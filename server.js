@@ -265,6 +265,125 @@ const searchIndeed = async (keyword, indeedKey) => {
   } catch { return { jobs:[] }; }
 };
 
+// Google Jobs scrape
+const searchGoogleJobs = async (keyword) => {
+  try {
+    const titles = ['marketing+manager','vp+marketing','head+of+marketing','digital+marketing+director','cmo'];
+    const q = encodeURIComponent(`${titles[0]} ${keyword} job`);
+    const r = await fetchT(`https://www.google.com/search?q=${q}&ibp=htl;jobs&sa=X`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+    }, 10000);
+    const html = await r.text();
+    const jobs = [];
+    // Extract company names from job listings
+    const companyMatches = html.match(/"hiringOrganization":\{"@type":"Organization","name":"([^"]+)"/g)||[];
+    const titleMatches = html.match(/"title":"([^"]+Marketing[^"]+)"/gi)||[];
+    const locationMatches = html.match(/"addressLocality":"([^"]+)"/g)||[];
+    const salaryMatches = html.match(/"\$[\d,]+(?:\s*[-–]\s*\$[\d,]+)?(?:\s*\/\s*(?:yr|year|mo|month))?"/g)||[];
+
+    companyMatches.slice(0,15).forEach((m,i) => {
+      const company = m.match(/"name":"([^"]+)"/)?.[1]||'';
+      const title = titleMatches[i]?.match(/"title":"([^"]+)"/)?.[1]||'Marketing Manager';
+      const location = locationMatches[i]?.match(/"addressLocality":"([^"]+)"/)?.[1]||'';
+      const salary = salaryMatches[i]?.replace(/"/g,'')||'';
+      if (company) jobs.push({
+        company, location, title, salary,
+        signals: { hiring_marketing:true, salary_unknown:!salary },
+        source: 'google_jobs',
+      });
+    });
+    return { jobs };
+  } catch { return { jobs:[] }; }
+};
+
+// ZipRecruiter scrape
+const searchZipRecruiter = async (keyword) => {
+  try {
+    const q = encodeURIComponent(`marketing manager ${keyword}`);
+    const r = await fetchT(`https://www.ziprecruiter.com/candidate/search?search=${q}&location=United+States&days=30`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    }, 10000);
+    const html = await r.text();
+    const jobs = [];
+    const jobMatches = html.match(/class="job_title"[^>]*>([^<]+)<\/[^>]+>[^<]*<[^>]+class="hiring_company_text"[^>]*>([^<]+)</g)||[];
+    const altMatches = html.match(/"hiring_company":"([^"]+)","job_title":"([^"]+)","location":"([^"]+)"/g)||[];
+
+    altMatches.slice(0,15).forEach(m => {
+      const company = m.match(/"hiring_company":"([^"]+)"/)?.[1]||'';
+      const title = m.match(/"job_title":"([^"]+)"/)?.[1]||'';
+      const location = m.match(/"location":"([^"]+)"/)?.[1]||'';
+      if (company) jobs.push({
+        company, title, location,
+        signals: { hiring_marketing: true, salary_unknown: true },
+        source: 'ziprecruiter_hiring',
+      });
+    });
+    return { jobs };
+  } catch { return { jobs:[] }; }
+};
+
+// Clutch.co scrape — companies leaving agency reviews
+const scrapeClutch = async (keyword) => {
+  try {
+    const q = encodeURIComponent(keyword);
+    const r = await fetchT(`https://clutch.co/agencies?client_focus=${q}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    }, 10000);
+    const html = await r.text();
+    const companies = [];
+    // Extract company names from reviews
+    const reviewerMatches = html.match(/class="reviewer-company"[^>]*>([^<]+)</g)||[];
+    const altMatches = html.match(/"reviewer_company":"([^"]+)"/g)||[];
+
+    [...reviewerMatches, ...altMatches].slice(0,10).forEach(m => {
+      const company = m.match(/>([^<]+)<|:"([^"]+)"/)?.[1]||m.match(/>([^<]+)<|:"([^"]+)"/)?.[2]||'';
+      if (company && company.length > 2) companies.push({
+        name: company.trim(),
+        signals: { agency_review: true, hiring_marketing: false },
+        source: 'clutch_review',
+      });
+    });
+    return { companies };
+  } catch { return { companies:[] }; }
+};
+
+// Google News — funding + marketing hire signals
+const scrapeGoogleNews = async (keyword) => {
+  try {
+    const queries = [
+      `${keyword} company raises funding 2026`,
+      `${keyword} hires CMO VP marketing 2026`,
+    ];
+    const companies = [];
+    for (const q of queries) {
+      const r = await fetchT(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      }, 8000);
+      const xml = await r.text();
+      const titleMatches = xml.match(/<title>([^<]+)<\/title>/g)||[];
+      titleMatches.slice(1,8).forEach(m => {
+        const title = m.replace(/<\/?title>/g,'');
+        const companyMatch = title.match(/^([A-Z][A-Za-z0-9\s&]+?)(?:\s+(?:raises|hires|appoints|names|announces|closes|secures))/);
+        if (companyMatch) {
+          const company = companyMatch[1].trim();
+          const isFunding = /raises|closes|secures|funding/i.test(title);
+          const isHire = /hires|appoints|names|CMO|VP marketing/i.test(title);
+          companies.push({
+            name: company,
+            signals: {
+              raised_funding: isFunding,
+              hiring_marketing: isHire,
+            },
+            source: isFunding ? 'news_funding' : 'news_hire',
+            newsHeadline: title.slice(0,120),
+          });
+        }
+      });
+    }
+    return { companies };
+  } catch { return { companies:[] }; }
+};
+
 // ── MASTER RESEARCH ENGINE ────────────────────────────────
 app.post('/api/research', async (req, res) => {
   const { company, website, keys } = req.body;
@@ -452,15 +571,20 @@ app.post('/api/discover', async (req, res) => {
     const allCompanies = [];
     const kwList = keywords.slice(0,3);
 
+    // Fire all sources simultaneously for each keyword
     const results = await Promise.allSettled(kwList.map(async (kw) => {
-      const [indeedRes, cbRes] = await Promise.allSettled([
+      const [indeedRes, cbRes, googleJobsRes, zipRes, clutchRes, newsRes] = await Promise.allSettled([
         searchIndeed(kw, indeedKey),
         searchCrunchbase(kw, crunchbaseKey),
+        searchGoogleJobs(kw),
+        searchZipRecruiter(kw),
+        scrapeClutch(kw),
+        scrapeGoogleNews(kw),
       ]);
 
       const companies = [];
 
-      // From Indeed
+      // Indeed jobs
       if (indeedRes.value?.jobs) {
         indeedRes.value.jobs.forEach(job => {
           if (job.company) companies.push({
@@ -476,9 +600,53 @@ app.post('/api/discover', async (req, res) => {
         });
       }
 
-      // From Crunchbase
+      // Google Jobs
+      if (googleJobsRes.value?.jobs) {
+        googleJobsRes.value.jobs.forEach(job => {
+          if (job.company) companies.push({
+            name: job.company,
+            location: job.location,
+            jobTitle: job.title,
+            salary: job.salary,
+            signals: job.signals,
+            source: 'google_jobs',
+          });
+        });
+      }
+
+      // ZipRecruiter
+      if (zipRes.value?.jobs) {
+        zipRes.value.jobs.forEach(job => {
+          if (job.company) companies.push({
+            name: job.company,
+            location: job.location,
+            jobTitle: job.title,
+            signals: job.signals,
+            source: 'ziprecruiter_hiring',
+          });
+        });
+      }
+
+      // Crunchbase
       if (cbRes.value?.companies) {
         cbRes.value.companies.forEach(co => companies.push(co));
+      }
+
+      // Clutch
+      if (clutchRes.value?.companies) {
+        clutchRes.value.companies.forEach(co => {
+          if (co.name) companies.push(co);
+        });
+      }
+
+      // Google News
+      if (newsRes.value?.companies) {
+        newsRes.value.companies.forEach(co => {
+          if (co.name) companies.push({
+            ...co,
+            jobTitle: co.newsHeadline,
+          });
+        });
       }
 
       return companies;
@@ -486,23 +654,26 @@ app.post('/api/discover', async (req, res) => {
 
     results.forEach(r => { if (r.value) allCompanies.push(...r.value); });
 
-    // Deduplicate
+    // Deduplicate by company name
     const seen = new Set();
     const unique = allCompanies.filter(c => {
-      const key = c.name.toLowerCase().trim();
-      if (!key||seen.has(key)) return false;
+      const key = (c.name||'').toLowerCase().trim();
+      if (!key || key.length < 2 || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
 
-    // Basic ICP score from signals only (full research happens on click)
+    // Score and sort
+    const WEIGHTS = {
+      hiring_marketing:25, raised_funding:15, agency_review:20,
+      salary_high:15, salary_mid:8, salary_low:5, salary_unknown:8,
+    };
     const scored = unique.map(c => {
-      const WEIGHTS = { hiring_marketing:25, raised_funding:15, salary_high:15, salary_mid:8, salary_low:5, salary_unknown:8 };
-      const score = Math.min(Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t,0),60); // max 60 before research
+      const score = Math.min(Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t,0), 60);
       return { ...c, icpScore: score };
     }).sort((a,b)=>b.icpScore-a.icpScore);
 
-    res.json({ companies: scored, total: scored.length });
+    res.json({ companies: scored, total: scored.length, sources: ['indeed','google_jobs','ziprecruiter','crunchbase','clutch','google_news'] });
 
   } catch(e) {
     console.error('Discovery error:', e);
