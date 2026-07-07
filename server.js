@@ -13,11 +13,10 @@ const safeJson = async (r) => { try { return await r.json(); } catch { return {}
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
 
 // Free proxy for domains blocked by Render
+const CF_WORKER = 'https://silent-credit-94eb.vindesil2.workers.dev/?url=';
 const fetchViaProxy = async (url, ms=10000) => {
-  const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url);
-  const r = await fetchT(proxyUrl, { headers: { 'Accept': 'application/json' } }, ms);
-  const d = await safeJson(r);
-  return d.contents || '';
+  const r = await fetchT(CF_WORKER + encodeURIComponent(url), {}, ms);
+  return r.text ? await r.text() : '';
 };
 const fetchT = (url, opts={}, ms=10000) => Promise.race([
   fetch(url, { ...opts, headers: { 'User-Agent': 'Mozilla/5.0 CROJungle/1.0', ...(opts.headers||{}) } }),
@@ -286,18 +285,13 @@ const searchSECEdgar = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
     const today = new Date().toISOString().split('T')[0];
-    // Correct EDGAR full-text search API
-    const url = `https://efts.sec.gov/LATEST/search-index?q=%22Series+A%22+OR+%22Series+B%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D&hits.hits.total.value=true`;
-    const r = await fetchT(url, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'CROJungle Research research@crojungle.com' }
-    }, 10000);
-    if (!r.ok) {
-      // Fallback to EDGAR company search
-      const r2 = await fetchT(`https://data.sec.gov/submissions/`, { headers: { 'User-Agent': 'CROJungle research@crojungle.com' } }, 8000);
-      console.log('SEC EDGAR fallback status:', r2.status);
+    const url = `https://efts.sec.gov/LATEST/search-index?q=%22Series+A%22+OR+%22Series+B%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D`;
+    const text = await fetchViaProxy(url, 12000);
+    if (!text || text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+      console.log('SEC EDGAR: blocked or returned HTML');
       return [];
     }
-    const d = await safeJson(r);
+    const d = JSON.parse(text);
     const hits = d?.hits?.hits || [];
     const results = hits.slice(0,20).map(hit => {
       const src = hit._source || hit.fields || {};
@@ -431,12 +425,9 @@ const scrapeBizBuySell = async () => {
     const results = [];
     for (const feedUrl of feeds) {
       try {
-        const r = await fetchT(feedUrl, { headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0' } }, 8000);
-        console.log(`BizBuySell ${feedUrl}: status ${r.status}`);
-        const xml = await safeText(r);
-        console.log(`BizBuySell XML preview: ${(xml||'').slice(0,100)}`);
+        const xml = await fetchViaProxy(feedUrl, 10000);
         if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
-          console.log('BizBuySell: returned HTML, not RSS');
+          console.log('BizBuySell: returned HTML not RSS');
           continue;
         }
         const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
@@ -445,7 +436,6 @@ const scrapeBizBuySell = async () => {
           const desc = (item.match(/<description><!\[CDATA\[([^\]]+)\]\]><\/description>/) || [])?.[1] || '';
           const link = item.match(/<link>([^<]+)<\/link>/)?.[1] || '';
           if (!title || title.length < 5) return;
-          // Extract revenue if mentioned
           const revenueMatch = desc.match(/\$([0-9,]+[MK]?)\s*(?:revenue|annual|gross)/i);
           const revenue = revenueMatch ? revenueMatch[0] : '';
           results.push({
@@ -458,7 +448,7 @@ const scrapeBizBuySell = async () => {
           });
         });
         if (results.length > 0) break;
-      } catch(e) { /* try next feed */ }
+      } catch(e) { console.log('BizBuySell feed error:', e.message); }
     }
     console.log(`BizBuySell: ${results.length}`);
     return results;
@@ -597,8 +587,11 @@ const scrapeProductHunt = async () => {
 // ═══════════════════════════════════════════════════════════
 const scrapePRNewswire = async () => {
   try {
-    const r = await fetchT('https://www.prnewswire.com/rss/news-releases-list.rss', {}, 8000);
-    const xml = await safeText(r);
+    const xml = await fetchViaProxy('https://www.prnewswire.com/rss/news-releases-list.rss', 10000);
+    if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
+      console.log('PR Newswire: blocked');
+      return [];
+    }
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
     const results = [];
     items.slice(0,30).forEach(item => {
