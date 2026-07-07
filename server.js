@@ -9,12 +9,34 @@ const PORT = process.env.PORT || 3001;
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10mb' }));
 
-// ── HELPERS ───────────────────────────────────────────────
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
-const fetchT = (url, opts={}, ms=12000) => Promise.race([fetch(url, opts), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);
+const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
+const fetchT = (url, opts={}, ms=10000) => Promise.race([
+  fetch(url, { ...opts, headers: { 'User-Agent': 'Mozilla/5.0 CROJungle/1.0', ...(opts.headers||{}) } }),
+  new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))
+]);
 
-// ── HEALTH ────────────────────────────────────────────────
-app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v3', endpoints: ['/api/claude','/api/scrape','/api/email','/api/research','/api/discover'] }));
+app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v6', sources: ['adzuna','sec_edgar','clutch_rss','google_news','reddit','product_hunt','pr_newswire'], ok: true }));
+
+// ── TEST ADZUNA — hit in browser to verify keys work ──────
+// Usage: https://crojungle-outreach-backend.onrender.com/api/test-adzuna?app_id=XXX&app_key=XXX
+app.get('/api/test-adzuna', async (req, res) => {
+  const { app_id, app_key } = req.query;
+  if (!app_id || !app_key) return res.status(400).json({ error: 'Pass ?app_id=YOUR_ID&app_key=YOUR_KEY' });
+  try {
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${app_id}&app_key=${app_key}&results_per_page=5&what=marketing+manager&sort_by=date`;
+    const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 10000);
+    const d = await safeJson(r);
+    res.json({
+      httpStatus: r.status,
+      totalJobsInDB: d.count || 0,
+      resultsReturned: (d.results||[]).length,
+      firstCompany: d.results?.[0]?.company?.display_name || 'none',
+      adzunaError: d.exception || d.error || null,
+      working: r.ok && (d.results||[]).length > 0,
+    });
+  } catch(e) { res.json({ error: e.message, working: false }); }
+});
 
 // ── CLAUDE ────────────────────────────────────────────────
 app.post('/api/claude', async (req, res) => {
@@ -67,627 +89,279 @@ app.get('/api/email', async (req, res) => {
   } catch(e) { res.json({ email:'', founderName:'', title:'' }); }
 });
 
-// ── SIGNAL SCRAPERS ───────────────────────────────────────
-
-// Google Ads Transparency
-const scrapeGoogleAds = async (domain) => {
-  try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://adstransparency.google.com/advertiser?domain=${clean}&region=US`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 8000);
-    const html = await r.text();
-    const hasAds = html.includes('ad-card') || html.includes('advertiser') || html.length > 50000;
-    const adCount = (html.match(/ad-card/g)||[]).length;
-    return { hasGoogleAds: hasAds, adCount, confirmed: true, source: 'Google Ads Transparency' };
-  } catch { return { hasGoogleAds: false, adCount: 0, confirmed: false }; }
-};
-
-// Facebook Ad Library
-const scrapeFacebookAds = async (companyName, fbToken) => {
-  if (!fbToken) return { hasAds: false, ads: [], confirmed: false, note: 'No Facebook token' };
-  try {
-    const url = `https://graph.facebook.com/v19.0/ads_archive?access_token=${fbToken}&ad_reached_countries=US&ad_active_status=ACTIVE&search_terms=${encodeURIComponent(companyName)}&fields=page_name,ad_creative_body,ad_delivery_start_time&limit=10`;
-    const r = await fetchT(url, {}, 8000);
-    const d = await safeJson(r);
-    if (d.error) return { hasAds: false, ads: [], confirmed: false };
-    const ads = (d.data||[]).map(ad => ({
-      copy: (ad.ad_creative_body||'').slice(0,200),
-      runningDays: ad.ad_delivery_start_time ? Math.floor((Date.now()-new Date(ad.ad_delivery_start_time))/86400000) : 0,
-    }));
-    return { hasAds: ads.length>0, ads, confirmed: true, source: 'Facebook Ad Library' };
-  } catch { return { hasAds: false, ads: [], confirmed: false }; }
-};
-
-// PageSpeed Insights
-const checkPageSpeed = async (url) => {
-  try {
-    const r = await fetchT(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`, {}, 15000);
-    const d = await safeJson(r);
-    const score = d.lighthouseResult?.categories?.performance?.score;
-    const lcp = d.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue;
-    const fid = d.lighthouseResult?.audits?.['first-input-delay']?.displayValue;
-    return {
-      mobileScore: score ? Math.round(score*100) : null,
-      lcp: lcp||null,
-      fid: fid||null,
-      confirmed: !!score,
-      source: 'Google PageSpeed API',
-    };
-  } catch { return { mobileScore: null, confirmed: false }; }
-};
-
-// BuiltWith tech stack
-const checkBuiltWith = async (domain) => {
-  try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://builtwith.com/${clean}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 8000);
-    const html = await r.text();
-    return {
-      hasCRM: /hubspot|salesforce|marketo|pipedrive|zoho crm/i.test(html),
-      hasEmailMarketing: /mailchimp|klaviyo|activecampaign|constant contact|sendgrid/i.test(html),
-      hasPixel: /facebook pixel|google analytics|gtag|hotjar|mixpanel|segment/i.test(html),
-      hasChat: /intercom|drift|crisp|zendesk chat|tidio/i.test(html),
-      hasVideo: /wistia|vimeo|youtube/i.test(html),
-      confirmed: true,
-      source: 'BuiltWith',
-    };
-  } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasChat:false, hasVideo:false, confirmed:false }; }
-};
-
-// SpyFu SEO data
-const checkSpyFu = async (domain) => {
-  try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://www.spyfu.com/overview/domain?query=${clean}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 8000);
-    const html = await r.text();
-    const organicMatch = html.match(/([\d,]+)\s*(?:organic clicks|monthly organic)/i);
-    const paidMatch = html.match(/\$[\d,]+(?:\s*\/\s*mo)?/i);
-    return {
-      organicClicks: organicMatch ? organicMatch[1] : null,
-      estimatedAdSpend: paidMatch ? paidMatch[0] : null,
-      confirmed: !!(organicMatch || paidMatch),
-      source: 'SpyFu',
-    };
-  } catch { return { confirmed: false }; }
-};
-
-// Google Reviews
-const checkGoogleReviews = async (companyName) => {
-  try {
-    const q = encodeURIComponent(companyName + ' reviews site:google.com');
-    const r = await fetchT(`https://www.google.com/search?q=${q}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 8000);
-    const html = await r.text();
-    const ratingMatch = html.match(/(\d\.\d)\s*(?:stars?|out of 5)/i);
-    const countMatch = html.match(/([\d,]+)\s*(?:reviews?|ratings?)/i);
-    return {
-      rating: ratingMatch ? ratingMatch[1] : null,
-      count: countMatch ? countMatch[1] : null,
-      confirmed: !!(ratingMatch || countMatch),
-      source: 'Google Reviews',
-    };
-  } catch { return { confirmed: false }; }
-};
-
-// Hunter email
-const getFounderEmail = async (domain, hunterKey) => {
-  if (!hunterKey) return { email:'', founderName:'' };
-  try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`);
-    const d = await safeJson(r);
-    const emails = d.data?.emails||[];
-    const priority = ['ceo','founder','co-founder','owner','president','cmo'];
-    const sorted = emails.sort((a,b)=>{
-      const aS=priority.findIndex(p=>(a.position||'').toLowerCase().includes(p));
-      const bS=priority.findIndex(p=>(b.position||'').toLowerCase().includes(p));
-      return (aS===-1?99:aS)-(bS===-1?99:bS);
-    });
-    const best = sorted[0];
-    return { email:best?.value||'', founderName:`${best?.first_name||''} ${best?.last_name||''}`.trim(), title:best?.position||'' };
-  } catch { return { email:'', founderName:'' }; }
-};
-
-// Crunchbase
-const searchCrunchbase = async (keyword, cbKey) => {
-  if (!cbKey) return { companies:[] };
-  try {
-    const ninetyDaysAgo = new Date(Date.now()-90*24*60*60*1000).toISOString().split('T')[0];
-    const r = await fetchT('https://api.crunchbase.com/api/v4/searches/organizations', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json','X-cb-user-key':cbKey },
-      body: JSON.stringify({
-        field_ids: ['name','website_url','short_description','num_employees_enum','founded_on','last_funding_type','last_funding_total','last_funding_at'],
-        query: [
-          { type:'predicate', field_id:'facet_ids', operator_id:'includes', values:['company'] },
-          { type:'predicate', field_id:'short_description', operator_id:'contains', values:[keyword] },
-          { type:'predicate', field_id:'last_funding_at', operator_id:'gte', values:[ninetyDaysAgo] },
-        ],
-        order: [{ field_id:'last_funding_at', sort_dir:'desc' }],
-        limit: 15,
-      }),
-    }, 10000);
-    const d = await safeJson(r);
-    return {
-      companies: (d.entities||[]).map(e => ({
-        name: e.properties?.name||'',
-        website: e.properties?.website_url||'',
-        description: e.properties?.short_description||'',
-        employees: e.properties?.num_employees_enum||'',
-        founded: e.properties?.founded_on?.value||'',
-        fundingType: e.properties?.last_funding_type||'',
-        fundingAmount: e.properties?.last_funding_total?.value_usd||0,
-        fundingDate: e.properties?.last_funding_at||'',
-        signals: { raised_funding: true },
-        source: 'crunchbase_funding',
-      })),
-    };
-  } catch { return { companies:[] }; }
-};
-
-// Indeed jobs
-// Job categories that signal CROJungle ICP
-// Marketing category catches all titles automatically
-const JOB_CATEGORIES = {
-  indeed: '26',      // Indeed category code for Marketing
-  marketing_q: 'marketing OR "growth" OR "demand generation" OR "paid media" OR "SEO" OR "content marketing" OR "brand" OR "CRO" OR "conversion"',
-  revenue_q: '"business development" OR "revenue" OR "go to market" OR "GTM"',
-};
-
-// Indeed jobs — search by marketing category
-const searchIndeed = async (keyword, indeedKey) => {
-  if (!indeedKey) return { jobs:[] };
-  try {
-    // Search marketing broadly by category
-    const q = encodeURIComponent(`(${JOB_CATEGORIES.marketing_q}) ${keyword}`);
-    const url = `https://api.indeed.com/ads/apisearch?publisher=${indeedKey}&q=${q}&sort=date&limit=25&fromage=30&co=us&userip=1.2.3.4&useragent=Mozilla&v=2&format=json`;
-    const r = await fetchT(url, {}, 8000);
-    const d = await safeJson(r);
-    return {
-      jobs: (d.results||[]).map(job => {
-        const salaryMatch = (job.snippet||'').match(/\$[\d,]+(?:\s*[-–]\s*\$[\d,]+)?/i);
-        const salary = salaryMatch ? salaryMatch[0] : '';
-        const salaryNum = salary ? parseInt(salary.replace(/[$,]/g,'')) : 0;
-        return {
-          company: job.company||'',
-          website: (()=>{ try { return new URL(job.url).hostname.replace('www.',''); } catch { return ''; } })(),
-          location: `${job.city||''}, ${job.state||''}`,
-          title: job.jobtitle||'',
-          salary,
-          snippet: (job.snippet||'').slice(0,300),
-          datePosted: job.date||'',
-          signals: {
-            hiring_marketing: true,
-            salary_high: salaryNum >= 90000,
-            salary_mid: salaryNum >= 60000 && salaryNum < 90000,
-            salary_low: salaryNum > 0 && salaryNum < 60000,
-            salary_unknown: !salary,
-          },
-          source: 'indeed_hiring',
-        };
-      }),
-    };
-  } catch { return { jobs:[] }; }
-};
-
-// Google Jobs — category-based search
-const searchGoogleJobs = async (keyword) => {
-  try {
-    const categoryQueries = [
-      `marketing jobs ${keyword} hiring`,
-      `growth marketing OR demand generation OR paid media jobs ${keyword}`,
-      `"business development" OR "revenue" jobs ${keyword} hiring`,
-    ];
-    const allJobs = [];
-    for (const q of categoryQueries.slice(0,2)) {
-      const r = await fetchT(`https://www.google.com/search?q=${encodeURIComponent(q)}&ibp=htl;jobs&sa=X`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-      }, 10000);
-      const html = await r.text();
-      const companyMatches = html.match(/"hiringOrganization":\{"@type":"Organization","name":"([^"]+)"/g)||[];
-      const titleMatches = html.match(/"title":"([^"]+)"/gi)||[];
-      const locationMatches = html.match(/"addressLocality":"([^"]+)"/g)||[];
-      const salaryMatches = html.match(/"\$[\d,]+(?:\s*[-–]\s*\$[\d,]+)?(?:\s*\/\s*(?:yr|year|mo|month))?"/g)||[];
-      companyMatches.slice(0,10).forEach((m,i) => {
-        const company = m.match(/"name":"([^"]+)"/)?.[1]||'';
-        const title = titleMatches[i]?.match(/"title":"([^"]+)"/)?.[1]||'Marketing Role';
-        const location = locationMatches[i]?.match(/"addressLocality":"([^"]+)"/)?.[1]||'';
-        const salary = salaryMatches[i]?.replace(/"/g,'')||'';
-        const salaryNum = salary ? parseInt(salary.replace(/[$,]/g,'')) : 0;
-        if (company) allJobs.push({
-          company, location, title, salary,
-          signals: { hiring_marketing:true, salary_high:salaryNum>=90000, salary_mid:salaryNum>=60000&&salaryNum<90000, salary_unknown:!salary },
-          source: 'google_jobs'
-        });
-      });
-    }
-    return { jobs: allJobs };
-  } catch { return { jobs:[] }; }
-};
-
-// ZipRecruiter — category-based search
-const searchZipRecruiter = async (keyword) => {
-  try {
-    const categorySearches = [
-      `marketing+${encodeURIComponent(keyword)}`,
-      `growth+marketing+${encodeURIComponent(keyword)}`,
-      `demand+generation+${encodeURIComponent(keyword)}`,
-    ];
-    const allJobs = [];
-    for (const search of categorySearches.slice(0,2)) {
-      const r = await fetchT(`https://www.ziprecruiter.com/candidate/search?search=${search}&location=United+States&days=30`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-      }, 10000);
-      const html = await r.text();
-      const altMatches = html.match(/"hiring_company":"([^"]+)","job_title":"([^"]+)","location":"([^"]+)"/g)||[];
-      altMatches.slice(0,8).forEach(m => {
-        const company = m.match(/"hiring_company":"([^"]+)"/)?.[1]||'';
-        const jobTitle = m.match(/"job_title":"([^"]+)"/)?.[1]||'';
-        const location = m.match(/"location":"([^"]+)"/)?.[1]||'';
-        if (company) allJobs.push({ company, title:jobTitle, location, signals:{ hiring_marketing:true, salary_unknown:true }, source:'ziprecruiter_hiring' });
-      });
-    }
-    const seen = new Set();
-    return { jobs: allJobs.filter(j => { const k=j.company.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true; }) };
-  } catch { return { jobs:[] }; }
-};
-
-// AngelList/Wellfound — startups hiring marketing
-const searchAngelList = async (keyword) => {
-  try {
-    const r = await fetchT(`https://wellfound.com/jobs?q=${encodeURIComponent('marketing ' + keyword)}&role=marketing`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 10000);
-    const html = await r.text();
-    const companies = [];
-    const companyMatches = html.match(/"companyName":"([^"]+)"/g)||[];
-    const titleMatches = html.match(/"jobTitle":"([^"]+)"/g)||[];
-    const locationMatches = html.match(/"locationName":"([^"]+)"/g)||[];
-    companyMatches.slice(0,10).forEach((m,i) => {
-      const company = m.match(/"companyName":"([^"]+)"/)?.[1]||'';
-      const title = titleMatches[i]?.match(/"jobTitle":"([^"]+)"/)?.[1]||'Marketing Role';
-      const location = locationMatches[i]?.match(/"locationName":"([^"]+)"/)?.[1]||'';
-      if (company) companies.push({ name:company, location, jobTitle:title, signals:{ hiring_marketing:true, salary_unknown:true }, source:'angellist_hiring' });
-    });
-    return { companies };
-  } catch { return { companies:[] }; }
-};
-
-// Product Hunt — recently launched companies
-const scrapeProductHunt = async (keyword) => {
-  try {
-    const r = await fetchT(`https://www.producthunt.com/search?q=${encodeURIComponent(keyword)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 10000);
-    const html = await r.text();
-    const companies = [];
-    const nameMatches = html.match(/"name":"([^"]+)","tagline":"([^"]+)","website":"([^"]+)"/g)||[];
-    nameMatches.slice(0,8).forEach(m => {
-      const name = m.match(/"name":"([^"]+)"/)?.[1]||'';
-      const website = m.match(/"website":"([^"]+)"/)?.[1]||'';
-      if (name) companies.push({ name, website, signals:{ recently_launched:true }, source:'product_hunt' });
-    });
-    return { companies };
-  } catch { return { companies:[] }; }
-};
-
-
-
-// Clutch.co scrape — companies leaving agency reviews
-const scrapeClutch = async (keyword) => {
-  try {
-    const q = encodeURIComponent(keyword);
-    const r = await fetchT(`https://clutch.co/agencies?client_focus=${q}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    }, 10000);
-    const html = await r.text();
-    const companies = [];
-    // Extract company names from reviews
-    const reviewerMatches = html.match(/class="reviewer-company"[^>]*>([^<]+)</g)||[];
-    const altMatches = html.match(/"reviewer_company":"([^"]+)"/g)||[];
-
-    [...reviewerMatches, ...altMatches].slice(0,10).forEach(m => {
-      const company = m.match(/>([^<]+)<|:"([^"]+)"/)?.[1]||m.match(/>([^<]+)<|:"([^"]+)"/)?.[2]||'';
-      if (company && company.length > 2) companies.push({
-        name: company.trim(),
-        signals: { agency_review: true, hiring_marketing: false },
-        source: 'clutch_review',
-      });
-    });
-    return { companies };
-  } catch { return { companies:[] }; }
-};
-
-// Google News — funding + marketing hire signals
-const scrapeGoogleNews = async (keyword) => {
-  try {
-    const queries = [
-      `${keyword} company raises funding 2026`,
-      `${keyword} hires CMO VP marketing 2026`,
-    ];
-    const companies = [];
-    for (const q of queries) {
-      const r = await fetchT(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      }, 8000);
-      const xml = await r.text();
-      const titleMatches = xml.match(/<title>([^<]+)<\/title>/g)||[];
-      titleMatches.slice(1,8).forEach(m => {
-        const title = m.replace(/<\/?title>/g,'');
-        const companyMatch = title.match(/^([A-Z][A-Za-z0-9\s&]+?)(?:\s+(?:raises|hires|appoints|names|announces|closes|secures))/);
-        if (companyMatch) {
-          const company = companyMatch[1].trim();
-          const isFunding = /raises|closes|secures|funding/i.test(title);
-          const isHire = /hires|appoints|names|CMO|VP marketing/i.test(title);
-          companies.push({
-            name: company,
-            signals: {
-              raised_funding: isFunding,
-              hiring_marketing: isHire,
-            },
-            source: isFunding ? 'news_funding' : 'news_hire',
-            newsHeadline: title.slice(0,120),
-          });
-        }
-      });
-    }
-    return { companies };
-  } catch { return { companies:[] }; }
-};
-
-// ── MASTER RESEARCH ENGINE ────────────────────────────────
-app.post('/api/research', async (req, res) => {
-  const { company, website, keys } = req.body;
-  const { firecrawlKey, hunterKey, fbToken, clearbitKey, apiKey } = keys||{};
-
+// ── FIND WEBSITE ──────────────────────────────────────────
+app.get('/api/find-website', async (req, res) => {
+  const { company } = req.query;
   if (!company) return res.status(400).json({ error: 'Company name required' });
-
-  const domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
-
   try {
-    // Fire ALL signals simultaneously
-    const [
-      homepageResult,
-      emailResult,
-      googleAdsResult,
-      fbAdsResult,
-      pageSpeedResult,
-      builtWithResult,
-      spyfuResult,
-      reviewsResult,
-    ] = await Promise.allSettled([
-      website && firecrawlKey ? fetch(`http://localhost:${PORT}/api/scrape`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ url:website, firecrawlKey }),
-      }).then(r=>r.json()).catch(()=>({markdown:''})) : Promise.resolve({markdown:''}),
-
-      domain && hunterKey ? getFounderEmail(domain, hunterKey) : Promise.resolve({email:'',founderName:''}),
-      domain ? scrapeGoogleAds(domain) : Promise.resolve({hasGoogleAds:false,confirmed:false}),
-      fbToken ? scrapeFacebookAds(company, fbToken) : Promise.resolve({hasAds:false,ads:[],confirmed:false}),
-      website ? checkPageSpeed(website) : Promise.resolve({mobileScore:null,confirmed:false}),
-      domain ? checkBuiltWith(domain) : Promise.resolve({confirmed:false}),
-      domain ? checkSpyFu(domain) : Promise.resolve({confirmed:false}),
-      checkGoogleReviews(company),
-    ]);
-
-    const homepage = homepageResult.value||{};
-    const email = emailResult.value||{};
-    const googleAds = googleAdsResult.value||{};
-    const fbAds = fbAdsResult.value||{};
-    const pageSpeed = pageSpeedResult.value||{};
-    const builtWith = builtWithResult.value||{};
-    const spyfu = spyfuResult.value||{};
-    const reviews = reviewsResult.value||{};
-    const content = homepage.markdown||'';
-
-    // Analyze homepage content
-    const hasCTA = /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
-    const hasWeakHeadline = /welcome to|we are|we provide|we help|we offer|our company/i.test(content.slice(0,500));
-    const hasTestimonials = /testimonial|review|client said|customer said|case study|trusted by/i.test(content);
-    const hasPricing = /pricing|plans|per month|per year|subscription/i.test(content);
-    const hasBlog = /blog|article|resource|insight|guide/i.test(content);
-    const hasVideo = /video|watch|youtube|vimeo|wistia/i.test(content);
-    const hasAgencyFooter = /powered by|marketing by|designed by|built by/i.test(content);
-
-    // Dunford positioning analysis
-    const positioningScore = (() => {
-      let score = 0;
-      if (content.slice(0,1000).match(/for\s+\w+\s+(who|that|with)/i)) score+=2; // named target
-      if (!hasWeakHeadline) score+=2; // specific headline
-      if (hasTestimonials) score+=2; // proof
-      if (content.match(/unlike|instead of|compared to|vs\./i)) score+=2; // named alternative
-      if (hasPricing) score+=1; // transparent pricing
-      if (hasVideo) score+=1; // video proof
-      return Math.min(score, 10);
-    })();
-
-    // Build 4 buckets
-    const buckets = {
-      ACQUISITION: {
-        googleAds: googleAds.hasGoogleAds ? `Running Google Ads (${googleAds.adCount||'some'} detected)` : 'No Google Ads detected',
-        googleAdsConfirmed: googleAds.confirmed,
-        facebookAds: fbAds.hasAds ? `${fbAds.ads.length} active Facebook ads` : 'No Facebook ads running',
-        facebookAdsConfirmed: fbAds.confirmed,
-        fbAdDetail: fbAds.ads.length>0 ? fbAds.ads.map(a=>`"${a.copy.slice(0,80)}" (${a.runningDays}d)`).join(' | ') : '',
-        staleFbAds: fbAds.ads.some(a=>a.runningDays>180),
-        seoTraffic: spyfu.organicClicks ? `${spyfu.organicClicks} estimated monthly organic clicks` : 'SEO data unavailable',
-        estimatedAdSpend: spyfu.estimatedAdSpend||'Unknown',
-        hasBlog: hasBlog ? 'Blog/content present' : 'No blog or content detected',
-      },
-      CONVERSION: {
-        hasCTA: hasCTA ? 'CTA present above fold' : 'No clear CTA detected above fold',
-        weakHeadline: hasWeakHeadline ? 'Generic headline detected' : 'Headline appears specific',
-        hasTestimonials: hasTestimonials ? 'Social proof present' : 'No testimonials or case studies detected',
-        hasPricing: hasPricing ? 'Pricing visible' : 'No pricing shown — friction point',
-        hasVideo: hasVideo ? 'Video content present' : 'No video content detected',
-        mobileScore: pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100 mobile score` : 'Mobile score unavailable',
-        loadTime: pageSpeed.lcp||'Unknown',
-        positioningScore: `${positioningScore}/10 Dunford positioning score`,
-        positioningWeak: positioningScore < 6,
-      },
-      AUTHORITY: {
-        googleReviews: reviews.count ? `${reviews.count} Google reviews — ${reviews.rating} stars` : 'No Google reviews found',
-        reviewsConfirmed: reviews.confirmed,
-        hasAgencyFooter: hasAgencyFooter ? 'Agency relationship detected in footer' : '',
-        linkedinActivity: 'Manual check required',
-      },
-      INFRASTRUCTURE: {
-        hasCRM: builtWith.hasCRM ? 'CRM detected' : 'No CRM detected',
-        hasEmailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool detected' : 'No email marketing detected',
-        hasPixel: builtWith.hasPixel ? 'Tracking pixel present' : 'No tracking pixel detected',
-        hasChat: builtWith.hasChat ? 'Live chat present' : 'No live chat detected',
-        techConfirmed: builtWith.confirmed,
-      },
-    };
-
-    // Detect specific flaws for pitch targeting
-    const flaws = [];
-    if (!googleAds.hasGoogleAds) flaws.push('no_google_ads');
-    if (!fbAds.hasAds) flaws.push('no_fb_ads');
-    else if (fbAds.ads.some(a=>a.runningDays>180)) flaws.push('stale_fb_ads');
-    if (!hasCTA) flaws.push('no_cta');
-    if (hasWeakHeadline) flaws.push('weak_hero');
-    if (!hasTestimonials) flaws.push('no_social_proof');
-    if (!builtWith.hasCRM) flaws.push('no_crm');
-    if (!builtWith.hasPixel) flaws.push('no_tracking');
-    if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50) flaws.push('slow_mobile');
-    if (positioningScore < 6) flaws.push('weak_positioning');
-
-    // Identify the sharpest single pain point
-    const painPriority = [
-      { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Landing page or homepage rebuild — $15k–$40k' },
-      { id:'weak_positioning', pain:`Positioning scores ${positioningScore}/10 — generic messaging that could apply to any competitor`, opportunity:'Brand positioning + website rewrite — $25k–$60k' },
-      { id:'stale_fb_ads', pain:'Running same Facebook ads for 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + landing page — $10k–$20k' },
-      { id:'no_crm', pain:'No CRM detected — no way to track or nurture leads', opportunity:'CRM setup + marketing automation software — $20k–$50k' },
-      { id:'no_tracking', pain:'No tracking pixel — flying blind on what\'s working', opportunity:'Analytics + tracking infrastructure — $8k–$15k' },
-      { id:'slow_mobile', pain:`Mobile score ${pageSpeed.mobileScore}/100 — losing majority of traffic before they see anything`, opportunity:'Site speed + mobile optimization — $10k–$25k' },
-      { id:'no_google_ads', pain:'No Google Ads — competitors capturing demand they can\'t see', opportunity:'Paid search setup + dedicated landing pages — $5k setup + management' },
-      { id:'no_social_proof', pain:'No testimonials or case studies — buyers can\'t verify claims', opportunity:'Social proof system + case study production — $8k–$15k' },
-      { id:'weak_hero', pain:'Generic homepage headline — doesn\'t differentiate from any competitor', opportunity:'Homepage messaging + positioning rewrite — $10k–$30k' },
-    ];
-
-    const topPain = painPriority.find(p=>flaws.includes(p.id));
-
-    // ICP score
-    const signals = {
-      hiring_marketing: false, // set by find phase
-      raised_funding: false,   // set by find phase
-      no_cta: !hasCTA,
-      weak_positioning: positioningScore < 6,
-      no_crm: !builtWith.hasCRM,
-      no_tracking: !builtWith.hasPixel,
-      slow_mobile: pageSpeed.mobileScore && pageSpeed.mobileScore < 50,
-      no_google_ads: !googleAds.hasGoogleAds,
-      has_agency: hasAgencyFooter,
-    };
-
-    res.json({
-      email: email.email||'',
-      founderName: email.founderName||'',
-      founderTitle: email.title||'',
-      buckets,
-      flaws,
-      topPain,
-      positioningScore,
-      signals,
-      homepageContent: content.slice(0,3000),
-      richData: {
-        adSpend: buckets.ACQUISITION.estimatedAdSpend,
-        googleAds: buckets.ACQUISITION.googleAds,
-        fbAds: buckets.ACQUISITION.facebookAds,
-        seoTraffic: buckets.ACQUISITION.seoTraffic,
-        mobileScore: buckets.CONVERSION.mobileScore,
-        hasCRM: buckets.INFRASTRUCTURE.hasCRM,
-        hasPixel: buckets.INFRASTRUCTURE.hasPixel,
-        positioningScore: buckets.CONVERSION.positioningScore,
-        googleReviews: buckets.AUTHORITY.googleReviews,
-      },
-      completedAt: new Date().toISOString(),
-    });
-
-  } catch(e) {
-    console.error('Research error:', e);
-    res.status(500).json({ error: e.message });
-  }
+    const q = encodeURIComponent(company + ' official website');
+    const r = await fetchT(`https://www.google.com/search?q=${q}`, {}, 8000);
+    const html = await safeText(r);
+    const match = html.match(/href="(https?:\/\/(?!google|youtube|facebook|twitter|linkedin|instagram|yelp|wikipedia)[^"&]+)"/);
+    if (match) {
+      try { return res.json({ website: new URL(match[1]).origin }); } catch {}
+    }
+    res.json({ website: '' });
+  } catch(e) { res.json({ website: '' }); }
 });
 
-// ── DISCOVERY ENGINE ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 1: ADZUNA — runs searches IN PARALLEL
+// Key fix: parallel not sequential = 3s not 90s
+// ═══════════════════════════════════════════════════════════
+const searchAdzuna = async (appId, appKey) => {
+  if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
+  try {
+    const searches = [
+      // Marketing signals → retainer/website/landing page leads
+      { title: 'marketing manager', isOps: false },
+      { title: 'VP marketing', isOps: false },
+      { title: 'head of marketing', isOps: false },
+      { title: 'growth marketing', isOps: false },
+      { title: 'demand generation', isOps: false },
+      { title: 'performance marketing', isOps: false },
+      // Ops signals → AI replacement / software build leads
+      { title: 'operations manager', isOps: true },
+      { title: 'customer service manager', isOps: true },
+      { title: 'business analyst', isOps: true },
+    ];
+
+    // ALL IN PARALLEL — critical fix
+    const results = await Promise.allSettled(
+      searches.map(async ({ title, isOps }) => {
+        const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
+        const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
+        if (!r.ok) { console.log(`Adzuna "${title}" ${r.status}`); return []; }
+        const d = await safeJson(r);
+        if (d.exception) { console.log(`Adzuna "${title}" exception:`, d.exception); return []; }
+        const jobs = d.results || [];
+        console.log(`Adzuna "${title}": ${jobs.length}`);
+        return jobs.map(job => {
+          if (!job.company?.display_name) return null;
+          const salaryNum = job.salary_min || 0;
+          return {
+            name: job.company.display_name,
+            website: '',
+            location: job.location?.display_name || '',
+            jobTitle: job.title || title,
+            salary: salaryNum ? `$${Math.round(salaryNum/1000)}k-$${Math.round((job.salary_max||salaryNum)/1000)}k` : '',
+            jobSnippet: (job.description||'').replace(/<[^>]+>/g,'').slice(0,150),
+            source: isOps ? 'adzuna_ops' : 'adzuna_jobs',
+            signals: {
+              hiring_marketing: !isOps,
+              hiring_ops: isOps,
+              ai_replacement_signal: isOps,
+              salary_high: salaryNum >= 90000,
+              salary_mid: salaryNum >= 60000 && salaryNum < 90000,
+              salary_low: salaryNum > 0 && salaryNum < 60000,
+              salary_unknown: !salaryNum,
+            },
+          };
+        }).filter(Boolean);
+      })
+    );
+
+    const combined = results.flatMap(r => r.value || []);
+    const seen = new Set();
+    const unique = combined.filter(r => {
+      const k = r.name.toLowerCase().trim();
+      if (!k || seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+    console.log(`Adzuna total: ${unique.length} unique companies`);
+    return unique;
+  } catch(e) { console.error('Adzuna error:', e.message); return []; }
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 2: SEC EDGAR — real-time funding, no key needed
+// ═══════════════════════════════════════════════════════════
+const searchSECEdgar = async () => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    const url = `https://efts.sec.gov/LATEST/search-index?q=%22marketing%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D`;
+    const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
+    const d = await safeJson(r);
+    const results = (d.hits?.hits || []).slice(0,20).map(hit => {
+      const src = hit._source || {};
+      const name = src.entity_name || src.company_name || '';
+      if (!name) return null;
+      return { name: name.trim(), source: 'sec_edgar', signals: { raised_funding: true }, jobTitle: 'Form D filing — recently raised' };
+    }).filter(Boolean);
+    console.log(`SEC EDGAR: ${results.length}`);
+    return results;
+  } catch(e) { console.error('SEC EDGAR error:', e.message); return []; }
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 3: CLUTCH RSS — agency frustration
+// ═══════════════════════════════════════════════════════════
+const scrapeClutchRSS = async () => {
+  try {
+    const r = await fetchT('https://clutch.co/feed', {}, 8000);
+    const xml = await safeText(r);
+    const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+    const results = [];
+    items.slice(0,15).forEach(item => {
+      const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+      const reviewMatch = title.match(/^(.+?)\s+(?:Review|review)/);
+      if (reviewMatch && reviewMatch[1].length > 2 && reviewMatch[1].length < 60) {
+        results.push({ name: reviewMatch[1].trim(), source: 'clutch_review', jobTitle: 'Left agency review on Clutch', signals: { agency_review: true } });
+      }
+    });
+    console.log(`Clutch RSS: ${results.length}`);
+    return results;
+  } catch(e) { console.error('Clutch error:', e.message); return []; }
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 4: GOOGLE NEWS RSS — CMO hires + funding
+// ═══════════════════════════════════════════════════════════
+const scrapeGoogleNews = async () => {
+  const results = [];
+  const queries = [
+    'company hires "VP of Marketing" OR "CMO" OR "Head of Marketing" 2026',
+    'startup raises "Series A" OR "Series B" funding 2026',
+  ];
+  for (const q of queries) {
+    try {
+      const r = await fetchT(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`, {}, 8000);
+      const xml = await safeText(r);
+      const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+      items.slice(0,8).forEach(item => {
+        const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+        const isFunding = /raises|Series [AB]|funded|closes/i.test(title);
+        const isHire = /hires|appoints|CMO|VP marketing|head of marketing/i.test(title);
+        if (!isFunding && !isHire) return;
+        const m = title.match(/^([A-Z][A-Za-z0-9\s&\.]+?)(?:\s+(?:Raises|Hires|Appoints|Closes|Names|Secures))/);
+        if (m && m[1].length > 2 && m[1].length < 50) {
+          results.push({ name: m[1].trim(), source: isFunding?'news_funding':'news_hire', jobTitle: title.slice(0,80), signals: { raised_funding: isFunding, hiring_marketing: isHire } });
+        }
+      });
+    } catch(e) { /* silent */ }
+  }
+  console.log(`Google News: ${results.length}`);
+  return results;
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 5: REDDIT RSS — founders in active pain
+// ═══════════════════════════════════════════════════════════
+const scrapeReddit = async () => {
+  const results = [];
+  const feeds = [
+    'https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency+help&sort=new&limit=10&restrict_sr=1&t=month',
+    'https://www.reddit.com/r/smallbusiness/search.json?q=website+marketing&sort=new&limit=10&restrict_sr=1&t=month',
+    'https://www.reddit.com/r/startups/search.json?q=marketing+hire+CMO&sort=new&limit=10&restrict_sr=1&t=month',
+  ];
+  for (const url of feeds) {
+    try {
+      const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
+      const d = await safeJson(r);
+      const posts = d?.data?.children || [];
+      posts.forEach(post => {
+        const p = post.data;
+        if (!p || p.score < 3 || !p.author || p.author === '[deleted]') return;
+        const title = p.title || '';
+        const text = (p.selftext||'').slice(0,200);
+        const isPain = /agency|website|marketing|ads|revenue|customers|growth|leads|conversion|redesign/i.test(title+text);
+        if (!isPain) return;
+        results.push({
+          name: `u/${p.author}`,
+          website: '',
+          jobTitle: title.slice(0,80),
+          jobSnippet: text.slice(0,150),
+          source: 'reddit_pain',
+          signals: { social_pain_signal: true },
+        });
+      });
+    } catch(e) { /* silent */ }
+  }
+  console.log(`Reddit: ${results.length}`);
+  return results;
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 6: PRODUCT HUNT — just launched
+// ═══════════════════════════════════════════════════════════
+const scrapeProductHunt = async () => {
+  try {
+    const r = await fetchT('https://www.producthunt.com/feed', {}, 8000);
+    const xml = await safeText(r);
+    const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+    const results = items.slice(0,15).map(item => {
+      const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+      if (!title) return null;
+      return { name: title.split(' — ')[0].split(' - ')[0].trim().slice(0,60), source: 'product_hunt', jobTitle: 'Just launched on Product Hunt', signals: { recently_launched: true, needs_marketing: true } };
+    }).filter(Boolean);
+    console.log(`Product Hunt: ${results.length}`);
+    return results;
+  } catch(e) { console.error('Product Hunt error:', e.message); return []; }
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE 7: PR NEWSWIRE — expansions + hires
+// ═══════════════════════════════════════════════════════════
+const scrapePRNewswire = async () => {
+  try {
+    const r = await fetchT('https://www.prnewswire.com/rss/news-releases-list.rss', {}, 8000);
+    const xml = await safeText(r);
+    const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+    const results = [];
+    items.slice(0,30).forEach(item => {
+      const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+      if (!title) return;
+      const relevant = /launch|CMO|VP marketing|Series [AB]|funding|raise|rebrand|expand/i.test(title);
+      if (!relevant) return;
+      const m = title.match(/^([A-Z][A-Za-z0-9\s&\.\,]+?)(?:\s+(?:Announces|Launches|Raises|Hires|Appoints|Expands|Closes|Unveils))/);
+      if (!m) return;
+      const isFunding = /raises|funding|Series|closes/i.test(title);
+      const isHire = /hires|appoints|CMO|VP marketing/i.test(title);
+      results.push({ name: m[1].trim(), source: 'pr_newswire', jobTitle: title.slice(0,80), signals: { raised_funding: isFunding, hiring_marketing: isHire, recently_launched: /launch|unveil/i.test(title) } });
+    });
+    console.log(`PR Newswire: ${results.length}`);
+    return results;
+  } catch(e) { console.error('PR Newswire error:', e.message); return []; }
+};
+
+// ═══════════════════════════════════════════════════════════
+// MASTER DISCOVERY — all 7 sources fire simultaneously
+// Total budget: ~8 seconds (Render free tier safe)
+// ═══════════════════════════════════════════════════════════
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys } = req.body;
-  const { indeedKey, crunchbaseKey } = keys||{};
+  const { adzunaId, adzunaKey } = keys || {};
 
-  if (!keywords||!keywords.length) return res.status(400).json({ error: 'Keywords required' });
+  console.log('\n=== DISCOVERY START ===');
+  console.log('Keywords:', keywords);
+  console.log('Adzuna keys present:', !!(adzunaId && adzunaKey));
 
   try {
-    const allCompanies = [];
-    const kwList = keywords.slice(0,3);
+    // ALL 7 sources fire simultaneously
+    const [adzunaRes, secRes, clutchRes, newsRes, redditRes, phRes, prRes] = await Promise.allSettled([
+      searchAdzuna(adzunaId, adzunaKey),
+      searchSECEdgar(),
+      scrapeClutchRSS(),
+      scrapeGoogleNews(),
+      scrapeReddit(),
+      scrapeProductHunt(),
+      scrapePRNewswire(),
+    ]);
 
-    // Fire all sources simultaneously for each keyword
-    const results = await Promise.allSettled(kwList.map(async (kw) => {
-      const [indeedRes, cbRes, googleJobsRes, zipRes, clutchRes, newsRes, angelRes, phRes] = await Promise.allSettled([
-        searchIndeed(kw, indeedKey),
-        searchCrunchbase(kw, crunchbaseKey),
-        searchGoogleJobs(kw),
-        searchZipRecruiter(kw),
-        scrapeClutch(kw),
-        scrapeGoogleNews(kw),
-        searchAngelList(kw),
-        scrapeProductHunt(kw),
-      ]);
+    const allCompanies = [
+      ...(adzunaRes.value || []),
+      ...(secRes.value || []),
+      ...(clutchRes.value || []),
+      ...(newsRes.value || []),
+      ...(redditRes.value || []),
+      ...(phRes.value || []),
+      ...(prRes.value || []),
+    ];
 
-      const companies = [];
+    console.log('Raw total:', allCompanies.length);
 
-      // Indeed jobs
-      if (indeedRes.value?.jobs) {
-        indeedRes.value.jobs.forEach(job => {
-          if (job.company) companies.push({ name:job.company, website:job.website?`https://${job.website}`:'', location:job.location, jobTitle:job.title, salary:job.salary, jobSnippet:job.snippet, signals:job.signals, source:'indeed_hiring' });
-        });
-      }
-      // Google Jobs
-      if (googleJobsRes.value?.jobs) {
-        googleJobsRes.value.jobs.forEach(job => {
-          if (job.company) companies.push({ name:job.company, location:job.location, jobTitle:job.title, salary:job.salary, signals:job.signals, source:'google_jobs' });
-        });
-      }
-      // ZipRecruiter
-      if (zipRes.value?.jobs) {
-        zipRes.value.jobs.forEach(job => {
-          if (job.company) companies.push({ name:job.company, location:job.location, jobTitle:job.title, signals:job.signals, source:'ziprecruiter_hiring' });
-        });
-      }
-      // AngelList
-      if (angelRes.value?.companies) {
-        angelRes.value.companies.forEach(co => { if (co.name) companies.push(co); });
-      }
-      // Crunchbase
-      if (cbRes.value?.companies) {
-        cbRes.value.companies.forEach(co => companies.push(co));
-      }
-      // Clutch
-      if (clutchRes.value?.companies) {
-        clutchRes.value.companies.forEach(co => { if (co.name) companies.push(co); });
-      }
-      // Google News
-      if (newsRes.value?.companies) {
-        newsRes.value.companies.forEach(co => { if (co.name) companies.push({ ...co, jobTitle:co.newsHeadline }); });
-      }
-      // Product Hunt
-      if (phRes.value?.companies) {
-        phRes.value.companies.forEach(co => { if (co.name) companies.push(co); });
-      }
-
-      return companies;
-    }));
-
-    results.forEach(r => { if (r.value) allCompanies.push(...r.value); });
-
-    // Deduplicate by company name
+    // Deduplicate
     const seen = new Set();
     const unique = allCompanies.filter(c => {
       const key = (c.name||'').toLowerCase().trim();
@@ -696,22 +370,335 @@ app.post('/api/discover', async (req, res) => {
       return true;
     });
 
-    // Score and sort
+    // Score
     const WEIGHTS = {
-      hiring_marketing:25, raised_funding:15, agency_review:20, recently_launched:10,
-      salary_high:15, salary_mid:8, salary_low:5, salary_unknown:8,
+      hiring_marketing: 25, raised_funding: 20, agency_review: 30,
+      ai_replacement_signal: 20, hiring_ops: 15, recently_launched: 12,
+      needs_marketing: 15, social_pain_signal: 18, salary_high: 15,
+      salary_mid: 8, salary_low: 5, salary_unknown: 8,
     };
-    const scored = unique.map(c => {
-      const score = Math.min(Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t,0), 60);
-      return { ...c, icpScore: score };
-    }).sort((a,b)=>b.icpScore-a.icpScore);
 
-    res.json({ companies: scored, total: scored.length, sources: ['indeed','google_jobs','ziprecruiter','angellist','crunchbase','clutch','google_news','product_hunt'] });
+    const scored = unique
+      .map(c => ({
+        ...c,
+        icpScore: Math.min(Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0), 60)
+      }))
+      .sort((a,b) => b.icpScore - a.icpScore)
+      .slice(0, 50);
+
+    // Breakdown by source
+    const breakdown = {};
+    scored.forEach(c => { breakdown[c.source] = (breakdown[c.source]||0)+1; });
+
+    console.log('Unique:', unique.length, '| Returning:', scored.length);
+    console.log('Breakdown:', breakdown);
+    console.log('=== DISCOVERY END ===\n');
+
+    res.json({ companies: scored, total: scored.length, breakdown });
 
   } catch(e) {
-    console.error('Discovery error:', e);
+    console.error('Discovery fatal error:', e);
     res.status(500).json({ error: e.message });
   }
 });
 
-app.listen(PORT, () => console.log(`CROJungle Backend v3 running on port ${PORT}`));
+// ═══════════════════════════════════════════════════════════
+// RESEARCH ENGINE — 15-point audit
+// ═══════════════════════════════════════════════════════════
+const getFounderEmail = async (domain, hunterKey) => {
+  if (!hunterKey || !domain) return { email:'', founderName:'' };
+  try {
+    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
+    const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`);
+    const d = await safeJson(r);
+    const emails = d.data?.emails || [];
+    const priority = ['ceo','founder','co-founder','owner','president','cmo'];
+    const sorted = emails.sort((a,b) => {
+      const aS = priority.findIndex(p=>(a.position||'').toLowerCase().includes(p));
+      const bS = priority.findIndex(p=>(b.position||'').toLowerCase().includes(p));
+      return (aS===-1?99:aS)-(bS===-1?99:bS);
+    });
+    const best = sorted[0];
+    return { email: best?.value||'', founderName: `${best?.first_name||''} ${best?.last_name||''}`.trim(), title: best?.position||'' };
+  } catch { return { email:'', founderName:'' }; }
+};
+
+const checkPageSpeed = async (url) => {
+  try {
+    const r = await fetchT(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`, {}, 12000);
+    const d = await safeJson(r);
+    const score = d.lighthouseResult?.categories?.performance?.score;
+    return { mobileScore: score ? Math.round(score*100) : null, lcp: d.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue||null, confirmed: !!score };
+  } catch { return { mobileScore: null, confirmed: false }; }
+};
+
+const checkBuiltWith = async (domain) => {
+  try {
+    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
+    const r = await fetchT(`https://builtwith.com/${clean}`, {}, 8000);
+    const html = await safeText(r);
+    return {
+      hasCRM: /hubspot|salesforce|marketo|pipedrive|zoho crm/i.test(html),
+      hasEmailMarketing: /mailchimp|klaviyo|activecampaign|constant contact/i.test(html),
+      hasPixel: /facebook pixel|google analytics|gtag|hotjar|mixpanel/i.test(html),
+      hasVideo: /wistia|vimeo|youtube/i.test(html),
+      hasChat: /intercom|drift|crisp|zendesk/i.test(html),
+      confirmed: true,
+    };
+  } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, confirmed:false }; }
+};
+
+const checkGoogleAds = async (domain) => {
+  try {
+    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
+    const r = await fetchT(`https://adstransparency.google.com/advertiser?domain=${clean}&region=US`, {}, 8000);
+    const html = await safeText(r);
+    return { hasGoogleAds: html.length > 50000 || html.includes('ad-card'), confirmed: true };
+  } catch { return { hasGoogleAds: false, confirmed: false }; }
+};
+
+const checkFacebookAds = async (name, fbToken) => {
+  if (!fbToken) return { hasAds: false, ads: [], confirmed: false };
+  try {
+    const url = `https://graph.facebook.com/v19.0/ads_archive?access_token=${fbToken}&ad_reached_countries=US&ad_active_status=ACTIVE&search_terms=${encodeURIComponent(name)}&fields=page_name,ad_creative_body,ad_delivery_start_time&limit=5`;
+    const r = await fetchT(url, {}, 8000);
+    const d = await safeJson(r);
+    if (d.error) return { hasAds: false, ads: [], confirmed: false };
+    const ads = (d.data||[]).map(ad => ({ copy: (ad.ad_creative_body||'').slice(0,150), runningDays: ad.ad_delivery_start_time ? Math.floor((Date.now()-new Date(ad.ad_delivery_start_time))/86400000) : 0 }));
+    return { hasAds: ads.length > 0, ads, confirmed: true };
+  } catch { return { hasAds: false, ads: [], confirmed: false }; }
+};
+
+app.post('/api/research', async (req, res) => {
+  const { company, website, keys } = req.body;
+  const { firecrawlKey, hunterKey, fbToken } = keys || {};
+  if (!company) return res.status(400).json({ error: 'Company name required' });
+
+  const domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
+  console.log(`Research: ${company} | ${website||'no website'}`);
+
+  try {
+    // All signals fire simultaneously
+    const [homepageRes, emailRes, googleAdsRes, fbAdsRes, pageSpeedRes, builtWithRes] = await Promise.allSettled([
+      website && firecrawlKey
+        ? fetchT('https://api.firecrawl.dev/v1/scrape', { method:'POST', headers:{'Authorization':`Bearer ${firecrawlKey}`,'Content-Type':'application/json'}, body: JSON.stringify({url:website,formats:['markdown'],onlyMainContent:true}) }, 12000).then(r=>r.json()).catch(()=>({data:{markdown:''}}))
+        : Promise.resolve({data:{markdown:''}}),
+      domain && hunterKey ? getFounderEmail(domain, hunterKey) : Promise.resolve({email:'',founderName:''}),
+      domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
+      fbToken ? checkFacebookAds(company, fbToken) : Promise.resolve({hasAds:false,ads:[]}),
+      website ? checkPageSpeed(website) : Promise.resolve({mobileScore:null}),
+      domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
+    ]);
+
+    const content = homepageRes.value?.data?.markdown || homepageRes.value?.markdown || '';
+    const email = emailRes.value || {};
+    const googleAds = googleAdsRes.value || {};
+    const fbAds = fbAdsRes.value || {};
+    const pageSpeed = pageSpeedRes.value || {};
+    const builtWith = builtWithRes.value || {};
+
+    // Homepage analysis
+    const hasCTA = /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
+    const hasWeakHeadline = /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
+    const hasTestimonials = /testimonial|review|client said|case study|trusted by|customers say/i.test(content);
+    const hasPricing = /pricing|plans|per month|subscription|\$/i.test(content);
+    const hasVideo = /video|youtube|vimeo|wistia/i.test(content);
+    const hasAgency = /powered by|designed by|marketing by/i.test(content);
+
+    // Dunford positioning score
+    const positioningScore = (() => {
+      let s = 0;
+      if (!hasWeakHeadline) s+=2;
+      if (content.slice(0,1000).match(/for\s+\w+\s+(who|that|with)/i)) s+=2;
+      if (hasTestimonials) s+=2;
+      if (content.match(/unlike|instead of|compared to|vs\./i)) s+=2;
+      if (hasPricing) s+=1;
+      if (hasVideo) s+=1;
+      return Math.min(s, 10);
+    })();
+
+    // 4 Buckets
+    const buckets = {
+      ACQUISITION: {
+        googleAds: googleAds.hasGoogleAds ? 'Running Google Ads — confirmed' : 'No Google Ads detected',
+        facebookAds: fbAds.hasAds ? `${fbAds.ads.length} active Facebook ads` : 'No Facebook ads running',
+        fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
+        staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
+      },
+      CONVERSION: {
+        hasCTA: hasCTA ? 'CTA present above fold' : 'No clear CTA detected above fold',
+        headline: hasWeakHeadline ? 'Generic headline detected — no differentiation' : 'Headline appears specific',
+        socialProof: hasTestimonials ? 'Testimonials/case studies present' : 'No social proof detected',
+        pricing: hasPricing ? 'Pricing visible' : 'No pricing shown — creates friction',
+        mobileScore: pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100 mobile score` : 'Mobile score unavailable',
+        lcp: pageSpeed.lcp ? `Load time: ${pageSpeed.lcp}` : '',
+        positioningScore: `Dunford positioning: ${positioningScore}/10`,
+      },
+      AUTHORITY: {
+        agencyFooter: hasAgency ? 'Agency relationship detected in footer' : 'No agency footer detected',
+        video: hasVideo ? 'Video content present' : 'No video content detected',
+        linkedinNote: 'Check LinkedIn manually for CMO presence and last post date',
+      },
+      INFRASTRUCTURE: {
+        crm: builtWith.hasCRM ? 'CRM detected' : 'No CRM detected',
+        emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : 'No email marketing detected',
+        trackingPixel: builtWith.hasPixel ? 'Analytics/pixel present' : 'No tracking pixel detected',
+        chat: builtWith.hasChat ? 'Live chat present' : 'No live chat detected',
+        video: builtWith.hasVideo ? 'Video hosting detected' : '',
+      },
+    };
+
+    // Flaws
+    const flaws = [];
+    if (!hasCTA) flaws.push('no_cta');
+    if (hasWeakHeadline) flaws.push('weak_hero');
+    if (!hasTestimonials) flaws.push('no_social_proof');
+    if (!builtWith.hasCRM) flaws.push('no_crm');
+    if (!builtWith.hasPixel) flaws.push('no_tracking');
+    if (!googleAds.hasGoogleAds) flaws.push('no_google_ads');
+    if (!fbAds.hasAds) flaws.push('no_fb_ads');
+    else if (fbAds.ads?.some(a=>a.runningDays>180)) flaws.push('stale_fb_ads');
+    if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50) flaws.push('slow_mobile');
+    if (positioningScore < 5) flaws.push('weak_positioning');
+
+    // Top pain
+    const painMap = [
+      { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Landing page or homepage rebuild', product:'Website Rebuild', price:'$10k–$25k' },
+      { id:'weak_positioning', pain:`Positioning ${positioningScore}/10 — generic messaging any competitor could use`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$15k–$40k' },
+      { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + landing page', product:'Landing Page + Ads', price:'$10k–$20k' },
+      { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Growth Retainer', price:'$8k–$15k/month' },
+      { id:'no_tracking', pain:'No tracking pixel — spending on marketing with no way to measure what works', opportunity:'Analytics + tracking infrastructure', product:'Growth Retainer', price:'$8k–$15k/month' },
+      { id:'slow_mobile', pain:`Mobile score ${pageSpeed.mobileScore}/100 — majority of traffic leaves before seeing the offer`, opportunity:'Site speed + mobile rebuild', product:'Website Rebuild', price:'$10k–$25k' },
+      { id:'no_google_ads', pain:'No Google Ads — competitors are capturing demand this company cannot see', opportunity:'Paid search + landing pages', product:'Growth Retainer', price:'$8k–$20k/month' },
+      { id:'no_social_proof', pain:'No testimonials or case studies — buyers cannot verify claims before buying', opportunity:'Social proof system', product:'Website Rebuild', price:'$8k–$20k' },
+      { id:'weak_hero', pain:'Homepage headline does not differentiate from a single competitor', opportunity:'Positioning + homepage rewrite', product:'Website Rebuild', price:'$10k–$30k' },
+    ];
+    const topPain = painMap.find(p => flaws.includes(p.id));
+
+    // Recommended product
+    const getRecommendedProduct = () => {
+      const hasAdSpend = googleAds.hasGoogleAds || fbAds.hasAds;
+      const hasInfra = builtWith.hasCRM || builtWith.hasPixel;
+      // Already spending + missing infrastructure = retainer
+      if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$8k–$35k/month', reason:'Already spending on ads but missing the infrastructure to track, nurture and convert — revenue is leaking', flag:'⚠ Needs CEO retainer proof points in Settings' };
+      // No marketing tech at all + complex site = AI Brain
+      if (!builtWith.hasCRM && !builtWith.hasPixel && !builtWith.hasEmailMarketing && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'Digital presence has no intelligence layer — disconnected systems, no automation, no tracking', flag:'⚠ Needs CEO AI Brain examples in Settings' };
+      // Bad website = website rebuild
+      if (flaws.includes('no_cta') || positioningScore < 5 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40)) return { product:'Website Rebuild', price:'$10k–$25k', reason:'Homepage has critical conversion failures — fastest win and opens the door to bigger work', flag:'' };
+      // Running ads with no landing page = landing page
+      if (hasAdSpend && flaws.includes('no_cta')) return { product:'Landing Page', price:'$5k–$15k', reason:'Running ads with no dedicated landing page — immediate ROI fix', flag:'' };
+      // Default
+      return { product:'Website / Landing Page', price:'$5k–$25k', reason:'Homepage conversion gaps identified — start here then expand', flag:'' };
+    };
+
+    const recommendedProduct = getRecommendedProduct();
+
+    console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product}`);
+
+    res.json({
+      email: email.email||'',
+      founderName: email.founderName||'',
+      founderTitle: email.title||'',
+      buckets, flaws, topPain, positioningScore, recommendedProduct,
+      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel },
+      homepageContent: content.slice(0,3000),
+      richData: {
+        googleAds: buckets.ACQUISITION.googleAds,
+        fbAds: buckets.ACQUISITION.facebookAds,
+        mobileScore: buckets.CONVERSION.mobileScore,
+        hasCRM: buckets.INFRASTRUCTURE.crm,
+        hasPixel: buckets.INFRASTRUCTURE.trackingPixel,
+        positioningScore: buckets.CONVERSION.positioningScore,
+      },
+    });
+  } catch(e) {
+    console.error('Research error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.listen(PORT, () => console.log(`CROJungle v6 — port ${PORT}`));
+
+// ── DIAGNOSTICS — tests all sources at once ───────────────
+app.post('/api/diagnostics', async (req, res) => {
+  const { keys } = req.body;
+  const { adzunaId, adzunaKey, indeedKey, crunchbaseKey, hunterKey, firecrawlKey } = keys || {};
+  const results = {};
+
+  // Test Adzuna
+  try {
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${adzunaId}&app_key=${adzunaKey}&results_per_page=3&what=marketing+manager&sort_by=date`;
+    const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
+    const d = await safeJson(r);
+    results.adzuna = { ok: r.ok && (d.results||[]).length > 0, count: (d.results||[]).length, total: d.count||0, error: d.exception||null };
+  } catch(e) { results.adzuna = { ok: false, error: e.message }; }
+
+  // Test SEC EDGAR
+  try {
+    const r = await fetchT(`https://efts.sec.gov/LATEST/search-index?q=%22marketing%22&forms=D&dateRange=custom&startdt=${new Date(Date.now()-30*864e5).toISOString().split('T')[0]}&enddt=${new Date().toISOString().split('T')[0]}`, { headers: { 'Accept': 'application/json' } }, 8000);
+    const d = await safeJson(r);
+    results.sec_edgar = { ok: true, count: d.hits?.hits?.length || 0, total: d.hits?.total?.value || 0 };
+  } catch(e) { results.sec_edgar = { ok: false, error: e.message }; }
+
+  // Test Clutch RSS
+  try {
+    const r = await fetchT('https://clutch.co/feed', {}, 6000);
+    const xml = await safeText(r);
+    const items = (xml.match(/<item>/g)||[]).length;
+    results.clutch_rss = { ok: items > 0, count: items };
+  } catch(e) { results.clutch_rss = { ok: false, error: e.message }; }
+
+  // Test Google News RSS
+  try {
+    const r = await fetchT('https://news.google.com/rss/search?q=company+hires+CMO&hl=en-US&gl=US&ceid=US:en', {}, 6000);
+    const xml = await safeText(r);
+    const items = (xml.match(/<item>/g)||[]).length;
+    results.google_news = { ok: items > 0, count: items };
+  } catch(e) { results.google_news = { ok: false, error: e.message }; }
+
+  // Test Reddit
+  try {
+    const r = await fetchT('https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency&sort=new&limit=5&restrict_sr=1', { headers: { 'User-Agent': 'CROJungle/1.0' } }, 6000);
+    const d = await safeJson(r);
+    const count = d?.data?.children?.length || 0;
+    results.reddit = { ok: count > 0, count };
+  } catch(e) { results.reddit = { ok: false, error: e.message }; }
+
+  // Test Product Hunt RSS
+  try {
+    const r = await fetchT('https://www.producthunt.com/feed', {}, 6000);
+    const xml = await safeText(r);
+    const items = (xml.match(/<item>/g)||[]).length;
+    results.product_hunt = { ok: items > 0, count: items };
+  } catch(e) { results.product_hunt = { ok: false, error: e.message }; }
+
+  // Test Hunter.io
+  if (hunterKey) {
+    try {
+      const r = await fetchT(`https://api.hunter.io/v2/account?api_key=${hunterKey}`, {}, 6000);
+      const d = await safeJson(r);
+      results.hunter = { ok: !!d.data, requests_remaining: d.data?.requests?.searches?.available || 0, error: d.errors?.[0]?.details || null };
+    } catch(e) { results.hunter = { ok: false, error: e.message }; }
+  } else { results.hunter = { ok: false, error: 'No key provided' }; }
+
+  // Test Crunchbase
+  if (crunchbaseKey) {
+    try {
+      const r = await fetchT(`https://api.crunchbase.com/api/v4/entities/organizations/apple?card_ids=fields&field_ids=short_description&user_key=${crunchbaseKey}`, {}, 6000);
+      results.crunchbase = { ok: r.ok, status: r.status, error: r.ok ? null : 'Invalid key or no access' };
+    } catch(e) { results.crunchbase = { ok: false, error: e.message }; }
+  } else { results.crunchbase = { ok: false, error: 'No key provided' }; }
+
+  // Test PR Newswire RSS
+  try {
+    const r = await fetchT('https://www.prnewswire.com/rss/news-releases-list.rss', {}, 6000);
+    const xml = await safeText(r);
+    const items = (xml.match(/<item>/g)||[]).length;
+    results.pr_newswire = { ok: items > 0, count: items };
+  } catch(e) { results.pr_newswire = { ok: false, error: e.message }; }
+
+  // Test backend itself
+  results.backend = { ok: true, version: 'v6' };
+
+  res.json(results);
+});
