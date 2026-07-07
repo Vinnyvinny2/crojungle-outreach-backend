@@ -101,16 +101,105 @@ app.get('/api/email', async (req, res) => {
 app.get('/api/find-website', async (req, res) => {
   const { company } = req.query;
   if (!company) return res.status(400).json({ error: 'Company name required' });
+
+  const BLOCKED = [
+    'google.','facebook.com','linkedin.com','twitter.com','instagram.com',
+    'youtube.com','indeed.com','glassdoor.com','yelp.com','wikipedia.org',
+    'bloomberg.com','crunchbase.com','pitchbook.com','zoominfo.com','apollo.io',
+    'reddit.com','amazon.com','apple.com','microsoft.com','trustpilot.com',
+    'bbb.org','clutch.co','g2.com','capterra.com','getapp.com','ziprecruiter.com',
+    'monster.com','careerbuilder.com','simplyhired.com','salary.com','payscale.com',
+    'sec.gov','irs.gov','usa.gov','github.com','producthunt.com','techcrunch.com',
+    'forbes.com','businessinsider.com','wsj.com','nytimes.com','ft.com',
+  ];
+
+  const isBlocked = (url) => {
+    try {
+      const domain = new URL(url).hostname.replace('www.','').toLowerCase();
+      return BLOCKED.some(b => domain.includes(b)) || domain.length < 4;
+    } catch { return true; }
+  };
+
   try {
-    const q = encodeURIComponent(company + ' official website');
-    const r = await fetchT(`https://www.google.com/search?q=${q}`, {}, 8000);
-    const html = await safeText(r);
-    const match = html.match(/href="(https?:\/\/(?!google|youtube|facebook|twitter|linkedin|instagram|yelp|wikipedia)[^"&]+)"/);
-    if (match) {
-      try { return res.json({ website: new URL(match[1]).origin }); } catch {}
-    }
+    // Method 1: Try Clearbit free autocomplete API
+    try {
+      const r = await fetchT(
+        `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
+        { headers: { 'Accept': 'application/json' } },
+        5000
+      );
+      const d = await safeJson(r);
+      if (Array.isArray(d) && d.length > 0 && d[0].domain) {
+        const website = `https://${d[0].domain}`;
+        console.log(`Clearbit found: ${website}`);
+        return res.json({ website, source: 'clearbit' });
+      }
+    } catch(e) { console.log('Clearbit lookup failed:', e.message); }
+
+    // Method 2: DuckDuckGo instant answer (less likely to block than Google)
+    try {
+      const q = encodeURIComponent(`${company} official website`);
+      const r = await fetchT(
+        `https://api.duckduckgo.com/?q=${q}&format=json&no_redirect=1&no_html=1`,
+        { headers: { 'Accept': 'application/json' } },
+        6000
+      );
+      const d = await safeJson(r);
+      const official = d.AbstractURL || d.OfficialWebsite || '';
+      if (official && !isBlocked(official)) {
+        const parsed = new URL(official);
+        console.log(`DuckDuckGo found: ${parsed.origin}`);
+        return res.json({ website: parsed.origin, source: 'duckduckgo' });
+      }
+      // Check related topics
+      const topics = d.RelatedTopics || [];
+      for (const t of topics) {
+        const url = t.FirstURL || '';
+        if (url && !isBlocked(url)) {
+          try {
+            const parsed = new URL(url);
+            if (parsed.hostname.includes(company.toLowerCase().replace(/\s+/g,'').slice(0,6))) {
+              return res.json({ website: parsed.origin, source: 'duckduckgo' });
+            }
+          } catch {}
+        }
+      }
+    } catch(e) { console.log('DuckDuckGo failed:', e.message); }
+
+    // Method 3: Google search as last resort with aggressive filtering
+    try {
+      const q = encodeURIComponent(`"${company}" official site`);
+      const r = await fetchT(
+        `https://www.google.com/search?q=${q}&num=10`,
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } },
+        8000
+      );
+      const html = await safeText(r);
+      const urlMatches = [...html.matchAll(/href="(https?:\/\/[^"&>]+)"/g)];
+      for (const m of urlMatches) {
+        const url = m[1];
+        if (!isBlocked(url)) {
+          try {
+            const parsed = new URL(url);
+            const domain = parsed.hostname.replace('www.','').toLowerCase();
+            // Domain should somewhat match company name
+            const companySlug = company.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,8);
+            const domainSlug = domain.split('.')[0].replace(/[^a-z0-9]/g,'');
+            if (domainSlug.includes(companySlug.slice(0,4)) || companySlug.includes(domainSlug.slice(0,4))) {
+              console.log(`Google found: ${parsed.origin}`);
+              return res.json({ website: parsed.origin, source: 'google' });
+            }
+          } catch {}
+        }
+      }
+    } catch(e) { console.log('Google search failed:', e.message); }
+
+    console.log(`No website found for "${company}"`);
     res.json({ website: '' });
-  } catch(e) { res.json({ website: '' }); }
+  } catch(e) {
+    console.error('find-website error:', e.message);
+    res.json({ website: '' });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -392,19 +481,38 @@ app.post('/api/discover', async (req, res) => {
       return true;
     });
 
-    // Score
+    // Score — full 100 point scale
+    // Discovery signals give a pre-research score
+    // Higher signals = more confident ICP match
     const WEIGHTS = {
-      hiring_marketing: 25, raised_funding: 20, agency_review: 30,
-      ai_replacement_signal: 20, hiring_ops: 15, recently_launched: 12,
-      needs_marketing: 15, social_pain_signal: 18, salary_high: 15,
-      salary_mid: 8, salary_low: 5, salary_unknown: 8,
+      // Stage 4 signals — hottest, in market NOW
+      agency_review: 45,        // Just fired/reviewing agency — hottest possible
+      social_pain_signal: 35,   // Founder venting publicly right now
+      founder_venting: 10,      // Additional venting bonus
+      // Stage 3-4 signals — actively in motion
+      hiring_marketing: 30,     // Posting marketing role = active pain
+      salary_high: 20,          // High salary = real budget
+      raised_funding: 25,       // Has money, needs to deploy on growth
+      // Stage 3 signals — aware, researching
+      ai_replacement_signal: 25, // Ops hire = AI replacement opportunity
+      hiring_ops: 10,
+      tool_frustration: 20,     // Switching marketing software
+      // Stage 5 signals — just launched
+      recently_launched: 15,
+      needs_marketing: 10,
+      expanding: 12,
+      // Salary modifiers
+      salary_mid: 10,
+      salary_low: 5,
+      salary_unknown: 5,
     };
 
     const scored = unique
-      .map(c => ({
-        ...c,
-        icpScore: Math.min(Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0), 60)
-      }))
+      .map(c => {
+        const raw = Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0);
+        const icpScore = Math.min(Math.round(raw), 85); // cap at 85 before research adds final 15
+        return { ...c, icpScore };
+      })
       .sort((a,b) => b.icpScore - a.icpScore)
       .slice(0, 50);
 
