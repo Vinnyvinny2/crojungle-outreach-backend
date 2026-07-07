@@ -210,22 +210,30 @@ const searchAdzuna = async (appId, appKey) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
     const searches = [
-      // Senior marketing signals — real budget, real authority
-      { title: 'VP of Marketing', isOps: false },
-      { title: 'Head of Marketing', isOps: false },
-      { title: 'Chief Marketing Officer', isOps: false },
-      { title: 'Director of Marketing', isOps: false },
-      { title: 'Growth Marketing Manager', isOps: false },
-      { title: 'Demand Generation Manager', isOps: false },
-      // Ops signals — AI replacement opportunity
-      { title: 'Head of Operations', isOps: true },
-      { title: 'VP of Operations', isOps: true },
-      { title: 'Director of Operations', isOps: true },
+      // Profile 1: E-commerce with marketing pain
+      { title: 'Head of E-commerce', isOps: false, profile: 'ecommerce' },
+      { title: 'E-commerce Marketing Manager', isOps: false, profile: 'ecommerce' },
+      // Profile 2: SaaS growth
+      { title: 'VP of Marketing', isOps: false, profile: 'saas' },
+      { title: 'Head of Growth', isOps: false, profile: 'saas' },
+      { title: 'Demand Generation Manager', isOps: false, profile: 'saas' },
+      // Profile 3: Multi-location local business
+      { title: 'Marketing Director', isOps: false, profile: 'local' },
+      { title: 'Chief Marketing Officer', isOps: false, profile: 'any' },
+      // Profile 4: Leadership change
+      { title: 'Head of Marketing', isOps: false, profile: 'any' },
+      { title: 'Director of Marketing', isOps: false, profile: 'any' },
+      // Profile 6: AI/software integration
+      { title: 'Head of Operations', isOps: true, profile: 'ai_ops' },
+      { title: 'Director of Operations', isOps: true, profile: 'ai_ops' },
+      { title: 'VP of Operations', isOps: true, profile: 'ai_ops' },
+      { title: 'Business Analyst', isOps: true, profile: 'ai_ops' },
+      { title: 'Customer Success Manager', isOps: true, profile: 'ai_ops' },
     ];
 
-    // ALL IN PARALLEL — critical fix
+    // ALL IN PARALLEL
     const results = await Promise.allSettled(
-      searches.map(async ({ title, isOps }) => {
+      searches.map(async ({ title, isOps, profile }) => {
         const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
         const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
         if (!r.ok) { console.log(`Adzuna "${title}" ${r.status}`); return []; }
@@ -244,10 +252,11 @@ const searchAdzuna = async (appId, appKey) => {
             salary: salaryNum ? `$${Math.round(salaryNum/1000)}k-$${Math.round((job.salary_max||salaryNum)/1000)}k` : '',
             jobSnippet: (job.description||'').replace(/<[^>]+>/g,'').slice(0,150),
             source: isOps ? 'adzuna_ops' : 'adzuna_jobs',
+            icpProfile: profile,
             signals: {
               hiring_marketing: !isOps,
               hiring_ops: isOps,
-              ai_replacement_signal: isOps,
+              ai_replacement_signal: isOps && profile === 'ai_ops',
               salary_high: salaryNum >= 90000,
               salary_mid: salaryNum >= 60000 && salaryNum < 90000,
               salary_low: salaryNum > 0 && salaryNum < 60000,
@@ -321,29 +330,161 @@ const scrapeClutchRSS = async () => {
 // ═══════════════════════════════════════════════════════════
 const scrapeGoogleNews = async () => {
   const results = [];
+  // 10 targeted searches — each maps to a specific pain signal
   const queries = [
-    'company hires "VP of Marketing" OR "CMO" OR "Head of Marketing" 2026',
-    'startup raises "Series A" OR "Series B" funding 2026',
+    { q: 'company hires "VP of Marketing" OR "CMO" OR "Head of Marketing" 2026', type: 'hire' },
+    { q: 'startup raises "Series A" OR "Series B" funding 2026', type: 'funding' },
+    { q: 'company "appointed" "Chief Marketing Officer" 2026', type: 'hire' },
+    { q: 'business rebrand 2026 "new brand" OR "new identity" OR "rebranding"', type: 'rebrand' },
+    { q: 'company "opens new location" OR "expanding" OR "new office" 2026', type: 'expansion' },
+    { q: 'startup "acquired by" OR "acquisition" marketing 2026', type: 'acquisition' },
+    { q: '"fired marketing agency" OR "left agency" OR "agency not delivering"', type: 'agency_pain' },
+    { q: 'company "raises" million "growth" 2026 marketing', type: 'funding' },
+    { q: '"VP of Growth" OR "Head of Growth" hired appointed 2026', type: 'hire' },
+    { q: 'company "launched" "new product" OR "new service" 2026', type: 'launch' },
   ];
-  for (const q of queries) {
+
+  const signalMap = {
+    hire: { hiring_marketing: true },
+    funding: { raised_funding: true },
+    rebrand: { rebranding: true, needs_marketing: true },
+    expansion: { expanding: true },
+    acquisition: { recently_acquired: true, needs_marketing: true },
+    agency_pain: { agency_review: true, social_pain_signal: true },
+    launch: { recently_launched: true, needs_marketing: true },
+  };
+
+  for (const { q, type } of queries) {
     try {
       const r = await fetchT(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`, {}, 8000);
       const xml = await safeText(r);
       const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-      items.slice(0,8).forEach(item => {
+      items.slice(0, 10).forEach(item => {
         const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
-        const isFunding = /raises|Series [AB]|funded|closes/i.test(title);
-        const isHire = /hires|appoints|CMO|VP marketing|head of marketing/i.test(title);
-        if (!isFunding && !isHire) return;
-        const m = title.match(/^([A-Z][A-Za-z0-9\s&\.]+?)(?:\s+(?:Raises|Hires|Appoints|Closes|Names|Secures))/);
-        if (m && m[1].length > 2 && m[1].length < 50) {
-          results.push({ name: m[1].trim(), source: isFunding?'news_funding':'news_hire', jobTitle: title.slice(0,80), signals: { raised_funding: isFunding, hiring_marketing: isHire } });
-        }
+        if (!title) return;
+        // Extract company name — appears before action verb
+        const m = title.match(/^([A-Z][A-Za-z0-9\s&\.,]+?)(?:\s+(?:Raises|Hires|Appoints|Closes|Names|Secures|Opens|Launches|Acquires|Rebrands|Expands|Fires|Leaves|Announces|Appointed|Hired|Named|Promoted))/i);
+        if (!m || m[1].length < 3 || m[1].length > 60) return;
+        const name = m[1].trim();
+        // Filter out news sites, not companies
+        if (/^(the|a|an|in|on|at|by|for|with|from|this|that|these|those|its|their)/i.test(name)) return;
+        results.push({
+          name,
+          source: 'news_' + type,
+          jobTitle: title.slice(0, 80),
+          signals: signalMap[type] || {},
+        });
       });
     } catch(e) { /* silent */ }
   }
-  console.log(`Google News: ${results.length}`);
+  console.log(`Google News: ${results.length} from 10 targeted searches`);
   return results;
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE: BIZBUYSELL RSS — owners preparing for exit
+// These founders want to maximize value BEFORE selling
+// Perfect CROJungle pitch: "we'll grow your revenue before you sell"
+// Free RSS, no bot protection
+// ═══════════════════════════════════════════════════════════
+const scrapeBizBuySell = async () => {
+  try {
+    const feeds = [
+      'https://www.bizbuysell.com/rss/businesses-for-sale/',
+      'https://www.bizbuysell.com/rss/new-businesses-for-sale.rss',
+    ];
+    const results = [];
+    for (const feedUrl of feeds) {
+      try {
+        const r = await fetchT(feedUrl, { headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0' } }, 8000);
+        const xml = await safeText(r);
+        if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) continue;
+        const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+        items.slice(0, 20).forEach(item => {
+          const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+          const desc = (item.match(/<description><!\[CDATA\[([^\]]+)\]\]><\/description>/) || [])?.[1] || '';
+          const link = item.match(/<link>([^<]+)<\/link>/)?.[1] || '';
+          if (!title || title.length < 5) return;
+          // Extract revenue if mentioned
+          const revenueMatch = desc.match(/\$([0-9,]+[MK]?)\s*(?:revenue|annual|gross)/i);
+          const revenue = revenueMatch ? revenueMatch[0] : '';
+          results.push({
+            name: title.trim().slice(0, 60),
+            website: link,
+            jobTitle: 'Listed for sale — owner wants to maximize value',
+            jobSnippet: (desc.replace(/<[^>]+>/g, '').slice(0, 150)) + (revenue ? ` | ${revenue}` : ''),
+            source: 'bizbuysell',
+            signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: true },
+          });
+        });
+        if (results.length > 0) break;
+      } catch(e) { /* try next feed */ }
+    }
+    console.log(`BizBuySell: ${results.length}`);
+    return results;
+  } catch(e) {
+    console.error('BizBuySell error:', e.message);
+    return [];
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE: FACEBOOK AD LIBRARY — companies running ads
+// Running ads + bad landing page = perfect CROJungle pitch
+// Requires fbToken in settings
+// ═══════════════════════════════════════════════════════════
+const searchFacebookAds = async (fbToken) => {
+  if (!fbToken) return [];
+  const results = [];
+  const searches = [
+    'SaaS software',
+    'e-commerce store',
+    'professional services',
+    'B2B company',
+    'healthcare clinic',
+    'real estate',
+    'fitness gym',
+    'restaurant',
+  ];
+  try {
+    for (const term of searches.slice(0, 4)) {
+      try {
+        const url = `https://graph.facebook.com/v19.0/ads_archive?access_token=${fbToken}&ad_reached_countries=US&ad_active_status=ACTIVE&search_terms=${encodeURIComponent(term)}&fields=page_name,page_id,ad_delivery_start_time,spend&limit=10`;
+        const r = await fetchT(url, {}, 8000);
+        const d = await safeJson(r);
+        if (d.error) { console.log('FB Ads error:', d.error.message); continue; }
+        (d.data || []).forEach(ad => {
+          if (!ad.page_name) return;
+          const daysRunning = ad.ad_delivery_start_time
+            ? Math.floor((Date.now() - new Date(ad.ad_delivery_start_time)) / 86400000)
+            : 0;
+          results.push({
+            name: ad.page_name,
+            website: `https://facebook.com/${ad.page_id}`,
+            jobTitle: `Running Facebook Ads${daysRunning > 90 ? ` for ${daysRunning} days — stale creative` : ''}`,
+            source: 'facebook_ads',
+            signals: {
+              running_fb_ads: true,
+              stale_ads: daysRunning > 90,
+              needs_marketing: true,
+            },
+          });
+        });
+      } catch(e) { /* silent */ }
+    }
+    // Dedupe
+    const seen = new Set();
+    const unique = results.filter(r => {
+      const k = r.name.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+    console.log(`Facebook Ads: ${unique.length}`);
+    return unique;
+  } catch(e) {
+    console.error('Facebook Ads error:', e.message);
+    return [];
+  }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -442,15 +583,15 @@ const scrapePRNewswire = async () => {
 // ═══════════════════════════════════════════════════════════
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys } = req.body;
-  const { adzunaId, adzunaKey } = keys || {};
+  const { adzunaId, adzunaKey, fbToken } = keys || {};
 
   console.log('\n=== DISCOVERY START ===');
   console.log('Keywords:', keywords);
   console.log('Adzuna keys present:', !!(adzunaId && adzunaKey));
 
   try {
-    // ALL 7 sources fire simultaneously
-    const [adzunaRes, secRes, clutchRes, newsRes, redditRes, phRes, prRes] = await Promise.allSettled([
+    // ALL sources fire simultaneously
+    const [adzunaRes, secRes, clutchRes, newsRes, redditRes, phRes, prRes, bizRes, fbAdsRes] = await Promise.allSettled([
       searchAdzuna(adzunaId, adzunaKey),
       searchSECEdgar(),
       scrapeClutchRSS(),
@@ -458,6 +599,8 @@ app.post('/api/discover', async (req, res) => {
       scrapeReddit(),
       scrapeProductHunt(),
       scrapePRNewswire(),
+      scrapeBizBuySell(),
+      searchFacebookAds(fbToken),
     ]);
 
     const allCompanies = [
@@ -468,13 +611,46 @@ app.post('/api/discover', async (req, res) => {
       ...(redditRes.value || []),
       ...(phRes.value || []),
       ...(prRes.value || []),
+      ...(bizRes.value || []),
+      ...(fbAdsRes.value || []),
     ];
 
     console.log('Raw total:', allCompanies.length);
 
+    // ── ICP FILTER — remove companies that are clearly too large ──
+    const BLOCKED_COMPANIES = new Set([
+      'google','amazon','apple','microsoft','meta','facebook','netflix','tesla','nvidia',
+      'openai','anthropic','stripe','shopify','salesforce','hubspot','oracle','sap',
+      'ibm','intel','qualcomm','adobe','zoom','slack','twitter','linkedin','uber',
+      'airbnb','lyft','doordash','instacart','coinbase','robinhood','palantir',
+      'snowflake','databricks','mongodb','twilio','okta','cloudflare','datadog',
+      'new relic','zendesk','freshworks','servicenow','workday','paycom','paychex',
+      'adp','square','block','paypal','visa','mastercard','amex','goldman sachs',
+      'jpmorgan','bank of america','wells fargo','citibank','walmart','target',
+      'costco','home depot','lowes','mcdonalds','starbucks','coca cola','pepsi',
+      'johnson johnson','pfizer','merck','abbvie','unitedhealth','cvs','walgreens',
+      'the new york times','washington post','cnn','fox','disney','warner','comcast',
+    ]);
+
+    const icpFiltered = allCompanies.filter(c => {
+      const name = (c.name||'').toLowerCase().trim();
+      if (!name || name.length < 2) return false;
+      // Block obvious large companies by name
+      const nameWords = name.split(/\s+/);
+      if (BLOCKED_COMPANIES.has(name)) return false;
+      if (nameWords.some(w => BLOCKED_COMPANIES.has(w) && w.length > 4)) return false;
+      // Block companies with "Inc." that are clearly enterprises (very long names = conglomerates)
+      if (name.length > 55) return false;
+      // Block government/non-profit signals
+      if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center)\b/i.test(name)) return false;
+      return true;
+    });
+
+    console.log(`After ICP filter: ${icpFiltered.length} (removed ${allCompanies.length - icpFiltered.length} large/irrelevant)`);
+
     // Deduplicate
     const seen = new Set();
-    const unique = allCompanies.filter(c => {
+    const unique = icpFiltered.filter(c => {
       const key = (c.name||'').toLowerCase().trim();
       if (!key || key.length < 2 || seen.has(key)) return false;
       seen.add(key);
@@ -485,23 +661,29 @@ app.post('/api/discover', async (req, res) => {
     // Discovery signals give a pre-research score
     // Higher signals = more confident ICP match
     const WEIGHTS = {
-      // Stage 4 signals — hottest, in market NOW
-      agency_review: 45,        // Just fired/reviewing agency — hottest possible
-      social_pain_signal: 35,   // Founder venting publicly right now
-      founder_venting: 10,      // Additional venting bonus
-      // Stage 3-4 signals — actively in motion
-      hiring_marketing: 30,     // Posting marketing role = active pain
-      salary_high: 20,          // High salary = real budget
-      raised_funding: 25,       // Has money, needs to deploy on growth
-      // Stage 3 signals — aware, researching
-      ai_replacement_signal: 25, // Ops hire = AI replacement opportunity
+      // Stage 4 — hottest, in market NOW
+      agency_review: 45,
+      social_pain_signal: 35,
+      founder_venting: 10,
+      // Stage 3-4 — actively in motion
+      hiring_marketing: 30,
+      salary_high: 20,
+      raised_funding: 25,
+      running_fb_ads: 30,       // confirmed budget + digital presence
+      stale_ads: 15,            // running same ads 90+ days = frustrated
+      // Exit prep — owner motivated to grow revenue fast
+      preparing_for_exit: 35,
+      needs_revenue_growth: 15,
+      owner_motivated: 10,
+      // Other signals
+      ai_replacement_signal: 25,
       hiring_ops: 10,
-      tool_frustration: 20,     // Switching marketing software
-      // Stage 5 signals — just launched
+      tool_frustration: 20,
       recently_launched: 15,
       needs_marketing: 10,
+      rebranding: 20,
       expanding: 12,
-      // Salary modifiers
+      recently_acquired: 18,
       salary_mid: 10,
       salary_low: 5,
       salary_unknown: 5,
