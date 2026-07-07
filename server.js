@@ -1179,6 +1179,26 @@ Return ONLY valid JSON, no markdown:
       return Math.min(bonus, 15);
     })();
 
+    // ── BRAIN GATE — if Brain didn't run, don't return fake rule-based data ──
+    // Rule-based checks are not reliable enough to show to users
+    if (!brainAudit) {
+      const reason = !apiKey ? 'No Anthropic API key in Settings'
+        : !firecrawlKey ? 'No Firecrawl key in Settings'
+        : content.length < 500 && !screenshotUrl ? 'Website could not be scraped — wrong URL or site blocked'
+        : 'Brain analysis failed — check API keys';
+
+      console.log(`Brain gate blocked: ${reason}`);
+      return res.status(422).json({
+        brainFailed: true,
+        reason,
+        screenshotUrl: screenshotUrl || null, // still return screenshot so user can verify website
+        partialData: {
+          email: email.email||'',
+          founderName: email.founderName||'',
+        }
+      });
+    }
+
     console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product} | +${researchBonus} research bonus`);
 
     res.json({
@@ -1199,7 +1219,7 @@ Return ONLY valid JSON, no markdown:
         positioningScore: buckets.CONVERSION.positioningScore,
         designQuality: designQuality,
         conversionRating: conversionRating,
-        visuallyAnalyzed: !!visualAnalysis,
+        visuallyAnalyzed: true, // Brain always does visual analysis
       },
     });
   } catch(e) {
