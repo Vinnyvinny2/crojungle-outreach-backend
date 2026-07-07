@@ -198,21 +198,29 @@ const searchSECEdgar = async () => {
 // SIGNAL SOURCE 3: CLUTCH RSS — agency frustration
 // ═══════════════════════════════════════════════════════════
 const scrapeClutchRSS = async () => {
-  try {
-    const r = await fetchT('https://clutch.co/feed', {}, 8000);
-    const xml = await safeText(r);
-    const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-    const results = [];
-    items.slice(0,15).forEach(item => {
-      const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
-      const reviewMatch = title.match(/^(.+?)\s+(?:Review|review)/);
-      if (reviewMatch && reviewMatch[1].length > 2 && reviewMatch[1].length < 60) {
-        results.push({ name: reviewMatch[1].trim(), source: 'clutch_review', jobTitle: 'Left agency review on Clutch', signals: { agency_review: true } });
-      }
-    });
-    console.log(`Clutch RSS: ${results.length}`);
-    return results;
-  } catch(e) { console.error('Clutch error:', e.message); return []; }
+  const results = [];
+  const feeds = [
+    'https://clutch.co/feed',
+    'https://clutch.co/agencies/digital-marketing/feed',
+  ];
+  for (const feedUrl of feeds) {
+    try {
+      const r = await fetchT(feedUrl, { headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0 (compatible; RSS Reader)' } }, 8000);
+      const xml = await safeText(r);
+      if (!xml || xml.trim().startsWith('<!DOCTYPE')) continue;
+      const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+      items.slice(0,10).forEach(item => {
+        const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+        const reviewMatch = title.match(/^(.+?)\s+(?:Review|review)/);
+        if (reviewMatch && reviewMatch[1].length > 2 && reviewMatch[1].length < 60) {
+          results.push({ name: reviewMatch[1].trim(), source: 'clutch_review', jobTitle: 'Left agency review on Clutch', signals: { agency_review: true } });
+        }
+      });
+      if (results.length > 0) break;
+    } catch(e) { /* try next */ }
+  }
+  console.log(`Clutch: ${results.length}`);
+  return results;
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -250,35 +258,41 @@ const scrapeGoogleNews = async () => {
 // ═══════════════════════════════════════════════════════════
 const scrapeReddit = async () => {
   const results = [];
-  const feeds = [
-    'https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency+help&sort=new&limit=10&restrict_sr=1&t=month',
-    'https://www.reddit.com/r/smallbusiness/search.json?q=website+marketing&sort=new&limit=10&restrict_sr=1&t=month',
-    'https://www.reddit.com/r/startups/search.json?q=marketing+hire+CMO&sort=new&limit=10&restrict_sr=1&t=month',
+  const searches = [
+    { url: 'https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency&sort=new&limit=15&restrict_sr=1&t=month', sub: 'entrepreneur' },
+    { url: 'https://www.reddit.com/r/smallbusiness/search.json?q=website+redesign+marketing&sort=new&limit=15&restrict_sr=1&t=month', sub: 'smallbusiness' },
+    { url: 'https://www.reddit.com/r/startups/search.json?q=marketing+hire&sort=new&limit=15&restrict_sr=1&t=month', sub: 'startups' },
+    { url: 'https://www.reddit.com/r/Entrepreneur/new.json?limit=25', sub: 'entrepreneur_new' },
   ];
-  for (const url of feeds) {
+  for (const { url, sub } of searches) {
     try {
-      const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
+      const r = await fetchT(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'CROJungle/1.0 (business lead research; contact vinny@crojungleteam.com)',
+        }
+      }, 10000);
+      if (!r.ok) continue;
       const d = await safeJson(r);
       const posts = d?.data?.children || [];
       posts.forEach(post => {
-        const p = post.data;
-        if (!p || p.score < 3 || !p.author || p.author === '[deleted]') return;
-        const title = p.title || '';
-        const text = (p.selftext||'').slice(0,200);
-        const isPain = /agency|website|marketing|ads|revenue|customers|growth|leads|conversion|redesign/i.test(title+text);
+        const p = post?.data;
+        if (!p || !p.title || !p.author || p.author === '[deleted]') return;
+        const text = p.title + ' ' + (p.selftext||'').slice(0,200);
+        const isPain = /agency|website|marketing|ads|revenue|customers|growth|leads|conversion|redesign|CMO|branding|SEO/i.test(text);
         if (!isPain) return;
         results.push({
-          name: `u/${p.author}`,
+          name: 'u/' + p.author + ' (r/' + sub + ')',
           website: '',
-          jobTitle: title.slice(0,80),
-          jobSnippet: text.slice(0,150),
+          jobTitle: p.title.slice(0,80),
+          jobSnippet: (p.selftext||'').slice(0,150),
           source: 'reddit_pain',
-          signals: { social_pain_signal: true },
+          signals: { social_pain_signal: true, founder_venting: true },
         });
       });
-    } catch(e) { /* silent */ }
+    } catch(e) { console.log('Reddit ' + sub + ' error:', e.message); }
   }
-  console.log(`Reddit: ${results.length}`);
+  console.log('Reddit: ' + results.length);
   return results;
 };
 
@@ -287,15 +301,21 @@ const scrapeReddit = async () => {
 // ═══════════════════════════════════════════════════════════
 const scrapeProductHunt = async () => {
   try {
-    const r = await fetchT('https://www.producthunt.com/feed', {}, 8000);
+    const r = await fetchT('https://www.producthunt.com/feed', {
+      headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0 (compatible; RSS Reader/1.0)' }
+    }, 8000);
     const xml = await safeText(r);
+    if (!xml || xml.trim().startsWith('<!DOCTYPE')) {
+      console.log('Product Hunt: blocked');
+      return [];
+    }
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-    const results = items.slice(0,15).map(item => {
+    const results = items.slice(0,20).map(item => {
       const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
       if (!title) return null;
       return { name: title.split(' — ')[0].split(' - ')[0].trim().slice(0,60), source: 'product_hunt', jobTitle: 'Just launched on Product Hunt', signals: { recently_launched: true, needs_marketing: true } };
     }).filter(Boolean);
-    console.log(`Product Hunt: ${results.length}`);
+    console.log('Product Hunt: ' + results.length);
     return results;
   } catch(e) { console.error('Product Hunt error:', e.message); return []; }
 };
