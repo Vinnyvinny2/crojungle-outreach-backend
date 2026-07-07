@@ -286,16 +286,32 @@ const searchSECEdgar = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
     const today = new Date().toISOString().split('T')[0];
-    const url = `https://efts.sec.gov/LATEST/search-index?q=%22marketing%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D`;
-    const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
+    // Correct EDGAR full-text search API
+    const url = `https://efts.sec.gov/LATEST/search-index?q=%22Series+A%22+OR+%22Series+B%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D&hits.hits.total.value=true`;
+    const r = await fetchT(url, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'CROJungle Research research@crojungle.com' }
+    }, 10000);
+    if (!r.ok) {
+      // Fallback to EDGAR company search
+      const r2 = await fetchT(`https://data.sec.gov/submissions/`, { headers: { 'User-Agent': 'CROJungle research@crojungle.com' } }, 8000);
+      console.log('SEC EDGAR fallback status:', r2.status);
+      return [];
+    }
     const d = await safeJson(r);
-    const results = (d.hits?.hits || []).slice(0,20).map(hit => {
-      const src = hit._source || {};
-      const name = src.entity_name || src.company_name || '';
-      if (!name) return null;
-      return { name: name.trim(), source: 'sec_edgar', signals: { raised_funding: true }, jobTitle: 'Form D filing — recently raised' };
+    const hits = d?.hits?.hits || [];
+    const results = hits.slice(0,20).map(hit => {
+      const src = hit._source || hit.fields || {};
+      const name = src.entity_name || src.company_name || src.entityName || '';
+      const amount = src.total_offering_amount || src.offeringAmount || '';
+      if (!name || name.length < 2) return null;
+      return {
+        name: name.trim(),
+        source: 'sec_edgar',
+        signals: { raised_funding: true },
+        jobTitle: `Form D filing${amount ? ` — $${Number(amount).toLocaleString()} raise` : ' — recently raised'}`,
+      };
     }).filter(Boolean);
-    console.log(`SEC EDGAR: ${results.length}`);
+    console.log(`SEC EDGAR: ${results.length} from ${hits.length} hits`);
     return results;
   } catch(e) { console.error('SEC EDGAR error:', e.message); return []; }
 };
@@ -362,12 +378,31 @@ const scrapeGoogleNews = async () => {
       items.slice(0, 10).forEach(item => {
         const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
         if (!title) return;
-        // Extract company name — appears before action verb
-        const m = title.match(/^([A-Z][A-Za-z0-9\s&\.,]+?)(?:\s+(?:Raises|Hires|Appoints|Closes|Names|Secures|Opens|Launches|Acquires|Rebrands|Expands|Fires|Leaves|Announces|Appointed|Hired|Named|Promoted))/i);
-        if (!m || m[1].length < 3 || m[1].length > 60) return;
-        const name = m[1].trim();
-        // Filter out news sites, not companies
-        if (/^(the|a|an|in|on|at|by|for|with|from|this|that|these|those|its|their)/i.test(name)) return;
+
+        // Multiple extraction strategies
+        let name = '';
+
+        // Strategy 1: "CompanyName Raises/Hires/Appoints/etc"
+        const m1 = title.match(/^([A-Z][A-Za-z0-9\s&\.,]+?)\s+(?:Raises|Hires|Appoints|Closes|Names|Secures|Opens|Launches|Acquires|Rebrands|Expands|Announces|Promotes|Welcomes|Taps|Selects)\b/i);
+        if (m1) name = m1[1].trim();
+
+        // Strategy 2: "X joins CompanyName as CMO" or "CompanyName names X as CMO"
+        if (!name) {
+          const m2 = title.match(/(?:joins|named at|to lead at|as CMO of|as VP of Marketing at)\s+([A-Z][A-Za-z0-9\s&\.]+?)(?:\s+as|\s+to|\s*$|,)/i);
+          if (m2) name = m2[1].trim();
+        }
+
+        // Strategy 3: "CompanyName Funded" or "CompanyName Secures"
+        if (!name) {
+          const m3 = title.match(/^([A-Z][A-Za-z0-9\s&]+?)\s+(?:Funded|Backed|Valued|Acquired)/i);
+          if (m3) name = m3[1].trim();
+        }
+
+        if (!name || name.length < 3 || name.length > 60) return;
+        // Filter out news outlets and generic words
+        if (/^(the|a |an |in |on |at |by |for |with |from |this |new |top |best |how |why |what |when |where |who )/i.test(name)) return;
+        if (/news|times|post|herald|report|journal|magazine|media group|press$/i.test(name)) return;
+
         results.push({
           name,
           source: 'news_' + type,
@@ -397,8 +432,13 @@ const scrapeBizBuySell = async () => {
     for (const feedUrl of feeds) {
       try {
         const r = await fetchT(feedUrl, { headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0' } }, 8000);
+        console.log(`BizBuySell ${feedUrl}: status ${r.status}`);
         const xml = await safeText(r);
-        if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) continue;
+        console.log(`BizBuySell XML preview: ${(xml||'').slice(0,100)}`);
+        if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
+          console.log('BizBuySell: returned HTML, not RSS');
+          continue;
+        }
         const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
         items.slice(0, 20).forEach(item => {
           const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
@@ -617,6 +657,11 @@ app.post('/api/discover', async (req, res) => {
 
     console.log('Raw total:', allCompanies.length);
 
+    // Source volume debug — critical to see what's actually coming in
+    const sourceVolume = {};
+    allCompanies.forEach(c => { sourceVolume[c.source||'unknown'] = (sourceVolume[c.source||'unknown']||0)+1; });
+    console.log('Source volumes BEFORE filter:', sourceVolume);
+
     // ── ICP FILTER — remove companies that are clearly too large ──
     const BLOCKED_COMPANIES = new Set([
       'google','amazon','apple','microsoft','meta','facebook','netflix','tesla','nvidia',
@@ -689,14 +734,28 @@ app.post('/api/discover', async (req, res) => {
       salary_unknown: 5,
     };
 
-    const scored = unique
+    const allScored = unique
       .map(c => {
         const raw = Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0);
-        const icpScore = Math.min(Math.round(raw), 85); // cap at 85 before research adds final 15
+        const icpScore = Math.min(Math.round(raw), 85);
         return { ...c, icpScore };
       })
-      .sort((a,b) => b.icpScore - a.icpScore)
-      .slice(0, 50);
+      .sort((a,b) => b.icpScore - a.icpScore);
+
+    // Source diversity — cap Adzuna at 40% so other signals get through
+    // Without this, Adzuna's volume drowns out higher-quality signals
+    const MAX_TOTAL = 60;
+    const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.40); // 24 max from Adzuna
+    const sourceCount = {};
+    const scored = [];
+    for (const c of allScored) {
+      const isAdzuna = c.source === 'adzuna_jobs' || c.source === 'adzuna_ops';
+      const src = isAdzuna ? '_adzuna' : c.source;
+      sourceCount[src] = (sourceCount[src]||0) + 1;
+      if (isAdzuna && sourceCount['_adzuna'] > MAX_ADZUNA) continue;
+      scored.push(c);
+      if (scored.length >= MAX_TOTAL) break;
+    }
 
     // Breakdown by source
     const breakdown = {};
@@ -735,12 +794,26 @@ const getFounderEmail = async (domain, hunterKey) => {
   } catch { return { email:'', founderName:'' }; }
 };
 
+const pageSpeedCache = new Map();
 const checkPageSpeed = async (url) => {
+  if (!url) return { mobileScore: null, confirmed: false };
+  // Cache results for 24 hours to avoid 429s
+  const cacheKey = url.toLowerCase();
+  if (pageSpeedCache.has(cacheKey)) {
+    const cached = pageSpeedCache.get(cacheKey);
+    if (Date.now() - cached.ts < 24*60*60*1000) return cached.data;
+  }
   try {
-    const r = await fetchT(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`, {}, 12000);
+    const r = await fetchT(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`, {}, 15000);
+    if (r.status === 429) {
+      console.log('PageSpeed: rate limited — skipping');
+      return { mobileScore: null, confirmed: false };
+    }
     const d = await safeJson(r);
     const score = d.lighthouseResult?.categories?.performance?.score;
-    return { mobileScore: score ? Math.round(score*100) : null, lcp: d.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue||null, confirmed: !!score };
+    const data = { mobileScore: score ? Math.round(score*100) : null, lcp: d.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue||null, confirmed: !!score };
+    pageSpeedCache.set(cacheKey, { data, ts: Date.now() });
+    return data;
   } catch { return { mobileScore: null, confirmed: false }; }
 };
 
@@ -818,35 +891,67 @@ app.post('/api/research', async (req, res) => {
 
     console.log(`Firecrawl: ${content.length} chars, screenshot: ${!!screenshotUrl}`);
 
-    // If we have a screenshot AND Claude API key, do visual analysis
+    // If we have content OR screenshot, run the full Brain audit
     let visualAnalysis = null;
-    if (screenshotUrl && apiKey) {
-      try {
-        // Download screenshot and send to Claude vision
-        const imgRes = await fetchT(screenshotUrl, {}, 10000);
-        const imgBuffer = await imgRes.buffer();
-        const base64 = imgBuffer.toString('base64');
+    let brainAudit = null;
 
-        const visionRes = await fetchT('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 1000,
-            messages: [{
-              role: 'user',
-              content: [
-                {
-                  type: 'image',
-                  source: { type: 'base64', media_type: 'image/png', data: base64 },
-                },
-                {
-                  type: 'text',
-                  text: `Analyze this homepage screenshot for ${company}. Return JSON only:
+    if (apiKey && (screenshotUrl || content.length > 500)) {
+      try {
+        // Build message content — always send text, add image if available
+        const msgContent = [];
+
+        if (screenshotUrl) {
+          try {
+            const imgRes = await fetchT(screenshotUrl, {}, 10000);
+            const imgBuffer = await imgRes.buffer();
+            const base64 = imgBuffer.toString('base64');
+            msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
+          } catch(e) { console.log('Screenshot fetch failed:', e.message); }
+        }
+
+        const homepageSnippet = content.slice(0, 6000);
+
+        msgContent.push({
+          type: 'text',
+          text: `You are CROJungle's senior marketing auditor. Your job is to find the single most expensive problem in this business's digital presence and recommend the right CROJungle product to fix it.
+
+COMPANY: ${company}
+WEBSITE: ${website || 'Unknown'}
+SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
+
+HOMEPAGE CONTENT (scraped):
+${homepageSnippet || 'Not available'}
+
+TECH STACK DETECTED:
+- CRM: ${builtWith.hasCRM ? 'Yes' : 'None detected'}
+- Email Marketing: ${builtWith.hasEmailMarketing ? 'Yes' : 'None detected'}
+- Tracking Pixel: ${builtWith.hasPixel ? 'Yes' : 'None detected'}
+- Live Chat: ${builtWith.hasChat ? 'Yes' : 'None detected'}
+
+ADS:
+- Google Ads: ${googleAds.hasGoogleAds ? 'Running' : 'Not detected'}
+- Facebook Ads: ${fbAds.hasAds ? `${fbAds.ads?.length} active ads` : 'Not detected'}
+${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
+
+${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : 'No screenshot available — audit from content only.'}
+
+AUDIT TASK:
+1. What is the single most expensive problem this business has right now? Be specific — reference their actual content, actual tech gaps, actual positioning.
+2. What is the ONE thing a founder would be embarrassed about if you pointed it out?
+3. Which CROJungle product fixes this and why?
+
+CROJungle products:
+- Website Rebuild ($10k-$25k): homepage conversion failures, weak positioning, no CTA
+- Landing Page ($5k-$15k): running ads to homepage, no dedicated conversion page
+- AI Brain ($40k-$70k): no marketing intelligence layer, disconnected systems, no automation
+- Software Build / AI Integration ($25k-$75k): manual ops, no workflow automation, post-acquisition chaos
+- Growth Retainer ($8k-$35k/month): running ads but leaking revenue, needs ongoing optimization
+
+Return ONLY valid JSON, no markdown:
 {
   "hasCTAAboveFold": true/false,
-  "ctaText": "exact CTA button text or null",
-  "heroHeadline": "exact headline text",
+  "ctaText": "exact CTA text or null",
+  "heroHeadline": "exact headline",
   "headlineQuality": "specific/generic/missing",
   "hasVideo": true/false,
   "hasSocialProof": true/false,
@@ -854,24 +959,45 @@ app.post('/api/research', async (req, res) => {
   "designQuality": "professional/dated/poor",
   "mobileReady": true/false,
   "aboveFoldClutter": true/false,
-  "trustSignals": ["list of visible trust signals"],
-  "biggestVisualIssue": "single most important visual problem",
-  "overallConversionRating": "strong/moderate/weak"
+  "trustSignals": ["visible trust signals"],
+  "biggestVisualIssue": "single most important visual problem with specific detail",
+  "overallConversionRating": "strong/moderate/weak",
+  "realPain": "the single most expensive confirmed problem — specific, referenced from their actual content",
+  "embarrassingFinding": "the one thing the founder would be embarrassed about",
+  "recommendedProduct": "Website Rebuild|Landing Page|AI Brain|Software Build / AI Integration|Growth Retainer",
+  "recommendedPrice": "price range",
+  "recommendedReason": "why this product, referenced from their specific situation",
+  "pitchAngle": "one sentence pitch that opens with the pain and closes with curiosity"
 }`
-                }
-              ]
-            }]
+        });
+
+        const visionRes = await fetchT('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: msgContent }]
           }),
-        }, 15000);
+        }, 20000);
 
         const vd = await safeJson(visionRes);
         const vText = vd.content?.[0]?.text || '';
         try {
           const clean = vText.replace(/```json|```/g,'').trim();
-          visualAnalysis = JSON.parse(clean);
-          console.log('Visual analysis complete:', visualAnalysis.overallConversionRating);
-        } catch(e) { console.log('Vision parse error:', e.message); }
-      } catch(e) { console.log('Vision analysis error:', e.message); }
+          const parsed = JSON.parse(clean);
+          visualAnalysis = parsed;
+          brainAudit = {
+            realPain: parsed.realPain,
+            embarrassingFinding: parsed.embarrassingFinding,
+            recommendedProduct: parsed.recommendedProduct,
+            recommendedPrice: parsed.recommendedPrice,
+            recommendedReason: parsed.recommendedReason,
+            pitchAngle: parsed.pitchAngle,
+          };
+          console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
+        } catch(e) { console.log('Brain parse error:', e.message, vText.slice(0,200)); }
+      } catch(e) { console.log('Brain audit error:', e.message); }
     }
 
     // Merge text analysis with visual analysis
@@ -944,18 +1070,33 @@ app.post('/api/research', async (req, res) => {
       },
     };
 
-    // Flaws
+    // Flaws — ONLY flag what we can CONFIRM, not what we can't detect
+    // "Not detected" ≠ "Doesn't exist" — be conservative to avoid false pitches
     const flaws = [];
-    if (!hasCTA) flaws.push('no_cta');
-    if (hasWeakHeadline) flaws.push('weak_hero');
-    if (!hasTestimonials) flaws.push('no_social_proof');
-    if (!builtWith.hasCRM) flaws.push('no_crm');
-    if (!builtWith.hasPixel) flaws.push('no_tracking');
-    if (!googleAds.hasGoogleAds) flaws.push('no_google_ads');
-    if (!fbAds.hasAds) flaws.push('no_fb_ads');
-    else if (fbAds.ads?.some(a=>a.runningDays>180)) flaws.push('stale_fb_ads');
+
+    // HIGH CONFIDENCE — visual or direct confirmation
+    if (!hasCTA && visualAnalysis && !visualAnalysis.hasCTAAboveFold) flaws.push('no_cta');
+    else if (!hasCTA && !visualAnalysis && content.length > 500) flaws.push('no_cta'); // fallback if no screenshot
+
+    if (hasWeakHeadline && visualAnalysis?.headlineQuality === 'generic') flaws.push('weak_hero');
+    else if (hasWeakHeadline && !visualAnalysis) flaws.push('weak_hero');
+
+    if (!hasTestimonials && visualAnalysis && !visualAnalysis.hasSocialProof) flaws.push('no_social_proof');
+    else if (!hasTestimonials && !visualAnalysis && content.length > 500) flaws.push('no_social_proof');
+
+    // MEDIUM CONFIDENCE — BuiltWith confirmed absence (only flag if content is rich enough to be reliable)
+    if (!builtWith.hasCRM && builtWith.checked && content.length > 1000) flaws.push('no_crm');
+    if (!builtWith.hasPixel && builtWith.checked) flaws.push('no_tracking');
+
+    // HIGH CONFIDENCE — confirmed running via API
+    if (fbAds.hasAds && fbAds.ads?.some(a=>a.runningDays>180)) flaws.push('stale_fb_ads');
+
+    // Mobile — only flag if actually checked and confirmed bad
     if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50) flaws.push('slow_mobile');
-    if (positioningScore < 5) flaws.push('weak_positioning');
+    if (positioningScore < 4) flaws.push('weak_positioning');
+
+    // DO NOT flag absence of ads as a flaw — we don't know if they're running them elsewhere
+    // DO NOT flag no_google_ads or no_fb_ads — SpyFu/Facebook checks are unreliable without keys
 
     // Top pain
     const painMap = [
@@ -969,33 +1110,82 @@ app.post('/api/research', async (req, res) => {
       { id:'no_social_proof', pain:'No testimonials or case studies — buyers cannot verify claims before buying', opportunity:'Social proof system', product:'Website Rebuild', price:'$8k–$20k' },
       { id:'weak_hero', pain:'Homepage headline does not differentiate from a single competitor', opportunity:'Positioning + homepage rewrite', product:'Website Rebuild', price:'$10k–$30k' },
     ];
-    const topPain = painMap.find(p => flaws.includes(p.id));
+    const topPain = (() => {
+      // Brain found a specific pain — use it, it's more accurate than rule-based
+      if (brainAudit?.realPain) {
+        return {
+          pain: brainAudit.realPain,
+          opportunity: brainAudit.embarrassingFinding || brainAudit.pitchAngle || 'See pitch angle below',
+          product: brainAudit.recommendedProduct,
+          price: brainAudit.recommendedPrice,
+          pitchAngle: brainAudit.pitchAngle,
+          fromBrain: true,
+        };
+      }
+      return painMap.find(p => flaws.includes(p.id));
+    })();
 
-    // Recommended product
+    // Recommended product — Brain audit takes priority when available
     const getRecommendedProduct = () => {
+      // Brain already made the call — trust it
+      if (brainAudit?.recommendedProduct) {
+        return {
+          product: brainAudit.recommendedProduct,
+          price: brainAudit.recommendedPrice || '$10k–$25k',
+          reason: brainAudit.recommendedReason || brainAudit.realPain || '',
+          pitchAngle: brainAudit.pitchAngle || '',
+          flag: '',
+        };
+      }
+      // Fallback logic when Brain didn't run
       const hasAdSpend = googleAds.hasGoogleAds || fbAds.hasAds;
       const hasInfra = builtWith.hasCRM || builtWith.hasPixel;
-      // Already spending + missing infrastructure = retainer
-      if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$8k–$35k/month', reason:'Already spending on ads but missing the infrastructure to track, nurture and convert — revenue is leaking', flag:'⚠ Needs CEO retainer proof points in Settings' };
-      // No marketing tech at all + complex site = AI Brain
-      if (!builtWith.hasCRM && !builtWith.hasPixel && !builtWith.hasEmailMarketing && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'Digital presence has no intelligence layer — disconnected systems, no automation, no tracking', flag:'⚠ Needs CEO AI Brain examples in Settings' };
-      // Bad website = website rebuild
-      if (flaws.includes('no_cta') || positioningScore < 5 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40)) return { product:'Website Rebuild', price:'$10k–$25k', reason:'Homepage has critical conversion failures — fastest win and opens the door to bigger work', flag:'' };
-      // Running ads with no landing page = landing page
-      if (hasAdSpend && flaws.includes('no_cta')) return { product:'Landing Page', price:'$5k–$15k', reason:'Running ads with no dedicated landing page — immediate ROI fix', flag:'' };
-      // Default
-      return { product:'Website / Landing Page', price:'$5k–$25k', reason:'Homepage conversion gaps identified — start here then expand', flag:'' };
+      const isAIOpportunity = !builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat;
+      const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40);
+      const isMediaOrAgency = /media|agency|creative|PR|communications|marketing firm|studio/i.test(content.slice(0,500));
+      if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$25k–$75k', reason:'Merged or growing operation with no unified tech stack', flag:'' };
+      if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$8k–$35k/month', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
+      if (isAIOpportunity && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'No intelligence layer — disconnected systems, no automation, no tracking', flag:'' };
+      if (isBroken) return { product:'Website Rebuild', price:'$10k–$25k', reason:'Homepage has critical conversion failures', flag:'' };
+      return { product:'Website / Landing Page', price:'$5k–$25k', reason:'Homepage conversion gaps identified', flag:'' };
     };
 
-    const recommendedProduct = getRecommendedProduct();
+    const recommendedProduct = (() => {
+      // If Brain audit ran successfully, trust it over rule-based logic
+      // Brain saw the actual content + screenshot and made a specific recommendation
+      if (brainAudit?.recommendedProduct && brainAudit?.recommendedReason) {
+        console.log('Using Brain audit recommendation:', brainAudit.recommendedProduct);
+        return {
+          product: brainAudit.recommendedProduct,
+          price: brainAudit.recommendedPrice || '$5k–$75k',
+          reason: brainAudit.recommendedReason,
+          flag: '',
+          fromBrain: true,
+        };
+      }
+      // Fallback to rule-based if Brain didn't run (no API key or no content)
+      return getRecommendedProduct();
+    })();
 
-    console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product}`);
+    // Post-research score — adds up to 15 points on top of discovery score
+    // Discovery was capped at 85, research adds the final 15
+    const researchBonus = (() => {
+      let bonus = 0;
+      if (topPain) bonus += 5;                          // confirmed specific pain
+      if (flaws.length >= 3) bonus += 3;                // multiple confirmed issues
+      if (email.email) bonus += 3;                      // found founder email
+      if (visualAnalysis) bonus += 2;                   // visual analysis completed
+      if (pageSpeed.mobileScore && pageSpeed.mobileScore < 60) bonus += 2; // confirmed mobile issue
+      return Math.min(bonus, 15);
+    })();
+
+    console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product} | +${researchBonus} research bonus`);
 
     res.json({
       email: email.email||'',
       founderName: email.founderName||'',
       founderTitle: email.title||'',
-      buckets, flaws, topPain, positioningScore, recommendedProduct,
+      buckets, flaws, topPain, positioningScore, recommendedProduct, researchBonus, brainAudit,
       visualAnalysis,
       screenshotUrl,
       signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel },
