@@ -210,17 +210,17 @@ const searchAdzuna = async (appId, appKey) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
     const searches = [
-      // Marketing signals → retainer/website/landing page leads
-      { title: 'marketing manager', isOps: false },
-      { title: 'VP marketing', isOps: false },
-      { title: 'head of marketing', isOps: false },
-      { title: 'growth marketing', isOps: false },
-      { title: 'demand generation', isOps: false },
-      { title: 'performance marketing', isOps: false },
-      // Ops signals → AI replacement / software build leads
-      { title: 'operations manager', isOps: true },
-      { title: 'customer service manager', isOps: true },
-      { title: 'business analyst', isOps: true },
+      // Senior marketing signals — real budget, real authority
+      { title: 'VP of Marketing', isOps: false },
+      { title: 'Head of Marketing', isOps: false },
+      { title: 'Chief Marketing Officer', isOps: false },
+      { title: 'Director of Marketing', isOps: false },
+      { title: 'Growth Marketing Manager', isOps: false },
+      { title: 'Demand Generation Manager', isOps: false },
+      // Ops signals — AI replacement opportunity
+      { title: 'Head of Operations', isOps: true },
+      { title: 'VP of Operations', isOps: true },
+      { title: 'Director of Operations', isOps: true },
     ];
 
     // ALL IN PARALLEL — critical fix
@@ -600,54 +600,130 @@ const checkFacebookAds = async (name, fbToken) => {
 };
 
 app.post('/api/research', async (req, res) => {
-  const { company, website, keys } = req.body;
-  const { firecrawlKey, hunterKey, fbToken } = keys || {};
+  const { company, website, keys, apiKey } = req.body;
+  const { firecrawlKey, fbToken } = keys || {};
+  const browserData = req.body.browserData || {};
+  const pageSpeed = browserData.pageSpeed || {};
+  const emailData = browserData.emailData || {};
+  const companyData = browserData.companyData || {};
   if (!company) return res.status(400).json({ error: 'Company name required' });
 
   const domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
   console.log(`Research: ${company} | ${website||'no website'}`);
 
   try {
-    // All signals fire simultaneously
-    const [homepageRes, emailRes, googleAdsRes, fbAdsRes, pageSpeedRes, builtWithRes] = await Promise.allSettled([
+    // Fire all signals simultaneously
+    const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes] = await Promise.allSettled([
       website && firecrawlKey
-        ? fetchT('https://api.firecrawl.dev/v1/scrape', { method:'POST', headers:{'Authorization':`Bearer ${firecrawlKey}`,'Content-Type':'application/json'}, body: JSON.stringify({url:website,formats:['markdown'],onlyMainContent:true}) }, 12000).then(r=>r.json()).catch(()=>({data:{markdown:''}}))
-        : Promise.resolve({data:{markdown:''}}),
-      domain && hunterKey ? getFounderEmail(domain, hunterKey) : Promise.resolve({email:'',founderName:''}),
-      domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
+        ? fetchT('https://api.firecrawl.dev/v1/scrape', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 2000 }),
+          }, 20000).then(r=>r.json()).catch(e => { console.log('Firecrawl error:', e.message); return {}; })
+        : Promise.resolve({}),
       fbToken ? checkFacebookAds(company, fbToken) : Promise.resolve({hasAds:false,ads:[]}),
-      website ? checkPageSpeed(website) : Promise.resolve({mobileScore:null}),
       domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
+      domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
     ]);
 
-    const content = homepageRes.value?.data?.markdown || homepageRes.value?.markdown || '';
-    const email = emailRes.value || {};
-    const googleAds = googleAdsRes.value || {};
+    const firecrawlData = firecrawlRes.value || {};
+    const content = firecrawlData.data?.markdown || firecrawlData.markdown || '';
+    const screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
     const fbAds = fbAdsRes.value || {};
-    const pageSpeed = pageSpeedRes.value || {};
     const builtWith = builtWithRes.value || {};
+    const googleAds = googleAdsRes.value || {};
+    const email = emailData; // from browser via browserData
 
-    // Homepage analysis
-    const hasCTA = /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
-    const hasWeakHeadline = /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
-    const hasTestimonials = /testimonial|review|client said|case study|trusted by|customers say/i.test(content);
+    console.log(`Firecrawl: ${content.length} chars, screenshot: ${!!screenshotUrl}`);
+
+    // If we have a screenshot AND Claude API key, do visual analysis
+    let visualAnalysis = null;
+    if (screenshotUrl && apiKey) {
+      try {
+        // Download screenshot and send to Claude vision
+        const imgRes = await fetchT(screenshotUrl, {}, 10000);
+        const imgBuffer = await imgRes.buffer();
+        const base64 = imgBuffer.toString('base64');
+
+        const visionRes = await fetchT('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 1000,
+            messages: [{
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/png', data: base64 },
+                },
+                {
+                  type: 'text',
+                  text: `Analyze this homepage screenshot for ${company}. Return JSON only:
+{
+  "hasCTAAboveFold": true/false,
+  "ctaText": "exact CTA button text or null",
+  "heroHeadline": "exact headline text",
+  "headlineQuality": "specific/generic/missing",
+  "hasVideo": true/false,
+  "hasSocialProof": true/false,
+  "socialProofType": "testimonials/logos/reviews/none",
+  "designQuality": "professional/dated/poor",
+  "mobileReady": true/false,
+  "aboveFoldClutter": true/false,
+  "trustSignals": ["list of visible trust signals"],
+  "biggestVisualIssue": "single most important visual problem",
+  "overallConversionRating": "strong/moderate/weak"
+}`
+                }
+              ]
+            }]
+          }),
+        }, 15000);
+
+        const vd = await safeJson(visionRes);
+        const vText = vd.content?.[0]?.text || '';
+        try {
+          const clean = vText.replace(/```json|```/g,'').trim();
+          visualAnalysis = JSON.parse(clean);
+          console.log('Visual analysis complete:', visualAnalysis.overallConversionRating);
+        } catch(e) { console.log('Vision parse error:', e.message); }
+      } catch(e) { console.log('Vision analysis error:', e.message); }
+    }
+
+    // Merge text analysis with visual analysis
+    const hasCTA = visualAnalysis?.hasCTAAboveFold ?? /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
+    const hasWeakHeadline = visualAnalysis ? visualAnalysis.headlineQuality === 'generic' : /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
+    const hasTestimonials = visualAnalysis?.hasSocialProof ?? /testimonial|review|client said|case study|trusted by/i.test(content);
     const hasPricing = /pricing|plans|per month|subscription|\$/i.test(content);
-    const hasVideo = /video|youtube|vimeo|wistia/i.test(content);
+    const hasVideo = visualAnalysis?.hasVideo ?? /video|youtube|vimeo|wistia/i.test(content);
     const hasAgency = /powered by|designed by|marketing by/i.test(content);
+    const designQuality = visualAnalysis?.designQuality || 'unknown';
+    const conversionRating = visualAnalysis?.overallConversionRating || 'unknown';
 
     // Dunford positioning score
     const positioningScore = (() => {
       let s = 0;
-      if (!hasWeakHeadline) s+=2;
-      if (content.slice(0,1000).match(/for\s+\w+\s+(who|that|with)/i)) s+=2;
-      if (hasTestimonials) s+=2;
-      if (content.match(/unlike|instead of|compared to|vs\./i)) s+=2;
-      if (hasPricing) s+=1;
-      if (hasVideo) s+=1;
+      if (visualAnalysis) {
+        if (visualAnalysis.headlineQuality === 'specific') s+=3;
+        if (visualAnalysis.hasSocialProof) s+=2;
+        if (visualAnalysis.trustSignals?.length > 2) s+=2;
+        if (!visualAnalysis.aboveFoldClutter) s+=1;
+        if (visualAnalysis.hasVideo) s+=1;
+        if (visualAnalysis.designQuality === 'professional') s+=1;
+      } else {
+        if (!hasWeakHeadline) s+=2;
+        if (content.slice(0,1000).match(/for\s+\w+\s+(who|that|with)/i)) s+=2;
+        if (hasTestimonials) s+=2;
+        if (content.match(/unlike|instead of|compared to|vs\./i)) s+=2;
+        if (hasPricing) s+=1;
+        if (hasVideo) s+=1;
+      }
       return Math.min(s, 10);
     })();
 
-    // 4 Buckets
+    // 4 Buckets — enhanced with visual analysis
     const buckets = {
       ACQUISITION: {
         googleAds: googleAds.hasGoogleAds ? 'Running Google Ads — confirmed' : 'No Google Ads detected',
@@ -656,13 +732,21 @@ app.post('/api/research', async (req, res) => {
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
       },
       CONVERSION: {
-        hasCTA: hasCTA ? 'CTA present above fold' : 'No clear CTA detected above fold',
-        headline: hasWeakHeadline ? 'Generic headline detected — no differentiation' : 'Headline appears specific',
-        socialProof: hasTestimonials ? 'Testimonials/case studies present' : 'No social proof detected',
-        pricing: hasPricing ? 'Pricing visible' : 'No pricing shown — creates friction',
+        hasCTA: hasCTA ? `CTA present above fold${visualAnalysis?.ctaText ? ` — "${visualAnalysis.ctaText}"` : ''}` : 'No clear CTA detected above fold',
+        headline: hasWeakHeadline
+          ? `Generic headline${visualAnalysis?.heroHeadline ? ` — "${visualAnalysis.heroHeadline}"` : ''}`
+          : `Specific headline${visualAnalysis?.heroHeadline ? ` — "${visualAnalysis.heroHeadline}"` : ''}`,
+        socialProof: hasTestimonials
+          ? `Social proof present${visualAnalysis?.socialProofType ? ` (${visualAnalysis.socialProofType})` : ''}`
+          : 'No social proof detected',
+        pricing: hasPricing ? 'Pricing visible' : 'No pricing shown',
         mobileScore: pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100 mobile score` : 'Mobile score unavailable',
         lcp: pageSpeed.lcp ? `Load time: ${pageSpeed.lcp}` : '',
         positioningScore: `Dunford positioning: ${positioningScore}/10`,
+        designQuality: visualAnalysis ? `Design: ${designQuality}` : '',
+        conversionRating: visualAnalysis ? `Overall conversion: ${conversionRating}` : '',
+        biggestVisualIssue: visualAnalysis?.biggestVisualIssue || '',
+        visuallyAnalyzed: !!visualAnalysis,
       },
       AUTHORITY: {
         agencyFooter: hasAgency ? 'Agency relationship detected in footer' : 'No agency footer detected',
@@ -730,6 +814,8 @@ app.post('/api/research', async (req, res) => {
       founderName: email.founderName||'',
       founderTitle: email.title||'',
       buckets, flaws, topPain, positioningScore, recommendedProduct,
+      visualAnalysis,
+      screenshotUrl,
       signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel },
       homepageContent: content.slice(0,3000),
       richData: {
@@ -739,6 +825,9 @@ app.post('/api/research', async (req, res) => {
         hasCRM: buckets.INFRASTRUCTURE.crm,
         hasPixel: buckets.INFRASTRUCTURE.trackingPixel,
         positioningScore: buckets.CONVERSION.positioningScore,
+        designQuality: designQuality,
+        conversionRating: conversionRating,
+        visuallyAnalyzed: !!visualAnalysis,
       },
     });
   } catch(e) {
