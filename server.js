@@ -11,6 +11,14 @@ app.use(express.json({ limit: '10mb' }));
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
+
+// Free proxy for domains blocked by Render
+const fetchViaProxy = async (url, ms=10000) => {
+  const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url);
+  const r = await fetchT(proxyUrl, { headers: { 'Accept': 'application/json' } }, ms);
+  const d = await safeJson(r);
+  return d.contents || '';
+};
 const fetchT = (url, opts={}, ms=10000) => Promise.race([
   fetch(url, { ...opts, headers: { 'User-Agent': 'Mozilla/5.0 CROJungle/1.0', ...(opts.headers||{}) } }),
   new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))
@@ -199,14 +207,10 @@ const searchSECEdgar = async () => {
 // ═══════════════════════════════════════════════════════════
 const scrapeClutchRSS = async () => {
   const results = [];
-  const feeds = [
-    'https://clutch.co/feed',
-    'https://clutch.co/agencies/digital-marketing/feed',
-  ];
+  const feeds = ['https://clutch.co/feed', 'https://clutch.co/agencies/digital-marketing/feed'];
   for (const feedUrl of feeds) {
     try {
-      const r = await fetchT(feedUrl, { headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0 (compatible; RSS Reader)' } }, 8000);
-      const xml = await safeText(r);
+      const xml = await fetchViaProxy(feedUrl);
       if (!xml || xml.trim().startsWith('<!DOCTYPE')) continue;
       const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
       items.slice(0,10).forEach(item => {
@@ -219,7 +223,7 @@ const scrapeClutchRSS = async () => {
       if (results.length > 0) break;
     } catch(e) { /* try next */ }
   }
-  console.log(`Clutch: ${results.length}`);
+  console.log('Clutch: ' + results.length);
   return results;
 };
 
@@ -260,20 +264,21 @@ const scrapeReddit = async () => {
   const results = [];
   const searches = [
     { url: 'https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency&sort=new&limit=15&restrict_sr=1&t=month', sub: 'entrepreneur' },
-    { url: 'https://www.reddit.com/r/smallbusiness/search.json?q=website+redesign+marketing&sort=new&limit=15&restrict_sr=1&t=month', sub: 'smallbusiness' },
+    { url: 'https://www.reddit.com/r/smallbusiness/search.json?q=website+marketing&sort=new&limit=15&restrict_sr=1&t=month', sub: 'smallbusiness' },
     { url: 'https://www.reddit.com/r/startups/search.json?q=marketing+hire&sort=new&limit=15&restrict_sr=1&t=month', sub: 'startups' },
-    { url: 'https://www.reddit.com/r/Entrepreneur/new.json?limit=25', sub: 'entrepreneur_new' },
   ];
   for (const { url, sub } of searches) {
     try {
-      const r = await fetchT(url, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'CROJungle/1.0 (business lead research; contact vinny@crojungleteam.com)',
-        }
-      }, 10000);
-      if (!r.ok) continue;
-      const d = await safeJson(r);
+      // Try direct first, fallback to proxy
+      let d = null;
+      try {
+        const r = await fetchT(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'CROJungle/1.0' } }, 8000);
+        if (r.ok) d = await safeJson(r);
+      } catch(e) {}
+      if (!d) {
+        const txt = await fetchViaProxy(url);
+        try { d = JSON.parse(txt); } catch(e) {}
+      }
       const posts = d?.data?.children || [];
       posts.forEach(post => {
         const p = post?.data;
@@ -290,7 +295,7 @@ const scrapeReddit = async () => {
           signals: { social_pain_signal: true, founder_venting: true },
         });
       });
-    } catch(e) { console.log('Reddit ' + sub + ' error:', e.message); }
+    } catch(e) { console.log('Reddit ' + sub + ':', e.message); }
   }
   console.log('Reddit: ' + results.length);
   return results;
@@ -301,12 +306,9 @@ const scrapeReddit = async () => {
 // ═══════════════════════════════════════════════════════════
 const scrapeProductHunt = async () => {
   try {
-    const r = await fetchT('https://www.producthunt.com/feed', {
-      headers: { 'Accept': 'application/rss+xml, text/xml, */*', 'User-Agent': 'Mozilla/5.0 (compatible; RSS Reader/1.0)' }
-    }, 8000);
-    const xml = await safeText(r);
-    if (!xml || xml.trim().startsWith('<!DOCTYPE')) {
-      console.log('Product Hunt: blocked');
+    const xml = await fetchViaProxy('https://www.producthunt.com/feed');
+    if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.length < 100) {
+      console.log('Product Hunt: blocked via proxy too');
       return [];
     }
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
