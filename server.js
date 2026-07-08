@@ -235,6 +235,40 @@ const searchAdzuna = async (appId, appKey) => {
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 2: SEC EDGAR — real-time funding, no key needed
 // ═══════════════════════════════════════════════════════════
+// EMAIL INFRASTRUCTURE CHECK — SPF/DMARC via Google DNS API. Free, factual.
+// No DMARC = they've never set up serious email marketing/deliverability.
+const checkEmailDNS = async (domain) => {
+  try {
+    const clean = domain.replace(/^www\./, '');
+    const [spfR, dmarcR] = await Promise.all([
+      fetchT(`https://dns.google/resolve?name=${clean}&type=TXT`, {}, 6000).then(r=>r.json()).catch(()=>({})),
+      fetchT(`https://dns.google/resolve?name=_dmarc.${clean}&type=TXT`, {}, 6000).then(r=>r.json()).catch(()=>({})),
+    ]);
+    const spfTxt = (spfR.Answer||[]).map(a=>a.data||'').join(' ');
+    const dmarcTxt = (dmarcR.Answer||[]).map(a=>a.data||'').join(' ');
+    return {
+      hasSPF: /v=spf1/i.test(spfTxt),
+      hasDMARC: /v=DMARC1/i.test(dmarcTxt),
+      dmarcPolicy: (dmarcTxt.match(/p=(none|quarantine|reject)/i)||[])[1] || '',
+      confirmed: true,
+    };
+  } catch { return { hasSPF:false, hasDMARC:false, dmarcPolicy:'', confirmed:false }; }
+};
+
+// CONTENT FRESHNESS — sitemap.xml lastmod dates. "Last update 14 months ago" is provable.
+const checkContentFreshness = async (domain) => {
+  try {
+    const r = await fetchT(`https://${domain}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 8000);
+    const xml = await safeText(r);
+    if (!xml || !xml.includes('<lastmod>')) return { checked:false };
+    const dates = [...xml.matchAll(/<lastmod>([^<]+)<\/lastmod>/g)].map(m=>new Date(m[1])).filter(d=>!isNaN(d));
+    if (!dates.length) return { checked:false };
+    const newest = new Date(Math.max(...dates));
+    const daysSince = Math.floor((Date.now()-newest)/(24*60*60*1000));
+    return { checked:true, lastUpdate: newest.toISOString().split('T')[0], daysSince, stale: daysSince > 180 };
+  } catch { return { checked:false }; }
+};
+
 const searchSECEdgar = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
@@ -1001,7 +1035,7 @@ const checkBuiltWith = async (domain) => {
     const url = `https://${domain}`;
     const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html' } }, 10000);
     const html = await safeText(r);
-    if (!html || html.length < 500) return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false };
+    if (!html || html.length < 500) return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, titleTag:'', hasMetaDesc:false, hasH1:false, hasSchema:false, hasEmailCapture:false, hasBooking:false, copyrightYear:0, confirmed:false };
     return {
       // CRM / marketing automation — script fingerprints
       hasCRM: /hubspot|hs-scripts|salesforce|pardot|marketo|pipedrive|zoho.*crm/i.test(html),
@@ -1014,6 +1048,15 @@ const checkBuiltWith = async (domain) => {
       hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i.test(html),
       hasVideo: /wistia|vimeo|youtube\.com\/embed|vidyard/i.test(html),
       hasChat: /intercom|drift|crisp\.chat|zendesk.*widget|tawk\.to|livechat/i.test(html),
+      // ── ON-PAGE SEO & FRESHNESS (free — same HTML fetch) ──
+      titleTag: (html.match(/<title[^>]*>([^<]{0,120})/i)?.[1] || '').trim(),
+      hasMetaDesc: /<meta[^>]+name=["']description["'][^>]+content=["'][^"']{30,}/i.test(html),
+      hasH1: /<h1[\s>]/i.test(html),
+      hasSchema: /application\/ld\+json/i.test(html),
+      hasEmailCapture: /type=["']email["']|newsletter|subscribe/i.test(html),
+      hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet/i.test(html),
+      copyrightYear: (() => { const ys = [...html.matchAll(/(?:©|&copy;|copyright)[^0-9]{0,20}(20\d\d)/gi)].map(m=>parseInt(m[1])); return ys.length ? Math.max(...ys) : 0; })(),
+      hasBooking: /calendly|acuityscheduling|youcanbook|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
       confirmed: true,
     };
   } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false }; }
@@ -1139,6 +1182,15 @@ SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 HOMEPAGE CONTENT (scraped):
 ${homepageSnippet || 'Not available'}
 
+ON-PAGE SEO & SITE FRESHNESS (from their page source — facts):
+- Title tag: ${builtWith.titleTag ? `"${builtWith.titleTag}"` : 'missing or unreadable'}
+- Meta description: ${builtWith.hasMetaDesc ? 'present' : 'MISSING'}
+- H1: ${builtWith.hasH1 ? 'present' : 'MISSING'}
+- Schema markup: ${builtWith.hasSchema ? 'present' : 'none'}
+- Email capture: ${builtWith.hasEmailCapture ? 'present' : 'NONE — no list building'}
+- Booking tool: ${builtWith.hasBooking ? 'present' : 'none'}
+- Copyright year in footer: ${builtWith.copyrightYear || 'not found'}${builtWith.copyrightYear && builtWith.copyrightYear < new Date().getFullYear() - 1 ? ' — STALE, site looks abandoned' : ''}
+
 TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools; a positive is reliable, a "none detected" is NOT proof of absence. Do not build the pitch on claimed absence of CRM/pixel/email unless the company is clearly small):
 - CRM: ${builtWith.hasCRM ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
 - Email Marketing: ${builtWith.hasEmailMarketing ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
@@ -1200,12 +1252,12 @@ Return ONLY valid JSON, no markdown:
   "overallConversionRating": "strong/moderate/weak",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
   "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
-  "realPain": "the single most expensive confirmed problem across ALL areas — specific, referenced from their actual situation",
+  "realPain": "The single most expensive confirmed problem — expressed in terms of wasted money, lost revenue, or bleeding labor cost. Must reference a specific confirmed signal (ad spend, job postings, conversion gap). No technical jargon. One founder-facing sentence.",
   "embarrassingFinding": "the one thing the founder would be embarrassed about",
   "recommendedProduct": "Website Rebuild|Landing Page|End-to-End Marketing|AI Brain|Custom AI Software Build|Revenue Growth Retainer|Exit / Valuation Advisory",
   "recommendedPrice": "price range",
   "recommendedReason": "why this offering, referenced from their specific situation",
-  "pitchAngle": "one sentence pitch that opens with the pain and closes with curiosity"
+  "pitchAngle": "One sentence. Lead with the dollar problem — wasted spend, labor cost, or leaked revenue — not a technical finding. End with a question that creates curiosity. Never mention SEO, meta tags, schema, or technical jargon. Write like a peer who did their homework, not an agency pitching services. Example: 'You're running 300 Facebook ads into a homepage that sends clinicians and facility managers to the exact same search bar — want to see what that's costing per lead?' NOT: 'Your website lacks schema markup and a meta description.'"
 }`
         });
 
@@ -1294,6 +1346,17 @@ Return ONLY valid JSON, no markdown:
     const buckets = {
       ACQUISITION: {
         googleAds: builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : googleAds.hasGoogleAds ? 'Google Ads possibly running (unverified heuristic)' : 'No Google Ads tag on page (they may still run ads — unverified)',
+        seoBasics: builtWith.confirmed ? [
+          !builtWith.titleTag || builtWith.titleTag.length < 15 ? 'weak/missing title tag' : '',
+          !builtWith.hasMetaDesc ? 'no meta description' : '',
+          !builtWith.hasH1 ? 'no H1' : '',
+          !builtWith.hasSchema ? 'no schema markup' : '',
+        ].filter(Boolean).length ? 'On-page SEO gaps: ' + [
+          !builtWith.titleTag || builtWith.titleTag.length < 15 ? 'weak/missing title tag' : '',
+          !builtWith.hasMetaDesc ? 'no meta description' : '',
+          !builtWith.hasH1 ? 'no H1' : '',
+          !builtWith.hasSchema ? 'no schema markup' : '',
+        ].filter(Boolean).join(', ') : 'On-page SEO fundamentals in place (title, meta, H1, schema)' : '',
         facebookAds: fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length || ''} active Facebook ads (confirmed via Ad Library)`.trim() : builtWith.hasMetaPixel ? 'Meta pixel found on site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'No active Facebook ads found in Ad Library (checked)' : 'Facebook ads: could not check (Ad Library scrape failed)',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
@@ -1325,6 +1388,9 @@ Return ONLY valid JSON, no markdown:
         emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : builtWith.confirmed ? 'No email tool detected on-page (unverified)' : 'Email marketing: could not verify',
         trackingPixel: builtWith.hasPixel ? 'Analytics/pixel present' : builtWith.confirmed ? 'No pixel detected on-page (scan can miss it)' : 'Tracking: could not verify',
         chat: builtWith.hasChat ? 'Live chat present' : builtWith.confirmed ? 'No live chat detected (unverified)' : 'Chat: could not verify',
+        emailCapture: builtWith.confirmed ? (builtWith.hasEmailCapture ? 'Email capture present' : 'No email capture form found — zero list building from site traffic') : '',
+        booking: builtWith.confirmed ? (builtWith.hasBooking ? 'Booking/scheduler tool present' : 'No booking tool — every conversion requires manual back-and-forth') : '',
+        siteFreshness: (builtWith.copyrightYear && builtWith.copyrightYear < new Date().getFullYear() - 1) ? `Footer copyright says ${builtWith.copyrightYear} — site appears untouched for ${new Date().getFullYear() - builtWith.copyrightYear} years` : '',
         video: builtWith.hasVideo ? 'Video hosting detected' : '',
       },
       // OPERATIONS — the AI-replacement / software-build opportunity.
@@ -1396,6 +1462,8 @@ Return ONLY valid JSON, no markdown:
     // GROWTH — funding / exit signals
     if (discoverySignals.raised_funding && !builtWith.hasCRM) flaws.push('funded_no_infra');
     if (discoverySignals.preparing_for_exit) flaws.push('exit_prep');
+    if (builtWith.confirmed && !builtWith.hasEmailCapture) flaws.push('no_email_capture');
+    if (builtWith.copyrightYear && builtWith.copyrightYear < new Date().getFullYear() - 1) flaws.push('stale_site');
 
     // DO NOT flag absence of ads as a flaw — we don't know if they're running them elsewhere
     // DO NOT flag no_google_ads or no_fb_ads — SpyFu/Facebook checks are unreliable without keys
@@ -1406,7 +1474,9 @@ Return ONLY valid JSON, no markdown:
       { id:'exit_prep', pain:'Preparing for exit — every dollar of new revenue and every efficiency gain directly raises the sale price', opportunity:'Revenue growth + valuation advisory before the sale closes', product:'Exit / Valuation Advisory', price:'Custom' },
       { id:'manual_labor', pain:`Hiring ${manualRoleCount} manual roles — repetitive work that software could handle at a fraction of the cost`, opportunity:'Workflow automation / custom software', product:'Custom AI Software Build', price:'$25k–$50k' },
       { id:'funded_no_infra', pain:'Recently funded but no CRM or marketing infrastructure — capital to grow with nothing to capture or convert leads', opportunity:'Full marketing infrastructure + intelligence layer', product:'AI Brain', price:'$40k–$70k' },
+      { id:'stale_site', pain:`Footer copyright reads ${builtWith.copyrightYear} — the site has visibly not been touched in years, and prospects notice`, opportunity:'Full website rebuild', product:'Website Rebuild', price:'$10k–$25k' },
       { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Landing page or homepage rebuild', product:'Website Rebuild', price:'$10k–$25k' },
+      { id:'no_email_capture', pain:'No email capture anywhere on the site — every visitor who does not convert today is lost forever', opportunity:'Lead capture + email nurture system', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
       { id:'weak_positioning', pain:`Positioning ${positioningScore}/10 — generic messaging any competitor could use`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$15k–$40k' },
       { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + landing page', product:'End-to-End Marketing', price:'$10k–$20k' },
       { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
