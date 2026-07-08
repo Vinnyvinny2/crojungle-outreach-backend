@@ -1876,3 +1876,4 @@ app.post('/api/diagnostics', async (req, res) => {
 
   res.json(results);
 });
+ 
