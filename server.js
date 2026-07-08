@@ -463,7 +463,9 @@ const scrapeBizBuySell = async (fcKey) => {
     }
     // FIRECRAWL FALLBACK — RSS is bot-blocked, render the listings page instead
     if (results.length === 0 && fcKey) {
+      console.log('BizBuySell: trying Firecrawl fallback...');
       const md = await firecrawlScrape(fcKey, 'https://www.bizbuysell.com/businesses-for-sale/', 30000);
+      console.log(`BizBuySell Firecrawl: got ${md.length} chars`);
       if (md && md.length > 500) {
         // Listings appear as markdown links to /business-opportunity/ pages
         const links = [...md.matchAll(/\[([^\]]{10,90})\]\((https:\/\/www\.bizbuysell\.com\/[^)]*business[^)]*)\)/gi)];
