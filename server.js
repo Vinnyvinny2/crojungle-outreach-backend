@@ -950,7 +950,7 @@ app.post('/api/research', async (req, res) => {
     let visualAnalysis = null;
     let brainAudit = null;
 
-    if (apiKey && (screenshotUrl || content.length > 500)) {
+    if (apiKey && (screenshotUrl || content.length > 100)) {
       try {
         // Build message content — always send text, add image if available
         const msgContent = [];
@@ -1239,7 +1239,7 @@ Return ONLY valid JSON, no markdown:
     if (!brainAudit) {
       const reason = !apiKey ? 'No Anthropic API key in Settings'
         : !firecrawlKey ? 'No Firecrawl key in Settings'
-        : content.length < 500 && !screenshotUrl ? 'Website could not be scraped — wrong URL or site blocked'
+        : content.length < 100 && !screenshotUrl ? 'Website could not be scraped — wrong URL or site blocked'
         : 'Brain analysis failed — check API keys';
 
       console.log(`Brain gate blocked: ${reason}`);
