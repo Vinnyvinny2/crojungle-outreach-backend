@@ -679,6 +679,7 @@ app.post('/api/discover', async (req, res) => {
 
     // ── ICP FILTER — remove companies that are clearly too large ──
     const BLOCKED_COMPANIES = new Set([
+      // Big tech + enterprises
       'google','amazon','apple','microsoft','meta','facebook','netflix','tesla','nvidia',
       'openai','anthropic','stripe','shopify','salesforce','hubspot','oracle','sap',
       'ibm','intel','qualcomm','adobe','zoom','slack','twitter','linkedin','uber',
@@ -690,6 +691,15 @@ app.post('/api/discover', async (req, res) => {
       'costco','home depot','lowes','mcdonalds','starbucks','coca cola','pepsi',
       'johnson johnson','pfizer','merck','abbvie','unitedhealth','cvs','walgreens',
       'the new york times','washington post','cnn','fox','disney','warner','comcast',
+      // Staffing agencies — they hire manual workers FOR others, not an ICP fit
+      'robert half','aston carter','aerotek','teksystems','ttec','michael page',
+      'manpower','adecco','randstad','kelly services','kelly','spherion','staffmark',
+      'insight global','kforce','modis','apex group','cielo','hays','allegis',
+      'volt','chs recruiting','staffworks','recruiting solutions',
+      // Too large or wrong ICP caught in first run
+      'honeywell','kroger','compass group','christus health','adventist health',
+      'norwegian cruise line','canva','spacex','locumtenens','qureos',
+      'mission healthcare','healthright 360','quadmed','gtangible',
     ]);
 
     const icpFiltered = allCompanies.filter(c => {
@@ -703,6 +713,8 @@ app.post('/api/discover', async (req, res) => {
       if (name.length > 55) return false;
       // Block government/non-profit signals
       if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center)\b/i.test(name)) return false;
+      // Block staffing agencies by keyword — they hire workers FOR companies, not ICP
+      if (/\b(staffing|recruiting|recruitment|temp agency|talent agency|placement agency|headhunter|workforce solutions|labor solutions|employment agency)\b/i.test(name)) return false;
       return true;
     });
 
