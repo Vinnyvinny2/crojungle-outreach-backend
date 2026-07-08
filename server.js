@@ -216,6 +216,7 @@ const searchAdzuna = async (appId, appKey) => {
         icpProfile: 'ai_ops',
         manualRoleCount: c.count,
         manualCategories: catN,
+        jobUrl: c.jobUrl || '',
         signals: {
           ai_replacement_signal: true,
           ai_replacement_multi: multi,
@@ -1140,7 +1141,28 @@ app.post('/api/research', async (req, res) => {
     const email = emailData; // from browser via browserData
 
     const hasDiscoveryContext = manualRoleCount > 0 || discoverySignals.raised_funding || discoverySignals.preparing_for_exit || discoverySignals.rebranding || discoverySignals.recently_acquired;
-    console.log(`Firecrawl: ${content.length} chars | screenshot: ${!!screenshotUrl} | discoveryContext: ${hasDiscoveryContext} | apiKey: ${!!apiKey}`);
+
+    // ═══ SCRAPE SANITY CHECK (permissive) ════════════════════════════════
+    // Detect a BROKEN scrape (bot wall, cookie modal, wrong page) so we don't
+    // audit garbage as the homepage. Permissive: flags only clear failures, and
+    // if a discovery signal exists (hiring/funding/exit) the audit STILL runs on
+    // that — we just tell the Brain not to trust the page content. No real lead lost.
+    const lowerContent = (content || '').toLowerCase();
+    const scrapeLooksBroken = content.length > 50 && (
+      /enable javascript|access denied|are you a robot|verify you are human|captcha|cloudflare|just a moment|checking your browser/i.test(lowerContent.slice(0, 800)) ||
+      (content.length < 300 && !screenshotUrl)
+    );
+    const companyCore = (company || '').toLowerCase().replace(/[^a-z0-9 ]/g,'').split(' ').filter(w=>w.length>3).slice(0,2);
+    const pageMentionsCompany = companyCore.length === 0 || companyCore.some(w => lowerContent.includes(w));
+    const scrapeTrustworthy = content.length > 300 && !scrapeLooksBroken && pageMentionsCompany;
+    if (content.length > 50 && !scrapeTrustworthy) {
+      console.log(`SCRAPE GUARD: content not trustworthy (broken:${scrapeLooksBroken}, mentionsCompany:${pageMentionsCompany}, len:${content.length}) — audit leans on discovery signals`);
+    }
+    // Broken scrape → send empty content so Brain audits from discovery signals,
+    // never from a cookie banner. Screenshot still passes through if present.
+    const trustedContent = scrapeTrustworthy ? content : '';
+
+    console.log(`Firecrawl: ${content.length} chars | screenshot: ${!!screenshotUrl} | scrapeTrustworthy: ${scrapeTrustworthy} | discoveryContext: ${hasDiscoveryContext} | apiKey: ${!!apiKey}`);
 
     // If we have content OR screenshot, run the full Brain audit
     let visualAnalysis = null;
@@ -1148,7 +1170,7 @@ app.post('/api/research', async (req, res) => {
     let brainError = '';
 
 
-    if (apiKey && (screenshotUrl || content.length > 100 || hasDiscoveryContext)) {
+    if (apiKey && (screenshotUrl || trustedContent.length > 100 || hasDiscoveryContext)) {
       try {
         // Build message content — always send text, add image if available
         const msgContent = [];
@@ -1169,7 +1191,7 @@ app.post('/api/research', async (req, res) => {
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
         }
 
-        const homepageSnippet = content.slice(0, 4000);
+        const homepageSnippet = trustedContent.slice(0, 4000);
 
         msgContent.push({
           type: 'text',
@@ -1199,10 +1221,10 @@ TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools;
 
 ADS:
 - Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
-- Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length} active ads — CONFIRMED via Ad Library. If they run many ads with a weak funnel, THAT is the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel CONFIRMED on their site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'No active ads found in Ad Library (checked)' : 'Could not check — do not claim anything about their Facebook ads'}
+- Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
-${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : content.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be scraped (site blocked Firecrawl). Do NOT make up homepage findings. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
+${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
 
 WHY THIS COMPANY WAS FLAGGED (discovery signal — factor this into your audit):
 - Source: ${discoverySource || 'unknown'}
@@ -1250,13 +1272,15 @@ Return ONLY valid JSON, no markdown:
   "trustSignals": ["visible trust signals"],
   "biggestVisualIssue": "single most important visual problem with specific detail",
   "overallConversionRating": "strong/moderate/weak",
+  "savingsEstimate": "A money estimate ONLY if you have a real input. Return an object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null if you have no real input. RULES: (1) ONLY produce numbers when there is a CONFIRMED input: a job-posting count (labor replacement) OR confirmed active ads + a broken funnel (ad waste). NEVER invent a number from a weak website alone — we don't know their traffic or revenue, so any such number is fabrication. (2) Use MODERATE ranges, not conservative, not inflated. Labor: assume typical fully-loaded salary $45k-$65k per manual role, and that software replaces 60-80% of that cost. Ad waste: only if confirmed ads — assume a broken funnel wastes 20-40% of spend, and estimate spend as (confirmed active ad count × $800-$2000/mo per active ad as a rough industry placeholder) — clearly a rough range. (3) 'basis' = one short sentence showing the exact inputs and math, e.g. '4 confirmed manual roles × ~$55k salary × 70% automatable'. (4) 'execution' = one short sentence on HOW CROJungle captures it, so the closer knows what to sell, e.g. 'Build a custom intake+scheduling AI that replaces the manual workflow across all sites.' If you have NO confirmed dollar input, return null and rely on the qualitative pain instead — do NOT fabricate.",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
   "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
   "realPain": "The single most expensive confirmed problem — expressed in terms of wasted money, lost revenue, or bleeding labor cost. Must reference a specific confirmed signal (ad spend, job postings, conversion gap). No technical jargon. One founder-facing sentence.",
   "embarrassingFinding": "the one thing the founder would be embarrassed about",
-  "recommendedProduct": "Website Rebuild|Landing Page|End-to-End Marketing|AI Brain|Custom AI Software Build|Revenue Growth Retainer|Exit / Valuation Advisory",
-  "recommendedPrice": "price range",
-  "recommendedReason": "why this offering, referenced from their specific situation",
+  "recommendedProduct": "The single best-fit primary offering (this is what the pitch leads with)",
+  "recommendedPrice": "price range for the primary",
+  "recommendedReason": "why THIS specific offering beats the others for THIS company — reference their confirmed situation, not generic reasoning. If you recommend Custom AI Software Build, you must justify why software specifically over marketing/website/growth work — do not default to it just because they hire people.",
+  "topThreeProducts": "Array of the 3 most relevant offerings ranked by dollar-impact fit, each as {product, price, why}. The #1 must match recommendedProduct. Rank by what would move the most money for THIS business, not by what's most expensive. Every business could 'use AI' — only rank Custom AI Software Build #1 when there is a CONFIRMED, specific, expensive manual-labor signal (multiple job postings), not as a lazy default.",
   "pitchAngle": "STRICT RULES: (1) Pick the ONE most expensive confirmed pain — never chain two or three pains into one sentence. (2) 35 words maximum. (3) No hedging ('what looks like', 'appears to') — if it is not confirmed, it does not go in the pitch. (4) MATCH THE VOCABULARY TO THE READER: exit-prep or just-funded or pre-IPO reader → unit economics language IS the sharpest weapon (margin, multiple, valuation, EBITDA) — use it confidently. Owner-operator (trucking, clinics, local services) → plain dollars and salaries, zero finance vocabulary. (5) Lead with the money, end with a short curiosity question. GOOD (owner-operator): 'You're paying four salaries to manually do work software could handle overnight — want to see the math?' GOOD (exit-prep): 'Every dollar of manual labor cost you cut before the sale multiplies straight into your asking price — want to see what's automatable?'"
 }`
         });
@@ -1288,17 +1312,201 @@ Return ONLY valid JSON, no markdown:
           const clean = vText.replace(/```json|```/g,'').trim();
           const parsed = JSON.parse(clean);
           visualAnalysis = parsed;
+
+          // ═══ DETERMINISTIC SOURCE VERIFICATION ═══════════════════════════
+          // The strongest guarantee: any EXACT quote Claude makes (headline, CTA)
+          // must actually appear in the scraped homepage. This is not another
+          // model's opinion — it's a string match against real source. A founder
+          // who knows their site will instantly spot a misquoted headline, so
+          // every quotable detail is verified against the raw page before shipping.
+          const sourceText = (trustedContent || '').toLowerCase().replace(/\s+/g, ' ');
+          const verifyQuote = (q) => {
+            if (!q || typeof q !== 'string' || q.length < 4) return null; // nothing to verify
+            const norm = q.toLowerCase().replace(/["'']/g, '').replace(/\s+/g, ' ').trim();
+            if (norm.length < 4) return null;
+            // Direct match, or match ignoring punctuation
+            const stripped = norm.replace(/[^a-z0-9 ]/g, '');
+            const sourceStripped = sourceText.replace(/[^a-z0-9 ]/g, '');
+            return sourceText.includes(norm) || sourceStripped.includes(stripped);
+          };
+          const quoteChecks = {
+            heroHeadline: verifyQuote(parsed.heroHeadline),
+            ctaText: verifyQuote(parsed.ctaText),
+          };
+          // If a quote was claimed but NOT found in source, null it out so the
+          // audit can't display or pitch a headline/CTA that isn't really there.
+          const unverifiedQuotes = [];
+          const visionSourced = [];
+          // With a screenshot, the screenshot IS a valid source — hero text is
+          // often an image/slider and won't appear in markdown. Only suppress
+          // quotes when there's no screenshot to have read them from.
+          if (parsed.heroHeadline && quoteChecks.heroHeadline === false) {
+            if (screenshotUrl) { visionSourced.push('headline (read from screenshot, not in text)'); }
+            else { unverifiedQuotes.push(`headline "${parsed.heroHeadline}" not found in page source`); parsed.heroHeadline = null; }
+          }
+          if (parsed.ctaText && quoteChecks.ctaText === false) {
+            if (screenshotUrl) { visionSourced.push('CTA (read from screenshot, not in text)'); }
+            else { unverifiedQuotes.push(`CTA "${parsed.ctaText}" not found in page source`); parsed.ctaText = null; }
+          }
+          if (unverifiedQuotes.length) {
+            console.log('SOURCE VERIFY: suppressed unverified quotes:', unverifiedQuotes.join('; '));
+          } else {
+            console.log('SOURCE VERIFY: all quotes matched page source');
+          }
+          // Attach verification result so the frontend can show a trust badge
+          parsed._quoteVerification = {
+            checked: trustedContent.length > 100 || !!screenshotUrl,
+            headlineVerified: quoteChecks.heroHeadline === true,
+            ctaVerified: quoteChecks.ctaText === true,
+            visionSourced,
+            suppressed: unverifiedQuotes,
+          };
           brainAudit = {
             realPain: parsed.realPain,
             embarrassingFinding: parsed.embarrassingFinding,
             recommendedProduct: parsed.recommendedProduct,
             recommendedPrice: parsed.recommendedPrice,
             recommendedReason: parsed.recommendedReason,
+            topThreeProducts: Array.isArray(parsed.topThreeProducts) ? parsed.topThreeProducts.slice(0,3) : [],
             pitchAngle: parsed.pitchAngle,
             operationsOpportunity: parsed.operationsOpportunity,
             exitValueAngle: parsed.exitValueAngle,
+            quoteVerification: parsed._quoteVerification || null,
+            savingsEstimate: (() => {
+              const se = parsed.savingsEstimate;
+              if (!se || typeof se !== 'object') return null;
+              const ml = Number(se.monthlyLow), mh = Number(se.monthlyHigh);
+              let al = Number(se.annualLow), ah = Number(se.annualHigh);
+              if (![ml,mh,al,ah].every(n => Number.isFinite(n) && n > 0)) return null;
+              if (ml > mh || al > ah) return null;
+              // Require a basis (the math) — no math shown, no number shown.
+              if (!se.basis || se.basis.length < 10) return null;
+              // ── DETERMINISTIC DEFENSIBILITY CEILING ──
+              // The max savings our CONFIRMED inputs can support:
+              //   labor: roles × $65k top salary × 80% automatable
+              //   ads:   attributed ads × $2k/mo top placeholder × 40% waste × 12
+              // If the Brain's number exceeds what the evidence supports, clamp it.
+              const laborCap = (manualRoleCount || 0) * 65000 * 0.8;
+              const adsCap = (fbAds.adCount || 0) * 2000 * 0.4 * 12;
+              const ceiling = (laborCap + adsCap) * 1.15; // 15% slack for rounding
+              if (ceiling > 0 && ah > ceiling) {
+                console.log(`SAVINGS CLAMP: Brain claimed $${ah} annual, evidence supports max $${Math.round(ceiling)} — clamping`);
+                ah = Math.round(ceiling);
+                if (al > ah) al = Math.round(ah * 0.6);
+              }
+              // No confirmed input at all → no number, period.
+              if (ceiling === 0) {
+                console.log('SAVINGS REJECT: no confirmed dollar input (no roles, no attributed ads)');
+                return null;
+              }
+              return {
+                monthlyLow: Math.round(al/12), monthlyHigh: Math.round(ah/12),
+                annualLow: Math.round(al), annualHigh: Math.round(ah),
+                basis: se.basis,
+                execution: se.execution || '',
+              };
+            })(),
           };
           console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
+
+          // ── SELF-CRITIQUE CALL ─────────────────────────────────────────
+          // Second Claude call reviews the first audit's claims against the
+          // raw evidence — catches hallucinations, overstated numbers, unverified
+          // findings. Runs text-only (no vision) so it's fast: ~5-8s.
+          try {
+            const critiquePrompt = `You are a quality-control auditor reviewing a marketing audit before it goes to a founder.
+
+RAW EVIDENCE (what we actually confirmed):
+- Company: ${company}
+- Website: ${website || 'none'}
+- Firecrawl scraped: ${content.length} characters of homepage content
+- Screenshot taken: ${!!screenshotUrl}
+- Facebook ads: ${fbAds.hasAds ? fbAds.adCount + ' ads verified as theirs (attribution-checked)' : fbAds.confirmed ? 'none found attributable to them' : 'not checked'}
+- Google Ads tag on page: ${builtWith.hasGoogleAdsTag ? 'YES (confirmed in source)' : 'NOT FOUND (may still run ads via tag manager)'}
+- Meta pixel on page: ${builtWith.hasMetaPixel ? 'YES (confirmed)' : 'NOT FOUND'}
+- CRM detected: ${builtWith.hasCRM ? 'YES' : 'not detected on-page'}
+- Email marketing detected: ${builtWith.hasEmailMarketing ? 'YES' : 'not detected on-page'}
+- Tracking pixel detected: ${builtWith.hasPixel ? 'YES' : 'not detected on-page'}
+- Live chat detected: ${builtWith.hasChat ? 'YES' : 'not detected on-page'}
+- Manual roles hiring (job board signal): ${manualRoleCount} postings confirmed
+- Funding signal: ${discoverySignals.raised_funding ? 'YES - Form D filing' : 'none'}
+- Exit signal: ${discoverySignals.preparing_for_exit ? 'YES - BizBuySell listing' : 'none'}
+- Copyright year: ${builtWith.copyrightYear || 'not found'}
+- Title tag: "${builtWith.titleTag || 'not found'}"
+- Email capture on site: ${builtWith.hasEmailCapture ? 'YES' : 'not found'}
+- Booking tool: ${builtWith.hasBooking ? 'YES' : 'not found'}
+- PageSpeed mobile: ${pageSpeed.mobileScore || 'not checked'}
+
+AUDIT PRODUCED BY FIRST CALL:
+Real pain: ${parsed.realPain || 'none'}
+Embarrassing finding: ${parsed.embarrassingFinding || 'none'}
+Recommended product: ${parsed.recommendedProduct} at ${parsed.recommendedPrice}
+Reason: ${parsed.recommendedReason || 'none'}
+Pitch angle: ${parsed.pitchAngle || 'none'}
+Operations opportunity: ${parsed.operationsOpportunity || 'none'}
+Exit angle: ${parsed.exitValueAngle || 'none'}
+Savings estimate: ${parsed.savingsEstimate ? `$${parsed.savingsEstimate.annualLow}-$${parsed.savingsEstimate.annualHigh}/yr — basis: ${parsed.savingsEstimate.basis}` : 'none given'}
+
+WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
+- Any finding about visual elements, headline text, CTA buttons, design, layout, or above-fold content — these come from Claude's own vision analysis of a real screenshot and are valid even though you cannot see the image.
+- Job posting counts — these are confirmed from the job board API.
+- Any signal labeled "[Job-board signal]", "[SEC filing signal]", "[Site scan]", "[Ad Library]" — these are sourced.
+- Estimates that are clearly framed as estimates ("est.", "roughly", "on the order of").
+
+WHAT TO FLAG:
+- Dollar figures stated as facts without an estimate label.
+- Claims about what competitors are doing (we have no competitor data).
+- Claims about internal company data (revenue, headcount, margins) unless from a confirmed source.
+- Ad counts not attributed to the company specifically.
+- Absence claims stated as facts ("they have no CRM") — acceptable only as "not detected on-page."
+- Any specific named person other than what Hunter returned.
+- A savings estimate whose basis doesn't match the confirmed inputs above (e.g. basis claims "6 roles" when the evidence shows 4 postings, or cites ad spend with zero attributed ads).
+
+YOUR JOB:
+1. Check every specific claim in the audit against the RAW EVIDENCE above.
+2. Flag anything that: (a) states a fact not in the evidence, (b) presents an estimate as a fact, (c) claims absence of something we couldn't verify (e.g. "no CRM" when we only checked the page source), (d) overstates a number.
+3. Rewrite ONLY the pitch angle — make it 100% grounded in confirmed evidence only. Keep it under 35 words. No hedging language but no unverified claims.
+4. Score your confidence in the audit 0-10 (10 = everything verified, 0 = mostly speculation).
+
+Return ONLY valid JSON:
+{
+  "verifiedClaims": ["list of claims directly supported by evidence"],
+  "flaggedClaims": ["list of claims that overstate or aren't supported — be specific"],
+  "correctedPitchAngle": "rewritten pitch using only confirmed evidence, 35 words max",
+  "confidenceScore": 0-10,
+  "critiqueNote": "one sentence summary of biggest accuracy risk in this audit"
+}`;
+
+            const critiqueRes = await fetchT('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 800,
+                messages: [{ role: 'user', content: critiquePrompt }]
+              }),
+            }, 25000);
+
+            const cd = await critiqueRes.json();
+            const cText = cd.content?.[0]?.text || '';
+            const cClean = cText.replace(/```json|```/g, '').trim();
+            const critique = JSON.parse(cClean);
+            brainAudit.critique = {
+              verifiedClaims: critique.verifiedClaims || [],
+              flaggedClaims: critique.flaggedClaims || [],
+              correctedPitchAngle: critique.correctedPitchAngle || parsed.pitchAngle,
+              confidenceScore: critique.confidenceScore ?? 7,
+              critiqueNote: critique.critiqueNote || '',
+            };
+            // Use corrected pitch angle if confidence is reasonable
+            if (critique.correctedPitchAngle && critique.confidenceScore >= 5) {
+              brainAudit.pitchAngle = critique.correctedPitchAngle;
+            }
+            console.log('Critique complete: confidence', critique.confidenceScore, '| flags:', (critique.flaggedClaims||[]).length);
+          } catch(e) {
+            console.log('Critique call failed (non-fatal):', e.message);
+            // Non-fatal — audit continues without critique
+          }
         } catch(e) {
           if (!brainError) brainError = `Claude responded but JSON parse failed: ${e.message} — response started with: "${vText.slice(0,120)}"`;
           console.log('Brain parse error:', e.message, vText.slice(0,200));
@@ -1357,7 +1565,7 @@ Return ONLY valid JSON, no markdown:
           !builtWith.hasH1 ? 'no H1' : '',
           !builtWith.hasSchema ? 'no schema markup' : '',
         ].filter(Boolean).join(', ') : 'On-page SEO fundamentals in place (title, meta, H1, schema)' : '',
-        facebookAds: fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length || ''} active Facebook ads (confirmed via Ad Library)`.trim() : builtWith.hasMetaPixel ? 'Meta pixel found on site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'No active Facebook ads found in Ad Library (checked)' : 'Facebook ads: could not check (Ad Library scrape failed)',
+        facebookAds: fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length || ''}+ active Facebook ads verified as THEIRS in Ad Library (attribution-checked)`.trim() : builtWith.hasMetaPixel ? 'Meta pixel on site — ad infrastructure exists, but no ads verified as theirs in Ad Library' : fbAds.confirmed ? 'No Facebook ads attributable to them in Ad Library' : 'Facebook ads: could not check (Ad Library scrape failed)',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
       },
