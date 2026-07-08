@@ -159,7 +159,7 @@ const searchAdzuna = async (appId, appKey) => {
     // ALL IN PARALLEL  
     const raw = await Promise.allSettled(
       searches.map(async ({ title, cat }) => {
-        const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
+        const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=35&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
         const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
         if (!r.ok) { console.log(`Adzuna "${title}" ${r.status}`); return []; }
         const d = await safeJson(r);
@@ -377,9 +377,17 @@ const scrapeBizBuySell = async () => {
     const results = [];
     for (const feedUrl of feeds) {
       try {
-        const xml = await fetchViaProxy(feedUrl, 10000);
+        // Try direct fetch first (proxy has been getting blocked), then proxy fallback
+        let xml = '';
+        try {
+          const r = await fetchT(feedUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36', 'Accept': 'application/rss+xml, application/xml' } }, 10000);
+          xml = await safeText(r);
+        } catch(e) { /* fall through to proxy */ }
         if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
-          console.log('BizBuySell: returned HTML not RSS');
+          xml = await fetchViaProxy(feedUrl, 10000);
+        }
+        if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
+          console.log('BizBuySell: blocked on both direct and proxy');
           continue;
         }
         const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
@@ -1462,7 +1470,7 @@ app.post('/api/diagnostics', async (req, res) => {
 
   // Test Adzuna
   try {
-    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${adzunaId}&app_key=${adzunaKey}&results_per_page=3&what=marketing+manager&sort_by=date`;
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${adzunaId}&app_key=${adzunaKey}&results_per_page=5&what=dispatcher&sort_by=date&max_days_old=30`;
     const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
     const d = await safeJson(r);
     results.adzuna = { ok: r.ok && (d.results||[]).length > 0, count: (d.results||[]).length, total: d.count||0, error: d.exception||null };
