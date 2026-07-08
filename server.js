@@ -1842,5 +1842,20 @@ app.post('/api/diagnostics', async (req, res) => {
   // Test backend itself
   results.backend = { ok: true, version: 'v8' };
 
+  // Test name normalization (stacking fix)
+  const normName = (raw) => (raw || '')
+    .toLowerCase().replace(/[.,]/g, '')
+    .replace(/\b(inc|incorporated|llc|corp|corporation|co|company|ltd|limited|group|holdings|lp|llp|plc|pllc)\b/g, '')
+    .replace(/\s+/g, ' ').trim();
+  const stackingTests = [
+    ['Viking Land Transportation', 'Viking Land Transportation Inc'],
+    ['Athletico Physical Therapy', 'Athletico Physical Therapy LLC'],
+    ['Acme Corp', 'ACME Corporation'],
+  ];
+  results.stacking_normalizer = {
+    ok: true,
+    tests: stackingTests.map(([a, b]) => ({ a, b, match: normName(a) === normName(b), normA: normName(a), normB: normName(b) }))
+  };
+
   res.json(results);
 });
