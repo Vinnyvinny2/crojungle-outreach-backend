@@ -854,8 +854,18 @@ app.post('/api/discover', async (req, res) => {
 
     // SIGNAL STACKING — merge across sources, union signals
     const merged = new Map();
+    // Normalize company names for matching: lowercase, strip legal suffixes
+    // (Inc, LLC, Corp, Co, Ltd), strip punctuation, collapse whitespace.
+    // This is why stacking was 0 — "Viking Land Transportation" and
+    // "Viking Land Transportation Inc" were treated as different companies.
+    const normName = (raw) => (raw || '')
+      .toLowerCase()
+      .replace(/[.,]/g, '')
+      .replace(/\b(inc|incorporated|llc|corp|corporation|co|company|ltd|limited|group|holdings|lp|llp|plc|pllc)\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
     for (const c of icpFiltered) {
-      const key = (c.name||'').toLowerCase().trim();
+      const key = normName(c.name);
       if (!key || key.length < 2) continue;
       if (!merged.has(key)) {
         merged.set(key, { ...c, signals: { ...(c.signals||{}) }, sources: [c.source] });
@@ -863,6 +873,8 @@ app.post('/api/discover', async (req, res) => {
         const ex = merged.get(key);
         for (const [k, v] of Object.entries(c.signals||{})) ex.signals[k] = ex.signals[k] || v;
         if (!ex.sources.includes(c.source)) ex.sources.push(c.source);
+        // Prefer the longer, more complete name (usually has the real legal entity)
+        if ((c.name||'').length > (ex.name||'').length) ex.name = c.name;
         if (!ex.website && c.website) ex.website = c.website;
         if (!ex.location && c.location) ex.location = c.location;
         if (!ex.jobSnippet && c.jobSnippet) ex.jobSnippet = c.jobSnippet;
@@ -1221,7 +1233,7 @@ TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools;
 
 ADS:
 - Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
-- Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library${fbAds.adAgeMonths ? ', running for at least ' + fbAds.adAgeMonths + ' months (sustained spend)' : ''} (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
+- Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
 ${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
@@ -1233,8 +1245,6 @@ ${manualRoleCount >= 2 ? `- HIRING SIGNAL: currently hiring ${manualRoleCount} m
 ${discoverySignals.raised_funding ? '- FUNDING SIGNAL: recently raised capital — board pressure to show growth, budget to deploy' : ''}
 ${discoverySignals.preparing_for_exit ? '- EXIT SIGNAL: preparing to sell — motivated to maximize revenue and valuation before exit' : ''}
 ${discoverySignals.rebranding ? '- REBRAND SIGNAL: rebranding — full marketing rebuild in motion, vendors up for grabs' : ''}
-
-VISUAL PRECISION RULE: Only quote text you can read clearly. If text is blurry, truncated, or partially visible, describe without quoting. Never guess truncated text — a wrong quote destroys credibility with a founder who knows their own site.
 
 AUDIT TASK — CROJungle is a full-service growth partner, NOT a single-product vendor. Audit the ENTIRE business across all five areas, then lead with the sharpest, most expensive problem:
 1. ACQUISITION — are they capturing demand? (ads, SEO, paid search presence)
@@ -1274,7 +1284,6 @@ Return ONLY valid JSON, no markdown:
   "trustSignals": ["visible trust signals"],
   "biggestVisualIssue": "single most important visual problem with specific detail",
   "overallConversionRating": "strong/moderate/weak",
-  "savingsEstimate": "A money estimate ONLY if you have a real input. Return an object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null if you have no real input. RULES: (1) ONLY produce numbers when there is a CONFIRMED input: a job-posting count (labor replacement) OR confirmed active ads + a broken funnel (ad waste). NEVER invent a number from a weak website alone — we don't know their traffic or revenue, so any such number is fabrication. (2) Use MODERATE ranges, not conservative, not inflated. Labor: assume typical fully-loaded salary $45k-$65k per manual role, and that software replaces 60-80% of that cost. Ad waste: only if confirmed ads — assume a broken funnel wastes 20-40% of spend, and estimate spend as (confirmed active ad count × $800-$2000/mo per active ad as a rough industry placeholder) — clearly a rough range. (3) 'basis' = one short sentence showing the exact inputs and math, e.g. '4 confirmed manual roles × ~$55k salary × 70% automatable'. (4) 'execution' = one short sentence on HOW CROJungle captures it, so the closer knows what to sell, e.g. 'Build a custom intake+scheduling AI that replaces the manual workflow across all sites.' If you have NO confirmed dollar input, return null and rely on the qualitative pain instead — do NOT fabricate.",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
   "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
   "realPain": "The single most expensive confirmed problem — expressed in terms of wasted money, lost revenue, or bleeding labor cost. Must reference a specific confirmed signal (ad spend, job postings, conversion gap). No technical jargon. One founder-facing sentence.",
@@ -1338,17 +1347,13 @@ Return ONLY valid JSON, no markdown:
           // If a quote was claimed but NOT found in source, null it out so the
           // audit can't display or pitch a headline/CTA that isn't really there.
           const unverifiedQuotes = [];
-          const visionSourced = [];
-          // With a screenshot, the screenshot IS a valid source — hero text is
-          // often an image/slider and won't appear in markdown. Only suppress
-          // quotes when there's no screenshot to have read them from.
           if (parsed.heroHeadline && quoteChecks.heroHeadline === false) {
-            if (screenshotUrl) { visionSourced.push('headline (read from screenshot, not in text)'); }
-            else { unverifiedQuotes.push(`headline "${parsed.heroHeadline}" not found in page source`); parsed.heroHeadline = null; }
+            unverifiedQuotes.push(`headline "${parsed.heroHeadline}" not found in page source`);
+            parsed.heroHeadline = null; // suppress unverified quote
           }
           if (parsed.ctaText && quoteChecks.ctaText === false) {
-            if (screenshotUrl) { visionSourced.push('CTA (read from screenshot, not in text)'); }
-            else { unverifiedQuotes.push(`CTA "${parsed.ctaText}" not found in page source`); parsed.ctaText = null; }
+            unverifiedQuotes.push(`CTA "${parsed.ctaText}" not found in page source`);
+            parsed.ctaText = null;
           }
           if (unverifiedQuotes.length) {
             console.log('SOURCE VERIFY: suppressed unverified quotes:', unverifiedQuotes.join('; '));
@@ -1357,10 +1362,9 @@ Return ONLY valid JSON, no markdown:
           }
           // Attach verification result so the frontend can show a trust badge
           parsed._quoteVerification = {
-            checked: trustedContent.length > 100 || !!screenshotUrl,
+            checked: !!content && content.length > 100,
             headlineVerified: quoteChecks.heroHeadline === true,
             ctaVerified: quoteChecks.ctaText === true,
-            visionSourced,
             suppressed: unverifiedQuotes,
           };
           brainAudit = {
@@ -1374,40 +1378,6 @@ Return ONLY valid JSON, no markdown:
             operationsOpportunity: parsed.operationsOpportunity,
             exitValueAngle: parsed.exitValueAngle,
             quoteVerification: parsed._quoteVerification || null,
-            savingsEstimate: (() => {
-              const se = parsed.savingsEstimate;
-              if (!se || typeof se !== 'object') return null;
-              const ml = Number(se.monthlyLow), mh = Number(se.monthlyHigh);
-              let al = Number(se.annualLow), ah = Number(se.annualHigh);
-              if (![ml,mh,al,ah].every(n => Number.isFinite(n) && n > 0)) return null;
-              if (ml > mh || al > ah) return null;
-              // Require a basis (the math) — no math shown, no number shown.
-              if (!se.basis || se.basis.length < 10) return null;
-              // ── DETERMINISTIC DEFENSIBILITY CEILING ──
-              // The max savings our CONFIRMED inputs can support:
-              //   labor: roles × $65k top salary × 80% automatable
-              //   ads:   attributed ads × $2k/mo top placeholder × 40% waste × 12
-              // If the Brain's number exceeds what the evidence supports, clamp it.
-              const laborCap = (manualRoleCount || 0) * 65000 * 0.8;
-              const adsCap = (fbAds.adCount || 0) * 2000 * 0.4 * 12;
-              const ceiling = (laborCap + adsCap) * 1.15; // 15% slack for rounding
-              if (ceiling > 0 && ah > ceiling) {
-                console.log(`SAVINGS CLAMP: Brain claimed $${ah} annual, evidence supports max $${Math.round(ceiling)} — clamping`);
-                ah = Math.round(ceiling);
-                if (al > ah) al = Math.round(ah * 0.6);
-              }
-              // No confirmed input at all → no number, period.
-              if (ceiling === 0) {
-                console.log('SAVINGS REJECT: no confirmed dollar input (no roles, no attributed ads)');
-                return null;
-              }
-              return {
-                monthlyLow: Math.round(al/12), monthlyHigh: Math.round(ah/12),
-                annualLow: Math.round(al), annualHigh: Math.round(ah),
-                basis: se.basis,
-                execution: se.execution || '',
-              };
-            })(),
           };
           console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
 
@@ -1447,7 +1417,6 @@ Reason: ${parsed.recommendedReason || 'none'}
 Pitch angle: ${parsed.pitchAngle || 'none'}
 Operations opportunity: ${parsed.operationsOpportunity || 'none'}
 Exit angle: ${parsed.exitValueAngle || 'none'}
-Savings estimate: ${parsed.savingsEstimate ? `$${parsed.savingsEstimate.annualLow}-$${parsed.savingsEstimate.annualHigh}/yr — basis: ${parsed.savingsEstimate.basis}` : 'none given'}
 
 WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
 - Any finding about visual elements, headline text, CTA buttons, design, layout, or above-fold content — these come from Claude's own vision analysis of a real screenshot and are valid even though you cannot see the image.
@@ -1462,7 +1431,6 @@ WHAT TO FLAG:
 - Ad counts not attributed to the company specifically.
 - Absence claims stated as facts ("they have no CRM") — acceptable only as "not detected on-page."
 - Any specific named person other than what Hunter returned.
-- A savings estimate whose basis doesn't match the confirmed inputs above (e.g. basis claims "6 roles" when the evidence shows 4 postings, or cites ad spend with zero attributed ads).
 
 YOUR JOB:
 1. Check every specific claim in the audit against the RAW EVIDENCE above.
@@ -1876,4 +1844,3 @@ app.post('/api/diagnostics', async (req, res) => {
 
   res.json(results);
 });
- 
