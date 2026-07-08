@@ -23,7 +23,7 @@ const fetchT = (url, opts={}, ms=10000) => Promise.race([
   new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))
 ]);
 
-app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v7 — AI-replacement Adzuna + signal stacking', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
+app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v8 — reachability + full-business audit, zero fabrication', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
 
 // ── TEST ADZUNA — hit in browser to verify keys work ──────
 // Usage: https://crojungle-outreach-backend.onrender.com/api/test-adzuna?app_id=XXX&app_key=XXX
@@ -465,13 +465,17 @@ const scrapeBizBuySell = async () => {
           if (!title || title.length < 5) return;
           const revenueMatch = desc.match(/\$([0-9,]+[MK]?)\s*(?:revenue|annual|gross)/i);
           const revenue = revenueMatch ? revenueMatch[0] : '';
+          // Broker-posted listings put a middleman between us and the owner.
+          // Detect broker language and tag it so reachability scores it lower.
+          const brokerPosted = /broker|brokerage|listing agent|represented by|business advisors|m&a advisor|intermediar/i.test(desc);
           results.push({
             name: title.trim().slice(0, 60),
             website: link,
-            jobTitle: 'Listed for sale — owner wants to maximize value',
+            jobTitle: brokerPosted ? 'Listed for sale via broker' : 'Listed for sale — owner wants to maximize value',
             jobSnippet: (desc.replace(/<[^>]+>/g, '').slice(0, 150)) + (revenue ? ` | ${revenue}` : ''),
             source: 'bizbuysell',
-            signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: true },
+            brokerPosted,
+            signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: !brokerPosted },
           });
         });
         if (results.length > 0) break;
@@ -641,6 +645,82 @@ const scrapePRNewswire = async () => {
 // MASTER DISCOVERY — all 7 sources fire simultaneously
 // Total budget: ~8 seconds (Render free tier safe)
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// FOUNDER-REACHABILITY SCORE — the ICP is not "who needs us" but
+// "who will actually reply to a cold audit and can say yes alone."
+// That means: owner-led, no CMO/procurement layer, reachable directly.
+// We score this UPFRONT from signals each source can actually see,
+// so we never waste a research call on an unreachable enterprise.
+// Returns { score: 0-30, reasons: [], hardBlock: bool }
+// ═══════════════════════════════════════════════════════════
+const ENTERPRISE_HINTS = /\b(inc\.?|corporation|corp\.?|holdings|group|global|international|worldwide|enterprises|industries|systems|technologies|solutions|partners|associates|llc)\b/i;
+const OWNER_LED_HINTS = /\b(family|family-owned|founder|owner|studio|shop|boutique|co\.|& sons|& co|and sons)\b/i;
+
+const scoreReachability = (c) => {
+  const name = (c.name || '').toLowerCase();
+  const sig = c.signals || {};
+  let score = 0;
+  const reasons = [];
+
+  // STRONG owner-led signals — these companies ARE the owner reaching out
+  if (sig.preparing_for_exit || c.source === 'bizbuysell') {
+    if (c.brokerPosted) {
+      score += 8; reasons.push('For-sale listing via broker — middleman between us and owner');
+    } else {
+      score += 22; reasons.push('Owner listing business for sale — direct owner contact');
+    }
+  }
+  if (sig.founder_venting || sig.social_pain_signal) {
+    score += 18; reasons.push('Founder publicly venting — personally involved, reachable');
+  }
+
+  // AI-replacement: a SMALL company hiring multiple manual roles almost
+  // never has a CMO — the owner is drowning in ops and signs the checks.
+  // But a huge company hiring 11 CS reps is a call center. Use role count
+  // as a proxy: 2-6 manual roles = likely owner-led SMB; 15+ = enterprise.
+  if (sig.ai_replacement_multi) {
+    const roles = c.manualRoleCount || 0;
+    if (roles >= 2 && roles <= 8) {
+      score += 16; reasons.push(`Hiring ${roles} manual roles at SMB scale — owner likely runs ops, no CMO`);
+    } else if (roles > 8 && roles <= 14) {
+      score += 6; reasons.push(`Hiring ${roles} manual roles — mid-size, owner may still be reachable`);
+    } else if (roles > 14) {
+      score += 0; reasons.push(`Hiring ${roles} roles — enterprise scale, likely has procurement/CMO`);
+    }
+  } else if (sig.ai_replacement_signal) {
+    score += 10; reasons.push('Hiring a manual role — small operation, owner-adjacent');
+  }
+
+  // Funding: Form D just-raised companies are usually early, founder-run,
+  // pre-CMO. Strong reachability. (Late-stage would be filtered by size.)
+  if (sig.raised_funding) {
+    score += 12; reasons.push('Recently raised — early-stage, founder still runs GTM, no CMO yet');
+  }
+
+  // Trigger events (rebrand/acquisition/launch) — mixed. Only credit lightly.
+  if (sig.rebranding || sig.recently_launched) {
+    score += 5; reasons.push('In transition — decision-makers accessible during change');
+  }
+
+  // A company that JUST hired a CMO is the OPPOSITE of our ICP — they now
+  // have the layer we want to avoid. Penalize news_hire CMO leads.
+  if (c.source === 'news_hire' && /cmo|chief marketing|vp.*marketing|head of marketing/i.test(c.jobTitle || '')) {
+    score -= 12; reasons.push('Just hired a CMO — now has the marketing layer we bypass (deprioritized)');
+  }
+
+  // Name-based heuristics
+  if (OWNER_LED_HINTS.test(name)) { score += 6; reasons.push('Name suggests owner-operated / family business'); }
+  if (ENTERPRISE_HINTS.test(name) && !OWNER_LED_HINTS.test(name)) { score -= 4; }
+
+  // HARD BLOCK — signals that this is unreachable regardless of pain.
+  // (The blocklist already removes named giants; this catches the pattern.)
+  const hardBlock = (sig.ai_replacement_multi && (c.manualRoleCount || 0) > 20);
+
+  // Reachability is ESTIMATED from signals until research confirms an owner
+  // email via Hunter. The frontend upgrades/downgrades it after research.
+  return { score: Math.max(0, Math.min(score, 30)), reasons: reasons.slice(0, 2), hardBlock, estimated: true };
+};
+
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys } = req.body;
   const { adzunaId, adzunaKey, fbToken } = keys || {};
@@ -790,8 +870,24 @@ app.post('/api/discover', async (req, res) => {
         const srcN = (c.sources || [c.source]).filter(Boolean).length;
         const stacked = srcN >= 2;
         const stackBonus = srcN >= 3 ? 30 : srcN === 2 ? 15 : 0;
-        const icpScore = Math.min(Math.round(raw + stackBonus), stacked ? 100 : 85);
-        return { ...c, icpScore, stacked, sourceCount: srcN };
+        // FOUNDER-REACHABILITY — the ICP gate. A lead we can't reach an owner at
+        // is worth little no matter how much pain it has. This score (0-30) is
+        // added, and a hard block sinks unreachable enterprises below research cutoff.
+        const reach = scoreReachability(c);
+        const base = raw + stackBonus + reach.score;
+        // Hard block → cap at 20 so it sinks to the bottom, never researched first.
+        const icpScore = reach.hardBlock
+          ? Math.min(Math.round(base), 20)
+          : Math.min(Math.round(base), stacked ? 100 : 90);
+        return {
+          ...c,
+          icpScore,
+          stacked,
+          sourceCount: srcN,
+          reachability: reach.score,
+          reachabilityReasons: reach.reasons,
+          reachabilityBlocked: reach.hardBlock,
+        };
       })
       .sort((a,b) => b.icpScore - a.icpScore);
 
@@ -818,6 +914,13 @@ app.post('/api/discover', async (req, res) => {
 
     console.log('Unique:', unique.length, '| Returning:', scored.length);
     console.log('Breakdown:', breakdown);
+    const reachSummary = {
+      high: scored.filter(c => c.reachability >= 18).length,
+      medium: scored.filter(c => c.reachability >= 8 && c.reachability < 18).length,
+      low: scored.filter(c => c.reachability < 8).length,
+      blocked: scored.filter(c => c.reachabilityBlocked).length,
+    };
+    console.log('Owner-reachability:', reachSummary);
     console.log('=== DISCOVERY END ===\n');
 
     res.json({ companies: scored, total: scored.length, breakdown });
@@ -888,13 +991,16 @@ const checkBuiltWith = async (domain) => {
   } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, confirmed:false }; }
 };
 
+// Google Ads Transparency page scrape — HEURISTIC ONLY, not reliable.
+// Page-size check produces false positives/negatives. We report it as
+// "possible" never "confirmed", and never build a pitch on it.
 const checkGoogleAds = async (domain) => {
   try {
     const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
     const r = await fetchT(`https://adstransparency.google.com/advertiser?domain=${clean}&region=US`, {}, 8000);
     const html = await safeText(r);
-    return { hasGoogleAds: html.length > 50000 || html.includes('ad-card'), confirmed: true };
-  } catch { return { hasGoogleAds: false, confirmed: false }; }
+    return { hasGoogleAds: html.length > 50000 || html.includes('ad-card'), confirmed: false, heuristic: true };
+  } catch { return { hasGoogleAds: false, confirmed: false, heuristic: true }; }
 };
 
 const checkFacebookAds = async (name, fbToken) => {
@@ -916,6 +1022,13 @@ app.post('/api/research', async (req, res) => {
   const pageSpeed = browserData.pageSpeed || {};
   const emailData = browserData.emailData || {};
   const companyData = browserData.companyData || {};
+  // Discovery signals — WHY this company was flagged (carried from Find)
+  const discoverySignals = req.body.discoverySignals || {};
+  const discoverySource = req.body.discoverySource || '';
+  const discoveryReason = req.body.discoveryReason || '';
+  const manualRoleCount = req.body.manualRoleCount || 0;
+  const manualCategories = req.body.manualCategories || 0;
+  const icpProfile = req.body.icpProfile || '';
   if (!company) return res.status(400).json({ error: 'Company name required' });
 
   const domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
@@ -984,23 +1097,42 @@ TECH STACK DETECTED:
 - Live Chat: ${builtWith.hasChat ? 'Yes' : 'None detected'}
 
 ADS:
-- Google Ads: ${googleAds.hasGoogleAds ? 'Running' : 'Not detected'}
+- Google Ads: ${googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact in pitch)' : 'Not detected (unverified)'}
 - Facebook Ads: ${fbAds.hasAds ? `${fbAds.ads?.length} active ads` : 'Not detected'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
 ${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : 'No screenshot available — audit from content only.'}
 
-AUDIT TASK:
-1. What is the single most expensive problem this business has right now? Be specific — reference their actual content, actual tech gaps, actual positioning.
-2. What is the ONE thing a founder would be embarrassed about if you pointed it out?
-3. Which CROJungle product fixes this and why?
+WHY THIS COMPANY WAS FLAGGED (discovery signal — factor this into your audit):
+- Source: ${discoverySource || 'unknown'}
+- Signal: ${discoveryReason || 'general ICP match'}
+${manualRoleCount >= 2 ? `- HIRING SIGNAL: currently hiring ${manualRoleCount} manual/repetitive roles${manualCategories ? ` across ${manualCategories} functions` : ''} — a strong sign of automatable labor spend (potential AI software build)` : ''}
+${discoverySignals.raised_funding ? '- FUNDING SIGNAL: recently raised capital — board pressure to show growth, budget to deploy' : ''}
+${discoverySignals.preparing_for_exit ? '- EXIT SIGNAL: preparing to sell — motivated to maximize revenue and valuation before exit' : ''}
+${discoverySignals.rebranding ? '- REBRAND SIGNAL: rebranding — full marketing rebuild in motion, vendors up for grabs' : ''}
 
-CROJungle products:
+AUDIT TASK — CROJungle is a full-service growth partner, NOT a single-product vendor. Audit the ENTIRE business across all five areas, then lead with the sharpest, most expensive problem:
+1. ACQUISITION — are they capturing demand? (ads, SEO, paid search presence)
+2. CONVERSION — does the website/funnel convert? (CTA, positioning, social proof, mobile)
+3. INFRASTRUCTURE — do they have marketing systems? (CRM, tracking, automation)
+4. OPERATIONS — are they bleeding money on manual labor that AI software could replace? (use the hiring signal above)
+5. GROWTH & VALUE — funding/exit context: what's suppressing their revenue or valuation?
+
+Then answer:
+- What is the single most expensive problem across ALL five areas? Be specific — reference their actual content, tech gaps, hiring, or exit context.
+- What is the ONE thing a founder would be embarrassed about if you pointed it out?
+- Which CROJungle offering fixes it and why?
+
+CROJungle offerings (full-service — can combine):
 - Website Rebuild ($10k-$25k): homepage conversion failures, weak positioning, no CTA
 - Landing Page ($5k-$15k): running ads to homepage, no dedicated conversion page
+- End-to-End Marketing / Ads Management ($8k-$35k/month): running ads but leaking revenue, needs full-funnel ownership
 - AI Brain ($40k-$70k): no marketing intelligence layer, disconnected systems, no automation
-- Software Build / AI Integration ($25k-$75k): manual ops, no workflow automation, post-acquisition chaos
-- Growth Retainer ($8k-$35k/month): running ads but leaking revenue, needs ongoing optimization
+- Custom AI Software Build ($25k-$75k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — often the biggest ticket
+- Revenue Growth / CRO Retainer ($8k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
+- Exit / Valuation Advisory (via Wall Street-backed partner): for companies preparing to sell — increase revenue AND advise on valuation/M&A. Nobody else offers this combination.
+
+Prioritize by dollar impact: a confirmed manual-labor signal (AI software, $25k-$75k) or exit-prep company usually outweighs a homepage CTA fix. Only recommend what the evidence supports — never fabricate.
 
 Return ONLY valid JSON, no markdown:
 {
@@ -1017,11 +1149,13 @@ Return ONLY valid JSON, no markdown:
   "trustSignals": ["visible trust signals"],
   "biggestVisualIssue": "single most important visual problem with specific detail",
   "overallConversionRating": "strong/moderate/weak",
-  "realPain": "the single most expensive confirmed problem — specific, referenced from their actual content",
+  "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
+  "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
+  "realPain": "the single most expensive confirmed problem across ALL areas — specific, referenced from their actual situation",
   "embarrassingFinding": "the one thing the founder would be embarrassed about",
-  "recommendedProduct": "Website Rebuild|Landing Page|AI Brain|Software Build / AI Integration|Growth Retainer",
+  "recommendedProduct": "Website Rebuild|Landing Page|End-to-End Marketing|AI Brain|Custom AI Software Build|Revenue Growth Retainer|Exit / Valuation Advisory",
   "recommendedPrice": "price range",
-  "recommendedReason": "why this product, referenced from their specific situation",
+  "recommendedReason": "why this offering, referenced from their specific situation",
   "pitchAngle": "one sentence pitch that opens with the pain and closes with curiosity"
 }`
         });
@@ -1049,6 +1183,8 @@ Return ONLY valid JSON, no markdown:
             recommendedPrice: parsed.recommendedPrice,
             recommendedReason: parsed.recommendedReason,
             pitchAngle: parsed.pitchAngle,
+            operationsOpportunity: parsed.operationsOpportunity,
+            exitValueAngle: parsed.exitValueAngle,
           };
           console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
         } catch(e) { console.log('Brain parse error:', e.message, vText.slice(0,200)); }
@@ -1089,7 +1225,7 @@ Return ONLY valid JSON, no markdown:
     // 4 Buckets — enhanced with visual analysis
     const buckets = {
       ACQUISITION: {
-        googleAds: googleAds.hasGoogleAds ? 'Running Google Ads — confirmed' : 'No Google Ads detected',
+        googleAds: googleAds.hasGoogleAds ? 'Google Ads possibly running (unverified)' : 'No Google Ads detected (unverified)',
         facebookAds: fbAds.hasAds ? `${fbAds.ads.length} active Facebook ads` : 'No Facebook ads running',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
@@ -1123,6 +1259,42 @@ Return ONLY valid JSON, no markdown:
         chat: builtWith.hasChat ? 'Live chat present' : 'No live chat detected',
         video: builtWith.hasVideo ? 'Video hosting detected' : '',
       },
+      // OPERATIONS — the AI-replacement / software-build opportunity.
+      // Populated from the discovery signal (manual hiring), not the website.
+      // This is what the old website-only audit was completely blind to.
+      OPERATIONS: {
+        manualHiring: manualRoleCount >= 2
+          ? `[Job-board signal] Hiring ${manualRoleCount} manual/repetitive roles${manualCategories ? ` across ${manualCategories} functions` : ''} — confirmed postings, automatable work`
+          : discoverySignals.ai_replacement_signal
+          ? '[Job-board signal] Hiring manual/repetitive roles — automation opportunity'
+          : 'No manual-hiring signal detected',
+        laborCostEstimate: manualRoleCount >= 2
+          ? `[Job-board signal] ${manualRoleCount} active postings for repetitive roles — recurring salary spend software could reduce`
+          : '',
+        automationOpportunity: manualRoleCount >= 3
+          ? 'HIGH — multiple repetitive roles could be replaced with a single software build'
+          : manualRoleCount >= 2
+          ? 'MEDIUM — repetitive workflows automatable'
+          : '',
+        techStackMaturity: (!builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat)
+          ? '[Site scan] No connected systems detected — greenfield for AI Brain / workflow automation'
+          : '[Site scan] Some tools present — integration opportunity',
+      },
+      // GROWTH — funding / exit-prep signals that suppress or unlock revenue
+      GROWTH: {
+        funding: discoverySignals.raised_funding
+          ? '[SEC filing signal] Recently raised — capital to deploy, board pressure to show growth'
+          : '',
+        exitPrep: discoverySignals.preparing_for_exit
+          ? '[Listing signal] Preparing for exit — motivated to maximize revenue/valuation fast'
+          : '',
+        triggerEvent: (discoverySignals.rebranding || discoverySignals.recently_acquired || discoverySignals.recently_launched)
+          ? `In flux (${discoverySignals.rebranding ? 'rebrand' : discoverySignals.recently_acquired ? 'acquisition' : 'launch'}) — vendors up for grabs, marketing reset needed`
+          : '',
+        adSpend: (googleAds.hasGoogleAds || fbAds.hasAds)
+          ? 'Confirmed ad spend — leaking revenue if funnel is broken'
+          : 'No confirmed ad spend',
+      },
     };
 
     // Flaws — ONLY flag what we can CONFIRM, not what we can't detect
@@ -1150,18 +1322,29 @@ Return ONLY valid JSON, no markdown:
     if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50) flaws.push('slow_mobile');
     if (positioningScore < 4) flaws.push('weak_positioning');
 
+    // OPERATIONS — AI-replacement signals (from discovery, high confidence)
+    if (manualRoleCount >= 5) flaws.push('heavy_manual_labor');
+    else if (manualRoleCount >= 2) flaws.push('manual_labor');
+    // GROWTH — funding / exit signals
+    if (discoverySignals.raised_funding && !builtWith.hasCRM) flaws.push('funded_no_infra');
+    if (discoverySignals.preparing_for_exit) flaws.push('exit_prep');
+
     // DO NOT flag absence of ads as a flaw — we don't know if they're running them elsewhere
     // DO NOT flag no_google_ads or no_fb_ads — SpyFu/Facebook checks are unreliable without keys
 
     // Top pain
     const painMap = [
+      { id:'heavy_manual_labor', pain:`Actively hiring ${manualRoleCount} manual/repetitive roles (confirmed job postings) — recurring labor that custom software could largely replace`, opportunity:'Custom AI software build to automate repetitive workflows', product:'Custom AI Software Build', price:'$25k–$75k+' },
+      { id:'exit_prep', pain:'Preparing for exit — every dollar of new revenue and every efficiency gain directly raises the sale price', opportunity:'Revenue growth + valuation advisory before the sale closes', product:'Exit / Valuation Advisory', price:'Custom' },
+      { id:'manual_labor', pain:`Hiring ${manualRoleCount} manual roles — repetitive work that software could handle at a fraction of the cost`, opportunity:'Workflow automation / custom software', product:'Custom AI Software Build', price:'$25k–$50k' },
+      { id:'funded_no_infra', pain:'Recently funded but no CRM or marketing infrastructure — capital to grow with nothing to capture or convert leads', opportunity:'Full marketing infrastructure + intelligence layer', product:'AI Brain', price:'$40k–$70k' },
       { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Landing page or homepage rebuild', product:'Website Rebuild', price:'$10k–$25k' },
       { id:'weak_positioning', pain:`Positioning ${positioningScore}/10 — generic messaging any competitor could use`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$15k–$40k' },
-      { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + landing page', product:'Landing Page + Ads', price:'$10k–$20k' },
-      { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Growth Retainer', price:'$8k–$15k/month' },
-      { id:'no_tracking', pain:'No tracking pixel — spending on marketing with no way to measure what works', opportunity:'Analytics + tracking infrastructure', product:'Growth Retainer', price:'$8k–$15k/month' },
+      { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + landing page', product:'End-to-End Marketing', price:'$10k–$20k' },
+      { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
+      { id:'no_tracking', pain:'No tracking pixel — spending on marketing with no way to measure what works', opportunity:'Analytics + tracking infrastructure', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
       { id:'slow_mobile', pain:`Mobile score ${pageSpeed.mobileScore}/100 — majority of traffic leaves before seeing the offer`, opportunity:'Site speed + mobile rebuild', product:'Website Rebuild', price:'$10k–$25k' },
-      { id:'no_google_ads', pain:'No Google Ads — competitors are capturing demand this company cannot see', opportunity:'Paid search + landing pages', product:'Growth Retainer', price:'$8k–$20k/month' },
+      { id:'no_google_ads', pain:'No Google Ads — competitors are capturing demand this company cannot see', opportunity:'Paid search + landing pages', product:'End-to-End Marketing', price:'$8k–$20k/month' },
       { id:'no_social_proof', pain:'No testimonials or case studies — buyers cannot verify claims before buying', opportunity:'Social proof system', product:'Website Rebuild', price:'$8k–$20k' },
       { id:'weak_hero', pain:'Homepage headline does not differentiate from a single competitor', opportunity:'Positioning + homepage rewrite', product:'Website Rebuild', price:'$10k–$30k' },
     ];
@@ -1306,14 +1489,6 @@ app.post('/api/diagnostics', async (req, res) => {
     results.sec_edgar = { ok: true, count: d.hits?.hits?.length || 0, total: d.hits?.total?.value || 0 };
   } catch(e) { results.sec_edgar = { ok: false, error: e.message }; }
 
-  // Test Clutch RSS
-  try {
-    const r = await fetchT('https://clutch.co/feed', {}, 6000);
-    const xml = await safeText(r);
-    const items = (xml.match(/<item>/g)||[]).length;
-    results.clutch_rss = { ok: items > 0, count: items };
-  } catch(e) { results.clutch_rss = { ok: false, error: e.message }; }
-
   // Test Google News RSS
   try {
     const r = await fetchT('https://news.google.com/rss/search?q=company+hires+CMO&hl=en-US&gl=US&ceid=US:en', {}, 6000);
@@ -1321,22 +1496,6 @@ app.post('/api/diagnostics', async (req, res) => {
     const items = (xml.match(/<item>/g)||[]).length;
     results.google_news = { ok: items > 0, count: items };
   } catch(e) { results.google_news = { ok: false, error: e.message }; }
-
-  // Test Reddit
-  try {
-    const r = await fetchT('https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency&sort=new&limit=5&restrict_sr=1', { headers: { 'User-Agent': 'CROJungle/1.0' } }, 6000);
-    const d = await safeJson(r);
-    const count = d?.data?.children?.length || 0;
-    results.reddit = { ok: count > 0, count };
-  } catch(e) { results.reddit = { ok: false, error: e.message }; }
-
-  // Test Product Hunt RSS
-  try {
-    const r = await fetchT('https://www.producthunt.com/feed', {}, 6000);
-    const xml = await safeText(r);
-    const items = (xml.match(/<item>/g)||[]).length;
-    results.product_hunt = { ok: items > 0, count: items };
-  } catch(e) { results.product_hunt = { ok: false, error: e.message }; }
 
   // Test Hunter.io
   if (hunterKey) {
@@ -1347,24 +1506,15 @@ app.post('/api/diagnostics', async (req, res) => {
     } catch(e) { results.hunter = { ok: false, error: e.message }; }
   } else { results.hunter = { ok: false, error: 'No key provided' }; }
 
-  // Test Crunchbase
-  if (crunchbaseKey) {
-    try {
-      const r = await fetchT(`https://api.crunchbase.com/api/v4/entities/organizations/apple?card_ids=fields&field_ids=short_description&user_key=${crunchbaseKey}`, {}, 6000);
-      results.crunchbase = { ok: r.ok, status: r.status, error: r.ok ? null : 'Invalid key or no access' };
-    } catch(e) { results.crunchbase = { ok: false, error: e.message }; }
-  } else { results.crunchbase = { ok: false, error: 'No key provided' }; }
-
-  // Test PR Newswire RSS
+  // Test BizBuySell RSS (active source)
   try {
-    const r = await fetchT('https://www.prnewswire.com/rss/news-releases-list.rss', {}, 6000);
-    const xml = await safeText(r);
-    const items = (xml.match(/<item>/g)||[]).length;
-    results.pr_newswire = { ok: items > 0, count: items };
-  } catch(e) { results.pr_newswire = { ok: false, error: e.message }; }
+    const xml = await fetchViaProxy('https://www.bizbuysell.com/rss/businesses-for-sale/', 8000);
+    const items = (xml && !xml.trim().startsWith('<!DOCTYPE')) ? (xml.match(/<item>/g)||[]).length : 0;
+    results.bizbuysell = { ok: items > 0, count: items, error: items === 0 ? 'Feed blocked or empty' : null };
+  } catch(e) { results.bizbuysell = { ok: false, error: e.message }; }
 
   // Test backend itself
-  results.backend = { ok: true, version: 'v6' };
+  results.backend = { ok: true, version: 'v8' };
 
   res.json(results);
 });
