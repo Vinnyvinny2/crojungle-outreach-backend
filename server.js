@@ -368,7 +368,40 @@ const scrapeGoogleNews = async () => {
 // Perfect CROJungle pitch: "we'll grow your revenue before you sell"
 // Free RSS, no bot protection
 // ═══════════════════════════════════════════════════════════
-const scrapeBizBuySell = async () => {
+// Shared Firecrawl scrape — renders JS and beats bot protection (1 credit/call)
+const firecrawlScrape = async (fcKey, url, timeout = 25000) => {
+  if (!fcKey) return '';
+  try {
+    const r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 3000 }),
+    }, timeout);
+    const d = await r.json();
+    return d.data?.markdown || d.markdown || '';
+  } catch(e) { console.log('firecrawlScrape error:', e.message); return ''; }
+};
+
+// FACEBOOK AD LIBRARY VIA FIRECRAWL — automates the manual "All ads" check.
+// The Ad Library is a JS app so plain fetch fails; Firecrawl renders it.
+// Returns confirmed ad presence + rough count, no Meta token needed.
+const checkAdLibraryViaFirecrawl = async (company, fcKey) => {
+  if (!fcKey || !company) return { hasAds: false, adCount: 0, confirmed: false };
+  try {
+    const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&search_type=keyword_search&q=${encodeURIComponent(company)}`;
+    const md = await firecrawlScrape(fcKey, url, 30000);
+    if (!md || md.length < 200) return { hasAds: false, adCount: 0, confirmed: false };
+    // "~340 results" header, or count Library ID occurrences as fallback
+    const m = md.match(/~?\s*([\d,]+)\s+results/i);
+    const libIds = (md.match(/Library ID/gi) || []).length;
+    const adCount = m ? parseInt(m[1].replace(/,/g, ''), 10) : libIds;
+    const hasAds = adCount > 0;
+    console.log(`Ad Library (Firecrawl): ${company} → ${adCount} ads`);
+    return { hasAds, adCount, confirmed: true, source: 'ad_library_scrape' };
+  } catch(e) { console.log('Ad Library scrape error:', e.message); return { hasAds: false, adCount: 0, confirmed: false }; }
+};
+
+const scrapeBizBuySell = async (fcKey) => {
   try {
     const feeds = [
       'https://www.bizbuysell.com/rss/businesses-for-sale/',
@@ -387,7 +420,7 @@ const scrapeBizBuySell = async () => {
           xml = await fetchViaProxy(feedUrl, 10000);
         }
         if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
-          console.log('BizBuySell: blocked on both direct and proxy');
+          console.log('BizBuySell RSS blocked — will try Firecrawl page scrape');
           continue;
         }
         const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
@@ -413,6 +446,32 @@ const scrapeBizBuySell = async () => {
         });
         if (results.length > 0) break;
       } catch(e) { console.log('BizBuySell feed error:', e.message); }
+    }
+    // FIRECRAWL FALLBACK — RSS is bot-blocked, render the listings page instead
+    if (results.length === 0 && fcKey) {
+      const md = await firecrawlScrape(fcKey, 'https://www.bizbuysell.com/businesses-for-sale/', 30000);
+      if (md && md.length > 500) {
+        // Listings appear as markdown links to /business-opportunity/ pages
+        const links = [...md.matchAll(/\[([^\]]{10,90})\]\((https:\/\/www\.bizbuysell\.com\/[^)]*business[^)]*)\)/gi)];
+        const seen = new Set();
+        for (const [, title, link] of links) {
+          const clean = title.replace(/[#*_]/g, '').trim();
+          if (clean.length < 8 || seen.has(clean.toLowerCase())) continue;
+          if (/sign in|register|broker|sell your|search|advanced|franchise directory/i.test(clean)) continue;
+          seen.add(clean.toLowerCase());
+          const brokerPosted = /broker|agent/i.test(clean);
+          results.push({
+            name: clean.slice(0, 60),
+            website: link,
+            jobTitle: brokerPosted ? 'Listed for sale via broker' : 'Listed for sale — owner wants to maximize value',
+            source: 'bizbuysell',
+            brokerPosted,
+            signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: !brokerPosted },
+          });
+          if (results.length >= 15) break;
+        }
+        console.log(`BizBuySell via Firecrawl: ${results.length}`);
+      }
     }
     console.log(`BizBuySell: ${results.length}`);
     return results;
@@ -656,7 +715,7 @@ const scoreReachability = (c) => {
 
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys } = req.body;
-  const { adzunaId, adzunaKey, fbToken } = keys || {};
+  const { adzunaId, adzunaKey, fbToken, firecrawlKey } = keys || {};
 
   console.log('\n=== DISCOVERY START ===');
   console.log('Keywords:', keywords);
@@ -671,7 +730,7 @@ app.post('/api/discover', async (req, res) => {
       searchAdzuna(adzunaId, adzunaKey),   // AI-replacement labor signals
       searchSECEdgar(),                    // just-funded — capital + board pressure  
       scrapeGoogleNews(),                  // trigger events — new CMO, rebrand, acquisition
-      scrapeBizBuySell(),                  // exit prep — motivated to grow revenue fast
+      scrapeBizBuySell(firecrawlKey),      // exit prep — RSS first, Firecrawl fallback
       searchFacebookAds(fbToken),          // dormant until token — confirmed ad budget
     ]);
 
@@ -1008,7 +1067,7 @@ app.post('/api/research', async (req, res) => {
             body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 2000 }),
           }, 20000).then(r=>r.json()).catch(e => { console.log('Firecrawl error:', e.message); return {}; })
         : Promise.resolve({}),
-      fbToken ? checkFacebookAds(company, fbToken) : Promise.resolve({hasAds:false,ads:[]}),
+      fbToken ? checkFacebookAds(company, fbToken) : checkAdLibraryViaFirecrawl(company, firecrawlKey),
       domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
       domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
     ]);
@@ -1072,7 +1131,7 @@ TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools;
 
 ADS:
 - Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
-- Facebook Ads: ${fbAds.hasAds ? `${fbAds.ads?.length} active ads (confirmed)` : builtWith.hasMetaPixel ? 'Meta pixel CONFIRMED on their site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'None found in Ad Library' : 'NOT CHECKED (no token) — do not claim anything about their Facebook ads'}
+- Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length} active ads — CONFIRMED via Ad Library. If they run many ads with a weak funnel, THAT is the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel CONFIRMED on their site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'No active ads found in Ad Library (checked)' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
 ${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : content.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be scraped (site blocked Firecrawl). Do NOT make up homepage findings. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
@@ -1219,7 +1278,7 @@ Return ONLY valid JSON, no markdown:
     const buckets = {
       ACQUISITION: {
         googleAds: builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : googleAds.hasGoogleAds ? 'Google Ads possibly running (unverified heuristic)' : 'No Google Ads tag on page (they may still run ads — unverified)',
-        facebookAds: fbAds.hasAds ? `${fbAds.ads.length} active Facebook ads (confirmed via Ad Library)` : builtWith.hasMetaPixel ? 'Meta pixel found on site — they have Facebook ad infrastructure (Ad Library not checked, no token)' : fbAds.confirmed ? 'No Facebook ads found in Ad Library' : 'Not checked — add Facebook token in Settings',
+        facebookAds: fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length || ''} active Facebook ads (confirmed via Ad Library)`.trim() : builtWith.hasMetaPixel ? 'Meta pixel found on site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'No active Facebook ads found in Ad Library (checked)' : 'Facebook ads: could not check (Ad Library scrape failed)',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
       },
@@ -1440,7 +1499,7 @@ Return ONLY valid JSON, no markdown:
       buckets, flaws, topPain, positioningScore, recommendedProduct, researchBonus, brainAudit,
       visualAnalysis,
       screenshotUrl,
-      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel },
+      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
       homepageContent: content.slice(0,3000),
       richData: {
         googleAds: buckets.ACQUISITION.googleAds,
