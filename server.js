@@ -900,20 +900,31 @@ const checkPageSpeed = async (url) => {
   } catch { return { mobileScore: null, confirmed: false }; }
 };
 
+// DIRECT SITE FINGERPRINTING — fetch the raw HTML and detect the actual
+// scripts on the page. Far more reliable than scraping builtwith.com:
+// a Google Ads conversion tag (AW-xxxx) in their source = they run Google Ads.
+// fbq( = Meta pixel. These are facts from their own page, not third-party guesses.
 const checkBuiltWith = async (domain) => {
   try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://builtwith.com/${clean}`, {}, 8000);
+    const url = `https://${domain}`;
+    const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html' } }, 10000);
     const html = await safeText(r);
+    if (!html || html.length < 500) return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false };
     return {
-      hasCRM: /hubspot|salesforce|marketo|pipedrive|zoho crm/i.test(html),
-      hasEmailMarketing: /mailchimp|klaviyo|activecampaign|constant contact/i.test(html),
-      hasPixel: /facebook pixel|google analytics|gtag|hotjar|mixpanel/i.test(html),
-      hasVideo: /wistia|vimeo|youtube/i.test(html),
-      hasChat: /intercom|drift|crisp|zendesk/i.test(html),
+      // CRM / marketing automation — script fingerprints
+      hasCRM: /hubspot|hs-scripts|salesforce|pardot|marketo|pipedrive|zoho.*crm/i.test(html),
+      hasEmailMarketing: /klaviyo|mailchimp|list-manage|activecampaign|constantcontact|braze|iterable|sendgrid/i.test(html),
+      // Analytics / pixels
+      hasPixel: /gtag\(|google-analytics|googletagmanager|fbq\(|facebook\.net\/tr|hotjar|mixpanel|segment\.com|clarity\.ms/i.test(html),
+      // Google Ads — conversion/remarketing tag is direct evidence of ad spend
+      hasGoogleAdsTag: /AW-\d{8,}|googleadservices|google_conversion/i.test(html),
+      // Meta pixel — direct evidence of Facebook/IG ad infrastructure
+      hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i.test(html),
+      hasVideo: /wistia|vimeo|youtube\.com\/embed|vidyard/i.test(html),
+      hasChat: /intercom|drift|crisp\.chat|zendesk.*widget|tawk\.to|livechat/i.test(html),
       confirmed: true,
     };
-  } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, confirmed:false }; }
+  } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false }; }
 };
 
 // Google Ads Transparency page scrape — HEURISTIC ONLY, not reliable.
@@ -1036,15 +1047,15 @@ SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 HOMEPAGE CONTENT (scraped):
 ${homepageSnippet || 'Not available'}
 
-TECH STACK DETECTED:
-- CRM: ${builtWith.hasCRM ? 'Yes' : 'None detected'}
-- Email Marketing: ${builtWith.hasEmailMarketing ? 'Yes' : 'None detected'}
-- Tracking Pixel: ${builtWith.hasPixel ? 'Yes' : 'None detected'}
-- Live Chat: ${builtWith.hasChat ? 'Yes' : 'None detected'}
+TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools; a positive is reliable, a "none detected" is NOT proof of absence. Do not build the pitch on claimed absence of CRM/pixel/email unless the company is clearly small):
+- CRM: ${builtWith.hasCRM ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
+- Email Marketing: ${builtWith.hasEmailMarketing ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
+- Tracking Pixel: ${builtWith.hasPixel ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
+- Live Chat: ${builtWith.hasChat ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
 
 ADS:
-- Google Ads: ${googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact in pitch)' : 'Not detected (unverified)'}
-- Facebook Ads: ${fbAds.hasAds ? `${fbAds.ads?.length} active ads` : 'Not detected'}
+- Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
+- Facebook Ads: ${fbAds.hasAds ? `${fbAds.ads?.length} active ads (confirmed)` : builtWith.hasMetaPixel ? 'Meta pixel CONFIRMED on their site — they have Facebook ad infrastructure' : fbAds.confirmed ? 'None found in Ad Library' : 'NOT CHECKED (no token) — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
 ${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : content.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be scraped (site blocked Firecrawl). Do NOT make up homepage findings. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
@@ -1190,8 +1201,8 @@ Return ONLY valid JSON, no markdown:
     // 4 Buckets — enhanced with visual analysis
     const buckets = {
       ACQUISITION: {
-        googleAds: googleAds.hasGoogleAds ? 'Google Ads possibly running (unverified)' : 'No Google Ads detected (unverified)',
-        facebookAds: fbAds.hasAds ? `${fbAds.ads.length} active Facebook ads` : 'No Facebook ads running',
+        googleAds: builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : googleAds.hasGoogleAds ? 'Google Ads possibly running (unverified heuristic)' : 'No Google Ads tag on page (they may still run ads — unverified)',
+        facebookAds: fbAds.hasAds ? `${fbAds.ads.length} active Facebook ads (confirmed via Ad Library)` : builtWith.hasMetaPixel ? 'Meta pixel found on site — they have Facebook ad infrastructure (Ad Library not checked, no token)' : fbAds.confirmed ? 'No Facebook ads found in Ad Library' : 'Not checked — add Facebook token in Settings',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
       },
@@ -1218,10 +1229,10 @@ Return ONLY valid JSON, no markdown:
         linkedinNote: 'Check LinkedIn manually for CMO presence and last post date',
       },
       INFRASTRUCTURE: {
-        crm: builtWith.hasCRM ? 'CRM detected' : 'No CRM detected',
-        emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : 'No email marketing detected',
-        trackingPixel: builtWith.hasPixel ? 'Analytics/pixel present' : 'No tracking pixel detected',
-        chat: builtWith.hasChat ? 'Live chat present' : 'No live chat detected',
+        crm: builtWith.hasCRM ? 'CRM detected' : builtWith.confirmed ? 'No CRM detected on-page (scan can miss server-side tools)' : 'CRM: could not verify (scan blocked)',
+        emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : builtWith.confirmed ? 'No email tool detected on-page (unverified)' : 'Email marketing: could not verify',
+        trackingPixel: builtWith.hasPixel ? 'Analytics/pixel present' : builtWith.confirmed ? 'No pixel detected on-page (scan can miss it)' : 'Tracking: could not verify',
+        chat: builtWith.hasChat ? 'Live chat present' : builtWith.confirmed ? 'No live chat detected (unverified)' : 'Chat: could not verify',
         video: builtWith.hasVideo ? 'Video hosting detected' : '',
       },
       // OPERATIONS — the AI-replacement / software-build opportunity.
@@ -1412,7 +1423,7 @@ Return ONLY valid JSON, no markdown:
       buckets, flaws, topPain, positioningScore, recommendedProduct, researchBonus, brainAudit,
       visualAnalysis,
       screenshotUrl,
-      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel },
+      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel },
       homepageContent: content.slice(0,3000),
       richData: {
         googleAds: buckets.ACQUISITION.googleAds,
