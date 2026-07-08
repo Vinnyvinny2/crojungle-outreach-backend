@@ -101,104 +101,29 @@ app.get('/api/find-website', async (req, res) => {
   const { company } = req.query;
   if (!company) return res.status(400).json({ error: 'Company name required' });
 
-  const BLOCKED = [
-    'google.','facebook.com','linkedin.com','twitter.com','instagram.com',
-    'youtube.com','indeed.com','glassdoor.com','yelp.com','wikipedia.org',
-    'bloomberg.com','crunchbase.com','pitchbook.com','zoominfo.com','apollo.io',
-    'reddit.com','amazon.com','apple.com','microsoft.com','trustpilot.com',
-    'bbb.org','clutch.co','g2.com','capterra.com','getapp.com','ziprecruiter.com',
-    'monster.com','careerbuilder.com','simplyhired.com','salary.com','payscale.com',
-    'sec.gov','irs.gov','usa.gov','github.com','producthunt.com','techcrunch.com',
-    'forbes.com','businessinsider.com','wsj.com','nytimes.com','ft.com',
-  ];
-
-  const isBlocked = (url) => {
-    try {
-      const domain = new URL(url).hostname.replace('www.','').toLowerCase();
-      return BLOCKED.some(b => domain.includes(b)) || domain.length < 4;
-    } catch { return true; }
-  };
-
+  // Method 1: Clearbit autocomplete — fast, free, reasonably accurate for known brands
+  // This works best for companies with a unique name. Generic names ("Central Diesel") often fail.
   try {
-    // Method 1: Try Clearbit free autocomplete API
-    try {
-      const r = await fetchT(
-        `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
-        { headers: { 'Accept': 'application/json' } },
-        5000
-      );
-      const d = await safeJson(r);
-      if (Array.isArray(d) && d.length > 0 && d[0].domain) {
-        const website = `https://${d[0].domain}`;
-        console.log(`Clearbit found: ${website}`);
-        return res.json({ website, source: 'clearbit' });
-      }
-    } catch(e) { console.log('Clearbit lookup failed:', e.message); }
+    const r = await fetchT(
+      `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
+      { headers: { 'Accept': 'application/json' } },
+      5000
+    );
+    const d = await safeJson(r);
+    if (Array.isArray(d) && d.length > 0 && d[0].domain) {
+      // Confidence check: does the result name actually match the company we searched?
+      const resultName = (d[0].name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const searchName = company.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
+      const confident = resultName.includes(searchName.slice(0, 6)) || searchName.includes(resultName.slice(0, 6));
+      const website = `https://${d[0].domain}`;
+      console.log(`Clearbit: ${website} | confident: ${confident}`);
+      return res.json({ website, source: 'clearbit', confident });
+    }
+  } catch(e) { console.log('Clearbit failed:', e.message); }
 
-    // Method 2: DuckDuckGo instant answer (less likely to block than Google)
-    try {
-      const q = encodeURIComponent(`${company} official website`);
-      const r = await fetchT(
-        `https://api.duckduckgo.com/?q=${q}&format=json&no_redirect=1&no_html=1`,
-        { headers: { 'Accept': 'application/json' } },
-        6000
-      );
-      const d = await safeJson(r);
-      const official = d.AbstractURL || d.OfficialWebsite || '';
-      if (official && !isBlocked(official)) {
-        const parsed = new URL(official);
-        console.log(`DuckDuckGo found: ${parsed.origin}`);
-        return res.json({ website: parsed.origin, source: 'duckduckgo' });
-      }
-      // Check related topics
-      const topics = d.RelatedTopics || [];
-      for (const t of topics) {
-        const url = t.FirstURL || '';
-        if (url && !isBlocked(url)) {
-          try {
-            const parsed = new URL(url);
-            if (parsed.hostname.includes(company.toLowerCase().replace(/\s+/g,'').slice(0,6))) {
-              return res.json({ website: parsed.origin, source: 'duckduckgo' });
-            }
-          } catch {}
-        }
-      }
-    } catch(e) { console.log('DuckDuckGo failed:', e.message); }
-
-    // Method 3: Google search as last resort with aggressive filtering
-    try {
-      const q = encodeURIComponent(`"${company}" official site`);
-      const r = await fetchT(
-        `https://www.google.com/search?q=${q}&num=10`,
-        { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } },
-        8000
-      );
-      const html = await safeText(r);
-      const urlMatches = [...html.matchAll(/href="(https?:\/\/[^"&>]+)"/g)];
-      for (const m of urlMatches) {
-        const url = m[1];
-        if (!isBlocked(url)) {
-          try {
-            const parsed = new URL(url);
-            const domain = parsed.hostname.replace('www.','').toLowerCase();
-            // Domain should somewhat match company name
-            const companySlug = company.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,8);
-            const domainSlug = domain.split('.')[0].replace(/[^a-z0-9]/g,'');
-            if (domainSlug.includes(companySlug.slice(0,4)) || companySlug.includes(domainSlug.slice(0,4))) {
-              console.log(`Google found: ${parsed.origin}`);
-              return res.json({ website: parsed.origin, source: 'google' });
-            }
-          } catch {}
-        }
-      }
-    } catch(e) { console.log('Google search failed:', e.message); }
-
-    console.log(`No website found for "${company}"`);
-    res.json({ website: '' });
-  } catch(e) {
-    console.error('find-website error:', e.message);
-    res.json({ website: '' });
-  }
+  // Nothing found — modal will show empty field for manual entry
+  console.log(`No website found for "${company}" — modal will prompt manual entry`);
+  res.json({ website: '', source: 'not_found', confident: false });
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -1022,7 +947,6 @@ app.post('/api/research', async (req, res) => {
   const pageSpeed = browserData.pageSpeed || {};
   const emailData = browserData.emailData || {};
   const companyData = browserData.companyData || {};
-  // Discovery signals — WHY this company was flagged (carried from Find)
   const discoverySignals = req.body.discoverySignals || {};
   const discoverySource = req.body.discoverySource || '';
   const discoveryReason = req.body.discoveryReason || '';
@@ -1030,6 +954,18 @@ app.post('/api/research', async (req, res) => {
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   if (!company) return res.status(400).json({ error: 'Company name required' });
+
+  // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
+  console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? apiKey.slice(0,12)+'...' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
+
+  // Pre-flight check — return 400 immediately if Anthropic key is missing
+  // so the error message is clear rather than a confusing 422
+  if (!apiKey) {
+    return res.status(400).json({
+      brainFailed: true,
+      reason: 'Anthropic API key missing — go to Settings and add your sk-ant-... key'
+    });
+  }
 
   const domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
   console.log(`Research: ${company} | ${website||'no website'}`);
@@ -1057,13 +993,16 @@ app.post('/api/research', async (req, res) => {
     const googleAds = googleAdsRes.value || {};
     const email = emailData; // from browser via browserData
 
-    console.log(`Firecrawl: ${content.length} chars, screenshot: ${!!screenshotUrl}`);
+    console.log(`Firecrawl: ${content.length} chars | screenshot: ${!!screenshotUrl} | discoveryContext: ${hasDiscoveryContext} | apiKey: ${!!apiKey}`);
 
     // If we have content OR screenshot, run the full Brain audit
     let visualAnalysis = null;
     let brainAudit = null;
+    let brainError = '';
 
-    if (apiKey && (screenshotUrl || content.length > 100)) {
+    const hasDiscoveryContext = manualRoleCount > 0 || discoverySignals.raised_funding || discoverySignals.preparing_for_exit || discoverySignals.rebranding || discoverySignals.recently_acquired;
+
+    if (apiKey && (screenshotUrl || content.length > 100 || hasDiscoveryContext)) {
       try {
         // Build message content — always send text, add image if available
         const msgContent = [];
@@ -1072,12 +1011,19 @@ app.post('/api/research', async (req, res) => {
           try {
             const imgRes = await fetchT(screenshotUrl, {}, 10000);
             const imgBuffer = await imgRes.buffer();
-            const base64 = imgBuffer.toString('base64');
-            msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
+            // Render free tier uploads slowly — a 4MB image alone can eat 20s.
+            // Cap at 1.5MB: most above-fold screenshots fit; oversized ones get
+            // skipped and the audit runs from the scraped text (still good).
+            if (imgBuffer.length < 1.5 * 1024 * 1024) {
+              const base64 = imgBuffer.toString('base64');
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
+            } else {
+              console.log(`Screenshot too large (${Math.round(imgBuffer.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
+            }
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
         }
 
-        const homepageSnippet = content.slice(0, 6000);
+        const homepageSnippet = content.slice(0, 4000);
 
         msgContent.push({
           type: 'text',
@@ -1101,7 +1047,7 @@ ADS:
 - Facebook Ads: ${fbAds.hasAds ? `${fbAds.ads?.length} active ads` : 'Not detected'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
-${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : 'No screenshot available — audit from content only.'}
+${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : content.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be scraped (site blocked Firecrawl). Do NOT make up homepage findings. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
 
 WHY THIS COMPANY WAS FLAGGED (discovery signal — factor this into your audit):
 - Source: ${discoverySource || 'unknown'}
@@ -1160,6 +1106,8 @@ Return ONLY valid JSON, no markdown:
 }`
         });
 
+        // 45s timeout — vision calls with screenshots regularly take 25-40s.
+        // The old 20s timeout was killing valid calls mid-flight.
         const visionRes = await fetchT('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
@@ -1168,10 +1116,19 @@ Return ONLY valid JSON, no markdown:
             max_tokens: 1500,
             messages: [{ role: 'user', content: msgContent }]
           }),
-        }, 20000);
+        }, 45000);
 
         const vd = await safeJson(visionRes);
+        // Surface actual API errors instead of swallowing them
+        if (vd.error) {
+          brainError = `Claude API error: ${vd.error.type || ''} — ${vd.error.message || JSON.stringify(vd.error).slice(0,200)}`;
+          console.log('BRAIN ERROR:', brainError);
+        }
         const vText = vd.content?.[0]?.text || '';
+        if (!vText && !vd.error) {
+          brainError = `Claude returned empty response (status shape: ${JSON.stringify(Object.keys(vd))})`;
+          console.log('BRAIN ERROR:', brainError);
+        }
         try {
           const clean = vText.replace(/```json|```/g,'').trim();
           const parsed = JSON.parse(clean);
@@ -1187,8 +1144,16 @@ Return ONLY valid JSON, no markdown:
             exitValueAngle: parsed.exitValueAngle,
           };
           console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
-        } catch(e) { console.log('Brain parse error:', e.message, vText.slice(0,200)); }
-      } catch(e) { console.log('Brain audit error:', e.message); }
+        } catch(e) {
+          if (!brainError) brainError = `Claude responded but JSON parse failed: ${e.message} — response started with: "${vText.slice(0,120)}"`;
+          console.log('Brain parse error:', e.message, vText.slice(0,200));
+        }
+      } catch(e) {
+        brainError = e.message.includes('abort') || e.message.includes('timeout')
+          ? 'Claude API call timed out after 45s — Render free tier may be too slow, retry usually works'
+          : `Brain call failed: ${e.message}`;
+        console.log('Brain audit error:', e.message);
+      }
     }
 
     // Merge text analysis with visual analysis
@@ -1420,10 +1385,11 @@ Return ONLY valid JSON, no markdown:
     // ── BRAIN GATE — if Brain didn't run, don't return fake rule-based data ──
     // Rule-based checks are not reliable enough to show to users
     if (!brainAudit) {
-      const reason = !apiKey ? 'No Anthropic API key in Settings'
-        : !firecrawlKey ? 'No Firecrawl key in Settings'
-        : content.length < 100 && !screenshotUrl ? 'Website could not be scraped — wrong URL or site blocked'
-        : 'Brain analysis failed — check API keys';
+      const reason = brainError
+        ? brainError
+        : !firecrawlKey
+        ? 'Firecrawl key missing — add fc-... key in Settings so we can scrape the homepage'
+        : 'Brain analysis failed — Claude API returned an error. Check your Anthropic key in Settings (sk-ant-...) and make sure it has credits.';
 
       console.log(`Brain gate blocked: ${reason}`);
       return res.status(422).json({
