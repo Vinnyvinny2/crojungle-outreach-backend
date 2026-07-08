@@ -993,6 +993,7 @@ app.post('/api/research', async (req, res) => {
     const googleAds = googleAdsRes.value || {};
     const email = emailData; // from browser via browserData
 
+    const hasDiscoveryContext = manualRoleCount > 0 || discoverySignals.raised_funding || discoverySignals.preparing_for_exit || discoverySignals.rebranding || discoverySignals.recently_acquired;
     console.log(`Firecrawl: ${content.length} chars | screenshot: ${!!screenshotUrl} | discoveryContext: ${hasDiscoveryContext} | apiKey: ${!!apiKey}`);
 
     // If we have content OR screenshot, run the full Brain audit
@@ -1000,7 +1001,6 @@ app.post('/api/research', async (req, res) => {
     let brainAudit = null;
     let brainError = '';
 
-    const hasDiscoveryContext = manualRoleCount > 0 || discoverySignals.raised_funding || discoverySignals.preparing_for_exit || discoverySignals.rebranding || discoverySignals.recently_acquired;
 
     if (apiKey && (screenshotUrl || content.length > 100 || hasDiscoveryContext)) {
       try {
