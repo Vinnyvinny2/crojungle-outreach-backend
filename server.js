@@ -156,9 +156,11 @@ const searchAdzuna = async (appId, appKey) => {
       { title: 'Receptionist',                     cat: 'admin' },
     ];
 
-    // ALL IN PARALLEL  
-    const raw = await Promise.allSettled(
-      searches.map(async ({ title, cat }) => {
+    // Stagger calls slightly to avoid 429 rate limits
+    const raw = [];
+    for (const { title, cat } of searches) {
+      await new Promise(r => setTimeout(r, 150)); // 150ms between calls
+      raw.push(await (async () => {
         const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=35&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
         const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
         if (!r.ok) { console.log(`Adzuna "${title}" ${r.status}`); return []; }
@@ -176,11 +178,11 @@ const searchAdzuna = async (appId, appKey) => {
             salaryNum: job.salary_min || 0,
           };
         }).filter(Boolean);
-      })
-    );
+      })());
+    }
       
     // AGGREGATE by company — role count IS the signal
-    const postings = raw.flatMap(r => r.value || []); 
+    const postings = raw.flatMap(r => Array.isArray(r) ? r : []); 
     const byCompany = new Map();
     for (const p of postings) {
       const key = p.company.toLowerCase().trim();
@@ -237,17 +239,29 @@ const searchSECEdgar = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
     const today = new Date().toISOString().split('T')[0];
-    const url = `https://efts.sec.gov/LATEST/search-index?q=%22Series+A%22+OR+%22Series+B%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D`;
+    // EFTS full-text search API — correct endpoint as of 2025
+    const url = `https://efts.sec.gov/LATEST/search-index?q=%22Series+A%22+OR+%22Series+B%22+OR+%22Series+C%22&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}&forms=D&hits.hits.total.relation=eq&hits.hits._source.period_of_report=true`;
     const text = await fetchViaProxy(url, 12000);
     if (!text || text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-      console.log('SEC EDGAR: blocked or returned HTML');
-      return [];
+      // Try the newer EDGAR search API endpoint
+      const url2 = `https://efts.sec.gov/LATEST/search-index?q=%22Form+D%22&forms=D&dateRange=custom&startdt=${thirtyDaysAgo}&enddt=${today}`;
+      const text2 = await fetchViaProxy(url2, 12000);
+      if (!text2 || text2.trim().startsWith('<')) { console.log('SEC EDGAR: blocked'); return []; }
+      const d2 = JSON.parse(text2);
+      const hits2 = d2?.hits?.hits || [];
+      console.log(`SEC EDGAR (fallback): ${hits2.length} hits`);
+      return hits2.slice(0, 20).map(hit => {
+        const src = hit._source || {};
+        const name = src.entity_name || src.company_name || src.display_names?.[0] || '';
+        if (!name || name.length < 2) return null;
+        return { name: name.trim(), source: 'sec_edgar', signals: { raised_funding: true }, jobTitle: 'Form D filing — recently raised' };
+      }).filter(Boolean);
     }
     const d = JSON.parse(text);
     const hits = d?.hits?.hits || [];
     const results = hits.slice(0,20).map(hit => {
       const src = hit._source || hit.fields || {};
-      const name = src.entity_name || src.company_name || src.entityName || '';
+      const name = src.entity_name || src.company_name || src.entityName || src.display_names?.[0] || '';
       const amount = src.total_offering_amount || src.offeringAmount || '';
       if (!name || name.length < 2) return null;
       return {
@@ -892,11 +906,11 @@ app.post('/api/discover', async (req, res) => {
       })
       .sort((a,b) => b.icpScore - a.icpScore);
 
-    // Source diversity — cap SINGLE-SOURCE Adzuna at 40% so other signals get through.
-    // Stacked Adzuna leads (also funded, also exit-prepping, etc.) are exempt — those
-    // are exactly the winners we want, so they always pass.
-    const MAX_TOTAL = 60;
-    const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.40); // 24 max from pure Adzuna
+    // Adzuna is now the highest-signal source (AI-replacement = biggest tickets).
+    // Old 40% cap was built when it was noise — flip it to 70% majority.
+    // Total raised to 120 so we return enough leads for a meaningful queue.
+    const MAX_TOTAL = 120;
+    const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.70); // 84 max from Adzuna
     const srcTally = {};
     const scored = [];
     for (const c of allScored) {
@@ -1559,11 +1573,20 @@ app.post('/api/diagnostics', async (req, res) => {
     } catch(e) { results.hunter = { ok: false, error: e.message }; }
   } else { results.hunter = { ok: false, error: 'No key provided' }; }
 
-  // Test BizBuySell RSS (active source)
+  // Test BizBuySell — RSS first, Firecrawl fallback
   try {
     const xml = await fetchViaProxy('https://www.bizbuysell.com/rss/businesses-for-sale/', 8000);
     const items = (xml && !xml.trim().startsWith('<!DOCTYPE')) ? (xml.match(/<item>/g)||[]).length : 0;
-    results.bizbuysell = { ok: items > 0, count: items, error: items === 0 ? 'Feed blocked or empty' : null };
+    if (items > 0) {
+      results.bizbuysell = { ok: true, count: items, source: 'rss' };
+    } else if (firecrawlKey) {
+      // RSS blocked — try Firecrawl render
+      const md = await firecrawlScrape(firecrawlKey, 'https://www.bizbuysell.com/businesses-for-sale/', 30000);
+      const listings = (md && md.match(/business-opportunity/gi)||[]).length;
+      results.bizbuysell = { ok: listings > 0, count: listings, source: 'firecrawl', error: listings === 0 ? 'Firecrawl returned no listings' : null };
+    } else {
+      results.bizbuysell = { ok: false, error: 'RSS blocked, no Firecrawl key to fall back to' };
+    }
   } catch(e) { results.bizbuysell = { ok: false, error: e.message }; }
 
   // Test backend itself
