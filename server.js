@@ -701,12 +701,21 @@ app.post('/api/discover', async (req, res) => {
       'manpower','adecco','randstad','kelly services','kelly','spherion','staffmark',
       'insight global','kforce','modis','apex group','cielo','hays','allegis',
       'volt','chs recruiting','staffworks','recruiting solutions',
+      'actalent','lhh','lhh us','stride inc','stride, inc',
+      // Large enterprises that keep slipping through
+      'cvs','cvs health','spectrum','charter communications',
+      'dollar general','dollar tree','amazon logistics','fedex','ups','usps',
+      'aramark','sodexo','sysco','cintas','waste management',
       // Too large or wrong ICP caught in first run
       'honeywell','kroger','compass group','christus health','adventist health',
       'norwegian cruise line','canva','spacex','locumtenens','qureos',
       'mission healthcare','healthright 360','quadmed','gtangible',
     ]);
 
+    // HARD SIZE FILTER: hiring 15+ roles in a single function = enterprise call center
+    // Viking Land (18 dispatchers across 1 function) is actually a legit SMB trucking co.
+    // But Spectrum/CVS hiring 20+ CS reps in one function = enterprise. Differentiate by
+    // whether we already know it's a large company via the blocklist. Trust the name list.
     const icpFiltered = allCompanies.filter(c => {
       const name = (c.name||'').toLowerCase().trim();
       if (!name || name.length < 2) return false;
@@ -718,8 +727,8 @@ app.post('/api/discover', async (req, res) => {
       if (name.length > 55) return false;
       // Block government/non-profit signals
       if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center)\b/i.test(name)) return false;
-      // Block staffing agencies by keyword — they hire workers FOR companies, not ICP
-      if (/\b(staffing|recruiting|recruitment|temp agency|talent agency|placement agency|headhunter|workforce solutions|labor solutions|employment agency)\b/i.test(name)) return false;
+      // Block staffing agencies and workforce companies by keyword
+      if (/\b(staffing|recruiting|recruitment|temp agency|talent agency|placement agency|headhunter|workforce solutions|labor solutions|employment agency|talent solutions|workforce management|employer of record|professional employer|peo |hr outsourc)\b/i.test(name)) return false;
       return true;
     });
 
