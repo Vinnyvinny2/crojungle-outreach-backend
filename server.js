@@ -23,7 +23,7 @@ const fetchT = (url, opts={}, ms=10000) => Promise.race([
   new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))
 ]);
 
-app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v6', sources: ['adzuna','sec_edgar','clutch_rss','google_news','reddit','product_hunt','pr_newswire'], ok: true }));
+app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v7 — AI-replacement Adzuna + signal stacking', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
 
 // ── TEST ADZUNA — hit in browser to verify keys work ──────
 // Usage: https://crojungle-outreach-backend.onrender.com/api/test-adzuna?app_id=XXX&app_key=XXX
@@ -208,31 +208,32 @@ app.get('/api/find-website', async (req, res) => {
 const searchAdzuna = async (appId, appKey) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
+    // RE-AIMED at AI-REPLACEMENT signals — CROJungle's biggest tickets ($25k-$75k builds).
+    // We hunt companies hiring repetitive/manual roles. A company posting MULTIPLE of
+    // these is bleeding money on labor that AI/software can replace. The *count* of
+    // manual roles is the signal — one CS rep is nothing, three is a bleeding funnel.
+    // `cat` groups synonyms so "Customer Service Rep" + "Call Center Rep" = one function.
     const searches = [
-      // Profile 1: E-commerce with marketing pain
-      { title: 'Head of E-commerce', isOps: false, profile: 'ecommerce' },
-      { title: 'E-commerce Marketing Manager', isOps: false, profile: 'ecommerce' },
-      // Profile 2: SaaS growth
-      { title: 'VP of Marketing', isOps: false, profile: 'saas' },
-      { title: 'Head of Growth', isOps: false, profile: 'saas' },
-      { title: 'Demand Generation Manager', isOps: false, profile: 'saas' },
-      // Profile 3: Multi-location local business
-      { title: 'Marketing Director', isOps: false, profile: 'local' },
-      { title: 'Chief Marketing Officer', isOps: false, profile: 'any' },
-      // Profile 4: Leadership change
-      { title: 'Head of Marketing', isOps: false, profile: 'any' },
-      { title: 'Director of Marketing', isOps: false, profile: 'any' },
-      // Profile 6: AI/software integration
-      { title: 'Head of Operations', isOps: true, profile: 'ai_ops' },
-      { title: 'Director of Operations', isOps: true, profile: 'ai_ops' },
-      { title: 'VP of Operations', isOps: true, profile: 'ai_ops' },
-      { title: 'Business Analyst', isOps: true, profile: 'ai_ops' },
-      { title: 'Customer Success Manager', isOps: true, profile: 'ai_ops' },
+      { title: 'Customer Service Representative', cat: 'customer_service' },
+      { title: 'Customer Support Specialist',     cat: 'customer_service' },
+      { title: 'Call Center Representative',       cat: 'customer_service' },
+      { title: 'Data Entry Clerk',                 cat: 'data_entry' },
+      { title: 'Data Entry Specialist',            cat: 'data_entry' },
+      { title: 'Order Entry Clerk',                cat: 'data_entry' },
+      { title: 'Scheduler',                        cat: 'scheduling' },
+      { title: 'Scheduling Coordinator',           cat: 'scheduling' },
+      { title: 'Appointment Setter',               cat: 'scheduling' },
+      { title: 'Dispatcher',                       cat: 'dispatch' },
+      { title: 'Bookkeeper',                       cat: 'bookkeeping' },
+      { title: 'Accounts Payable Clerk',           cat: 'bookkeeping' },
+      { title: 'Billing Specialist',               cat: 'bookkeeping' },
+      { title: 'Administrative Assistant',         cat: 'admin' },
+      { title: 'Receptionist',                     cat: 'admin' },
     ];
 
-    // ALL IN PARALLEL
-    const results = await Promise.allSettled(
-      searches.map(async ({ title, isOps, profile }) => {
+    // ALL IN PARALLEL  
+    const raw = await Promise.allSettled(
+      searches.map(async ({ title, cat }) => {
         const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
         const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
         if (!r.ok) { console.log(`Adzuna "${title}" ${r.status}`); return []; }
@@ -242,39 +243,65 @@ const searchAdzuna = async (appId, appKey) => {
         console.log(`Adzuna "${title}": ${jobs.length}`);
         return jobs.map(job => {
           if (!job.company?.display_name) return null;
-          const salaryNum = job.salary_min || 0;
           return {
-            name: job.company.display_name,
-            website: '',
+            company: job.company.display_name,
+            cat, 
+            roleTitle: title,
             location: job.location?.display_name || '',
-            jobTitle: job.title || title,
-            salary: salaryNum ? `$${Math.round(salaryNum/1000)}k-$${Math.round((job.salary_max||salaryNum)/1000)}k` : '',
-            jobSnippet: (job.description||'').replace(/<[^>]+>/g,'').slice(0,150),
-            source: isOps ? 'adzuna_ops' : 'adzuna_jobs',
-            icpProfile: profile,
-            signals: {
-              hiring_marketing: !isOps,
-              hiring_ops: isOps,
-              ai_replacement_signal: isOps && profile === 'ai_ops',
-              salary_high: salaryNum >= 90000,
-              salary_mid: salaryNum >= 60000 && salaryNum < 90000,
-              salary_low: salaryNum > 0 && salaryNum < 60000,
-              salary_unknown: !salaryNum,
-            },
+            salaryNum: job.salary_min || 0,
           };
         }).filter(Boolean);
       })
     );
+      
+    // AGGREGATE by company — role count IS the signal
+    const postings = raw.flatMap(r => r.value || []); 
+    const byCompany = new Map();
+    for (const p of postings) {
+      const key = p.company.toLowerCase().trim();
+      if (!key) continue;
+      if (!byCompany.has(key)) {
+        byCompany.set(key, { name: p.company.trim(), location: p.location, cats: new Set(), roles: [], count: 0, maxSalary: 0 });
+      }
+      const c = byCompany.get(key);
+      c.cats.add(p.cat);
+      if (!c.roles.includes(p.roleTitle)) c.roles.push(p.roleTitle);
+      c.count += 1;
+      if (p.salaryNum > c.maxSalary) c.maxSalary = p.salaryNum;
+      if (!c.location && p.location) c.location = p.location;
+    }
 
-    const combined = results.flatMap(r => r.value || []);
-    const seen = new Set();
-    const unique = combined.filter(r => {
-      const k = r.name.toLowerCase().trim();
-      if (!k || seen.has(k)) return false;
-      seen.add(k); return true;
+    const results = [...byCompany.values()].map(c => {
+      const catN = c.cats.size;
+      const multi = catN >= 2 || c.count >= 3;   // 2+ functions OR 3+ postings
+      const heavy = catN >= 3 || c.count >= 5;   // 3+ functions OR 5+ postings
+      const roleList = c.roles.slice(0, 4).join(', ');
+      return {
+        name: c.name,
+        website: '',
+        location: c.location,
+        jobTitle: heavy 
+          ? `Hiring ${c.count} manual roles across ${catN} functions (${roleList}) — heavy AI-replaceable labor spend`
+          : multi
+          ? `Hiring ${c.count} manual roles (${roleList}) — AI-replaceable labor` 
+          : `Hiring ${roleList} — manual role, AI-replaceable`,
+        source: 'adzuna_ai',
+        icpProfile: 'ai_ops',
+        manualRoleCount: c.count,
+        manualCategories: catN,
+        signals: {
+          ai_replacement_signal: true,
+          ai_replacement_multi: multi,
+          ai_replacement_heavy: heavy,
+          salary_high: c.maxSalary >= 90000,
+          salary_mid: c.maxSalary >= 60000 && c.maxSalary < 90000,
+        },
+      };
     });
-    console.log(`Adzuna total: ${unique.length} unique companies`);
-    return unique;
+     
+    const multiN = results.filter(r => r.signals.ai_replacement_multi).length;
+    console.log(`Adzuna: ${results.length} companies (${multiN} hiring multiple manual roles)`);
+    return results;
   } catch(e) { console.error('Adzuna error:', e.message); return []; }
 };
 
@@ -623,27 +650,22 @@ app.post('/api/discover', async (req, res) => {
   console.log('Adzuna keys present:', !!(adzunaId && adzunaKey));
 
   try {
-    // ALL sources fire simultaneously
-    const [adzunaRes, secRes, clutchRes, newsRes, redditRes, phRes, prRes, bizRes, fbAdsRes] = await Promise.allSettled([
-      searchAdzuna(adzunaId, adzunaKey),
-      searchSECEdgar(),
-      scrapeClutchRSS(),
-      scrapeGoogleNews(),
-      scrapeReddit(),
-      scrapeProductHunt(),
-      scrapePRNewswire(),
-      scrapeBizBuySell(),
-      searchFacebookAds(fbToken),
+    // FOUR-SOURCE SET — quality over volume, each tied to a product CROJungle sells. 
+    // Parked: Clutch + Reddit (blocked without ScraperAPI), Product Hunt (wrong ICP),
+    // PR Newswire (too broad). Their functions still exist above — re-enable by adding
+    // them back here. Facebook Ads stays wired but returns [] until fbToken is set.
+    const [adzunaRes, secRes, newsRes, bizRes, fbAdsRes] = await Promise.allSettled([  
+      searchAdzuna(adzunaId, adzunaKey),   // AI-replacement labor signals
+      searchSECEdgar(),                    // just-funded — capital + board pressure  
+      scrapeGoogleNews(),                  // trigger events — new CMO, rebrand, acquisition
+      scrapeBizBuySell(),                  // exit prep — motivated to grow revenue fast
+      searchFacebookAds(fbToken),          // dormant until token — confirmed ad budget
     ]);
 
     const allCompanies = [
       ...(adzunaRes.value || []),
-      ...(secRes.value || []),
-      ...(clutchRes.value || []),
+      ...(secRes.value || []), 
       ...(newsRes.value || []),
-      ...(redditRes.value || []),
-      ...(phRes.value || []),
-      ...(prRes.value || []),
       ...(bizRes.value || []),
       ...(fbAdsRes.value || []),
     ];
@@ -686,14 +708,31 @@ app.post('/api/discover', async (req, res) => {
 
     console.log(`After ICP filter: ${icpFiltered.length} (removed ${allCompanies.length - icpFiltered.length} large/irrelevant)`);
 
-    // Deduplicate
-    const seen = new Set();
-    const unique = icpFiltered.filter(c => {
+    // SIGNAL STACKING — merge across sources, union signals
+    const merged = new Map();
+    for (const c of icpFiltered) {
       const key = (c.name||'').toLowerCase().trim();
-      if (!key || key.length < 2 || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+      if (!key || key.length < 2) continue;
+      if (!merged.has(key)) {
+        merged.set(key, { ...c, signals: { ...(c.signals||{}) }, sources: [c.source] });
+      } else {
+        const ex = merged.get(key);
+        for (const [k, v] of Object.entries(c.signals||{})) ex.signals[k] = ex.signals[k] || v;
+        if (!ex.sources.includes(c.source)) ex.sources.push(c.source);
+        if (!ex.website && c.website) ex.website = c.website;
+        if (!ex.location && c.location) ex.location = c.location;
+        if (!ex.jobSnippet && c.jobSnippet) ex.jobSnippet = c.jobSnippet;
+        if (c.manualRoleCount && (!ex.manualRoleCount || c.manualRoleCount > ex.manualRoleCount)) {
+          ex.manualRoleCount = c.manualRoleCount;
+          ex.manualCategories = c.manualCategories;
+        }
+        if (c.icpProfile && (!ex.icpProfile || ex.icpProfile === 'any')) ex.icpProfile = c.icpProfile;
+      }
+    }
+    const unique = [...merged.values()];
+    const stackedCount = unique.filter(c => (c.sources||[]).length >= 2).length;
+    console.log(`After merge: ${unique.length} unique (${stackedCount} stacked across 2+ sources)`);
+    
 
     // Score — full 100 point scale
     // Discovery signals give a pre-research score
@@ -713,8 +752,11 @@ app.post('/api/discover', async (req, res) => {
       preparing_for_exit: 35,
       needs_revenue_growth: 15,
       owner_motivated: 10,
-      // Other signals
-      ai_replacement_signal: 25,
+      // AI-replacement labor signals (Adzuna re-aim) — Tier 1 $25k-$75k builds
+      ai_replacement_signal: 25,   // hiring any manual/repetitive role
+      ai_replacement_multi: 20,    // 2+ functions or 3+ postings — real bleeding
+      ai_replacement_heavy: 20,    // 3+ functions or 5+ postings — stacks on multi  
+      // Other signals 
       hiring_ops: 10,
       tool_frustration: 20,
       recently_launched: 15,
@@ -730,22 +772,30 @@ app.post('/api/discover', async (req, res) => {
     const allScored = unique
       .map(c => {
         const raw = Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0);
-        const icpScore = Math.min(Math.round(raw), 85);
-        return { ...c, icpScore };
+        // STACKING MULTIPLIER — independent sources agreeing is a strong confidence 
+        // boost. 2 sources = +15, 3+ = +30. Stacked leads can reach 100 and top the
+        // queue; single-source leads cap at 85 so they can't crowd out real winners.
+        const srcN = (c.sources || [c.source]).filter(Boolean).length;
+        const stacked = srcN >= 2;
+        const stackBonus = srcN >= 3 ? 30 : srcN === 2 ? 15 : 0;
+        const icpScore = Math.min(Math.round(raw + stackBonus), stacked ? 100 : 85);
+        return { ...c, icpScore, stacked, sourceCount: srcN };
       })
       .sort((a,b) => b.icpScore - a.icpScore);
 
-    // Source diversity — cap Adzuna at 40% so other signals get through
-    // Without this, Adzuna's volume drowns out higher-quality signals
+    // Source diversity — cap SINGLE-SOURCE Adzuna at 40% so other signals get through.
+    // Stacked Adzuna leads (also funded, also exit-prepping, etc.) are exempt — those
+    // are exactly the winners we want, so they always pass.
     const MAX_TOTAL = 60;
-    const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.40); // 24 max from Adzuna
-    const sourceCount = {};
+    const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.40); // 24 max from pure Adzuna
+    const srcTally = {};
     const scored = [];
     for (const c of allScored) {
-      const isAdzuna = c.source === 'adzuna_jobs' || c.source === 'adzuna_ops';
-      const src = isAdzuna ? '_adzuna' : c.source;
-      sourceCount[src] = (sourceCount[src]||0) + 1;
-      if (isAdzuna && sourceCount['_adzuna'] > MAX_ADZUNA) continue;
+      const isPureAdzuna = c.sourceCount === 1 && c.source === 'adzuna_ai';
+      if (isPureAdzuna) {
+        srcTally['_adzuna'] = (srcTally['_adzuna']||0) + 1;
+        if (srcTally['_adzuna'] > MAX_ADZUNA) continue;
+      }
       scored.push(c);
       if (scored.length >= MAX_TOTAL) break;
     }
