@@ -2087,10 +2087,7 @@ Return ONLY valid JSON, no markdown:
           body: JSON.stringify({
             model: 'claude-sonnet-4-6',
             max_tokens: 6000,
-            messages: [
-              { role: 'user', content: msgContent },
-              { role: 'assistant', content: '```json\n{' }
-            ]
+            messages: [{ role: 'user', content: msgContent }]
           }),
         }, 45000);
 
@@ -2106,9 +2103,7 @@ Return ONLY valid JSON, no markdown:
           console.log('BRAIN ERROR:', brainError);
         }
         try {
-          // Prefill means response starts mid-JSON — prepend the { we sent as prefill
-          const rawText = '```json\n{' + vText;
-          const clean = rawText.replace(/```json|```/g,'').trim();
+          const clean = vText.replace(/```json|```/g,'').trim();
           let parsed;
           try {
             parsed = JSON.parse(clean);
