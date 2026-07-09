@@ -140,19 +140,36 @@ const googleSearch = async (query) => {
 // This is perfect ICP logic: famous enough for Wikipedia = probably too big.
 const getSizeOnly = async (companyName) => {
   try {
+    // Clean company name — remove legal suffixes and punctuation that break Wikipedia search
+    const cleanName = companyName
+      .replace(/,?\s*(Inc\.?|LLC\.?|Corp\.?|Ltd\.?|L\.P\.?|LLP\.?|Co\.?|dba\s+|The\s+)$/gi, '')
+      .replace(/[,\.]+/g, ' ')
+      .trim();
+    
     // Step 1: Search Wikipedia for the company
-    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(companyName + ' company')}&srlimit=1&format=json&origin=*`;
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(cleanName + ' company')}&srlimit=3&format=json&origin=*`;
     const searchRes = await fetchT(searchUrl, { headers: { 'User-Agent': 'CROJungle/1.0 (outreach tool)' } }, 8000);
     const searchData = await safeJson(searchRes);
     const pages = searchData?.query?.search || [];
     if (pages.length === 0) {
-      // No Wikipedia page = small/obscure company = likely our ICP
       console.log(`Wikipedia [${companyName}]: no page found — likely SMB, passes through`);
       return null;
     }
 
+    // Validate the match — Wikipedia title should contain words from the company name
+    const nameWords = cleanName.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const matchedPage = pages.find(p => {
+      const title = p.title.toLowerCase();
+      return nameWords.some(w => title.includes(w));
+    });
+
+    if (!matchedPage) {
+      console.log(`Wikipedia [${companyName}]: no confident match (top result: "${pages[0].title}") — passes through`);
+      return null;
+    }
+
     // Step 2: Get the page summary which includes key facts
-    const pageTitle = encodeURIComponent(pages[0].title);
+    const pageTitle = encodeURIComponent(matchedPage.title);
     const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${pageTitle}`;
     const summaryRes = await fetchT(summaryUrl, { headers: { 'User-Agent': 'CROJungle/1.0' } }, 8000);
     const summary = await safeJson(summaryRes);
@@ -192,7 +209,7 @@ const getSizeOnly = async (companyName) => {
     const cbData = await safeJson(cbRes);
     const website = Array.isArray(cbData) && cbData[0]?.domain ? 'https://' + cbData[0].domain : null;
 
-    console.log(`Wikipedia [${companyName}]: emp=${employees||'not found in extract'} wiki="${pages[0].title}" site=${website||'?'}`);
+    console.log(`Wikipedia [${companyName}]: emp=${employees||'not in extract'} wiki="${matchedPage.title}" site=${website||'?'}`);
     return { employees, website };
   } catch(e) {
     console.log(`Size lookup failed [${companyName}]:`, e.message);
