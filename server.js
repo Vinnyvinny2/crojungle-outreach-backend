@@ -488,9 +488,10 @@ const scrapeBizBuySell = async (fcKey) => {
           const brokerPosted = /broker|brokerage|listing agent|represented by|business advisors|m&a advisor|intermediar/i.test(desc);
           results.push({
             name: title.trim().slice(0, 60),
-            website: link,
+            website: '',          // Real website unknown — modal will prompt
+            listingUrl: link,     // BizBuySell listing URL
             jobTitle: brokerPosted ? 'Listed for sale via broker' : 'Listed for sale — owner wants to maximize value',
-            jobSnippet: (desc.replace(/<[^>]+>/g, '').slice(0, 150)) + (revenue ? ` | ${revenue}` : ''),
+            jobSnippet: (desc.replace(/<[^>]+>/g, '').slice(0, 150)) + (revenue ? ` | ${revenue}` : '') + ' | BizBuySell listing',
             source: 'bizbuysell',
             brokerPosted,
             signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: !brokerPosted },
@@ -516,8 +517,10 @@ const scrapeBizBuySell = async (fcKey) => {
           const brokerPosted = /broker|agent/i.test(clean);
           results.push({
             name: clean.slice(0, 60),
-            website: link,
+            website: '',          // Real website unknown — modal will prompt for it
+            listingUrl: link,     // BizBuySell listing URL (NOT the company's site)
             jobTitle: brokerPosted ? 'Listed for sale via broker' : 'Listed for sale — owner wants to maximize value',
+            jobSnippet: 'BizBuySell listing — view: ' + link,
             source: 'bizbuysell',
             brokerPosted,
             signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: !brokerPosted },
@@ -1494,7 +1497,7 @@ Return ONLY valid JSON, no markdown:
   "recommendedProduct": "The single best-fit primary offering (this is what the pitch leads with)",
   "recommendedPrice": "price range for the primary",
   "recommendedReason": "why THIS specific offering beats the others for THIS company — reference their confirmed situation, not generic reasoning. If you recommend Custom AI Software Build, you must justify why software specifically over marketing/website/growth work — do not default to it just because they hire people.",
-  "topThreeProducts": "Array of the 3 most relevant offerings ranked by dollar-impact fit, each as {product, price, why}. The #1 must match recommendedProduct. Rank by what would move the most money for THIS business, not by what's most expensive. Every business could 'use AI' — only rank Custom AI Software Build #1 when there is a CONFIRMED, specific, expensive manual-labor signal (multiple job postings), not as a lazy default.",
+  "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + broken funnel (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
   "pitchAngle": "STRICT RULES: (1) Pick the ONE most expensive confirmed pain — never chain two or three pains into one sentence. (2) 35 words maximum. (3) No hedging ('what looks like', 'appears to') — if it is not confirmed, it does not go in the pitch. (4) MATCH THE VOCABULARY TO THE READER: exit-prep or just-funded or pre-IPO reader → unit economics language IS the sharpest weapon (margin, multiple, valuation, EBITDA) — use it confidently. Owner-operator (trucking, clinics, local services) → plain dollars and salaries, zero finance vocabulary. (5) Lead with the money, end with a short curiosity question. GOOD (owner-operator): 'You're paying four salaries to manually do work software could handle overnight — want to see the math?' GOOD (exit-prep): 'Every dollar of manual labor cost you cut before the sale multiplies straight into your asking price — want to see what's automatable?'"
