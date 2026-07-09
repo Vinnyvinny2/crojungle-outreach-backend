@@ -23,7 +23,7 @@ const fetchT = (url, opts={}, ms=10000) => Promise.race([
   new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))
 ]);
 
-app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v8 — reachability + full-business audit, zero fabrication', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
+app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v9 — full-stack: stacking + combos + accuracy guards + reachability playbook', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
 
 // ── TEST ADZUNA — hit in browser to verify keys work ──────
 // Usage: https://crojungle-outreach-backend.onrender.com/api/test-adzuna?app_id=XXX&app_key=XXX
@@ -770,6 +770,25 @@ const scoreReachability = (c) => {
   return { score: Math.max(0, Math.min(score, 30)), reasons: reasons.slice(0, 2), hardBlock, estimated: true };
 };
 
+
+app.get('/api/verify-website', async (req, res) => {
+  const { url, company } = req.query;
+  if (!url || !company) return res.status(400).json({ error: 'url and company required' });
+  try {
+    const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }, redirect: 'follow' }, 8000);
+    const html = await safeText(r);
+    const lc = html.toLowerCase();
+    const companyWords = company.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 3);
+    const mentionsCompany = companyWords.some(w => lc.includes(w));
+    const is404 = r.status === 404 || /404|not found|page not found|unknown site|this page could not be loaded/i.test(html.slice(0, 2000));
+    const verdict = is404 ? 'dead' : !mentionsCompany ? 'wrong_site' : 'ok';
+    console.log(`Verify ${url}: status=${r.status} verdict=${verdict}`);
+    res.json({ ok: verdict === 'ok', status: r.status, mentionsCompany, is404, verdict, finalUrl: r.url || url });
+  } catch(e) {
+    res.json({ ok: false, verdict: 'unreachable', error: e.message });
+  }
+});
+
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys } = req.body;
   const { adzunaId, adzunaKey, fbToken, firecrawlKey } = keys || {};
@@ -853,6 +872,11 @@ app.post('/api/discover', async (req, res) => {
       if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center)\b/i.test(name)) return false;
       // Block staffing agencies and workforce companies by keyword
       if (/\b(staffing|recruiting|recruitment|temp agency|talent agency|placement agency|headhunter|workforce solutions|labor solutions|employment agency|talent solutions|workforce management|employer of record|professional employer|peo |hr outsourc)\b/i.test(name)) return false;
+      // Block defense/government/aerospace by keyword
+      if (/\b(defense contractor|aerospace|government contractor|department of defense|federal contractor)\b/i.test(name)) return false;
+      // Block by job title signals that indicate enterprise scale
+      const jt = (c.jobTitle || c.jobSnippet || '').toLowerCase();
+      if (/regional (sales|marketing) director|department of defense|intelligence community|federal (sales|accounts)|enterprise (sales|account)/i.test(jt)) return false;
       return true;
     });
 
@@ -1452,6 +1476,8 @@ ${discoverySignals.raised_funding ? '- FUNDING SIGNAL: recently raised capital �
 ${discoverySignals.preparing_for_exit ? '- EXIT SIGNAL: preparing to sell — motivated to maximize revenue and valuation before exit' : ''}
 ${discoverySignals.rebranding ? '- REBRAND SIGNAL: rebranding — full marketing rebuild in motion, vendors up for grabs' : ''}
 
+VISUAL PRECISION RULE: Only quote text you can read clearly in the screenshot. If text is blurry, truncated, or partially visible, describe without quoting. Never guess truncated text — a wrong quote destroys credibility with a founder who knows their own site.
+
 AUDIT TASK — CROJungle is a full-service growth partner, NOT a single-product vendor. Audit the ENTIRE business across all five areas, then lead with the sharpest, most expensive problem:
 1. ACQUISITION — are they capturing demand? (ads, SEO, paid search presence)
 2. CONVERSION — does the website/funnel convert? (CTA, positioning, social proof, mobile)
@@ -1472,6 +1498,8 @@ CROJungle offerings (full-service — can combine):
 - Custom AI Software Build ($25k-$75k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — often the biggest ticket
 - Revenue Growth / CRO Retainer ($8k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
 - Exit / Valuation Advisory (via Wall Street-backed partner): for companies preparing to sell — increase revenue AND advise on valuation/M&A. Nobody else offers this combination.
+
+DOLLAR-FIGURE RULE: job posting counts are FACTS; salary totals derived from them are ESTIMATES. Any labor-cost dollar figure MUST be framed as an estimate ("est.", "roughly") and must show its basis. Never present a derived number as a measured one.
 
 Prioritize by dollar impact: a confirmed manual-labor signal (AI software, $25k-$75k) or exit-prep company usually outweighs a homepage CTA fix. Only recommend what the evidence supports — never fabricate.
 
