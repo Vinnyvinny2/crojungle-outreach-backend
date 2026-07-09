@@ -105,15 +105,29 @@ app.get('/api/email', async (req, res) => {
 
 const googleSearch = async (query) => {
   try {
-    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    // Route through Cloudflare Worker — Render's IP is blocked by DDG directly
+    // DDG Instant Answer API — designed for programmatic access, not blocked like the HTML endpoint
+    const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
     const r = await fetchT(CF_WORKER + encodeURIComponent(ddgUrl), {}, 15000);
-    const html = await r.text();
-    if (html.includes('Host not in allowlist')) {
-      console.log('CF Worker blocked DDG — check worker settings');
-      return '';
+    const text = await r.text();
+    if (!text || text.includes('Host not in allowlist')) return '';
+    // DDG JSON API returns structured data — convert to text for our pattern matching
+    try {
+      const d = JSON.parse(text);
+      // Combine AbstractText, RelatedTopics snippets, and Answer into searchable text
+      const parts = [
+        d.AbstractText || '',
+        d.Answer || '',
+        d.AbstractSource || '',
+        ...(d.RelatedTopics || []).map(t => t.Text || t.Result || '').slice(0, 10),
+        ...(d.Results || []).map(r => r.Text || '').slice(0, 5),
+      ];
+      const combined = parts.join(' ');
+      console.log(`DDG [${query.slice(0,40)}]: ${combined.length} chars`);
+      return combined;
+    } catch {
+      // If not JSON, return raw text (may still be parseable)
+      return text;
     }
-    return html;
   } catch(e) {
     console.log('DuckDuckGo search failed:', e.message);
     return '';
@@ -1277,6 +1291,16 @@ app.post('/api/discover', async (req, res) => {
       'honeywell','kroger','compass group','christus health','adventist health',
       'norwegian cruise line','canva','spacex','locumtenens','qureos',
       'mission healthcare','healthright 360','quadmed','gtangible',
+      // Government / nonprofits / utilities
+      'social security administration','social security','ymca','ywca',
+      'red cross','salvation army','habitat for humanity','united way',
+      // Large franchise/retail chains
+      'circle k','state farm','allstate','progressive insurance',
+      'dominos','dominos pizza','subway','mcdonalds','chick-fil-a','chipotle',
+      'dollar general','dollar tree','family dollar','7-eleven',
+      // Large staffing firms often in Adzuna
+      'collabera','cybercoders','jobot','ampcus','aasritha',
+      'viaplus','vinci','ao globe life','globe life',
       'kaiser','kaiser permanente','permanente','banner health','providence health',
       'ascension','commonspirit','hca healthcare','tenet healthcare','community health',
       'dignity health','advocate aurora','sutter health','northwell','mayo clinic',
