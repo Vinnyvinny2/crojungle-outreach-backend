@@ -97,12 +97,211 @@ app.get('/api/email', async (req, res) => {
 });
 
 // ── FIND WEBSITE ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// COMPANY INTEL — Google search for website + headcount
+// Uses DuckDuckGo HTML (free, no key) to get the same
+// results you'd see if you Googled the company yourself.
+// ═══════════════════════════════════════════════════════════
+
+const googleSearch = async (query) => {
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const r = await fetchT(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      }
+    }, 8000);
+    const html = await r.text();
+    return html;
+  } catch(e) {
+    console.log('DuckDuckGo search failed:', e.message);
+    return '';
+  }
+};
+
+// ── COMPANY SIZE LOOKUP ───────────────────────────────────────────────────────
+// Google "[company name] number of employees" — same thing you'd search manually.
+// Returns { employees, employeeRange, website, icpPass, icpReason }
+// ICP: 10–200 employees = PASS. 200–500 = SOFT (flag it). 500+ = BLOCK.
+const lookupCompanySize = async (companyName) => {
+  try {
+    const html = await googleSearch(`${companyName} number of employees`);
+    if (!html) return { employees: null, icpPass: null, icpReason: 'size lookup failed' };
+
+    // Extract employee count from search snippets
+    // Patterns: "1,234 employees", "~500 employees", "10,000+ employees", "50 to 200 employees"
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ');
+    
+    const patterns = [
+      /(\d[\d,]+)\s*(?:to|-)\s*(\d[\d,]+)\s*employees/i,  // range: 50 to 200
+      /([\d,]+)\+?\s*employees/i,                            // 1,234 employees
+      /employees[:\s]+(\d[\d,]+)/i,                          // employees: 1234
+      /workforce\s+of\s+([\d,]+)/i,                          // workforce of 500
+      /staff\s+of\s+([\d,]+)/i,                              // staff of 500
+      /(\d[\d,]+)\s*(?:full.time\s+)?(?:staff|workers|people)/i,
+    ];
+
+    let employees = null;
+    let employeeRange = null;
+
+    for (const pat of patterns) {
+      const m = text.match(pat);
+      if (m) {
+        if (m[2]) {
+          // Range match
+          const low = parseInt(m[1].replace(/,/g,''));
+          const high = parseInt(m[2].replace(/,/g,''));
+          employees = Math.round((low + high) / 2);
+          employeeRange = `${m[1]}–${m[2]}`;
+        } else {
+          employees = parseInt(m[1].replace(/,/g,''));
+          employeeRange = m[1];
+        }
+        if (employees > 0 && employees < 10000000) break; // sanity check
+      }
+    }
+
+    // Also try to grab website from the same search
+    let website = null;
+    const siteMatch = text.match(/(?:website|visit)[:\s]+([a-z0-9.-]+\.[a-z]{2,})/i);
+    if (siteMatch) website = 'https://' + siteMatch[1];
+
+    // ICP decision
+    let icpPass = null;
+    let icpReason = '';
+    if (employees === null) {
+      icpPass = null; // unknown — don't block, but flag
+      icpReason = 'employee count not found in search results';
+    } else if (employees < 10) {
+      icpPass = false;
+      icpReason = `Too small (${employeeRange} employees) — likely no budget`;
+    } else if (employees <= 200) {
+      icpPass = true;
+      icpReason = `${employeeRange} employees — CEO likely still reachable`;
+    } else if (employees <= 500) {
+      icpPass = 'soft'; // show warning but let through
+      icpReason = `${employeeRange} employees — may have management layers, verify reachability`;
+    } else {
+      icpPass = false;
+      icpReason = `Too large (${employeeRange} employees) — owner not reachable`;
+    }
+
+    console.log(`Size lookup [${companyName}]: ${employees || 'unknown'} employees → ${icpPass}`);
+    return { employees, employeeRange, website, icpPass, icpReason };
+  } catch(e) {
+    console.log('Size lookup failed:', e.message);
+    return { employees: null, icpPass: null, icpReason: 'lookup error: ' + e.message };
+  }
+};
+
+// Extract company website from search results
+const findWebsiteFromSearch = async (companyName) => {
+  const html = await googleSearch(`${companyName} official website`);
+  if (!html) return null;
+
+  // Extract result URLs — DuckDuckGo puts them in result__url or result__a
+  const urlMatches = html.match(/class="result__url"[^>]*>([^<]+)</g) || [];
+  const hrefMatches = html.match(/href="([^"]+)"[^>]*class="result__a"/g) || [];
+
+  const candidates = [];
+
+  // From result URLs (displayed domain text)
+  for (const m of urlMatches) {
+    const domain = m.replace(/class="result__url"[^>]*>/, '').replace(/<.*/, '').trim();
+    if (domain && !domain.includes('duckduckgo') && !domain.includes('wikipedia') &&
+        !domain.includes('linkedin') && !domain.includes('facebook') &&
+        !domain.includes('yelp') && !domain.includes('indeed') && !domain.includes('glassdoor')) {
+      candidates.push('https://' + domain.replace(/^https?:\/\//, '').split('/')[0]);
+    }
+  }
+
+  // From actual href links
+  for (const m of hrefMatches) {
+    const href = m.match(/href="([^"]+)"/)?.[1];
+    if (href && href.startsWith('http') && !href.includes('duckduckgo')) {
+      try {
+        const domain = new URL(href).hostname.replace('www.', '');
+        if (!domain.includes('wikipedia') && !domain.includes('linkedin') &&
+            !domain.includes('facebook') && !domain.includes('yelp') &&
+            !domain.includes('indeed') && !domain.includes('glassdoor') &&
+            !domain.includes('bloomberg') && !domain.includes('crunchbase')) {
+          candidates.push('https://' + domain);
+        }
+      } catch {}
+    }
+  }
+
+  if (!candidates.length) return null;
+
+  // Pick the best match — prefer domains containing company name words
+  const nameWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+  for (const url of candidates) {
+    const domain = url.toLowerCase();
+    if (nameWords.some(w => domain.includes(w))) return url;
+  }
+
+  return candidates[0]; // Fallback to first result
+};
+
+// Extract headcount from search results — same as Googling "[company] number of employees"
+const getCompanyHeadcount = async (companyName) => {
+  const html = await googleSearch(`${companyName} number of employees headcount`);
+  if (!html) return null;
+
+  // Look for patterns like "X employees", "X,XXX employees", "X-XXX employees"
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ');
+
+  const patterns = [
+    /(\d{1,3}(?:,\d{3})*)\s*(?:to|-)\s*(\d{1,3}(?:,\d{3})*)\s*employees/i,  // "1,000 to 5,000 employees"
+    /(\d{1,3}(?:,\d{3})+)\s*employees/i,  // "10,000 employees"
+    /employees?\s*[:·]\s*(\d{1,3}(?:,\d{3})*)/i,  // "Employees: 5,000"
+    /(\d{1,3}(?:,\d{3})*)\s*(?:full[- ]time\s*)?(?:staff|workers|people|team members)/i,
+    /workforce\s*of\s*(\d{1,3}(?:,\d{3})*)/i,
+    /(\d+)K\s*employees/i,  // "50K employees"
+    /(\d{1,4})\s*employees/i,  // small companies "250 employees"
+  ];
+
+  for (const pattern of patterns) {
+    const m = text.match(pattern);
+    if (m) {
+      let count;
+      if (m[2]) {
+        // Range — use the average
+        const lo = parseInt(m[1].replace(/,/g, ''));
+        const hi = parseInt(m[2].replace(/,/g, ''));
+        count = Math.round((lo + hi) / 2);
+      } else if (m[1].endsWith && m[0].includes('K')) {
+        count = parseInt(m[1]) * 1000;
+      } else {
+        count = parseInt(m[1].replace(/,/g, ''));
+      }
+      if (count > 0 && count < 10000000) {
+        console.log(`Headcount for ${companyName}: ~${count}`);
+        return count;
+      }
+    }
+  }
+
+  return null;
+};
+
+// ICP size gate — under 500 employees = passes, over 1000 = blocked, 500-1000 = borderline
+const checkCompanySize = async (companyName) => {
+  const headcount = await getCompanyHeadcount(companyName);
+  if (headcount === null) return { passes: true, headcount: null, reason: 'size unknown — allowing through' };
+  if (headcount <= 200) return { passes: true, headcount, reason: `${headcount} employees — strong ICP fit` };
+  if (headcount <= 500) return { passes: true, headcount, reason: `${headcount} employees — within ICP range` };
+  if (headcount <= 1000) return { passes: true, headcount, reason: `${headcount} employees — borderline, score reduced` };
+  return { passes: false, headcount, reason: `${headcount} employees — too large, outside ICP` };
+};
+
 app.get('/api/find-website', async (req, res) => {
   const { company } = req.query;
   if (!company) return res.status(400).json({ error: 'Company name required' });
 
-  // Method 1: Clearbit autocomplete — fast, free, reasonably accurate for known brands
-  // This works best for companies with a unique name. Generic names ("Central Diesel") often fail.
+  // Method 1: Clearbit autocomplete — fast for well-known brands
   try {
     const r = await fetchT(
       `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
@@ -111,25 +310,116 @@ app.get('/api/find-website', async (req, res) => {
     );
     const d = await safeJson(r);
     if (Array.isArray(d) && d.length > 0 && d[0].domain) {
-      // Confidence check: does the result name actually match the company we searched?
       const resultName = (d[0].name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       const searchName = company.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
       const confident = resultName.includes(searchName.slice(0, 6)) || searchName.includes(resultName.slice(0, 6));
-      const website = `https://${d[0].domain}`;
-      console.log(`Clearbit: ${website} | confident: ${confident}`);
-      return res.json({ website, source: 'clearbit', confident });
+      if (confident) {
+        const website = `https://${d[0].domain}`;
+        console.log(`Clearbit: ${website}`);
+        return res.json({ website, source: 'clearbit', confident: true });
+      }
     }
   } catch(e) { console.log('Clearbit failed:', e.message); }
 
-  // Nothing found — modal will show empty field for manual entry
-  console.log(`No website found for "${company}" — modal will prompt manual entry`);
+  // Method 2: Google/DuckDuckGo search — works for everything Clearbit misses
+  try {
+    const website = await findWebsiteFromSearch(company);
+    if (website) {
+      console.log(`DuckDuckGo found: ${website}`);
+      return res.json({ website, source: 'search', confident: true });
+    }
+  } catch(e) { console.log('Search website lookup failed:', e.message); }
+
+  console.log(`No website found for "${company}"`);
   res.json({ website: '', source: 'not_found', confident: false });
 });
+
+
 
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 1: ADZUNA — runs searches IN PARALLEL
 // Key fix: parallel not sequential = 3s not 90s
 // ═══════════════════════════════════════════════════════════
+// ═══ GOOGLE ENRICHMENT — employee count + real website from Google search ════
+// Runs after initial ICP filter, before scoring. One search per company.
+// Returns { employees: number|null, website: string|null, revenue: string|null }
+const googleEnrich = async (companyName) => {
+  try {
+    // Use DuckDuckGo — Google blocks server requests, DDG doesn't
+    const html = await googleSearch(`${companyName} number of employees`);
+    if (!html) return { employees: null, website: null };
+    
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
+    
+    let employees = null;
+    let website = null;
+    let revenue = null;
+    
+    // Extract employee count — most specific patterns first
+    const empPatterns = [
+      /([0-9,]+)\s*(?:to|[-–])\s*([0-9,]+)\s*employees/i,  // range: 1,000-5,000
+      /([0-9,]+)\+?\s*employees/i,                            // 10,000 employees
+      /employees[:\s]+([0-9,]+)/i,                            // employees: 500
+      /([0-9]+[,.]?[0-9]*)\s*[KkMm]\s*employees/i,          // 10K employees
+      /workforce\s+of\s+([0-9,]+)/i,
+      /([0-9,]+)\s*(?:full.time\s+)?(?:staff|workers)/i,
+    ];
+    
+    for (const pat of empPatterns) {
+      const m = text.match(pat);
+      if (m) {
+        let raw;
+        if (m[2]) {
+          // Range — take midpoint
+          const lo = parseInt(m[1].replace(/,/g,''));
+          const hi = parseInt(m[2].replace(/,/g,''));
+          employees = Math.round((lo + hi) / 2);
+        } else {
+          raw = m[1].replace(/,/g,'');
+          if (/[Kk]$/.test(raw)) employees = parseFloat(raw) * 1000;
+          else if (/[Mm]$/.test(raw)) employees = parseFloat(raw) * 1000000;
+          else employees = parseInt(raw);
+        }
+        if (employees > 0 && employees < 5000000) break;
+      }
+    }
+    
+    // Extract website — look for company domain in search results
+    const skipDomains = new Set(['google','bing','yahoo','duckduckgo','youtube','facebook','twitter',
+      'linkedin','instagram','wikipedia','yelp','bbb','glassdoor','indeed','amazon','bloomberg',
+      'forbes','crunchbase','zoominfo','bizbuysell','adzuna','sec','dnb','hoovers','comparably',
+      'macrotrends','statista','craft','owler','rocketreach','apollo','lusha']);
+    const hrefMatches = html.match(/href="([^"]+)"/g) || [];
+    for (const m of hrefMatches) {
+      const href = m.replace('href="','').replace('"','');
+      if (!href.startsWith('http')) continue;
+      try {
+        const domain = new URL(href).hostname.replace('www.','').toLowerCase();
+        const base = domain.split('.')[0];
+        if (skipDomains.has(base) || skipDomains.has(domain)) continue;
+        const compWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w=>w.length>3);
+        if (compWords.some(w => base.includes(w.slice(0,5)))) {
+          website = 'https://' + domain;
+          break;
+        }
+      } catch {}
+    }
+    
+    // Revenue extraction
+    const revMatch = text.match(/\$([0-9,.]+)\s*(?:billion|million|B\b|M\b)[^a-z]*(?:revenue|sales|annual)/i);
+    if (revMatch) revenue = revMatch[0].slice(0,60).trim();
+    
+    console.log(`Enrich [${companyName}]: employees=${employees||'?'} website=${website||'?'}`);
+    return { employees, website, revenue };
+  } catch(e) {
+    console.log(`Enrich failed [${companyName}]:`, e.message);
+    return { employees: null, website: null, revenue: null };
+  }
+};
+
+
+
+
 const searchAdzuna = async (appId, appKey) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
@@ -712,6 +1002,24 @@ const scoreReachability = (c) => {
   const sig = c.signals || {};
   let score = 0;
   const reasons = [];
+  
+  // ── VERIFIED EMPLOYEE COUNT (from Google enrichment) ──────────────────
+  // This is the most reliable signal we have for owner-reachability.
+  if (c.verifiedEmployees) {
+    const emp = c.verifiedEmployees;
+    if (emp <= 25) {
+      score += 20; reasons.push(`${emp} verified employees — tiny operation, owner answers email directly`);
+    } else if (emp <= 75) {
+      score += 16; reasons.push(`${emp} verified employees — small business, owner still in marketing decisions`);
+    } else if (emp <= 150) {
+      score += 10; reasons.push(`${emp} verified employees — founder-led, may have a small marketing team`);
+    } else if (emp <= 250) {
+      score += 5; reasons.push(`${emp} verified employees — growing, owner still reachable but has layers`);
+    } else if (emp <= 500) {
+      score += 2; reasons.push(`${emp} verified employees — mid-market, harder to reach owner directly`);
+    }
+    // Over 500 is hard-blocked before scoring — never reaches here
+  }
 
   // STRONG owner-led signals — these companies ARE the owner reaching out
   if (sig.preparing_for_exit || c.source === 'bizbuysell') {
@@ -855,6 +1163,10 @@ app.post('/api/discover', async (req, res) => {
       'honeywell','kroger','compass group','christus health','adventist health',
       'norwegian cruise line','canva','spacex','locumtenens','qureos',
       'mission healthcare','healthright 360','quadmed','gtangible',
+      'kaiser','kaiser permanente','permanente','banner health','providence health',
+      'ascension','commonspirit','hca healthcare','tenet healthcare','community health',
+      'dignity health','advocate aurora','sutter health','northwell','mayo clinic',
+      'cleveland clinic','johns hopkins','geisinger','spectrum health','intermountain',
       // Fortune 500 / large enterprises that slipped through
       'anduril','anduril industries','cigna','the cigna group','cigna group',
       'tag','schneider','schneider national','schneider electric',
@@ -909,6 +1221,57 @@ app.post('/api/discover', async (req, res) => {
 
     console.log(`After ICP filter: ${icpFiltered.length} (removed ${allCompanies.length - icpFiltered.length} large/irrelevant)`);
 
+    // ═══ GOOGLE SIZE ENRICHMENT + WEBSITE LOOKUP ═══════════════════════════
+    // Run in parallel — Google search per company returns real employee count + website
+    // Hard gate: over 500 employees = not our ICP, blocked before scoring
+    // This is the real ICP filter. Blocklist was the band-aid. This is the fix.
+    const ENRICH_BATCH = 15; // max parallel Google requests
+    const toEnrich = icpFiltered.slice(0, 80); // enrich top 80 by pre-score
+    const enrichResults = new Map();
+    
+    for (let i = 0; i < toEnrich.length; i += ENRICH_BATCH) {
+      const batch = toEnrich.slice(i, i + ENRICH_BATCH);
+      const results = await Promise.allSettled(batch.map(c => googleEnrich(c.name)));
+      batch.forEach((c, idx) => {
+        const r = results[idx];
+        if (r.status === 'fulfilled') enrichResults.set(c.name, r.value);
+      });
+      // Small delay between batches to avoid rate limiting
+      if (i + ENRICH_BATCH < toEnrich.length) await new Promise(r => setTimeout(r, 1000));
+    }
+    
+    // Apply enrichment + size gate
+    const sizeGated = icpFiltered.filter(c => {
+      const enrich = enrichResults.get(c.name);
+      
+      if (enrich) {
+        // Attach verified data
+        if (enrich.employees) c.verifiedEmployees = enrich.employees;
+        if (enrich.revenue) c.verifiedRevenue = enrich.revenue;
+        if (enrich.website && !c.website) c.website = enrich.website;
+        
+        // Hard block: 500+ employees = enterprise, not reachable
+        if (enrich.employees && enrich.employees > 500) {
+          console.log(`Size gate BLOCKED [${c.name}]: ${enrich.employees} employees`);
+          return false;
+        }
+        // Soft flag: 200-500 employees
+        if (enrich.employees && enrich.employees > 200) {
+          c.sizeWarning = `${enrich.employees} employees — may have management layers`;
+        }
+      } else {
+        // No size data — check name for enterprise signals before passing through
+        const nameLower = (c.name || '').toLowerCase();
+        const enterpriseNameSignals = /\b(health system|medical center|national|international|industries|holdings|worldwide|global|enterprise|corporation|bancorp|bancshares|financial group|insurance group|health plan)\b/i;
+        if (enterpriseNameSignals.test(nameLower) || nameLower.length > 40) {
+          c.sizeWarning = 'Size unverified — name suggests possible enterprise';
+        }
+      }
+      return true;
+    });
+    
+    console.log(`After size gate: ${sizeGated.length} (blocked ${icpFiltered.length - sizeGated.length} enterprises)`);
+
     // SIGNAL STACKING — merge across sources, union signals
     const merged = new Map();
     // Normalize company names for matching: lowercase, strip legal suffixes
@@ -921,7 +1284,7 @@ app.post('/api/discover', async (req, res) => {
       .replace(/\b(inc|incorporated|llc|corp|corporation|co|company|ltd|limited|group|holdings|lp|llp|plc|pllc)\b/g, '')
       .replace(/\s+/g, ' ')
       .trim();
-    for (const c of icpFiltered) {
+    for (const c of sizeGated) {
       const key = normName(c.name);
       if (!key || key.length < 2) continue;
       if (!merged.has(key)) {
@@ -1315,6 +1678,7 @@ app.post('/api/research', async (req, res) => {
   const discoverySource = req.body.discoverySource || '';
   const discoveryReason = req.body.discoveryReason || '';
   const manualRoleCount = req.body.manualRoleCount || 0;
+  const verifiedEmployees = req.body.verifiedEmployees || null;
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -1337,8 +1701,14 @@ app.post('/api/research', async (req, res) => {
 
   try {
     // Fire all signals simultaneously
+    // Never scrape BizBuySell listing pages — bot-protected and wrong site
+    const isBizBuySellUrl = website && /bizbuysell\.com/i.test(website);
+    if (isBizBuySellUrl) {
+      console.log('BizBuySell URL detected — skipping scrape, needs real company website');
+    }
+
     const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
-      website && firecrawlKey
+      website && firecrawlKey && !isBizBuySellUrl
         ? fetchT('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
@@ -1447,6 +1817,7 @@ app.post('/api/research', async (req, res) => {
 
 COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
+VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 HOMEPAGE CONTENT (scraped):
@@ -1566,7 +1937,7 @@ Return ONLY valid JSON, no markdown:
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
             model: 'claude-sonnet-4-6',
-            max_tokens: 1500,
+            max_tokens: 4000,
             messages: [{ role: 'user', content: msgContent }]
           }),
         }, 45000);
@@ -1584,7 +1955,42 @@ Return ONLY valid JSON, no markdown:
         }
         try {
           const clean = vText.replace(/```json|```/g,'').trim();
-          const parsed = JSON.parse(clean);
+          let parsed;
+          try {
+            parsed = JSON.parse(clean);
+          } catch(parseErr) {
+            // Try to repair truncated JSON by finding the last valid closing brace
+            let repaired = clean;
+            // Count open braces and add missing closes
+            const opens = (repaired.match(/\{/g)||[]).length;
+            const closes = (repaired.match(/\}/g)||[]).length;
+            const missing = opens - closes;
+            if (missing > 0) {
+              // Close any open string first
+              if ((repaired.match(/"/g)||[]).length % 2 !== 0) repaired += '"';
+              repaired += '}'.repeat(missing);
+            }
+            try {
+              parsed = JSON.parse(repaired);
+              console.log('Brain JSON repaired successfully');
+            } catch(e2) {
+              // Last resort: extract what we can
+              const extract = (key) => { const m = clean.match(new RegExp(`"${key}"\\s*:\\s*"([^"]{0,500})`)); return m ? m[1] : null; };
+              parsed = {
+                heroHeadline: extract('heroHeadline'),
+                ctaText: extract('ctaText'),
+                headlineQuality: extract('headlineQuality') || 'generic',
+                designQuality: extract('designQuality') || 'unknown',
+                overallConversionRating: extract('overallConversionRating') || 'unknown',
+                realPain: extract('realPain'),
+                embarrassingFinding: extract('embarrassingFinding'),
+                recommendedProduct: extract('recommendedProduct'),
+                pitchAngle: extract('pitchAngle'),
+                _truncated: true
+              };
+              console.log('Brain JSON truncated — partial extraction used');
+            }
+          }
           visualAnalysis = parsed;
 
           // ═══ DETERMINISTIC SOURCE VERIFICATION ═══════════════════════════
