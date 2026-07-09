@@ -397,34 +397,50 @@ app.get('/api/find-website', async (req, res) => {
   const { company } = req.query;
   if (!company) return res.status(400).json({ error: 'Company name required' });
 
-  // Method 1: Clearbit autocomplete — fast for well-known brands
+  // BizBuySell category pages have no real website — don't even try
+  if (/^(health care|pet services|service businesses|business opportunities|how to (buy|sell)|building|automotive|education|non-classifiable|restaurants|retail|manufacturing|food|beauty|technology|financial|transportation|construction|agriculture|wholesale|distribution)/i.test(company.trim())) {
+    return res.json({ website: '', source: 'category_page', confident: false });
+  }
+
+  // Clean the company name — strip legal suffixes
+  const cleanName = company
+    .replace(/,?\s*(Inc\.?|LLC\.?|Corp\.?|Ltd\.?|L\.P\.?|LLP\.?|Co\.?|Group|Holdings|Company)$/gi, '')
+    .replace(/,.*$/, '') // drop everything after first comma
+    .trim();
+
+  // Method 1: Clearbit autocomplete — return top 3 candidates
   try {
     const r = await fetchT(
-      `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
+      `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(cleanName)}`,
       { headers: { 'Accept': 'application/json' } },
       5000
     );
     const d = await safeJson(r);
     if (Array.isArray(d) && d.length > 0 && d[0].domain) {
       const resultName = (d[0].name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const searchName = company.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
-      const confident = resultName.includes(searchName.slice(0, 6)) || searchName.includes(resultName.slice(0, 6));
-      if (confident) {
-        const website = `https://${d[0].domain}`;
-        console.log(`Clearbit: ${website}`);
-        return res.json({ website, source: 'clearbit', confident: true });
-      }
+      const searchName = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Confident if names overlap meaningfully
+      const confident = resultName.includes(searchName.slice(0, 5)) || searchName.includes(resultName.slice(0, 5));
+      const website = `https://${d[0].domain}`;
+      console.log(`Clearbit: ${website} (confident=${confident})`);
+      // Return even if not confident — let user verify in modal. Include alternates.
+      const alternates = d.slice(0, 3).filter(x => x.domain).map(x => ({ name: x.name, domain: x.domain }));
+      return res.json({ website, source: 'clearbit', confident, alternates });
     }
   } catch(e) { console.log('Clearbit failed:', e.message); }
 
-  // Method 2: Google/DuckDuckGo search — works for everything Clearbit misses
+  // Method 2: Domain guess — try companyname.com
   try {
-    const website = await findWebsiteFromSearch(company);
-    if (website) {
-      console.log(`DuckDuckGo found: ${website}`);
-      return res.json({ website, source: 'search', confident: true });
+    const guess = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (guess.length >= 3 && guess.length <= 30) {
+      const guessUrl = `https://${guess}.com`;
+      const check = await fetchT(guessUrl, { method: 'HEAD' }, 5000).catch(() => null);
+      if (check && check.ok) {
+        console.log(`Domain guess worked: ${guessUrl}`);
+        return res.json({ website: guessUrl, source: 'domain_guess', confident: false });
+      }
     }
-  } catch(e) { console.log('Search website lookup failed:', e.message); }
+  } catch(e) { console.log('Domain guess failed:', e.message); }
 
   console.log(`No website found for "${company}"`);
   res.json({ website: '', source: 'not_found', confident: false });
@@ -883,14 +899,14 @@ const scrapeBizBuySell = async (fcKey) => {
         for (const [, title, link] of links) {
           const clean = title.replace(/[#*_]/g, '').trim();
           if (clean.length < 8 || seen.has(clean.toLowerCase())) continue;
-          // Block navigation, category pages, and generic BizBuySell UI text
-          if (/sign in|register|broker|sell your|search|advanced|franchise directory|how to buy|how to sell|business opportunities|businesses for sale|for sale$|& children|& boat|& construction|& food|& retail|& services|& technology|my business|my account|my saved|dashboard|learning center|market insight|financial bench|blog|news|resource/i.test(clean)) continue;
-          // Must look like an actual business name — at least 2 words, not a category phrase
+          // ONLY accept real listing URLs — they contain a numeric listing ID.
+          // Category pages like /health-care-and-fitness-businesses-for-sale/ have NO numeric ID.
+          const isRealListing = /\/\d{5,}\/?$/.test(link) || /-\d{5,}[\/\-]/.test(link);
+          if (!isRealListing) continue;
+          // Block any remaining category-style titles
+          if (/businesses? for sale|franchise|opportunities$|^\w+ & \w+$|services$|establishments?$/i.test(clean)) continue;
           const wordCount = clean.split(/\s+/).length;
           if (wordCount < 2) continue;
-          // Block obvious category patterns: "Industry & Industry", "Type Businesses"
-          if (/^\w+ & \w+$/.test(clean) || /businesses for sale$/i.test(clean)) continue;
-          // Must contain something that looks like a real business name (has letters, not just symbols)
           if (!/[a-zA-Z]{3,}/.test(clean)) continue;
           seen.add(clean.toLowerCase());
           const brokerPosted = /broker|agent/i.test(clean);
