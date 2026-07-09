@@ -134,61 +134,53 @@ const googleSearch = async (query) => {
   }
 };
 
-// Lightweight size-only lookup — ONE search, used at Find time for the size gate.
-// Returns { employees, website } or null. Full enrichment happens at Research time.
+// Lightweight size-only lookup using Clearbit autocomplete (free, no auth, already works)
+// Returns { employees, website } or null.
 const getSizeOnly = async (companyName) => {
   try {
-    const html = await googleSearch(`${companyName} number of employees`);
-    if (!html) return null;
-    const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
+    const r = await fetchT(
+      `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(companyName)}`,
+      { headers: { 'Accept': 'application/json' } },
+      6000
+    );
+    const d = await safeJson(r);
+    if (!Array.isArray(d) || d.length === 0) return null;
 
-    let employees = null;
-    const empPatterns = [
-      /([0-9,]+)\s*(?:to|[-\u2013])\s*([0-9,]+)\s*employees/i,
-      /([0-9,]+)\+?\s*employees/i,
-      /employees[:\s]+([0-9,]+)/i,
-      /([0-9]+[,.]?[0-9]*)\s*[KkMm]\s*employees/i,
-      /workforce\s+of\s+([0-9,]+)/i,
-    ];
-    for (const pat of empPatterns) {
-      const m = text.match(pat);
-      if (m) {
-        if (m[2]) {
-          const lo = parseInt(m[1].replace(/,/g,''));
-          const hi = parseInt(m[2].replace(/,/g,''));
-          employees = Math.round((lo + hi) / 2);
-        } else {
-          let raw = m[1].replace(/,/g,'');
-          if (/[Kk]$/.test(raw)) employees = parseFloat(raw) * 1000;
-          else if (/[Mm]$/.test(raw)) employees = parseFloat(raw) * 1000000;
-          else employees = parseInt(raw);
-        }
-        if (employees > 0 && employees < 5000000) break;
-        employees = null;
+    // Find best match by name similarity
+    const searchName = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    let best = null;
+    for (const item of d.slice(0, 3)) {
+      const itemName = (item.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (itemName.includes(searchName.slice(0, 6)) || searchName.includes(itemName.slice(0, 6))) {
+        best = item;
+        break;
+      }
+    }
+    if (!best) best = d[0]; // fallback to first result
+
+    // Extract employee count — Clearbit returns 'employees' and 'employeesRange'
+    let employees = best.employees || null;
+    const empRange = best.employeesRange || null;
+    
+    // Parse range if no exact count (e.g. "1001-5000")
+    if (!employees && empRange) {
+      const parts = empRange.split('-').map(p => parseInt(p.replace(/[^0-9]/g, '')));
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        employees = Math.round((parts[0] + parts[1]) / 2);
+      } else if (parts[0]) {
+        employees = parts[0];
       }
     }
 
-    // Grab website while we're here
-    let website = null;
-    const skipDomains = new Set(['google','bing','yahoo','duckduckgo','youtube','facebook','twitter',
-      'linkedin','instagram','wikipedia','yelp','bbb','glassdoor','indeed','amazon','bloomberg',
-      'forbes','crunchbase','zoominfo','bizbuysell','adzuna','sec','dnb','hoovers','comparably',
-      'macrotrends','statista','craft','owler','rocketreach','reddit','trustpilot','g2']);
-    const hrefMatches = html.match(/href="([^"]+)"/g) || [];
-    for (const m of hrefMatches) {
-      const href = m.replace('href="','').replace('"','');
-      if (!href.startsWith('http')) continue;
-      try {
-        const domain = new URL(href).hostname.replace('www.','').toLowerCase();
-        const base = domain.split('.')[0];
-        if (skipDomains.has(base) || skipDomains.has(domain)) continue;
-        const compWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w=>w.length>3);
-        if (compWords.some(w => base.includes(w.slice(0,5)))) { website = 'https://' + domain; break; }
-      } catch {}
+    const website = best.domain ? 'https://' + best.domain : null;
+    
+    if (employees || website) {
+      console.log(`Clearbit size [${companyName}]: emp=${employees||'?'} range=${empRange||'?'} site=${website||'?'}`);
     }
-
-    return { employees, website };
+    
+    return { employees, employeeRange: empRange, website };
   } catch(e) {
+    console.log(`Size lookup failed [${companyName}]:`, e.message);
     return null;
   }
 };
@@ -417,68 +409,19 @@ app.get('/api/find-website', async (req, res) => {
 // Returns { employees: number|null, website: string|null, revenue: string|null }
 const googleEnrich = async (companyName) => {
   try {
-    // Fire 4 parallel DuckDuckGo searches — headcount, decision-maker, pain, revenue
-    const [empHtml, ceoHtml, painHtml, revHtml] = await Promise.all([
-      googleSearch(`${companyName} number of employees`),
-      googleSearch(`${companyName} CEO founder`),
-      googleSearch(`${companyName} reviews complaints`),
-      googleSearch(`${companyName} revenue annual`),
+    // Size/website from Clearbit (reliable, fast, free)
+    // CEO/pain from DDG via CF Worker (best effort)
+    const [clearbitRes, ceoHtml, painHtml] = await Promise.all([
+      getSizeOnly(companyName),
+      googleSearch(`${companyName} CEO founder owner`),
+      googleSearch(`${companyName} reviews complaints problems`),
     ]);
 
     const clean = (h) => (h || '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ');
 
-    // HEADCOUNT
-    let employees = null;
-    const empText = clean(empHtml);
-    const empPatterns = [
-      /([0-9,]+)\s*(?:to|[-\u2013])\s*([0-9,]+)\s*employees/i,
-      /([0-9,]+)\+?\s*employees/i,
-      /employees[:\s]+([0-9,]+)/i,
-      /([0-9]+[,.]?[0-9]*)\s*[KkMm]\s*employees/i,
-      /workforce\s+of\s+([0-9,]+)/i,
-      /([0-9,]+)\s*(?:full.time\s+)?(?:staff|workers)/i,
-    ];
-    for (const pat of empPatterns) {
-      const m = empText.match(pat);
-      if (m) {
-        if (m[2]) {
-          const lo = parseInt(m[1].replace(/,/g,''));
-          const hi = parseInt(m[2].replace(/,/g,''));
-          employees = Math.round((lo + hi) / 2);
-        } else {
-          let raw = m[1].replace(/,/g,'');
-          if (/[Kk]$/.test(raw)) employees = parseFloat(raw) * 1000;
-          else if (/[Mm]$/.test(raw)) employees = parseFloat(raw) * 1000000;
-          else employees = parseInt(raw);
-        }
-        if (employees > 0 && employees < 5000000) break;
-        employees = null;
-      }
-    }
-
-    // WEBSITE — from any search result page
-    let website = null;
-    const skipDomains = new Set(['google','bing','yahoo','duckduckgo','youtube','facebook','twitter','x','tiktok',
-      'linkedin','instagram','wikipedia','yelp','bbb','glassdoor','indeed','amazon','bloomberg',
-      'forbes','crunchbase','zoominfo','bizbuysell','adzuna','sec','dnb','hoovers','comparably',
-      'macrotrends','statista','craft','owler','rocketreach','apollo','lusha','reddit','quora',
-      'trustpilot','g2','capterra','sitejabber']);
-    const allSearchHtml = (empHtml || '') + (ceoHtml || '');
-    const hrefMatches = allSearchHtml.match(/href="([^"]+)"/g) || [];
-    for (const m of hrefMatches) {
-      const href = m.replace('href="','').replace('"','');
-      if (!href.startsWith('http')) continue;
-      try {
-        const domain = new URL(href).hostname.replace('www.','').toLowerCase();
-        const base = domain.split('.')[0];
-        if (skipDomains.has(base) || skipDomains.has(domain)) continue;
-        const compWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w=>w.length>3);
-        if (compWords.some(w => base.includes(w.slice(0,5)))) {
-          website = 'https://' + domain;
-          break;
-        }
-      } catch {}
-    }
+    // HEADCOUNT + WEBSITE from Clearbit
+    const employees = clearbitRes ? clearbitRes.employees : null;
+    const website = clearbitRes ? clearbitRes.website : null;
 
     // CEO / DECISION MAKER
     let ceoName = null;
@@ -514,11 +457,8 @@ const googleEnrich = async (companyName) => {
       }
     }
 
-    // REVENUE
-    let revenue = null;
-    const revText = clean(revHtml);
-    const revMatch = revText.match(/\$([0-9,.]+)\s*(?:billion|million|B\b|M\b)[^a-z]{0,20}(?:revenue|sales|annual)/i);
-    if (revMatch) revenue = revMatch[0].slice(0,60).trim();
+    // REVENUE — not available from Clearbit free tier, skip for now
+    const revenue = null;
 
     console.log(`Enrich [${companyName}]: emp=${employees||'?'} site=${website||'?'} ceo=${ceoName||'?'} pain=${painSignals.length} rev=${revenue||'?'}`);
     return { employees, website, revenue, ceoName, ceoTitle, painSignals };
