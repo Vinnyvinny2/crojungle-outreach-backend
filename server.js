@@ -176,6 +176,7 @@ const searchAdzuna = async (appId, appKey) => {
             roleTitle: title,
             location: job.location?.display_name || '',
             salaryNum: job.salary_min || 0,
+            jobUrl: job.redirect_url || '',
           };
         }).filter(Boolean);
       })());
@@ -188,9 +189,10 @@ const searchAdzuna = async (appId, appKey) => {
       const key = p.company.toLowerCase().trim();
       if (!key) continue;
       if (!byCompany.has(key)) {
-        byCompany.set(key, { name: p.company.trim(), location: p.location, cats: new Set(), roles: [], count: 0, maxSalary: 0 });
+        byCompany.set(key, { name: p.company.trim(), location: p.location, cats: new Set(), roles: [], count: 0, maxSalary: 0, jobUrl: p.jobUrl });
       }
       const c = byCompany.get(key);
+      if (!c.jobUrl && p.jobUrl) c.jobUrl = p.jobUrl;
       c.cats.add(p.cat);
       if (!c.roles.includes(p.roleTitle)) c.roles.push(p.roleTitle);
       c.count += 1;
@@ -853,7 +855,26 @@ app.post('/api/discover', async (req, res) => {
       'honeywell','kroger','compass group','christus health','adventist health',
       'norwegian cruise line','canva','spacex','locumtenens','qureos',
       'mission healthcare','healthright 360','quadmed','gtangible',
+      // Fortune 500 / large enterprises that slipped through
+      'anduril','anduril industries','cigna','the cigna group','cigna group',
+      'tag','schneider','schneider national','schneider electric',
+      'humana','aetna','centene','molina healthcare','kaiser','kaiser permanente',
+      'lockheed','lockheed martin','raytheon','northrop','northrop grumman',
+      'boeing','general dynamics','l3harris','booz allen','leidos','saic',
+      'mantech','caci','peraton','deloitte','kpmg','pwc','ernst young','accenture',
+      'mckesson','cardinal health','amerisourcebergen','trellix','mandiant',
+      'ttec','concentrix','teleperformance','conduent','cognizant','infosys','wipro',
+      'tcs','tata','capgemini','dxc','ntt data','hcl','genpact',
+      'marriott','hilton','hyatt','wyndham','ihg','choice hotels',
+      'nfp','aon','marsh','willis towers','gallagher','brown brown',
+      'grunley','vast data','chandra technologies','cybercoders','telex',
+      'weisiger','kokosing','merrill gardens','ernest health','waterbox',
+      'united heritage','nhrg','purple brand','soligo','harvey','bmb','atominvest',
+      'aryon security','trophy games','al masraf','hardie grant',
     ]);
+
+    // Known enterprise substrings — if the company name CONTAINS any of these, block it
+    const ENTERPRISE_SUBSTRINGS = ['industries','national','international','group','holdings','enterprises','corporation','systems inc','technologies inc','solutions inc','health system','healthcare system','medical center','regional','university','federal','national'];
 
     // HARD SIZE FILTER: hiring 15+ roles in a single function = enterprise call center
     // Viking Land (18 dispatchers across 1 function) is actually a legit SMB trucking co.
@@ -865,7 +886,13 @@ app.post('/api/discover', async (req, res) => {
       // Block obvious large companies by name
       const nameWords = name.split(/\s+/);
       if (BLOCKED_COMPANIES.has(name)) return false;
-      if (nameWords.some(w => BLOCKED_COMPANIES.has(w) && w.length > 4)) return false;
+      // Match on ANY significant word (3+ chars), not just 4+
+      if (nameWords.some(w => BLOCKED_COMPANIES.has(w) && w.length >= 2)) return false;
+      // Match first 1-2 words against blocklist (catches "Anduril Industries", "The Cigna Group")
+      const firstTwo = nameWords.slice(0, 2).join(' ');
+      const firstWord = nameWords[0] === 'the' ? nameWords[1] : nameWords[0];
+      if (firstWord && BLOCKED_COMPANIES.has(firstWord)) return false;
+      if (BLOCKED_COMPANIES.has(firstTwo)) return false;
       // Block companies with "Inc." that are clearly enterprises (very long names = conglomerates)
       if (name.length > 55) return false;
       // Block government/non-profit signals
