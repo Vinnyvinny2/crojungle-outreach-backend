@@ -353,6 +353,9 @@ const scrapeGoogleNews = async () => {
     { q: 'company "raises" million "growth" 2026 marketing', type: 'funding' },
     { q: '"VP of Growth" OR "Head of Growth" hired appointed 2026', type: 'hire' },
     { q: 'company "launched" "new product" OR "new service" 2026', type: 'launch' },
+    // Overlap queries — designed to find companies also likely hiring manual roles on Adzuna
+    { q: 'small business "hiring" OR "growing team" 2026 operations', type: 'expansion' },
+    { q: 'company "opening new locations" OR "scaling operations" 2026', type: 'expansion' },
   ];
 
   const signalMap = {
@@ -886,9 +889,107 @@ app.post('/api/discover', async (req, res) => {
       }
     }
     const unique = [...merged.values()];
+
+    // SECOND-PASS CROSS-SOURCE STACK — after the main merge, do a fuzzy cross-reference
+    // between Adzuna leads and EDGAR/News leads. These often have name variants that
+    // survived separate merge passes. Match on first 2 significant words of company name.
+    const significantWords = (name) => normName(name).split(' ').filter(w => w.length > 3).slice(0, 2).join(' ');
+    const edgarLeads = unique.filter(c => c.source === 'sec_edgar');
+    const adzunaLeads = unique.filter(c => c.source === 'adzuna_ai');
+    const newsLeads = unique.filter(c => (c.source||'').startsWith('news_'));
+    // Build lookup maps by significant-word key
+    const edgarMap = new Map(edgarLeads.map(c => [significantWords(c.name), c]));
+    const newsMap = new Map(newsLeads.map(c => [significantWords(c.name), c]));
+    let secondPassStacks = 0;
+    for (const az of adzunaLeads) {
+      const key = significantWords(az.name);
+      if (key.length < 4) continue;
+      const edgarMatch = edgarMap.get(key);
+      const newsMatch = newsMap.get(key);
+      const match = edgarMatch || newsMatch;
+      if (match && !az.sources.includes(match.source)) {
+        // Stack them: merge signals, add source
+        az.sources.push(match.source);
+        for (const [k, v] of Object.entries(match.signals||{})) az.signals[k] = az.signals[k] || v;
+        if (!az.website && match.website) az.website = match.website;
+        // Re-score with stacking bonus
+        const raw = Object.entries(az.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0);
+        const stackBonus = az.sources.length >= 3 ? 30 : 15;
+        const reach = scoreReachability(az);
+        az.icpScore = Math.min(Math.round(raw + stackBonus + reach.score), 100);
+        az.stacked = true;
+        az.sourceCount = az.sources.length;
+        secondPassStacks++;
+        // Remove the duplicate from unique (the edgar/news version)
+        const dupIdx = unique.indexOf(match);
+        if (dupIdx >= 0) unique.splice(dupIdx, 1);
+        if (edgarMatch) edgarMap.delete(key);
+        if (newsMatch) newsMap.delete(key);
+      }
+    }
+    if (secondPassStacks > 0) console.log(`Second-pass cross-source stack: ${secondPassStacks} additional stacks found`);
+
     const stackedCount = unique.filter(c => (c.sources||[]).length >= 2).length;
     console.log(`After merge: ${unique.length} unique (${stackedCount} stacked across 2+ sources)`);
+    // Combo tally logged after scoring (below)
     
+
+
+    // ═══ STACK COMBO CLASSIFIER ══════════════════════════════════════════
+    // Combos are SIGNAL-based: which signals combined matters more than how
+    // many sources agreed. Returns the hottest matching combo or null.
+    // Stacking never gates — singles flow normally; combos only elevate.
+    const classifyStack = (c) => {
+      const s = c.signals || {};
+      const funded = !!s.raised_funding;
+      const manualMulti = !!(s.ai_replacement_multi || s.ai_replacement_heavy) || (c.manualRoleCount || 0) >= 3;
+      const manualAny = !!s.ai_replacement_signal || (c.manualRoleCount || 0) >= 1;
+      const mktgHire = !!s.hiring_marketing;
+      const growthEvent = !!(s.expanding || s.recently_acquired || s.recently_launched || s.rebranding);
+      const exitPrep = !!s.preparing_for_exit;
+      const agencyPain = !!(s.agency_review || s.social_pain_signal);
+      const multiSource = (c.sources || [c.source]).filter(Boolean).length >= 2;
+
+      // TIER S — Perfect Storm: money + bleeding ops + growth mandate
+      if (funded && manualMulti && (mktgHire || growthEvent)) return {
+        tier: 'S', id: 'perfect_storm', boost: 35, label: '🌩 Perfect Storm',
+        whyHot: 'Just funded + hiring multiple manual roles + active growth event — capital, urgency, and operational bleeding all at once',
+        productHint: 'Custom AI Software Build + End-to-End Marketing bundle — board pressure makes this a fast yes'
+      };
+      // TIER A combos
+      if (funded && manualMulti) return {
+        tier: 'A', id: 'funded_labor', boost: 25, label: '⚡ Funded & Bleeding Labor',
+        whyHot: 'Fresh capital + multiple manual-role postings — money in the bank being spent on labor that software replaces',
+        productHint: 'Custom AI Software Build — they can fund it today and the ROI math is immediate'
+      };
+      if (funded && mktgHire) return {
+        tier: 'A', id: 'funded_marketing', boost: 25, label: '⚡ Funded & Buying Marketing',
+        whyHot: 'Just raised + hiring marketing — new budget being deployed NOW; new marketing leaders re-evaluate vendors in their first 90 days',
+        productHint: 'End-to-End Marketing — note: buyer may be the incoming marketing hire, not the owner; pitch to whoever owns the new budget'
+      };
+      if (growthEvent && manualMulti) return {
+        tier: 'A', id: 'scaling_manual', boost: 25, label: '⚡ Scaling on Manual Ops',
+        whyHot: 'Expanding/acquiring while stacking manual hires — growth is amplifying the labor waste every month',
+        productHint: 'Custom AI Software Build — frame as scaling infrastructure, not cost-cutting'
+      };
+      if (exitPrep && manualAny) return {
+        tier: 'A', id: 'exit_fat', boost: 25, label: '⚡ Exit with Fat to Trim',
+        whyHot: 'Preparing to sell while carrying manual labor cost — every dollar cut multiplies straight into asking price',
+        productHint: 'AI Software Build + Exit/Valuation Advisory — the Wall Street partner angle is the differentiator here'
+      };
+      if (agencyPain && (funded || manualAny || growthEvent)) return {
+        tier: 'A', id: 'in_market_switcher', boost: 25, label: '⚡ In-Market Switcher',
+        whyHot: 'Publicly frustrated with their current agency plus an active buying signal — actively shopping for a replacement',
+        productHint: 'End-to-End Marketing — lead with what the last agency got wrong'
+      };
+      // TIER B — generic multi-source corroboration, no named combo
+      if (multiSource) return {
+        tier: 'B', id: 'corroborated', boost: 15, label: '🔗 Multi-Source',
+        whyHot: 'Appeared in 2+ independent sources — higher confidence the signals are real',
+        productHint: null
+      };
+      return null;
+    };
 
     // Score — full 100 point scale
     // Discovery signals give a pre-research score
@@ -928,12 +1029,13 @@ app.post('/api/discover', async (req, res) => {
     const allScored = unique
       .map(c => {
         const raw = Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0);
-        // STACKING MULTIPLIER — independent sources agreeing is a strong confidence 
-        // boost. 2 sources = +15, 3+ = +30. Stacked leads can reach 100 and top the
-        // queue; single-source leads cap at 85 so they can't crowd out real winners.
         const srcN = (c.sources || [c.source]).filter(Boolean).length;
-        const stacked = srcN >= 2;
-        const stackBonus = srcN >= 3 ? 30 : srcN === 2 ? 15 : 0;
+        // COMBO CLASSIFICATION — which signals combined matters more than source count.
+        // Boost = max(combo boost, generic source bonus). Never double-counted.
+        const combo = classifyStack(c);
+        const srcBonus = srcN >= 3 ? 30 : srcN === 2 ? 15 : 0;
+        const stackBonus = Math.max(combo ? combo.boost : 0, srcBonus);
+        const stacked = srcN >= 2 || (combo && combo.tier !== 'B');
         // FOUNDER-REACHABILITY — the ICP gate. A lead we can't reach an owner at
         // is worth little no matter how much pain it has. This score (0-30) is
         // added, and a hard block sinks unreachable enterprises below research cutoff.
@@ -943,6 +1045,7 @@ app.post('/api/discover', async (req, res) => {
         const icpScore = reach.hardBlock
           ? Math.min(Math.round(base), 20)
           : Math.min(Math.round(base), stacked ? 100 : 90);
+        c.stackCombo = combo || null;
         return {
           ...c,
           icpScore,
@@ -954,6 +1057,10 @@ app.post('/api/discover', async (req, res) => {
         };
       })
       .sort((a,b) => b.icpScore - a.icpScore);
+
+    const comboTally = {};
+    for (const c of allScored) if (c.stackCombo) comboTally[c.stackCombo.id] = (comboTally[c.stackCombo.id]||0)+1;
+    if (Object.keys(comboTally).length) console.log('Stack combos:', JSON.stringify(comboTally));
 
     // Adzuna is now the highest-signal source (AI-replacement = biggest tickets).
     // Old 40% cap was built when it was noise — flip it to 70% majority.
@@ -1043,12 +1150,44 @@ const checkPageSpeed = async (url) => {
 // scripts on the page. Far more reliable than scraping builtwith.com:
 // a Google Ads conversion tag (AW-xxxx) in their source = they run Google Ads.
 // fbq( = Meta pixel. These are facts from their own page, not third-party guesses.
+// ── NINJAPEAR ENRICHMENT (optional) ──────────────────────────────────────────
+// Real-time company data aggregated from the PUBLIC WEB (not LinkedIn scraping).
+// Built by the former Proxycurl team explicitly to avoid the lawsuit that killed
+// Proxycurl. Returns: employee count + growth, executives with titles, funding, HQ.
+// Dormant until a ninjaPearKey is set in Settings — pay-per-use, no monthly minimum.
+// This is the "LinkedIn signal" without the legal/operational death sentence.
+const enrichCompany = async (domain, ninjaPearKey) => {
+  if (!ninjaPearKey || !domain) return null;
+  try {
+    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
+    const r = await fetchT(
+      `https://api.nubela.co/api/v2/company?website=${encodeURIComponent(clean)}&use_cache=if-present`,
+      { headers: { 'Authorization': `Bearer ${ninjaPearKey}` } },
+      12000
+    );
+    const d = await safeJson(r);
+    if (!d || d.error) return null;
+    const execs = (d.executives || []).slice(0, 5).map(e => ({ name: e.name || '', title: e.title || e.role || '', link: e.profile_url || '' }));
+    return {
+      employeeCount: d.employee_count || d.headcount || null,
+      headcountRange: d.headcount_range || '',
+      headcountGrowth: d.headcount_growth || null,
+      executives: execs,
+      founded: d.founded_year || null,
+      hq: d.hq_address || d.location || '',
+      totalRaised: d.total_raised || null,
+      industry: d.industry || '',
+      source: 'ninjapear',
+    };
+  } catch(e) { console.log('NinjaPear error:', e.message); return null; }
+};
+
 const checkBuiltWith = async (domain) => {
   try {
     const url = `https://${domain}`;
     const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html' } }, 10000);
     const html = await safeText(r);
-    if (!html || html.length < 500) return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, titleTag:'', hasMetaDesc:false, hasH1:false, hasSchema:false, hasEmailCapture:false, hasBooking:false, copyrightYear:0, confirmed:false };
+    if (!html || html.length < 500) return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, titleTag:'', hasMetaDesc:false, hasH1:false, hasSchema:false, hasEmailCapture:false, hasBooking:false, copyrightYear:0, contacts:{emails:[],phones:[],linkedin:[],facebook:[],owners:[],contactPage:''}, confirmed:false };
     return {
       // CRM / marketing automation — script fingerprints
       hasCRM: /hubspot|hs-scripts|salesforce|pardot|marketo|pipedrive|zoho.*crm/i.test(html),
@@ -1069,6 +1208,18 @@ const checkBuiltWith = async (domain) => {
       hasEmailCapture: /type=["']email["']|newsletter|subscribe/i.test(html),
       hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet/i.test(html),
       copyrightYear: (() => { const ys = [...html.matchAll(/(?:©|&copy;|copyright)[^0-9]{0,20}(20\d\d)/gi)].map(m=>parseInt(m[1])); return ys.length ? Math.max(...ys) : 0; })(),
+      // ── CONTACT INTELLIGENCE — extracted from THEIR page (facts, not guesses) ──
+      contacts: (() => {
+        const emails = [...new Set([...html.matchAll(/mailto:([^"'?\s>]+)/gi)].map(m=>m[1].toLowerCase()))].slice(0,5);
+        const phones = [...new Set([...html.matchAll(/tel:([+\d()\-. ]{7,20})/gi)].map(m=>m[1].trim()))].slice(0,3);
+        const linkedin = [...new Set([...html.matchAll(/https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in)\/[a-z0-9\-_%]+/gi)].map(m=>m[0]))].slice(0,3);
+        const facebook = [...new Set([...html.matchAll(/https?:\/\/(?:www\.)?facebook\.com\/[a-zA-Z0-9.\-_]+/gi)].map(m=>m[0]).filter(u=>!/facebook\.com\/(tr|plugins|sharer)/i.test(u)))].slice(0,2);
+        const textOnly = html.replace(/<script[\s\S]*?<\/script>/gi,'').replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ');
+        const nameHits = [...textOnly.matchAll(/([A-Z][a-z]{2,15} [A-Z][a-z]{2,18})\s*[,\u2013\-|]?\s*(Owner|Founder|Co-Founder|President|CEO|Principal)/g)].map(m=>({name:m[1],title:m[2]}));
+        const owners = [...new Map(nameHits.map(h=>[h.name,h])).values()].slice(0,3);
+        const contactPage = (html.match(/href=["']([^"']*(?:contact|about|team|our-story)[^"']*)["']/i)||[])[1] || '';
+        return { emails, phones, linkedin, facebook, owners, contactPage };
+      })(),
       hasBooking: /calendly|acuityscheduling|youcanbook|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
       confirmed: true,
     };
@@ -1101,7 +1252,7 @@ const checkFacebookAds = async (name, fbToken) => {
 
 app.post('/api/research', async (req, res) => {
   const { company, website, keys, apiKey } = req.body;
-  const { firecrawlKey, fbToken } = keys || {};
+  const { firecrawlKey, fbToken, ninjaPearKey } = keys || {};
   const browserData = req.body.browserData || {};
   const pageSpeed = browserData.pageSpeed || {};
   const emailData = browserData.emailData || {};
@@ -1112,6 +1263,7 @@ app.post('/api/research', async (req, res) => {
   const manualRoleCount = req.body.manualRoleCount || 0;
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
+  const stackCombo = req.body.stackCombo || null;
   if (!company) return res.status(400).json({ error: 'Company name required' });
 
   // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
@@ -1131,7 +1283,7 @@ app.post('/api/research', async (req, res) => {
 
   try {
     // Fire all signals simultaneously
-    const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes] = await Promise.allSettled([
+    const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
       website && firecrawlKey
         ? fetchT('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
@@ -1142,12 +1294,14 @@ app.post('/api/research', async (req, res) => {
       fbToken ? checkFacebookAds(company, fbToken) : checkAdLibraryViaFirecrawl(company, firecrawlKey),
       domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
       domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
+      enrichCompany(domain, ninjaPearKey),
     ]);
 
     const firecrawlData = firecrawlRes.value || {};
     const content = firecrawlData.data?.markdown || firecrawlData.markdown || '';
     const screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
     const fbAds = fbAdsRes.value || {};
+    const enrichment = enrichRes.value || null;
     const builtWith = builtWithRes.value || {};
     const googleAds = googleAdsRes.value || {};
     const email = emailData; // from browser via browserData
@@ -1173,6 +1327,34 @@ app.post('/api/research', async (req, res) => {
     // Broken scrape → send empty content so Brain audits from discovery signals,
     // never from a cookie banner. Screenshot still passes through if present.
     const trustedContent = scrapeTrustworthy ? content : '';
+
+    // ═══ REACH INTELLIGENCE ═══════════════════════════════════════════════
+    // Timing window — deterministic from discovery signals
+    const reachWindow = discoverySignals.preparing_for_exit ? { window: 'NOW — actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately' }
+      : discoverySignals.agency_review ? { window: '~60 days', urgency: 'high', note: 'Actively shopping for agency replacement — window closes when they sign someone' }
+      : discoverySignals.raised_funding ? { window: '30-90 days post-raise', urgency: 'medium-high', note: 'Deploying new capital; budgets being allocated right now' }
+      : (discoverySignals.rebranding || discoverySignals.recently_launched) ? { window: '~30 days', urgency: 'medium', note: 'In transition — vendors being picked' }
+      : (manualRoleCount >= 3) ? { window: 'while job postings are live', urgency: 'medium', note: 'Feeling the labor pain right now — live postings prove it is current' }
+      : { window: 'standard', urgency: 'normal', note: '' };
+
+    // Hunter contact verified against homepage
+    const founderName = (email.founderName || '').trim();
+    const founderLastName = founderName.split(' ').slice(-1)[0].toLowerCase();
+    const nameOnPage = founderLastName.length > 2 && trustedContent.toLowerCase().includes(founderLastName);
+
+    // Email quality — deterministic grade
+    const emailAddr = (email.email || '').toLowerCase();
+    const emailLocal = emailAddr.split('@')[0] || '';
+    const isGenericInbox = /^(info|contact|hello|admin|office|support|sales|team|mail)$/.test(emailLocal);
+    const isPersonalPattern = founderName && emailLocal.length > 1 && founderName.toLowerCase().split(' ').some(w => w.length > 2 && emailLocal.includes(w.slice(0, Math.min(w.length, 5))));
+    const ownerTitle = /owner|founder|ceo|president|principal/i.test(email.title || email.founderTitle || '');
+    const emailGrade = !emailAddr ? 'none'
+      : isPersonalPattern && ownerTitle ? 'A — personal email of owner-level contact'
+      : isPersonalPattern ? 'B — personal-pattern email'
+      : ownerTitle && !isGenericInbox ? 'B — owner title, non-generic address'
+      : isGenericInbox ? 'D — generic inbox (info@), low open odds'
+      : 'C — email found, quality unclear';
+    if (founderName || emailAddr) console.log(`Reach: ${founderName||'no name'} | grade: ${emailGrade} | nameOnPage: ${nameOnPage} | window: ${reachWindow.window}`);
 
     console.log(`Firecrawl: ${content.length} chars | screenshot: ${!!screenshotUrl} | scrapeTrustworthy: ${scrapeTrustworthy} | discoveryContext: ${hasDiscoveryContext} | apiKey: ${!!apiKey}`);
 
@@ -1238,6 +1420,27 @@ ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[])
 
 ${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
 
+${stackCombo ? `STACKED SIGNAL COMBO — HIGHEST-CONFIDENCE LEAD TYPE:
+${stackCombo.label} (Tier ${stackCombo.tier})
+Why hot: ${stackCombo.whyHot}
+${stackCombo.productHint ? 'Product guidance: ' + stackCombo.productHint : ''}
+LEAD THE PITCH WITH THIS COMBO NARRATIVE — the intersection of these signals IS the story. A founder who just raised AND is hiring manual roles feels both facts daily; naming both together proves we understand their exact moment.
+
+` : ''}CONTACT INTELLIGENCE (all FACTS — from their own page + Hunter; NEVER invent contacts beyond these):
+- Hunter contact: ${founderName ? founderName + ' (' + (email.founderTitle||'title unknown') + ') — ' + (email.email || 'no address') : 'none found'}
+- Email quality grade: ${emailGrade}
+- Hunter name on their homepage: ${founderName ? (nameOnPage ? 'YES — likely current' : 'NOT on page — may be outdated; prefer role over name if uncertain') : 'N/A'}
+- Owners/decision-makers named ON THEIR OWN PAGE: ${builtWith.contacts?.owners?.length ? builtWith.contacts.owners.map(o=>o.name+' ('+o.title+')').join(', ') : 'none stated'}
+- Emails displayed on their site: ${builtWith.contacts?.emails?.length ? builtWith.contacts.emails.join(', ') : 'none'}
+- Phone displayed on their site: ${builtWith.contacts?.phones?.length ? builtWith.contacts.phones.join(', ') + ' — prominently displayed phone means they welcome calls' : 'none'}
+- LinkedIn: ${builtWith.contacts?.linkedin?.length ? builtWith.contacts.linkedin[0] : 'not linked'}
+- Contact/About page: ${builtWith.contacts?.contactPage ? 'yes — ' + builtWith.contacts.contactPage : 'not found'}
+${enrichment ? `- Company size: ${enrichment.employeeCount || enrichment.headcountRange || 'unknown'} employees${enrichment.headcountGrowth ? ' (growth: ' + enrichment.headcountGrowth + ')' : ''} — ${(enrichment.employeeCount && enrichment.employeeCount < 50) ? 'SMALL: owner is almost certainly the decision-maker and reachable' : (enrichment.employeeCount && enrichment.employeeCount < 200) ? 'MID: owner or a single VP owns this decision' : 'LARGER: expect a decision layer'}
+- Executives (verified via public web): ${enrichment.executives?.length ? enrichment.executives.map(e=>e.name+' ('+e.title+')').join(', ') : 'none found'}${enrichment.founded ? '\n- Founded: ' + enrichment.founded : ''}` : ''}
+
+TIMING WINDOW (deterministic from their discovery signals — use this in reachPlan.timing):
+${reachWindow.window} | urgency: ${reachWindow.urgency}${reachWindow.note ? ' | ' + reachWindow.note : ''}
+
 WHY THIS COMPANY WAS FLAGGED (discovery signal — factor this into your audit):
 - Source: ${discoverySource || 'unknown'}
 - Signal: ${discoveryReason || 'general ICP match'}
@@ -1292,6 +1495,8 @@ Return ONLY valid JSON, no markdown:
   "recommendedPrice": "price range for the primary",
   "recommendedReason": "why THIS specific offering beats the others for THIS company — reference their confirmed situation, not generic reasoning. If you recommend Custom AI Software Build, you must justify why software specifically over marketing/website/growth work — do not default to it just because they hire people.",
   "topThreeProducts": "Array of the 3 most relevant offerings ranked by dollar-impact fit, each as {product, price, why}. The #1 must match recommendedProduct. Rank by what would move the most money for THIS business, not by what's most expensive. Every business could 'use AI' — only rank Custom AI Software Build #1 when there is a CONFIRMED, specific, expensive manual-labor signal (multiple job postings), not as a lazy default.",
+  "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
+  "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + broken funnel (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
   "pitchAngle": "STRICT RULES: (1) Pick the ONE most expensive confirmed pain — never chain two or three pains into one sentence. (2) 35 words maximum. (3) No hedging ('what looks like', 'appears to') — if it is not confirmed, it does not go in the pitch. (4) MATCH THE VOCABULARY TO THE READER: exit-prep or just-funded or pre-IPO reader → unit economics language IS the sharpest weapon (margin, multiple, valuation, EBITDA) — use it confidently. Owner-operator (trucking, clinics, local services) → plain dollars and salaries, zero finance vocabulary. (5) Lead with the money, end with a short curiosity question. GOOD (owner-operator): 'You're paying four salaries to manually do work software could handle overnight — want to see the math?' GOOD (exit-prep): 'Every dollar of manual labor cost you cut before the sale multiplies straight into your asking price — want to see what's automatable?'"
 }`
         });
@@ -1378,6 +1583,39 @@ Return ONLY valid JSON, no markdown:
             operationsOpportunity: parsed.operationsOpportunity,
             exitValueAngle: parsed.exitValueAngle,
             quoteVerification: parsed._quoteVerification || null,
+            reachPlan: (() => {
+              const rp = parsed.reachPlan;
+              if (!rp || typeof rp !== 'object') return null;
+              const knownNames = [founderName, ...((builtWith.contacts||{}).owners||[]).map(o=>o.name)].filter(Boolean).map(n=>n.toLowerCase());
+              const who = (rp.who || '').trim();
+              const isRole = /^the |owner|founder|ceo|president|decision.maker/i.test(who);
+              const nameKnown = knownNames.some(n => who.toLowerCase().includes(n.split(' ').slice(-1)[0]));
+              if (who && !isRole && !nameKnown) { console.log(`REACH PLAN: rejected invented name "${who}"`); rp.who = 'the owner'; }
+              return { who: rp.who || 'the owner', channel: rp.channel || '', timing: rp.timing || reachWindow.window, opener: rp.opener || '' };
+            })(),
+            contactIntel: (builtWith.contacts) || null,
+            enrichment: enrichment || null,
+            emailGrade,
+            reachWindow,
+            savingsEstimate: (() => {
+              const se = parsed.savingsEstimate;
+              if (!se || typeof se !== 'object') return null;
+              const ml = Number(se.monthlyLow), mh = Number(se.monthlyHigh);
+              let al = Number(se.annualLow), ah = Number(se.annualHigh);
+              if (![ml,mh,al,ah].every(n => Number.isFinite(n) && n > 0)) return null;
+              if (ml > mh || al > ah) return null;
+              if (!se.basis || se.basis.length < 10) return null;
+              // DEFENSIBILITY CEILING from confirmed inputs
+              const laborCap = (manualRoleCount || 0) * 65000 * 0.8;
+              const adsCap = (fbAds.adCount || 0) * 2000 * 0.4 * 12;
+              const ceiling = (laborCap + adsCap) * 1.15;
+              if (ceiling === 0) { console.log('SAVINGS REJECT: no confirmed dollar input'); return null; }
+              if (ah > ceiling) {
+                console.log(`SAVINGS CLAMP: claimed $${ah}, evidence supports max $${Math.round(ceiling)}`);
+                ah = Math.round(ceiling); if (al > ah) al = Math.round(ah * 0.6);
+              }
+              return { monthlyLow: Math.round(al/12), monthlyHigh: Math.round(ah/12), annualLow: Math.round(al), annualHigh: Math.round(ah), basis: se.basis, execution: se.execution || '' };
+            })(),
           };
           console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
 
