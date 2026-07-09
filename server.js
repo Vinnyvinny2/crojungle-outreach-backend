@@ -105,19 +105,77 @@ app.get('/api/email', async (req, res) => {
 
 const googleSearch = async (query) => {
   try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const r = await fetchT(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      }
-    }, 8000);
+    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    // Route through Cloudflare Worker — Render's IP is blocked by DDG directly
+    const r = await fetchT(CF_WORKER + encodeURIComponent(ddgUrl), {}, 15000);
     const html = await r.text();
+    if (html.includes('Host not in allowlist')) {
+      console.log('CF Worker blocked DDG — check worker settings');
+      return '';
+    }
     return html;
   } catch(e) {
     console.log('DuckDuckGo search failed:', e.message);
     return '';
+  }
+};
+
+// Lightweight size-only lookup — ONE search, used at Find time for the size gate.
+// Returns { employees, website } or null. Full enrichment happens at Research time.
+const getSizeOnly = async (companyName) => {
+  try {
+    const html = await googleSearch(`${companyName} number of employees`);
+    if (!html) return null;
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
+
+    let employees = null;
+    const empPatterns = [
+      /([0-9,]+)\s*(?:to|[-\u2013])\s*([0-9,]+)\s*employees/i,
+      /([0-9,]+)\+?\s*employees/i,
+      /employees[:\s]+([0-9,]+)/i,
+      /([0-9]+[,.]?[0-9]*)\s*[KkMm]\s*employees/i,
+      /workforce\s+of\s+([0-9,]+)/i,
+    ];
+    for (const pat of empPatterns) {
+      const m = text.match(pat);
+      if (m) {
+        if (m[2]) {
+          const lo = parseInt(m[1].replace(/,/g,''));
+          const hi = parseInt(m[2].replace(/,/g,''));
+          employees = Math.round((lo + hi) / 2);
+        } else {
+          let raw = m[1].replace(/,/g,'');
+          if (/[Kk]$/.test(raw)) employees = parseFloat(raw) * 1000;
+          else if (/[Mm]$/.test(raw)) employees = parseFloat(raw) * 1000000;
+          else employees = parseInt(raw);
+        }
+        if (employees > 0 && employees < 5000000) break;
+        employees = null;
+      }
+    }
+
+    // Grab website while we're here
+    let website = null;
+    const skipDomains = new Set(['google','bing','yahoo','duckduckgo','youtube','facebook','twitter',
+      'linkedin','instagram','wikipedia','yelp','bbb','glassdoor','indeed','amazon','bloomberg',
+      'forbes','crunchbase','zoominfo','bizbuysell','adzuna','sec','dnb','hoovers','comparably',
+      'macrotrends','statista','craft','owler','rocketreach','reddit','trustpilot','g2']);
+    const hrefMatches = html.match(/href="([^"]+)"/g) || [];
+    for (const m of hrefMatches) {
+      const href = m.replace('href="','').replace('"','');
+      if (!href.startsWith('http')) continue;
+      try {
+        const domain = new URL(href).hostname.replace('www.','').toLowerCase();
+        const base = domain.split('.')[0];
+        if (skipDomains.has(base) || skipDomains.has(domain)) continue;
+        const compWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w=>w.length>3);
+        if (compWords.some(w => base.includes(w.slice(0,5)))) { website = 'https://' + domain; break; }
+      } catch {}
+    }
+
+    return { employees, website };
+  } catch(e) {
+    return null;
   }
 };
 
@@ -345,51 +403,54 @@ app.get('/api/find-website', async (req, res) => {
 // Returns { employees: number|null, website: string|null, revenue: string|null }
 const googleEnrich = async (companyName) => {
   try {
-    // Use DuckDuckGo — Google blocks server requests, DDG doesn't
-    const html = await googleSearch(`${companyName} number of employees`);
-    if (!html) return { employees: null, website: null };
-    
-    const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
-    
+    // Fire 4 parallel DuckDuckGo searches — headcount, decision-maker, pain, revenue
+    const [empHtml, ceoHtml, painHtml, revHtml] = await Promise.all([
+      googleSearch(`${companyName} number of employees`),
+      googleSearch(`${companyName} CEO founder`),
+      googleSearch(`${companyName} reviews complaints`),
+      googleSearch(`${companyName} revenue annual`),
+    ]);
+
+    const clean = (h) => (h || '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ');
+
+    // HEADCOUNT
     let employees = null;
-    let website = null;
-    let revenue = null;
-    
-    // Extract employee count — most specific patterns first
+    const empText = clean(empHtml);
     const empPatterns = [
-      /([0-9,]+)\s*(?:to|[-–])\s*([0-9,]+)\s*employees/i,  // range: 1,000-5,000
-      /([0-9,]+)\+?\s*employees/i,                            // 10,000 employees
-      /employees[:\s]+([0-9,]+)/i,                            // employees: 500
-      /([0-9]+[,.]?[0-9]*)\s*[KkMm]\s*employees/i,          // 10K employees
+      /([0-9,]+)\s*(?:to|[-\u2013])\s*([0-9,]+)\s*employees/i,
+      /([0-9,]+)\+?\s*employees/i,
+      /employees[:\s]+([0-9,]+)/i,
+      /([0-9]+[,.]?[0-9]*)\s*[KkMm]\s*employees/i,
       /workforce\s+of\s+([0-9,]+)/i,
       /([0-9,]+)\s*(?:full.time\s+)?(?:staff|workers)/i,
     ];
-    
     for (const pat of empPatterns) {
-      const m = text.match(pat);
+      const m = empText.match(pat);
       if (m) {
-        let raw;
         if (m[2]) {
-          // Range — take midpoint
           const lo = parseInt(m[1].replace(/,/g,''));
           const hi = parseInt(m[2].replace(/,/g,''));
           employees = Math.round((lo + hi) / 2);
         } else {
-          raw = m[1].replace(/,/g,'');
+          let raw = m[1].replace(/,/g,'');
           if (/[Kk]$/.test(raw)) employees = parseFloat(raw) * 1000;
           else if (/[Mm]$/.test(raw)) employees = parseFloat(raw) * 1000000;
           else employees = parseInt(raw);
         }
         if (employees > 0 && employees < 5000000) break;
+        employees = null;
       }
     }
-    
-    // Extract website — look for company domain in search results
-    const skipDomains = new Set(['google','bing','yahoo','duckduckgo','youtube','facebook','twitter',
+
+    // WEBSITE — from any search result page
+    let website = null;
+    const skipDomains = new Set(['google','bing','yahoo','duckduckgo','youtube','facebook','twitter','x','tiktok',
       'linkedin','instagram','wikipedia','yelp','bbb','glassdoor','indeed','amazon','bloomberg',
       'forbes','crunchbase','zoominfo','bizbuysell','adzuna','sec','dnb','hoovers','comparably',
-      'macrotrends','statista','craft','owler','rocketreach','apollo','lusha']);
-    const hrefMatches = html.match(/href="([^"]+)"/g) || [];
+      'macrotrends','statista','craft','owler','rocketreach','apollo','lusha','reddit','quora',
+      'trustpilot','g2','capterra','sitejabber']);
+    const allSearchHtml = (empHtml || '') + (ceoHtml || '');
+    const hrefMatches = allSearchHtml.match(/href="([^"]+)"/g) || [];
     for (const m of hrefMatches) {
       const href = m.replace('href="','').replace('"','');
       if (!href.startsWith('http')) continue;
@@ -404,22 +465,54 @@ const googleEnrich = async (companyName) => {
         }
       } catch {}
     }
-    
-    // Revenue extraction
-    const revMatch = text.match(/\$([0-9,.]+)\s*(?:billion|million|B\b|M\b)[^a-z]*(?:revenue|sales|annual)/i);
+
+    // CEO / DECISION MAKER
+    let ceoName = null;
+    let ceoTitle = null;
+    const ceoText = clean(ceoHtml);
+    const ceoPatterns = [
+      /(?:CEO|Chief Executive Officer)[,\s]+([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/,
+      /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?),?\s+(?:CEO|Chief Executive Officer|founder|co-founder|President)/,
+      /founder(?:\s+and\s+CEO)?[,\s]+([A-Z][a-z]+ [A-Z][a-z]+)/i,
+      /led by\s+([A-Z][a-z]+ [A-Z][a-z]+)/,
+      /(?:CEO|founder|President)\s+([A-Z][a-z]+ [A-Z][a-z]+)/,
+    ];
+    for (const pat of ceoPatterns) {
+      const m = ceoText.match(pat);
+      if (m && m[1] && m[1].length < 40 && !/company|corporation|inc|llc/i.test(m[1])) {
+        ceoName = m[1].trim();
+        ceoTitle = 'CEO';
+        break;
+      }
+    }
+
+    // PAIN SIGNALS from reviews search
+    const painText = clean(painHtml);
+    const painSignals = [];
+    const painKeywords = ['slow', 'bad customer service', 'outdated', 'confusing', 'expensive', 'broken', 'poor', 'terrible', 'unresponsive', 'no support', 'buggy', 'clunky', 'ancient', 'legacy'];
+    const snippets = painText.match(/[A-Z][^.!?]{20,180}[.!?]/g) || [];
+    const firstWord = companyName.toLowerCase().split(' ')[0];
+    for (const snip of snippets.slice(0, 15)) {
+      const low = snip.toLowerCase();
+      if (painKeywords.some(k => low.includes(k)) && low.includes(firstWord)) {
+        painSignals.push(snip.trim().slice(0, 180));
+        if (painSignals.length >= 3) break;
+      }
+    }
+
+    // REVENUE
+    let revenue = null;
+    const revText = clean(revHtml);
+    const revMatch = revText.match(/\$([0-9,.]+)\s*(?:billion|million|B\b|M\b)[^a-z]{0,20}(?:revenue|sales|annual)/i);
     if (revMatch) revenue = revMatch[0].slice(0,60).trim();
-    
-    console.log(`Enrich [${companyName}]: employees=${employees||'?'} website=${website||'?'}`);
-    return { employees, website, revenue };
+
+    console.log(`Enrich [${companyName}]: emp=${employees||'?'} site=${website||'?'} ceo=${ceoName||'?'} pain=${painSignals.length} rev=${revenue||'?'}`);
+    return { employees, website, revenue, ceoName, ceoTitle, painSignals };
   } catch(e) {
     console.log(`Enrich failed [${companyName}]:`, e.message);
-    return { employees: null, website: null, revenue: null };
+    return { employees: null, website: null, revenue: null, ceoName: null, ceoTitle: null, painSignals: [] };
   }
 };
-
-
-
-
 const searchAdzuna = async (appId, appKey) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
@@ -804,7 +897,15 @@ const scrapeBizBuySell = async (fcKey) => {
         for (const [, title, link] of links) {
           const clean = title.replace(/[#*_]/g, '').trim();
           if (clean.length < 8 || seen.has(clean.toLowerCase())) continue;
-          if (/sign in|register|broker|sell your|search|advanced|franchise directory/i.test(clean)) continue;
+          // Block navigation, category pages, and generic BizBuySell UI text
+          if (/sign in|register|broker|sell your|search|advanced|franchise directory|how to buy|how to sell|business opportunities|businesses for sale|for sale$|& children|& boat|& construction|& food|& retail|& services|& technology|my business|my account|my saved|dashboard|learning center|market insight|financial bench|blog|news|resource/i.test(clean)) continue;
+          // Must look like an actual business name — at least 2 words, not a category phrase
+          const wordCount = clean.split(/\s+/).length;
+          if (wordCount < 2) continue;
+          // Block obvious category patterns: "Industry & Industry", "Type Businesses"
+          if (/^\w+ & \w+$/.test(clean) || /businesses for sale$/i.test(clean)) continue;
+          // Must contain something that looks like a real business name (has letters, not just symbols)
+          if (!/[a-zA-Z]{3,}/.test(clean)) continue;
           seen.add(clean.toLowerCase());
           const brokerPosted = /broker|agent/i.test(clean);
           results.push({
@@ -1021,6 +1122,19 @@ const scoreReachability = (c) => {
     // Over 500 is hard-blocked before scoring — never reaches here
   }
 
+  // ── VERIFIED CEO NAME (from Google search) ────────────────────────────
+  // Having a named decision-maker is a massive reachability signal — we know
+  // who to write to by name, not "to whom it may concern"
+  if (c.verifiedCEO) {
+    score += 8; reasons.push(`Decision-maker identified: ${c.verifiedCEO} (${c.verifiedCEOTitle || 'CEO'}) — pitch by name`);
+  }
+
+  // ── PUBLIC PAIN SIGNALS (from reviews/complaints search) ──────────────
+  // Public complaints about the company are gold — the pitch can lead with them
+  if (c.publicPainSignals && c.publicPainSignals.length > 0) {
+    score += 5; reasons.push(`${c.publicPainSignals.length} public pain signals found — real hooks for outreach`);
+  }
+
   // STRONG owner-led signals — these companies ARE the owner reaching out
   if (sig.preparing_for_exit || c.source === 'bizbuysell') {
     if (c.brokerPosted) {
@@ -1221,23 +1335,31 @@ app.post('/api/discover', async (req, res) => {
 
     console.log(`After ICP filter: ${icpFiltered.length} (removed ${allCompanies.length - icpFiltered.length} large/irrelevant)`);
 
-    // ═══ GOOGLE SIZE ENRICHMENT + WEBSITE LOOKUP ═══════════════════════════
-    // Run in parallel — Google search per company returns real employee count + website
-    // Hard gate: over 500 employees = not our ICP, blocked before scoring
-    // This is the real ICP filter. Blocklist was the band-aid. This is the fix.
-    const ENRICH_BATCH = 15; // max parallel Google requests
-    const toEnrich = icpFiltered.slice(0, 80); // enrich top 80 by pre-score
+    // ═══ SIZE GATE — ONE lightweight search per lead, just headcount ═══════
+    // At Find time we only need the size gate to block enterprises. The full
+    // CEO/pain/revenue enrichment happens at Research time on leads you pursue.
+    // This keeps Find fast and doesn't hammer DuckDuckGo.
+    // Only enrich the top 40 by pre-score — the ones most likely to matter.
+    const toEnrich = icpFiltered
+      .sort((a,b) => (b.icpScore||0) - (a.icpScore||0))
+      .slice(0, 40);
     const enrichResults = new Map();
-    
-    for (let i = 0; i < toEnrich.length; i += ENRICH_BATCH) {
-      const batch = toEnrich.slice(i, i + ENRICH_BATCH);
-      const results = await Promise.allSettled(batch.map(c => googleEnrich(c.name)));
+    console.log(`Size enrichment: checking top ${toEnrich.length} leads...`);
+
+    const SIZE_BATCH = 4;
+    for (let i = 0; i < toEnrich.length; i += SIZE_BATCH) {
+      const batch = toEnrich.slice(i, i + SIZE_BATCH);
+      const results = await Promise.allSettled(batch.map(c => getSizeOnly(c.name)));
       batch.forEach((c, idx) => {
         const r = results[idx];
-        if (r.status === 'fulfilled') enrichResults.set(c.name, r.value);
+        if (r.status === 'fulfilled' && r.value) {
+          enrichResults.set(c.name, r.value);
+          console.log(`Size [${c.name}]: emp=${r.value.employees||'?'} site=${r.value.website||'?'}`);
+        } else {
+          console.log(`Size [${c.name}]: timeout/failed`);
+        }
       });
-      // Small delay between batches to avoid rate limiting
-      if (i + ENRICH_BATCH < toEnrich.length) await new Promise(r => setTimeout(r, 1000));
+      if (i + SIZE_BATCH < toEnrich.length) await new Promise(r => setTimeout(r, 600));
     }
     
     // Apply enrichment + size gate
@@ -1249,6 +1371,8 @@ app.post('/api/discover', async (req, res) => {
         if (enrich.employees) c.verifiedEmployees = enrich.employees;
         if (enrich.revenue) c.verifiedRevenue = enrich.revenue;
         if (enrich.website && !c.website) c.website = enrich.website;
+        if (enrich.ceoName) { c.verifiedCEO = enrich.ceoName; c.verifiedCEOTitle = enrich.ceoTitle || 'CEO'; }
+        if (enrich.painSignals && enrich.painSignals.length > 0) c.publicPainSignals = enrich.painSignals;
         
         // Hard block: 500+ employees = enterprise, not reachable
         if (enrich.employees && enrich.employees > 500) {
@@ -1678,11 +1802,30 @@ app.post('/api/research', async (req, res) => {
   const discoverySource = req.body.discoverySource || '';
   const discoveryReason = req.body.discoveryReason || '';
   const manualRoleCount = req.body.manualRoleCount || 0;
-  const verifiedEmployees = req.body.verifiedEmployees || null;
+  let verifiedEmployees = req.body.verifiedEmployees || null;
+  let verifiedCEO = req.body.verifiedCEO || null;
+  let verifiedCEOTitle = req.body.verifiedCEOTitle || null;
+  let publicPainSignals = req.body.publicPainSignals || [];
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
   if (!company) return res.status(400).json({ error: 'Company name required' });
+
+  // ═══ FULL ENRICHMENT AT RESEARCH TIME ══════════════════════════════════
+  // Only runs for THIS one company (no rate-limiting risk). Gets CEO name,
+  // public pain signals, revenue — the deep intelligence for the pitch.
+  // Skip if we already have it from Find, or if no company name.
+  if (!verifiedCEO || publicPainSignals.length === 0) {
+    try {
+      const deepEnrich = await googleEnrich(company);
+      if (deepEnrich) {
+        if (!verifiedEmployees && deepEnrich.employees) verifiedEmployees = deepEnrich.employees;
+        if (!verifiedCEO && deepEnrich.ceoName) { verifiedCEO = deepEnrich.ceoName; verifiedCEOTitle = deepEnrich.ceoTitle; }
+        if (publicPainSignals.length === 0 && deepEnrich.painSignals) publicPainSignals = deepEnrich.painSignals;
+        console.log(`Research enrichment [${company}]: ceo=${verifiedCEO||'?'} pain=${publicPainSignals.length}`);
+      }
+    } catch(e) { console.log('Research enrichment failed (non-fatal):', e.message); }
+  }
 
   // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
   console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? apiKey.slice(0,12)+'...' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
@@ -1818,6 +1961,8 @@ app.post('/api/research', async (req, res) => {
 COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
 VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
+VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle || 'CEO') + ') — found in public search results, use their real name in the pitch' : 'Not identified — pitch to "the owner/CEO"'}
+PUBLIC PAIN SIGNALS (from reviews/complaints search): ${publicPainSignals.length > 0 ? '\n' + publicPainSignals.map(p => '- ' + p).join('\n') + '\n→ These are real public complaints — WEAVE THEM into the pitch. This is the "we noticed X" hook.' : 'None found in public search — pitch from site audit only'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 HOMEPAGE CONTENT (scraped):
@@ -1937,8 +2082,11 @@ Return ONLY valid JSON, no markdown:
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
             model: 'claude-sonnet-4-6',
-            max_tokens: 4000,
-            messages: [{ role: 'user', content: msgContent }]
+            max_tokens: 6000,
+            messages: [
+              { role: 'user', content: msgContent },
+              { role: 'assistant', content: '```json\n{' }
+            ]
           }),
         }, 45000);
 
@@ -1954,7 +2102,9 @@ Return ONLY valid JSON, no markdown:
           console.log('BRAIN ERROR:', brainError);
         }
         try {
-          const clean = vText.replace(/```json|```/g,'').trim();
+          // Prefill means response starts mid-JSON — prepend the { we sent as prefill
+          const rawText = '```json\n{' + vText;
+          const clean = rawText.replace(/```json|```/g,'').trim();
           let parsed;
           try {
             parsed = JSON.parse(clean);
@@ -2093,6 +2243,8 @@ Return ONLY valid JSON, no markdown:
 RAW EVIDENCE (what we actually confirmed):
 - Company: ${company}
 - Website: ${website || 'none'}
+- VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google search)' : 'Not verified'}
+- ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
 - Screenshot taken: ${!!screenshotUrl}
 - Facebook ads: ${fbAds.hasAds ? fbAds.adCount + ' ads verified as theirs (attribution-checked)' : fbAds.confirmed ? 'none found attributable to them' : 'not checked'}
@@ -2127,6 +2279,7 @@ WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
 - Estimates that are clearly framed as estimates ("est.", "roughly", "on the order of").
 
 WHAT TO FLAG:
+- ICP MISMATCH: If verified headcount is over 500, flag this loudly — this company is NOT our ICP (too large, owner unreachable). The audit should not be sent.
 - Dollar figures stated as facts without an estimate label.
 - Claims about what competitors are doing (we have no competitor data).
 - Claims about internal company data (revenue, headcount, margins) unless from a confirmed source.
