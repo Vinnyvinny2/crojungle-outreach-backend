@@ -134,51 +134,66 @@ const googleSearch = async (query) => {
   }
 };
 
-// Lightweight size-only lookup using Clearbit autocomplete (free, no auth, already works)
-// Returns { employees, website } or null.
+// Size lookup using Wikipedia API — free, no key, works from any IP
+// Logic: if company has a Wikipedia page with employee data, extract it.
+// If NO Wikipedia page → almost certainly a small SMB → passes through.
+// This is perfect ICP logic: famous enough for Wikipedia = probably too big.
 const getSizeOnly = async (companyName) => {
   try {
-    const r = await fetchT(
+    // Step 1: Search Wikipedia for the company
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(companyName + ' company')}&srlimit=1&format=json&origin=*`;
+    const searchRes = await fetchT(searchUrl, { headers: { 'User-Agent': 'CROJungle/1.0 (outreach tool)' } }, 8000);
+    const searchData = await safeJson(searchRes);
+    const pages = searchData?.query?.search || [];
+    if (pages.length === 0) {
+      // No Wikipedia page = small/obscure company = likely our ICP
+      console.log(`Wikipedia [${companyName}]: no page found — likely SMB, passes through`);
+      return null;
+    }
+
+    // Step 2: Get the page summary which includes key facts
+    const pageTitle = encodeURIComponent(pages[0].title);
+    const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${pageTitle}`;
+    const summaryRes = await fetchT(summaryUrl, { headers: { 'User-Agent': 'CROJungle/1.0' } }, 8000);
+    const summary = await safeJson(summaryRes);
+    const extract = (summary?.extract || '') + ' ' + (summary?.description || '');
+
+    // Step 3: Extract employee count from the extract text
+    let employees = null;
+    const empPatterns = [
+      /([0-9,]+)\s*(?:to|[-–])\s*([0-9,]+)\s*employees/i,
+      /([0-9,]+)\+?\s*employees/i,
+      /employs?\s+([0-9,]+)/i,
+      /workforce\s+of\s+([0-9,]+)/i,
+      /([0-9]+(?:\.[0-9]+)?)\s*(?:thousand|million)\s*employees/i,
+    ];
+    for (const pat of empPatterns) {
+      const m = extract.match(pat);
+      if (m) {
+        if (m[2]) {
+          employees = Math.round((parseInt(m[1].replace(/,/g,'')) + parseInt(m[2].replace(/,/g,''))) / 2);
+        } else if (/thousand/i.test(m[0])) {
+          employees = parseFloat(m[1]) * 1000;
+        } else if (/million/i.test(m[0])) {
+          employees = parseFloat(m[1]) * 1000000;
+        } else {
+          employees = parseInt(m[1].replace(/,/g,''));
+        }
+        if (employees > 0 && employees < 10000000) break;
+        employees = null;
+      }
+    }
+
+    // Step 4: Get website from Clearbit (already works)
+    const cbRes = await fetchT(
       `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(companyName)}`,
-      { headers: { 'Accept': 'application/json' } },
-      6000
+      { headers: { 'Accept': 'application/json' } }, 5000
     );
-    const d = await safeJson(r);
-    if (!Array.isArray(d) || d.length === 0) return null;
+    const cbData = await safeJson(cbRes);
+    const website = Array.isArray(cbData) && cbData[0]?.domain ? 'https://' + cbData[0].domain : null;
 
-    // Find best match by name similarity
-    const searchName = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');
-    let best = null;
-    for (const item of d.slice(0, 3)) {
-      const itemName = (item.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (itemName.includes(searchName.slice(0, 6)) || searchName.includes(itemName.slice(0, 6))) {
-        best = item;
-        break;
-      }
-    }
-    if (!best) best = d[0]; // fallback to first result
-
-    // Extract employee count — Clearbit returns 'employees' and 'employeesRange'
-    let employees = best.employees || null;
-    const empRange = best.employeesRange || null;
-    
-    // Parse range if no exact count (e.g. "1001-5000")
-    if (!employees && empRange) {
-      const parts = empRange.split('-').map(p => parseInt(p.replace(/[^0-9]/g, '')));
-      if (parts.length >= 2 && parts[0] && parts[1]) {
-        employees = Math.round((parts[0] + parts[1]) / 2);
-      } else if (parts[0]) {
-        employees = parts[0];
-      }
-    }
-
-    const website = best.domain ? 'https://' + best.domain : null;
-    
-    if (employees || website) {
-      console.log(`Clearbit size [${companyName}]: emp=${employees||'?'} range=${empRange||'?'} site=${website||'?'}`);
-    }
-    
-    return { employees, employeeRange: empRange, website };
+    console.log(`Wikipedia [${companyName}]: emp=${employees||'not found in extract'} wiki="${pages[0].title}" site=${website||'?'}`);
+    return { employees, website };
   } catch(e) {
     console.log(`Size lookup failed [${companyName}]:`, e.message);
     return null;
@@ -1231,6 +1246,14 @@ app.post('/api/discover', async (req, res) => {
       'honeywell','kroger','compass group','christus health','adventist health',
       'norwegian cruise line','canva','spacex','locumtenens','qureos',
       'mission healthcare','healthright 360','quadmed','gtangible',
+      // Confirmed leakers from test runs
+      'uline','thales','fujifilm','trinity health','berkshire hathaway',
+      'entegris','sprague pest','quipt home medical',
+      'mclarty','mclarty automotive','border states',
+      'helen ross mcnabb','ymca','collabera',
+      'state farm','circle k','social security',
+      'renewal by andersen','renewal','bjs restaurants','bj restaurants',
+      'green worldwide shipping','enersys',
       // Government / nonprofits / utilities
       'social security administration','social security','ymca','ywca',
       'red cross','salvation army','habitat for humanity','united way',
