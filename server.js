@@ -152,7 +152,10 @@ const enrichViaCompaniesAPI = async (domain, apiKey) => {
       headers: { 'Authorization': `Basic ${apiKey}`, 'Accept': 'application/json' }
     }, 8000);
     const d = await safeJson(r);
-    if (!d || !d.about) return null;
+    if (!d || !d.about) {
+      if (d?.message || d?.error) console.log(`CompaniesAPI [${cleanDomain}]: API said "${d.message || d.error}"`);
+      return null;
+    }
 
     const employees = d.about.totalEmployeesExact || null;
     const empBand = d.about.totalEmployees || null;
@@ -185,14 +188,19 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
   if (!companyName || !apiKey) return null;
   try {
     const cleanName = companyName.replace(/\s*\(cik\s*\d+\)\s*/gi,'').replace(/,?\s*(Inc|LLC|Corp|Ltd|LLP|Co)\.?$/gi,'').trim();
-    const url = `https://api.thecompaniesapi.com/v2/companies/name?name=${encodeURIComponent(cleanName)}`;
+    const url = `https://api.thecompaniesapi.com/v2/companies/by-name?name=${encodeURIComponent(cleanName)}&simplified=true&size=1`;
     const r = await fetchT(url, {
       headers: { 'Authorization': `Basic ${apiKey}`, 'Accept': 'application/json' }
     }, 8000);
     const d = await safeJson(r);
     // Response has companies array; take best match
-    const company = d?.companies?.[0] || d?.[0] || (d?.about ? d : null);
-    if (!company || !company.about) return null;
+    const company = d?.companies?.[0] || null;
+    if (!company) {
+      // Log why it failed so we can diagnose
+      if (d?.message || d?.error) console.log(`CompaniesAPI name [${cleanName}]: API said "${d.message || d.error}"`);
+      return null;
+    }
+    if (!company.about) return null;
 
     const employees = company.about.totalEmployeesExact || null;
     const empBand = company.about.totalEmployees || null;
