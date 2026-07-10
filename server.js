@@ -202,21 +202,37 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
       return null;
     }
 
-    // STRICT MATCH — prevents "United Airlines" → unitedairway.xyz or "Yembo" → yembolkitchen
+    // STRICT MATCH — prevents "United Airlines" → unitedairway.xyz scam sites
     const queryWords = cleanName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w => w.length > 3);
     const best = candidates.find(c => {
-      const capiName = (c.about?.name || '').toLowerCase().replace(/[^a-z0-9\s]/g,'');
-      const capiDomain = (c.domain?.domain || '').toLowerCase().split('.')[0]; // base only, no TLD
-      // Name match: at least half of query words must appear in the returned company name
-      const nameWords = capiName.split(/\s+/);
+      const rawName = (c.about?.name || '');
+      const capiName = rawName.toLowerCase().replace(/[^a-z0-9\s]/g,'');
+      const fullDomain = (c.domain?.domain || '').toLowerCase();
+      const capiDomain = fullDomain.split('.')[0];
+      const tld = fullDomain.split('.').slice(1).join('.');
+
+      // REJECT scam/junk signals outright
+      // 1. Suspicious TLDs used by scam/spam sites
+      if (/^(xyz|info|online|site|top|click|link|live|fun|shop)$/i.test(tld)) return false;
+      // 2. Name contains phone numbers or scam phrases (fake "customer service" sites)
+      if (/\d{3}[\s-]?\d{3}[\s-]?\d{4}|reservations|phone number|customer service number|helpline|toll.?free|1-8\d\d/i.test(rawName)) return false;
+      // 3. Domain has extra words bolted onto the company name (unitedairway vs united)
+      //    Real match: domain base closely matches a query word. Reject if domain
+      //    is much longer than the name words (indicates a different entity).
+
+      // Name match: ALL significant query words must appear (stricter than before)
       const nameMatchCount = queryWords.filter(w => capiName.includes(w)).length;
-      const nameMatch = queryWords.length > 0 && nameMatchCount >= Math.ceil(queryWords.length * 0.6);
-      // Domain match: require the FIRST significant query word to be the START of the domain
-      // (not just a substring). "unitedairway" starts with "united" — but "united" ≠ "unitedairlines"
-      // So we also require the domain to NOT have extra words bolted on
+      const nameMatch = queryWords.length > 0 && nameMatchCount === queryWords.length;
+
+      // Domain match: the domain base must START WITH the first query word AND
+      // be a tight length match (prevents "unitedairway" matching "united")
       const firstWord = queryWords[0] || '';
-      const domainMatch = firstWord.length > 3 && capiDomain === firstWord.slice(0, capiDomain.length) &&
-        capiDomain.length >= firstWord.length * 0.8 && capiDomain.length <= cleanName.replace(/\s/g,'').length * 1.3;
+      const domainStartsWithWord = firstWord.length > 3 && capiDomain.startsWith(firstWord.slice(0, Math.min(firstWord.length, 8)));
+      const compact = cleanName.replace(/[^a-z0-9]/gi,'').toLowerCase();
+      const domainTight = capiDomain.length <= compact.length + 4; // not much longer than the name
+      const domainMatch = domainStartsWithWord && domainTight;
+
+      // Accept only if name fully matches OR domain tightly matches
       return nameMatch || domainMatch;
     });
     if (!best) {
@@ -290,10 +306,13 @@ const getSizeOnly = async (companyName) => {
     }
 
     // Validate the match — Wikipedia title should contain words from the company name
-    const nameWords = cleanName.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    // Keep distinctive short words (SSM, UF, etc.) — only drop tiny filler words
+    const stopWords = new Set(['the','and','for','inc','llc','corp','company','co','of','a']);
+    const nameWords = cleanName.toLowerCase().split(/\s+/).filter(w => w.length > 1 && !stopWords.has(w));
     const matchedPage = pages.find(p => {
       const title = p.title.toLowerCase();
-      return nameWords.some(w => title.includes(w));
+      // Require the FIRST significant word (usually the distinctive brand) to match
+      return nameWords.length > 0 && (title.includes(nameWords[0]) || nameWords.some(w => w.length > 4 && title.includes(w)));
     });
 
     if (!matchedPage) {
@@ -2283,6 +2302,14 @@ app.post('/api/research', async (req, res) => {
     const googleAds = googleAdsRes.value || {};
     const email = emailData; // from browser via browserData
 
+    // If Hunter found a named contact, use them as the verified decision-maker.
+    // Hunter is the most reliable source — it finds the actual person at the domain.
+    if (!verifiedCEO && email.founderName && email.founderName.trim().length > 3) {
+      verifiedCEO = email.founderName.trim();
+      verifiedCEOTitle = email.title || email.founderTitle || 'Owner';
+      console.log(`Hunter name used as CEO: ${verifiedCEO} (${verifiedCEOTitle})`);
+    }
+
     // ═══ THE COMPANIES API — authoritative size/industry (if key present) ═══════
     let verifiedIndustry = null;
     if (companiesApiKey && website) {
@@ -2508,6 +2535,7 @@ Return ONLY valid JSON, no markdown:
   "mobileReady": true/false,
   "aboveFoldClutter": true/false,
   "trustSignals": ["visible trust signals"],
+  "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
   "biggestVisualIssue": "single most important visual problem with specific detail",
   "overallConversionRating": "strong/moderate/weak",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
@@ -2644,7 +2672,7 @@ Return ONLY valid JSON, no markdown:
             reachPlan: (() => {
               const rp = parsed.reachPlan;
               if (!rp || typeof rp !== 'object') return null;
-              const knownNames = [founderName, ...((builtWith.contacts||{}).owners||[]).map(o=>o.name)].filter(Boolean).map(n=>n.toLowerCase());
+              const knownNames = [founderName, verifiedCEO, ...((builtWith.contacts||{}).owners||[]).map(o=>o.name)].filter(Boolean).map(n=>n.toLowerCase());
               const who = (rp.who || '').trim();
               const isRole = /^the |owner|founder|ceo|president|decision.maker/i.test(who);
               const nameKnown = knownNames.some(n => who.toLowerCase().includes(n.split(' ').slice(-1)[0]));
@@ -2676,6 +2704,24 @@ Return ONLY valid JSON, no markdown:
             })(),
           };
           console.log('Brain audit complete:', parsed.recommendedProduct, '|', parsed.realPain?.slice(0,60));
+
+          // ── BRAIN-EXTRACTED DECISION-MAKER ─────────────────────────────
+          // Claude read the whole page — it's far better than regex at finding
+          // the founder's name. Use it if we don't already have a verified CEO,
+          // or upgrade a low-confidence name with a high-confidence one.
+          const dm = parsed.decisionMaker;
+          if (dm && typeof dm === 'object' && dm.name && dm.name.length > 3) {
+            const dmName = dm.name.trim();
+            const isGeneric = /^(the |our |team|leadership|management|owner|founder|ceo|president|staff)$/i.test(dmName);
+            const looksLikeName = /^[A-Z][a-z]+(\s+[A-Z][a-z.]+){1,2}$/.test(dmName);
+            if (!isGeneric && looksLikeName && (dm.confidence === 'high' || dm.confidence === 'medium')) {
+              if (!verifiedCEO || dm.confidence === 'high') {
+                verifiedCEO = dmName;
+                verifiedCEOTitle = dm.title || verifiedCEOTitle || 'Owner';
+                console.log(`Brain extracted decision-maker: ${verifiedCEO} (${verifiedCEOTitle}) [${dm.confidence}]`);
+              }
+            }
+          }
 
           // ── SELF-CRITIQUE CALL ─────────────────────────────────────────
           // Second Claude call reviews the first audit's claims against the
