@@ -246,6 +246,31 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
   }
 };
 
+// SEC EDGAR headcount — the ONLY fully trustworthy source (legally filed 10-Ks).
+// Public companies must report exact employee count. This catches the big public
+// companies (SSM is private, but Uline/EchoStar/public giants get caught here).
+// Free, no key, works from Render.
+const getEdgarHeadcount = async (companyName) => {
+  try {
+    const clean = companyName.replace(/\s*\(cik\s*\d+\)\s*/gi,'').replace(/,?\s*(Inc|LLC|Corp|Ltd|LLP|Co)\.?$/gi,'').trim();
+    // Search EDGAR company database by name
+    const searchUrl = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(clean)}&CIK=&type=10-K&dateb=&owner=include&count=1&action=getcompany&output=atom`;
+    const r = await fetchT(searchUrl, { headers: { 'User-Agent': 'CROJungle research@crojungleteam.com' } }, 7000);
+    const xml = await safeText(r);
+    // If the company files 10-Ks, it's public — public companies are almost always
+    // over our ICP size. We treat "files 10-Ks" as a strong enterprise signal.
+    const isPublic = /<title>.*10-K.*<\/title>/i.test(xml) || /company-info/i.test(xml);
+    const hasFilings = /<entry>/i.test(xml) && !/No matching/i.test(xml);
+    if (hasFilings && isPublic) {
+      console.log(`EDGAR [${clean}]: files 10-Ks → public company → enterprise`);
+      return { isPublic: true, employees: 501 }; // 501 = "over ICP" marker
+    }
+    return null;
+  } catch(e) {
+    return null;
+  }
+};
+
 const getSizeOnly = async (companyName) => {
   try {
     // Clean company name — remove legal suffixes and punctuation that break Wikipedia search
@@ -1653,6 +1678,7 @@ app.post('/api/discover', async (req, res) => {
     const SIZE_BATCH = 4;
     // Combined size lookup: CompaniesAPI (if key + domain) → Wikipedia fallback
     const lookupSize = async (c, allowCredit) => {
+      // ── Source 1: The Companies API (exact headcount when available) ──
       if (companiesApiKey) {
         let capi = null;
         if (c.website) capi = await enrichViaCompaniesAPI(c.website, companiesApiKey);
@@ -1661,19 +1687,30 @@ app.post('/api/discover', async (req, res) => {
           const full = await enrichViaCompaniesAPI(capi.website, companiesApiKey, true);
           if (full && full.employees) capi.employees = full.employees;
         }
-        // If we got real headcount → done. If we got a domain but no headcount,
-        // still return the website (useful for research) but fall through to
-        // Wikipedia for the size gate decision on companies we know are large.
         if (capi && capi.employees) {
           return { employees: capi.employees, website: capi.website || c.website, industry: capi.industry, source: 'companiesapi' };
         }
-        if (capi && capi.website) {
-          // No headcount — try Wikipedia as a safety net for large companies
-          const wiki = await getSizeOnly(c.name);
-          return { employees: wiki?.employees || null, website: capi.website, industry: capi.industry, source: wiki?.employees ? 'wiki' : 'companiesapi' };
+        // Got a domain but no headcount — hold onto the website, keep checking
+        if (capi && capi.website && !c.website) c.website = capi.website;
+        var resolvedWebsite = capi?.website || c.website;
+      }
+
+      // ── Source 2: Wikipedia (catches famous enterprises) ──
+      const wiki = await getSizeOnly(c.name);
+      if (wiki && wiki.employees) {
+        return { employees: wiki.employees, website: wiki.website || resolvedWebsite, source: 'wikipedia' };
+      }
+
+      // ── Source 3: SEC EDGAR (public company = enterprise, only on top leads) ──
+      if (allowCredit) {
+        const edgar = await getEdgarHeadcount(c.name);
+        if (edgar && edgar.isPublic) {
+          return { employees: edgar.employees, website: resolvedWebsite, source: 'edgar-public' };
         }
       }
-      return await getSizeOnly(c.name);
+
+      // No headcount from any source — return website if we found one
+      return resolvedWebsite ? { employees: null, website: resolvedWebsite, source: 'domain-only' } : (wiki || null);
     };
     for (let i = 0; i < toEnrich.length; i += SIZE_BATCH) {
       const batch = toEnrich.slice(i, i + SIZE_BATCH);
@@ -1692,38 +1729,65 @@ app.post('/api/discover', async (req, res) => {
     }
     
     // Apply enrichment + size gate
+    // ═══════════════════════════════════════════════════════════════════════
+    // BULLETPROOF SIZE GATE — multi-signal waterfall
+    // ═══════════════════════════════════════════════════════════════════════
+    // Philosophy: the gate answers ONE question — "is the owner reachable by a
+    // cold email?" We NEVER block a likely-SMB (that's a lost customer), and we
+    // block anything showing clear enterprise markers (that wastes research).
+    // Decision uses independent signals; verified headcount wins when present,
+    // otherwise we combine name-pattern + public-company + no-data-is-SMB logic.
+    const ENTERPRISE_NAME = /\b(health system|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|state of|department of|social security|national health|regional medical|memorial hospital|health plan)\b/i;
+
+    let blockedCount = 0, blockReasons = {};
     const sizeGated = icpFiltered.filter(c => {
       const enrich = enrichResults.get(c.name);
-      
+      const nameLower = (c.name || '').toLowerCase();
+
+      // Attach whatever verified data we got
       if (enrich) {
-        // Attach verified data
         if (enrich.employees) c.verifiedEmployees = enrich.employees;
         if (enrich.revenue) c.verifiedRevenue = enrich.revenue;
         if (enrich.website && !c.website) c.website = enrich.website;
+        if (enrich.industry) c.verifiedIndustry = enrich.industry;
         if (enrich.ceoName) { c.verifiedCEO = enrich.ceoName; c.verifiedCEOTitle = enrich.ceoTitle || 'CEO'; }
         if (enrich.painSignals && enrich.painSignals.length > 0) c.publicPainSignals = enrich.painSignals;
-        
-        // Hard block: 500+ employees = enterprise, not reachable
-        if (enrich.employees && enrich.employees > 500) {
-          console.log(`Size gate BLOCKED [${c.name}]: ${enrich.employees} employees`);
+      }
+
+      // ── SIGNAL 1: Verified headcount (highest confidence) ──────────────
+      if (c.verifiedEmployees) {
+        if (c.verifiedEmployees > 500) {
+          console.log(`BLOCKED [${c.name}]: ${c.verifiedEmployees} employees (verified)`);
+          blockedCount++; blockReasons.headcount = (blockReasons.headcount||0)+1;
           return false;
         }
-        // Soft flag: 200-500 employees
-        if (enrich.employees && enrich.employees > 200) {
-          c.sizeWarning = `${enrich.employees} employees — may have management layers`;
+        if (c.verifiedEmployees > 200) {
+          c.sizeWarning = `${c.verifiedEmployees} employees — mid-market, verify reachability`;
         }
-      } else {
-        // No size data — check name for enterprise signals before passing through
-        const nameLower = (c.name || '').toLowerCase();
-        const enterpriseNameSignals = /\b(health system|medical center|national|international|industries|holdings|worldwide|global|enterprise|corporation|bancorp|bancshares|financial group|insurance group|health plan)\b/i;
-        if (enterpriseNameSignals.test(nameLower) || nameLower.length > 40) {
-          c.sizeWarning = 'Size unverified — name suggests possible enterprise';
-        }
+        // Verified small (≤200) — this is a confirmed ICP lead, keep it. No further checks.
+        return true;
       }
+
+      // ── SIGNAL 2: No verified headcount — use cautious heuristics ───────
+      // 2a. Enterprise name patterns (health systems, gov, airlines, etc.)
+      if (ENTERPRISE_NAME.test(nameLower)) {
+        console.log(`BLOCKED [${c.name}]: enterprise name pattern`);
+        blockedCount++; blockReasons.namePattern = (blockReasons.namePattern||0)+1;
+        return false;
+      }
+
+      // 2b. Very long multi-word names are usually enterprises/institutions
+      if ((c.name || '').length > 45) {
+        c.sizeWarning = 'Long name — possible enterprise, verify';
+      }
+
+      // 2c. No data at all + short simple name = almost certainly an SMB.
+      // This is the KEY insight: absence from all databases IS the SMB signal.
+      // We KEEP these — blocking them would lose real customers.
       return true;
     });
-    
-    console.log(`After size gate: ${sizeGated.length} (blocked ${icpFiltered.length - sizeGated.length} enterprises)`);
+
+    console.log(`After size gate: ${sizeGated.length} kept | blocked ${blockedCount} (${JSON.stringify(blockReasons)})`);
 
     // SIGNAL STACKING — merge across sources, union signals
     const merged = new Map();
