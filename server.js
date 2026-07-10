@@ -199,26 +199,28 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
     const candidates = d?.companies || [];
     if (candidates.length === 0) {
       if (d?.message || d?.error) console.log(`CompaniesAPI name [${cleanName}]: "${d.message || d.error}"`);
-      else console.log(`CompaniesAPI name [${cleanName}]: raw keys = ${JSON.stringify(Object.keys(d||{}))}`);
       return null;
     }
-    // ONE-TIME DEBUG: dump the shape of the first candidate so we can see field names
-    if (!global.__capiDumped) {
-      global.__capiDumped = true;
-      console.log('CompaniesAPI RAW SAMPLE:', JSON.stringify(candidates[0]).slice(0, 800));
-    }
 
-    // STRICT MATCH — the returned company name must share significant words with our query.
-    // Prevents "Hertz" → "hertzaustralia" or "United" → scam domains.
-    const queryWords = cleanName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w => w.length > 2);
+    // STRICT MATCH — prevents "United Airlines" → unitedairway.xyz or "Yembo" → yembolkitchen
+    const queryWords = cleanName.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w => w.length > 3);
     const best = candidates.find(c => {
-      const capiName = (c.about?.name || '').toLowerCase();
-      const capiDomain = (c.domain?.domain || '').toLowerCase();
-      // Require at least one significant query word in the returned name or domain
-      return queryWords.some(w => capiName.includes(w) || capiDomain.includes(w));
+      const capiName = (c.about?.name || '').toLowerCase().replace(/[^a-z0-9\s]/g,'');
+      const capiDomain = (c.domain?.domain || '').toLowerCase().split('.')[0]; // base only, no TLD
+      // Name match: at least half of query words must appear in the returned company name
+      const nameWords = capiName.split(/\s+/);
+      const nameMatchCount = queryWords.filter(w => capiName.includes(w)).length;
+      const nameMatch = queryWords.length > 0 && nameMatchCount >= Math.ceil(queryWords.length * 0.6);
+      // Domain match: require the FIRST significant query word to be the START of the domain
+      // (not just a substring). "unitedairway" starts with "united" — but "united" ≠ "unitedairlines"
+      // So we also require the domain to NOT have extra words bolted on
+      const firstWord = queryWords[0] || '';
+      const domainMatch = firstWord.length > 3 && capiDomain === firstWord.slice(0, capiDomain.length) &&
+        capiDomain.length >= firstWord.length * 0.8 && capiDomain.length <= cleanName.replace(/\s/g,'').length * 1.3;
+      return nameMatch || domainMatch;
     });
     if (!best) {
-      console.log(`CompaniesAPI name [${cleanName}]: no confident match (top: ${candidates[0]?.about?.name || '?'})`);
+      console.log(`CompaniesAPI name [${cleanName}]: no confident match`);
       return null;
     }
 
@@ -1651,22 +1653,26 @@ app.post('/api/discover', async (req, res) => {
     const SIZE_BATCH = 4;
     // Combined size lookup: CompaniesAPI (if key + domain) → Wikipedia fallback
     const lookupSize = async (c, allowCredit) => {
-      // CompaniesAPI first — by domain if we have one, else by name
       if (companiesApiKey) {
         let capi = null;
         if (c.website) capi = await enrichViaCompaniesAPI(c.website, companiesApiKey);
         if (!capi || !capi.employees) capi = await searchCompaniesAPIByName(c.name, companiesApiKey);
-        // If we resolved a domain but got no headcount, spend 1 credit for the
-        // real full-profile headcount — but only for top leads (allowCredit).
         if (capi && capi.website && !capi.employees && allowCredit) {
           const full = await enrichViaCompaniesAPI(capi.website, companiesApiKey, true);
           if (full && full.employees) capi.employees = full.employees;
         }
-        if (capi && (capi.employees || capi.website)) {
+        // If we got real headcount → done. If we got a domain but no headcount,
+        // still return the website (useful for research) but fall through to
+        // Wikipedia for the size gate decision on companies we know are large.
+        if (capi && capi.employees) {
           return { employees: capi.employees, website: capi.website || c.website, industry: capi.industry, source: 'companiesapi' };
         }
+        if (capi && capi.website) {
+          // No headcount — try Wikipedia as a safety net for large companies
+          const wiki = await getSizeOnly(c.name);
+          return { employees: wiki?.employees || null, website: capi.website, industry: capi.industry, source: wiki?.employees ? 'wiki' : 'companiesapi' };
+        }
       }
-      // Fallback to Wikipedia (free, no key)
       return await getSizeOnly(c.name);
     };
     for (let i = 0; i < toEnrich.length; i += SIZE_BATCH) {
