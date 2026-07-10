@@ -146,21 +146,20 @@ const enrichViaCompaniesAPI = async (domain, apiKey) => {
   if (!domain || !apiKey) return null;
   try {
     const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-    // Use simplified mode first — it's free
+    // simplified=true is FREE (no credits deducted)
     const url = `https://api.thecompaniesapi.com/v2/companies/${encodeURIComponent(cleanDomain)}?simplified=true`;
     const r = await fetchT(url, {
-      headers: { 'Authorization': `Basic ${Buffer.from(apiKey + ':').toString('base64')}`, 'Accept': 'application/json' }
+      headers: { 'Authorization': `Basic ${apiKey}`, 'Accept': 'application/json' }
     }, 8000);
     const d = await safeJson(r);
     if (!d || !d.about) return null;
 
     const employees = d.about.totalEmployeesExact || null;
-    const empBand = d.about.totalEmployees || null; // e.g. "over-10k", "11-50"
+    const empBand = d.about.totalEmployees || null;
     const industry = d.about.industry || null;
     const founded = d.about.yearFounded || null;
     const name = d.about.name || null;
 
-    // Parse band into a rough number if no exact count
     let estEmployees = employees;
     if (!estEmployees && empBand) {
       const bandMap = {
@@ -176,6 +175,45 @@ const enrichViaCompaniesAPI = async (domain, apiKey) => {
     return { employees: estEmployees, empBand, industry, founded, name, website: 'https://' + cleanDomain };
   } catch(e) {
     console.log('CompaniesAPI failed:', e.message);
+    return null;
+  }
+};
+
+// Name-based lookup — for Find time when we don't have a domain yet.
+// Uses the search endpoint (also free in simplified form).
+const searchCompaniesAPIByName = async (companyName, apiKey) => {
+  if (!companyName || !apiKey) return null;
+  try {
+    const cleanName = companyName.replace(/\s*\(cik\s*\d+\)\s*/gi,'').replace(/,?\s*(Inc|LLC|Corp|Ltd|LLP|Co)\.?$/gi,'').trim();
+    const url = `https://api.thecompaniesapi.com/v2/companies/name?name=${encodeURIComponent(cleanName)}`;
+    const r = await fetchT(url, {
+      headers: { 'Authorization': `Basic ${apiKey}`, 'Accept': 'application/json' }
+    }, 8000);
+    const d = await safeJson(r);
+    // Response has companies array; take best match
+    const company = d?.companies?.[0] || d?.[0] || (d?.about ? d : null);
+    if (!company || !company.about) return null;
+
+    const employees = company.about.totalEmployeesExact || null;
+    const empBand = company.about.totalEmployees || null;
+    let estEmployees = employees;
+    if (!estEmployees && empBand) {
+      const bandMap = { '1-10':5,'11-50':30,'51-200':125,'201-500':350,'501-1k':750,'1k-5k':3000,'5k-10k':7500,'over-10k':15000 };
+      estEmployees = bandMap[empBand] || null;
+    }
+    const domain = company.domain?.domain || null;
+    if (estEmployees || domain) {
+      console.log(`CompaniesAPI name [${cleanName}]: emp=${estEmployees||'?'} band=${empBand||'?'} domain=${domain||'?'}`);
+    }
+    return {
+      employees: estEmployees, empBand,
+      industry: company.about.industry || null,
+      website: domain ? 'https://' + domain : null,
+      name: company.about.name || null,
+      source: 'companiesapi'
+    };
+  } catch(e) {
+    console.log('CompaniesAPI name search failed:', e.message);
     return null;
   }
 };
@@ -986,10 +1024,15 @@ const enrichFromAboutPage = async (website, fcKey, homepageContent) => {
       const m = text.match(pat);
       if (m && m[1] && m[1].length < 40) {
         const name = m[1].trim();
-        // Reject false positives (common words, company terms)
-        if (!/company|corporation|solutions|services|group|industries|systems|about|contact|our team|the team/i.test(name)) {
+        const words = name.split(/\s+/);
+        // Must be 2-3 words, each a proper capitalized name-like token (3+ letters for first/last)
+        const looksLikeName = words.length >= 2 && words.length <= 3 &&
+          /^[A-Z][a-z]{2,}$/.test(words[0]) &&
+          /^[A-Z][a-z]{2,}$/.test(words[words.length - 1]);
+        // Reject company terms and common non-name words
+        const isJunk = /company|corporation|solutions|services|group|industries|systems|about|contact|our team|the team|core|home|welcome|our story|leadership|management team|meet the/i.test(name);
+        if (looksLikeName && !isJunk) {
           result.ceoName = name;
-          // Determine title from surrounding text
           const titleMatch = m[0].match(/founder\s*(?:and|&)\s*CEO|CEO\s*(?:and|&)\s*founder|chief executive officer|co-?founder|founder|owner|president|managing (?:partner|director)|principal/i);
           result.ceoTitle = titleMatch ? titleMatch[0] : 'Owner';
           break;
@@ -1568,11 +1611,13 @@ app.post('/api/discover', async (req, res) => {
     const SIZE_BATCH = 4;
     // Combined size lookup: CompaniesAPI (if key + domain) → Wikipedia fallback
     const lookupSize = async (c) => {
-      // If we have a domain and the CompaniesAPI key, use it first (most accurate)
-      if (companiesApiKey && c.website) {
-        const capi = await enrichViaCompaniesAPI(c.website, companiesApiKey);
-        if (capi && capi.employees) {
-          return { employees: capi.employees, website: capi.website, industry: capi.industry, source: 'companiesapi' };
+      // CompaniesAPI first — by domain if we have one, else by name
+      if (companiesApiKey) {
+        let capi = null;
+        if (c.website) capi = await enrichViaCompaniesAPI(c.website, companiesApiKey);
+        if (!capi || !capi.employees) capi = await searchCompaniesAPIByName(c.name, companiesApiKey);
+        if (capi && (capi.employees || capi.website)) {
+          return { employees: capi.employees, website: capi.website || c.website, industry: capi.industry, source: 'companiesapi' };
         }
       }
       // Fallback to Wikipedia (free, no key)
@@ -2598,8 +2643,25 @@ Return ONLY valid JSON:
 
             const cd = await critiqueRes.json();
             const cText = cd.content?.[0]?.text || '';
-            const cClean = cText.replace(/```json|```/g, '').trim();
-            const critique = JSON.parse(cClean);
+            let cClean = cText.replace(/```json|```/g, '').trim();
+            // Extract just the JSON object if there's trailing text
+            const firstBrace = cClean.indexOf('{');
+            const lastBrace = cClean.lastIndexOf('}');
+            if (firstBrace >= 0 && lastBrace > firstBrace) {
+              cClean = cClean.slice(firstBrace, lastBrace + 1);
+            }
+            let critique;
+            try {
+              critique = JSON.parse(cClean);
+            } catch(parseErr) {
+              // Repair truncated JSON
+              let repaired = cClean;
+              if ((repaired.match(/"/g)||[]).length % 2 !== 0) repaired += '"';
+              const opens = (repaired.match(/\{/g)||[]).length;
+              const closes = (repaired.match(/\}/g)||[]).length;
+              if (opens > closes) repaired += '}'.repeat(opens - closes);
+              critique = JSON.parse(repaired);
+            }
             brainAudit.critique = {
               verifiedClaims: critique.verifiedClaims || [],
               flaggedClaims: critique.flaggedClaims || [],
