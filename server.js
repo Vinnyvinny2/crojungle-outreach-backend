@@ -1751,6 +1751,22 @@ app.post('/api/discover', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════
     // BULLETPROOF SIZE GATE — multi-signal waterfall
     // ═══════════════════════════════════════════════════════════════════════
+    // RECONCILING THE CEO'S ICPs WITH COLD-EMAIL REACHABILITY:
+    // The CEO defined four client profiles CROJungle can SERVE profitably —
+    // including retainer-marketing clients OVER $50M revenue with no upper limit,
+    // and website clients up to $500M. Those are real, valuable clients.
+    // BUT they are not cold-email-reachable: at that size there is no founder
+    // reading their own inbox, and the buyer sits behind procurement and VP layers.
+    // Those companies are won through Mike's network and referrals.
+    //
+    // THIS SYSTEM targets the cold-reachable slice — which maps almost exactly to
+    // the CEO's ICP #4: $1.5M-$50M revenue, hiring, poor digital presence, stagnant
+    // or bloated. That is roughly 10-200 employees. Plus the small end of the
+    // software lane (high headcount-to-revenue, hiring people to do software work).
+    //
+    // So: block >500 (unreachable), flag 200-500 (fuzzy edge, verify), keep <=200
+    // (confirmed cold-reachable ICP), and keep no-data (absence = SMB = our people).
+    // ═══════════════════════════════════════════════════════════════════════
     // Philosophy: the gate answers ONE question — "is the owner reachable by a
     // cold email?" We NEVER block a likely-SMB (that's a lost customer), and we
     // block anything showing clear enterprise markers (that wastes research).
@@ -1997,6 +2013,18 @@ app.post('/api/discover', async (req, res) => {
         if (roleCount >= 5 && catCount >= 3) internalStack = 25;       // heavy manual-labor load
         else if (roleCount >= 3 && catCount >= 2) internalStack = 15;  // meaningful load
         else if (roleCount >= 2) internalStack = 8;                    // some load
+
+        // ═══ CEO's SOFTWARE-BUYER SIGNAL ═══════════════════════════════════
+        // The CEO's ICP #2 is explicitly: "grown rapidly then stagnated, high ratio
+        // of employee count to revenue, looking to hire people to do things software
+        // can do." A SMALL company hiring MANY manual roles is exactly that profile —
+        // they are solving a scaling problem with headcount instead of software.
+        // This is a sharper signal than heavy hiring alone, and it is the highest-
+        // ticket product ($25k-$75k+). Reward the combination.
+        if (c.verifiedEmployees && c.verifiedEmployees <= 200 && roleCount >= 3) {
+          internalStack += 15;
+          c.softwareBuyerSignal = `${roleCount} manual roles open at a ~${c.verifiedEmployees}-person company — solving scale with headcount instead of software`;
+        }
         const stackBonus = Math.max(combo ? combo.boost : 0, srcBonus, internalStack);
         const stacked = srcN >= 2 || (combo && combo.tier !== 'B') || internalStack >= 15;
         const reach = scoreReachability(c);
@@ -2427,6 +2455,63 @@ app.post('/api/research', async (req, res) => {
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
         }
 
+        // ═══ ICP LANE CLASSIFIER — maps to the CEO's four real client profiles ═══
+        // The CEO defined who CROJungle can SERVE. Our size gate defines who cold
+        // email can REACH. This classifier finds the overlap and tells the Brain
+        // which lane this company is in — which drives product + proof point choice.
+        const icpLane = (() => {
+          const emp = verifiedEmployees || 0;
+          const roles = manualRoleCount || 0;
+          const siteYear = builtWith.copyrightYear || null;
+          const staleSite = siteYear && siteYear < 2021;
+          const adSpendSignal = (fbAds.adCount || 0) > 0;
+          const lanes = [];
+
+          // LANE 2 (software): grown fast then stagnated, high headcount:revenue ratio,
+          // hiring people to do what software can do. Our Adzuna manual-role signal IS this.
+          if (roles >= 2) {
+            lanes.push({
+              lane: 'SOFTWARE',
+              why: `${roles} manual/repetitive roles open — hiring people to do what software can do. This is the "high employee-count-to-revenue ratio" profile.`,
+              product: 'Custom AI Software Build',
+              proofPoint: 'seasonal-business (relief + profit) or Kraft Heinz (if larger/more technical)',
+            });
+          }
+
+          // LANE 1 (high-end website): site built pre-2021, poor digital presence, no AI
+          if (staleSite || (builtWith.hasMetaDesc === false && builtWith.hasH1 === false)) {
+            lanes.push({
+              lane: 'WEBSITE_REBUILD',
+              why: staleSite
+                ? `Site copyright reads ${siteYear} — the digital footprint predates 2021 and is decaying.`
+                : 'Site is missing fundamental on-page structure (no meta description, no H1) — a decayed digital presence.',
+              product: 'Website Rebuild',
+              proofPoint: 'University of Canada West (digital decay → working recruitment tool)',
+            });
+          }
+
+          // LANE 4 (retainer marketing, SMB): $1.5M-$50M, hiring marketing, poor digital, stagnant
+          if (adSpendSignal) {
+            lanes.push({
+              lane: 'RETAINER_MARKETING',
+              why: `${fbAds.adCount} active paid ads confirmed — real budget flowing into a funnel we can audit.`,
+              product: 'End-to-End Marketing / Ads Management',
+              proofPoint: 'Sean ($140k on $4k in one month, ~30x over 8 months)',
+            });
+          }
+
+          if (lanes.length === 0) {
+            return {
+              summary: 'No strong lane signal — audit from the site alone and pick the sharpest confirmed problem.',
+              lanes: [],
+            };
+          }
+          return {
+            summary: lanes.map(l => `[${l.lane}] ${l.why} → likely product: ${l.product}. Best-parallel proof point: ${l.proofPoint}.`).join('\n'),
+            lanes,
+          };
+        })();
+
         const homepageSnippet = trustedContent.slice(0, 4000);
 
         msgContent.push({
@@ -2440,6 +2525,12 @@ VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle 
 PUBLIC PAIN SIGNALS (from reviews/complaints search): ${publicPainSignals.length > 0 ? '\n' + publicPainSignals.map(p => '- ' + p).join('\n') + '\n→ These are real public complaints — WEAVE THEM into the pitch. This is the "we noticed X" hook.' : 'None found in public search — pitch from site audit only'}
 RECENT NEWS TRIGGERS (verified to be about THIS company via Google News): ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago] ${t.headline}`).join('\n') + '\n→ These are CONFIRMED recent events about this exact company. Use the most relevant ONE as the pitch cold-open ("I saw you just..."). This is the strongest personalization signal — it proves we did our homework. Only reference a trigger that genuinely connects to the pain/product.' : 'No recent company-specific news found — do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
+
+ICP LANE (which of CROJungle's real client profiles this company matches — drives product choice AND which proof point parallels their situation):
+${icpLane.summary}
+
+REACHABILITY REALITY (important context for the pitch, not a reason to soften it):
+This company is being contacted COLD. That means the pitch has to earn a conversation from someone who has never heard of us. CROJungle also serves much larger companies ($50M-$500M) — but those are won through Mike's network and referrals, not cold email, because there is no reachable founder at that size. This prospect is in the cold-reachable lane: the owner or a senior operator still reads their own email and still feels the fire personally. Pitch to THAT person — someone who is close enough to the problem to recognize it instantly when you name it.
 
 HOMEPAGE CONTENT (scraped):
 ${homepageSnippet || 'Not available'}
@@ -2509,6 +2600,39 @@ Then answer:
 - What is the ONE thing a founder would be embarrassed about if you pointed it out?
 - Which CROJungle offering fixes it and why?
 
+═══ WHO CROJUNGLE ACTUALLY IS (this governs the voice of every pitch) ═══
+CROJungle is led by Mike Taft and Muhammad Junaid. Mike is a faith-led entrepreneur whose career runs through government contracting, private technology, Wall Street investing, and building companies from the ground up. Mike is the tip of the spear: he meets a leader on the specific things keeping them from their goals, and uses CROJ as the production engine — custom software, AI integration, marketing — to bring cost down and profit up.
+
+THE CORE INSIGHT THAT SELLS (use this framing, it is the sharpest thing we have):
+Most executives and owners are trapped in a cycle — performing at a high level themselves while constantly putting out fires in areas they already handed to someone else. There is never a good time to stop and fix it. The only two options are to live in the cycle longer, or bring in someone who can do what you would do yourself if you weren't stuck in it. CROJ is the door out of that cycle. When a pitch can credibly name the fire the owner is stuck putting out, THAT is the emotional hook — not the tactic.
+
+WHAT WE ARE (positioning — do not soften this):
+A $5,000/month agency executes a marketing function. CROJ determines what is actually preventing growth, then assembles the strategy, marketing, technology, software, and operational solution to fix it. The difference is not more deliverables — it is the ability to solve a larger and more consequential class of business problem. We are, more accurately, a revenue-metrics special ops team that happens to sit under the marketing category.
+A $5k agency conversation sounds like: "run ads, get leads."
+A CROJ conversation sounds like: "revenue dipped across these three product lines — diagnose why, build the plan, implement it, optimized for max sales in a 12-month window."
+We are also structurally built for scale a small shop cannot touch: optimized for $20k+/month ad spend, capable up to $5M+/month.
+
+REAL PROOF POINTS (use ONE, only where it genuinely parallels this prospect's situation — never stack them, never stretch them):
+- Small business (Sean): $140k returned on a $4k investment in a single month; ~30x average ROI over 8 months.
+- Small business, seasonal/high-margin, $1M topline: +$65k revenue in 3 months; on track for +$130k net profit year one and +$400k more by end of year two. Critically, that $65k offset their off-season losses for the first time in company history — the owner got a stress-free off-season for the first time ever. (This is the best proof point for an owner-operator: it is about relief, not just revenue.)
+- Enterprise (Kraft Heinz): end-to-end research, product planning, and implementation of a mobile app — 500k+ downloads.
+- Enterprise (University of Canada West): rebuilt a decayed 70,000-page digital footprint into a consolidated ~250-page site with custom CMS — turned digital decay into a working recruitment and donor tool.
+
+HOW MIKE WANTS TO BE PITCHED (mirror this — it is exactly how the prospect wants to be treated):
+1. Listened to first. Their scenario, their goals, their definition of success — before any prescription.
+2. Shown this is familiar territory and well-handled here. Precedent, not promises.
+3. Given a precise plan, a clear price, and the confidence that proceeding is easy.
+A cold email cannot do step 1 — so the email must EARN step 1 by proving we already looked closely. That is what the audit is for. The email shows the work, then asks for the conversation. It never prescribes before listening.
+
+WHAT THE CTA IS (never invent a different one):
+A reply leads to a short qualifying/listening call with an SDR, then a direct meeting with Mike. So the ask is small and conversational — a short call to walk through what we found and hear their side. NOT "book a demo," NOT "let's get you a proposal."
+
+VOICE RULES:
+- Confident and specific, never salesy or hypey. Mike would rather refer someone elsewhere than pretend to be a cheap ad shop.
+- Lead with the diagnosis, not the service. The service is the answer to a question they haven't been asked yet.
+- Name the fire they are stuck putting out. That is the line that gets the reply.
+- No flattery, no "I hope this finds you well," no fake personalization. The proof-of-work IS the personalization.
+
 CROJungle offerings (full-service — can combine):
 - Website Rebuild ($10k-$25k): homepage conversion failures, weak positioning, no CTA
 - Landing Page ($5k-$15k): running ads to homepage, no dedicated conversion page
@@ -2548,7 +2672,7 @@ Return ONLY valid JSON, no markdown:
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + broken funnel (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
-  "pitchAngle": "STRICT RULES: (1) Pick the ONE most expensive confirmed pain — never chain two or three pains into one sentence. (2) 35 words maximum. (3) No hedging ('what looks like', 'appears to') — if it is not confirmed, it does not go in the pitch. (4) MATCH THE VOCABULARY TO THE READER: exit-prep or just-funded or pre-IPO reader → unit economics language IS the sharpest weapon (margin, multiple, valuation, EBITDA) — use it confidently. Owner-operator (trucking, clinics, local services) → plain dollars and salaries, zero finance vocabulary. (5) Lead with the money, end with a short curiosity question. GOOD (owner-operator): 'You're paying four salaries to manually do work software could handle overnight — want to see the math?' GOOD (exit-prep): 'Every dollar of manual labor cost you cut before the sale multiplies straight into your asking price — want to see what's automatable?'"
+  "pitchAngle": "The one line that earns a reply. STRICT RULES: (1) ONE confirmed pain only — never chain several. (2) 40 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
 }`
         });
 
@@ -2770,6 +2894,8 @@ WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
 
 WHAT TO FLAG:
 - ICP MISMATCH: If verified headcount is over 500, flag this loudly — this company is NOT our ICP (too large, owner unreachable). The audit should not be sent.
+- VOICE FAILURE (flag this — it is as damaging as a factual error): CROJungle's pitch must sound like Mike Taft, not like a generic AI audit tool. Flag the pitch if it: (a) reads like a template or a marketing agency blast, (b) leads with a service instead of a diagnosis, (c) uses flattery or filler ("hope this finds you well", "I was really impressed by"), (d) asks for a demo or a proposal instead of a short conversational call, (e) fails to name the actual fire this owner is stuck putting out, or (f) stacks multiple pains instead of landing one. The strongest CROJ pitch makes the owner feel SEEN — it names the specific fire they have been living with — and then asks for a short call. If the pitch would not make a founder stop and think "how do they know that", say so.
+- PROOF-POINT MISUSE: If a client result is cited, it must genuinely parallel this prospect's situation. Citing Kraft Heinz to a 15-person trucking company is a mismatch. Citing the $1M seasonal business (off-season relief) to an owner-operator is a strong parallel. Flag any stretched or irrelevant proof point.
 - Dollar figures stated as facts without an estimate label.
 - Claims about what competitors are doing (we have no competitor data).
 - Claims about internal company data (revenue, headcount, margins) unless from a confirmed source.
@@ -3160,6 +3286,114 @@ Return ONLY valid JSON:
 app.listen(PORT, () => console.log(`CROJungle v6 — port ${PORT}`));
 
 // ── DIAGNOSTICS — tests all sources at once ───────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// LINKEDIN CONTENT MACHINE — draft posts from REAL aggregate audit data
+// ═══════════════════════════════════════════════════════════════════════════
+// The machine writes the draft. Mike reviews and edits before every post — this
+// endpoint NEVER posts anything itself, it only produces drafts for human review.
+// GROUNDING RULE: every number in every draft must trace back to a real researched
+// lead passed in. No invented statistics, no rounding up, no "many companies" when
+// the actual count is 4. If the batch doesn't support a claim, the draft says less,
+// not more.
+app.post('/api/linkedin-drafts', async (req, res) => {
+  const { leads, apiKey } = req.body;
+  if (!Array.isArray(leads) || leads.length === 0) {
+    return res.status(400).json({ error: 'leads array required — pass already-researched leads from the pipeline' });
+  }
+  if (!apiKey) return res.status(400).json({ error: 'Anthropic apiKey required' });
+
+  try {
+    // ── Build the real aggregate from actual researched leads (no fabrication) ──
+    const researched = leads.filter(l => l.brainAudit && !l.brainAudit.icpBlocked);
+    if (researched.length === 0) {
+      return res.json({ drafts: [], note: 'No researched, non-blocked leads in this batch — nothing to aggregate.' });
+    }
+
+    const flawCounts = {};
+    const productCounts = {};
+    const industryCounts = {};
+    let totalAdSpendLeads = 0, totalManualLaborLeads = 0, totalStaleSiteLeads = 0;
+    const realExamples = [];
+
+    researched.forEach(l => {
+      (l.flaws || []).forEach(f => { flawCounts[f] = (flawCounts[f]||0) + 1; });
+      const prod = l.brainAudit?.recommendedProduct;
+      if (prod) productCounts[prod] = (productCounts[prod]||0) + 1;
+      if (l.verifiedIndustry) industryCounts[l.verifiedIndustry] = (industryCounts[l.verifiedIndustry]||0) + 1;
+      if ((l.brainAudit?.enrichment?.adCount || 0) > 0) totalAdSpendLeads++;
+      if ((l.manualRoleCount || 0) >= 2) totalManualLaborLeads++;
+      if (l.flaws?.includes('stale_site')) totalStaleSiteLeads++;
+      if (l.brainAudit?.realPain) {
+        realExamples.push({ industry: l.verifiedIndustry || 'unknown', pain: l.brainAudit.realPain, savingsEst: l.brainAudit.savingsEstimate });
+      }
+    });
+
+    const aggregateSummary = `
+BATCH SIZE: ${researched.length} real companies audited (this is the ONLY count you may cite — never round up or say "dozens" if it's fewer)
+FLAW FREQUENCY (real counts, only cite if count >= 3): ${JSON.stringify(flawCounts)}
+PRODUCT RECOMMENDATIONS (real counts): ${JSON.stringify(productCounts)}
+INDUSTRIES REPRESENTED: ${JSON.stringify(industryCounts)}
+Companies with confirmed active ad spend: ${totalAdSpendLeads} of ${researched.length}
+Companies with 2+ manual-labor roles open: ${totalManualLaborLeads} of ${researched.length}
+Companies with a stale/pre-2021 site: ${totalStaleSiteLeads} of ${researched.length}
+
+REAL EXAMPLE FINDINGS (anonymized — do not use company names, describe by industry/size only):
+${realExamples.slice(0, 8).map((e,i) => `${i+1}. [${e.industry}] ${e.pain}`).join('\n')}
+`.trim();
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2500,
+        messages: [{
+          role: 'user',
+          content: `You are drafting LinkedIn posts for Mike Taft, CEO of CROJungle — a growth partner for founder-led businesses ($1.5M-$50M revenue). Mike's background: government contracting, Wall Street, private technology, building companies from the ground up. His core insight: owners get trapped performing at a high level while constantly firefighting in areas they already delegated — there's never a good time to stop and fix it. CROJ is the door out of that cycle.
+
+These are DRAFTS ONLY — Mike will review, edit, and post them himself, so write in a voice he can quickly make his own, not a finished polished piece.
+
+REAL DATA FROM THIS WEEK'S AUDITS (the ONLY facts you may use — do not invent, round up, or generalize beyond what's here):
+${aggregateSummary}
+
+RULES:
+1. Every number in the post must come directly from the data above. If the batch is small (e.g. "4 of 12 companies"), say the real number — small honest numbers build more credibility than vague "many companies" claims.
+2. NEVER name a specific company — describe by industry/size/situation only ("a regional trucking company", "a $2M home services business").
+3. Voice: direct, operator-to-operator, no marketing language, no hashtag spam, no "I'm excited to announce". Mike would rather sound like he's talking to one specific founder than broadcasting to a feed.
+4. Lead with the diagnosis/insight, not a sales pitch. The post should make a founder reading it think "that's literally my problem" — it should NOT mention CROJungle by name or pitch services; save that for a soft one-line close at most.
+5. Length: 80-150 words. LinkedIn rewards short, scannable posts with white space, not paragraphs.
+6. Produce exactly 3 DIFFERENT angles on the same real data — not 3 versions of the same post.
+
+Return ONLY valid JSON, no markdown:
+{
+  "drafts": [
+    {"angle": "short label like 'the labor-cost insight'", "post": "the full draft text", "groundedIn": "one sentence citing which specific data point this post is built from"},
+    {"angle": "...", "post": "...", "groundedIn": "..."},
+    {"angle": "...", "post": "...", "groundedIn": "..."}
+  ]
+}`
+        }]
+      }),
+    }, 30000);
+
+    const data = await r.json();
+    const text = data.content?.[0]?.text || '';
+    let clean = text.replace(/```json|```/g, '').trim();
+    const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) clean = clean.slice(fb, lb + 1);
+
+    let parsed;
+    try { parsed = JSON.parse(clean); }
+    catch(e) { return res.status(502).json({ error: 'Draft generation returned invalid JSON', raw: clean.slice(0, 500) }); }
+
+    console.log(`LinkedIn drafts: ${(parsed.drafts||[]).length} generated from ${researched.length} real audits`);
+    res.json({ drafts: parsed.drafts || [], batchSize: researched.length, aggregateSummary });
+  } catch(e) {
+    console.log('LinkedIn draft generation failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/diagnostics', async (req, res) => {
   const { keys } = req.body;
   const { adzunaId, adzunaKey, indeedKey, crunchbaseKey, hunterKey, firecrawlKey } = keys || {};
