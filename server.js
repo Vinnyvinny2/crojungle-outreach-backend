@@ -3303,6 +3303,49 @@ app.listen(PORT, () => console.log(`CROJungle v6 — port ${PORT}`));
 // then add it to the sequence by ID. Free — no premium plan required.
 // Hunter processes one contact per call (no native bulk endpoint), so we chunk
 // gently with a small delay between calls to stay well within rate limits.
+// Ensures a Hunter custom attribute exists with this label, returns its slug.
+// Custom attributes must exist BEFORE a lead can carry a value for them — this
+// creates it once (idempotent: if it already exists, Hunter's list tells us the
+// slug instead of erroring).
+const ensureHunterAttribute = async (hunterKey, label) => {
+  try {
+    const listRes = await fetchT(`https://api.hunter.io/v2/leads_custom_attributes`, {
+      headers: { 'Authorization': `Bearer ${hunterKey}` },
+    }, 8000);
+    const listData = await safeJson(listRes);
+    const existing = (listData?.data?.leads_custom_attributes || []).find(a => a.label === label);
+    if (existing) return existing.slug;
+
+    const createRes = await fetchT(`https://api.hunter.io/v2/leads_custom_attributes`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${hunterKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    }, 8000);
+    const createData = await safeJson(createRes);
+    return createData?.data?.slug || null;
+  } catch(e) {
+    console.log(`ensureHunterAttribute(${label}) failed:`, e.message);
+    return null;
+  }
+};
+
+// List the user's Hunter sequences so they can find the correct Sequence ID.
+// Hunter's API still calls sequences "campaigns" under the hood.
+app.get('/api/hunter-sequences', async (req, res) => {
+  const hunterKey = req.query.key;
+  if (!hunterKey) return res.status(400).json({ error: 'key required' });
+  try {
+    const r = await fetchT(`https://api.hunter.io/v2/campaigns?api_key=${encodeURIComponent(hunterKey)}`, {}, 10000);
+    const d = await safeJson(r);
+    if (!r.ok) return res.status(r.status).json({ error: 'Hunter returned ' + r.status, raw: d });
+    const seqs = (d?.data?.campaigns || d?.data || []).map(c => ({ id: c.id, name: c.name, status: c.status }));
+    console.log(`Hunter sequences: found ${seqs.length}`);
+    res.json({ sequences: seqs });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/send-to-hunter', async (req, res) => {
   const { leads, sequenceId, hunterKey } = req.body;
   if (!Array.isArray(leads) || leads.length === 0) return res.status(400).json({ error: 'leads array required' });
@@ -3311,17 +3354,28 @@ app.post('/api/send-to-hunter', async (req, res) => {
 
   const results = { sent: [], failed: [] };
 
+  // ═══ One-time setup: make sure the custom attributes exist ═══════════════
+  // These slugs are what you insert into your Hunter sequence's email content
+  // via the { } "Insert attribute" button — that's what makes the personalized
+  // pitch actually appear in the sent email instead of a generic template.
+  const pitchSlug = await ensureHunterAttribute(hunterKey, 'Pitch Body');
+  const subjectSlug = await ensureHunterAttribute(hunterKey, 'Pitch Subject');
+  const angleSlug = await ensureHunterAttribute(hunterKey, 'Pitch Angle');
+
   for (const lead of leads) {
     if (!lead.email) { results.failed.push({ name: lead.name, reason: 'no email' }); continue; }
     const fullName = (lead.founderName || lead.verifiedCEO || '').trim();
     const parts = fullName.split(/\s+/);
     try {
-      // Step 1: save the lead in Hunter with the personalized content as notes
-      // (Hunter sequences pull subject/body from the sequence template + merge
-      // tags, so we store the specific pitch in notes for reference / manual
-      // paste into the sequence's custom fields if using variable personalization)
+      const customAttrs = {};
+      if (pitchSlug) customAttrs[pitchSlug] = (lead.pitch || '').slice(0, 5000);
+      if (subjectSlug) customAttrs[subjectSlug] = lead.subject || '';
+      if (angleSlug) customAttrs[angleSlug] = lead.brainAudit?.pitchAngle || '';
+
+      // Upsert (create-or-update by email) — avoids duplicate-email errors if
+      // this lead was already saved in Hunter from an earlier find/enrich step.
       const leadRes = await fetchT('https://api.hunter.io/v2/leads', {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Authorization': `Bearer ${hunterKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: lead.email,
@@ -3329,7 +3383,7 @@ app.post('/api/send-to-hunter', async (req, res) => {
           last_name: parts.slice(1).join(' ') || undefined,
           company: lead.name || undefined,
           website: lead.website || undefined,
-          notes: `PITCH ANGLE: ${lead.brainAudit?.pitchAngle || ''}\n\nFULL BODY:\n${lead.pitch || ''}`.slice(0, 3000),
+          custom_attributes: customAttrs,
         }),
       }, 10000);
       const leadData = await safeJson(leadRes);
@@ -3337,9 +3391,9 @@ app.post('/api/send-to-hunter', async (req, res) => {
         results.failed.push({ name: lead.name, email: lead.email, reason: `Lead save failed: HTTP ${leadRes.status}` });
         continue;
       }
-      const leadId = leadData?.data?.id || leadData?.id;
+      const leadId = leadData?.data?.id;
 
-      // Step 2: add the saved lead to the sequence so it enters the send queue
+      // Add the saved lead to the sequence so it enters the send queue
       const addRes = await fetchT(`https://api.hunter.io/v2/campaigns/${sequenceId}/recipients`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${hunterKey}`, 'Content-Type': 'application/json' },
@@ -3359,7 +3413,7 @@ app.post('/api/send-to-hunter', async (req, res) => {
   }
 
   console.log(`Hunter send: ${results.sent.length} sent, ${results.failed.length} failed`);
-  res.json(results);
+  res.json({ ...results, attributeSlugs: { pitchSlug, subjectSlug, angleSlug } });
 });
 
 app.post('/api/linkedin-drafts', async (req, res) => {
