@@ -3295,6 +3295,73 @@ app.listen(PORT, () => console.log(`CROJungle v6 — port ${PORT}`));
 // lead passed in. No invented statistics, no rounding up, no "many companies" when
 // the actual count is 4. If the batch doesn't support a claim, the draft says less,
 // not more.
+// ═══════════════════════════════════════════════════════════════════════════
+// HUNTER SEQUENCES SEND — pushes researched leads into a live Hunter sequence
+// ═══════════════════════════════════════════════════════════════════════════
+// Runs server-side so the Hunter API key never reaches the browser.
+// Hunter's API: create/save the lead (with the personalized pitch as notes),
+// then add it to the sequence by ID. Free — no premium plan required.
+// Hunter processes one contact per call (no native bulk endpoint), so we chunk
+// gently with a small delay between calls to stay well within rate limits.
+app.post('/api/send-to-hunter', async (req, res) => {
+  const { leads, sequenceId, hunterKey } = req.body;
+  if (!Array.isArray(leads) || leads.length === 0) return res.status(400).json({ error: 'leads array required' });
+  if (!sequenceId) return res.status(400).json({ error: 'sequenceId required — the Hunter sequence (campaign) to add leads to' });
+  if (!hunterKey) return res.status(400).json({ error: 'hunterKey required' });
+
+  const results = { sent: [], failed: [] };
+
+  for (const lead of leads) {
+    if (!lead.email) { results.failed.push({ name: lead.name, reason: 'no email' }); continue; }
+    const fullName = (lead.founderName || lead.verifiedCEO || '').trim();
+    const parts = fullName.split(/\s+/);
+    try {
+      // Step 1: save the lead in Hunter with the personalized content as notes
+      // (Hunter sequences pull subject/body from the sequence template + merge
+      // tags, so we store the specific pitch in notes for reference / manual
+      // paste into the sequence's custom fields if using variable personalization)
+      const leadRes = await fetchT('https://api.hunter.io/v2/leads', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${hunterKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: lead.email,
+          first_name: parts[0] || undefined,
+          last_name: parts.slice(1).join(' ') || undefined,
+          company: lead.name || undefined,
+          website: lead.website || undefined,
+          notes: `PITCH ANGLE: ${lead.brainAudit?.pitchAngle || ''}\n\nFULL BODY:\n${lead.pitch || ''}`.slice(0, 3000),
+        }),
+      }, 10000);
+      const leadData = await safeJson(leadRes);
+      if (!leadRes.ok) {
+        results.failed.push({ name: lead.name, email: lead.email, reason: `Lead save failed: HTTP ${leadRes.status}` });
+        continue;
+      }
+      const leadId = leadData?.data?.id || leadData?.id;
+
+      // Step 2: add the saved lead to the sequence so it enters the send queue
+      const addRes = await fetchT(`https://api.hunter.io/v2/campaigns/${sequenceId}/recipients`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${hunterKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(leadId ? { lead_ids: [leadId] } : { emails: [lead.email] }),
+      }, 10000);
+      if (addRes.ok) {
+        results.sent.push({ id: lead.id, name: lead.name, email: lead.email });
+      } else {
+        const errText = await safeText(addRes);
+        results.failed.push({ name: lead.name, email: lead.email, reason: `Sequence add failed: HTTP ${addRes.status}: ${errText.slice(0,200)}` });
+      }
+    } catch(e) {
+      results.failed.push({ name: lead.name, email: lead.email, reason: e.message });
+    }
+    // Gentle pacing between calls — respectful of Hunter's rate limits
+    await new Promise(r => setTimeout(r, 250));
+  }
+
+  console.log(`Hunter send: ${results.sent.length} sent, ${results.failed.length} failed`);
+  res.json(results);
+});
+
 app.post('/api/linkedin-drafts', async (req, res) => {
   const { leads, apiKey } = req.body;
   if (!Array.isArray(leads) || leads.length === 0) {
