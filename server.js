@@ -3364,6 +3364,17 @@ app.post('/api/send-to-hunter', async (req, res) => {
 
   for (const lead of leads) {
     if (!lead.email) { results.failed.push({ name: lead.name, reason: 'no email' }); continue; }
+    // HARD GUARD: never push a lead without real content. A missing pitch or
+    // subject would send a broken/fallback email to a real founder — worse than
+    // not sending at all. Fail here, before it ever reaches Hunter's queue.
+    if (!lead.pitch || !lead.pitch.trim()) {
+      results.failed.push({ name: lead.name, email: lead.email, reason: 'no pitch body — blocked before send' });
+      continue;
+    }
+    if (!lead.subject || !lead.subject.trim()) {
+      results.failed.push({ name: lead.name, email: lead.email, reason: 'no subject line — blocked before send' });
+      continue;
+    }
     const fullName = (lead.founderName || lead.verifiedCEO || '').trim();
     const parts = fullName.split(/\s+/);
     try {
