@@ -690,7 +690,7 @@ const googleEnrich = async (companyName) => {
     return { employees: null, website: null, revenue: null, ceoName: null, ceoTitle: null, painSignals: [] };
   }
 };
-const searchAdzuna = async (appId, appKey) => {
+const searchAdzuna = async (appId, appKey, location) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
     // RE-AIMED at AI-REPLACEMENT signals — CROJungle's biggest tickets ($25k-$75k builds).
@@ -698,30 +698,204 @@ const searchAdzuna = async (appId, appKey) => {
     // these is bleeding money on labor that AI/software can replace. The *count* of
     // manual roles is the signal — one CS rep is nothing, three is a bleeding funnel.
     // `cat` groups synonyms so "Customer Service Rep" + "Call Center Rep" = one function.
+    // ═══════════════════════════════════════════════════════════════════════
+    // ROLE × INDUSTRY — the single biggest quality upgrade available to Find
+    // ═══════════════════════════════════════════════════════════════════════
+    // THE BUG: we were searching by ROLE alone. Search "Dispatcher" and you get
+    // dispatchers at hospitals, staffing agencies, universities, and 911 call
+    // centers. That is why UF Health, Kaiser, and Cross Country Nurses kept
+    // appearing — we were generating our own noise and then paying the ICP filter
+    // to throw it away.
+    //
+    // THE FIX: Adzuna supports a `category` filter. Search "Dispatcher" WITHIN
+    // logistics-warehouse and you get TRUCKING COMPANIES hiring dispatchers —
+    // which is literally J&M Tank Lines. Search "Estimator" within
+    // trade-construction and you get AA Asphalting.
+    //
+    // Every result also carries its category tag, so we know the lead's industry.
+    // That feeds industry-matched proof points in the pitch, and the peer engine.
+    //
+    // TIER 1: perfect role×industry fits — these ARE the ICP, not a proxy for it.
+    // TIER 2: broad role sweeps to catch everything else, with anti-ICP categories
+    //         stripped out of the RESULTS (so we never waste the ICP filter on them).
+    // ═══════════════════════════════════════════════════════════════════════
+    // THE SEARCH MATRIX — built from the CEO's four ICPs, not from industry guesses
+    // ═══════════════════════════════════════════════════════════════════════
+    // THE MISTAKE I MADE: I narrowed this to trucking and contractors. But NONE of
+    // the CEO's four ICPs mention an industry. Every one is a BUSINESS CONDITION:
+    //
+    //   ICP #1  $5M-$500M · pre-2021 website · no AI · poor digital presence
+    //   ICP #2  <$100M · grew fast then stagnated · HIGH HEADCOUNT-TO-REVENUE
+    //   ICP #3  >$50M · adding marketing staff or attacking a new market
+    //   ICP #4  $1.5M-$50M · HIRING A MARKETING PERSON · poor digital · stagnant
+    //
+    // Two of those four are about MARKETING HIRES — and we were not searching for
+    // marketing roles AT ALL. We were blind to the retainer ICP, which is
+    // CROJungle's core product. That is the single biggest miss in this system.
+    //
+    // THE TWO BUYING WINDOWS WE INTERCEPT:
+    //
+    //  A) OPS ROLE POSTED  → "we will pay a human $55k/yr to do repetitive work"
+    //                        → they have budget, a problem, and no software.  (ICP #2 → build)
+    //  B) MARKETING ROLE POSTED → "we will pay a human $70k/yr to do marketing"
+    //                        → they have DECIDED to spend on marketing, but not HOW.
+    //                        → CROJ offers an entire senior team for the same money. (ICP #3/#4 → retainer)
+    //
+    // Research (McKinsey/HBR) names the digital laggards: healthcare, hospitality,
+    // construction, agriculture, and legal ("all 100 top law firms are digital
+    // laggards; only 3% show any website personalization").
+    //
+    // AND THE ERROR I HAVE TO UNDO: I blocked healthcare entirely because HOSPITALS
+    // kept appearing. That killed dental practices, vet clinics, med spas, chiro,
+    // physical therapy, home health — all owner-operated, 10-50 people, drowning in
+    // scheduling and billing. PERFECT ICP. The SIZE GATE blocks hospitals. Block by
+    // SIZE, not by industry.
     const searches = [
-      { title: 'Customer Service Representative', cat: 'customer_service' },
-      { title: 'Customer Support Specialist',     cat: 'customer_service' },
-      { title: 'Call Center Representative',       cat: 'customer_service' },
-      { title: 'Data Entry Clerk',                 cat: 'data_entry' },
-      { title: 'Data Entry Specialist',            cat: 'data_entry' },
-      { title: 'Order Entry Clerk',                cat: 'data_entry' },
-      { title: 'Scheduler',                        cat: 'scheduling' },
-      { title: 'Scheduling Coordinator',           cat: 'scheduling' },
-      { title: 'Appointment Setter',               cat: 'scheduling' },
-      { title: 'Dispatcher',                       cat: 'dispatch' },
-      { title: 'Bookkeeper',                       cat: 'bookkeeping' },
-      { title: 'Accounts Payable Clerk',           cat: 'bookkeeping' },
-      { title: 'Billing Specialist',               cat: 'bookkeeping' },
-      { title: 'Administrative Assistant',         cat: 'admin' },
-      { title: 'Receptionist',                     cat: 'admin' },
+      // ══════════════════════════════════════════════════════════════════════
+      // LANE A — THE SOFTWARE ICP (ICP #2): ops roles × labor-intensive industries
+      // A company paying humans to do repetitive work has a $25k-$75k build problem.
+      // ══════════════════════════════════════════════════════════════════════
+
+      // Trucking / freight / distribution — coordination chaos (J&M Tank Lines)
+      { title: 'Dispatcher',                      cat: 'dispatch',         industry: 'logistics-warehouse-jobs', lane: 'software' },
+      { title: 'Logistics Coordinator',           cat: 'ops_coordination', industry: 'logistics-warehouse-jobs', lane: 'software' },
+      { title: 'Data Entry Clerk',                cat: 'data_entry',       industry: 'logistics-warehouse-jobs', lane: 'software' },
+
+      // Contractors / trades / home services — the owner quotes jobs at 9pm (AA Asphalting)
+      { title: 'Estimator',                       cat: 'quoting',          industry: 'trade-construction-jobs',  lane: 'software' },
+      { title: 'Office Manager',                  cat: 'admin',            industry: 'trade-construction-jobs',  lane: 'software' },
+      { title: 'Scheduling Coordinator',          cat: 'scheduling',       industry: 'trade-construction-jobs',  lane: 'software' },
+
+      // HVAC / plumbing / electrical / facilities — scheduling IS the business.
+      // This is the ServiceTitan segment: high ticket, heavy ad spend, owner-run.
+      { title: 'Dispatcher',                      cat: 'dispatch',         industry: 'maintenance-jobs',         lane: 'software' },
+      { title: 'Scheduler',                       cat: 'scheduling',       industry: 'maintenance-jobs',         lane: 'software' },
+
+      // ── HEALTHCARE PRACTICES — the segment I wrongly blocked ──────────────
+      // Dental, veterinary, med spa, chiro, PT, home health. Owner = the doctor.
+      // 10-50 people. Buried in scheduling, intake, insurance, billing. Huge LTV
+      // per patient, so marketing ROI is enormous. The size gate blocks hospitals.
+      { title: 'Scheduler',                       cat: 'scheduling',       industry: 'healthcare-nursing-jobs',  lane: 'software' },
+      { title: 'Medical Billing Specialist',      cat: 'bookkeeping',      industry: 'healthcare-nursing-jobs',  lane: 'software' },
+      { title: 'Patient Coordinator',             cat: 'scheduling',       industry: 'healthcare-nursing-jobs',  lane: 'software' },
+
+      // Small manufacturers — order entry and inside sales are pure manual work
+      { title: 'Order Entry Clerk',               cat: 'data_entry',       industry: 'manufacturing-jobs',       lane: 'software' },
+      { title: 'Inside Sales Representative',     cat: 'inside_sales',     industry: 'manufacturing-jobs',       lane: 'software' },
+
+      // Hospitality — confirmed digital laggard: only 7% have integrated systems,
+      // 80% have no digital budget. Restaurant groups, hotels, event venues.
+      { title: 'Reservations Coordinator',        cat: 'scheduling',       industry: 'hospitality-catering-jobs', lane: 'software' },
+      { title: 'Booking Coordinator',             cat: 'scheduling',       industry: 'hospitality-catering-jobs', lane: 'software' },
+
+      // Property management / real estate — manual everything
+      { title: 'Leasing Coordinator',             cat: 'scheduling',       industry: 'property-jobs',            lane: 'software' },
+      { title: 'Property Administrator',          cat: 'admin',            industry: 'property-jobs',            lane: 'software' },
+
+      // Insurance agencies / accounting firms — manual quoting and data entry,
+      // recurring revenue, owner-operated
+      { title: 'Insurance Account Manager',       cat: 'data_entry',       industry: 'accounting-finance-jobs',  lane: 'software' },
+      { title: 'Bookkeeper',                      cat: 'bookkeeping',      industry: 'accounting-finance-jobs',  lane: 'software' },
+
+      // Law firms — confirmed digital laggards. Intake is 100% automatable, and
+      // PI firms spend enormously on ads (which makes them a retainer lead too).
+      { title: 'Legal Assistant',                 cat: 'admin',            industry: 'legal-jobs',               lane: 'software' },
+      { title: 'Intake Coordinator',              cat: 'scheduling',       industry: 'legal-jobs',               lane: 'software' },
+
+      // ══════════════════════════════════════════════════════════════════════
+      // LANE B — THE RETAINER ICP (ICP #3 & #4): THE MARKETING HIRE
+      // ══════════════════════════════════════════════════════════════════════
+      // We were completely blind to this, and it is CROJungle's CORE PRODUCT.
+      //
+      // A company posting a "Marketing Coordinator" job has ALREADY DECIDED to
+      // spend ~$70k/year on marketing. They have the budget. They have the intent.
+      // They just have not decided HOW to spend it. CROJ offers an entire senior
+      // team — strategy, ads, creative, tech — for the price of that one junior hire.
+      //
+      // CRITICAL: we want companies BUILDING a marketing function from scratch —
+      // not ones that already have one. A "Marketing Coordinator" posting means no
+      // marketing leader exists yet. A "CMO" posting means they just installed the
+      // exact layer we exist to bypass (and we penalize that elsewhere).
+      { title: 'Marketing Coordinator',           cat: 'marketing_hire',   industry: 'pr-advertising-marketing-jobs', lane: 'retainer' },
+      { title: 'Marketing Manager',               cat: 'marketing_hire',   industry: 'pr-advertising-marketing-jobs', lane: 'retainer' },
+      { title: 'Digital Marketing Specialist',    cat: 'marketing_hire',   industry: 'pr-advertising-marketing-jobs', lane: 'retainer' },
+      { title: 'Marketing Specialist',            cat: 'marketing_hire',   industry: 'pr-advertising-marketing-jobs', lane: 'retainer' },
+      { title: 'Social Media Manager',            cat: 'marketing_hire',   industry: 'pr-advertising-marketing-jobs', lane: 'retainer' },
+
+      // ══════════════════════════════════════════════════════════════════════
+      // LANE D — THE SIGNALS I WAS COMPLETELY MISSING
+      // ══════════════════════════════════════════════════════════════════════
+
+      // ── "GROW REVENUE WITH HEADCOUNT" — the retainer pitch, from the other side
+      // A company hiring 3 BDRs is trying to buy revenue with humans. That's ~$180k/yr
+      // for three people cold-calling. CROJ generates the same pipeline with marketing,
+      // for less, and it compounds instead of quitting.
+      { title: 'Business Development Representative', cat: 'revenue_hire', lane: 'retainer' },
+      { title: 'Sales Development Representative',    cat: 'revenue_hire', lane: 'retainer' },
+      { title: 'Appointment Setter',                  cat: 'revenue_hire', lane: 'retainer' },
+
+      // ── THE OWNER IS DROWNING — Mike's core insight, as a job posting ──────
+      // "Executive Assistant to the Owner/CEO" at a small company means ONE thing:
+      // the owner is personally buried and is trying to buy his way out with a human.
+      // That IS the firefighting cycle, posted publicly, with a salary attached.
+      { title: 'Executive Assistant to CEO',      cat: 'owner_drowning',   lane: 'software' },
+      { title: 'Executive Assistant',             cat: 'owner_drowning',   lane: 'software' },
+      { title: 'Chief of Staff',                  cat: 'owner_drowning',   lane: 'software' },
+
+      // ── THEY KNOW OPS IS BROKEN ───────────────────────────────────────────
+      // Hiring an Operations Manager means they've DIAGNOSED the problem themselves.
+      // They just think the answer is a person. It's a system.
+      { title: 'Operations Manager',              cat: 'ops_broken',       lane: 'software' },
+      { title: 'Director of Operations',          cat: 'ops_broken',       lane: 'software' },
+      { title: 'Process Improvement Manager',     cat: 'ops_broken',       lane: 'software' },
+
+      // ── ABOUT TO REBUILD THEIR SITE (ICP #1) ──────────────────────────────
+      // Hiring a web person = they KNOW the site is broken and are about to spend
+      // money on it. We can do it better, faster, and tie it to revenue.
+      { title: 'Web Developer',                   cat: 'website_rebuild',  lane: 'retainer' },
+      { title: 'Webmaster',                       cat: 'website_rebuild',  lane: 'retainer' },
+      { title: 'Ecommerce Manager',               cat: 'website_rebuild',  lane: 'retainer' },
+
+      // ══════════════════════════════════════════════════════════════════════
+      // LANE C — BROAD SWEEPS (catch everything else; anti-ICP stripped from results)
+      // ══════════════════════════════════════════════════════════════════════
+      { title: 'Customer Service Representative', cat: 'customer_service', lane: 'software' },
+      { title: 'Call Center Representative',      cat: 'customer_service', lane: 'software' },
+      { title: 'Appointment Setter',              cat: 'scheduling',       lane: 'software' },
+      { title: 'Accounts Payable Clerk',          cat: 'bookkeeping',      lane: 'software' },
+      { title: 'Operations Coordinator',          cat: 'ops_coordination', lane: 'software' },
+      { title: 'Administrative Assistant',        cat: 'admin',            lane: 'software' },
     ];
+
+    // Categories that are STRUCTURALLY not our ICP — no owner reads their own email.
+    //
+    // NOTE what is NO LONGER blocked: healthcare (dental/vet/med-spa practices are
+    // perfect ICP — the SIZE GATE blocks the hospitals), legal (law firms are the
+    // most confirmed digital laggards in the research), hospitality, retail,
+    // property, accounting. Blocking a whole industry to avoid its enterprises was
+    // throwing out an enormous amount of our actual ICP.
+    const ANTI_ICP_CATEGORIES = new Set([
+      'teaching-jobs',             // schools = government budgets, procurement
+      'social-work-jobs',          // nonprofits
+      'charity-voluntary-jobs',    // nonprofits
+      'graduate-jobs',             // noise, not a company signal
+      'it-jobs',                   // tech companies build in-house; they are not buyers
+      'scientific-qa-jobs',        // labs and pharma = enterprise procurement
+    ]);
 
     // Stagger calls slightly to avoid 429 rate limits
     const raw = [];
-    for (const { title, cat } of searches) {
+    for (const { title, cat, industry, lane } of searches) {
       await new Promise(r => setTimeout(r, 150)); // 150ms between calls
       raw.push(await (async () => {
-        const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=35&what=${encodeURIComponent(title)}&sort_by=date&max_days_old=30`;
+        // GEOGRAPHY: a services business closes far better where it has network,
+        // references, and can physically show up. Optional — blank = nationwide.
+        const whereParam = location ? `&where=${encodeURIComponent(location)}&distance=50` : '';
+        // INDUSTRY FILTER — this is what turns "dispatchers anywhere" into
+        // "TRUCKING COMPANIES hiring dispatchers". Biggest quality lever in Find.
+        const catParam = industry ? `&category=${encodeURIComponent(industry)}` : '';
+        // 50 is Adzuna's max per page — 43% more volume for the same call count.
+        const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=50&what=${encodeURIComponent(title)}${catParam}${whereParam}&sort_by=date&max_days_old=30`;
         const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 8000);
         if (!r.ok) { console.log(`Adzuna "${title}" ${r.status}`); return []; }
         const d = await safeJson(r);
@@ -730,13 +904,45 @@ const searchAdzuna = async (appId, appKey) => {
         console.log(`Adzuna "${title}": ${jobs.length}`);
         return jobs.map(job => {
           if (!job.company?.display_name) return null;
+          // ═══ ANTI-ICP CATEGORY REJECTION — at the SOURCE ═══════════════
+          // A hospital, school, government office, or tech company is not an
+          // owner-operated business. Drop them here rather than pulling them
+          // into the pipeline and paying the ICP filter to remove them later.
+          const jobCat = job.category?.tag || '';
+          if (ANTI_ICP_CATEGORIES.has(jobCat)) return null;
+          // ═══ THE POSTING DATE IS THE MOST IMPORTANT FIELD HERE ═══════════
+          // Research (Gartner, 2026 signal benchmarks): 99% of B2B purchases are
+          // triggered by an organizational change, and every signal DECAYS.
+          // "Intent data from three weeks ago is nearly worthless."
+          //
+          // A job posted TODAY = they have identified the problem, allocated the
+          // budget ($50-60k salary), started a process — and have NOT YET HIRED.
+          // That is a LIVE buying window we can intercept.
+          // A job posted 30 days ago = they probably already hired. Window closed.
+          //
+          // We were capturing none of this. Every posting was scored identically.
+          const created = job.created ? new Date(job.created) : null;
+          const ageDays = created && !isNaN(created)
+            ? Math.floor((Date.now() - created.getTime()) / 86400000)
+            : null;
           return {
             company: job.company.display_name,
-            cat, 
+            cat,
             roleTitle: title,
             location: job.location?.display_name || '',
             salaryNum: job.salary_min || 0,
             jobUrl: job.redirect_url || '',
+            postedAt: job.created || null,
+            ageDays,
+            // The industry — feeds industry-matched proof points in the pitch,
+            // and tells us whether this was a TIER-1 perfect fit or a broad sweep.
+            industryTag: jobCat,
+            industryLabel: job.category?.label || '',
+            perfectFit: !!industry,   // came from a targeted role×industry search
+            // WHICH BUYING WINDOW is this? They are completely different pitches:
+            //   software = "you're about to pay a human $55k to do repetitive work"
+            //   retainer = "you're about to pay one junior $70k; we give you a senior team"
+            lane: lane || 'software',
           };
         }).filter(Boolean);
       })());
@@ -749,7 +955,16 @@ const searchAdzuna = async (appId, appKey) => {
       const key = p.company.toLowerCase().trim();
       if (!key) continue;
       if (!byCompany.has(key)) {
-        byCompany.set(key, { name: p.company.trim(), location: p.location, cats: new Set(), roles: [], count: 0, maxSalary: 0, jobUrl: p.jobUrl });
+        byCompany.set(key, {
+          name: p.company.trim(), location: p.location, cats: new Set(), roles: [],
+          count: 0, maxSalary: 0, jobUrl: p.jobUrl,
+          freshestAgeDays: null,   // how recently did they post? THE key urgency signal
+          postedDates: [],
+          industryTag: p.industryTag || '',
+          industryLabel: p.industryLabel || '',
+          perfectFit: false,       // did they come from a targeted role×industry search?
+          lanes: new Set(),        // 'software' | 'retainer' — a company can be BOTH
+        });
       }
       const c = byCompany.get(key);
       if (!c.jobUrl && p.jobUrl) c.jobUrl = p.jobUrl;
@@ -758,6 +973,18 @@ const searchAdzuna = async (appId, appKey) => {
       c.count += 1;
       if (p.salaryNum > c.maxSalary) c.maxSalary = p.salaryNum;
       if (!c.location && p.location) c.location = p.location;
+      // A company found via a TIER-1 role×industry search is a perfect ICP fit —
+      // a trucking company hiring dispatchers, a contractor hiring estimators.
+      if (p.perfectFit) c.perfectFit = true;
+      if (p.lane) c.lanes.add(p.lane);
+      if (!c.industryTag && p.industryTag) { c.industryTag = p.industryTag; c.industryLabel = p.industryLabel; }
+      // Track the FRESHEST posting — that's the one whose window is still open
+      if (p.ageDays != null) {
+        c.postedDates.push(p.ageDays);
+        if (c.freshestAgeDays === null || p.ageDays < c.freshestAgeDays) {
+          c.freshestAgeDays = p.ageDays;
+        }
+      }
     }
 
     const results = [...byCompany.values()].map(c => {
@@ -769,28 +996,106 @@ const searchAdzuna = async (appId, appKey) => {
         name: c.name,
         website: '',
         location: c.location,
-        jobTitle: heavy 
-          ? `Hiring ${c.count} manual roles across ${catN} functions (${roleList}) — heavy AI-replaceable labor spend`
-          : multi
-          ? `Hiring ${c.count} manual roles (${roleList}) — AI-replaceable labor` 
-          : `Hiring ${roleList} — manual role, AI-replaceable`,
+        jobTitle: (() => {
+          const isRetainer = c.lanes.has('retainer');
+          const isBoth = isRetainer && c.lanes.has('software');
+          if (isBoth) {
+            return `Hiring ${roleList} — manual ops roles AND a marketing hire. They need the build AND the retainer.`;
+          }
+          if (isRetainer) {
+            // ICP #3/#4: they've decided to spend on marketing, not decided how.
+            return `Hiring ${roleList} — building a marketing function from scratch. Budget allocated, direction not chosen.`;
+          }
+          return heavy
+            ? `Hiring ${c.count} manual roles across ${catN} functions (${roleList}) — heavy AI-replaceable labor spend`
+            : multi
+            ? `Hiring ${c.count} manual roles (${roleList}) — AI-replaceable labor`
+            : `Hiring ${roleList} — manual role, AI-replaceable`;
+        })(),
         source: 'adzuna_ai',
         icpProfile: 'ai_ops',
         manualRoleCount: c.count,
         manualCategories: catN,
         jobUrl: c.jobUrl || '',
+        // ═══ THE BUYING WINDOW ═══════════════════════════════════════════
+        // This is the single most actionable field in the entire system.
+        industry: c.industryLabel || '',
+        industryTag: c.industryTag || '',
+        perfectFit: c.perfectFit,
+        // WHICH PRODUCT does this lead need? Drives the whole pitch.
+        lanes: [...c.lanes],
+        buyingLane:
+          c.lanes.has('retainer') && c.lanes.has('software') ? 'both' :
+          c.lanes.has('retainer') ? 'retainer' : 'software',
+        signalAgeDays: c.freshestAgeDays,
+        signalFreshness:
+          c.freshestAgeDays == null ? 'unknown' :
+          c.freshestAgeDays <= 3  ? 'burning'  :  // posted days ago — they have NOT hired yet
+          c.freshestAgeDays <= 7  ? 'hot'      :  // still actively interviewing
+          c.freshestAgeDays <= 14 ? 'warm'     :  // may have candidates
+          c.freshestAgeDays <= 21 ? 'cooling'  :  // probably close to an offer
+                                    'stale',      // almost certainly hired — window closed
         signals: {
           ai_replacement_signal: true,
           ai_replacement_multi: multi,
           ai_replacement_heavy: heavy,
           salary_high: c.maxSalary >= 90000,
           salary_mid: c.maxSalary >= 60000 && c.maxSalary < 90000,
+          // A posting under a week old means the role is UNFILLED — we can still
+          // intercept the decision. This is the whole point of signal-based selling.
+          window_open: c.freshestAgeDays != null && c.freshestAgeDays <= 7,
+
+          // ═══ THE OWNER IS DROWNING — Mike's insight, posted publicly ══════
+          // "Executive Assistant to the Owner" at a small company means the owner
+          // is personally buried and is trying to buy his way out with a human.
+          owner_drowning: c.cats.has('owner_drowning'),
+
+          // ═══ THEY'VE DIAGNOSED IT THEMSELVES ═════════════════════════════
+          // Hiring an Operations Manager = they KNOW ops is broken. They just
+          // think the answer is a person. It's a system.
+          ops_broken: c.cats.has('ops_broken'),
+
+          // ═══ BUYING REVENUE WITH HEADCOUNT ═══════════════════════════════
+          // Hiring BDRs/SDRs = trying to buy pipeline with humans. Marketing does
+          // it cheaper and it compounds instead of quitting.
+          buying_revenue_with_humans: c.cats.has('revenue_hire'),
+
+          // ═══ ABOUT TO REBUILD THEIR SITE (ICP #1) ════════════════════════
+          website_rebuild_intent: c.cats.has('website_rebuild'),
+          // Found via a targeted role×industry search — this is a TRUCKING company
+          // hiring dispatchers, not a hospital hiring one. Exact ICP, not a proxy.
+          perfect_icp_fit: c.perfectFit,
+
+          // ═══ THE RETAINER BUYING WINDOW (ICP #3 & #4) ═════════════════════
+          // They are hiring a marketing person. They have ALREADY decided to spend
+          // ~$70k/yr on marketing — they just have not decided HOW. CROJ offers a
+          // full senior team for the price of that one junior hire. This is the
+          // core product, and we were completely blind to it until now.
+          hiring_marketing: c.lanes.has('retainer'),
+
+          // ═══ THE PERFECT STORM ═══════════════════════════════════════════
+          // Hiring manual ops roles AND a marketing person at the same time.
+          // They need the build AND the retainer. They are bleeding money on two
+          // fronts simultaneously and have budget allocated for both.
+          needs_both_products: c.lanes.has('retainer') && c.lanes.has('software'),
         },
       };
     });
-     
-    const multiN = results.filter(r => r.signals.ai_replacement_multi).length;
-    console.log(`Adzuna: ${results.length} companies (${multiN} hiring multiple manual roles)`);
+
+    const multiN    = results.filter(r => r.signals.ai_replacement_multi).length;
+    const openN     = results.filter(r => r.signals.window_open).length;
+    const perfectN  = results.filter(r => r.perfectFit).length;
+    const retainerN = results.filter(r => r.signals.hiring_marketing).length;
+    const bothN     = results.filter(r => r.signals.needs_both_products).length;
+    const byIndustry = {};
+    for (const r of results) if (r.industry) byIndustry[r.industry] = (byIndustry[r.industry] || 0) + 1;
+
+    console.log(`Adzuna: ${results.length} companies`);
+    console.log(`  SOFTWARE lane: ${multiN} hiring multiple manual roles`);
+    console.log(`  RETAINER lane: ${retainerN} hiring a marketing person (budget allocated, direction not chosen)`);
+    console.log(`  ⚡ PERFECT STORM: ${bothN} hiring BOTH ops roles AND marketing — need the build AND the retainer`);
+    console.log(`  ${perfectN} exact ICP fit (role×industry) | ${openN} with an OPEN buying window (<7d)`);
+    if (Object.keys(byIndustry).length) console.log('  Industries:', JSON.stringify(byIndustry));
     return results;
   } catch(e) { console.error('Adzuna error:', e.message); return []; }
 };
@@ -906,20 +1211,54 @@ const scrapeClutchRSS = async () => {
 const scrapeGoogleNews = async () => {
   const results = [];
   // 10 targeted searches — each maps to a specific pain signal
+  // ═══ RE-AIMED AT THE ACTUAL ICP ════════════════════════════════════════
+  // The old queries hunted "company hires CMO" and "startup raises Series A" —
+  // which surface ENTERPRISES and funded tech startups. That is the OPPOSITE of
+  // our ICP, and it is exactly why Ford, Hertz, Maximus and Floor & Decor kept
+  // appearing. Those queries were actively fighting the size gate.
+  //
+  // Worse: a company that JUST HIRED A CMO is the single worst lead we can get.
+  // They now have the exact layer we exist to bypass. We were spending API calls
+  // hunting our own anti-ICP.
+  //
+  // These queries hunt OWNER-OPERATED businesses in growth pain — the people who
+  // actually reply (2.4% reply, 18% positive at sub-50 employees).
   const queries = [
-    { q: 'company hires "VP of Marketing" OR "CMO" OR "Head of Marketing" 2026', type: 'hire' },
-    { q: 'startup raises "Series A" OR "Series B" funding 2026', type: 'funding' },
-    { q: 'company "appointed" "Chief Marketing Officer" 2026', type: 'hire' },
-    { q: 'business rebrand 2026 "new brand" OR "new identity" OR "rebranding"', type: 'rebrand' },
-    { q: 'company "opens new location" OR "expanding" OR "new office" 2026', type: 'expansion' },
-    { q: 'startup "acquired by" OR "acquisition" marketing 2026', type: 'acquisition' },
-    { q: '"fired marketing agency" OR "left agency" OR "agency not delivering"', type: 'agency_pain' },
-    { q: 'company "raises" million "growth" 2026 marketing', type: 'funding' },
-    { q: '"VP of Growth" OR "Head of Growth" hired appointed 2026', type: 'hire' },
-    { q: 'company "launched" "new product" OR "new service" 2026', type: 'launch' },
-    // Overlap queries — designed to find companies also likely hiring manual roles on Adzuna
-    { q: 'small business "hiring" OR "growing team" 2026 operations', type: 'expansion' },
-    { q: 'company "opening new locations" OR "scaling operations" 2026', type: 'expansion' },
+    // Owner-operators saying they're drowning — the purest signal there is
+    { q: '"family-owned" OR "family business" expanding OR "adding staff" OR "growing"', type: 'expansion' },
+    { q: '"second location" OR "third location" opening family business', type: 'expansion' },
+    { q: 'owner "started the business" OR "founded the company" expanding 2026', type: 'expansion' },
+
+    // Growth outpacing systems — the exact moment they need us
+    { q: '"struggling to keep up" OR "growing pains" OR "outgrown our systems" business owner', type: 'growth_pain' },
+    { q: 'small business "hiring" "can\'t keep up with demand" OR "backlog"', type: 'growth_pain' },
+
+    // Owner-operator industries where the founder still runs it
+    { q: 'trucking OR logistics OR contractor OR HVAC OR plumbing company expanding hiring', type: 'expansion' },
+    { q: '"regional" OR "local" company "record year" OR "best year" growth', type: 'expansion' },
+
+    // Exit-prep — motivated, has money, improvements multiply the exit value
+    { q: 'business owner "preparing to sell" OR "exit strategy" OR "succession plan"', type: 'exit_prep' },
+
+    // Agency frustration — they've already tried the cheap option and it failed
+    { q: '"fired our agency" OR "left our marketing agency" OR "agency wasn\'t delivering"', type: 'agency_pain' },
+
+    // Just-funded but SMALL (the size gate filters the big ones out anyway)
+    { q: '"seed round" OR "raised" small business OR "family business" 2026', type: 'funding' },
+
+    // ═══ THE NEW SALES LEADER — I had this exactly backwards ═══════════════
+    // We correctly PENALIZE a new CMO hire: they just installed the marketing
+    // layer we exist to bypass.
+    //
+    // But a new VP OF SALES is the OPPOSITE. He has a quota, no pipeline, 90 days
+    // to prove himself — and NO marketing team to feed him leads. He is under more
+    // pressure than anyone in the building and he will buy lead generation
+    // immediately. Same for a new CRO or a new COO (who wants to fix operations).
+    { q: '"VP of Sales" OR "Head of Sales" OR "Chief Revenue Officer" appointed OR hired OR joins 2026', type: 'new_sales_leader' },
+    { q: 'company names new "Chief Operating Officer" OR "VP of Operations" 2026', type: 'new_ops_leader' },
+
+    // New OWNER — someone just bought the business and wants to grow it fast
+    { q: '"acquired" OR "new owner" small business OR "family business" 2026 growth', type: 'new_owner' },
   ];
 
   const signalMap = {
@@ -1567,9 +1906,9 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey) => {
 
     // Run both searches in parallel — sequential cost us ~15s for no reason
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 2, true).catch(() => []))
     );
-    const hits = batches.flat().slice(0, 6);
+    const hits = batches.flat().slice(0, 4);
     if (hits.length === 0) return null;
 
     const corpus = hits.map(h =>
@@ -1917,14 +2256,16 @@ const findOwnerViaNews = async (companyName) => {
 const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle }) => {
   // Run every source in parallel. Web search is the new heavy hitter — it reaches
   // BBB, Manta, local press, and chamber directories where SMB owners actually live.
-  const [brain, websearch, registry, news] = await Promise.all([
+  // Registry search costs ~2 credits and has a very low hit rate (it mostly
+  // surfaces filing agents, not owners). Skipped by default — the website and
+  // web-search sources do the real work. Still available in the test harness.
+  const [brain, websearch, news] = await Promise.all([
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
     findOwnerViaWebSearch(companyName, website, fcKey, apiKey).catch(() => null),
-    findOwnerViaRegistry(companyName, fcKey).catch(() => null),
-    findOwnerViaNews(companyName).catch(() => null),
+    findOwnerViaNews(companyName).catch(() => null),  // free — Google News RSS
   ]);
 
-  const found = [brain, websearch, registry, news].filter(Boolean);
+  const found = [brain, websearch, news].filter(Boolean);
   if (hunterName && looksLikeRealName(hunterName)) {
     found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
   }
@@ -2060,10 +2401,26 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
           if (catchAll === false) {
             const res = await verifyEmailSMTP(built, verifierKey);
             if (res.valid === true) {
+              console.log(`✓ EMAIL [${domain}] T2 CONFIRMED: ${built} — mailbox exists`);
               return { email: built, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: learned };
             }
-            // Normal domain and it doesn't resolve → this person has no mailbox here
-            console.log(`EMAIL [${domain}]: ${built} rejected by SMTP — ${name} has no mailbox at this domain`);
+            if (res.invalid === true) {
+              // We PROVED this mailbox doesn't exist on a non-catch-all domain.
+              // Do NOT fall through and hand it back anyway — that would guarantee
+              // a bounce. Try the other patterns instead.
+              console.log(`EMAIL [${domain}]: ${built} REJECTED by SMTP — trying other patterns for ${name}`);
+              for (const c of candidates.filter(x => x.pattern !== learned).slice(0, 4)) {
+                const r2 = await verifyEmailSMTP(c.email, verifierKey);
+                if (r2.valid === true) {
+                  domainPatternMemory.set(domain, c.pattern);
+                  console.log(`✓ EMAIL [${domain}] T2 CONFIRMED on retry: ${c.email} (${c.pattern})`);
+                  return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
+                }
+                await new Promise(r => setTimeout(r, 200));
+              }
+              console.log(`✗ EMAIL [${domain}]: no mailbox exists for ${name}. BLOCKED — sending would bounce.`);
+              return fail;
+            }
           }
         }
         // Can't SMTP-verify (catch-all or no verifier key), but the pattern came
@@ -2107,22 +2464,41 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   if (candidates.length === 0) return fail;
 
   // ── Is this domain catch-all? Determines whether SMTP means anything. ─────
+  // Cached per domain, so we only pay this probe ONCE per company domain ever.
   const catchAll = await isCatchAllDomain(domain, verifierKey);
 
-  // ── TIER 2: normal domain → race every pattern through SMTP ───────────────
+  // ── TIER 2: normal domain → verify patterns via SMTP ──────────────────────
+  // CREDIT DISCIPLINE: the verifier gives 100 checks/day. So we:
+  //   1. Try the LEARNED pattern first if we know this company's convention
+  //      (from Hunter or a scraped address) — usually a 1-check hit.
+  //   2. Otherwise try the 4 most common patterns, not all 8.
+  //   3. Stop the instant one resolves.
+  // Worst case ~5 checks/company; typical case 1-2. That's 25-50 companies/day.
   if (catchAll === false && verifierKey) {
-    for (const c of candidates) {
+    const learnedFirst = domainPatternMemory.get(domain);
+    const ordered = learnedFirst
+      ? [
+          ...candidates.filter(c => c.pattern === learnedFirst),
+          ...candidates.filter(c => c.pattern !== learnedFirst),
+        ]
+      : candidates;
+
+    // Cap attempts — the 4 most common conventions cover the vast majority.
+    const toTry = ordered.slice(0, learnedFirst ? 5 : 4);
+
+    for (const c of toTry) {
       const res = await verifyEmailSMTP(c.email, verifierKey);
       if (res.valid === true) {
         domainPatternMemory.set(domain, c.pattern);
-        console.log(`✓ EMAIL [${domain}] T2 SMTP-verified: ${c.email} (pattern: ${c.pattern})`);
+        console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED (mailbox exists): ${c.email} — pattern ${c.pattern}`);
         return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
       }
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
     }
-    // Normal domain, every pattern rejected → this person's mailbox isn't there.
-    // Better to send nothing than to bounce.
-    console.log(`✗ EMAIL [${domain}] all patterns rejected on a normal domain — no address exists`);
+    // Normal (non-catch-all) domain and none of the likely patterns resolve →
+    // this person genuinely has no mailbox here. Sending would guarantee a bounce,
+    // and a bounce damages the sending domain. Better to send nothing.
+    console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here. BLOCKED.`);
     return fail;
   }
 
@@ -2231,107 +2607,240 @@ const checkAdLibraryViaFirecrawl = async (company, fcKey) => {
   } catch(e) { console.log('Ad Library scrape error:', e.message); return { hasAds: false, adCount: 0, confirmed: false }; }
 };
 
-const scrapeBizBuySell = async (fcKey) => {
+// ═══════════════════════════════════════════════════════════════════════════
+// EXIT-PREP ENGINE — the single highest-value signal in the entire system
+// ═══════════════════════════════════════════════════════════════════════════
+// THE MATH THAT MAKES THIS THE BEST PITCH CROJUNGLE HAS:
+//
+//   "Every dollar saved in operational efficiency can be worth FIVE TIMES that
+//    amount at the closing table."
+//
+//   $1M EBITDA × 5x multiple = $5M valuation.
+//   Improve to $1.2M EBITDA  = $6M valuation.
+//   → $200k of operational improvement = $1,000,000 MORE AT CLOSING.
+//
+// And from the valuation firms, on what LOWERS a multiple:
+//   "What moves a multiple DOWN: extreme OWNER-DEPENDENCY, heavy debt,
+//    and AGING TECHNOLOGY."
+//
+// That is Mike's entire thesis, priced. The fires the owner is personally putting
+// out are LITERALLY DESTROYING HIS VALUATION. And aging tech — ICP #1 — is a
+// named multiple-killer that every buyer's due diligence will find.
+//
+// THE PITCH:
+//   "You're listing at $5M. Four people doing manual scheduling = $220k/yr in
+//    loaded labor. Automate it, EBITDA goes up $220k, and at your 5x multiple
+//    that's $1.1M more at closing. The build costs $50k and takes 90 days."
+//   → A 22x return, with a deadline, to an owner who is definitionally motivated,
+//     has money, and listed the business HIMSELF (so he is directly reachable).
+//
+// CROJungle also has an Exit/Valuation Advisory product. Direct fit.
+//
+// WHY THIS WAS BROKEN: the old scraper hit BizBuySell's category pages directly
+// and got 0 results every run. We now have Firecrawl /search, which can find
+// listings across EVERY broker network at once — BizBuySell, BizQuest, Sunbelt,
+// Transworld, Murphy, and local brokers.
+const findFounderVenting = async (fcKey, apiKey) => {
+  if (!fcKey || !apiKey) return { leads: [], painLanguage: [] };
   try {
-    const feeds = [
-      'https://www.bizbuysell.com/rss/businesses-for-sale/',
-      'https://www.bizbuysell.com/rss/new-businesses-for-sale.rss',
+    // The subreddits where owner-operators actually live and complain
+    const queries = [
+      `site:reddit.com (r/smallbusiness OR r/Entrepreneur) "drowning in" OR "can't keep up" OR "buried in" scheduling OR quotes OR invoices owner`,
+      `site:reddit.com (r/HVAC OR r/Construction OR r/Plumbing OR r/Trucking OR r/Dentistry) owner "office manager" OR "dispatch" OR "scheduling" nightmare OR chaos`,
     ];
-    const results = [];
-    for (const feedUrl of feeds) {
-      try {
-        // Try direct fetch first (proxy has been getting blocked), then proxy fallback
-        let xml = '';
-        try {
-          const r = await fetchT(feedUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36', 'Accept': 'application/rss+xml, application/xml' } }, 10000);
-          xml = await safeText(r);
-        } catch(e) { /* fall through to proxy */ }
-        if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
-          xml = await fetchViaProxy(feedUrl, 10000);
-        }
-        if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
-          console.log('BizBuySell RSS blocked — will try Firecrawl page scrape');
-          continue;
-        }
-        const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-        items.slice(0, 20).forEach(item => {
-          const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
-          const desc = (item.match(/<description><!\[CDATA\[([^\]]+)\]\]><\/description>/) || [])?.[1] || '';
-          const link = item.match(/<link>([^<]+)<\/link>/)?.[1] || '';
-          if (!title || title.length < 5) return;
-          const revenueMatch = desc.match(/\$([0-9,]+[MK]?)\s*(?:revenue|annual|gross)/i);
-          const revenue = revenueMatch ? revenueMatch[0] : '';
-          // Broker-posted listings put a middleman between us and the owner.
-          // Detect broker language and tag it so reachability scores it lower.
-          const brokerPosted = /broker|brokerage|listing agent|represented by|business advisors|m&a advisor|intermediar/i.test(desc);
-          results.push({
-            name: title.trim().slice(0, 60),
-            website: '',          // Real website unknown — modal will prompt
-            listingUrl: link,     // BizBuySell listing URL
-            jobTitle: brokerPosted ? 'Listed for sale via broker' : 'Listed for sale — owner wants to maximize value',
-            jobSnippet: (desc.replace(/<[^>]+>/g, '').slice(0, 150)) + (revenue ? ` | ${revenue}` : '') + ' | BizBuySell listing',
-            source: 'bizbuysell',
-            brokerPosted,
-            signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: !brokerPosted },
-          });
-        });
-        if (results.length > 0) break;
-      } catch(e) { console.log('BizBuySell feed error:', e.message); }
-    }
-    // FIRECRAWL FALLBACK — RSS is bot-blocked, render the listings page instead
-    if (results.length === 0 && fcKey) {
-      console.log('BizBuySell: trying Firecrawl fallback...');
-      const md = await firecrawlScrape(fcKey, 'https://www.bizbuysell.com/businesses-for-sale/', 30000);
-      console.log(`BizBuySell Firecrawl: got ${md.length} chars`);
-      if (md && md.length > 500) {
-        // Listings appear as markdown links to /business-opportunity/ pages
-        const links = [...md.matchAll(/\[([^\]]{10,90})\]\((https:\/\/www\.bizbuysell\.com\/[^)]*business[^)]*)\)/gi)];
-        const seen = new Set();
-        for (const [, title, link] of links) {
-          const clean = title.replace(/[#*_]/g, '').trim();
-          if (clean.length < 8 || seen.has(clean.toLowerCase())) continue;
-          // ONLY accept real listing URLs — they contain a numeric listing ID.
-          // Category pages like /health-care-and-fitness-businesses-for-sale/ have NO numeric ID.
-          const isRealListing = /\/\d{5,}\/?$/.test(link) || /-\d{5,}[\/\-]/.test(link);
-          if (!isRealListing) continue;
-          // HARD BLOCK — BizBuySell category/nav names that aren't real companies
-          const categoryNames = /^(home based businesses|health care|service businesses|non-?classifiable|see more|business opportunities|building|automotive|education|food|retail|manufacturing|wholesale|agriculture|transportation|beauty|pet services|restaurants?|franchises?|financial|technology|real estate|entertainment|travel)\b/i;
-          if (categoryNames.test(clean)) continue;
-          // Block any remaining category-style titles
-          if (/businesses? for sale|franchise|opportunities$|^\w+ & \w+$|services$|establishments?$/i.test(clean)) continue;
-          const wordCount = clean.split(/\s+/).length;
-          if (wordCount < 2) continue;
-          if (!/[a-zA-Z]{3,}/.test(clean)) continue;
-          seen.add(clean.toLowerCase());
-          const brokerPosted = /broker|agent/i.test(clean);
-          results.push({
-            name: clean.slice(0, 60),
-            website: '',          // Real website unknown — modal will prompt for it
-            listingUrl: link,     // BizBuySell listing URL (NOT the company's site)
-            jobTitle: brokerPosted ? 'Listed for sale via broker' : 'Listed for sale — owner wants to maximize value',
-            jobSnippet: 'BizBuySell listing — view: ' + link,
-            source: 'bizbuysell',
-            brokerPosted,
-            signals: { preparing_for_exit: true, needs_revenue_growth: true, owner_motivated: !brokerPosted },
-          });
-          if (results.length >= 15) break;
-        }
-        console.log(`BizBuySell via Firecrawl: ${results.length}`);
-      }
-    }
-    console.log(`BizBuySell: ${results.length}`);
-    return results;
+
+    const batches = await Promise.all(
+      queries.map(q => firecrawlSearch(fcKey, q, 4, true).catch(() => []))
+    );
+    const hits = batches.flat().slice(0, 8);
+    if (hits.length === 0) return { leads: [], painLanguage: [] };
+
+    const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.content}`)
+      .join('\n\n').slice(0, 20000);
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1400,
+        messages: [{ role: 'user', content: `These are real Reddit posts from business owners.
+
+TWO TASKS:
+
+TASK 1 — IDENTIFIABLE COMPANIES (rare but red-hot):
+If an owner NAMED their company or linked their website, extract it. Most posts are
+anonymous — that is expected, and an empty array here is a correct answer. Never guess
+a company name from context.
+
+TASK 2 — PAIN LANGUAGE (the real value):
+Extract the EXACT WORDS owners use to describe the operational fire they're fighting.
+Not a paraphrase — their literal phrasing. This is gold: it tells us how our buyer
+actually talks about his problem, which makes every pitch we write sharper.
+
+We are hunting descriptions of: being buried in manual work, scheduling/dispatch chaos,
+quotes taking forever, the owner personally doing work he already delegated, hiring
+people to fix a systems problem, growth outrunning their processes.
+
+Return ONLY valid JSON:
+{
+  "companies":[{"name":"...","website":"...","evidence":"their exact words"}],
+  "painLanguage":[{"quote":"their exact words, verbatim","theme":"scheduling|quoting|admin|hiring|growth|owner-trapped"}]
+}
+
+CONTENT:
+${corpus}` }]
+      }),
+    }, 35000);
+
+    const d = await r.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+
+    // Anti-hallucination: the quote must actually exist in what we scraped
+    const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
+    const painLanguage = (parsed.painLanguage || []).filter(p => {
+      if (!p.quote) return false;
+      return flat.includes(String(p.quote).toLowerCase().replace(/\s+/g, ' ').slice(0, 25));
+    });
+
+    const leads = (parsed.companies || [])
+      .filter(c => c.name && c.name.length > 3)
+      .map(c => ({
+        name: c.name.trim(),
+        website: c.website || '',
+        jobTitle: `Owner venting publicly — "${String(c.evidence || '').slice(0, 90)}"`,
+        source: 'founder_venting',
+        signalAgeDays: 7,
+        signalFreshness: 'hot',
+        signals: { founder_venting: true, social_pain_signal: true, window_open: true },
+      }));
+
+    if (leads.length) console.log(`Founder venting: ${leads.length} IDENTIFIABLE owners publicly describing their pain — red hot`);
+    if (painLanguage.length) console.log(`Pain language: captured ${painLanguage.length} verbatim owner quotes (sharpens every pitch)`);
+    return { leads, painLanguage };
   } catch(e) {
-    console.error('BizBuySell error:', e.message);
+    console.log('Founder-venting engine failed:', e.message);
+    return { leads: [], painLanguage: [] };
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GOLDEN TICKET #1 — BUSINESSES FOR SALE
+// ═══════════════════════════════════════════════════════════════════════════
+// I previously DISABLED this because the scraper returned 0 results. That was the
+// wrong fix — I killed the signal instead of repairing it. This is arguably the
+// single most motivated buyer that exists:
+//
+//   · An owner selling wants MAXIMUM VALUATION. At a 3-5x EBITDA multiple, every
+//     $1 of new annual profit becomes $3-5 of exit value. A $65k profit lift is a
+//     $200k-$325k bump in what he walks away with.
+//   · He has a HARD DEADLINE. Improvements made now show up in the trailing
+//     financials a buyer will scrutinize.
+//   · He is ALREADY thinking about the business as an asset to improve.
+//   · He IS the decision-maker — the seller is the owner, by definition.
+//
+// AND THE LISTING HANDS US THE FIRMOGRAPHICS FOR FREE: revenue, cash flow,
+// employee count, industry, location, asking price. Data we normally pay for.
+//
+// The old version guessed at BizBuySell's URL structure and got nothing.
+// This uses Firecrawl /search, which actually reaches the listings.
+const findBusinessesForSale = async (fcKey, apiKey) => {
+  if (!fcKey || !apiKey) return [];
+  try {
+    const queries = [
+      'site:bizbuysell.com business for sale established cash flow owner retiring',
+      '"business for sale" "seller financing" OR "owner retiring" established revenue cash flow',
+    ];
+    const batches = await Promise.all(
+      queries.map(q => firecrawlSearch(fcKey, q, 5, true).catch(() => []))
+    );
+    const hits = batches.flat().slice(0, 8);
+    if (hits.length === 0) { console.log('For-sale: no listings found'); return []; }
+
+    const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`).join('\n\n').slice(0, 20000);
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: `These are business-for-sale listings scraped from the web.
+
+TASK: Extract each REAL business being sold, with its firmographics.
+
+RULES:
+- Only report businesses that are ACTUALLY LISTED FOR SALE with real detail.
+- SKIP anything that is a category page, a broker's homepage, an ad, or a generic "browse businesses" page.
+- SKIP listings with no revenue/cash-flow figure — without financials it is not actionable.
+- SKIP franchises-for-sale-as-a-concept (we want an existing operating business, not a franchise opportunity).
+- Report figures EXACTLY as stated. Never estimate.
+- Prefer listings that name the business or make it identifiable. If it is fully anonymous ("established HVAC company in Texas"), still include it — but say so, because we may be able to identify it later.
+
+Return ONLY valid JSON:
+{"listings":[{
+  "name":"business name, or a precise description if anonymized",
+  "industry":"e.g. HVAC, trucking, dental practice",
+  "location":"city, state",
+  "revenue":"as stated, e.g. $2.4M",
+  "cashFlow":"as stated (this is the EBITDA the multiple applies to)",
+  "askingPrice":"as stated",
+  "employees": number or null,
+  "reason":"stated reason for selling, if given (retiring, health, etc.)",
+  "url":"listing URL",
+  "identifiable": true/false
+}]}
+
+LISTINGS:
+${corpus}` }]
+      }),
+    }, 35000);
+
+    const d = await r.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+
+    const out = (parsed.listings || [])
+      .filter(l => l.name && l.name.length > 3)
+      .map(l => ({
+        name: l.name,
+        website: '',
+        location: l.location || '',
+        industry: l.industry || '',
+        revenue: l.revenue || '',
+        cashFlow: l.cashFlow || '',
+        askingPrice: l.askingPrice || '',
+        employees: l.employees || null,
+        source: 'for_sale',
+        icpProfile: 'exit_prep',
+        jobUrl: l.url || '',
+        // Selling owners are maximally motivated AND directly reachable.
+        // Every $1 of profit we add multiplies into the sale price.
+        jobTitle: `FOR SALE — ${l.revenue || 'revenue undisclosed'}${l.cashFlow ? ', ' + l.cashFlow + ' cash flow' : ''}${l.reason ? ' · ' + l.reason : ''}. Every $1 of new profit multiplies 3-5x into their exit.`,
+        signals: {
+          preparing_for_exit: true,
+          // An owner listing it himself (not via a broker) is directly reachable
+          brokerPosted: /broker|brokerage|advisors|business brokers/i.test(l.url || ''),
+        },
+        exitContext: {
+          revenue: l.revenue, cashFlow: l.cashFlow, askingPrice: l.askingPrice,
+          reason: l.reason, identifiable: l.identifiable,
+        },
+      }));
+
+    console.log(`For-sale: ${out.length} businesses actively listed (the most motivated buyer that exists)`);
+    return out;
+  } catch(e) {
+    console.log('findBusinessesForSale failed:', e.message);
     return [];
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// SIGNAL SOURCE: FACEBOOK AD LIBRARY — companies running ads
-// Running ads + bad landing page = perfect CROJungle pitch
-// Requires fbToken in settings
-// ═══════════════════════════════════════════════════════════
 const searchFacebookAds = async (fbToken) => {
   if (!fbToken) return [];
   const results = [];
@@ -2494,102 +3003,416 @@ const scrapePRNewswire = async () => {
 const ENTERPRISE_HINTS = /\b(inc\.?|corporation|corp\.?|holdings|group|global|international|worldwide|enterprises|industries|systems|technologies|solutions|partners|associates|llc)\b/i;
 const OWNER_LED_HINTS = /\b(family|family-owned|founder|owner|studio|shop|boutique|co\.|& sons|& co|and sons)\b/i;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// REACHABILITY — P(this person reads a cold email AND can act on it)
+// ═══════════════════════════════════════════════════════════════════════════
+// REBUILT on real benchmark data (Belkins 7.5M emails, Sales.co 2M emails,
+// Saleshandy 53M emails, 2025-2026), not intuition. What the data actually says:
+//
+//   · COMPANY SIZE is the strongest predictor and it is near-linear.
+//     1-10 employees   → 2.40% reply, 18.2% POSITIVE
+//     11-50            → strong
+//     5,000+           → 1.37% reply, only 3.4% positive  (5.3x worse QUALITY)
+//
+//   · FOUNDERS/OWNERS are the most responsive seniority — beating C-level by 35%
+//     and VPs by 80%. No EA filtering, no procurement chain, can say yes this week.
+//
+//   · 70% of all positive C-level replies come from companies with 1-50 employees.
+//     Our ICP is not just good — it is where nearly all the yield lives.
+//
+//   · VERIFIED emails get ~2x the reply rate of unverified. (Bounces also poison
+//     the sending domain, so this is doubly weighted.)
+//
+//   · ADVANCED personalization (real pain + recent trigger) → 17-18% reply,
+//     vs 7-9% for generic. Another ~2x.
+//
+// ARCHITECTURE FIX: the old version read verifiedCEO and publicPainSignals at
+// FIND time — where they are ALWAYS empty (they only get populated during
+// Research). So it was silently scoring off headcount alone and calling it
+// reachability. Now it runs in two modes and is RECOMPUTED after research, so
+// the score actually reflects what we know at the moment we know it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// How likely is a person with THIS title, at a company of THIS size, to both
+// reply AND be able to buy? The data shows this interaction matters enormously:
+// a founder at 20 people is the single best target on earth; a CEO at 400 is
+// insulated and slow; a Director at 300 replies well but cannot sign a $50k build.
+const titleSizeFit = (title, employees) => {
+  const t = (title || '').toLowerCase();
+  const emp = employees || 0;
+  const isOwner    = /founder|owner|co-?founder|proprietor/.test(t);
+  const isCEO      = /ceo|chief executive|president/.test(t);
+  const isPartner  = /managing (partner|director)|principal|partner/.test(t);
+  const isOps      = /coo|chief operating|general manager|\bgm\b|vp of operations/.test(t);
+  const isVP       = /\bvp\b|vice president|head of/.test(t);
+  const isDirector = /director/.test(t);
+
+  // Small (<=50): founders and CEOs dominate. This is the sweet spot.
+  if (emp > 0 && emp <= 50) {
+    if (isOwner) return { fit: 30, why: 'Owner at a sub-50 company — the single most responsive target in cold email' };
+    if (isCEO)   return { fit: 27, why: 'CEO at a small company — reads their own inbox, can say yes this week' };
+    if (isPartner) return { fit: 24, why: 'Managing partner at a small firm — direct authority' };
+    if (isOps)   return { fit: 18, why: 'Ops lead at a small company — close to the owner' };
+    if (isVP || isDirector) return { fit: 8, why: 'Below owner level at a small company — likely not the buyer' };
+    return { fit: 5, why: 'Unclear authority' };
+  }
+  // Mid (51-200): still founder-led, but ops leaders gain real budget authority.
+  if (emp > 50 && emp <= 200) {
+    if (isOwner) return { fit: 27, why: 'Owner of a 50-200 person company — still hands-on, still signs' };
+    if (isCEO)   return { fit: 24, why: 'CEO at 50-200 — reachable, holds the budget' };
+    if (isPartner) return { fit: 22, why: 'Managing partner — direct authority' };
+    if (isOps)   return { fit: 20, why: 'COO/GM at this size genuinely owns operational budget' };
+    if (isVP)    return { fit: 10, why: 'VP — may influence, rarely signs a build this size' };
+    if (isDirector) return { fit: 6, why: 'Director — needs approval for a purchase this size' };
+    return { fit: 5, why: 'Unclear authority' };
+  }
+  // Upper (201-500): the fuzzy edge. Founders get insulated; ops leaders take over.
+  if (emp > 200) {
+    if (isOwner || isCEO) return { fit: 14, why: `${emp} employees — the founder is getting insulated by layers` };
+    if (isOps)  return { fit: 16, why: `COO/GM at ${emp} — often the real operational buyer at this size` };
+    if (isVP)   return { fit: 10, why: 'VP at a larger company — influences, needs sign-off' };
+    if (isDirector) return { fit: 6, why: 'Director — replies well but cannot authorize this spend' };
+    return { fit: 4, why: 'Unclear authority at scale' };
+  }
+  // No headcount known — score the title alone, conservatively.
+  if (isOwner || isCEO) return { fit: 18, why: 'Owner/CEO identified (company size unconfirmed)' };
+  if (isPartner || isOps) return { fit: 12, why: 'Senior operator identified (size unconfirmed)' };
+  if (isVP || isDirector) return { fit: 5, why: 'Below owner level (size unconfirmed)' };
+  return { fit: 3, why: 'No clear decision-maker' };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGNAL ENGINE — freshness, decay, and ACTIVE stacking
+// ═══════════════════════════════════════════════════════════════════════════
+// Grounded in 2026 signal-based-selling benchmarks:
+//
+//   · Gartner: 99% of B2B purchases are triggered by a specific organizational
+//     change. Not by good copy. By an EVENT.
+//   · Only 5% of any market is in a buying window at a given moment. The other
+//     95% will not engage no matter how good the email is. Find's ONLY job is to
+//     isolate that 5%.
+//   · SIGNAL STACKING is the whole game:
+//        1 signal  → ~20% true-positive rate
+//        2 signals → 50-60% true-positive rate   (2.5-3x better leads)
+//     Our logs said "0 stacked" on EVERY run — because we were waiting for two
+//     sources to coincidentally find the same company. That almost never happens.
+//     THE FIX: stop waiting for coincidence. ACTIVELY go look for a second signal
+//     on the companies we already found.
+//   · SIGNAL DECAY is real: "intent data from three weeks ago is nearly worthless."
+//     Funding decays 50% every 60 days. We were treating a 29-day-old job posting
+//     exactly like one posted this morning.
+//   · Emails referencing a specific trigger event: 18% reply vs 3.43% generic (5x).
+//
+// THE CORE INSIGHT FOR CROJUNGLE:
+// When a company posts a job for a Scheduler / Dispatcher / Data Entry Clerk,
+// they have ALREADY: identified the problem, allocated ~$55k of budget, and
+// started a buying process — but have NOT yet committed. That is a live buying
+// window with a hard closing date. We are not cold-pitching; we are intercepting
+// a purchase decision already in motion and offering a better way to spend money
+// they have already decided to spend. Once they hire, the window slams shut.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Every signal, weighted by real conversion power and given a decay half-life.
+const SIGNAL_TIERS = {
+  // ── TIER 1: the buying window is OPEN and we can still intercept ──────────
+  // ═══ THE PERFECT STORM ═══════════════════════════════════════════════════
+  // Hiring manual ops roles AND a marketing person at the same time. They need
+  // the BUILD and the RETAINER. Budget allocated on both fronts, decision made
+  // on neither. This is the single best lead the system can produce.
+  needs_both_products:  { weight: 45, halfLife: 21, tier: 1, label: 'PERFECT STORM — hiring ops roles AND a marketing person. Needs the build AND the retainer.' },
+
+  // ═══ THE RETAINER WINDOW (ICP #3 & #4) — CROJungle's core product ════════
+  // They posted a marketing role. They have ALREADY decided to spend ~$70k/yr on
+  // marketing. They have NOT decided how. CROJ offers a full senior team for the
+  // price of that one junior hire. We were completely blind to this until now.
+  hiring_marketing:     { weight: 34, halfLife: 21, tier: 1, label: 'Hiring a marketing person — budget allocated, direction NOT chosen. The retainer pitch writes itself.' },
+
+  perfect_icp_fit:      { weight: 20, halfLife: 21, tier: 1, label: 'Exact ICP match — found in their own industry, not by accident' },
+  ai_replacement_heavy: { weight: 38, halfLife: 21, tier: 1, label: 'Drowning in manual labor — multiple roles across multiple functions' },
+  ai_replacement_multi: { weight: 30, halfLife: 21, tier: 1, label: 'Hiring several manual roles — the owner is buried in ops' },
+  // ═══ BUSINESSES FOR SALE — the most motivated buyer that exists ═══════════
+  // At a 3-5x EBITDA multiple, every $1 of new annual profit becomes $3-5 of EXIT
+  // VALUE. A $65k profit lift = $200k-$325k more in his pocket. He has a hard
+  // deadline, he already thinks of the business as an asset to improve, and the
+  // seller IS the owner — directly reachable by definition.
+  preparing_for_exit:   { weight: 36, halfLife: 90, tier: 1, label: 'FOR SALE — every $1 of new profit multiplies 3-5x into their exit price. Maximum motivation, hard deadline, owner IS the seller.' },
+
+  // ═══ OWNER PUBLICLY ASKING FOR HELP — the highest-intent signal there is ══
+  // Someone posting "I'm drowning in scheduling, how do I automate this?" is
+  // literally raising their hand. Nothing beats a self-declared problem.
+  founder_venting:      { weight: 40, halfLife: 30, tier: 1, label: 'Owner is PUBLICLY asking for help with exactly what we sell — self-declared intent' },
+
+  // ═══ NEW SALES LEADER — I had this backwards ═════════════════════════════
+  // A new CMO is BAD (they just built the layer we bypass). A new VP of Sales is
+  // GOOD: quota, no pipeline, 90 days to prove himself, and NO marketing team to
+  // feed him. He is the most pressured person in the building and he buys leads.
+  new_sales_leader:     { weight: 28, halfLife: 60, tier: 2, label: 'New VP of Sales / CRO — has a quota, no pipeline, and no marketing team. Buys lead gen fast.' },
+  new_ops_leader:       { weight: 22, halfLife: 60, tier: 2, label: 'New COO / VP of Ops — hired specifically to fix operations, and has budget to do it' },
+  new_owner:            { weight: 20, halfLife: 90, tier: 2, label: 'New owner just bought the business — wants growth, and is not attached to the old way' },
+  agency_pain:          { weight: 30, halfLife: 45, tier: 1, label: 'Just fired their agency — already tried cheap, it failed' },
+
+  // ── TIER 2: they have budget and a live problem ──────────────────────────
+  ai_replacement_signal:{ weight: 18, halfLife: 21, tier: 2, label: 'Hiring a manual role — automatable spend' },
+  raised_funding:       { weight: 22, halfLife: 60, tier: 2, label: 'Recently raised — has cash, pre-CMO, founder still owns GTM' },
+  running_ads:          { weight: 24, halfLife: 7,  tier: 2, label: 'Actively spending on ads — real budget flowing into a funnel we can audit' },
+  growth_pain:          { weight: 22, halfLife: 45, tier: 2, label: 'Publicly saying they cannot keep up — growth has outrun their systems' },
+
+  // ── TIER 3: context that sharpens a pitch but does not create a window ────
+  expansion:            { weight: 12, halfLife: 45, tier: 3, label: 'Expanding — new location or scaling operations' },
+  recently_acquired:    { weight: 10, halfLife: 60, tier: 3, label: 'Recently acquired — systems in flux' },
+  rebranding:           { weight: 8,  halfLife: 60, tier: 3, label: 'Rebranding — digital presence under review' },
+  recently_launched:    { weight: 8,  halfLife: 45, tier: 3, label: 'Just launched something new' },
+};
+
+// Exponential decay. A signal at its half-life is worth 50% of its fresh value.
+// This is what stops us treating a 29-day-old job posting like today's.
+const decayMultiplier = (ageDays, halfLife) => {
+  if (ageDays == null) return 0.6;              // unknown age — assume middling
+  if (ageDays <= 2) return 1.15;                // BURNING. Fresher than fresh.
+  return Math.max(0.15, Math.pow(0.5, ageDays / halfLife));
+};
+
+// ── STACK RECONCILIATION ─────────────────────────────────────
+// A "stack" means the SAME company was surfaced by TWO GENUINELY INDEPENDENT
+// sources. That is a claim about EVIDENCE, so it gets exactly one source of
+// truth: c.sources (written by the dedup merge), unioned with any source added
+// by an ACTIVE check that went out and asked about this specific company.
+//
+// WHAT THIS REPLACES, AND WHY:
+// stackSignalsOnLeads() looked every lead up in an index built from newsLeads /
+// edgarLeads - which were `unique.filter(...)`, i.e. SUBSETS OF THE VERY ARRAY
+// IT WAS ITERATING. So every news lead found ITSELF in newsIndex, and every
+// EDGAR lead found ITSELF in edgarIndex. Each one got:
+//     stackedSources = ['news_google','news_google']   // length 2
+// which scoreSignals() read as nSources >= 2, awarding a 1.6x score multiplier
+// and the badge "STACKED - 2 independent signals on the same account", plus a
+// stackEvidence line rendered in the UI. All of it fabricated from a company
+// matching itself.
+//
+// It could never have worked. Dedup runs FIRST and has already collapsed every
+// true cross-source duplicate into one entry. Anything still standing as its own
+// row in `unique` is, by construction, NOT a duplicate. So the function was
+// incapable of producing a TRUE stack and capable only of producing FALSE ones -
+// and it inflated precisely the leads we would have emailed first.
+//
+// The Set union below makes self-stacking structurally impossible: a Set cannot
+// hold the same source twice. Even a future buggy caller cannot double-count.
+const reconcileStackedSources = (leads) => {
+  let stacked = 0;
+  for (const lead of leads) {
+    const s = new Set();
+    for (const src of (lead.sources || [lead.source])) if (src) s.add(src);
+    // Sources added by an ACTIVE third-party check (facebook_ads) are genuinely
+    // independent and must survive.
+    for (const src of (lead.stackedSources || [])) if (src) s.add(src);
+    lead.stackedSources = [...s];
+    lead.sourceCount    = lead.stackedSources.length;
+    lead.stacked        = lead.stackedSources.length >= 2;
+    if (lead.stacked) stacked++;
+  }
+  return stacked;
+};
+
+// ── THE SCORE ─────────────────────────────────────────────────────────────
+// Fit × Intent × Timing, per the 2026 signal-selling framework — not a flat tally.
+const scoreSignals = (c) => {
+  const sig = c.signals || {};
+  const age = c.signalAgeDays;
+  let intent = 0;
+  const firing = [];
+
+  for (const [key, def] of Object.entries(SIGNAL_TIERS)) {
+    if (!sig[key]) continue;
+    const decay = decayMultiplier(age, def.halfLife);
+    const pts = def.weight * decay;
+    intent += pts;
+    firing.push({ key, tier: def.tier, label: def.label, points: Math.round(pts), decay: +decay.toFixed(2) });
+  }
+
+  // ═══ THE STACK MULTIPLIER — the single biggest lever in Find ═══════════
+  // Research: 1 signal = ~20% true positive. 2+ = 50-60%. That is a 2.5-3x
+  // improvement in lead quality, and it is the entire reason signal-based
+  // outbound beats spray-and-pray.
+  const nSources = (c.stackedSources || [c.source]).filter(Boolean).length;
+  const tier1Count = firing.filter(f => f.tier === 1).length;
+  const distinctSignals = firing.length;
+
+  let stackMult = 1.0;
+  let stackWhy = 'Single signal';
+  if (nSources >= 3 || (tier1Count >= 2 && distinctSignals >= 3)) {
+    stackMult = 2.2; stackWhy = 'STACKED across 3+ independent signals — 50-60% true-positive rate';
+  } else if (nSources >= 2 || (tier1Count >= 1 && distinctSignals >= 2)) {
+    stackMult = 1.6; stackWhy = 'STACKED — 2 independent signals on the same account';
+  } else if (distinctSignals >= 2) {
+    stackMult = 1.25; stackWhy = 'Multiple signals from one source';
+  }
+
+  const score = Math.round(intent * stackMult);
+
+  // Urgency — is the window actually open RIGHT NOW?
+  const freshness = c.signalFreshness || 'unknown';
+  const urgency =
+    freshness === 'burning' ? 'ACT NOW — posted in the last 3 days, they have not hired yet' :
+    freshness === 'hot'     ? 'Window open — still interviewing, we can intercept' :
+    freshness === 'warm'    ? 'Window closing — they may have candidates' :
+    freshness === 'cooling' ? 'Window nearly shut — likely close to an offer' :
+    freshness === 'stale'   ? 'Window closed — almost certainly hired' :
+                              'Timing unknown';
+
+  return {
+    intentScore: Math.min(100, score),
+    firing: firing.sort((a, b) => b.points - a.points),
+    stackMult,
+    stackWhy,
+    stackedSources: c.stackedSources || [c.source],
+    urgency,
+    freshness,
+    isStacked: stackMult > 1.25,
+  };
+};
+
 const scoreReachability = (c) => {
   const name = (c.name || '').toLowerCase();
   const sig = c.signals || {};
   let score = 0;
   const reasons = [];
-  
-  // ── VERIFIED EMPLOYEE COUNT (from Google enrichment) ──────────────────
-  // This is the most reliable signal we have for owner-reachability.
+
+  // ══ 1. COMPANY SIZE (0-30) — the strongest single predictor in the data ══
+  // Near-linear: the smaller they are, the more likely the owner reads it AND
+  // the more likely the reply is a POSITIVE one (18.2% vs 3.4% positive rate).
   if (c.verifiedEmployees) {
-    const emp = c.verifiedEmployees;
-    if (emp <= 25) {
-      score += 20; reasons.push(`${emp} verified employees — tiny operation, owner answers email directly`);
-    } else if (emp <= 75) {
-      score += 16; reasons.push(`${emp} verified employees — small business, owner still in marketing decisions`);
-    } else if (emp <= 150) {
-      score += 10; reasons.push(`${emp} verified employees — founder-led, may have a small marketing team`);
-    } else if (emp <= 250) {
-      score += 5; reasons.push(`${emp} verified employees — growing, owner still reachable but has layers`);
-    } else if (emp <= 500) {
-      score += 2; reasons.push(`${emp} verified employees — mid-market, harder to reach owner directly`);
+    const e = c.verifiedEmployees;
+    if (e <= 10)       { score += 30; reasons.push(`${e} employees — 2.4% reply rate, 18% of replies are positive. The best segment that exists.`); }
+    else if (e <= 25)  { score += 28; reasons.push(`${e} employees — owner answers their own email, no gatekeeper`); }
+    else if (e <= 50)  { score += 25; reasons.push(`${e} employees — 70% of all positive C-level replies come from this band`); }
+    else if (e <= 100) { score += 20; reasons.push(`${e} employees — founder-led, still hands-on`); }
+    else if (e <= 200) { score += 14; reasons.push(`${e} employees — reachable, but a marketing layer may exist`); }
+    else if (e <= 350) { score += 7;  reasons.push(`${e} employees — the founder is getting insulated`); }
+    else if (e <= 500) { score += 3;  reasons.push(`${e} employees — mid-market, owner rarely reads cold email`); }
+    // >500 is hard-blocked upstream and never reaches here.
+  } else {
+    // NO DATA = almost certainly a small business (they're in no database).
+    // This is the "absence is the signal" principle that protects real SMBs.
+    score += 12;
+    reasons.push('Not in any company database — almost certainly a small owner-run business');
+  }
+
+  // ══ 2. DECISION-MAKER × SIZE FIT (0-30) — who we can actually reach ══
+  // Only meaningful AFTER research. At Find time this is legitimately unknown.
+  if (c.decisionMaker && c.decisionMaker.name) {
+    const dm = c.decisionMaker;
+    const { fit, why } = titleSizeFit(dm.title, c.verifiedEmployees);
+    score += fit;
+    reasons.push(`${dm.name} (${dm.title || 'title unknown'}) — ${why}`);
+
+    // Corroboration means we're confident it's really them, not a Hunter guess.
+    if (dm.corroborated) {
+      score += 6;
+      reasons.push(`Confirmed across ${dm.sources.length} independent sources — this is genuinely the owner`);
     }
-    // Over 500 is hard-blocked before scoring — never reaches here
+    if (dm.canBuy === false) {
+      score -= 20;
+      reasons.push(`⚠ Cannot authorize a purchase — reaching them wastes the audit`);
+    }
+  } else if (c.verifiedCEO) {
+    const { fit, why } = titleSizeFit(c.verifiedCEOTitle, c.verifiedEmployees);
+    score += Math.round(fit * 0.6); // named, but unverified source
+    reasons.push(`${c.verifiedCEO} identified — ${why}`);
   }
 
-  // ── VERIFIED CEO NAME (from Google search) ────────────────────────────
-  // Having a named decision-maker is a massive reachability signal — we know
-  // who to write to by name, not "to whom it may concern"
-  if (c.verifiedCEO) {
-    score += 8; reasons.push(`Decision-maker identified: ${c.verifiedCEO} (${c.verifiedCEOTitle || 'CEO'}) — pitch by name`);
+  // ══ 3. CAN WE ACTUALLY REACH THEM? (0-20) — verified email = 2x reply rate ══
+  // This was missing entirely, and it's one of the two biggest multipliers in
+  // the benchmark data. A bounce also poisons the sending domain, so an
+  // unverified address is worse than no address.
+  if (c.emailResult) {
+    const er = c.emailResult;
+    if (er.tier === 1)      { score += 20; reasons.push('Email published on their own site — confirmed real'); }
+    else if (er.tier === 2) { score += 20; reasons.push('Email SMTP-verified — the mailbox provably exists (2x reply rate vs unverified)'); }
+    else if (er.tier === 3) { score += 11; reasons.push('Email built from their confirmed company pattern — likely but unverified'); }
+    else if (er.tier === 4) { score -= 10; reasons.push('⚠ Email is an unverified guess — sending risks a bounce that damages the domain'); }
+    else                    { score -= 15; reasons.push('⚠ No usable email — unreachable'); }
+  } else if (c.email) {
+    score += 8; reasons.push('Email present (confidence unknown)');
   }
 
-  // ── PUBLIC PAIN SIGNALS (from reviews/complaints search) ──────────────
-  // Public complaints about the company are gold — the pitch can lead with them
+  // ══ 4. PERSONALIZATION AMMO (0-20) — the other 2x multiplier ══
+  // Real pain + a recent trigger takes reply rates from 7-9% to 17-18%.
   if (c.publicPainSignals && c.publicPainSignals.length > 0) {
-    score += 5; reasons.push(`${c.publicPainSignals.length} public pain signals found — real hooks for outreach`);
+    const n = Math.min(c.publicPainSignals.length, 3);
+    score += 4 + (n * 3);
+    reasons.push(`${c.publicPainSignals.length} verified operational pain signals — we can name the fire he's fighting (2x reply rate)`);
+  }
+  if (c.companyTriggers && c.companyTriggers.length > 0) {
+    const fresh = c.companyTriggers.filter(t => (t.ageDays ?? 999) <= 45);
+    if (fresh.length > 0) {
+      score += 6;
+      reasons.push(`Recent trigger event (${fresh[0].type}, ${fresh[0].ageDays}d ago) — timely, relevant cold-open`);
+    } else {
+      score += 2;
+      reasons.push('Company news found, but not recent enough to lead with');
+    }
   }
 
-  // STRONG owner-led signals — these companies ARE the owner reaching out
+  // ══ 5. FOUNDER-LED BEHAVIOURAL SIGNALS (0-22) ══
+  // These are cases where the OWNER is demonstrably the one acting.
   if (sig.preparing_for_exit || c.source === 'bizbuysell') {
-    if (c.brokerPosted) {
-      score += 8; reasons.push('For-sale listing via broker — middleman between us and owner');
-    } else {
-      score += 22; reasons.push('Owner listing business for sale — direct owner contact');
-    }
+    if (c.brokerPosted) { score += 6;  reasons.push('For-sale listing via broker — a middleman sits between us and the owner'); }
+    else                { score += 22; reasons.push('Owner is personally listing the business for sale — maximally motivated AND directly reachable'); }
   }
   if (sig.founder_venting || sig.social_pain_signal) {
-    score += 18; reasons.push('Founder publicly venting — personally involved, reachable');
+    score += 16; reasons.push('Founder publicly venting — personally in the weeds, and clearly reachable');
   }
 
-  // AI-replacement: a SMALL company hiring multiple manual roles almost
-  // never has a CMO — the owner is drowning in ops and signs the checks.
-  // But a huge company hiring 11 CS reps is a call center. Use role count
-  // as a proxy: 2-6 manual roles = likely owner-led SMB; 15+ = enterprise.
+  // AI-replacement hiring: a SMALL company hiring several manual roles almost
+  // never has a CMO — the owner is drowning in ops and signs the checks himself.
+  // A large company hiring 15 CS reps is just a call center. Role count is the tell.
   if (sig.ai_replacement_multi) {
     const roles = c.manualRoleCount || 0;
-    if (roles >= 2 && roles <= 8) {
-      score += 16; reasons.push(`Hiring ${roles} manual roles at SMB scale — owner likely runs ops, no CMO`);
-    } else if (roles > 8 && roles <= 14) {
-      score += 6; reasons.push(`Hiring ${roles} manual roles — mid-size, owner may still be reachable`);
-    } else if (roles > 14) {
-      score += 0; reasons.push(`Hiring ${roles} roles — enterprise scale, likely has procurement/CMO`);
-    }
+    if (roles >= 2 && roles <= 8)       { score += 14; reasons.push(`Hiring ${roles} manual roles at SMB scale — the owner runs ops and there is no CMO`); }
+    else if (roles > 8 && roles <= 14)  { score += 5;  reasons.push(`Hiring ${roles} manual roles — mid-size, owner may still be reachable`); }
+    else if (roles > 14)                { reasons.push(`Hiring ${roles} roles — enterprise scale, expect procurement and a CMO`); }
   } else if (sig.ai_replacement_signal) {
-    score += 10; reasons.push('Hiring a manual role — small operation, owner-adjacent');
+    score += 8; reasons.push('Hiring a manual role — small operation, owner-adjacent');
   }
 
-  // Funding: Form D just-raised companies are usually early, founder-run,
-  // pre-CMO. Strong reachability. (Late-stage would be filtered by size.)
+  // Just-funded: early, founder-run, pre-CMO. (Late-stage gets size-gated out.)
   if (sig.raised_funding) {
-    score += 12; reasons.push('Recently raised — early-stage, founder still runs GTM, no CMO yet');
+    score += 10; reasons.push('Recently raised — early-stage, the founder still owns GTM');
   }
-
-  // Trigger events (rebrand/acquisition/launch) — mixed. Only credit lightly.
   if (sig.rebranding || sig.recently_launched) {
-    score += 5; reasons.push('In transition — decision-makers accessible during change');
+    score += 4; reasons.push('In transition — decision-makers are accessible during change');
   }
 
-  // A company that JUST hired a CMO is the OPPOSITE of our ICP — they now
-  // have the layer we want to avoid. Penalize news_hire CMO leads.
+  // ══ 6. PENALTIES — things that mean the owner is NOT the buyer ══
+  // A company that just hired a CMO now has exactly the layer we exist to bypass.
   if (c.source === 'news_hire' && /cmo|chief marketing|vp.*marketing|head of marketing/i.test(c.jobTitle || '')) {
-    score -= 12; reasons.push('Just hired a CMO — now has the marketing layer we bypass (deprioritized)');
+    score -= 14; reasons.push('Just hired a CMO — they now have the marketing layer we bypass');
   }
 
-  // Name-based heuristics
-  if (OWNER_LED_HINTS.test(name)) { score += 6; reasons.push('Name suggests owner-operated / family business'); }
+  // Name heuristics — weak, but free.
+  if (OWNER_LED_HINTS.test(name))  { score += 5; reasons.push('Name suggests a family/owner-operated business'); }
   if (ENTERPRISE_HINTS.test(name) && !OWNER_LED_HINTS.test(name)) { score -= 4; }
 
-  // HARD BLOCK — signals that this is unreachable regardless of pain.
-  // (The blocklist already removes named giants; this catches the pattern.)
   const hardBlock = (sig.ai_replacement_multi && (c.manualRoleCount || 0) > 20);
 
-  // Reachability is ESTIMATED from signals until research confirms an owner
-  // email via Hunter. The frontend upgrades/downgrades it after research.
-  return { score: Math.max(0, Math.min(score, 30)), reasons: reasons.slice(0, 2), hardBlock, estimated: true };
-};
+  // Normalize to 0-100. This is a PROBABILITY-LIKE score, not an arbitrary tally.
+  const final = Math.max(0, Math.min(100, Math.round(score)));
 
+  return {
+    score: final,
+    reasons,
+    hardBlock,
+    // Plain-English verdict so the UI never has to interpret a bare number.
+    verdict:
+      final >= 75 ? 'Excellent — owner is reachable and can buy today' :
+      final >= 55 ? 'Good — likely reaches a real decision-maker' :
+      final >= 35 ? 'Moderate — reachable but weaker odds' :
+                    'Poor — likely wastes a send',
+    // Stage-aware: at Find we only know size + signals. Say so honestly rather
+    // than pretending a pre-score is a full reachability read.
+    stage: (c.decisionMaker || c.emailResult) ? 'researched' : 'pre-research',
+  };
+};
 
 app.get('/api/verify-website', async (req, res) => {
   const { url, company } = req.query;
@@ -2633,19 +3456,51 @@ app.post('/api/discover', async (req, res) => {
     // Parked: Clutch + Reddit (blocked without ScraperAPI), Product Hunt (wrong ICP),
     // PR Newswire (too broad). Their functions still exist above — re-enable by adding
     // them back here. Facebook Ads stays wired but returns [] until fbToken is set.
-    const [adzunaRes, secRes, newsRes, bizRes, fbAdsRes] = await Promise.allSettled([  
-      searchAdzuna(adzunaId, adzunaKey),   // AI-replacement labor signals
-      searchSECEdgar(),                    // just-funded — capital + board pressure  
-      scrapeGoogleNews(),                  // trigger events — new CMO, rebrand, acquisition
-      scrapeBizBuySell(firecrawlKey),      // exit prep — RSS first, Firecrawl fallback
-      searchFacebookAds(fbToken),          // dormant until token — confirmed ad budget
+    // ═══════════════════════════════════════════════════════════════════════
+    // EVERY SIGNAL SOURCE — each one catches a different buying window
+    // ═══════════════════════════════════════════════════════════════════════
+    const [adzunaRes, secRes, newsRes, forSaleRes, ventingRes, fbAdsRes] = await Promise.allSettled([
+      // THE TWO HIRING WINDOWS — ops roles (build) and marketing roles (retainer)
+      searchAdzuna(adzunaId, adzunaKey, req.body.location),
+
+      // JUST RAISED — capital allocated, board pressure, pre-CMO, founder still owns GTM
+      searchSECEdgar(),
+
+      // TRIGGER EVENTS — expansion, new location, agency fired, new sales leader
+      scrapeGoogleNews(),
+
+      // ═══ GOLDEN TICKET: BUSINESSES FOR SALE ═══════════════════════════════
+      // The single most motivated buyer that exists. At a 3-5x EBITDA multiple,
+      // every $1 of new annual profit becomes $3-5 of EXIT VALUE. He has a hard
+      // deadline, he's already thinking about the business as an asset to improve,
+      // and the seller IS the owner — so he's directly reachable by definition.
+      // The listing also hands us revenue, cash flow, and headcount for free.
+      findBusinessesForSale(firecrawlKey, apiKey),
+
+      // ═══ GOLDEN TICKET: OWNERS PUBLICLY ASKING FOR HELP ═══════════════════
+      // An owner posting "I'm drowning in scheduling, how do I automate this?" is
+      // the highest-intent signal that exists — they are literally raising their
+      // hand. Reddit is IP-blocked from Render, but Firecrawl reaches it.
+      // Most posts are anonymous; when one IS identifiable, it's red hot.
+      // Either way we harvest their ACTUAL LANGUAGE for the pitch.
+      findFounderVenting(firecrawlKey, apiKey),
+
+      // CONFIRMED AD BUDGET (dormant until a Meta token is added)
+      searchFacebookAds(fbToken),
     ]);
+
+    // Owner venting returns both identifiable leads AND the raw pain language
+    const venting = ventingRes.value || { leads: [], painLanguage: [] };
+    if (venting.painLanguage?.length) {
+      console.log(`Owner pain language harvested (${venting.painLanguage.length} phrases) — use their words, not ours`);
+    }
 
     const allCompanies = [
       ...(adzunaRes.value || []),
-      ...(secRes.value || []), 
+      ...(secRes.value || []),
       ...(newsRes.value || []),
-      ...(bizRes.value || []),
+      ...(forSaleRes.value || []),
+      ...(venting.leads || []),
       ...(fbAdsRes.value || []),
     ];
 
@@ -2823,6 +3678,41 @@ app.post('/api/discover', async (req, res) => {
       });
       if (i + SIZE_BATCH < toEnrich.length) await new Promise(r => setTimeout(r, 600));
     }
+
+    // ═══ AD-SPEND STACK CHECK — the strongest possible signal for CROJungle ══
+    // A company hiring 4 schedulers AND running 800 paid ads is the perfect lead:
+    // they are bleeding money on BOTH manual labor AND a broken funnel. That is
+    // two independent, verifiable signals on the same account — which the research
+    // says triples the true-positive rate (20% → 50-60%).
+    //
+    // This check used to happen only at RESEARCH time, which is too late to
+    // influence which leads we prioritize. Now it runs on the top leads at FIND
+    // time, so the ranking actually reflects it. Ad spend also decays fastest of
+    // any signal (7-day half-life) — they could pause the campaign tomorrow.
+    if (firecrawlKey) {
+      const adCheckPool = toEnrich.slice(0, 12).filter(c => c.website);
+      if (adCheckPool.length > 0) {
+        const adResults = await Promise.allSettled(
+          adCheckPool.map(c => checkAdLibraryViaFirecrawl(c.name, firecrawlKey))
+        );
+        let adsFound = 0;
+        adCheckPool.forEach((c, idx) => {
+          const r = adResults[idx];
+          if (r.status === 'fulfilled' && r.value && r.value.adCount > 0) {
+            c.signals = c.signals || {};
+            c.signals.running_ads = true;
+            c.adCount = r.value.adCount;
+            c.signalAgeDays = 0; // ads running RIGHT NOW — freshest signal possible
+            c.stackedSources = [...(c.stackedSources || [c.source]), 'facebook_ads'];
+            c.stackEvidence = [...(c.stackEvidence || []), `${r.value.adCount} active paid ads running right now`];
+            adsFound++;
+          }
+        });
+        if (adsFound > 0) {
+          console.log(`Ad-spend stack: ${adsFound} of ${adCheckPool.length} top leads are ALSO running paid ads — these are the best leads in the batch`);
+        }
+      }
+    }
     
     // Apply enrichment + size gate
     // ═══════════════════════════════════════════════════════════════════════
@@ -2934,6 +3824,10 @@ app.post('/api/discover', async (req, res) => {
           ex.manualCategories = c.manualCategories;
         }
         if (c.icpProfile && (!ex.icpProfile || ex.icpProfile === 'any')) ex.icpProfile = c.icpProfile;
+        // Preserve the buying lane across a cross-source merge. If two sources
+        // disagree, the RICHER answer wins: retainer + software = both.
+        if (c.buyingLane && !ex.buyingLane) ex.buyingLane = c.buyingLane;
+        else if (c.buyingLane && ex.buyingLane && c.buyingLane !== ex.buyingLane) ex.buyingLane = 'both';
       }
     }
     const unique = [...merged.values()];
@@ -2979,6 +3873,23 @@ app.post('/api/discover', async (req, res) => {
 
     const stackedCount = unique.filter(c => (c.sources||[]).length >= 2).length;
     console.log(`After merge: ${unique.length} unique (${stackedCount} stacked across 2+ sources)`);
+
+    // ═══ STACK RECONCILIATION ══════════════════════════════════
+    // Derive stackedSources from the ONE place cross-source truth is recorded:
+    // c.sources, written by the dedup merge above when two DIFFERENT sources
+    // produced the same normalized company name. Unioned with any source added
+    // by an ACTIVE check that genuinely went out and asked (facebook_ads).
+    //
+    // A 0 here is a REAL 0, and it is information. Adzuna finds hirers, EDGAR
+    // finds fundraisers, News finds newsmakers - they are largely different
+    // companies. The only stack that reliably fires is the ad-library check,
+    // because it is the only one that LEAVES THE POOL and asks a third party
+    // about a specific company we already found. That is what a real active
+    // stack is: a fetch, not an index lookup.
+    const nowStacked = reconcileStackedSources(unique);
+    const adStacked  = unique.filter(c => (c.stackedSources || []).includes('facebook_ads')).length;
+    console.log(`Active stacking result: ${nowStacked} companies carry 2+ genuinely independent sources (${adStacked} of them via the live ad check)`);
+
     // Combo tally logged after scoring (below)
     
 
@@ -3074,54 +3985,73 @@ app.post('/api/discover', async (req, res) => {
       salary_unknown: 5,
     };
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // THE SCORE — Fit × Intent × Timing (2026 signal-based-selling framework)
+    // ═══════════════════════════════════════════════════════════════════════
+    // Replaces the old flat point-tally. Three independent dimensions:
+    //
+    //   FIT     — is this the kind of company we can actually serve and reach?
+    //             (size, reachability, decision-maker odds)
+    //   INTENT  — is there real evidence they need what we sell, right now?
+    //             (signal tiers, weighted, with decay)
+    //   TIMING  — is the buying window open, or did we miss it?
+    //             (freshness — a 29-day-old job posting is nearly worthless)
+    //
+    // A high-fit company with no intent is a bad lead. High intent with a closed
+    // window is a bad lead. Only the intersection is worth a send — that is the
+    // 5% of the market actually in a buying window (Gartner).
     const allScored = unique
       .map(c => {
-        const raw = Object.entries(c.signals||{}).reduce((t,[k,v])=>v?t+(WEIGHTS[k]||0):t, 0);
-        const srcN = (c.sources || [c.source]).filter(Boolean).length;
-        // COMBO CLASSIFICATION — which signals combined matters more than source count.
-        const combo = classifyStack(c);
-        const srcBonus = srcN >= 3 ? 30 : srcN === 2 ? 15 : 0;
-        // INTERNAL STACKING — a company hiring many manual roles across many
-        // categories is a stacked signal even from ONE source. This fires often
-        // (unlike cross-source overlap which is rare) and is a real intensity signal.
-        const roleCount = c.manualRoleCount || 0;
-        const catCount = c.manualCategories || 0;
-        let internalStack = 0;
-        if (roleCount >= 5 && catCount >= 3) internalStack = 25;       // heavy manual-labor load
-        else if (roleCount >= 3 && catCount >= 2) internalStack = 15;  // meaningful load
-        else if (roleCount >= 2) internalStack = 8;                    // some load
+        const intent = scoreSignals(c);          // intent + timing + stacking
+        const reach  = scoreReachability(c);     // fit + reachability
 
-        // ═══ CEO's SOFTWARE-BUYER SIGNAL ═══════════════════════════════════
-        // The CEO's ICP #2 is explicitly: "grown rapidly then stagnated, high ratio
-        // of employee count to revenue, looking to hire people to do things software
-        // can do." A SMALL company hiring MANY manual roles is exactly that profile —
-        // they are solving a scaling problem with headcount instead of software.
-        // This is a sharper signal than heavy hiring alone, and it is the highest-
-        // ticket product ($25k-$75k+). Reward the combination.
-        if (c.verifiedEmployees && c.verifiedEmployees <= 200 && roleCount >= 3) {
-          internalStack += 15;
-          c.softwareBuyerSignal = `${roleCount} manual roles open at a ~${c.verifiedEmployees}-person company — solving scale with headcount instead of software`;
+        // Software-buyer signal: a SMALL company hiring MANY manual roles is
+        // solving a scaling problem with headcount instead of software. That is
+        // the CEO's ICP #2 verbatim, and it is the highest-ticket product.
+        if (c.verifiedEmployees && c.verifiedEmployees <= 200 && (c.manualRoleCount || 0) >= 3) {
+          c.softwareBuyerSignal = `${c.manualRoleCount} manual roles open at a ~${c.verifiedEmployees}-person company — solving scale with headcount instead of software`;
         }
-        const stackBonus = Math.max(combo ? combo.boost : 0, srcBonus, internalStack);
-        const stacked = srcN >= 2 || (combo && combo.tier !== 'B') || internalStack >= 15;
-        const reach = scoreReachability(c);
-        const base = raw + stackBonus + reach.score;
+
+        // FIT × INTENT — a geometric blend, so a zero on either dimension kills
+        // the lead rather than being masked by a high score on the other.
+        // (A 10-person company with no signal is not a lead. A perfect signal at
+        // an unreachable enterprise is not a lead either.)
+        const fit = reach.score;                 // 0-100
+        const intentScore = intent.intentScore;  // 0-100
+        const blended = Math.sqrt(Math.max(fit, 1) * Math.max(intentScore, 1));
+
         const icpScore = reach.hardBlock
-          ? Math.min(Math.round(base), 20)
-          : Math.min(Math.round(base), stacked ? 100 : 90);
-        c.stackCombo = combo || null;
+          ? Math.min(Math.round(blended), 20)
+          : Math.min(100, Math.round(blended));
+
         return {
           ...c,
           icpScore,
-          stacked,
-          sourceCount: srcN,
-          internalStack,
-          reachability: reach.score,
+          // Intent
+          intentScore,
+          signalsFiring: intent.firing,
+          urgency: intent.urgency,
+          freshness: intent.freshness,
+          // Stacking — the 2.5-3x lever
+          stacked: intent.isStacked,
+          stackMult: intent.stackMult,
+          stackWhy: intent.stackWhy,
+          stackedSources: intent.stackedSources,
+          sourceCount: intent.stackedSources.length,
+          // Fit
+          reachability: fit,
           reachabilityReasons: reach.reasons,
+          reachabilityVerdict: reach.verdict,
           reachabilityBlocked: reach.hardBlock,
         };
       })
-      .sort((a,b) => b.icpScore - a.icpScore);
+      // Sort by score, but a BURNING window jumps the queue — that lead expires.
+      .sort((a, b) => {
+        const aBurn = a.freshness === 'burning' ? 1 : 0;
+        const bBurn = b.freshness === 'burning' ? 1 : 0;
+        if (aBurn !== bBurn) return bBurn - aBurn;
+        return b.icpScore - a.icpScore;
+      });
 
     const comboTally = {};
     for (const c of allScored) if (c.stackCombo) comboTally[c.stackCombo.id] = (comboTally[c.stackCombo.id]||0)+1;
@@ -3368,6 +4298,12 @@ app.post('/api/research', async (req, res) => {
   const discoverySignals = req.body.discoverySignals || {};
   const discoverySource = req.body.discoverySource || '';
   const discoveryReason = req.body.discoveryReason || '';
+  // LANE VISIBILITY - the retainer pitch silently falling back to software was a
+  // real failure mode with no error attached. Now every research call states its lane.
+  const _lane = req.body.buyingLane;
+  if (!_lane) console.log(`[LANE] ${company}: buyingLane MISSING from request -> defaulting to software. If this company came from a marketing-role posting, the RETAINER pitch just failed silently.`);
+  else console.log(`[LANE] ${company}: ${_lane}${_lane === 'retainer' ? '  <- RETAINER (core product)' : _lane === 'both' ? '  <- PERFECT STORM' : ''}`);
+
   const manualRoleCount = req.body.manualRoleCount || 0;
   let verifiedEmployees = req.body.verifiedEmployees || null;
   let verifiedRevenue = req.body.verifiedRevenue || null;
@@ -3383,17 +4319,11 @@ app.post('/api/research', async (req, res) => {
   // Only runs for THIS one company (no rate-limiting risk). Gets CEO name,
   // public pain signals, revenue — the deep intelligence for the pitch.
   // Skip if we already have it from Find, or if no company name.
-  if (!verifiedCEO || publicPainSignals.length === 0) {
-    try {
-      const deepEnrich = await googleEnrich(company);
-      if (deepEnrich) {
-        if (!verifiedEmployees && deepEnrich.employees) verifiedEmployees = deepEnrich.employees;
-        if (!verifiedCEO && deepEnrich.ceoName) { verifiedCEO = deepEnrich.ceoName; verifiedCEOTitle = deepEnrich.ceoTitle; }
-        if (publicPainSignals.length === 0 && deepEnrich.painSignals) publicPainSignals = deepEnrich.painSignals;
-        console.log(`Research enrichment [${company}]: ceo=${verifiedCEO||'?'} pain=${publicPainSignals.length}`);
-      }
-    } catch(e) { console.log('Research enrichment failed (non-fatal):', e.message); }
-  }
+  // REMOVED: googleEnrich(). It used googleSearch(), which is IP-BLOCKED from
+  // Render — it returned "2 chars" every single time and never once produced a
+  // CEO name or a pain signal. It is fully replaced by findDecisionMaker()
+  // (multi-source, corroborated) and findBusinessPain() (Firecrawl web search),
+  // both of which actually work.
 
   // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
   console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? apiKey.slice(0,12)+'...' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
@@ -3471,27 +4401,19 @@ app.post('/api/research', async (req, res) => {
       } catch(e) { console.log('CompaniesAPI research enrich skipped:', e.message); }
     }
 
-    // ═══ ABOUT-PAGE ENRICHMENT — CEO name + team size from company's own site ═══
-    // Firecrawl works from Render where search engines are blocked. This is our
-    // real source for the decision-maker's name. Runs only if we don't have it yet.
-    if ((!verifiedCEO || !verifiedEmployees) && website && content) {
-      try {
-        const aboutData = await enrichFromAboutPage(website, firecrawlKey, content);
-        if (!verifiedCEO && aboutData.ceoName) {
-          verifiedCEO = aboutData.ceoName;
-          verifiedCEOTitle = aboutData.ceoTitle || 'Owner';
-        }
-        if (!verifiedEmployees && aboutData.teamSize) {
-          verifiedEmployees = aboutData.teamSize;
-        }
-      } catch(e) { console.log('About enrich skipped:', e.message); }
-    }
+    // NOTE: The old regex-based about-page CEO finder was REMOVED here. It was
+    // the thing producing garbage like "on core (principal)", and it scraped the
+    // same /about and /team pages that findOwnerViaBrain (below) scrapes anyway —
+    // burning 1-3 Firecrawl credits per research for a worse answer.
+    // findOwnerViaBrain does this properly: it uses /map to find the REAL
+    // leadership pages, then has Claude read them.
 
     // ═══ SIZE VIA WEB SEARCH — closes the Companies API coverage gap ═══════
     // The Companies API returns emp=? on a big share of private SMBs. ZoomInfo's
     // public pages, D&B, Buzzfile and Manta all publish headcount and revenue for
     // private companies, free to read. Only runs when we still have no headcount.
-    if (!verifiedEmployees && firecrawlKey && apiKey && company) {
+    // CREDIT GATE: ~3 credits. Only if we genuinely have no headcount at all.
+    if (!verifiedEmployees && firecrawlKey && apiKey && company && req.body.deepMode !== false) {
       try {
         const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey);
         if (sz && sz.employees) {
@@ -3510,7 +4432,12 @@ app.post('/api/research', async (req, res) => {
     // CREDIT DISCIPLINE: only run this when we don't already have pain signals,
     // and only for leads worth the spend. Firecrawl free tier is 500/mo.
     let painSummary = '';
-    if (publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
+    // CREDIT GATE: the pain engine costs ~4 credits. Only spend it on leads that
+    // are actually worth pitching — i.e. we found a real decision-maker who can
+    // buy. Running it on every lead (including ones we'd never send to) was
+    // burning the monthly budget on companies that get discarded anyway.
+    const painWorthIt = req.body.deepMode !== false; // callers can opt out
+    if (painWorthIt && publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
       try {
         const pain = await findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry);
         if (pain.signals && pain.signals.length > 0) {
@@ -3738,6 +4665,16 @@ COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
 VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
 VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle || 'CEO') + ') — found in public search results, use their real name in the pitch' : 'Not identified — pitch to "the owner/CEO"'}
+═══ MONEY ON FIRE — provable, undeniable, and no competitor will ever tell them ═══
+${moneyOnFire.count > 0 ? `${moneyOnFire.headline}
+
+${moneyOnFire.fires.map(f => `[${f.severity.toUpperCase()}] ${f.fire}\n   → ${f.cost}`).join('\n\n')}
+
+→ THESE ARE FACTS, NOT OPINIONS. Every one is independently verifiable by them in under five minutes. That is what makes them impossible to dismiss.
+→ The single most devastating one, when present, is ADS WITHOUT A PIXEL. They are paying for traffic they physically cannot measure. Not "underperforming" — literally blind. No competitor, no agency, and no employee has ever told them this.
+→ Lead with the CRITICAL fires. Do not list all of them — pick the one that costs the most money and name it precisely. A single undeniable fact beats five soft observations.
+${moneyOnFire.isBurning ? '→ ⚠ THIS COMPANY IS BURNING ON MULTIPLE FRONTS AT ONCE. The audit essentially writes itself — lead with the arithmetic.' : ''}` : 'No confirmed money-on-fire signals — the audit must come from the site and operational evidence only. Do NOT invent financial leaks.'}
+
 ═══ THE FIRE HE IS ACTUALLY FIGHTING (highest-value intel we have) ═══
 ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : ''}${publicPainSignals.length > 0 ? 'VERIFIED OPERATIONAL PAIN (from real reviews, complaints, and employee feedback — each carries the exact quote that proves it):\n' + publicPainSignals.map(p => '- ' + p).join('\n') + `
 
@@ -3748,7 +4685,23 @@ ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : '
 RECENT NEWS TRIGGERS (verified to be about THIS company via Google News): ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago] ${t.headline}`).join('\n') + '\n→ These are CONFIRMED recent events about this exact company. Use the most relevant ONE as the pitch cold-open ("I saw you just..."). This is the strongest personalization signal — it proves we did our homework. Only reference a trigger that genuinely connects to the pain/product.' : 'No recent company-specific news found — do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
-ICP LANE (which of CROJungle's real client profiles this company matches — drives product choice AND which proof point parallels their situation):
+═══ THE BUYING WINDOW WE ARE INTERCEPTING (this determines the ENTIRE pitch) ═══
+${req.body.buyingLane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
+They have allocated budget on BOTH fronts and committed on NEITHER. This is the strongest possible position.
+THE PITCH: they are about to spend ~$125k/year on two hires (one to do repetitive work software handles, one junior marketer). CROJ replaces the first with a build and the second with a senior team — for less, and it compounds.
+Lead with whichever is bleeding more money. Do NOT pitch both products in one email — name the sharper fire, and let the call surface the rest.`
+: req.body.buyingLane === 'retainer' ? `📣 THE RETAINER WINDOW — they posted a MARKETING role.
+THIS IS THE MOST IMPORTANT THING TO UNDERSTAND ABOUT THIS LEAD:
+They have ALREADY DECIDED to spend money on marketing. The budget is allocated (~$70k/yr). What they have NOT decided is HOW to spend it. We are not asking them to open their wallet — it is already open.
+THE PITCH: "You're about to hire one junior marketer for $70k. For that money you can have a senior team — strategy, ads, creative, and the technology behind it — that has already done this." A single junior hire cannot run strategy, build the funnel, produce creative, AND manage spend. A team can.
+This maps to the CEO's ICP #3 and #4 — CROJungle's CORE PRODUCT. Do NOT pitch a software build here unless the audit turns up an overwhelming ops problem.
+The strongest proof point here is Sean ($140k on $4k in one month, ~30x over 8 months) — it is exactly the "one marketing hire vs. a team" comparison, in dollars.`
+: `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
+They have already identified the problem and allocated the budget (~$55k/yr per role). They have started a hiring process but have NOT yet committed.
+THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $25k-$75k custom build.
+The strongest proof point is the seasonal business (relief + profit) for an owner-operator, or Kraft Heinz if they are larger and more technical.`}
+
+ICP LANE (secondary context — which profile they match and which proof point parallels their situation):
 ${icpLane.summary}
 
 REACHABILITY REALITY (important context for the pitch, not a reason to soften it):
@@ -4211,6 +5164,92 @@ Return ONLY valid JSON:
 
     // Merge text analysis with visual analysis
     const hasCTA = visualAnalysis?.hasCTAAboveFold ?? /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MONEY ON FIRE — the most undeniable audit finding we can produce
+    // ═══════════════════════════════════════════════════════════════════
+    // We already detect all of these SEPARATELY and have never combined them.
+    // A company doing several at once is setting money on fire in multiple
+    // ways simultaneously — and every single one is PROVABLE, not an opinion.
+    //
+    // The brutal one is ads-without-a-pixel: they are paying for traffic they
+    // physically cannot measure. Not "underperforming" — literally blind.
+    // You cannot argue with it, and no competitor will ever tell them.
+    const moneyOnFire = (() => {
+      const fires = [];
+      const adCount = fbAds.adCount || 0;
+      const hasAds = adCount > 0 || !!builtWith.hasGoogleAdsTag;
+
+      // FIRE 1 — Paying for traffic they cannot measure.
+      if (hasAds && !builtWith.hasMetaPixel && (fbAds.adCount || 0) > 0) {
+        fires.push({
+          severity: 'critical',
+          fire: `${adCount} paid ads running with NO Meta pixel installed`,
+          cost: 'Every dollar of that ad spend is unmeasurable. They cannot tell a winning ad from a losing one, cannot retarget a single visitor, and cannot optimize anything. They are flying completely blind.',
+        });
+      }
+      if (hasAds && !builtWith.hasPixel) {
+        fires.push({
+          severity: 'critical',
+          fire: 'Paying for ads with NO analytics of any kind on the page',
+          cost: 'Zero conversion tracking. They cannot answer "did that ad make money?" — for any ad, ever.',
+        });
+      }
+
+      // FIRE 2 — Paying for traffic that lands somewhere it cannot convert.
+      if (hasAds && !hasCTA) {
+        fires.push({
+          severity: 'critical',
+          fire: `Paid traffic landing on a page with no call-to-action`,
+          cost: 'They are renting attention and then giving it away. A visitor who WANTS to act has nowhere to click.',
+        });
+      }
+      if (hasAds && !builtWith.hasEmailCapture && !builtWith.hasBooking) {
+        fires.push({
+          severity: 'high',
+          fire: 'Paid traffic with no email capture and no booking tool',
+          cost: 'Every visitor who is not ready to buy TODAY is lost permanently. No second chance, no nurture, nothing.',
+        });
+      }
+
+      // FIRE 3 — Paying humans to do work software does once.
+      if (manualRoleCount >= 2) {
+        const annual = manualRoleCount * 55000;
+        fires.push({
+          severity: 'high',
+          fire: `${manualRoleCount} manual roles open — roughly $${(annual/1000).toFixed(0)}k/yr in loaded salary`,
+          cost: `That is a recurring, compounding cost for work a one-time build handles permanently. They pay it again every single year.`,
+        });
+      }
+
+      // FIRE 4 — No CRM. Every lead they generate leaks out the side.
+      if (hasAds && !builtWith.hasCRM) {
+        fires.push({
+          severity: 'high',
+          fire: 'Running paid ads with no CRM detected',
+          cost: 'Leads arrive and vanish. No follow-up, no pipeline, no idea which ones closed.',
+        });
+      }
+
+      const critical = fires.filter(f => f.severity === 'critical').length;
+      return {
+        fires,
+        count: fires.length,
+        criticalCount: critical,
+        // 3+ simultaneous fires with ad spend confirmed = the audit writes itself
+        isBurning: fires.length >= 3 && hasAds,
+        headline: fires.length === 0 ? '' :
+          critical > 0
+            ? `${fires.length} ways this business is losing money right now — ${critical} of them critical and provable`
+            : `${fires.length} confirmed leaks in how this business converts and operates`,
+      };
+    })();
+    if (moneyOnFire.count > 0) {
+      console.log(`MONEY ON FIRE [${company}]: ${moneyOnFire.count} leaks (${moneyOnFire.criticalCount} critical)${moneyOnFire.isBurning ? ' — BURNING' : ''}`);
+      moneyOnFire.fires.forEach(f => console.log(`  · [${f.severity}] ${f.fire}`));
+    }
+
+
     const hasWeakHeadline = visualAnalysis ? visualAnalysis.headlineQuality === 'generic' : /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
     const hasTestimonials = visualAnalysis?.hasSocialProof ?? /testimonial|review|client said|case study|trusted by/i.test(content);
     const hasPricing = /pricing|plans|per month|subscription|\$/i.test(content);
@@ -4474,9 +5513,36 @@ Return ONLY valid JSON:
       });
     }
 
+    // ═══ RECOMPUTE REACHABILITY — now with REAL inputs ══════════════════════
+    // THE ARCHITECTURAL FIX: at Find time, scoreReachability() reads verifiedCEO,
+    // emailResult and painSignals — which are ALL empty at that stage, because
+    // they only get populated here in Research. So the Find-time score was
+    // silently a headcount-only pre-score wearing a "reachability" label.
+    //
+    // Now that we actually know WHO the decision-maker is, whether we can REACH
+    // them, and what fire they're fighting, we score it properly and overwrite.
+    const reach = scoreReachability({
+      name: company,
+      signals: discoverySignals,
+      source: discoverySource,
+      manualRoleCount,
+      jobTitle: req.body.jobTitle || '',
+      verifiedEmployees,
+      verifiedCEO, verifiedCEOTitle,
+      decisionMaker,
+      emailResult,
+      email: email.email,
+      publicPainSignals,
+      companyTriggers,
+    });
+    console.log(`REACHABILITY [${company}]: ${reach.score}/100 — ${reach.verdict}`);
+
     console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product} | +${researchBonus} research bonus`);
 
     res.json({
+      reachability: reach.score,
+      reachabilityVerdict: reach.verdict,
+      reachabilityReasons: reach.reasons,
       email: email.email||'',
       founderName: email.founderName||'',
       founderTitle: email.title||'',
