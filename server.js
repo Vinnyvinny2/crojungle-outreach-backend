@@ -3444,7 +3444,7 @@ app.get('/api/verify-website', async (req, res) => {
 });
 
 app.post('/api/discover', async (req, res) => {
-  const { keywords, keys } = req.body;
+  const { keywords, keys, apiKey } = req.body;
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey } = keys || {};
 
   console.log('\n=== DISCOVERY START ===');
