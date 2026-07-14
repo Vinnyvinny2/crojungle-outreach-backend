@@ -1484,7 +1484,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     const corpus = pages.join('\n').slice(0, 22000);
     if (corpus.trim().length < 300) {
-      console.log(`DM/brain [${companyName}]: not enough content to analyze`);
+      console.log(`DM/brain [${companyName}]: no readable content (homepage empty AND no leadership pages mapped)`);
       return null;
     }
 
@@ -1979,9 +1979,23 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // Managing Partner. Anything below that is a NO-SEND by default — the lead is
   // held back for a manual look rather than wasted on someone with no authority.
   const AUTHORITY_FLOOR = 75; // COO/GM and above. VP=50, Director=35, Manager=20.
-  best.canBuy = best.authority >= AUTHORITY_FLOOR;
+  const hasAuthority = best.authority >= AUTHORITY_FLOOR;
+
+  // EVIDENCE FLOOR: authority alone isn't enough. If the ONLY source is Hunter —
+  // whose LinkedIn-biased index is exactly what surfaces the wrong people — then
+  // we have one weak, unverified opinion. That is not enough to burn a lead on.
+  // Require either corroboration (2+ independent sources) OR a strong single
+  // source that is NOT Hunter (their own website / web search / registry).
+  const nonHunterSources = best.sources.filter(s => s !== 'hunter');
+  const hasRealEvidence = best.corroborated || nonHunterSources.length >= 1;
+
+  best.canBuy = hasAuthority && hasRealEvidence;
   if (!best.canBuy) {
-    console.log(`DM [${companyName}]: ⚠ ${best.name} is "${best.title}" (authority ${best.authority}) — BELOW BUYING FLOOR. Held back.`);
+    const why = !hasAuthority
+      ? `"${best.title}" (authority ${best.authority}) is below the buying floor`
+      : 'Hunter is the ONLY source — no independent confirmation this is the real owner';
+    console.log(`DM [${companyName}]: ⚠ ${best.name} — ${why}. HELD BACK.`);
+    best.blockWhy = why;
   }
 
   console.log(`DM [${companyName}]: ${best.name} (${best.title || '?'}) | score ${best.score} | ${confidence} | sources: ${best.sources.join('+')}${best.corroborated ? ' [CORROBORATED]' : ''}`);
@@ -1996,7 +2010,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     evidence: best.evidence || '',
     authority: best.authority,
     canBuy: best.canBuy,
-    blockReason: best.canBuy ? null : `"${best.title || 'unknown title'}" cannot authorize a purchase — need the owner/founder/CEO`,
+    blockReason: best.canBuy ? null : (best.blockWhy || `"${best.title || 'unknown title'}" cannot authorize a purchase`),
     alternates: clusters.slice(1, 3).map(c => ({
       name: c.name, title: c.title, sources: c.sources, score: c.score,
       authority: c.authority, canBuy: c.authority >= 75,
@@ -4622,6 +4636,12 @@ app.post('/api/test-contact-engine', async (req, res) => {
     if (firecrawlKey) {
       const s = Date.now();
       homepageContent = await firecrawlScrape(firecrawlKey, website, 20000);
+      // Retry once with a longer timeout — a 0-char scrape collapses the whole
+      // engine to Hunter-only, which is exactly the failure we're trying to fix.
+      if (!homepageContent || homepageContent.length < 200) {
+        console.log(`TEST [${company}]: homepage scrape empty, retrying...`);
+        homepageContent = await firecrawlScrape(firecrawlKey, website, 35000);
+      }
       out.timing.scrape = Date.now() - s;
       out.sources.homepage_chars = homepageContent.length;
     }
