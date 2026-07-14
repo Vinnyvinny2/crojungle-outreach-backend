@@ -1836,6 +1836,52 @@ ${corpus}` }]
 
 // ── SOURCE 3: NEWS — press naming them as the owner ────────────────────────
 
+// ── SOURCE: PUBLIC BUSINESS REGISTRY ───────────────────────────────────────
+// Every US LLC/corp files its members and officers with the state — public record.
+// This is the most authoritative source for who LEGALLY owns a small business.
+//
+// IMPORTANT CAVEAT: registries very often list the REGISTERED AGENT (a lawyer or
+// a filing service like LegalZoom), not the actual owner. So we hard-reject
+// agent-like entries, and this is treated as CORROBORATION, never a sole source.
+const findOwnerViaRegistry = async (companyName, fcKey) => {
+  if (!companyName || !fcKey) return null;
+  try {
+    const clean = companyName.replace(/,?\s*(Inc|LLC|Corp|Ltd|Co)\.?$/gi, '').trim();
+
+    // Web search reaches registry aggregators far more reliably than guessing
+    // OpenCorporates' URL structure (which is what the old version did, and why
+    // it always returned nothing).
+    const results = await firecrawlSearch(
+      fcKey,
+      `"${clean}" (opencorporates OR bizapedia OR "secretary of state") officers OR members OR registered agent`,
+      3,
+      true
+    );
+    if (results.length === 0) return null;
+
+    const OWNER_ROLE = /(managing member|sole member|member|president|ceo|chief executive|owner|founder|principal|managing director|incorporator|officer|director|manager)/i;
+    const AGENT_ROLE = /(registered agent|agent for service|resident agent|statutory agent|corporation service|ct corporation|registered office|incorp services|legalzoom|northwest registered|national registered)/i;
+
+    for (const r of results) {
+      const lines = (r.content || '').split('\n');
+      for (const line of lines) {
+        if (AGENT_ROLE.test(line)) continue;      // a filing agent is not the owner
+        if (!OWNER_ROLE.test(line)) continue;
+        const m = line.match(/([A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+){1,2})/);
+        if (m && looksLikeRealName(m[1])) {
+          const roleM = line.match(OWNER_ROLE);
+          console.log(`DM/registry [${companyName}]: ✓ ${m[1]} (${roleM ? roleM[0] : 'officer'})`);
+          return { name: m[1].trim(), title: roleM ? roleM[0] : 'Officer', confidence: 'medium', source: 'registry' };
+        }
+      }
+    }
+    return null;
+  } catch(e) {
+    console.log('DM/registry failed:', e.message);
+    return null;
+  }
+};
+
 const findOwnerViaNews = async (companyName) => {
   if (!companyName) return null;
   try {
