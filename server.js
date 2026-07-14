@@ -603,6 +603,20 @@ app.get('/api/find-website', async (req, res) => {
     }
   } catch(e) { console.log('Domain guess failed:', e.message); }
 
+  // Method 3: WEB SEARCH — the reliable one. Clearbit misses constantly (which is
+  // why the "confirm website" modal kept appearing) and domain-guessing only works
+  // when the company name happens to equal the domain. A real web search just
+  // finds it. Requires the Firecrawl key to be passed.
+  const fcKey = req.query.fcKey;
+  if (fcKey) {
+    try {
+      const found = await findWebsiteViaSearch(cleanName, fcKey, req.query.location);
+      if (found) {
+        return res.json({ website: found, source: 'web_search', confident: true });
+      }
+    } catch(e) { console.log('Website web-search failed:', e.message); }
+  }
+
   console.log(`No website found for "${company}"`);
   res.json({ website: '', source: 'not_found', confident: false });
 });
@@ -971,6 +985,79 @@ const scrapeGoogleNews = async () => {
 // Free RSS, no bot protection
 // ═══════════════════════════════════════════════════════════
 // Shared Firecrawl scrape — renders JS and beats bot protection (1 credit/call)
+// ── FIRECRAWL /map — get the site's REAL URLs instead of guessing paths ────
+// This is why every website lookup was returning "nothing found": we were
+// guessing that the about page lived at /about. On most real sites it doesn't —
+// it's at /our-company, /who-we-are, /history, /meet-the-team, etc.
+// Map asks the site for its actual structure (sitemap + SERP + index cache).
+const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
+  if (!fcKey || !url) return [];
+  try {
+    const r = await fetchT('https://api.firecrawl.dev/v1/map', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, ...(search ? { search } : {}), limit }),
+    }, 20000);
+    const d = await r.json();
+    if (isCreditError(d, r.status)) {
+      FIRECRAWL_OUT_OF_CREDITS = true;
+      console.log('🔴 FIRECRAWL OUT OF CREDITS (map)');
+      return [];
+    }
+    const links = d.links || d.data?.links || [];
+    return links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
+  } catch(e) {
+    console.log('firecrawlMap error:', e.message);
+    return [];
+  }
+};
+
+// ── FIRECRAWL /search — REAL WEB SEARCH, and it works from Render ──────────
+// This is the capability we spent hours concluding was impossible. DuckDuckGo and
+// Google block Render's IPs at the network edge — but Firecrawl runs its own
+// scraping infrastructure and is NOT blocked. It searches the web AND returns
+// full page content, not just snippets.
+const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
+  if (!fcKey || !query) return [];
+  try {
+    const r = await fetchT('https://api.firecrawl.dev/v1/search', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        limit,
+        ...(scrapeContent ? { scrapeOptions: { formats: ['markdown'], onlyMainContent: true } } : {}),
+      }),
+    }, 30000);
+    const d = await r.json();
+    if (isCreditError(d, r.status)) {
+      FIRECRAWL_OUT_OF_CREDITS = true;
+      console.log('🔴 FIRECRAWL OUT OF CREDITS (search)');
+      return [];
+    }
+    const results = d.data || d.results || [];
+    return results.map(x => ({
+      url: x.url || '',
+      title: x.title || '',
+      description: x.description || '',
+      content: (x.markdown || x.content || '').slice(0, 6000),
+    })).filter(x => x.url);
+  } catch(e) {
+    console.log('firecrawlSearch error:', e.message);
+    return [];
+  }
+};
+
+// Global flag — set the moment Firecrawl reports it's out of credits, so the
+// whole run can report it honestly instead of silently producing empty results.
+let FIRECRAWL_OUT_OF_CREDITS = false;
+
+const isCreditError = (d, status) =>
+  status === 402 ||
+  /insufficient credits|payment required|out of credits|credit limit|upgrade your plan/i.test(
+    String(d?.error || d?.message || '')
+  );
+
 const firecrawlScrape = async (fcKey, url, timeout = 25000) => {
   if (!fcKey) return '';
   try {
@@ -980,6 +1067,11 @@ const firecrawlScrape = async (fcKey, url, timeout = 25000) => {
       body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 3000 }),
     }, timeout);
     const d = await r.json();
+    if (isCreditError(d, r.status)) {
+      FIRECRAWL_OUT_OF_CREDITS = true;
+      console.log('🔴 FIRECRAWL OUT OF CREDITS — scrapes, searches, and maps will all fail until topped up.');
+      return '';
+    }
     return d.data?.markdown || d.markdown || '';
   } catch(e) { console.log('firecrawlScrape error:', e.message); return ''; }
 };
@@ -1311,11 +1403,11 @@ const genericInboxScore = (employees) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DM_SOURCE_WEIGHT = {
-  own_website_brain: 40,   // they published it themselves, read by an LLM — strongest single source
-  registry:          35,   // legal public record — authoritative, but can be a lawyer/registered agent
-  news:              30,   // press quotes them as owner — strong corroboration
-  hunter:            25,   // real, but LinkedIn-biased and often surfaces the wrong seniority
-  email_pattern:     15,   // their email exists and matches their name — confirms the person is real
+  own_website_brain: 45,   // they published it themselves — strongest single source there is
+  web_search:        40,   // the whole web, read by an LLM. Catches BBB/Manta/local press.
+  registry:          30,   // legal public record — but often lists a filing agent, not the owner
+  news:              30,   // press quotes them as owner — strong independent corroboration
+  hunter:            20,   // real, but LinkedIn-biased: it surfaces VPs and HR, not owners
 };
 
 const normalizePersonName = (n) => String(n || '')
@@ -1333,58 +1425,92 @@ const sameName = (a, b) => {
 };
 
 const looksLikeRealName = (n) => {
-  const parts = normalizePersonName(n).split(' ').filter(Boolean);
+  const clean = normalizePersonName(n);
+  const parts = clean.split(' ').filter(Boolean);
   if (parts.length < 2 || parts.length > 4) return false;
-  // Each part must be a proper capitalized word; reject job-title fragments
-  if (!/^[A-Z][a-z]{1,}$/.test(parts[0]) || !/^[A-Z][a-z]{1,}$/.test(parts[parts.length-1])) return false;
-  return !/\b(team|leadership|management|company|owner|founder|president|about|contact|core|home|welcome|our|the|staff|group|service)\b/i.test(n);
+  // First and last must be capitalized word-like tokens (allow initials like "J.")
+  const wordOk = (w) => /^[A-Z][a-zA-Z'-]{1,}$/.test(w);
+  if (!wordOk(parts[0]) || !wordOk(parts[parts.length - 1])) return false;
+  // Reject only if the WHOLE thing is a job title / generic phrase — not if a
+  // legitimate name merely contains a substring. (The old version killed real
+  // names and was why every website lookup silently returned nothing.)
+  const junkWhole = /^(the |our )?(team|leadership|management|company|owner|founder|president|ceo|about|contact|staff|group|services?|home|welcome|meet the team|our story)$/i;
+  if (junkWhole.test(clean)) return false;
+  // Reject if EITHER name token is itself a job word
+  const jobWord = /^(team|leadership|management|company|owner|founder|president|ceo|coo|cfo|director|manager|staff|group|service|services|about|contact|home|core|welcome|our|us)$/i;
+  if (parts.some(p => jobWord.test(p))) return false;
+  return true;
 };
 
-// ── SOURCE 1: THE BRAIN READS THEIR ACTUAL WEBSITE ─────────────────────────
-// The single biggest upgrade. Scrape About/Team/Leadership/Story pages, hand the
-// whole thing to Claude, and ask directly: who owns this company? Claude reading
-// prose beats regex by a mile — and this is where owner-operators actually live.
+// ── SOURCE 1: THEIR WEBSITE — but find the REAL pages, don't guess ─────────
+// THE BUG THAT BROKE EVERYTHING: we were guessing that the leadership page lived
+// at /about or /team. On most real sites it doesn't — it's /our-company,
+// /who-we-are, /history, /meet-the-team, /leadership-team. Every guess 404'd,
+// so the Brain got nothing but the homepage and correctly found nobody.
+//
+// THE FIX: Firecrawl /map asks the site for its ACTUAL structure. We then pick
+// the pages most likely to name a human, and read those.
+const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
+
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
-  if (!website || !apiKey) return null;
+  if (!website || !apiKey || !fcKey) return null;
   try {
-    const base = website.replace(/\/$/, '');
-    const pages = [homepageContent || ''];
-    // Owner-operators put themselves on these pages. Scrape the ones that exist.
-    const paths = ['/about', '/about-us', '/our-story', '/team', '/our-team', '/leadership', '/management', '/contact'];
-    let scraped = 0;
-    for (const p of paths) {
-      if (scraped >= 3) break; // 3 good pages is plenty; keep Firecrawl usage sane
-      const md = await firecrawlScrape(fcKey, base + p, 9000);
-      if (md && md.length > 250) { pages.push(`\n\n--- PAGE ${p} ---\n` + md); scraped++; }
+    const pages = [];
+    if (homepageContent && homepageContent.length > 200) {
+      pages.push('--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000));
     }
-    const corpus = pages.join('\n').slice(0, 18000);
-    if (corpus.trim().length < 300) return null;
+
+    // Ask the site for its real URLs, filtered toward leadership pages
+    const urls = await firecrawlMap(fcKey, website, 'about team leadership founder owner');
+    const candidates = urls
+      .filter(u => LEADERSHIP_URL_HINTS.test(u))
+      .filter(u => !/\.(pdf|jpg|png|gif|zip|mp4)$/i.test(u))
+      .slice(0, 4);
+
+    console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
+
+    // Read the real pages (max 3 — keeps Firecrawl credits sane)
+    let read = 0;
+    for (const u of candidates) {
+      if (read >= 3) break;
+      const md = await firecrawlScrape(fcKey, u, 12000);
+      if (md && md.length > 200) {
+        pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
+        read++;
+      }
+    }
+
+    const corpus = pages.join('\n').slice(0, 22000);
+    if (corpus.trim().length < 300) {
+      console.log(`DM/brain [${companyName}]: not enough content to analyze`);
+      return null;
+    }
 
     const r = await fetchT('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 400,
-        messages: [{ role: 'user', content: `Below is content scraped from ${companyName}'s own website.
+        model: 'claude-sonnet-4-6',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: `Content scraped from ${companyName}'s own website (homepage + their about/team/leadership pages).
 
-Identify the OWNER / FOUNDER / CEO — the person who actually has authority to buy. For a small owner-operated business this is the person who started or owns it, NOT a marketing manager or office coordinator.
+TASK: Identify the OWNER / FOUNDER / CEO / PRESIDENT — the person with authority to BUY. For an owner-operated business this is whoever started or owns it. It is NOT an HR director, a VP of Maintenance, an office manager, or a marketing coordinator — those people cannot authorize a purchase.
 
 STRICT RULES:
-- Only report a name that ACTUALLY APPEARS in the content. Never guess, never infer from the company name, never invent.
-- Return the name of a PERSON, never a job title, department, or generic word.
-- If several people are listed, pick the one with the highest ownership authority (Founder/Owner > CEO > President > Managing Partner > COO).
-- If NO person's name appears anywhere, return null. Returning null is correct and expected — do not fabricate to fill the field.
+- Report ONLY a name that literally appears in the content below. Never infer, never guess, never invent.
+- If several people are listed, choose by BUYING AUTHORITY: Owner/Founder > CEO > President > Managing Partner/Principal > COO/GM. Ignore anyone below that.
+- Owner-operated companies often say things like "Founded by X in 1998", "X started the company", "a message from our president, X", or a family name matching the company name.
+- If NOBODY with real buying authority is named anywhere, return null for name. Returning null is CORRECT — do not settle for a junior employee just to fill the field.
 
 Return ONLY valid JSON, no markdown:
-{"name":"Full Name or null","title":"their exact title as written on the site, or null","evidence":"the exact sentence/phrase from the content that names them, verbatim","confidence":"high|medium|low"}
+{"name":"Full Name or null","title":"their exact title as written, or null","evidence":"the exact sentence naming them, verbatim from the content","confidence":"high|medium|low"}
 
-confidence: high = name explicitly tied to an ownership title ("John Smith, Founder"). medium = clearly the principal but title looser. low = a name appears but their role is ambiguous.
+confidence: high = name explicitly tied to an ownership title. medium = clearly the principal but title is looser. low = a name appears but their authority is ambiguous.
 
 CONTENT:
 ${corpus}` }]
       }),
-    }, 25000);
+    }, 30000);
 
     const d = await r.json();
     let text = d.content?.[0]?.text || '';
@@ -1393,13 +1519,18 @@ ${corpus}` }]
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = JSON.parse(text);
 
-    if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) return null;
-    // The evidence must actually exist in what we scraped — this blocks hallucination cold.
-    if (parsed.evidence && !corpus.toLowerCase().includes(String(parsed.evidence).toLowerCase().slice(0, 25))) {
-      console.log(`DM/brain [${companyName}]: evidence not found in source — REJECTED as unverifiable`);
+    if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
+      console.log(`DM/brain [${companyName}]: no owner-level person named on their site`);
       return null;
     }
-    console.log(`DM/brain [${companyName}]: ${parsed.name} (${parsed.title || '?'}) [${parsed.confidence}]`);
+    // Anti-hallucination: their name must literally be in what we scraped.
+    const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
+    const np = String(parsed.name).toLowerCase().split(/\s+/).filter(Boolean);
+    if (!(np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]))) {
+      console.log(`DM/brain [${companyName}]: "${parsed.name}" not present in source — REJECTED as hallucinated`);
+      return null;
+    }
+    console.log(`DM/brain [${companyName}]: ✓ ${parsed.name} (${parsed.title || '?'}) [${parsed.confidence}]`);
     return {
       name: parsed.name.trim(),
       title: parsed.title || null,
@@ -1413,46 +1544,298 @@ ${corpus}` }]
   }
 };
 
-// ── SOURCE 2: PUBLIC BUSINESS REGISTRY ─────────────────────────────────────
-// Every US LLC/corp must file its members/officers with the state. It is public
-// record. OpenCorporates aggregates 240M companies — their API is paid, but the
-// HTML pages are public and Firecrawl reads them free.
-// CAVEAT (important): registries often list the registered AGENT (a lawyer or
-// filing service), not the real owner. So we explicitly reject agent-like entries
-// and treat this as corroboration, never as a sole source.
-const findOwnerViaRegistry = async (companyName, fcKey) => {
-  if (!companyName || !fcKey) return null;
+// ── SOURCE 2: WEB SEARCH — the capability we thought we didn't have ────────
+// Firecrawl's /search endpoint does real web search from Render (it uses its own
+// infrastructure, so it is NOT IP-blocked the way DuckDuckGo and Google are).
+// This searches the ENTIRE web for who owns this company, then has the Brain read
+// the actual result pages. This is how a human would do it.
+const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey) => {
+  if (!companyName || !fcKey || !apiKey) return null;
   try {
-    const q = encodeURIComponent(companyName.replace(/\s*(inc|llc|corp|ltd|co)\.?$/i, '').trim());
-    const md = await firecrawlScrape(fcKey, `https://opencorporates.com/companies?q=${q}&jurisdiction_code=us`, 12000);
-    if (!md || md.length < 200) return null;
+    const clean = companyName.replace(/,?\s*(Inc|LLC|Corp|Ltd)\.?$/gi, '').trim();
+    const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
 
-    // Officer roles that indicate real ownership — not a filing agent
-    const OWNER_ROLE = /(managing member|member|president|ceo|chief executive|owner|founder|principal|managing director|manager|director|incorporator|officer)/i;
-    const AGENT_ROLE = /(registered agent|agent for service|resident agent|statutory agent|corporation service|ct corporation|registered office|incorp services|legalzoom|northwest registered)/i;
+    // Two angles: who owns it, and their profile on business directories that
+    // actually index SMB owners (BBB lists a "Principal Contact", Manta and
+    // Buzzfile list officers — these are goldmines that LinkedIn-based tools miss)
+    const queries = [
+      `"${clean}" owner OR founder OR "chief executive" OR president name`,
+      `"${clean}" ${domain ? domain + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
+    ];
 
-    // Look for "NAME — Role" patterns in the scraped registry page
-    const lines = md.split('\n');
-    for (const line of lines) {
-      if (AGENT_ROLE.test(line)) continue; // skip filing agents entirely
-      if (!OWNER_ROLE.test(line)) continue;
-      const m = line.match(/([A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+){1,2})/);
-      if (m && looksLikeRealName(m[1])) {
-        const roleM = line.match(OWNER_ROLE);
-        console.log(`DM/registry [${companyName}]: ${m[1]} (${roleM ? roleM[0] : 'officer'})`);
-        return { name: m[1].trim(), title: roleM ? roleM[0] : 'Officer', confidence: 'medium', source: 'registry' };
-      }
+    const hits = [];
+    for (const q of queries) {
+      const results = await firecrawlSearch(fcKey, q, 4, true);
+      hits.push(...results);
+      if (hits.length >= 5) break;
     }
-    return null;
+    if (hits.length === 0) return null;
+
+    const corpus = hits.map(h =>
+      `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`
+    ).join('\n\n').slice(0, 20000);
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: `These are real web search results about the company "${companyName}"${domain ? ' (' + domain + ')' : ''}.
+
+TASK: Identify the OWNER / FOUNDER / CEO / PRESIDENT of THIS SPECIFIC COMPANY — the person with authority to buy.
+
+CRITICAL WARNINGS:
+- Search results often mix up DIFFERENT companies with similar names. Only report a person if the source clearly ties them to THIS company${domain ? ' (' + domain + ')' : ''}. If the source is about a different business, ignore it.
+- Do NOT report a journalist, an author of an article, a customer leaving a review, or an employee of a directory site.
+- Do NOT report someone below owner level (HR director, VP of maintenance, office manager cannot buy).
+- If you cannot confidently name the owner of THIS company, return null. Null is the correct answer when the evidence isn't there.
+
+Return ONLY valid JSON, no markdown:
+{"name":"Full Name or null","title":"their title","evidence":"exact quote from the results naming them as owner of this company","sourceUrl":"which URL said it","confidence":"high|medium|low"}
+
+SEARCH RESULTS:
+${corpus}` }]
+      }),
+    }, 30000);
+
+    const d = await r.json();
+    let text = d.content?.[0]?.text || '';
+    text = text.replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+
+    if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
+      console.log(`DM/websearch [${companyName}]: no owner found in web results`);
+      return null;
+    }
+    // Anti-hallucination: the name must appear in the actual search results
+    const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
+    const np = String(parsed.name).toLowerCase().split(/\s+/).filter(Boolean);
+    if (!(np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]))) {
+      console.log(`DM/websearch [${companyName}]: "${parsed.name}" not in results — REJECTED`);
+      return null;
+    }
+    console.log(`DM/websearch [${companyName}]: ✓ ${parsed.name} (${parsed.title || '?'}) via ${parsed.sourceUrl || '?'}`);
+    return {
+      name: parsed.name.trim(),
+      title: parsed.title || null,
+      confidence: parsed.confidence || 'medium',
+      evidence: parsed.evidence || '',
+      sourceUrl: parsed.sourceUrl || '',
+      source: 'web_search',
+    };
   } catch(e) {
-    console.log('DM/registry failed:', e.message);
+    console.log('DM/websearch failed:', e.message);
     return null;
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DEEP BUSINESS INTELLIGENCE — everything Firecrawl /search now unlocks
+// ═══════════════════════════════════════════════════════════════════════════
+// Until now the "audit" was ONLY what sits on their homepage. That is shallow —
+// it tells us their site is broken, but not what the OWNER is actually losing
+// sleep over. Mike's whole insight is "name the fire he is stuck putting out."
+// You cannot name that fire from a homepage.
+//
+// Now we can read what the world says about this business: customer reviews and
+// complaints, BBB filings, Glassdoor (employees describe operational chaos in
+// detail), local press, industry forums. THAT is where the real pain lives.
+//
+// CREDIT DISCIPLINE: Firecrawl free tier is 500 credits/month and a search with
+// content costs ~1 credit per result. Saturating every source on every company
+// would burn the month in ~30 leads. So this ESCALATES — it only runs when the
+// cheap sources have already failed, and it stops the moment it has enough.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── FIND THEIR REAL WEBSITE (replaces Clearbit + domain guessing) ──────────
+// This was a genuine weak point: Clearbit misses constantly, which is why the
+// "confirm the website" modal kept appearing. A web search finds it reliably.
+const findWebsiteViaSearch = async (companyName, fcKey, location) => {
+  if (!companyName || !fcKey) return null;
+  try {
+    const q = `"${companyName}"${location ? ' ' + location : ''} official website`;
+    const results = await firecrawlSearch(fcKey, q, 4, false); // no content = cheaper
+    if (results.length === 0) return null;
+
+    const BAD_HOST = /(linkedin|facebook|twitter|instagram|yelp|bbb\.org|manta|buzzfile|dnb\.com|indeed|glassdoor|crunchbase|bloomberg|zoominfo|wikipedia|youtube|mapquest|yellowpages)/i;
+    const nameWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+
+    for (const r of results) {
+      let host = '';
+      try { host = new URL(r.url).hostname.replace('www.', '').toLowerCase(); } catch { continue; }
+      if (BAD_HOST.test(host)) continue; // a directory listing is not their website
+      // The domain should plausibly relate to the company name
+      const base = host.split('.')[0];
+      const relates = nameWords.some(w => base.includes(w.slice(0, Math.min(w.length, 6))))
+                   || nameWords.some(w => (r.title || '').toLowerCase().includes(w));
+      if (relates) {
+        const site = 'https://' + host;
+        console.log(`WEBSITE [${companyName}]: found via search → ${site}`);
+        return site;
+      }
+    }
+    return null;
+  } catch(e) {
+    console.log('findWebsiteViaSearch failed:', e.message);
+    return null;
+  }
+};
+
+// ── FIND REVENUE + HEADCOUNT (closes the size-gate gap) ────────────────────
+// The Companies API returns emp=? on a big share of private SMBs. But ZoomInfo's
+// PUBLIC pages, D&B, Buzzfile and Manta all publish revenue estimates and
+// headcount for private companies, free to read. Search reaches them.
+const findSizeViaSearch = async (companyName, website, fcKey, apiKey) => {
+  if (!companyName || !fcKey || !apiKey) return null;
+  try {
+    const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
+    const q = `"${companyName}" ${domain ? domain + ' ' : ''}revenue employees company size`;
+    const results = await firecrawlSearch(fcKey, q, 4, true);
+    if (results.length === 0) return null;
+
+    const corpus = results.map(r => `--- ${r.title}\nURL: ${r.url}\n${r.content}`).join('\n\n').slice(0, 14000);
+
+    const r2 = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        messages: [{ role: 'user', content: `Web results about "${companyName}"${domain ? ' (' + domain + ')' : ''}.
+
+Extract this company's EMPLOYEE COUNT and ANNUAL REVENUE if stated.
+
+RULES:
+- Only report figures the sources ACTUALLY state. Never estimate, never guess.
+- Make sure the figure is about THIS company, not a similarly-named one.
+- Directory sites (ZoomInfo, D&B, Buzzfile, Manta) often publish these for private companies — those are valid sources.
+- If a figure is not stated anywhere, return null for it. Null is correct.
+
+Return ONLY valid JSON:
+{"employees": number or null, "revenue": "e.g. $5M-$10M" or null, "source": "which site said it", "confidence": "high|medium|low"}
+
+RESULTS:
+${corpus}` }]
+      }),
+    }, 25000);
+
+    const d = await r2.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+    if (!parsed.employees && !parsed.revenue) return null;
+    console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'} rev=${parsed.revenue || '?'} (${parsed.source || '?'})`);
+    return parsed;
+  } catch(e) {
+    console.log('findSizeViaSearch failed:', e.message);
+    return null;
+  }
+};
+
+// ── THE BIG ONE: WHAT IS THE OWNER ACTUALLY LOSING SLEEP OVER? ─────────────
+// This transforms the pitch. Instead of "your website has no lead capture" —
+// which is a website observation — we get "your reviews say quotes take three
+// weeks, you're hiring four schedulers, and your ads point at a page with no
+// form." That is the fire he is stuck putting out, backed by evidence.
+//
+// Sources that actually carry this: Google/Yelp reviews, BBB complaints (public),
+// Glassdoor (employees describe the operational chaos in brutal detail),
+// industry forums, local press.
+const findBusinessPain = async (companyName, website, fcKey, apiKey, industry) => {
+  if (!companyName || !fcKey || !apiKey) return { signals: [], summary: '' };
+  try {
+    const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
+
+    // Two angles: what customers complain about, and what employees say about
+    // how the place actually runs. Employees are the most honest source there is.
+    const queries = [
+      `"${companyName}" reviews complaints problems slow response`,
+      `"${companyName}" glassdoor OR indeed employee review management`,
+    ];
+
+    const hits = [];
+    for (const q of queries) {
+      const res = await firecrawlSearch(fcKey, q, 3, true);
+      hits.push(...res);
+      if (hits.length >= 5) break;
+    }
+    if (hits.length === 0) return { signals: [], summary: '' };
+
+    const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.content}`).join('\n\n').slice(0, 18000);
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 900,
+        messages: [{ role: 'user', content: `Real web content about "${companyName}"${industry ? ' (' + industry + ')' : ''} — reviews, complaints, employee feedback, press.
+
+TASK: Identify the OPERATIONAL PAIN this business is actually living with. Not website problems — the real friction in how the business RUNS. The kind of thing that has the owner personally putting out fires.
+
+WHAT WE ARE LOOKING FOR (only if actually evidenced):
+- Slow response / quote turnaround / scheduling chaos
+- Manual processes that clearly do not scale
+- Understaffing, turnover, "we're always short-handed"
+- Communication breakdowns between office and field
+- Billing, invoicing, or dispatch problems
+- Growth that has outpaced their systems
+
+CRITICAL RULES:
+- ONLY report pain that is DIRECTLY EVIDENCED in the content. Quote it.
+- Verify the content is about THIS company, not a similarly-named one. If unsure, discard it.
+- Do NOT invent pain. Do NOT generalize from the industry. An empty result is CORRECT and expected when the evidence isn't there — a fabricated pain point would destroy the pitch's credibility instantly.
+- Ignore generic one-star rants with no operational detail ("bad service", "rude"). We want SPECIFIC, operational, fixable problems.
+
+Return ONLY valid JSON:
+{
+  "signals": [
+    {"pain":"one specific operational problem","evidence":"the exact quote proving it","source":"where it came from","severity":"high|medium|low"}
+  ],
+  "summary": "one sentence: the single biggest operational fire this owner is fighting, or empty string if nothing is evidenced"
+}
+
+CONTENT:
+${corpus}` }]
+      }),
+    }, 35000);
+
+    const d = await r.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+
+    // Anti-fabrication: every quoted piece of evidence must actually exist in
+    // the scraped content. This is the same guard as the Brain audit — a pitch
+    // built on an invented complaint is worse than no pitch at all.
+    const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
+    const verified = (parsed.signals || []).filter(s => {
+      if (!s.evidence) return false;
+      const ev = String(s.evidence).toLowerCase().replace(/\s+/g, ' ').slice(0, 30);
+      const ok = flat.includes(ev);
+      if (!ok) console.log(`PAIN [${companyName}]: rejected unverifiable — "${String(s.pain).slice(0,50)}"`);
+      return ok;
+    });
+
+    if (verified.length > 0) {
+      console.log(`PAIN [${companyName}]: ${verified.length} verified signals — ${verified.map(s => s.pain).join(' | ').slice(0, 120)}`);
+    } else {
+      console.log(`PAIN [${companyName}]: no verifiable operational pain found`);
+    }
+    return { signals: verified, summary: verified.length ? (parsed.summary || '') : '' };
+  } catch(e) {
+    console.log('findBusinessPain failed:', e.message);
+    return { signals: [], summary: '' };
+  }
+};
+
 // ── SOURCE 3: NEWS — press naming them as the owner ────────────────────────
-// "John Smith, owner of J&M Tank Lines, said..." — free via Google News RSS,
-// already proven to work from Render. Strong, independent corroboration.
+
 const findOwnerViaNews = async (companyName) => {
   if (!companyName) return null;
   try {
@@ -1461,20 +1844,20 @@ const findOwnerViaNews = async (companyName) => {
     const r = await fetchT(url, {}, 8000);
     const xml = await safeText(r);
     const text = xml.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ');
+    const esc = clean.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    // Match: "John Smith, CEO of Acme" / "Acme founder John Smith" / "John Smith, owner of Acme"
     const patterns = [
-      new RegExp(`([A-Z][a-z]+(?:\\s+[A-Z][a-zA-Z'-]+){1,2}),?\\s+(?:the\\s+)?(owner|founder|co-founder|CEO|president|chief executive)\\s+(?:and\\s+\\w+\\s+)?of\\s+${clean.slice(0,20)}`, 'i'),
-      new RegExp(`${clean.slice(0,20)}[^.]{0,25}?(owner|founder|co-founder|CEO|president)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-zA-Z'-]+){1,2})`, 'i'),
+      new RegExp(`([A-Z][a-z]+(?:\\s+[A-Z][a-zA-Z'-]+){1,2}),?\\s+(?:the\\s+)?(owner|founder|co-founder|CEO|president|chief executive)\\s+(?:and\\s+\\w+\\s+)?of\\s+${esc}`, 'i'),
+      new RegExp(`${esc}[^.]{0,25}?(owner|founder|co-founder|CEO|president)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-zA-Z'-]+){1,2})`, 'i'),
     ];
     for (const pat of patterns) {
       const m = text.match(pat);
       if (m) {
-        const name = looksLikeRealName(m[1]) ? m[1] : (looksLikeRealName(m[2]) ? m[2] : null);
-        const title = /owner|founder|ceo|president|chief/i.test(m[1]) ? m[1] : m[2];
-        if (name) {
-          console.log(`DM/news [${companyName}]: ${name} (${title})`);
-          return { name: name.trim(), title, confidence: 'medium', source: 'news' };
+        const cand = looksLikeRealName(m[1]) ? m[1] : (looksLikeRealName(m[2]) ? m[2] : null);
+        const title = /owner|founder|ceo|president|chief/i.test(m[1] || '') ? m[1] : m[2];
+        if (cand) {
+          console.log(`DM/news [${companyName}]: ✓ ${cand} (${title})`);
+          return { name: cand.trim(), title, confidence: 'medium', source: 'news' };
         }
       }
     }
@@ -1487,13 +1870,16 @@ const findOwnerViaNews = async (companyName) => {
 // INDEPENDENT sources name them. Agreement across sources is what gets us to 90%,
 // because no single source can.
 const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle }) => {
-  const [brain, registry, news] = await Promise.all([
+  // Run every source in parallel. Web search is the new heavy hitter — it reaches
+  // BBB, Manta, local press, and chamber directories where SMB owners actually live.
+  const [brain, websearch, registry, news] = await Promise.all([
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
+    findOwnerViaWebSearch(companyName, website, fcKey, apiKey).catch(() => null),
     findOwnerViaRegistry(companyName, fcKey).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),
   ]);
 
-  const found = [brain, registry, news].filter(Boolean);
+  const found = [brain, websearch, registry, news].filter(Boolean);
   if (hunterName && looksLikeRealName(hunterName)) {
     found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
   }
@@ -1539,6 +1925,20 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     best.score >= 80 ? 'high' :
     best.score >= 50 ? 'medium' : 'low';
 
+  // ═══ THE AUTHORITY GATE ══════════════════════════════════════════════════
+  // Reaching the wrong person wastes the entire audit. A VP of Maintenance or an
+  // HR Director CANNOT buy a $25k software build or a $10k/mo retainer — emailing
+  // them burns the lead permanently AND burns a send.
+  //
+  // For a founder-led company, the buyer is the Owner / Founder / CEO / President /
+  // Managing Partner. Anything below that is a NO-SEND by default — the lead is
+  // held back for a manual look rather than wasted on someone with no authority.
+  const AUTHORITY_FLOOR = 75; // COO/GM and above. VP=50, Director=35, Manager=20.
+  best.canBuy = best.authority >= AUTHORITY_FLOOR;
+  if (!best.canBuy) {
+    console.log(`DM [${companyName}]: ⚠ ${best.name} is "${best.title}" (authority ${best.authority}) — BELOW BUYING FLOOR. Held back.`);
+  }
+
   console.log(`DM [${companyName}]: ${best.name} (${best.title || '?'}) | score ${best.score} | ${confidence} | sources: ${best.sources.join('+')}${best.corroborated ? ' [CORROBORATED]' : ''}`);
 
   return {
@@ -1550,7 +1950,12 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     corroborated: best.corroborated,
     evidence: best.evidence || '',
     authority: best.authority,
-    alternates: clusters.slice(1, 3).map(c => ({ name: c.name, title: c.title, sources: c.sources, score: c.score })),
+    canBuy: best.canBuy,
+    blockReason: best.canBuy ? null : `"${best.title || 'unknown title'}" cannot authorize a purchase — need the owner/founder/CEO`,
+    alternates: clusters.slice(1, 3).map(c => ({
+      name: c.name, title: c.title, sources: c.sources, score: c.score,
+      authority: c.authority, canBuy: c.authority >= 75,
+    })),
   };
 };
 
@@ -2848,6 +3253,7 @@ const checkFacebookAds = async (name, fbToken) => {
 };
 
 app.post('/api/research', async (req, res) => {
+  FIRECRAWL_OUT_OF_CREDITS = false; // reset per run so the flag reflects THIS request
   const { company, website, keys, apiKey } = req.body;
   const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey, verifierKey } = keys || {};
   const browserData = req.body.browserData || {};
@@ -2859,6 +3265,7 @@ app.post('/api/research', async (req, res) => {
   const discoveryReason = req.body.discoveryReason || '';
   const manualRoleCount = req.body.manualRoleCount || 0;
   let verifiedEmployees = req.body.verifiedEmployees || null;
+  let verifiedRevenue = req.body.verifiedRevenue || null;
   let verifiedCEO = req.body.verifiedCEO || null;
   let verifiedCEOTitle = req.body.verifiedCEOTitle || null;
   let publicPainSignals = req.body.publicPainSignals || [];
@@ -2973,6 +3380,42 @@ app.post('/api/research', async (req, res) => {
           verifiedEmployees = aboutData.teamSize;
         }
       } catch(e) { console.log('About enrich skipped:', e.message); }
+    }
+
+    // ═══ SIZE VIA WEB SEARCH — closes the Companies API coverage gap ═══════
+    // The Companies API returns emp=? on a big share of private SMBs. ZoomInfo's
+    // public pages, D&B, Buzzfile and Manta all publish headcount and revenue for
+    // private companies, free to read. Only runs when we still have no headcount.
+    if (!verifiedEmployees && firecrawlKey && apiKey && company) {
+      try {
+        const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey);
+        if (sz && sz.employees) {
+          verifiedEmployees = sz.employees;
+          console.log(`SIZE [${company}]: recovered ${sz.employees} employees via web search (${sz.source})`);
+        }
+        if (sz && sz.revenue) verifiedRevenue = sz.revenue;
+      } catch(e) { console.log('Size search skipped:', e.message); }
+    }
+
+    // ═══ DEEP BUSINESS PAIN — what the owner is ACTUALLY fighting ══════════
+    // This is what turns "your website has no lead capture" (a website
+    // observation) into "your reviews say quotes take three weeks and you're
+    // hiring four schedulers" (the fire he's personally putting out).
+    //
+    // CREDIT DISCIPLINE: only run this when we don't already have pain signals,
+    // and only for leads worth the spend. Firecrawl free tier is 500/mo.
+    let painSummary = '';
+    if (publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
+      try {
+        const pain = await findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry);
+        if (pain.signals && pain.signals.length > 0) {
+          // Feed the Brain the pain WITH its evidence, so the pitch can quote it
+          publicPainSignals = pain.signals.map(s =>
+            `${s.pain} — evidence: "${String(s.evidence).slice(0, 140)}" (${s.source || 'web'})`
+          );
+          painSummary = pain.summary || '';
+        }
+      } catch(e) { console.log('Pain engine skipped:', e.message); }
     }
 
     // ═══ DECISION-MAKER ENGINE ═════════════════════════════════════════════
@@ -3190,7 +3633,13 @@ COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
 VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
 VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle || 'CEO') + ') — found in public search results, use their real name in the pitch' : 'Not identified — pitch to "the owner/CEO"'}
-PUBLIC PAIN SIGNALS (from reviews/complaints search): ${publicPainSignals.length > 0 ? '\n' + publicPainSignals.map(p => '- ' + p).join('\n') + '\n→ These are real public complaints — WEAVE THEM into the pitch. This is the "we noticed X" hook.' : 'None found in public search — pitch from site audit only'}
+═══ THE FIRE HE IS ACTUALLY FIGHTING (highest-value intel we have) ═══
+${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : ''}${publicPainSignals.length > 0 ? 'VERIFIED OPERATIONAL PAIN (from real reviews, complaints, and employee feedback — each carries the exact quote that proves it):\n' + publicPainSignals.map(p => '- ' + p).join('\n') + `
+
+→ THIS IS THE MOST IMPORTANT INPUT IN THIS ENTIRE PROMPT. Mike's core insight is that owners are trapped putting out fires in areas they already delegated. THIS is that fire, and we can PROVE it.
+→ A pitch that names the operational fire ("your reviews say quotes take three weeks and you're hiring four schedulers to keep up") is in a completely different league from one that names a website flaw ("your homepage has no lead capture form"). The first makes the owner feel SEEN. The second sounds like every other agency email.
+→ CONNECT the operational pain to the website/ad finding wherever they genuinely link — that combination is the sharpest possible pitch. Example: "You are running 840 ads into a page with no form, while your reviews say quotes take three weeks. You are paying to generate leads you cannot answer."
+→ NEVER quote the review verbatim in the email (it embarrasses them publicly). Reference the PATTERN, not the quote. "Your reviews mention slow quote turnaround" — not "one customer said you're incompetent."` : 'No verified operational pain found in public sources — pitch from the site/ad audit only. Do NOT invent operational pain: fabricating a complaint would destroy credibility instantly.'}
 RECENT NEWS TRIGGERS (verified to be about THIS company via Google News): ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago] ${t.headline}`).join('\n') + '\n→ These are CONFIRMED recent events about this exact company. Use the most relevant ONE as the pitch cold-open ("I saw you just..."). This is the strongest personalization signal — it proves we did our homework. Only reference a trigger that genuinely connects to the pain/product.' : 'No recent company-specific news found — do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
@@ -3930,8 +4379,10 @@ Return ONLY valid JSON:
       visualAnalysis,
       screenshotUrl,
       companyTriggers,
-      verifiedCEO, verifiedCEOTitle, verifiedEmployees,
+      verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
       emailResult, decisionMaker,
+      publicPainSignals, painSummary,
+      firecrawlOutOfCredits: FIRECRAWL_OUT_OF_CREDITS,
       signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
       homepageContent: content.slice(0,3000),
       richData: {
@@ -4001,6 +4452,31 @@ const ensureHunterAttribute = async (hunterKey, label) => {
 // List the user's Hunter sequences so they can find the correct Sequence ID.
 // Hunter's API still calls sequences "campaigns" under the hood.
 // Check remaining Hunter credits so the app can warn before they run out.
+// Check remaining Firecrawl credits. This matters more than it sounds: Firecrawl
+// now powers ~8 of our data sources. If it silently runs dry, the system produces
+// thin audits and empty decision-maker lookups WITHOUT any error — which looks
+// exactly like a broken engine. This makes an empty tank visible.
+app.get('/api/firecrawl-credits', async (req, res) => {
+  const key = req.query.key;
+  if (!key) return res.status(400).json({ error: 'key required' });
+  try {
+    const r = await fetchT('https://api.firecrawl.dev/v1/team/credit-usage', {
+      headers: { 'Authorization': `Bearer ${key}` },
+    }, 8000);
+    const d = await safeJson(r);
+    const remaining = d?.data?.remaining_credits ?? d?.remaining_credits ?? null;
+    const planCredits = d?.data?.plan_credits ?? null;
+    res.json({
+      remaining,
+      planCredits,
+      // ~6-8 credits per fully-researched company
+      companiesLeft: remaining != null ? Math.floor(remaining / 7) : null,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/hunter-credits', async (req, res) => {
   const key = req.query.key;
   if (!key) return res.status(400).json({ error: 'key required' });
@@ -4065,6 +4541,11 @@ app.post('/api/test-contact-engine', async (req, res) => {
     out.sources.own_website_brain = brain || 'nothing found';
     out.timing.brain = Date.now() - s1;
 
+    const sW = Date.now();
+    const websearch = await findOwnerViaWebSearch(company, website, firecrawlKey, apiKey).catch(e => ({ error: e.message }));
+    out.sources.web_search = websearch || 'nothing found';
+    out.timing.web_search = Date.now() - sW;
+
     const s2 = Date.now();
     const registry = await findOwnerViaRegistry(company, firecrawlKey).catch(e => ({ error: e.message }));
     out.sources.registry = registry || 'nothing found';
@@ -4127,6 +4608,8 @@ app.post('/api/test-contact-engine', async (req, res) => {
       oursAuthority: out.decisionMaker?.authority || 0,
       oursCorroborated: !!out.decisionMaker?.corroborated,
       oursSources: out.decisionMaker?.sources || [],
+      oursCanBuy: out.decisionMaker?.canBuy === true,
+      oursBlockReason: out.decisionMaker?.blockReason || null,
       emailSendable: out.email?.sendable === true,
       emailEvidence: out.email?.label || null,
       winner:
@@ -4183,6 +4666,16 @@ app.post('/api/send-to-hunter', async (req, res) => {
       results.failed.push({
         name: lead.name, email: lead.email,
         reason: `email not verified (${lead.emailResult.label}) — blocked to protect sender reputation`
+      });
+      continue;
+    }
+    // AUTHORITY GUARD: never burn a lead by pitching someone who cannot buy.
+    // A VP of Maintenance or HR Director cannot authorize a $25k build. Emailing
+    // them wastes the audit AND permanently burns the company.
+    if (lead.decisionMaker && lead.decisionMaker.canBuy === false) {
+      results.failed.push({
+        name: lead.name, email: lead.email,
+        reason: `${lead.decisionMaker.name} is "${lead.decisionMaker.title}" — cannot authorize a purchase. Find the owner first.`
       });
       continue;
     }
