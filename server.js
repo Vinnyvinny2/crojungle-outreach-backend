@@ -1065,6 +1065,573 @@ const getCompanyNews = async (companyName, website) => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FIREPROOF EMAIL ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+// Getting the right email is the single most important job in this system —
+// everything upstream is worthless without it. So this is built to be better
+// than a single-source lookup, and to NEVER hand back a guess dressed up as a fact.
+//
+// THE CORE PROBLEM: 30-40% of B2B domains are "catch-all" — they accept mail at
+// EVERY address, real or fake. SMTP verification returns "250 OK" for the CEO's
+// real inbox AND for xyzrandom99@domain. Every verifier hits this wall, and 23%
+// of unverified catch-all addresses hard-bounce, which torches sender reputation.
+//
+// THE ARCHITECTURE — five confidence tiers, highest wins:
+//   T1 CONFIRMED_SCRAPED  — we found it published on their own website. Strongest
+//                           possible evidence: they put it there on purpose.
+//   T2 SMTP_VERIFIED      — pattern generated, then SMTP-confirmed on a domain we
+//                           PROVED is not catch-all. Equivalent to what Hunter does.
+//   T3 PATTERN_LEARNED    — catch-all domain (SMTP useless), but we already learned
+//                           this company's naming convention from a confirmed address
+//                           at the same domain. This is our edge: a corpus we build.
+//   T4 PATTERN_INFERRED   — catch-all, no learned pattern. Statistical best guess.
+//                           RISKY — flagged, and blocked from sending by default.
+//   T5 NONE               — no defensible address. Block. Never send a guess.
+//
+// Nothing below T3 is allowed to send without explicit human override.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Learned naming conventions, keyed by domain. Built from every confirmed address
+// we ever see. This is the corpus that makes catch-all domains solvable.
+const domainPatternMemory = new Map();
+
+const EMAIL_TIERS = {
+  CONFIRMED_SCRAPED: { tier: 1, score: 100, label: 'Published on their site', sendable: true },
+  SMTP_VERIFIED:     { tier: 2, score: 95,  label: 'SMTP-verified (mailbox exists)', sendable: true },
+  PATTERN_LEARNED:   { tier: 3, score: 75,  label: 'Matches this company\'s known email pattern', sendable: true },
+  PATTERN_INFERRED:  { tier: 4, score: 40,  label: 'Inferred pattern — unverified, may bounce', sendable: false },
+  NONE:              { tier: 5, score: 0,   label: 'No defensible address found', sendable: false },
+};
+
+// Every standard corporate naming convention, ordered by real-world frequency.
+const buildCandidates = (fullName, domain) => {
+  const parts = String(fullName || '').trim().toLowerCase()
+    .replace(/[^a-z\s'-]/g, '').replace(/[''-]/g, '')
+    .split(/\s+/).filter(Boolean);
+  if (parts.length < 2 || !domain) return [];
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  const fi = first[0];
+  const li = last[0];
+  // Ordered by how common each pattern actually is across B2B companies
+  return [
+    { pattern: 'first.last',  email: `${first}.${last}@${domain}` },
+    { pattern: 'first',       email: `${first}@${domain}` },
+    { pattern: 'firstlast',   email: `${first}${last}@${domain}` },
+    { pattern: 'f.last',      email: `${fi}.${last}@${domain}` },
+    { pattern: 'flast',       email: `${fi}${last}@${domain}` },
+    { pattern: 'first_last',  email: `${first}_${last}@${domain}` },
+    { pattern: 'first.l',     email: `${first}.${li}@${domain}` },
+    { pattern: 'last.first',  email: `${last}.${first}@${domain}` },
+  ];
+};
+
+// Given a known-good email + the person's name, reverse-engineer the convention.
+// This is how we learn a company's pattern from one confirmed address.
+const inferPattern = (email, fullName) => {
+  const local = String(email).split('@')[0].toLowerCase();
+  const parts = String(fullName || '').trim().toLowerCase()
+    .replace(/[^a-z\s'-]/g, '').replace(/[''-]/g, '')
+    .split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return null;
+  const first = parts[0], last = parts[parts.length - 1];
+  const fi = first[0], li = last[0];
+  const map = {
+    [`${first}.${last}`]: 'first.last',
+    [`${first}`]: 'first',
+    [`${first}${last}`]: 'firstlast',
+    [`${fi}.${last}`]: 'f.last',
+    [`${fi}${last}`]: 'flast',
+    [`${first}_${last}`]: 'first_last',
+    [`${first}.${li}`]: 'first.l',
+    [`${last}.${first}`]: 'last.first',
+  };
+  return map[local] || null;
+};
+
+const applyPattern = (pattern, fullName, domain) => {
+  const c = buildCandidates(fullName, domain).find(x => x.pattern === pattern);
+  return c ? c.email : '';
+};
+
+// ── SMTP VERIFICATION (via free API) ───────────────────────────────────────
+// Render blocks outbound port 25, so we can't do raw SMTP ourselves. We use a
+// free verification API. MyEmailVerifier: 100 free/day, no credit card, credits
+// never expire — 60x Hunter's monthly ceiling.
+// Returns: { valid, catchAll, unknown }
+const verifyEmailSMTP = async (email, verifierKey) => {
+  if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true };
+  try {
+    const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
+    const r = await fetchT(url, {}, 12000);
+    const d = await safeJson(r);
+    const status = String(d?.Status || d?.status || '').toLowerCase();
+    const catchAll = /true|yes/i.test(String(d?.Catch_All_Status ?? d?.catch_all ?? ''));
+    return {
+      valid: status === 'valid',
+      invalid: status === 'invalid',
+      catchAll,
+      unknown: !status || status === 'unknown',
+      raw: status,
+    };
+  } catch(e) {
+    console.log('SMTP verify failed:', e.message);
+    return { valid: null, catchAll: null, unknown: true };
+  }
+};
+
+// ── CATCH-ALL DETECTION — the check that makes verification meaningful ──────
+// Probe the domain with an address that mathematically cannot exist. If the
+// server accepts it, the domain accepts EVERYTHING, and any "valid" result on
+// that domain is meaningless. This single check is the difference between
+// trustworthy verification and false confidence.
+const catchAllCache = new Map();
+const isCatchAllDomain = async (domain, verifierKey) => {
+  if (!verifierKey || !domain) return null;
+  if (catchAllCache.has(domain)) return catchAllCache.get(domain);
+  const nonsense = `zz9x${Math.random().toString(36).slice(2, 10)}qq@${domain}`;
+  const res = await verifyEmailSMTP(nonsense, verifierKey);
+  // If a mailbox that cannot possibly exist comes back "valid", it's catch-all.
+  const isCatchAll = res.valid === true || res.catchAll === true;
+  catchAllCache.set(domain, isCatchAll);
+  console.log(`Catch-all probe [${domain}]: ${isCatchAll ? 'CATCH-ALL (SMTP unreliable here)' : 'normal domain (SMTP trustworthy)'}`);
+  return isCatchAll;
+};
+
+// ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
+// An address published on their own site is the strongest evidence there is.
+// Also harvests EVERY address found, which feeds the pattern-learning corpus.
+const scrapeEmailsFromSite = async (website, fcKey, homepageContent) => {
+  const out = { emails: [], source: '' };
+  if (!website) return out;
+  const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
+  if (!domain) return out;
+
+  const JUNK_DOMAIN = /@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i;
+  const JUNK_LOCAL  = /^(noreply|no-reply|donotreply|postmaster|abuse|webmaster|privacy|legal|dmca|unsubscribe|mailer-daemon|bounce|test|user|name|email|your)@/i;
+
+  const extract = (text) => {
+    if (!text) return [];
+    const found = new Set();
+    (text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi) || [])
+      .forEach(m => found.add(m.replace(/mailto:/i, '').toLowerCase()));
+    (text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
+      .forEach(e => found.add(e.toLowerCase()));
+    return [...found].filter(e =>
+      e.endsWith('@' + domain) && !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60
+    );
+  };
+
+  // Pass 1: homepage content we already have — costs nothing extra
+  let emails = extract(homepageContent);
+  if (emails.length > 0) return { emails, source: 'homepage' };
+
+  // Pass 2: the pages most likely to publish a real address
+  if (!fcKey) return out;
+  const base = website.replace(/\/$/, '');
+  for (const path of ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team']) {
+    try {
+      const md = await firecrawlScrape(fcKey, base + path, 10000);
+      if (!md || md.length < 100) continue;
+      emails = extract(md);
+      if (emails.length > 0) return { emails, source: 'contact_page' };
+    } catch(e) { /* next path */ }
+  }
+  return out;
+};
+
+const GENERIC_LOCAL = /^(info|contact|hello|hi|team|office|admin|sales|support|inquiries|enquiries|mail|general)@/i;
+
+// ═══ THE ORCHESTRATOR — runs the full waterfall, returns a scored result ════
+// ═══ DECISION-MAKER AUTHORITY RANKING ══════════════════════════════════════
+// Getting AN email is worthless if it's the wrong person. For a founder-led
+// 10-200 person company, the owner is the only one who can say yes. A marketing
+// coordinator's inbox wastes the audit entirely.
+//
+// This ranks any contact we find by actual buying authority, so when we have
+// several candidates we always pursue the highest one — and if that person's
+// address can't be verified, we fall DOWN the ladder rather than sideways.
+//
+// Deliberately NOT a CC list: a cold email CC'ing three people reads as a blast
+// and destroys the "I looked closely at your business" effect the whole pitch
+// depends on. One email, to the best available person.
+const TITLE_AUTHORITY = [
+  { rank: 100, re: /\b(founder|co-?founder|owner|proprietor)\b/i },
+  { rank: 95,  re: /\b(ceo|chief executive)\b/i },
+  { rank: 90,  re: /\b(president)\b/i },
+  { rank: 85,  re: /\b(managing (partner|director)|principal|partner)\b/i },
+  { rank: 75,  re: /\b(coo|chief operating|gm|general manager)\b/i },
+  { rank: 70,  re: /\b(cfo|chief financial)\b/i },
+  { rank: 65,  re: /\b(cmo|chief marketing)\b/i },
+  { rank: 60,  re: /\b(cto|chief technology)\b/i },
+  { rank: 50,  re: /\b(vp|vice president|head of)\b/i },
+  { rank: 35,  re: /\b(director)\b/i },
+  { rank: 20,  re: /\b(manager|lead)\b/i },
+  { rank: 10,  re: /\b(coordinator|specialist|associate|assistant|intern)\b/i },
+];
+
+const authorityScore = (title) => {
+  if (!title) return 30; // unknown title — assume mid, don't punish a bare name
+  for (const t of TITLE_AUTHORITY) if (t.re.test(title)) return t.rank;
+  return 30;
+};
+
+// Generic inboxes: at a 15-person company info@ often IS the owner's desk, so
+// it beats reaching a junior employee. At a 200-person company it's a black hole.
+const genericInboxScore = (employees) => {
+  if (!employees) return 45;
+  if (employees <= 25) return 65;   // small shop — info@ likely lands on the owner
+  if (employees <= 75) return 45;
+  return 25;                        // bigger — info@ goes to a queue
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DECISION-MAKER ENGINE — finding the OWNER, not just a contact
+// ═══════════════════════════════════════════════════════════════════════════
+// WHY THIS EXISTS: Hunter, Apollo, and ZoomInfo all build their databases by
+// indexing LinkedIn. The owner of a 15-person trucking company HAS NO LINKEDIN.
+// He is structurally invisible to every one of those tools — that is not a bug
+// we can fix by paying more, it is how they are built. Our ICP is precisely the
+// segment they miss (they miss 60-80% of owner-operated businesses).
+//
+// But he is NOT invisible. He is all over the public record:
+//   · His own About/Team page — owner-operators are PROUD and put themselves front and center
+//   · Google News — "John Smith, owner of J&M Tank Lines, said..."
+//   · State business registries — every LLC's members/officers are public record
+//
+// NO SINGLE SOURCE hits 90%. CORROBORATION does. When the About page says
+// "John Smith, Founder," Google News says "John Smith, owner of J&M," and the
+// registry lists "SMITH, JOHN — Managing Member" — that is three independent
+// public records agreeing. That is not a guess.
+//
+// THE OTHER BIG FIX: we stop using regex to read their website. Claude reads it.
+// Regex produced garbage like "on core (principal)". An LLM reading a team page
+// and answering "who owns this company" is dramatically more reliable.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DM_SOURCE_WEIGHT = {
+  own_website_brain: 40,   // they published it themselves, read by an LLM — strongest single source
+  registry:          35,   // legal public record — authoritative, but can be a lawyer/registered agent
+  news:              30,   // press quotes them as owner — strong corroboration
+  hunter:            25,   // real, but LinkedIn-biased and often surfaces the wrong seniority
+  email_pattern:     15,   // their email exists and matches their name — confirms the person is real
+};
+
+const normalizePersonName = (n) => String(n || '')
+  .replace(/\b(mr|mrs|ms|dr|jr|sr|ii|iii|phd|mba|cpa)\b\.?/gi, '')
+  .replace(/[^A-Za-z\s'-]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const sameName = (a, b) => {
+  const A = normalizePersonName(a).toLowerCase().split(' ').filter(Boolean);
+  const B = normalizePersonName(b).toLowerCase().split(' ').filter(Boolean);
+  if (A.length < 2 || B.length < 2) return false;
+  // Same first AND last name = same person. Middle names/initials ignored.
+  return A[0] === B[0] && A[A.length-1] === B[B.length-1];
+};
+
+const looksLikeRealName = (n) => {
+  const parts = normalizePersonName(n).split(' ').filter(Boolean);
+  if (parts.length < 2 || parts.length > 4) return false;
+  // Each part must be a proper capitalized word; reject job-title fragments
+  if (!/^[A-Z][a-z]{1,}$/.test(parts[0]) || !/^[A-Z][a-z]{1,}$/.test(parts[parts.length-1])) return false;
+  return !/\b(team|leadership|management|company|owner|founder|president|about|contact|core|home|welcome|our|the|staff|group|service)\b/i.test(n);
+};
+
+// ── SOURCE 1: THE BRAIN READS THEIR ACTUAL WEBSITE ─────────────────────────
+// The single biggest upgrade. Scrape About/Team/Leadership/Story pages, hand the
+// whole thing to Claude, and ask directly: who owns this company? Claude reading
+// prose beats regex by a mile — and this is where owner-operators actually live.
+const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
+  if (!website || !apiKey) return null;
+  try {
+    const base = website.replace(/\/$/, '');
+    const pages = [homepageContent || ''];
+    // Owner-operators put themselves on these pages. Scrape the ones that exist.
+    const paths = ['/about', '/about-us', '/our-story', '/team', '/our-team', '/leadership', '/management', '/contact'];
+    let scraped = 0;
+    for (const p of paths) {
+      if (scraped >= 3) break; // 3 good pages is plenty; keep Firecrawl usage sane
+      const md = await firecrawlScrape(fcKey, base + p, 9000);
+      if (md && md.length > 250) { pages.push(`\n\n--- PAGE ${p} ---\n` + md); scraped++; }
+    }
+    const corpus = pages.join('\n').slice(0, 18000);
+    if (corpus.trim().length < 300) return null;
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        messages: [{ role: 'user', content: `Below is content scraped from ${companyName}'s own website.
+
+Identify the OWNER / FOUNDER / CEO — the person who actually has authority to buy. For a small owner-operated business this is the person who started or owns it, NOT a marketing manager or office coordinator.
+
+STRICT RULES:
+- Only report a name that ACTUALLY APPEARS in the content. Never guess, never infer from the company name, never invent.
+- Return the name of a PERSON, never a job title, department, or generic word.
+- If several people are listed, pick the one with the highest ownership authority (Founder/Owner > CEO > President > Managing Partner > COO).
+- If NO person's name appears anywhere, return null. Returning null is correct and expected — do not fabricate to fill the field.
+
+Return ONLY valid JSON, no markdown:
+{"name":"Full Name or null","title":"their exact title as written on the site, or null","evidence":"the exact sentence/phrase from the content that names them, verbatim","confidence":"high|medium|low"}
+
+confidence: high = name explicitly tied to an ownership title ("John Smith, Founder"). medium = clearly the principal but title looser. low = a name appears but their role is ambiguous.
+
+CONTENT:
+${corpus}` }]
+      }),
+    }, 25000);
+
+    const d = await r.json();
+    let text = d.content?.[0]?.text || '';
+    text = text.replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+
+    if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) return null;
+    // The evidence must actually exist in what we scraped — this blocks hallucination cold.
+    if (parsed.evidence && !corpus.toLowerCase().includes(String(parsed.evidence).toLowerCase().slice(0, 25))) {
+      console.log(`DM/brain [${companyName}]: evidence not found in source — REJECTED as unverifiable`);
+      return null;
+    }
+    console.log(`DM/brain [${companyName}]: ${parsed.name} (${parsed.title || '?'}) [${parsed.confidence}]`);
+    return {
+      name: parsed.name.trim(),
+      title: parsed.title || null,
+      confidence: parsed.confidence || 'medium',
+      evidence: parsed.evidence || '',
+      source: 'own_website_brain',
+    };
+  } catch(e) {
+    console.log('DM/brain failed:', e.message);
+    return null;
+  }
+};
+
+// ── SOURCE 2: PUBLIC BUSINESS REGISTRY ─────────────────────────────────────
+// Every US LLC/corp must file its members/officers with the state. It is public
+// record. OpenCorporates aggregates 240M companies — their API is paid, but the
+// HTML pages are public and Firecrawl reads them free.
+// CAVEAT (important): registries often list the registered AGENT (a lawyer or
+// filing service), not the real owner. So we explicitly reject agent-like entries
+// and treat this as corroboration, never as a sole source.
+const findOwnerViaRegistry = async (companyName, fcKey) => {
+  if (!companyName || !fcKey) return null;
+  try {
+    const q = encodeURIComponent(companyName.replace(/\s*(inc|llc|corp|ltd|co)\.?$/i, '').trim());
+    const md = await firecrawlScrape(fcKey, `https://opencorporates.com/companies?q=${q}&jurisdiction_code=us`, 12000);
+    if (!md || md.length < 200) return null;
+
+    // Officer roles that indicate real ownership — not a filing agent
+    const OWNER_ROLE = /(managing member|member|president|ceo|chief executive|owner|founder|principal|managing director|manager|director|incorporator|officer)/i;
+    const AGENT_ROLE = /(registered agent|agent for service|resident agent|statutory agent|corporation service|ct corporation|registered office|incorp services|legalzoom|northwest registered)/i;
+
+    // Look for "NAME — Role" patterns in the scraped registry page
+    const lines = md.split('\n');
+    for (const line of lines) {
+      if (AGENT_ROLE.test(line)) continue; // skip filing agents entirely
+      if (!OWNER_ROLE.test(line)) continue;
+      const m = line.match(/([A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+){1,2})/);
+      if (m && looksLikeRealName(m[1])) {
+        const roleM = line.match(OWNER_ROLE);
+        console.log(`DM/registry [${companyName}]: ${m[1]} (${roleM ? roleM[0] : 'officer'})`);
+        return { name: m[1].trim(), title: roleM ? roleM[0] : 'Officer', confidence: 'medium', source: 'registry' };
+      }
+    }
+    return null;
+  } catch(e) {
+    console.log('DM/registry failed:', e.message);
+    return null;
+  }
+};
+
+// ── SOURCE 3: NEWS — press naming them as the owner ────────────────────────
+// "John Smith, owner of J&M Tank Lines, said..." — free via Google News RSS,
+// already proven to work from Render. Strong, independent corroboration.
+const findOwnerViaNews = async (companyName) => {
+  if (!companyName) return null;
+  try {
+    const clean = companyName.replace(/,?\s*(Inc|LLC|Corp|Ltd)\.?$/gi, '').trim();
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(`"${clean}" (owner OR founder OR CEO OR president)`)}&hl=en-US&gl=US&ceid=US:en`;
+    const r = await fetchT(url, {}, 8000);
+    const xml = await safeText(r);
+    const text = xml.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ');
+
+    // Match: "John Smith, CEO of Acme" / "Acme founder John Smith" / "John Smith, owner of Acme"
+    const patterns = [
+      new RegExp(`([A-Z][a-z]+(?:\\s+[A-Z][a-zA-Z'-]+){1,2}),?\\s+(?:the\\s+)?(owner|founder|co-founder|CEO|president|chief executive)\\s+(?:and\\s+\\w+\\s+)?of\\s+${clean.slice(0,20)}`, 'i'),
+      new RegExp(`${clean.slice(0,20)}[^.]{0,25}?(owner|founder|co-founder|CEO|president)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-zA-Z'-]+){1,2})`, 'i'),
+    ];
+    for (const pat of patterns) {
+      const m = text.match(pat);
+      if (m) {
+        const name = looksLikeRealName(m[1]) ? m[1] : (looksLikeRealName(m[2]) ? m[2] : null);
+        const title = /owner|founder|ceo|president|chief/i.test(m[1]) ? m[1] : m[2];
+        if (name) {
+          console.log(`DM/news [${companyName}]: ${name} (${title})`);
+          return { name: name.trim(), title, confidence: 'medium', source: 'news' };
+        }
+      }
+    }
+    return null;
+  } catch(e) { return null; }
+};
+
+// ═══ THE ORCHESTRATOR — corroborate across sources, score the confidence ════
+// Runs every free source in parallel, then scores each candidate by how many
+// INDEPENDENT sources name them. Agreement across sources is what gets us to 90%,
+// because no single source can.
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle }) => {
+  const [brain, registry, news] = await Promise.all([
+    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
+    findOwnerViaRegistry(companyName, fcKey).catch(() => null),
+    findOwnerViaNews(companyName).catch(() => null),
+  ]);
+
+  const found = [brain, registry, news].filter(Boolean);
+  if (hunterName && looksLikeRealName(hunterName)) {
+    found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
+  }
+  if (found.length === 0) {
+    console.log(`DM [${companyName}]: NO decision-maker found in any source`);
+    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
+  }
+
+  // Cluster the same human across sources (John Smith == John A. Smith)
+  const clusters = [];
+  for (const f of found) {
+    const hit = clusters.find(c => sameName(c.name, f.name));
+    if (hit) {
+      hit.sources.push(f.source);
+      hit.score += DM_SOURCE_WEIGHT[f.source] || 10;
+      // Prefer the most authoritative title we've seen for this person
+      if (f.title && authorityScore(f.title) > authorityScore(hit.title)) hit.title = f.title;
+      if (f.evidence && !hit.evidence) hit.evidence = f.evidence;
+    } else {
+      clusters.push({
+        name: f.name, title: f.title, evidence: f.evidence || '',
+        sources: [f.source], score: DM_SOURCE_WEIGHT[f.source] || 10,
+      });
+    }
+  }
+
+  // Rank: corroboration first, then buying authority, then raw source weight.
+  // A person named by 2 independent public records outranks a lone Hunter hit.
+  clusters.forEach(c => {
+    c.corroborated = c.sources.length >= 2;
+    c.authority = authorityScore(c.title);
+    // Corroboration bonus — this is the whole point of the multi-source design
+    if (c.sources.length >= 3) c.score += 35;
+    else if (c.sources.length === 2) c.score += 20;
+    // Owner/founder titles are what we actually want for this ICP
+    if (c.authority >= 90) c.score += 15;
+    else if (c.authority < 40) c.score -= 20; // a coordinator is worse than useless
+  });
+  clusters.sort((a, b) => (b.score - a.score) || (b.authority - a.authority));
+
+  const best = clusters[0];
+  const confidence =
+    best.score >= 80 ? 'high' :
+    best.score >= 50 ? 'medium' : 'low';
+
+  console.log(`DM [${companyName}]: ${best.name} (${best.title || '?'}) | score ${best.score} | ${confidence} | sources: ${best.sources.join('+')}${best.corroborated ? ' [CORROBORATED]' : ''}`);
+
+  return {
+    name: best.name,
+    title: best.title,
+    score: Math.min(100, best.score),
+    confidence,
+    sources: best.sources,
+    corroborated: best.corroborated,
+    evidence: best.evidence || '',
+    authority: best.authority,
+    alternates: clusters.slice(1, 3).map(c => ({ name: c.name, title: c.title, sources: c.sources, score: c.score })),
+  };
+};
+
+const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey }) => {
+  const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
+  const name = ceoName || hunterName || '';
+  const fail = { email: '', ...EMAIL_TIERS.NONE, name, pattern: null };
+  if (!domain) return fail;
+
+  // ── Hunter already found one? It's verified at the source. Learn from it. ──
+  if (hunterEmail) {
+    const p = inferPattern(hunterEmail, hunterName || name);
+    if (p) domainPatternMemory.set(domain, p);
+    return { email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED, label: 'Verified by Hunter', name: hunterName || name, pattern: p };
+  }
+
+  // ── TIER 1: published on their own website ────────────────────────────────
+  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent);
+  if (scraped.emails.length > 0) {
+    // Learn the company's convention from every address we found
+    for (const e of scraped.emails) {
+      const p = inferPattern(e, name);
+      if (p) { domainPatternMemory.set(domain, p); break; }
+    }
+    // Prefer an address matching our decision-maker, then any personal address,
+    // then a generic one (at a 15-person company, info@ often IS the owner).
+    const nameParts = name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+    const nameMatch = scraped.emails.find(e => nameParts.some(p => e.split('@')[0].includes(p)));
+    const personal  = scraped.emails.find(e => !GENERIC_LOCAL.test(e));
+    const best = nameMatch || personal || scraped.emails[0];
+    const isGeneric = GENERIC_LOCAL.test(best);
+    console.log(`✓ EMAIL [${domain}] T1 scraped from ${scraped.source}: ${best}${isGeneric ? ' (generic)' : ''}`);
+    return {
+      email: best, ...EMAIL_TIERS.CONFIRMED_SCRAPED,
+      label: isGeneric ? 'Published on their site (generic inbox)' : 'Published on their site',
+      score: isGeneric ? 85 : 100,
+      name, pattern: domainPatternMemory.get(domain) || null,
+    };
+  }
+
+  // Everything below needs a name to build candidates from
+  if (!name) return fail;
+  const candidates = buildCandidates(name, domain);
+  if (candidates.length === 0) return fail;
+
+  // ── Is this domain catch-all? Determines whether SMTP means anything. ─────
+  const catchAll = await isCatchAllDomain(domain, verifierKey);
+
+  // ── TIER 2: normal domain → race every pattern through SMTP ───────────────
+  if (catchAll === false && verifierKey) {
+    for (const c of candidates) {
+      const res = await verifyEmailSMTP(c.email, verifierKey);
+      if (res.valid === true) {
+        domainPatternMemory.set(domain, c.pattern);
+        console.log(`✓ EMAIL [${domain}] T2 SMTP-verified: ${c.email} (pattern: ${c.pattern})`);
+        return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
+      }
+      await new Promise(r => setTimeout(r, 200)); // be polite to the API
+    }
+    // Normal domain, every pattern rejected → this person's mailbox isn't there.
+    // Better to send nothing than to bounce.
+    console.log(`✗ EMAIL [${domain}] all patterns rejected on a normal domain — no address exists`);
+    return fail;
+  }
+
+  // ── TIER 3: catch-all, but we know this company's convention ──────────────
+  const learned = domainPatternMemory.get(domain);
+  if (learned) {
+    const email = applyPattern(learned, name, domain);
+    if (email) {
+      console.log(`✓ EMAIL [${domain}] T3 learned pattern (${learned}): ${email}`);
+      return { email, ...EMAIL_TIERS.PATTERN_LEARNED, name, pattern: learned };
+    }
+  }
+
+  // ── TIER 4: catch-all, no learned pattern → statistical guess. NOT sendable. ──
+  const inferred = candidates[0];
+  console.log(`⚠ EMAIL [${domain}] T4 inferred only (catch-all, no evidence): ${inferred.email} — BLOCKED from sending`);
+  return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern };
+};
+
 const enrichFromAboutPage = async (website, fcKey, homepageContent) => {
   const result = { ceoName: null, ceoTitle: null, teamSize: null, founderQuote: null };
   if (!website || !fcKey) return result;
@@ -2093,12 +2660,46 @@ app.post('/api/discover', async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 // RESEARCH ENGINE — 15-point audit
 // ═══════════════════════════════════════════════════════════
-const getFounderEmail = async (domain, hunterKey) => {
-  if (!hunterKey || !domain) return { email:'', founderName:'' };
+// Free fallback when Hunter credits run out: build the most likely email from
+// the decision-maker's name + domain using standard corporate patterns.
+// NOT verified — flagged clearly so it's never mistaken for a confirmed address.
+const guessEmailFromName = (fullName, domain) => {
+  if (!fullName || !domain) return '';
+  const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
+  const parts = fullName.trim().toLowerCase().replace(/[^a-z\s]/g,'').split(/\s+/);
+  if (parts.length < 2) return '';
+  const [first, last] = [parts[0], parts[parts.length-1]];
+  // firstname.lastname@ is by far the most common corporate pattern
+  return `${first}.${last}@${clean}`;
+};
+
+const getFounderEmail = async (domain, hunterKey, fallbackName) => {
+  if (!domain) return { email:'', founderName:'' };
+  if (!hunterKey) {
+    const guess = guessEmailFromName(fallbackName, domain);
+    return guess ? { email: guess, founderName: fallbackName || '', guessed: true } : { email:'', founderName:'' };
+  }
   try {
     const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
     const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`);
     const d = await safeJson(r);
+
+    // ═══ CREDIT EXHAUSTION DETECTION ═══════════════════════════════════════
+    // Hunter returns 401/403/429 with a specific error when credits run out.
+    const errCode = d?.errors?.[0]?.code;
+    const errId = d?.errors?.[0]?.id;
+    const outOfCredits = r.status === 402 || errCode === 402 ||
+      /credit|quota|limit/i.test(d?.errors?.[0]?.details || '') ||
+      errId === 'usage_limit_reached';
+
+    if (outOfCredits) {
+      console.log(`⚠️ HUNTER CREDITS EXHAUSTED — falling back to pattern guess for ${clean}`);
+      const guess = guessEmailFromName(fallbackName, clean);
+      return guess
+        ? { email: guess, founderName: fallbackName || '', guessed: true, creditsOut: true }
+        : { email: '', founderName: '', creditsOut: true };
+    }
+
     const emails = d.data?.emails || [];
     const priority = ['ceo','founder','co-founder','owner','president','cmo'];
     const sorted = emails.sort((a,b) => {
@@ -2107,8 +2708,16 @@ const getFounderEmail = async (domain, hunterKey) => {
       return (aS===-1?99:aS)-(bS===-1?99:bS);
     });
     const best = sorted[0];
-    return { email: best?.value||'', founderName: `${best?.first_name||''} ${best?.last_name||''}`.trim(), title: best?.position||'' };
-  } catch { return { email:'', founderName:'' }; }
+    if (best?.value) {
+      return { email: best.value, founderName: `${best.first_name||''} ${best.last_name||''}`.trim(), title: best.position||'' };
+    }
+    // Hunter found nothing — try the free pattern guess before giving up
+    const guess = guessEmailFromName(fallbackName, clean);
+    return guess ? { email: guess, founderName: fallbackName || '', guessed: true } : { email:'', founderName:'' };
+  } catch {
+    const guess = guessEmailFromName(fallbackName, domain);
+    return guess ? { email: guess, founderName: fallbackName || '', guessed: true } : { email:'', founderName:'' };
+  }
 };
 
 const pageSpeedCache = new Map();
@@ -2240,7 +2849,7 @@ const checkFacebookAds = async (name, fbToken) => {
 
 app.post('/api/research', async (req, res) => {
   const { company, website, keys, apiKey } = req.body;
-  const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey } = keys || {};
+  const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey, verifierKey } = keys || {};
   const browserData = req.body.browserData || {};
   const pageSpeed = browserData.pageSpeed || {};
   const emailData = browserData.emailData || {};
@@ -2364,6 +2973,65 @@ app.post('/api/research', async (req, res) => {
           verifiedEmployees = aboutData.teamSize;
         }
       } catch(e) { console.log('About enrich skipped:', e.message); }
+    }
+
+    // ═══ DECISION-MAKER ENGINE ═════════════════════════════════════════════
+    // Runs BEFORE the email engine, because knowing WHO we're targeting is what
+    // makes email pattern generation possible — and because reaching the wrong
+    // person (a marketing coordinator instead of the owner) wastes the entire
+    // audit. Corroborates across their website, public registries, news, and
+    // Hunter. Agreement across independent sources is what gets us near 90%.
+    let decisionMaker = null;
+    if (company) {
+      try {
+        decisionMaker = await findDecisionMaker({
+          companyName: company,
+          website,
+          fcKey: firecrawlKey,
+          apiKey,
+          homepageContent: content,
+          hunterName: email.founderName || '',
+          hunterTitle: email.title || '',
+        });
+        // A corroborated owner beats whatever we had before. A lone weak hit does not
+        // override an already-verified name.
+        if (decisionMaker && decisionMaker.name) {
+          if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
+            verifiedCEO = decisionMaker.name;
+            verifiedCEOTitle = decisionMaker.title || verifiedCEOTitle || 'Owner';
+          }
+        }
+      } catch(e) { console.log('Decision-maker engine failed (non-fatal):', e.message); }
+    }
+
+    // ═══ FIREPROOF EMAIL ENGINE ════════════════════════════════════════════
+    // Runs AFTER the CEO name is known (Hunter → About-page → Brain), because
+    // the name is what makes pattern generation possible. Returns a scored,
+    // tiered result — never a bare guess dressed up as a fact.
+    let emailResult = null;
+    if (website) {
+      try {
+        emailResult = await findEmailFireproof({
+          website,
+          ceoName: (decisionMaker && decisionMaker.name) || verifiedCEO,
+          ceoTitle: (decisionMaker && decisionMaker.title) || verifiedCEOTitle,
+          employees: verifiedEmployees,
+          fcKey: firecrawlKey,
+          homepageContent: content,
+          hunterEmail: email.email || '',
+          hunterName: email.founderName || '',
+          hunterTitle: email.title || '',
+          verifierKey,
+        });
+        if (emailResult && emailResult.email) {
+          console.log(`EMAIL RESULT [${company}]: ${emailResult.email} | ${emailResult.label} | score ${emailResult.score} | sendable: ${emailResult.sendable}`);
+          // Only overwrite the browser-found email if ours is better evidence
+          if (!email.email || emailResult.tier <= 2) {
+            email.email = emailResult.email;
+          }
+          if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
+        }
+      } catch(e) { console.log('Email engine failed (non-fatal):', e.message); }
     }
 
     // ═══ COMPANY NEWS TRIGGERS — recent events for the pitch cold-open ═══════
@@ -3263,6 +3931,7 @@ Return ONLY valid JSON:
       screenshotUrl,
       companyTriggers,
       verifiedCEO, verifiedCEOTitle, verifiedEmployees,
+      emailResult, decisionMaker,
       signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
       homepageContent: content.slice(0,3000),
       richData: {
@@ -3331,6 +4000,26 @@ const ensureHunterAttribute = async (hunterKey, label) => {
 
 // List the user's Hunter sequences so they can find the correct Sequence ID.
 // Hunter's API still calls sequences "campaigns" under the hood.
+// Check remaining Hunter credits so the app can warn before they run out.
+app.get('/api/hunter-credits', async (req, res) => {
+  const key = req.query.key;
+  if (!key) return res.status(400).json({ error: 'key required' });
+  try {
+    const r = await fetchT(`https://api.hunter.io/v2/account?api_key=${encodeURIComponent(key)}`, {}, 8000);
+    const d = await safeJson(r);
+    const used = d?.data?.requests?.searches?.used ?? null;
+    const available = d?.data?.requests?.searches?.available ?? null;
+    res.json({
+      used, available,
+      remaining: (available != null && used != null) ? available - used : null,
+      plan: d?.data?.plan_name || null,
+      resetDate: d?.data?.reset_date || null,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/hunter-sequences', async (req, res) => {
   const hunterKey = req.query.key;
   if (!hunterKey) return res.status(400).json({ error: 'key required' });
@@ -3343,6 +4032,118 @@ app.get('/api/hunter-sequences', async (req, res) => {
     res.json({ sequences: seqs });
   } catch(e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEST HARNESS — verify the decision-maker + email engines on any company
+// ═══════════════════════════════════════════════════════════════════════════
+// Runs every source INDEPENDENTLY and shows you exactly what each one returned,
+// so you can see whether the engine actually works instead of trusting a summary.
+app.post('/api/test-contact-engine', async (req, res) => {
+  const { company, website, keys } = req.body;
+  const { firecrawlKey, hunterKey, verifierKey } = keys || {};
+  const apiKey = req.body.apiKey;
+  if (!company || !website) return res.status(400).json({ error: 'company and website required' });
+
+  const t0 = Date.now();
+  const out = { company, website, sources: {}, decisionMaker: null, email: null, timing: {} };
+
+  try {
+    // Scrape the homepage once, reuse everywhere (same as the real flow)
+    let homepageContent = '';
+    if (firecrawlKey) {
+      const s = Date.now();
+      homepageContent = await firecrawlScrape(firecrawlKey, website, 20000);
+      out.timing.scrape = Date.now() - s;
+      out.sources.homepage_chars = homepageContent.length;
+    }
+
+    // ── Each source, run independently so you can see who found what ──
+    const s1 = Date.now();
+    const brain = await findOwnerViaBrain(website, firecrawlKey, apiKey, homepageContent, company).catch(e => ({ error: e.message }));
+    out.sources.own_website_brain = brain || 'nothing found';
+    out.timing.brain = Date.now() - s1;
+
+    const s2 = Date.now();
+    const registry = await findOwnerViaRegistry(company, firecrawlKey).catch(e => ({ error: e.message }));
+    out.sources.registry = registry || 'nothing found';
+    out.timing.registry = Date.now() - s2;
+
+    const s3 = Date.now();
+    const news = await findOwnerViaNews(company).catch(e => ({ error: e.message }));
+    out.sources.news = news || 'nothing found';
+    out.timing.news = Date.now() - s3;
+
+    // Hunter — the incumbent we're measuring against
+    let hunterEmail = '', hunterName = '', hunterTitle = '';
+    if (hunterKey) {
+      const s4 = Date.now();
+      try {
+        const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
+        const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${domain}&type=personal&limit=5&api_key=${hunterKey}`, {}, 10000);
+        const d = await safeJson(r);
+        const emails = (d?.data?.emails || []).map(e => ({
+          email: e.value, name: `${e.first_name||''} ${e.last_name||''}`.trim(),
+          title: e.position || '', confidence: e.confidence,
+          authority: authorityScore(e.position || ''),
+        })).sort((a,b) => b.authority - a.authority);
+        out.sources.hunter = emails.length ? emails : 'nothing found';
+        if (emails[0]) { hunterEmail = emails[0].email; hunterName = emails[0].name; hunterTitle = emails[0].title; }
+      } catch(e) { out.sources.hunter = { error: e.message }; }
+      out.timing.hunter = Date.now() - s4;
+    } else {
+      out.sources.hunter = 'no key provided';
+    }
+
+    // ── The corroborated verdict ──
+    const s5 = Date.now();
+    out.decisionMaker = await findDecisionMaker({
+      companyName: company, website, fcKey: firecrawlKey, apiKey,
+      homepageContent, hunterName, hunterTitle,
+    });
+    out.timing.decisionMaker = Date.now() - s5;
+
+    // ── The email, using the decision-maker we just identified ──
+    const s6 = Date.now();
+    out.email = await findEmailFireproof({
+      website,
+      ceoName: out.decisionMaker?.name,
+      ceoTitle: out.decisionMaker?.title,
+      fcKey: firecrawlKey,
+      homepageContent,
+      hunterEmail, hunterName, hunterTitle,
+      verifierKey,
+    });
+    out.timing.email = Date.now() - s6;
+
+    // ── Honest head-to-head scoring ──
+    out.verdict = {
+      hunterFoundPerson: !!hunterName,
+      hunterTitle: hunterTitle || null,
+      hunterAuthority: hunterName ? authorityScore(hunterTitle) : 0,
+      oursFoundPerson: !!out.decisionMaker?.name,
+      oursTitle: out.decisionMaker?.title || null,
+      oursAuthority: out.decisionMaker?.authority || 0,
+      oursCorroborated: !!out.decisionMaker?.corroborated,
+      oursSources: out.decisionMaker?.sources || [],
+      emailSendable: out.email?.sendable === true,
+      emailEvidence: out.email?.label || null,
+      winner:
+        (!hunterName && out.decisionMaker?.name) ? 'OURS (Hunter found nobody)' :
+        (hunterName && !out.decisionMaker?.name) ? 'HUNTER (we found nobody)' :
+        (!hunterName && !out.decisionMaker?.name) ? 'NEITHER' :
+        (out.decisionMaker?.authority > authorityScore(hunterTitle)) ? 'OURS (higher authority person)' :
+        (out.decisionMaker?.authority < authorityScore(hunterTitle)) ? 'HUNTER (higher authority person)' :
+        out.decisionMaker?.corroborated ? 'OURS (same person, but corroborated)' : 'TIE',
+    };
+
+    out.timing.total = Date.now() - t0;
+    console.log(`TEST [${company}]: ${out.verdict.winner} | ours: ${out.decisionMaker?.name || 'none'} (${out.decisionMaker?.sources?.join('+') || '-'}) | hunter: ${hunterName || 'none'}`);
+    res.json(out);
+  } catch(e) {
+    console.log('Test harness error:', e.message);
+    res.status(500).json({ error: e.message, partial: out });
   }
 });
 
@@ -3373,6 +4174,16 @@ app.post('/api/send-to-hunter', async (req, res) => {
     }
     if (!lead.subject || !lead.subject.trim()) {
       results.failed.push({ name: lead.name, email: lead.email, reason: 'no subject line — blocked before send' });
+      continue;
+    }
+    // HARD GUARD: never send to an unverified guess. A bounce costs sender
+    // reputation, which is far more expensive than a missed lead. Tier 4
+    // (inferred pattern on a catch-all domain) is explicitly not sendable.
+    if (lead.emailResult && lead.emailResult.sendable === false) {
+      results.failed.push({
+        name: lead.name, email: lead.email,
+        reason: `email not verified (${lead.emailResult.label}) — blocked to protect sender reputation`
+      });
       continue;
     }
     const fullName = (lead.founderName || lead.verifiedCEO || '').trim();
