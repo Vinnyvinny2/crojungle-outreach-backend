@@ -1200,7 +1200,10 @@ const EMAIL_TIERS = {
 const buildCandidates = (fullName, domain) => {
   const parts = String(fullName || '').trim().toLowerCase()
     .replace(/[^a-z\s'-]/g, '').replace(/[''-]/g, '')
-    .split(/\s+/).filter(Boolean);
+    .split(/\s+/).filter(Boolean)
+    // Drop middle initials and middle names — "Jeffrey R Jewett" must yield
+    // jeffrey.jewett@, never jeffrey.r@. Keep only first and last.
+    .filter((p, i, arr) => i === 0 || i === arr.length - 1 || p.length > 1);
   if (parts.length < 2 || !domain) return [];
   const first = parts[0];
   const last = parts[parts.length - 1];
@@ -1227,6 +1230,7 @@ const inferPattern = (email, fullName) => {
     .replace(/[^a-z\s'-]/g, '').replace(/[''-]/g, '')
     .split(/\s+/).filter(Boolean);
   if (parts.length < 2) return null;
+  // Only first + last matter for pattern inference; middle names are noise
   const first = parts[0], last = parts[parts.length - 1];
   const fi = first[0], li = last[0];
   const map = {
@@ -1469,15 +1473,13 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
 
-    // Read the real pages (max 3 — keeps Firecrawl credits sane)
-    let read = 0;
-    for (const u of candidates) {
-      if (read >= 3) break;
-      const md = await firecrawlScrape(fcKey, u, 12000);
-      if (md && md.length > 200) {
-        pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
-        read++;
-      }
+    // Read the real pages IN PARALLEL (was sequential — that alone cost ~20s)
+    const top = candidates.slice(0, 2); // 2 pages is plenty and keeps this fast
+    const scrapes = await Promise.all(
+      top.map(u => firecrawlScrape(fcKey, u, 9000).then(md => ({ u, md })).catch(() => ({ u, md: '' })))
+    );
+    for (const { u, md } of scrapes) {
+      if (md && md.length > 200) pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
     }
 
     const corpus = pages.join('\n').slice(0, 22000);
@@ -1563,12 +1565,11 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey) => {
       `"${clean}" ${domain ? domain + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
     ];
 
-    const hits = [];
-    for (const q of queries) {
-      const results = await firecrawlSearch(fcKey, q, 4, true);
-      hits.push(...results);
-      if (hits.length >= 5) break;
-    }
+    // Run both searches in parallel — sequential cost us ~15s for no reason
+    const batches = await Promise.all(
+      queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
+    );
+    const hits = batches.flat().slice(0, 6);
     if (hits.length === 0) return null;
 
     const corpus = hits.map(h =>
@@ -1757,12 +1758,10 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry) =
       `"${companyName}" glassdoor OR indeed employee review management`,
     ];
 
-    const hits = [];
-    for (const q of queries) {
-      const res = await firecrawlSearch(fcKey, q, 3, true);
-      hits.push(...res);
-      if (hits.length >= 5) break;
-    }
+    const batches = await Promise.all(
+      queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
+    );
+    const hits = batches.flat().slice(0, 6);
     if (hits.length === 0) return { signals: [], summary: '' };
 
     const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.content}`).join('\n\n').slice(0, 18000);
@@ -1853,8 +1852,8 @@ const findOwnerViaRegistry = async (companyName, fcKey) => {
     // it always returned nothing).
     const results = await firecrawlSearch(
       fcKey,
-      `"${clean}" (opencorporates OR bizapedia OR "secretary of state") officers OR members OR registered agent`,
-      3,
+      `"${clean}" (opencorporates OR bizapedia OR "secretary of state") officers OR members`,
+      2,
       true
     );
     if (results.length === 0) return null;
@@ -2011,11 +2010,57 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   const fail = { email: '', ...EMAIL_TIERS.NONE, name, pattern: null };
   if (!domain) return fail;
 
-  // ── Hunter already found one? It's verified at the source. Learn from it. ──
-  if (hunterEmail) {
-    const p = inferPattern(hunterEmail, hunterName || name);
-    if (p) domainPatternMemory.set(domain, p);
-    return { email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED, label: 'Verified by Hunter', name: hunterName || name, pattern: p };
+  // ── Hunter found an address — but is it the RIGHT PERSON? ─────────────────
+  // CRITICAL: Hunter's LinkedIn-biased index surfaces VPs and HR directors, not
+  // owners. If our decision-maker engine identified the CEO but Hunter's address
+  // belongs to the VP of Maintenance, using it would send a pitch addressed to
+  // the CEO into the wrong person's inbox. That burns the lead.
+  //
+  // So: only use Hunter's address if it's the SAME PERSON. Otherwise we still
+  // LEARN the company's email convention from it (very valuable — it tells us
+  // exactly how this company formats addresses) and use that to build the
+  // correct address for the person we actually want.
+  if (hunterEmail && hunterName) {
+    console.log(`EMAIL [${domain}]: Hunter has ${hunterName} <${hunterEmail}>. Decision-maker we want: ${name || 'unknown'}.`);
+    const learned = inferPattern(hunterEmail, hunterName);
+    if (learned) domainPatternMemory.set(domain, learned);
+
+    const isSamePerson = !name || sameName(hunterName, name);
+    if (isSamePerson) {
+      return {
+        email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED,
+        label: 'Verified by Hunter', name: hunterName, pattern: learned,
+      };
+    }
+
+    // Different person. Hunter gave us the VP; we want the owner. Build the
+    // owner's address using the pattern we just learned from Hunter's own data —
+    // this is genuinely high-confidence, because we KNOW the company's convention.
+    if (learned && name) {
+      const built = applyPattern(learned, name, domain);
+      if (built) {
+        console.log(`EMAIL [${domain}]: Hunter had ${hunterName} (${hunterTitle || '?'}), but decision-maker is ${name}. Built ${built} using Hunter's own pattern (${learned}).`);
+        // SMTP-verify it if we can — that upgrades it to fully confirmed
+        if (verifierKey) {
+          const catchAll = await isCatchAllDomain(domain, verifierKey);
+          if (catchAll === false) {
+            const res = await verifyEmailSMTP(built, verifierKey);
+            if (res.valid === true) {
+              return { email: built, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: learned };
+            }
+            // Normal domain and it doesn't resolve → this person has no mailbox here
+            console.log(`EMAIL [${domain}]: ${built} rejected by SMTP — ${name} has no mailbox at this domain`);
+          }
+        }
+        // Can't SMTP-verify (catch-all or no verifier key), but the pattern came
+        // from a REAL verified address at this exact domain — that's Tier 3.
+        return {
+          email: built, ...EMAIL_TIERS.PATTERN_LEARNED,
+          label: `Built from ${hunterName}'s confirmed address pattern at this domain`,
+          name, pattern: learned,
+        };
+      }
+    }
   }
 
   // ── TIER 1: published on their own website ────────────────────────────────
