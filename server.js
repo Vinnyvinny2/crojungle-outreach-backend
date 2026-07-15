@@ -3280,13 +3280,21 @@ const SIGNAL_TIERS = {
   // literally raising their hand. Nothing beats a self-declared problem.
   founder_venting:      { weight: 40, halfLife: 30, tier: 1, label: 'Owner is PUBLICLY asking for help with exactly what we sell — self-declared intent' },
 
-  // ═══ NEW SALES LEADER — I had this backwards ═════════════════════════════
-  // A new CMO is BAD (they just built the layer we bypass). A new VP of Sales is
-  // GOOD: quota, no pipeline, 90 days to prove himself, and NO marketing team to
-  // feed him. He is the most pressured person in the building and he buys leads.
-  new_sales_leader:     { weight: 28, halfLife: 60, tier: 2, label: 'New VP of Sales / CRO — has a quota, no pipeline, and no marketing team. Buys lead gen fast.' },
-  new_ops_leader:       { weight: 22, halfLife: 60, tier: 2, label: 'New COO / VP of Ops — hired specifically to fix operations, and has budget to do it' },
-  new_owner:            { weight: 20, halfLife: 90, tier: 2, label: 'New owner just bought the business — wants growth, and is not attached to the old way' },
+  // ═══ EXECUTIVE-CHANGE SIGNALS — CORROBORATORS, NOT STANDALONE LEADS ══════
+  // Hard-won insight: "a new VP of Sales" alone is a WEAK signal. It tells us a
+  // title changed at SOME company — nothing about whether they're a fit, reachable,
+  // or need us. A new VP of Sales at a 5,000-person enterprise is useless.
+  //
+  // These signals only become valuable when they STACK on a company we already
+  // like: a new VP of Sales AT A SMALL COMPANY THAT'S ALREADY HIRING and has no
+  // marketing team is gold — he has quota, no pipeline, and no one to feed him.
+  //
+  // So we weight them LOW as standalone (they won't surface a lead on their own)
+  // but the stack multiplier makes them powerful when they corroborate an Adzuna
+  // or EDGAR company. A title change is a MULTIPLIER on fit, never a substitute.
+  new_sales_leader:     { weight: 12, halfLife: 60, tier: 3, label: 'New VP of Sales / CRO — quota, no pipeline, no marketing team. Strong ONLY when it stacks with a fit signal.' },
+  new_ops_leader:       { weight: 10, halfLife: 60, tier: 3, label: 'New COO / VP of Ops — hired to fix operations. A corroborator, not a lead on its own.' },
+  new_owner:            { weight: 14, halfLife: 90, tier: 3, label: 'New owner — wants growth, not attached to the old way. Strong when it stacks with hiring/ad signals.' },
   agency_pain:          { weight: 30, halfLife: 45, tier: 1, label: 'Just fired their agency — already tried cheap, it failed' },
 
   // ── TIER 2: they have budget and a live problem ──────────────────────────
@@ -4079,12 +4087,34 @@ app.post('/api/discover', async (req, res) => {
       const agencyPain = !!(s.agency_review || s.social_pain_signal);
       const multiSource = (c.sources || [c.source]).filter(Boolean).length >= 2;
 
+      const newSalesLeader = !!s.new_sales_leader;
+      const newOwner = !!s.new_owner;
+
       // TIER S — Perfect Storm: money + bleeding ops + growth mandate
       if (funded && manualMulti && (mktgHire || growthEvent)) return {
         tier: 'S', id: 'perfect_storm', boost: 35, label: '🌩 Perfect Storm',
         whyHot: 'Just funded + hiring multiple manual roles + active growth event — capital, urgency, and operational bleeding all at once',
         productHint: 'Custom AI Software Build + End-to-End Marketing bundle — board pressure makes this a fast yes'
       };
+
+      // ═══ NEW SALES LEADER + FIT — the stack that makes a title change matter ══
+      // A new VP of Sales ALONE is weak. But a new VP of Sales at a company that
+      // is ALSO hiring (in-ICP, reachable) and has NO marketing team means he has
+      // a quota, no pipeline, and no one to generate leads. He is the most
+      // pressured buyer in the building — and now we have a fit reason to reach him.
+      if (newSalesLeader && (manualAny || mktgHire || funded)) return {
+        tier: 'A', id: 'pressured_sales_leader', boost: 28, label: '⚡ New Sales Leader, No Pipeline',
+        whyHot: 'A new VP of Sales/CRO AND active hiring/budget signals — he has a quota and 90 days to prove himself, no marketing team feeding him, and the company is clearly in a growth push. He buys lead gen fast.',
+        productHint: 'End-to-End Marketing / lead gen — pitch the new sales leader directly, not the owner. He owns the number and feels the pipeline gap personally.'
+      };
+
+      // New owner who is ALSO showing a growth/hiring signal — wants to make a mark
+      if (newOwner && (manualAny || mktgHire || growthEvent)) return {
+        tier: 'A', id: 'new_owner_growth', boost: 24, label: '⚡ New Owner in Growth Mode',
+        whyHot: 'New owner AND active hiring/growth signals — they just bought the business, want to prove the thesis, and are not attached to the old vendors or the old way.',
+        productHint: 'Lead with a fresh-start angle — they are actively rebuilding and open to new partners in a way an established owner is not.'
+      };
+
       // TIER A combos
       if (funded && manualMulti) return {
         tier: 'A', id: 'funded_labor', boost: 25, label: '⚡ Funded & Bleeding Labor',
@@ -4221,9 +4251,14 @@ app.post('/api/discover', async (req, res) => {
     console.log('Unique:', unique.length, '| Returning:', scored.length);
     console.log('Breakdown:', breakdown);
     const reachSummary = {
-      high: scored.filter(c => c.reachability >= 18).length,
-      medium: scored.filter(c => c.reachability >= 8 && c.reachability < 18).length,
-      low: scored.filter(c => c.reachability < 8).length,
+      // Find-time reachability is an ESTIMATE — we have size but no confirmed
+      // contact yet. "High" should mean genuinely high (small AND some corroborating
+      // signal), not just "small company." Otherwise 86% score high and the metric
+      // is useless as a filter. The REAL reachability score is computed post-research
+      // once we have a decision-maker and verified email.
+      high: scored.filter(c => c.reachability >= 24).length,
+      medium: scored.filter(c => c.reachability >= 12 && c.reachability < 24).length,
+      low: scored.filter(c => c.reachability < 12).length,
       blocked: scored.filter(c => c.reachabilityBlocked).length,
     };
     console.log('Owner-reachability:', reachSummary);
