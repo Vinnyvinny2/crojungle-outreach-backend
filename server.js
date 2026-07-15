@@ -1152,10 +1152,12 @@ const searchSECEdgar = async () => {
       const d2 = JSON.parse(text2);
       const hits2 = d2?.hits?.hits || [];
       console.log(`SEC EDGAR (fallback): ${hits2.length} hits`);
+      const FUND_PAT = [/\b(fund|capital|ventures?|partners?|investments?|holdings?|advisors?|management|assets?)\s+(lp|llc|ltd|inc)\.?$/i,/\b(series [a-z]|series [ivxlc]+)\s*(lp|llc|ltd)?\.?$/i,/\bco-investment\b/i,/\bopportunities?\s+fund\b/i,/\bprivate\s+(investors?|equity|capital)\b/i,/\bspecial\s+(opportunities?|purpose)\b/i,/\b(qp|qualified purchaser)\s*(lp|llc)?\.?$/i];
       return hits2.slice(0, 20).map(hit => {
         const src = hit._source || {};
-        const name = src.entity_name || src.company_name || src.display_names?.[0] || '';
+        const name = (src.entity_name || src.company_name || src.display_names?.[0] || '').replace(/\s*\(CIK\s*\d+\)\s*/gi,'').trim();
         if (!name || name.length < 2) return null;
+        if (FUND_PAT.some(p => p.test(name))) return null;
         return { name: name.trim(), source: 'sec_edgar', signals: { raised_funding: true }, jobTitle: 'Form D filing — recently raised' };
       }).filter(Boolean);
     }
@@ -1168,6 +1170,27 @@ const searchSECEdgar = async () => {
       name = name.replace(/\s*\(CIK\s*\d+\)\s*/gi, '').replace(/\s*\([A-Z]{2,5}\)\s*/g, '').trim();
       const amount = src.total_offering_amount || src.offeringAmount || '';
       if (!name || name.length < 2) return null;
+
+      // ══ FILTER OUT INVESTMENT FUNDS ══════════════════════════════════════
+      // Form D is filed by BOTH operating companies raising capital AND by
+      // private equity/VC funds raising a new fund. We want the former — an
+      // operating business with budget pressure. The latter (funds) have names
+      // like "Glade Brook Private Investors XLVIII LP", "Hummingbird Series B LLC",
+      // "Feynman Point Special Opportunities Fund LP" — they are not our ICP.
+      // These patterns catch ~95% of fund names reliably:
+      const FUND_PATTERNS = [
+        /(fund|capital|ventures?|partners?|investments?|holdings?|advisors?|management|asset[s]?)\s+(lp|llc|ltd|inc)\.?$/i,
+        /(series [a-z]|series [ivxlc]+)\s*(lp|llc|ltd)?\.?$/i,
+        /co-investment/i,
+        /opportunities?\s+fund/i,
+        /private\s+(investors?|equity|capital)/i,
+        /special\s+(opportunities?|purpose)/i,
+        /(qp|qualified purchaser)\s*(lp|llc)?\.?$/i,
+      ];
+      if (FUND_PATTERNS.some(p => p.test(name))) {
+        return null; // investment fund, not an operating business
+      }
+
       return {
         name: name.trim(),
         source: 'sec_edgar',
@@ -1175,7 +1198,7 @@ const searchSECEdgar = async () => {
         jobTitle: `Form D filing${amount ? ` — $${Number(amount).toLocaleString()} raise` : ' — recently raised'}`,
       };
     }).filter(Boolean);
-    console.log(`SEC EDGAR: ${results.length} from ${hits.length} hits`);
+    console.log(`SEC EDGAR: ${results.length} from ${hits.length} hits (investment funds filtered out)`);
     return results;
   } catch(e) { console.error('SEC EDGAR error:', e.message); return []; }
 };
@@ -1993,6 +2016,121 @@ ${corpus}` }]
 // ── FIND THEIR REAL WEBSITE (replaces Clearbit + domain guessing) ──────────
 // This was a genuine weak point: Clearbit misses constantly, which is why the
 // "confirm the website" modal kept appearing. A web search finds it reliably.
+// ═══════════════════════════════════════════════════════════════════════════
+// VISION AUDIT — look at the actual rendered page, don't grep the source
+// ═══════════════════════════════════════════════════════════════════════════
+// Regex on HTML misses JS-rendered content and can't judge what a visitor
+// actually SEES. This sends the screenshot to Claude vision and asks specific,
+// binary questions about the rendered above-fold experience. These answers are
+// MECHANICAL (a human looking at the same screenshot would agree), unlike a
+// positioning "score" which is judgment. Each answer carries what was observed,
+// so the finding is defensible — we can say exactly what we saw.
+const visionAuditPage = async (screenshotBase64, companyName, apiKey) => {
+  if (!screenshotBase64 || !apiKey) return null;
+  try {
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 700,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } },
+          { type: 'text', text: `This is the above-the-fold screenshot of ${companyName}'s homepage — exactly what a visitor sees on arrival before scrolling.
+
+Answer each question about what is ACTUALLY VISIBLE in this image. You are the eyes of the audit — a human looking at this same screenshot must agree with every answer. Describe what you SEE, do not infer from what you'd expect.
+
+Return ONLY JSON:
+{
+  "hasVisibleCTA": true/false,        // Is there a clear, clickable call-to-action button visible (Get a quote, Contact us, Book now, Shop, Sign up)? A nav menu link does NOT count — it must be a prominent action.
+  "ctaObserved": "what the CTA button says, or 'none visible'",
+  "hasHeadline": true/false,          // Is there a real value-proposition headline (not just a logo or nav)?
+  "headlineObserved": "the headline text you see, or 'none visible'",
+  "heroIsBlank": true/false,          // Is the main hero area empty, a blank carousel, still loading, or broken-looking?
+  "hasVisibleSocialProof": true/false,// Are testimonials, review stars, client logos, or trust badges visible above the fold?
+  "looksDated": true/false,           // Does the visual design look pre-2020 (old fonts, cluttered layout, dated styling)?
+  "designObservation": "one factual sentence describing what the page looks like",
+  "overallConversionReadiness": "strong|moderate|weak"  // Based only on what's visible: can this page convert a paid-ad visitor?
+}` }
+        ] }]
+      }),
+    }, 30000);
+
+    const d = await r.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+    console.log(`VISION [${companyName}]: CTA=${parsed.hasVisibleCTA} headline=${parsed.hasHeadline} blankHero=${parsed.heroIsBlank} readiness=${parsed.overallConversionReadiness}`);
+    return parsed;
+  } catch(e) {
+    console.log('visionAuditPage failed (non-fatal):', e.message);
+    return null;
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DOMAIN CONFIRMATION — is this site REALLY the company we think it is?
+// ═══════════════════════════════════════════════════════════════════════════
+// The most dangerous audit error is not "listing page vs business page" — it's
+// "right name, WRONG company." There are dozens of "Clark Transfer"s in the US.
+// Resolving a domain by name-overlap can easily land on a different company that
+// happens to share the name. Every finding would then be accurate — about the
+// WRONG business.
+//
+// This reads the homepage we're about to audit and asks Claude, with the
+// identifying facts we already know (location, industry, what they do), whether
+// this site actually belongs to the target company. If confidence is low, we do
+// NOT audit — a blank audit is infinitely better than a confident wrong one.
+const confirmDomainMatch = async (companyName, homepageContent, knownFacts, apiKey) => {
+  if (!companyName || !homepageContent || homepageContent.length < 100 || !apiKey) {
+    return { match: 'unknown', confidence: 'low', reason: 'not enough content to confirm' };
+  }
+  try {
+    const facts = [];
+    if (knownFacts.location) facts.push(`Location: ${knownFacts.location}`);
+    if (knownFacts.industry) facts.push(`Industry: ${knownFacts.industry}`);
+    if (knownFacts.signal) facts.push(`Why we're looking at them: ${knownFacts.signal}`);
+    if (knownFacts.employees) facts.push(`Approx size: ${knownFacts.employees} employees`);
+
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: `We are about to build a marketing audit for a company called "${companyName}". Before we do, confirm this website actually belongs to THAT company — not a different business with a similar name.
+
+WHAT WE KNOW ABOUT THE TARGET COMPANY:
+${facts.length ? facts.join('\\n') : '(only the name)'}
+
+HOMEPAGE CONTENT OF THE SITE WE RESOLVED:
+${homepageContent.slice(0, 3000)}
+
+TASK: Does this website belong to the target company?
+- "yes" — the name, and ideally the location/industry, clearly match.
+- "no" — this is a DIFFERENT company (wrong location, wrong industry, or clearly a different business that shares the name).
+- "unclear" — can't tell (generic content, name matches but nothing else confirms it).
+
+Be strict. If the industry or location contradicts what we know, that's a "no" even if the name matches. When in doubt, "unclear" — never guess "yes".
+
+Return ONLY JSON:
+{"match":"yes|no|unclear","confidence":"high|medium|low","reason":"one short sentence"}` }]
+      }),
+    }, 20000);
+
+    const d = await r.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+    return { match: parsed.match || 'unclear', confidence: parsed.confidence || 'low', reason: parsed.reason || '' };
+  } catch(e) {
+    console.log('confirmDomainMatch failed (non-fatal):', e.message);
+    return { match: 'unknown', confidence: 'low', reason: 'confirmation check errored' };
+  }
+};
+
 const findWebsiteViaSearch = async (companyName, fcKey, location) => {
   if (!companyName || !fcKey) return null;
   try {
@@ -3714,6 +3852,38 @@ app.post('/api/discover', async (req, res) => {
       }
     }
     
+    const WEIGHTS = {
+      // Stage 4 — hottest, in market NOW
+      agency_review: 45,
+      social_pain_signal: 35,
+      founder_venting: 10,
+      // Stage 3-4 — actively in motion
+      hiring_marketing: 30,
+      salary_high: 20,
+      raised_funding: 25,
+      running_fb_ads: 30,       // confirmed budget + digital presence
+      stale_ads: 15,            // running same ads 90+ days = frustrated
+      // Exit prep — owner motivated to grow revenue fast
+      preparing_for_exit: 35,
+      needs_revenue_growth: 15,
+      owner_motivated: 10,
+      // AI-replacement labor signals (Adzuna re-aim) — Tier 1 $25k-$75k builds
+      ai_replacement_signal: 25,   // hiring any manual/repetitive role
+      ai_replacement_multi: 20,    // 2+ functions or 3+ postings — real bleeding
+      ai_replacement_heavy: 20,    // 3+ functions or 5+ postings — stacks on multi  
+      // Other signals 
+      hiring_ops: 10,
+      tool_frustration: 20,
+      recently_launched: 15,
+      needs_marketing: 10,
+      rebranding: 20,
+      expanding: 12,
+      recently_acquired: 18,
+      salary_mid: 10,
+      salary_low: 5,
+      salary_unknown: 5,
+    };
+
     // Apply enrichment + size gate
     // ═══════════════════════════════════════════════════════════════════════
     // BULLETPROOF SIZE GATE — multi-signal waterfall
@@ -3953,37 +4123,7 @@ app.post('/api/discover', async (req, res) => {
     // Score — full 100 point scale
     // Discovery signals give a pre-research score
     // Higher signals = more confident ICP match
-    const WEIGHTS = {
-      // Stage 4 — hottest, in market NOW
-      agency_review: 45,
-      social_pain_signal: 35,
-      founder_venting: 10,
-      // Stage 3-4 — actively in motion
-      hiring_marketing: 30,
-      salary_high: 20,
-      raised_funding: 25,
-      running_fb_ads: 30,       // confirmed budget + digital presence
-      stale_ads: 15,            // running same ads 90+ days = frustrated
-      // Exit prep — owner motivated to grow revenue fast
-      preparing_for_exit: 35,
-      needs_revenue_growth: 15,
-      owner_motivated: 10,
-      // AI-replacement labor signals (Adzuna re-aim) — Tier 1 $25k-$75k builds
-      ai_replacement_signal: 25,   // hiring any manual/repetitive role
-      ai_replacement_multi: 20,    // 2+ functions or 3+ postings — real bleeding
-      ai_replacement_heavy: 20,    // 3+ functions or 5+ postings — stacks on multi  
-      // Other signals 
-      hiring_ops: 10,
-      tool_frustration: 20,
-      recently_launched: 15,
-      needs_marketing: 10,
-      rebranding: 20,
-      expanding: 12,
-      recently_acquired: 18,
-      salary_mid: 10,
-      salary_low: 5,
-      salary_unknown: 5,
-    };
+
 
     // ═══════════════════════════════════════════════════════════════════════
     // THE SCORE — Fit × Intent × Timing (2026 signal-based-selling framework)
@@ -4289,7 +4429,8 @@ const checkFacebookAds = async (name, fbToken) => {
 
 app.post('/api/research', async (req, res) => {
   FIRECRAWL_OUT_OF_CREDITS = false; // reset per run so the flag reflects THIS request
-  const { company, website, keys, apiKey } = req.body;
+  const { company, keys, apiKey } = req.body;
+  let website = req.body.website;  // mutable — the website guard may resolve/blank it
   const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey, verifierKey } = keys || {};
   const browserData = req.body.browserData || {};
   const pageSpeed = browserData.pageSpeed || {};
@@ -4337,19 +4478,58 @@ app.post('/api/research', async (req, res) => {
     });
   }
 
-  const domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
+  let domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
+  let verifiedIndustry = null;  // declared early — the domain-confirmation step uses it
   console.log(`Research: ${company} | ${website||'no website'}`);
 
   try {
-    // Fire all signals simultaneously
-    // Never scrape BizBuySell listing pages — bot-protected and wrong site
-    const isBizBuySellUrl = website && /bizbuysell\.com/i.test(website);
-    if (isBizBuySellUrl) {
-      console.log('BizBuySell URL detected — skipping scrape, needs real company website');
+    // ═══════════════════════════════════════════════════════════════════════
+    // WEBSITE INTEGRITY GUARD — audit the REAL business, never a listing page
+    // ═══════════════════════════════════════════════════════════════════════
+    // The #1 way an audit goes wrong: we scrape a BizBuySell/broker/directory
+    // page instead of the actual business's website. Every finding would then be
+    // about the WRONG site — "no CTA, no pixel" describes BizBuySell, not the
+    // business. That destroys the entire audit's credibility.
+    //
+    // This blocks EVERY known listing/aggregator/directory host — not just
+    // BizBuySell — and if the website we were handed is one of them (or empty,
+    // as for-sale leads always are), it resolves the business's REAL domain via
+    // search before anything is scraped. If it can't find a real domain, it runs
+    // the audit WITHOUT a website rather than auditing the wrong one.
+    const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|businessbroker|loopnet|dealstream|flippa|businessmart|sunbeltnetwork|murphybusiness|transworld|acquisitions?\.com|empireflippers|quietlight|latonas|feinternational|crexi|costar|loopnet|linkedin|facebook|twitter|instagram|yelp|bbb\.org|manta|buzzfile|dnb\.com|dun|indeed|glassdoor|crunchbase|bloomberg|zoominfo|wikipedia|youtube|mapquest|yellowpages|angi\.com|thumbtack|houzz|google\.com\/maps)/i;
+
+    const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
+    const handedHost = hostOf(website);
+    const handedIsListingOrEmpty = !website || LISTING_OR_DIRECTORY_HOST.test(handedHost);
+
+    if (handedIsListingOrEmpty && website) {
+      console.log(`WEBSITE GUARD [${company}]: handed a listing/directory URL (${handedHost}) — NOT the business's site. Resolving real domain…`);
     }
 
+    // Resolve the real business domain if what we have isn't usable
+    if (handedIsListingOrEmpty && firecrawlKey && company) {
+      const real = await findWebsiteViaSearch(company, firecrawlKey, req.body.location);
+      if (real && !LISTING_OR_DIRECTORY_HOST.test(hostOf(real))) {
+        console.log(`WEBSITE GUARD [${company}]: resolved real domain → ${real}`);
+        website = real;
+        domain = hostOf(real);
+      } else {
+        console.log(`WEBSITE GUARD [${company}]: could NOT resolve a real business domain — auditing WITHOUT a website rather than auditing the wrong one`);
+        website = ''; // never audit the listing page
+      }
+    }
+
+    // Final safety check — after resolution, if the website is STILL a listing
+    // host, blank it. We would rather have no site audit than a wrong one.
+    if (website && LISTING_OR_DIRECTORY_HOST.test(hostOf(website))) {
+      console.log(`WEBSITE GUARD [${company}]: website still points to a listing host after resolution — blanking it`);
+      website = '';
+    }
+
+    const isBizBuySellUrl = false; // handled comprehensively above now
+
     const scrapeHomepage = async () => {
-      if (!website || !firecrawlKey || isBizBuySellUrl) return {};
+      if (!website || !firecrawlKey) return {};
       const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
@@ -4381,6 +4561,29 @@ app.post('/api/research', async (req, res) => {
     const googleAds = googleAdsRes.value || {};
     const email = emailData; // from browser via browserData
 
+    // ═══ CONFIRM WE'RE AUDITING THE RIGHT COMPANY ════════════════════════════
+    // We resolved a domain and scraped it — but is it REALLY this company, or a
+    // different business with the same name? Confirm before generating a single
+    // finding. If it's clearly the wrong company, blank the site data so we don't
+    // build an audit about someone else. A blank audit beats a confident wrong one.
+    let domainConfirmation = { match: 'unknown', confidence: 'low', reason: '' };
+    if (website && content && content.length > 100) {
+      domainConfirmation = await confirmDomainMatch(company, content, {
+        location: req.body.location,
+        industry: verifiedIndustry || req.body.industry,
+        signal: req.body.sourceSignal || req.body.discoveryReason,
+        employees: verifiedEmployees,
+      }, apiKey);
+      console.log(`DOMAIN MATCH [${company}]: ${domainConfirmation.match} (${domainConfirmation.confidence}) — ${domainConfirmation.reason}`);
+
+      if (domainConfirmation.match === 'no') {
+        // Wrong company. Do NOT audit this site. Blank everything site-derived.
+        console.log(`⛔ WRONG COMPANY [${company}]: resolved site is a different business. Discarding site audit — will not generate findings about the wrong company.`);
+        website = '';
+        domain = '';
+      }
+    }
+
     // If Hunter found a named contact, use them as the verified decision-maker.
     // Hunter is the most reliable source — it finds the actual person at the domain.
     if (!verifiedCEO && email.founderName && email.founderName.trim().length > 3) {
@@ -4390,7 +4593,6 @@ app.post('/api/research', async (req, res) => {
     }
 
     // ═══ THE COMPANIES API — authoritative size/industry (if key present) ═══════
-    let verifiedIndustry = null;
     if (companiesApiKey && website) {
       try {
         const capi = await enrichViaCompaniesAPI(website, companiesApiKey);
@@ -4436,8 +4638,12 @@ app.post('/api/research', async (req, res) => {
     // are actually worth pitching — i.e. we found a real decision-maker who can
     // buy. Running it on every lead (including ones we'd never send to) was
     // burning the monthly budget on companies that get discarded anyway.
-    const painWorthIt = req.body.deepMode !== false; // callers can opt out
-    if (painWorthIt && publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
+    // PAIN RESEARCH ALWAYS RUNS — it is the single most valuable input to the pitch.
+    // Skipping it on Quick mode was silently producing website-only audits with
+    // none of the story. This is the data that makes an owner think "how do they
+    // know this?" If Firecrawl is out of credits it returns empty and we fall back
+    // to the site audit — which is the correct behavior, not a skip.
+    if (publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
       try {
         const pain = await findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry);
         if (pain.signals && pain.signals.length > 0) {
@@ -4582,6 +4788,7 @@ app.post('/api/research', async (req, res) => {
         // Build message content — always send text, add image if available
         const msgContent = [];
 
+        let screenshotBase64 = null;
         if (screenshotUrl) {
           try {
             const imgRes = await fetchT(screenshotUrl, {}, 10000);
@@ -4590,12 +4797,23 @@ app.post('/api/research', async (req, res) => {
             // Cap at 1.5MB: most above-fold screenshots fit; oversized ones get
             // skipped and the audit runs from the scraped text (still good).
             if (imgBuffer.length < 3 * 1024 * 1024) {
-              const base64 = imgBuffer.toString('base64');
-              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
+              screenshotBase64 = imgBuffer.toString('base64');
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } });
             } else {
               console.log(`Screenshot too large (${Math.round(imgBuffer.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
             }
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
+        }
+
+        // ═══ VISION AUDIT — the eyes of the operation ════════════════════════
+        // Look at the ACTUAL rendered page instead of grepping HTML. These
+        // findings are mechanical (a human would agree) and OVERRIDE the
+        // regex-based CTA/social-proof guesses when available — because a
+        // screenshot can't be fooled by JS-rendered content the way source-scan can.
+        if (screenshotBase64) {
+          visualAnalysis = await visionAuditPage(screenshotBase64, company, apiKey);
+          // visualAnalysis now carries the authoritative visual findings;
+          // hasCTA (declared below) reads from it directly.
         }
 
         // ═══ ICP LANE CLASSIFIER — maps to the CEO's four real client profiles ═══
@@ -4665,6 +4883,11 @@ COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
 VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
 VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle || 'CEO') + ') — found in public search results, use their real name in the pitch' : 'Not identified — pitch to "the owner/CEO"'}
+═══ WHAT THEIR HOMEPAGE ACTUALLY LOOKS LIKE (vision — we SAW this, not guessed) ═══
+${visualAnalysis ? `${visualAnalysis.heroIsBlank ? '⚠ THE HERO IS BLANK OR BROKEN-LOOKING. ' : ''}Headline visible: ${visualAnalysis.hasHeadline ? 'yes — "' + (visualAnalysis.headlineObserved || '') + '"' : 'NO — no value-proposition headline visible on arrival'}. CTA visible: ${visualAnalysis.hasVisibleCTA ? 'yes — "' + (visualAnalysis.ctaObserved || '') + '"' : 'NO — no clear call-to-action button above the fold'}. Social proof above fold: ${visualAnalysis.hasVisibleSocialProof ? 'yes' : 'no'}. Design: ${visualAnalysis.designObservation || (visualAnalysis.looksDated ? 'looks dated' : 'current')}. Conversion readiness: ${visualAnalysis.overallConversionReadiness || 'unknown'}.
+→ These are VISUAL FACTS — we looked at their actual rendered homepage. "Your homepage loads with a blank hero and no call-to-action" is undeniable when we've literally seen it. This is your sharpest, most credible ammunition. Use the exact observation.
+${visualAnalysis.heroIsBlank && (fbAds.adCount||0) > 0 ? '→ ⚠ THEY ARE RUNNING ' + fbAds.adCount + ' PAID ADS INTO A BLANK HOMEPAGE. This is the single most expensive, most provable problem they have. Lead with it.' : ''}` : 'No screenshot available — audit the site from scraped text only. Do NOT describe what the page "looks like" — we did not see it.'}
+
 ═══ MONEY ON FIRE — provable, undeniable, and no competitor will ever tell them ═══
 ${moneyOnFire.count > 0 ? `${moneyOnFire.headline}
 
@@ -5163,7 +5386,11 @@ Return ONLY valid JSON:
     }
 
     // Merge text analysis with visual analysis
-    const hasCTA = visualAnalysis?.hasCTAAboveFold ?? /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
+    // VISION FIRST: if the vision audit looked at the rendered page, its verdict is
+    // authoritative. Fall back to source-regex only when there's no screenshot.
+    const hasCTA = (typeof visualAnalysis?.hasVisibleCTA === 'boolean')
+      ? visualAnalysis.hasVisibleCTA
+      : /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
 
     // ═══════════════════════════════════════════════════════════════════
     // MONEY ON FIRE — the most undeniable audit finding we can produce
@@ -5553,6 +5780,38 @@ Return ONLY valid JSON:
       verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
       emailResult, decisionMaker,
       publicPainSignals, painSummary,
+      // INTEGRITY STAMP: the exact website every finding was measured against.
+      // If this is blank, no site was audited (we refused to audit a listing page).
+      // The frontend shows this so you can verify at a glance it's the real business.
+      auditedWebsite: website || '',
+      auditedWebsiteResolved: website && website !== req.body.website,
+      // Did we confirm this site really belongs to THIS company (not a same-name
+      // different business)? 'yes' = confirmed, 'no' = wrong company (site discarded),
+      // 'unclear'/'unknown' = couldn't confirm — treat findings with more caution.
+      domainMatch: domainConfirmation.match,
+      domainMatchConfidence: domainConfirmation.confidence,
+      domainMatchReason: domainConfirmation.reason,
+      visionAudit: visualAnalysis || null,
+      // ═══ CONFIDENCE LABELS — the key to defensible accuracy ════════════════
+      // Every finding tagged by HOW we know it. A finding is only "wrong" if its
+      // confidence label overstates its certainty. This never overstates.
+      //   mechanical  = a machine measured it; a human would agree (highest)
+      //   visual      = vision looked at the rendered page (high)
+      //   limited     = we checked but can't see everything (e.g. server-side CRM)
+      //   judgment    = Claude's structured opinion (lowest — always verify)
+      signalConfidence: {
+        facebook_ads:   { level: 'mechanical', method: 'Meta Ad Library direct lookup' },
+        meta_pixel:     { level: 'mechanical', method: 'page source scan for fbq/facebook.net/tr' },
+        google_ads_tag: { level: 'mechanical', method: 'page source scan for gtag AW-' },
+        analytics:      { level: 'mechanical', method: 'page source scan for GA4/GTM' },
+        cta_above_fold: { level: visualAnalysis ? 'visual' : 'limited', method: visualAnalysis ? 'vision read the rendered screenshot' : 'source regex (may miss JS-rendered)' },
+        social_proof:   { level: visualAnalysis ? 'visual' : 'limited', method: visualAnalysis ? 'vision read the rendered screenshot' : 'source regex' },
+        crm:            { level: 'limited', method: 'page source scan — server-side CRMs are invisible; "none detected" is not "none exists"' },
+        decision_maker: { level: (decisionMaker?.corroborated ? 'mechanical' : 'limited'), method: (decisionMaker?.sources || []).join(' + ') || 'search' },
+        email:          { level: (emailResult?.tier <= 2 ? 'mechanical' : emailResult?.tier === 3 ? 'limited' : 'judgment'), method: emailResult?.label || 'none' },
+        positioning:    { level: 'judgment', method: 'Claude structured opinion (Dunford framework) — always verify' },
+        operational_pain: { level: publicPainSignals.length ? 'mechanical' : 'limited', method: 'verified against exact quotes from real reviews' },
+      },
       firecrawlOutOfCredits: FIRECRAWL_OUT_OF_CREDITS,
       signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
       homepageContent: content.slice(0,3000),
