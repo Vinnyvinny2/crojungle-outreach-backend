@@ -6,6 +6,19 @@ const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ═══ BULLETPROOF CORS ═══════════════════════════════════════════════════════
+// Set the headers manually on EVERY response and answer OPTIONS preflight
+// immediately, before any other middleware or route can interfere or crash.
+// A dropped/crashed request loses its CORS headers and shows up in the browser
+// as a "No Access-Control-Allow-Origin" error even when origin:'*' is set.
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Max-Age', '86400');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10mb' }));
 
