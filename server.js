@@ -4300,6 +4300,22 @@ app.post('/api/discover', async (req, res) => {
       // Large REITs and property managers are never founder-led SMBs.
       if (/\b(communities|residential|property company|property management|properties trust|realty trust|apartment homes|reit|worldwide|global logistics|international group|holdings corp)\b/i.test(name)) return false;
 
+      // ── INVESTMENT FUNDS / SPVs — not operating businesses, no owner to sell to.
+      // Catches EDGAR Form D noise: "Glade Brook Private Investors LV LP",
+      // "BCP Great Lakes II Series B Offshore Feeder LP", "Feynman Point Fund LP" etc.
+      if (/\b(fund|feeder|\blp\b|l\.p\.|spv|series [a-z]+ (llc|lp)|co-?investment|capital partners|private investors|opportunities fund|holdings llc|ventures? fund|partners fund|offshore|qp lp)\b/i.test(name)) return false;
+      // "Series A/B/C" + LLC/LP structure = investment vehicle
+      if (/series [a-z0-9]+.*(llc|lp|fund|feeder)/i.test(name)) return false;
+
+      // ── NEWS-HEADLINE JUNK — the source returned a headline, not a company.
+      // Catches "Papillion couple targeted by identity theft", "20+ Year Metal
+      // Roofing Company – Tampa Region" (a for-sale listing title, not a name).
+      if (/\b(couple|targeted|identity theft|arrested|charged|lawsuit|sentenced|indicted|convicted|man |woman |police|victim)\b/i.test(name)) return false;
+      if (/\d+\+?\s*year/i.test(name)) return false;   // "20+ Year ..." listing titles
+      if (name.includes('–') || name.includes('—')) {      // em/en-dash usually = headline/listing
+        if (/region|area|for sale|listed|opportunity/i.test(name)) return false;
+      }
+
       // ── SIZE / STRUCTURE HEURISTICS ──
       if (name.length > 55) return false;
       // Government / non-profit / institution
@@ -4812,38 +4828,79 @@ const WEIGHTS = {
           c.softwareBuyerSignal = `${c.manualRoleCount} manual roles open at a ~${c.verifiedEmployees}-person company — solving scale with headcount instead of software`;
         }
 
-        // FIT × INTENT — a geometric blend, so a zero on either dimension kills
-        // the lead rather than being masked by a high score on the other.
-        // (A 10-person company with no signal is not a lead. A perfect signal at
-        // an unreachable enterprise is not a lead either.)
-        const fit = reach.score;                 // 0-100
-        const intentScore = intent.intentScore;  // 0-100
-        // BLEND: geometric mean when we have REAL fit data (size verified), because
-        // then a zero on either dimension should kill the lead. But at FIND time most
-        // leads have no size data, so fit is a flat ~26 for everyone — using the
-        // geometric mean there caps every score at sqrt(26*100)=51 and hides the
-        // intent spread entirely. So when fit is unverified, weight toward intent
-        // (70/30) so a company drowning in 8 roles outranks one hiring 1.
-        const hasRealFit = !!c.verifiedEmployees;
-        let blended = hasRealFit
-          ? Math.sqrt(Math.max(fit, 1) * Math.max(intentScore, 1))
-          : (intentScore * 0.7 + fit * 0.3);
-        // UNVERIFIED-SIZE PENALTY: a lead whose size we couldn't confirm might be a
-        // hidden enterprise (US Foods, AECOM slip in this way). Cap it below any
-        // size-verified SMB so the trustworthy leads always sort to the top. A
-        // confirmed 30-person company must outrank an unknown-size national brand.
-        if (c.sizeUnverified && !c.verifiedEmployees) {
-          blended = Math.min(blended * 0.62, 55);
-        }
-        // CONFIRMED-SMB BONUS: verified ≤200 employees is the single best predictor
-        // in the data. Reward it so real ICP fits rise decisively above the noise.
-        if (c.verifiedEmployees && c.verifiedEmployees <= 200) {
-          blended = Math.min(blended * 1.12, 100);
+        // ═══════════════════════════════════════════════════════════════════
+        // FIND-TIME TRIAGE SCORE (rebuilt) — NOT a precise ICP score.
+        // Find does not yet know the two things that matter most: whether the
+        // owner is reachable and what the real pain is. Those are proven in
+        // RESEARCH. So Find's number is deliberately a ROUGH TRIAGE: "is this
+        // worth Research's time?" The real score is produced after research.
+        //
+        // PRINCIPLE (locked with Vin): reachability is the foundation, and
+        // verified-small size is our best proxy for it. So:
+        //   • VERIFIED small (1-200)  → the dominant positive. A confirmed
+        //     40-person company hiring ONE role beats an unknown-size company
+        //     hiring five. Size confirmed = owner reachable = worth pursuing.
+        //   • ANY real signal qualifies (hiring / funded / for-sale / venting).
+        //     We can pull financial or marketing levers for any business with a
+        //     revenue problem, so we do NOT filter by need-type.
+        //   • GOLDEN TICKET: verified-small + MULTIPLE ai-replaceable roles.
+        //     Multiple roles ONLY boosts when size is verified small — so it can
+        //     never again push a whale up on volume alone.
+        //   • UNVERIFIED size → competitive second tier (Research will verify),
+        //     never above a verified lead.
+        // ═══════════════════════════════════════════════════════════════════
+        const fit = reach.score;                 // 0-100 (mostly size/title driven)
+        const intentScore = intent.intentScore;  // 0-100 (signal strength)
+        const emp = c.verifiedEmployees || 0;
+        const verifiedSmall = emp > 0 && emp <= 200;
+        const roles = c.manualRoleCount || 0;
+        const hasRealSignal = intentScore > 0 || roles >= 1 ||
+          !!c.signals?.raised_funding || !!c.signals?.sba_funded ||
+          c.source === 'for_sale' || c.source === 'founder_venting' || c.source === 'theirstack';
+
+        let triage;
+        if (reach.hardBlock) {
+          // Unreachable (enterprise CEO, etc.) — floored.
+          triage = Math.min(Math.round(fit * 0.3 + intentScore * 0.2), 25);
+        } else if (verifiedSmall) {
+          // ── VERIFIED SMALL: the trustworthy tier. Base is HIGH because the
+          // single most important thing (reachable owner) is confirmed. Signal
+          // and roles adjust WITHIN this tier, they don't gate it. ──
+          let base = 72;                                   // confirmed-reachable floor
+          base += Math.min(intentScore * 0.12, 12);        // signal strength: up to +12
+          // GOLDEN TICKET: multiple RELEVANT AI-replaceable roles at a verified-
+          // small co. Keys off the ai_replacement flags (which only fire on our
+          // curated ops/marketing role searches — dispatcher, scheduler, CS rep,
+          // bookkeeper, marketing coordinator, etc.), NEVER on random roles like
+          // janitor/driver/warehouse. So volume only counts when it's the RIGHT
+          // kind of volume.
+          const relevantHeavy = !!c.signals?.ai_replacement_heavy && roles >= 3;
+          const relevantMulti = !!c.signals?.ai_replacement_multi && roles >= 2;
+          if (relevantHeavy) base += 14;        // golden ticket
+          else if (relevantMulti) base += 8;
+          // If roles are high but NOT flagged AI-replaceable, no volume bonus.
+          // High-intent source bonus (owner has money/motivation)
+          if (c.source === 'for_sale') base += 6;
+          if (c.signals?.raised_funding || c.signals?.sba_funded) base += 5;
+          if (c.source === 'founder_venting') base += 6;   // most reachable + motivated
+          // Very small = even more reachable
+          if (emp <= 50) base += 4;
+          triage = Math.min(Math.round(base), 98);
+        } else if (hasRealSignal) {
+          // ── UNVERIFIED but has a real signal: competitive SECOND tier.
+          // Research will verify size + reachability. Capped below verified so a
+          // verified lead always outranks an unverified one. ──
+          let base = 40 + Math.min(intentScore * 0.22, 20); // 40-60 range on signal
+          // Owner-pain / for-sale are inherently reachable-owner signals → nudge up
+          if (c.source === 'founder_venting' || c.source === 'for_sale') base += 5;
+          if (c.signals?.raised_funding || c.signals?.sba_funded) base += 3;
+          triage = Math.min(Math.round(base), 64);          // hard cap: never beats verified
+        } else {
+          // No real signal at all — low.
+          triage = Math.min(Math.round(fit * 0.3), 30);
         }
 
-        const icpScore = reach.hardBlock
-          ? Math.min(Math.round(blended), 20)
-          : Math.min(100, Math.round(blended));
+        const icpScore = triage;
 
         // HONEST "EXACT ICP" — was: perfectFit = "came from an industry search",
         // which fired on staffing firms and enterprises alike. Now it requires
