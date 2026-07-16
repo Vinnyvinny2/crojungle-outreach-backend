@@ -3797,6 +3797,111 @@ app.get('/api/verify-website', async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LEAD AUDIT PASS — the workflow step between Find and Research.
+// Verifies COMPANY SIZE on the whole queue using only AUTHORITATIVE, mostly-free
+// sources. This is NOT an AI guess — it reads real headcount from databases and
+// refuses to fabricate. A lead the databases don't know stays honestly "unverified".
+//
+// SOURCE CASCADE (most accurate first):
+//   1. The Companies API by DOMAIN (simplified=true = FREE) — most reliable
+//   2. The Companies API by NAME (free, STRICT match — rejects scam/mismatch)
+//   3. Wikipedia (catches famous enterprises)
+//   4. SEC EDGAR (files 10-Ks => public => enterprise)
+//
+// VERDICTS:
+//   verified_smb   — confirmed 1-200 employees        → keep, boost
+//   too_big        — confirmed >200 employees         → remove
+//   unverified     — not in any database              → keep but flag (honest unknown)
+// ═══════════════════════════════════════════════════════════════════════════
+app.post('/api/audit-leads', async (req, res) => {
+  const { leads, companiesApiKey } = req.body;
+  if (!Array.isArray(leads) || leads.length === 0) {
+    return res.status(400).json({ error: 'leads array required' });
+  }
+
+  const ICP_MAX = 200;
+  const results = [];
+  let verifiedSmb = 0, tooBig = 0, unverified = 0;
+
+  // Authoritative size lookup for ONE lead. Returns { employees, source, band } or null.
+  const authoritativeSize = async (lead) => {
+    // ── 1. Companies API by DOMAIN (free simplified) — most accurate ──
+    if (companiesApiKey && lead.website) {
+      const byDomain = await enrichViaCompaniesAPI(lead.website, companiesApiKey);
+      if (byDomain && byDomain.employees) {
+        return { employees: byDomain.employees, band: byDomain.empBand, industry: byDomain.industry, source: 'companiesapi-domain' };
+      }
+      // domain resolved but no headcount — remember the resolved site
+      if (byDomain && byDomain.website && !lead.website) lead.website = byDomain.website;
+    }
+    // ── 2. Companies API by NAME (free, strict match) ──
+    if (companiesApiKey) {
+      const byName = await searchCompaniesAPIByName(lead.name, companiesApiKey);
+      if (byName && byName.employees) {
+        return { employees: byName.employees, band: byName.empBand, industry: byName.industry, source: 'companiesapi-name' };
+      }
+      if (byName && byName.website && !lead.website) lead.website = byName.website;
+    }
+    // ── 3. Wikipedia (famous enterprises) ──
+    const wiki = await getSizeOnly(lead.name);
+    if (wiki && wiki.employees) {
+      return { employees: wiki.employees, source: 'wikipedia' };
+    }
+    // ── 4. SEC EDGAR (public company = enterprise) ──
+    const edgar = await getEdgarHeadcount(lead.name);
+    if (edgar && edgar.isPublic) {
+      return { employees: edgar.employees, source: 'edgar-public' };
+    }
+    return null; // genuinely unknown — do NOT fabricate
+  };
+
+  // Process in small concurrent batches with a pause between them (rate-safe).
+  const BATCH = 5;
+  for (let i = 0; i < leads.length; i += BATCH) {
+    const batch = leads.slice(i, i + BATCH);
+    const settled = await Promise.allSettled(batch.map(authoritativeSize));
+    batch.forEach((lead, idx) => {
+      const r = settled[idx];
+      const size = (r.status === 'fulfilled') ? r.value : null;
+      let verdict, employees = null, source = null, note;
+      if (size && size.employees) {
+        employees = size.employees; source = size.source;
+        if (employees > ICP_MAX) {
+          verdict = 'too_big';
+          note = `${employees} employees (${source}) — above the 200-employee ICP ceiling`;
+          tooBig++;
+        } else {
+          verdict = 'verified_smb';
+          note = `${employees} employees (${source}) — confirmed within ICP`;
+          verifiedSmb++;
+        }
+      } else {
+        verdict = 'unverified';
+        note = 'Not found in any company database — size could not be confirmed';
+        unverified++;
+      }
+      results.push({
+        id: lead.id,
+        name: lead.name,
+        verdict,
+        verifiedEmployees: employees,
+        sizeSource: source,
+        website: lead.website || null,
+        note,
+      });
+    });
+    // gentle pause between batches so we never trip a rate limit
+    if (i + BATCH < leads.length) await new Promise(r => setTimeout(r, 500));
+  }
+
+  console.log(`Audit: ${leads.length} checked → ${verifiedSmb} verified SMB, ${tooBig} too big (removed), ${unverified} unverified`);
+  res.json({
+    results,
+    summary: { total: leads.length, verifiedSmb, tooBig, unverified },
+  });
+});
+
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys, apiKey } = req.body;
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
