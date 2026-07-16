@@ -1151,6 +1151,105 @@ const checkContentFreshness = async (domain) => {
 };
 
 // ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE: THEIRSTACK — the size problem solved AT THE QUERY.
+// Unlike Adzuna, TheirStack filters by company size BEFORE returning results.
+// We ask for ONLY 10-200 employee companies hiring our target roles, so whales
+// (US Foods, Goodyear, Morgan Stanley) are never returned — no downstream
+// filtering, no whack-a-mole. COST: 1 API credit per job returned, so we cap
+// tight. Free tier = 200 credits/mo; keep TS_LIMIT small until on a paid plan.
+// Fails safe to [] if no key or the call errors. Never fabricates.
+// ═══════════════════════════════════════════════════════════
+const TS_LIMIT = 25; // credits per run = TS_LIMIT (1 credit/job). Raise on paid plan.
+const searchTheirStack = async (theirstackKey) => {
+  if (!theirstackKey) return [];
+  try {
+    const body = {
+      page: 0,
+      limit: TS_LIMIT,
+      posted_at_max_age_days: 14,                 // required-ish: fresh postings only
+      job_country_code_or: ['US'],
+      min_employee_count: 10,                      // THE FIX — size filtered at source
+      max_employee_count: 200,
+      order_by: [{ field: 'date_posted', desc: true }],
+      // Target the same AI-replaceable / marketing roles the rest of Find hunts
+      job_title_or: [
+        'Dispatcher', 'Scheduler', 'Scheduling Coordinator', 'Data Entry',
+        'Office Manager', 'Operations Coordinator', 'Administrative Assistant',
+        'Customer Service Representative', 'Appointment Setter', 'Bookkeeper',
+        'Marketing Coordinator', 'Marketing Manager', 'Social Media Manager',
+      ],
+    };
+    const r = await fetchT('https://api.theirstack.com/v1/jobs/search', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${theirstackKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }, 15000);
+
+    const d = await safeJson(r);
+    if (!r.ok) {
+      console.log(`TheirStack: HTTP ${r.status} — ${JSON.stringify(d).slice(0,160)}`);
+      return [];
+    }
+    const jobs = Array.isArray(d?.data) ? d.data : [];
+    if (jobs.length === 0) { console.log('TheirStack: 0 jobs returned'); return []; }
+
+    // Group jobs by company so multiple roles at one company become one lead
+    // with a role count (the volume signal our scorer rewards).
+    const byCompany = new Map();
+    for (const j of jobs) {
+      const name = (j.company || '').trim();
+      if (!name || name.length < 2) continue;
+      const emp = j.company_object?.num_employees || j.num_employees || null;
+      if (!byCompany.has(name)) {
+        byCompany.set(name, {
+          name,
+          website: j.company_object?.url || j.final_url || '',
+          location: j.short_location || j.location || '',
+          verifiedEmployees: (typeof emp === 'number' && emp > 0) ? emp : null,
+          roles: new Set(),
+          industry: j.company_object?.industry || '',
+        });
+      }
+      const c = byCompany.get(name);
+      if (j.job_title) c.roles.add(j.job_title);
+    }
+
+    const out = [...byCompany.values()].map(c => {
+      const roleCount = c.roles.size;
+      return {
+        name: c.name,
+        website: c.website,
+        location: c.location,
+        // TheirStack gives us verified size for FREE in the same call — huge.
+        verifiedEmployees: c.verifiedEmployees,
+        industry: c.industry,
+        manualRoleCount: roleCount,
+        manualCategories: Math.min(roleCount, 3),
+        source: 'theirstack',
+        perfectFit: true,                          // size-verified in range by construction
+        signalFreshness: 'hot',
+        signalAgeDays: 7,
+        signals: {
+          ai_replacement_signal: true,
+          ai_replacement_multi: roleCount >= 2,
+          ai_replacement_heavy: roleCount >= 3,
+        },
+        jobTitle: `Hiring ${roleCount} manual role${roleCount === 1 ? '' : 's'} at a ${c.verifiedEmployees ? '~' + c.verifiedEmployees + '-person' : 'verified small'} company (size-filtered at source)`,
+      };
+    });
+    console.log(`TheirStack: ${out.length} size-verified SMBs from ${jobs.length} jobs (${TS_LIMIT} credits)`);
+    return out;
+  } catch (e) {
+    console.log('TheirStack failed:', e.message);
+    return [];
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE: SBA LOANS — the debt-funding equivalent of Form D, but for
 // MAIN STREET. A remodeler/trucker/contractor does not raise a seed round; they
 // get an SBA 7(a) or 504 loan. That is capital allocated + a 60-90 day growth
@@ -3700,7 +3799,7 @@ app.get('/api/verify-website', async (req, res) => {
 
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys, apiKey } = req.body;
-  const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey } = keys || {};
+  const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
 
   console.log('\n=== DISCOVERY START ===');
   console.log('Keywords:', keywords);
@@ -3714,7 +3813,10 @@ app.post('/api/discover', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════
     // EVERY SIGNAL SOURCE — each one catches a different buying window
     // ═══════════════════════════════════════════════════════════════════════
-    const [adzunaRes, secRes, sbaRes, newsRes, forSaleRes, ventingRes, fbAdsRes] = await Promise.allSettled([
+    const [tsRes, adzunaRes, secRes, sbaRes, newsRes, forSaleRes, ventingRes, fbAdsRes] = await Promise.allSettled([
+      // THEIRSTACK — size-filtered at the query (10-200 employees). No whales returned.
+      searchTheirStack(theirstackKey),
+
       // THE TWO HIRING WINDOWS — ops roles (build) and marketing roles (retainer)
       searchAdzuna(adzunaId, adzunaKey, req.body.location),
 
@@ -3757,6 +3859,7 @@ app.post('/api/discover', async (req, res) => {
     // the whole discovery. arr() coerces anything unexpected to [].
     const arr = (r) => (r && r.status === 'fulfilled' && Array.isArray(r.value)) ? r.value : [];
     const allCompanies = [
+      ...arr(tsRes),
       ...arr(adzunaRes),
       ...arr(secRes),
       ...arr(sbaRes),
@@ -3863,6 +3966,7 @@ app.post('/api/discover', async (req, res) => {
       'gpac','gqr','the judge group','judge group','system one','yoh','actalent',
       'medical solutions','cross country','crosscountry','host healthcare','aya healthcare',
       'trustaff','triage staffing','amn healthcare','favorite healthcare',
+      'peopleready','trueblue','lvi associates','salesroads','perm staff jobs','ccs facility services',
     ]);
     // ── KNOWN ENTERPRISES / REITs / DISTRIBUTORS (too big — owner unreachable) ──
     const ENTERPRISE_BRANDS = new Set([
@@ -3978,7 +4082,7 @@ const WEIGHTS = {
     const preScored = icpFiltered
       .map(c => ({ c, _pre: preScore(c) }))
       .sort((a,b) => b._pre - a._pre);
-    const toEnrich = preScored.slice(0, 90).map(x => x.c);
+    const toEnrich = preScored.slice(0, 140).map(x => x.c);
     const enrichResults = new Map();
     console.log(`Size enrichment: checking top ${toEnrich.length} of ${icpFiltered.length} leads (free simplified calls)...`);
 
@@ -4111,6 +4215,16 @@ const WEIGHTS = {
       'us xpress','u.s. xpress','us xpress - dedicated','mtc','glc on-the-go','glc on the go',
       'ace handyman services','ace handyman','capital one','abbott','solaris healthcare',
       'legacy professional services','trc','trc companies','mri network','mrinetwork',
+      'goodyear','the goodyear tire & rubber company','goodyear tire','morgan stanley','pnc',
+      'fresenius','fresenius medical care','highmark','highmark health','amcor','logitech',
+      'lithia','lithia & driveway','lithia motors','rust-oleum','rust-oleum corporation',
+      'barnes & noble','barnes & noble education','the washington post','washington post',
+      'granite construction','republic services','herc rentals','four seasons','elevance',
+      'elevance health','acxiom','lumen','medline','medline industries','flowserve',
+      'caterpillar','bechtel','expeditors','eaton','kuehne+nagel','brinks','waste connections',
+      'first student','penske','rush enterprises','ballard spahr','baptist health care',
+      'roper st. francis','pruitthealth','fresenius medical','cross country healthcare',
+      'american bureau of shipping','hersha hospitality management','isc2','flash appliance repair',
     ]);
 
     let blockedCount = 0, blockReasons = {};
@@ -4148,6 +4262,18 @@ const WEIGHTS = {
       if (NATIONAL_BRANDS.has(nameLower) || NATIONAL_BRANDS.has(nm)) {
         console.log(`BLOCKED [${c.name}]: known national brand`);
         blockedCount++; blockReasons.nationalBrand = (blockReasons.nationalBrand||0)+1;
+        return false;
+      }
+
+      // 2b-healthcare: block LARGE health systems by name, but KEEP small
+      // practices (dental/vet/med-spa/chiro are perfect ICP). Big systems carry
+      // 'health care/healthcare/medical care/health system/hospital'; small
+      // practices carry the practice type instead.
+      const SMALL_PRACTICE = /\b(dental|dentist|orthodont|veterinar|\bvet\b|derma|med spa|medspa|chiropract|optometr|physical therapy|family medicine|pediatric dent|urgent care clinic|aesthetic)\b/i;
+      const BIG_HEALTH = /\b(health care|healthcare|medical care|health system|healthcare system|health network|hospital|regional medical|medical center|health plan|health services|healthcare services)\b/i;
+      if (BIG_HEALTH.test(nameLower) && !SMALL_PRACTICE.test(nameLower)) {
+        console.log(`BLOCKED [${c.name}]: large health system (name)`);
+        blockedCount++; blockReasons.bigHealth = (blockReasons.bigHealth||0)+1;
         return false;
       }
 
@@ -4409,7 +4535,7 @@ const WEIGHTS = {
         // size-verified SMB so the trustworthy leads always sort to the top. A
         // confirmed 30-person company must outrank an unknown-size national brand.
         if (c.sizeUnverified && !c.verifiedEmployees) {
-          blended = Math.min(blended * 0.72, 70);
+          blended = Math.min(blended * 0.62, 55);
         }
         // CONFIRMED-SMB BONUS: verified ≤200 employees is the single best predictor
         // in the data. Reward it so real ICP fits rise decisively above the noise.
