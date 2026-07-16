@@ -3945,6 +3945,13 @@ app.post('/api/discover', async (req, res) => {
   console.log('\n=== DISCOVERY START ===');
   console.log('Keywords:', keywords);
   console.log('Adzuna keys present:', !!(adzunaId && adzunaKey));
+  // DIAGNOSTIC: prove whether each key actually arrived from the frontend.
+  console.log('Keys arrived →', JSON.stringify({
+    adzuna: !!(adzunaId && adzunaKey),
+    companiesApi: !!companiesApiKey,
+    firecrawl: !!firecrawlKey,
+    theirstack: theirstackKey ? ('yes, len=' + theirstackKey.length) : 'NO — key did not arrive from frontend',
+  }));
 
   try {
     // FOUR-SOURCE SET — quality over volume, each tied to a product CROJungle sells. 
@@ -4360,6 +4367,12 @@ const WEIGHTS = {
       'fresenius','fresenius medical care','highmark','highmark health','amcor','logitech',
       'lithia','lithia & driveway','lithia motors','rust-oleum','rust-oleum corporation',
       'barnes & noble','barnes & noble education','the washington post','washington post',
+      'liberty mutual','ocean spray','maersk','dover corporation','sharkninja',
+      'scale ai','bigcommerce','ingersoll rand','panda express','hub international',
+      'digitas','leonardo drs','tradesmen international','shift digital',
+      'sage hospitality','snapchat','hy-vee','bayada','brightspring',
+      'norwegian cruise line','west shore home','perkins+will','perkinswill',
+      'standardaero','lifetime brands','jpmorgan chase','jp morgan',
       'granite construction','republic services','herc rentals','four seasons','elevance',
       'elevance health','acxiom','lumen','medline','medline industries','flowserve',
       'caterpillar','bechtel','expeditors','eaton','kuehne+nagel','brinks','waste connections',
