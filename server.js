@@ -1316,6 +1316,67 @@ const searchTheirStack = async (theirstackKey) => {
   }
 };
 
+// ═══ GOOGLE PLACES (New) — LOCAL OWNER-OPERATED BUSINESSES ═══════════════════
+// The reachability goldmine: local trades/services where the OWNER runs the shop,
+// answers their own phone, and reads their own email. Places gives NO employee
+// count, so these are size-unverified — Research confirms the owner & email.
+// FREE-TIER SAFE: Text Search (New) = 5,000 free calls/month. We shuffle the
+// category×city grid and cap per run (GP_QUERY_CAP, default 40) so a run costs
+// ~40 calls — ~100+ runs/month stay free. Request format verified against
+// Google's official Text Search (New) docs.
+const GP_CATEGORIES = [
+  { q: 'HVAC contractor', label: 'HVAC' }, { q: 'roofing company', label: 'Roofing' },
+  { q: 'plumbing company', label: 'Plumbing' }, { q: 'electrician company', label: 'Electrical' },
+  { q: 'landscaping company', label: 'Landscaping' }, { q: 'auto repair shop', label: 'Auto Repair' },
+  { q: 'dental practice', label: 'Dental' }, { q: 'med spa', label: 'Med Spa' },
+  { q: 'pest control company', label: 'Pest Control' }, { q: 'general contractor', label: 'Construction' },
+  { q: 'flooring company', label: 'Flooring' }, { q: 'garage door company', label: 'Garage Doors' },
+];
+const GP_CITIES = ['Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX'];
+const searchGooglePlaces = async (placesKey) => {
+  if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
+  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber';
+  const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
+  const RUN_CAP = parseInt(process.env.GP_QUERY_CAP || '40', 10);
+  const grid = [];
+  for (const cat of GP_CATEGORIES) for (const city of GP_CITIES) grid.push({ cat, city });
+  grid.sort(() => Math.random() - 0.5);                          // rotate coverage each run
+  const out = [], seen = new Set();
+  let calls = 0;
+  for (const { cat, city } of grid.slice(0, RUN_CAP)) {
+    try {
+      const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': FIELD_MASK },
+        body: JSON.stringify({ textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true }),
+      }, 12000);
+      calls++;
+      const d = await r.json();
+      if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing/i.test(JSON.stringify(d.error))) break; continue; }
+      for (const p of (d.places || [])) {
+        const name = (p.displayName?.text || '').trim();
+        const website = p.websiteUri || '';
+        const reviews = p.userRatingCount || 0;
+        if (!name || !website) continue;                          // must have a site to Research
+        if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
+        if (reviews < MIN_REVIEWS) continue;                      // established business only
+        const domainKey = website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
+        if (seen.has(domainKey)) continue; seen.add(domainKey);
+        out.push({
+          name, website, location: p.formattedAddress || '',
+          source: 'google_places', icpProfile: 'local_owner_operated',
+          industry: cat.label, reviewCount: reviews, rating: p.rating || null,
+          phone: p.internationalPhoneNumber || '',
+          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${p.rating ? `, ${p.rating}\u2605` : ''}. Owner-operated, high reachability.`,
+          signals: { local_owner_operated: true },
+        });
+      }
+    } catch(e) { /* fail-safe per query */ }
+  }
+  console.log(`Google Places: ${out.length} local owner-operated businesses from ${calls} queries`);
+  return out;
+};
+
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE: SBA LOANS — the debt-funding equivalent of Form D, but for
 // MAIN STREET. A remodeler/trucker/contractor does not raise a seed round; they
@@ -3802,6 +3863,7 @@ const scoreReachability = (c) => {
     else                { score += 14; reasons.push('Owner is personally listing the business — maximally motivated AND directly reachable'); }
   }
   if (sig.founder_venting || sig.social_pain_signal) { score += 10; reasons.push('Founder publicly venting — personally in the weeds and clearly reachable'); }
+  if (sig.local_owner_operated) { score += 12; reasons.push('Local owner-operated business — the owner runs the shop and reads their own email (highest-reachability segment)'); }
   if (sig.ai_replacement_multi) {
     const roles = c.manualRoleCount || 0;
     if (roles >= 2 && roles <= 8) { score += 8; reasons.push(`Hiring ${roles} manual roles at SMB scale — the owner runs ops and there is no CMO`); }
@@ -4046,6 +4108,7 @@ app.get('/api/cron/discover', async (req, res) => {
   const firecrawlKey = process.env.FIRECRAWL_KEY || '';
   const companiesApiKey = process.env.COMPANIES_API_KEY || '';
   const theirstackKey = process.env.THEIRSTACK_KEY || '';
+  const placesKey = process.env.GOOGLE_PLACES_KEY || '';
   const fbToken = process.env.FB_TOKEN || '';
 
   // ── Decide whether TheirStack runs this time (credit gate) ──
@@ -4132,7 +4195,7 @@ app.post('/api/discover', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════
     // EVERY SIGNAL SOURCE — each one catches a different buying window
     // ═══════════════════════════════════════════════════════════════════════
-    const [tsRes, adzunaRes, secRes, sbaRes, newsRes, forSaleRes, ventingRes, fbAdsRes] = await Promise.allSettled([
+    const [tsRes, adzunaRes, secRes, sbaRes, newsRes, forSaleRes, ventingRes, fbAdsRes, placesRes] = await Promise.allSettled([
       // THEIRSTACK — size-filtered at the query (10-200 employees). No whales returned.
       searchTheirStack(theirstackKey),
 
@@ -4166,6 +4229,11 @@ app.post('/api/discover', async (req, res) => {
 
       // CONFIRMED AD BUDGET (dormant until a Meta token is added)
       searchFacebookAds(fbToken),
+
+      // ═══ GOOGLE PLACES — local owner-operated businesses (free tier) ═══════
+      // The highest-reachability segment: the owner runs the shop and reads
+      // their own email. No size data, so Research confirms owner + email.
+      searchGooglePlaces(placesKey),
     ]);
 
     // Owner venting returns both identifiable leads AND the raw pain language
@@ -4186,6 +4254,7 @@ app.post('/api/discover', async (req, res) => {
       ...arr(forSaleRes),
       ...(Array.isArray(venting.leads) ? venting.leads : []),
       ...arr(fbAdsRes),
+      ...arr(placesRes),
     ];
 
     console.log('Raw total:', allCompanies.length);
