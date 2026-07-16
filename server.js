@@ -233,9 +233,17 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
       //    Real match: domain base closely matches a query word. Reject if domain
       //    is much longer than the name words (indicates a different entity).
 
-      // Name match: ALL significant query words must appear (stricter than before)
-      const nameMatchCount = queryWords.filter(w => capiName.includes(w)).length;
-      const nameMatch = queryWords.length > 0 && nameMatchCount === queryWords.length;
+      // Name match — WORD-LEVEL, not substring, plus a superstring guard.
+      // Substring wrongly accepted BILL->Billboard and Kean->Keanes; ignoring extra
+      // words wrongly accepted Digitas->Digitas Liquorice. Those are different entities.
+      const CAPI_SUFFIX = new Set(['inc','llc','ltd','corp','corporation','company','group','holdings','holding','co','plc','llp','lp','the','and','of']);
+      const capiWords = capiName.split(/\s+/).filter(Boolean);
+      const capiSig = capiWords.filter(w => w.length > 3 && !CAPI_SUFFIX.has(w));
+      const wordHit = w => capiWords.some(cw => cw === w || (cw.startsWith(w) && cw.length - w.length <= 1) || (w.startsWith(cw) && w.length - cw.length <= 1));
+      const nameMatchCount = queryWords.filter(wordHit).length;
+      const allQueryWordsPresent = queryWords.length > 0 && nameMatchCount === queryWords.length;
+      const extraDistinct = capiSig.filter(cw => !queryWords.some(w => cw === w || cw.startsWith(w) || w.startsWith(cw)));
+      const nameMatch = allQueryWordsPresent && extraDistinct.length === 0;
 
       // Domain match: the domain base must START WITH the first query word AND
       // be a tight length match (prevents "unitedairway" matching "united")
@@ -1375,8 +1383,19 @@ const searchSECEdgar = async () => {
       const d2 = JSON.parse(text2);
       const hits2 = d2?.hits?.hits || [];
       console.log(`SEC EDGAR (fallback): ${hits2.length} hits`);
-      const FUND_PAT = [/\b(fund|capital|ventures?|partners?|investments?|holdings?|advisors?|management|assets?)\s+(lp|llc|ltd|inc)\.?$/i,/\b(series [a-z]|series [ivxlc]+)\s*(lp|llc|ltd)?\.?$/i,/\bco-investment\b/i,/\bopportunities?\s+fund\b/i,/\bprivate\s+(investors?|equity|capital)\b/i,/\bspecial\s+(opportunities?|purpose)\b/i,/\b(qp|qualified purchaser)\s*(lp|llc)?\.?$/i];
-      return hits2.slice(0, 20).map(hit => {
+      const FUND_PAT = [
+        /\b(fund|funds|capital|ventures?|partners?|investors?|investments?|holdings?|advisors?|advisers?|management)\b\s*,?\s*(lp|l\.p\.|llc|l\.l\.c\.|ltd|plc)?\.?\s*$/i,
+        /\bseries\s+([a-z]|[ivxlcdm]+)\b/i,
+        /\bco[-\s]?investment\b/i,
+        /\baffiliates\b/i,
+        /\b(feeder|offshore|onshore|blocker|aggregator|parallel)\b/i,
+        /\b(spv|special\s+purpose|special\s+opportunit(?:y|ies)|opportunit(?:y|ies)\s+fund)\b/i,
+        /\bprivate\s+(investors?|equity|credit|capital)\b/i,
+        /\b(qp|qualified\s+purchaser)\b/i,
+        /\b(partners|capital|ventures|holdings|fund|investors)\s+([ivxlcdm]{1,5}|\d{1,3})\b/i,
+        /\blp\.?\s*$/i,
+      ];
+      return hits2.slice(0, 45).map(hit => {
         const src = hit._source || {};
         const name = (src.entity_name || src.company_name || src.display_names?.[0] || '').replace(/\s*\(CIK\s*\d+\)\s*/gi,'').trim();
         if (!name || name.length < 2) return null;
@@ -1386,7 +1405,7 @@ const searchSECEdgar = async () => {
     }
     const d = JSON.parse(text);
     const hits = d?.hits?.hits || [];
-    const results = hits.slice(0,20).map(hit => {
+    const results = hits.slice(0,45).map(hit => {
       const src = hit._source || hit.fields || {};
       let name = src.entity_name || src.company_name || src.entityName || src.display_names?.[0] || '';
       // Strip CIK numbers and ticker symbols that EDGAR appends
@@ -1402,13 +1421,16 @@ const searchSECEdgar = async () => {
       // "Feynman Point Special Opportunities Fund LP" — they are not our ICP.
       // These patterns catch ~95% of fund names reliably:
       const FUND_PATTERNS = [
-        /(fund|capital|ventures?|partners?|investments?|holdings?|advisors?|management|asset[s]?)\s+(lp|llc|ltd|inc)\.?$/i,
-        /(series [a-z]|series [ivxlc]+)\s*(lp|llc|ltd)?\.?$/i,
-        /co-investment/i,
-        /opportunities?\s+fund/i,
-        /private\s+(investors?|equity|capital)/i,
-        /special\s+(opportunities?|purpose)/i,
-        /(qp|qualified purchaser)\s*(lp|llc)?\.?$/i,
+        /\b(fund|funds|capital|ventures?|partners?|investors?|investments?|holdings?|advisors?|advisers?|management)\b\s*,?\s*(lp|l\.p\.|llc|l\.l\.c\.|ltd|plc)?\.?\s*$/i,
+        /\bseries\s+([a-z]|[ivxlcdm]+)\b/i,
+        /\bco[-\s]?investment\b/i,
+        /\baffiliates\b/i,
+        /\b(feeder|offshore|onshore|blocker|aggregator|parallel)\b/i,
+        /\b(spv|special\s+purpose|special\s+opportunit(?:y|ies)|opportunit(?:y|ies)\s+fund)\b/i,
+        /\bprivate\s+(investors?|equity|credit|capital)\b/i,
+        /\b(qp|qualified\s+purchaser)\b/i,
+        /\b(partners|capital|ventures|holdings|fund|investors)\s+([ivxlcdm]{1,5}|\d{1,3})\b/i,
+        /\blp\.?\s*$/i,
       ];
       if (FUND_PATTERNS.some(p => p.test(name))) {
         return null; // investment fund, not an operating business
@@ -4399,15 +4421,22 @@ const WEIGHTS = {
     const lookupSize = async (c, allowCredit) => {
       // ── Source 1: The Companies API (exact headcount when available) ──
       if (companiesApiKey) {
+        const hadOwnSite = !!c.website;
         let capi = null;
-        if (c.website) capi = await enrichViaCompaniesAPI(c.website, companiesApiKey);
+        let viaOwnDomain = false;
+        if (c.website) { capi = await enrichViaCompaniesAPI(c.website, companiesApiKey); if (capi && capi.employees) viaOwnDomain = true; }
         if (!capi || !capi.employees) capi = await searchCompaniesAPIByName(c.name, companiesApiKey);
         if (capi && capi.website && !capi.employees && allowCredit) {
           const full = await enrichViaCompaniesAPI(capi.website, companiesApiKey, true);
           if (full && full.employees) capi.employees = full.employees;
         }
         if (capi && capi.employees) {
-          return { employees: capi.employees, website: capi.website || c.website, industry: capi.industry, source: 'companiesapi' };
+          // sizeConfidence: 'trusted' ONLY when headcount came from lead's OWN website.
+          // Name-search-derived domain is 'weak' — how a $20B homebuilder (Lennar) resolved
+          // to a 5-person dealer microsite. Weak-SMALL must NEVER earn verified-small floor;
+          // weak-LARGE can still block (blocking big is always safe).
+          const sizeConfidence = (viaOwnDomain && hadOwnSite) ? 'trusted' : 'weak';
+          return { employees: capi.employees, website: capi.website || c.website, industry: capi.industry, source: 'companiesapi', sizeConfidence };
         }
         // Got a domain but no headcount — hold onto the website, keep checking
         if (capi && capi.website && !c.website) c.website = capi.website;
@@ -4557,8 +4586,18 @@ const WEIGHTS = {
         if (enrich.revenue) c.verifiedRevenue = enrich.revenue;
         if (enrich.website && !c.website) c.website = enrich.website;
         if (enrich.industry) c.verifiedIndustry = enrich.industry;
+        if (enrich.sizeConfidence) c.sizeConfidence = enrich.sizeConfidence;
         if (enrich.ceoName) { c.verifiedCEO = enrich.ceoName; c.verifiedCEOTitle = enrich.ceoTitle || 'CEO'; }
         if (enrich.painSignals && enrich.painSignals.length > 0) c.publicPainSignals = enrich.painSignals;
+      }
+
+      // ── STAFFING / RECRUITING — never our ICP. Block by verified industry
+      //    (Companies API tags these 'staffing-and-recruiting') OR by name. ──
+      if (/staffing|recruit/i.test(c.verifiedIndustry || '') ||
+          (/\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services)|technical resources)\b|staff\b|\b(mrinetwork|mri network|teema|peopleshare|aerotek|adecco|randstad|kforce|robert half|insight global|beacon hill|roth staffing|ledgent|apex systems|cybercoders|teksystems|aptask)\b/i).test(c.name || '')) {
+        console.log(`BLOCKED [${c.name}]: staffing/recruiting firm`);
+        blockedCount++; blockReasons.staffing = (blockReasons.staffing||0)+1;
+        return false;
       }
 
       // ── SIGNAL 1: Verified headcount (highest confidence) ──────────────
@@ -4857,7 +4896,12 @@ const WEIGHTS = {
         const fit = reach.score;                 // 0-100 (mostly size/title driven)
         const intentScore = intent.intentScore;  // 0-100 (signal strength)
         const emp = c.verifiedEmployees || 0;
-        const verifiedSmall = emp > 0 && emp <= 200;
+        // Size is only trustworthy from lead's OWN domain ('trusted') or TheirStack's
+        // at-source 10-200 band. A name-search-derived 'weak' number (Lennar dealer
+        // microsite emp=5) does NOT earn verified-small floor — it falls to unverified
+        // and Research confirms it.
+        const sourceBandVerified = c.source === 'theirstack';
+        const verifiedSmall = sourceBandVerified || (c.sizeConfidence === 'trusted' && emp > 0 && emp <= 200);
         const roles = c.manualRoleCount || 0;
         const hasRealSignal = intentScore > 0 || roles >= 1 ||
           !!c.signals?.raised_funding || !!c.signals?.sba_funded ||
@@ -4888,8 +4932,8 @@ const WEIGHTS = {
           if (c.source === 'for_sale') base += 6;
           if (c.signals?.raised_funding || c.signals?.sba_funded) base += 5;
           if (c.source === 'founder_venting') base += 6;   // most reachable + motivated
-          // Very small = even more reachable
-          if (emp <= 50) base += 4;
+          // Very small = even more reachable (only when we have a real count)
+          if (emp > 0 && emp <= 50) base += 4;
           triage = Math.min(Math.round(base), 98);
         } else if (hasRealSignal) {
           // ── UNVERIFIED but has a real signal: competitive SECOND tier.
