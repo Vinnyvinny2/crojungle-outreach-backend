@@ -3714,7 +3714,7 @@ app.post('/api/discover', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════
     // EVERY SIGNAL SOURCE — each one catches a different buying window
     // ═══════════════════════════════════════════════════════════════════════
-    const [adzunaRes, secRes, newsRes, forSaleRes, ventingRes, fbAdsRes, sbaRes] = await Promise.allSettled([
+    const [adzunaRes, secRes, sbaRes, newsRes, forSaleRes, ventingRes, fbAdsRes] = await Promise.allSettled([
       // THE TWO HIRING WINDOWS — ops roles (build) and marketing roles (retainer)
       searchAdzuna(adzunaId, adzunaKey, req.body.location),
 
@@ -3753,14 +3753,17 @@ app.post('/api/discover', async (req, res) => {
       console.log(`Owner pain language harvested (${venting.painLanguage.length} phrases) — use their words, not ours`);
     }
 
+    // Defensive: any source returning a non-array (or rejecting) must never crash
+    // the whole discovery. arr() coerces anything unexpected to [].
+    const arr = (r) => (r && r.status === 'fulfilled' && Array.isArray(r.value)) ? r.value : [];
     const allCompanies = [
-      ...(adzunaRes.value || []),
-      ...(secRes.value || []),
-      ...(sbaRes.value || []),
-      ...(newsRes.value || []),
-      ...(forSaleRes.value || []),
-      ...(venting.leads || []),
-      ...(fbAdsRes.value || []),
+      ...arr(adzunaRes),
+      ...arr(secRes),
+      ...arr(sbaRes),
+      ...arr(newsRes),
+      ...arr(forSaleRes),
+      ...(Array.isArray(venting.leads) ? venting.leads : []),
+      ...arr(fbAdsRes),
     ];
 
     console.log('Raw total:', allCompanies.length);
