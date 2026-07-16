@@ -982,6 +982,7 @@ const searchAdzuna = async (appId, appKey, location) => {
             location: job.location?.display_name || '',
             salaryNum: job.salary_min || 0,
             jobUrl: job.redirect_url || '',
+            description: (job.description || '').slice(0, 700),
             postedAt: job.created || null,
             ageDays,
             // The industry — feeds industry-matched proof points in the pitch,
@@ -1007,7 +1008,7 @@ const searchAdzuna = async (appId, appKey, location) => {
       if (!byCompany.has(key)) {
         byCompany.set(key, {
           name: p.company.trim(), location: p.location, cats: new Set(), roles: [],
-          count: 0, maxSalary: 0, jobUrl: p.jobUrl,
+          count: 0, maxSalary: 0, jobUrl: p.jobUrl, descriptions: [],
           freshestAgeDays: null,   // how recently did they post? THE key urgency signal
           postedDates: [],
           industryTag: p.industryTag || '',
@@ -1018,6 +1019,7 @@ const searchAdzuna = async (appId, appKey, location) => {
       }
       const c = byCompany.get(key);
       if (!c.jobUrl && p.jobUrl) c.jobUrl = p.jobUrl;
+      if (p.description) c.descriptions.push(p.description);
       c.cats.add(p.cat);
       if (!c.roles.includes(p.roleTitle)) c.roles.push(p.roleTitle);
       c.count += 1;
@@ -1042,10 +1044,26 @@ const searchAdzuna = async (appId, appKey, location) => {
       const multi = catN >= 2 || c.count >= 3;   // 2+ functions OR 3+ postings
       const heavy = catN >= 3 || c.count >= 5;   // 3+ functions OR 5+ postings
       const roleList = c.roles.slice(0, 4).join(', ');
+      // ═══ FOUNDER-LED LANGUAGE MINING — the job DESCRIPTION is free intent data ═══
+      // A posting that says "family-owned", "report to the owner", or "wear many hats"
+      // is written by (or for) a hands-on owner. That is a direct founder-reachability
+      // signal we already fetched and were throwing away. High-precision phrases only.
+      const descBlob = (c.descriptions || []).join(' \u2014 ').toLowerCase();
+      const founderPhrases = [
+        /family[- ](owned|run|business)/, /\bowner[- ]operated\b/, /\bowned and operated\b/,
+        /report(ing)? (directly )?to the (owner|founder|president|ceo)/,
+        /work(ing)? (directly|closely) with the (owner|founder|president)/,
+        /\bwear (many|multiple) hats\b/, /\bsmall (but growing|family|close-knit|tight-knit) (team|business|company)\b/,
+        /\b(the|our) (owner|founder) (is|will|personally)/, /\bfounder[- ]led\b/, /\bentrepreneurial environment\b/,
+      ];
+      const founderHits = founderPhrases.filter(re => re.test(descBlob));
+      const founderLedPosting = founderHits.length > 0;
       return {
         name: c.name,
         website: '',
         location: c.location,
+        founderLedPosting,
+        founderLedEvidence: founderLedPosting ? (descBlob.match(founderPhrases.find(re => re.test(descBlob)))||[])[0] : '',
         jobTitle: (() => {
           const isRetainer = c.lanes.has('retainer');
           const isBoth = isRetainer && c.lanes.has('software');
@@ -3687,146 +3705,133 @@ const scoreReachability = (c) => {
   let score = 0;
   const reasons = [];
 
-  // ══ 1. COMPANY SIZE (0-30) — the strongest single predictor in the data ══
-  // Near-linear: the smaller they are, the more likely the owner reads it AND
-  // the more likely the reply is a POSITIVE one (18.2% vs 3.4% positive rate).
-  if (c.verifiedEmployees) {
-    const e = c.verifiedEmployees;
-    if (e <= 10)       { score += 30; reasons.push(`${e} employees — 2.4% reply rate, 18% of replies are positive. The best segment that exists.`); }
-    else if (e <= 25)  { score += 28; reasons.push(`${e} employees — owner answers their own email, no gatekeeper`); }
-    else if (e <= 50)  { score += 25; reasons.push(`${e} employees — 70% of all positive C-level replies come from this band`); }
-    else if (e <= 100) { score += 20; reasons.push(`${e} employees — founder-led, still hands-on`); }
-    else if (e <= 200) { score += 14; reasons.push(`${e} employees — reachable, but a marketing layer may exist`); }
-    else if (e <= 350) { score += 7;  reasons.push(`${e} employees — the founder is getting insulated`); }
-    else if (e <= 500) { score += 3;  reasons.push(`${e} employees — mid-market, owner rarely reads cold email`); }
-    // >500 is hard-blocked upstream and never reaches here.
-  } else if (c.sizeUnverified) {
-    // We ACTIVELY CHECKED and couldn't confirm size. This is NOT proof of small —
-    // it could be a national brand whose headcount just didn't resolve this run
-    // (this is exactly how US Foods / AECOM looked "reachable"). Give almost no
-    // reachability credit and say so honestly. Never claim it's small.
-    score += 3;
-    reasons.push('⚠ Size could not be verified — do NOT assume reachable until confirmed at Research');
-  } else {
-    // Size was never checked at all (outside the enrichment window). Neutral,
-    // small cautious credit, honest label — no confident "small business" claim.
-    score += 6;
-    reasons.push('Size unchecked — verify headcount before pitching');
-  }
+  // ═══ THE SPINE: can we IDENTIFY and REACH the actual owner/decision-maker? ═══
+  // This is what reachability MEANS. Size is only a proxy for it — direct evidence
+  // (we found the owner AND we can email them) outweighs the proxy. A lead where we
+  // cannot name who to reach is, by definition, not reachable, so it is capped low
+  // at the end regardless of how hot the signal is.
+  const dm = (c.decisionMaker && c.decisionMaker.name) ? c.decisionMaker : null;
+  let foundOwner = false;
 
-  // ══ 2. DECISION-MAKER × SIZE FIT (0-30) — who we can actually reach ══
-  // Only meaningful AFTER research. At Find time this is legitimately unknown.
-  if (c.decisionMaker && c.decisionMaker.name) {
-    const dm = c.decisionMaker;
-    const { fit, why } = titleSizeFit(dm.title, c.verifiedEmployees);
-    score += fit;
-    reasons.push(`${dm.name} (${dm.title || 'title unknown'}) — ${why}`);
-
-    // Corroboration means we're confident it's really them, not a Hunter guess.
+  if (dm) {
+    const ownerLevel = /ceo|founder|owner|president|principal|managing (director|partner)/i.test(dm.title || '');
     if (dm.corroborated) {
-      score += 6;
-      reasons.push(`Confirmed across ${dm.sources.length} independent sources — this is genuinely the owner`);
+      score += ownerLevel ? 40 : 28; foundOwner = ownerLevel;
+      reasons.push(`${dm.name} (${dm.title||'?'}) confirmed across ${(dm.sources||[]).length} independent sources — we know exactly who to reach`);
+    } else {
+      const hunterOnly = (dm.sources||[]).length === 1 && (dm.sources||[])[0] === 'hunter';
+      if (hunterOnly) { score += ownerLevel ? 16 : 10; reasons.push(`${dm.name} (${dm.title||'?'}) — single unverified source (Hunter); verify before sending`); }
+      else { score += ownerLevel ? 26 : 16; foundOwner = ownerLevel; reasons.push(`${dm.name} (${dm.title||'?'}) — found via ${(dm.sources||[]).join('+')||'search'}`); }
     }
-    if (dm.canBuy === false) {
-      score -= 20;
-      reasons.push(`⚠ Cannot authorize a purchase — reaching them wastes the audit`);
-    }
+    if (dm.canBuy === false) { score -= 20; reasons.push('⚠ Not a purchase authority — reaching them wastes the audit'); }
   } else if (c.verifiedCEO) {
-    const { fit, why } = titleSizeFit(c.verifiedCEOTitle, c.verifiedEmployees);
-    score += Math.round(fit * 0.6); // named, but unverified source
-    reasons.push(`${c.verifiedCEO} identified — ${why}`);
+    const ownerLevel = /ceo|founder|owner|president|principal/i.test(c.verifiedCEOTitle || '');
+    score += ownerLevel ? 14 : 8; foundOwner = ownerLevel;
+    reasons.push(`${c.verifiedCEO} (${c.verifiedCEOTitle||'?'}) identified — named but from an unverified source`);
+  } else {
+    reasons.push('No decision-maker identified — we cannot confirm who to reach');
   }
 
-  // ══ 3. CAN WE ACTUALLY REACH THEM? (0-20) — verified email = 2x reply rate ══
-  // This was missing entirely, and it's one of the two biggest multipliers in
-  // the benchmark data. A bounce also poisons the sending domain, so an
-  // unverified address is worse than no address.
+  // Owner publicly named on their OWN site = public-facing founder who reads their
+  // own mail (a real gatekeeper-bypass signal, not a guess).
+  if (c.ownerOnOwnSite && (dm || c.verifiedCEO)) {
+    score += 6; reasons.push('Owner is named on their own website — public-facing founder, reads their own inbox');
+  }
+
+  // ═══ CAN WE ACTUALLY EMAIL THEM? — the second half of reachability ═══
   if (c.emailResult) {
     const er = c.emailResult;
-    if (er.tier === 1)      { score += 20; reasons.push('Email published on their own site — confirmed real'); }
-    else if (er.tier === 2) { score += 20; reasons.push('Email SMTP-verified — the mailbox provably exists (2x reply rate vs unverified)'); }
-    else if (er.tier === 3) { score += 11; reasons.push('Email built from their confirmed company pattern — likely but unverified'); }
-    else if (er.tier === 4) { score -= 10; reasons.push('⚠ Email is an unverified guess — sending risks a bounce that damages the domain'); }
-    else                    { score -= 15; reasons.push('⚠ No usable email — unreachable'); }
+    if (er.tier === 1)      { score += 28; reasons.push('Email published on their own site — confirmed real, owner is public-facing'); }
+    else if (er.tier === 2) { score += 28; reasons.push('Email SMTP-verified — the mailbox provably exists (2x reply rate)'); }
+    else if (er.tier === 3) { score += 14; reasons.push('Email built from their confirmed domain pattern — likely but unverified'); }
+    else if (er.tier === 4) { score -= 8;  reasons.push('⚠ Email is an unverified guess — a bounce would damage the sending domain'); }
+    else                    { score -= 12; reasons.push('⚠ No usable email — cannot reach them'); }
   } else if (c.email) {
     score += 8; reasons.push('Email present (confidence unknown)');
+  } else {
+    reasons.push('No email found yet');
   }
 
-  // ══ 4. PERSONALIZATION AMMO (0-20) — the other 2x multiplier ══
-  // Real pain + a recent trigger takes reply rates from 7-9% to 17-18%.
+  // ═══ WHO reads that inbox? tier tells us the address is deliverable; this tells
+  // us whether it reaches the OWNER or a gatekeeper. A personal mailbox that matches
+  // the owner's name is the gold standard; a shared role inbox means a receptionist. ═══
+  const addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
+  const localPart = (addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
+  if (localPart) {
+    const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
+    const ownerName = ((c.decisionMaker && c.decisionMaker.name) || c.verifiedCEO || '').toLowerCase();
+    const ownerTokens = ownerName.split(/\s+/).filter(w => w.length >= 3);
+    const matchesOwner = ownerTokens.length > 0 && ownerTokens.some(t => localPart.includes(t));
+    if (matchesOwner) {
+      score += 12; reasons.push(`Email is the owner's personal mailbox (${localPart}@\u2026) \u2014 lands directly with them, no gatekeeper`);
+    } else if (ROLE_INBOX.test(localPart)) {
+      score -= 12; reasons.push(`\u26a0 Only a shared inbox found (${localPart}@\u2026) \u2014 a receptionist/gatekeeper reads this, not the owner`);
+    } else if (/^[a-z]+(\.[a-z]+)?$/.test(localPart)) {
+      score += 3; reasons.push(`Personal-style mailbox (${localPart}@\u2026) \u2014 an individual, though not confirmed as the owner we identified`);
+    }
+  }
+
+  // ═══ SIZE — a MODIFIER now, not the spine. Small = the owner is hands-on. ═══
+  if (c.verifiedEmployees) {
+    const e = c.verifiedEmployees;
+    if (e <= 25)       { score += 18; reasons.push(`${e} employees — the owner answers their own email`); }
+    else if (e <= 50)  { score += 15; reasons.push(`${e} employees — founder-led; most positive C-level replies come from this band`); }
+    else if (e <= 100) { score += 9;  reasons.push(`${e} employees — founder-led, still hands-on`); }
+    else if (e <= 200) { score += 4;  reasons.push(`${e} employees — reachable, but a marketing layer may exist`); }
+    else if (e <= 350) { score -= 4;  reasons.push(`${e} employees — the founder is getting insulated`); }
+    else               { score -= 10; reasons.push(`${e} employees — mid-market, owner rarely reads cold email`); }
+  } else if (foundOwner) {
+    score += 8; reasons.push('Headcount unconfirmed, but the owner is publicly reachable — consistent with a small, founder-led firm');
+  } else if (c.sizeUnverified) {
+    reasons.push('⚠ Size unverified and no owner found — do not assume reachable');
+  } else {
+    score += 3; reasons.push('Size unchecked — verify headcount before pitching');
+  }
+
+  // ═══ PERSONALIZATION / FOUNDER-LED SIGNALS — modifiers ═══
   if (c.publicPainSignals && c.publicPainSignals.length > 0) {
     const n = Math.min(c.publicPainSignals.length, 3);
-    score += 4 + (n * 3);
-    reasons.push(`${c.publicPainSignals.length} verified operational pain signals — we can name the fire he's fighting (2x reply rate)`);
+    score += 3 + n * 2; reasons.push(`${c.publicPainSignals.length} verified operational pain signals — we can name the fire he is fighting`);
   }
   if (c.companyTriggers && c.companyTriggers.length > 0) {
     const fresh = c.companyTriggers.filter(t => (t.ageDays ?? 999) <= 45);
-    if (fresh.length > 0) {
-      score += 6;
-      reasons.push(`Recent trigger event (${fresh[0].type}, ${fresh[0].ageDays}d ago) — timely, relevant cold-open`);
-    } else {
-      score += 2;
-      reasons.push('Company news found, but not recent enough to lead with');
-    }
+    if (fresh.length) { score += 5; reasons.push(`Recent trigger (${fresh[0].type}, ${fresh[0].ageDays}d ago) — timely cold-open`); }
   }
-
-  // ══ 5. FOUNDER-LED BEHAVIOURAL SIGNALS (0-22) ══
-  // These are cases where the OWNER is demonstrably the one acting.
   if (sig.preparing_for_exit || c.source === 'bizbuysell') {
-    if (c.brokerPosted) { score += 6;  reasons.push('For-sale listing via broker — a middleman sits between us and the owner'); }
-    else                { score += 22; reasons.push('Owner is personally listing the business for sale — maximally motivated AND directly reachable'); }
+    if (c.brokerPosted) { score += 4; reasons.push('For-sale via broker — a middleman sits between us and the owner'); }
+    else                { score += 14; reasons.push('Owner is personally listing the business — maximally motivated AND directly reachable'); }
   }
-  if (sig.founder_venting || sig.social_pain_signal) {
-    score += 16; reasons.push('Founder publicly venting — personally in the weeds, and clearly reachable');
-  }
-
-  // AI-replacement hiring: a SMALL company hiring several manual roles almost
-  // never has a CMO — the owner is drowning in ops and signs the checks himself.
-  // A large company hiring 15 CS reps is just a call center. Role count is the tell.
+  if (sig.founder_venting || sig.social_pain_signal) { score += 10; reasons.push('Founder publicly venting — personally in the weeds and clearly reachable'); }
   if (sig.ai_replacement_multi) {
     const roles = c.manualRoleCount || 0;
-    if (roles >= 2 && roles <= 8)       { score += 14; reasons.push(`Hiring ${roles} manual roles at SMB scale — the owner runs ops and there is no CMO`); }
-    else if (roles > 8 && roles <= 14)  { score += 5;  reasons.push(`Hiring ${roles} manual roles — mid-size, owner may still be reachable`); }
-    else if (roles > 14)                { reasons.push(`Hiring ${roles} roles — enterprise scale, expect procurement and a CMO`); }
-  } else if (sig.ai_replacement_signal) {
-    score += 8; reasons.push('Hiring a manual role — small operation, owner-adjacent');
-  }
+    if (roles >= 2 && roles <= 8) { score += 8; reasons.push(`Hiring ${roles} manual roles at SMB scale — the owner runs ops and there is no CMO`); }
+  } else if (sig.ai_replacement_signal) { score += 4; reasons.push('Hiring a manual role — small operation, owner-adjacent'); }
+  if (sig.raised_funding) { score += 6; reasons.push('Recently raised — early-stage, the founder still owns GTM'); }
 
-  // Just-funded: early, founder-run, pre-CMO. (Late-stage gets size-gated out.)
-  if (sig.raised_funding) {
-    score += 10; reasons.push('Recently raised — early-stage, the founder still owns GTM');
-  }
-  if (sig.rebranding || sig.recently_launched) {
-    score += 4; reasons.push('In transition — decision-makers are accessible during change');
-  }
-
-  // ══ 6. PENALTIES — things that mean the owner is NOT the buyer ══
-  // A company that just hired a CMO now has exactly the layer we exist to bypass.
+  // ═══ PENALTIES ═══
   if (c.source === 'news_hire' && /cmo|chief marketing|vp.*marketing|head of marketing/i.test(c.jobTitle || '')) {
-    score -= 14; reasons.push('Just hired a CMO — they now have the marketing layer we bypass');
+    score -= 14; reasons.push('Just hired a CMO — the marketing layer we exist to bypass now exists');
   }
-
-  // Name heuristics — weak, but free.
-  if (OWNER_LED_HINTS.test(name))  { score += 5; reasons.push('Name suggests a family/owner-operated business'); }
+  if (OWNER_LED_HINTS.test(name))  { score += 4; reasons.push('Name suggests a family/owner-operated business'); }
   if (ENTERPRISE_HINTS.test(name) && !OWNER_LED_HINTS.test(name)) { score -= 4; }
+
+  // ═══ STRUCTURAL CAP: no identified owner => not reachable, full stop. ═══
+  // You cannot reach an owner you could not name. This makes reachability a genuine
+  // qualifier — a signal-95 lead with no findable owner is still a poor send.
+  let capped = Math.max(0, Math.min(100, Math.round(score)));
+  if (!dm && !c.verifiedCEO) capped = Math.min(capped, 22);
 
   const hardBlock = (sig.ai_replacement_multi && (c.manualRoleCount || 0) > 20);
 
-  // Normalize to 0-100. This is a PROBABILITY-LIKE score, not an arbitrary tally.
-  const final = Math.max(0, Math.min(100, Math.round(score)));
-
   return {
-    score: final,
+    score: capped,
     reasons,
     hardBlock,
-    // Plain-English verdict so the UI never has to interpret a bare number.
     verdict:
-      final >= 75 ? 'Excellent — owner is reachable and can buy today' :
-      final >= 55 ? 'Good — likely reaches a real decision-maker' :
-      final >= 35 ? 'Moderate — reachable but weaker odds' :
-                    'Poor — likely wastes a send',
-    // Stage-aware: at Find we only know size + signals. Say so honestly rather
-    // than pretending a pre-score is a full reachability read.
+      capped >= 72 ? 'Excellent — owner identified, reachable, and can buy' :
+      capped >= 50 ? 'Good — likely reaches a real decision-maker' :
+      capped >= 30 ? 'Moderate — reachable, but verify the contact first' :
+                     'Poor — owner not confirmed reachable, likely wastes a send',
     stage: (c.decisionMaker || c.emailResult) ? 'researched' : 'pre-research',
   };
 };
@@ -4934,6 +4939,16 @@ const WEIGHTS = {
           if (c.source === 'founder_venting') base += 6;   // most reachable + motivated
           // Very small = even more reachable (only when we have a real count)
           if (emp > 0 && emp <= 50) base += 4;
+          // FOUNDER-LED NAME — a company named after a person is far more likely
+          // owner-reachable. High-precision patterns only (few false positives):
+          // "X & Associates/Partners/Sons/Co", possessive ("Dave's"), or initials
+          // ("J&M"). A weak-but-free reachability proxy available at Find time.
+          if (/\b\w+\s*&\s*(associates|partners|sons|daughters|co|company|son)\b|\b\w+'s\b|^[a-z]\s*&\s*[a-z]\b/i.test(c.name || '')) {
+            base += 3; c.founderLedName = true;
+          }
+          // Founder-led language mined from their own job postings — a direct
+          // reachability signal (owner is hands-on and writes/approves the posting).
+          if (c.founderLedPosting) { base += 5; }
           triage = Math.min(Math.round(base), 98);
         } else if (hasRealSignal) {
           // ── UNVERIFIED but has a real signal: competitive SECOND tier.
@@ -6196,7 +6211,7 @@ Return ONLY valid JSON:
   "correctedPitchAngle": "rewritten pitch using only confirmed evidence, 35 words max",
   "confidenceScore": 0-10,
   "critiqueNote": "one sentence summary of biggest accuracy risk in this audit",
-  "icpBlocker": "if this company is clearly OUTSIDE our ICP (over 500 employees, enterprise, government, publicly traded giant), state the reason here in one short phrase. Otherwise empty string.",
+  "icpBlocker": "Flag this company as OUTSIDE our ICP (state the reason in one short phrase; otherwise empty string) if ANY of these are true: (a) revenue clearly above ~$15M or below ~$800k; (b) more than ~150 employees; (c) it is a holding company, portfolio/PE-owned rollup, or franchise system rather than a single founder-led operating business; (d) it is enterprise, government, a publicly-traded giant, a hospital/health system, or a staffing/recruiting firm; (e) the owner/founder is clearly NOT reachable — a C-suite layer (CMO, dedicated marketing dept) already sits between the owner and the marketing function. Our ICP is a FOUNDER-LED business, $800k-$15M revenue, where the OWNER still personally feels the marketing/revenue problem and can act on a cold email. If the decision-maker we found is not owner-level or not confirmed reachable, that is a blocker.",
   "estimatedEmployees": "your best estimate of employee count as a number if you can infer it from the evidence, otherwise null"
 }`;
 
@@ -6552,9 +6567,27 @@ Return ONLY valid JSON:
     //
     // Now that we actually know WHO the decision-maker is, whether we can REACH
     // them, and what fire they're fighting, we score it properly and overwrite.
+    // ═══ OWNER/EMAIL MATCH — did we build the email for the SAME person we named
+    // as the owner? Southwest exposed this: owner = "Lori Palmer", email = mcurrent@
+    // (a different person). An email to the wrong human is a wasted send no matter
+    // how sharp the audit. Flag it loudly rather than let it pass silently. ═══
+    const ownerNameForMatch = ((decisionMaker && decisionMaker.name) || verifiedCEO || '').toLowerCase();
+    const ownerTokensM = ownerNameForMatch.split(/\s+/).filter(w => w.length >= 3);
+    const emailLocalM = (email.email || '').split('@')[0].toLowerCase().replace(/[^a-z.]/g, '');
+    const ROLE_RE_M = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply)/;
+    let ownerEmailMatch = 'unknown', ownerEmailMatchReason = '';
+    if (ownerTokensM.length && emailLocalM) {
+      if (ownerTokensM.some(t => emailLocalM.includes(t))) {
+        ownerEmailMatch = 'match'; ownerEmailMatchReason = `Email (${emailLocalM}@\u2026) matches ${decisionMaker?.name || verifiedCEO} — reaching the right person`;
+      } else if (ROLE_RE_M.test(emailLocalM)) {
+        ownerEmailMatch = 'shared_inbox'; ownerEmailMatchReason = `Owner is ${decisionMaker?.name || verifiedCEO}, but the only email is a shared inbox (${emailLocalM}@\u2026) — a gatekeeper reads this, not them`;
+      } else {
+        ownerEmailMatch = 'different_person'; ownerEmailMatchReason = `\u26a0 Owner identified as ${decisionMaker?.name || verifiedCEO}, but the email (${emailLocalM}@\u2026) appears to belong to a DIFFERENT person — verify before sending`;
+      }
+      console.log(`OWNER/EMAIL MATCH [${company}]: ${ownerEmailMatch} — ${ownerEmailMatchReason}`);
+    }
+
     const reach = scoreReachability({
-      name: company,
-      signals: discoverySignals,
       source: discoverySource,
       manualRoleCount,
       jobTitle: req.body.jobTitle || '',
@@ -6563,6 +6596,7 @@ Return ONLY valid JSON:
       decisionMaker,
       emailResult,
       email: email.email,
+      ownerOnOwnSite: nameOnPage || (decisionMaker && (decisionMaker.sources||[]).some(x => /own_website|website/i.test(x))),
       publicPainSignals,
       companyTriggers,
     });
@@ -6574,6 +6608,8 @@ Return ONLY valid JSON:
       reachability: reach.score,
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
+      ownerEmailMatch,
+      ownerEmailMatchReason,
       email: email.email||'',
       founderName: email.founderName||'',
       founderTitle: email.title||'',
