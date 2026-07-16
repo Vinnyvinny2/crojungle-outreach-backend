@@ -279,6 +279,35 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
 // Public companies must report exact employee count. This catches the big public
 // companies (SSM is private, but Uline/EchoStar/public giants get caught here).
 // Free, no key, works from Render.
+// PEOPLE DATA LABS — company size by name. 70M+ profiles incl. many SMBs the
+// Companies API lacks. Free tier 1,000 matches/mo, 10/min. Returns real
+// employee_count. Strict min_likelihood so we never accept a fuzzy wrong match.
+// Fails safe to null (404 = no match). Never fabricates.
+const getPDLSize = async (companyName, pdlKey, location) => {
+  if (!companyName || !pdlKey) return null;
+  try {
+    const clean = companyName.replace(/\s*\(cik\s*\d+\)\s*/gi,'').replace(/,?\s*(Inc|LLC|Corp|Ltd|LLP|Co)\.?$/gi,'').trim();
+    const params = new URLSearchParams({ name: clean, min_likelihood: '6' });
+    if (location) params.set('location', location);
+    const url = `https://api.peopledatalabs.com/v5/company/enrich?${params.toString()}`;
+    const r = await fetchT(url, { headers: { 'X-Api-Key': pdlKey, 'Accept': 'application/json' } }, 9000);
+    const d = await safeJson(r);
+    if (!d || d.status !== 200) return null; // 404 = no confident match → honest unknown
+    const emp = (typeof d.employee_count === 'number' && d.employee_count > 0) ? d.employee_count : null;
+    let est = emp;
+    if (!est && d.size) {
+      const bandMap = { '1-10':5,'11-50':30,'51-200':125,'201-500':350,'501-1000':750,'1001-5000':3000,'5001-10000':7500,'10001+':15000 };
+      est = bandMap[d.size] || null;
+    }
+    if (!est) return null;
+    console.log(`PDL [${clean}]: emp=${est} size=${d.size||'?'} likelihood=${d.likelihood||'?'}`);
+    return { employees: est, band: d.size || null, industry: d.industry || null, likelihood: d.likelihood };
+  } catch(e) {
+    console.log('PDL lookup failed:', e.message);
+    return null;
+  }
+};
+
 const getEdgarHeadcount = async (companyName) => {
   try {
     const clean = companyName.replace(/\s*\(cik\s*\d+\)\s*/gi,'').replace(/,?\s*(Inc|LLC|Corp|Ltd|LLP|Co)\.?$/gi,'').trim();
@@ -3815,7 +3844,7 @@ app.get('/api/verify-website', async (req, res) => {
 //   unverified     — not in any database              → keep but flag (honest unknown)
 // ═══════════════════════════════════════════════════════════════════════════
 app.post('/api/audit-leads', async (req, res) => {
-  const { leads, companiesApiKey } = req.body;
+  const { leads, companiesApiKey, pdlKey } = req.body;
   if (!Array.isArray(leads) || leads.length === 0) {
     return res.status(400).json({ error: 'leads array required' });
   }
@@ -3843,7 +3872,14 @@ app.post('/api/audit-leads', async (req, res) => {
       }
       if (byName && byName.website && !lead.website) lead.website = byName.website;
     }
-    // ── 3. Wikipedia (famous enterprises) ──
+    // ── 3. People Data Labs by NAME (70M+ profiles incl. SMBs the others miss) ──
+    if (pdlKey) {
+      const pdl = await getPDLSize(lead.name, pdlKey, lead.location);
+      if (pdl && pdl.employees) {
+        return { employees: pdl.employees, band: pdl.band, industry: pdl.industry, source: 'peopledatalabs' };
+      }
+    }
+    // ── 4. Wikipedia (famous enterprises) ──
     const wiki = await getSizeOnly(lead.name);
     if (wiki && wiki.employees) {
       return { employees: wiki.employees, source: 'wikipedia' };
