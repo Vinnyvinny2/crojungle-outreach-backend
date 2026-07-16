@@ -3938,6 +3938,138 @@ app.post('/api/audit-leads', async (req, res) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SCHEDULED AUTO-DISCOVERY (Render Cron)
+// Runs Find automatically on a schedule with NO browser open. Reads API keys
+// from Render environment variables (set once in the Render dashboard), runs
+// the normal discovery pipeline, and saves fresh leads straight to Supabase so
+// they appear in the app next time you open it.
+//
+// TheirStack costs credits, so it's GATED: it only runs if TS_MIN_HOURS have
+// passed since its last cron run (tracked in Supabase). Free sources run every
+// time. This lets you run free sources 3-4x/day while TheirStack stays ~2x/week.
+//
+// SECURITY: protected by a secret token (CRON_SECRET env var) so only Render's
+// scheduler can trigger it.
+// ═══════════════════════════════════════════════════════════════════════════
+const SB_URL = process.env.SUPABASE_URL || '';
+const SB_KEY = process.env.SUPABASE_KEY || '';
+
+// Minimal Supabase REST helper (server-side)
+const sbRest = async (path, options = {}) => {
+  if (!SB_URL || !SB_KEY) return null;
+  try {
+    const r = await fetch(SB_URL + '/rest/v1' + path, {
+      ...options,
+      headers: {
+        'apikey': SB_KEY,
+        'Authorization': 'Bearer ' + SB_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': options.prefer || 'return=minimal',
+        ...(options.headers || {}),
+      },
+    });
+    if (!r.ok) { console.log('Supabase REST error', r.status, await r.text()); return null; }
+    const t = await r.text();
+    return t ? JSON.parse(t) : null;
+  } catch (e) { console.log('Supabase REST failed:', e.message); return null; }
+};
+
+// Map a discovered company to a discovered_queue row (mirrors the frontend shape)
+const companyToQueueRow = (c) => ({
+  id: c.id || (c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40) + '_' + (c.source || 'find'),
+  name: c.name || '',
+  website: c.website || '',
+  icp_score: c.icpScore || 0,
+  source: c.source || '',
+  signals: c.signals || {},
+  job_title: c.jobTitle || '',
+  location: c.location || '',
+  manual_role_count: c.manualRoleCount || 0,
+  stacked: !!c.stacked,
+  reachability: c.reachability || 0,
+  extra: JSON.stringify(c),
+});
+
+app.get('/api/cron/discover', async (req, res) => {
+  // ── Auth: require the secret token ──
+  const secret = req.query.secret || req.headers['x-cron-secret'];
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  if (!SB_URL || !SB_KEY) {
+    return res.status(500).json({ error: 'SUPABASE_URL / SUPABASE_KEY env vars not set' });
+  }
+
+  // ── Gather keys from env vars ──
+  const adzunaId = process.env.ADZUNA_ID || '';
+  const adzunaKey = process.env.ADZUNA_KEY || '';
+  const firecrawlKey = process.env.FIRECRAWL_KEY || '';
+  const companiesApiKey = process.env.COMPANIES_API_KEY || '';
+  const theirstackKey = process.env.THEIRSTACK_KEY || '';
+  const fbToken = process.env.FB_TOKEN || '';
+
+  // ── Decide whether TheirStack runs this time (credit gate) ──
+  const TS_MIN_HOURS = parseInt(process.env.TS_MIN_HOURS || '84', 10); // ~2x/week
+  let runTheirStack = false;
+  if (theirstackKey) {
+    const rows = await sbRest('/cron_state?id=eq.theirstack&select=last_run');
+    const last = rows && rows[0] && rows[0].last_run ? new Date(rows[0].last_run).getTime() : 0;
+    const hoursSince = (Date.now() - last) / 3.6e6;
+    runTheirStack = hoursSince >= TS_MIN_HOURS;
+    console.log(`Cron: TheirStack last ran ${hoursSince.toFixed(1)}h ago; gate ${TS_MIN_HOURS}h → ${runTheirStack ? 'RUN' : 'skip'}`);
+  }
+
+  // ── Call the existing discover endpoint internally (reuses all logic) ──
+  console.log('=== CRON DISCOVERY START ===');
+  const port = process.env.PORT || 3001;
+  let data;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/discover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        keywords: ['SaaS', 'e-commerce', 'B2B software', 'professional services'],
+        location: process.env.TARGET_LOCATION || '',
+        keys: {
+          adzunaId, adzunaKey, firecrawlKey, companiesApiKey, fbToken,
+          // Only pass the TheirStack key when the gate allows it
+          theirstackKey: runTheirStack ? theirstackKey : '',
+        },
+      }),
+    });
+    data = await r.json();
+  } catch (e) {
+    console.log('Cron discover call failed:', e.message);
+    return res.status(500).json({ error: 'discover call failed: ' + e.message });
+  }
+
+  const companies = (data && data.companies) || [];
+  if (companies.length === 0) {
+    return res.json({ ok: true, added: 0, note: 'no companies returned', breakdown: data && data.breakdown });
+  }
+
+  // ── Save to Supabase (upsert — dedupes by id, so re-runs accumulate cleanly) ──
+  const rows = companies.slice(0, 200).map(companyToQueueRow);
+  await sbRest('/discovered_queue?on_conflict=id', {
+    method: 'POST',
+    body: JSON.stringify(rows),
+    prefer: 'return=minimal,resolution=merge-duplicates',
+  });
+
+  // ── Record TheirStack run time if it ran ──
+  if (runTheirStack) {
+    await sbRest('/cron_state?on_conflict=id', {
+      method: 'POST',
+      body: JSON.stringify({ id: 'theirstack', last_run: new Date().toISOString() }),
+      prefer: 'return=minimal,resolution=merge-duplicates',
+    });
+  }
+
+  console.log(`=== CRON DISCOVERY END: ${rows.length} leads saved ===`);
+  res.json({ ok: true, added: rows.length, theirstackRan: runTheirStack, breakdown: data.breakdown });
+});
+
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys, apiKey } = req.body;
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
