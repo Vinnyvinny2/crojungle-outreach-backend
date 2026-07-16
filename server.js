@@ -1189,8 +1189,20 @@ const checkContentFreshness = async (domain) => {
 // Fails safe to [] if no key or the call errors. Never fabricates.
 // ═══════════════════════════════════════════════════════════
 const TS_LIMIT = 25; // credits per run = TS_LIMIT (1 credit/job). Raise on paid plan.
+// Track last TheirStack run in memory (persists across requests, resets on deploy).
+// 24h gate: costs 25 credits/run, free tier = 200/mo. Once/day = ~200/mo, stays free.
+let _tsLastRun = 0;
+const TS_GATE_MS = 23 * 60 * 60 * 1000; // 23h so it doesn't drift
+
 const searchTheirStack = async (theirstackKey) => {
   if (!theirstackKey) return [];
+  const now = Date.now();
+  if (_tsLastRun && (now - _tsLastRun) < TS_GATE_MS) {
+    const hoursLeft = ((TS_GATE_MS - (now - _tsLastRun)) / 3.6e6).toFixed(1);
+    console.log(`TheirStack: skipped (credit gate — ${hoursLeft}h until next run)`);
+    return [];
+  }
+  _tsLastRun = now;
   try {
     const body = {
       page: 0,
