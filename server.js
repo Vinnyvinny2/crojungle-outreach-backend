@@ -3388,6 +3388,24 @@ const scoreSignals = (c) => {
     firing.push({ key, tier: def.tier, label: def.label, points: Math.round(pts), decay: +decay.toFixed(2) });
   }
 
+  // ═══ ROLE-VOLUME SCALING — the fix for score collapse ══════════════════
+  // Every AI-replacement lead fired the same 1-2 signals, so intent was flat and
+  // every score converged to ~51. But a company hiring 6 manual roles across 3
+  // functions is drowning FAR worse than one hiring 2 vague ops roles — and that
+  // MUST separate them. Volume and function-spread are the real intensity signal.
+  const roleCount = c.manualRoleCount || 0;
+  const funcCount = c.manualCategories || c.functionCount || 0;
+  if (roleCount > 0) {
+    // +5 per role beyond the first (caps at +30 for 7+ roles)
+    const volumeBonus = Math.min((roleCount - 1) * 5, 30);
+    // +8 per distinct function beyond the first (a company bleeding across
+    // dispatch AND CS AND data-entry is a much bigger build)
+    const spreadBonus = Math.min(Math.max(funcCount - 1, 0) * 8, 24);
+    intent += volumeBonus + spreadBonus;
+    if (volumeBonus > 0) firing.push({ key: 'role_volume', tier: 2, label: `${roleCount} manual roles open — ${volumeBonus} pts of labor-bleed intensity`, points: volumeBonus, decay: 1 });
+    if (spreadBonus > 0) firing.push({ key: 'role_spread', tier: 2, label: `Manual hiring across ${funcCount} functions — bleeding on multiple fronts`, points: spreadBonus, decay: 1 });
+  }
+
   // ═══ THE STACK MULTIPLIER — the single biggest lever in Find ═══════════
   // Research: 1 signal = ~20% true positive. 2+ = 50-60%. That is a 2.5-3x
   // improvement in lead quality, and it is the entire reason signal-based
@@ -3419,7 +3437,7 @@ const scoreSignals = (c) => {
                               'Timing unknown';
 
   return {
-    intentScore: Math.min(100, score),
+    intentScore: Math.min(130, score),
     firing: firing.sort((a, b) => b.points - a.points),
     stackMult,
     stackWhy,
@@ -3745,30 +3763,73 @@ app.post('/api/discover', async (req, res) => {
     // Viking Land (18 dispatchers across 1 function) is actually a legit SMB trucking co.
     // But Spectrum/CVS hiring 20+ CS reps in one function = enterprise. Differentiate by
     // whether we already know it's a large company via the blocklist. Trust the name list.
+    // ── KNOWN STAFFING / RECRUITING BRANDS (they SELL the labor they post) ──
+    // A staffing firm's job posts are their PRODUCT, not a signal about their own
+    // operations. They'd never buy AI to replace the workers they rent out. These
+    // flood the queue with "hiring manual roles" noise. Block by name AND pattern.
+    const STAFFING_BRANDS = new Set([
+      'manpower','manpowergroup','vaco','talentrust','talent trust','aerotek','adecco',
+      'randstad','kelly services','kforce','insight global','teksystems','robert half',
+      'aston carter','collabera','cybercoders','jobot','apex systems','apex group',
+      'the contractor consultants','contractor consultants','tandym','beacon hill',
+      'addison group','on assignment','asgn','lhh','hays','spherion','staffmark',
+      'volt','modis','allegis','cielo','nesco resource','pridestaff','express employment',
+      'trueblue','peoplecaddy','integrity staffing','elwood staffing','snelling',
+      'gpac','gqr','the judge group','judge group','system one','yoh','actalent',
+      'medical solutions','cross country','crosscountry','host healthcare','aya healthcare',
+      'trustaff','triage staffing','amn healthcare','favorite healthcare',
+    ]);
+    // ── KNOWN ENTERPRISES / REITs / DISTRIBUTORS (too big — owner unreachable) ──
+    const ENTERPRISE_BRANDS = new Set([
+      'skanska','skanska constructions','avalonbay','avalonbay communities','reece',
+      'lincoln property','lincoln property company','village green','equity residential',
+      'greystar','camden property','mid-america apartment','udr','essex property',
+      'aimco','invitation homes','american homes','bituminous roadways','vinci',
+      'turner construction','dpr construction','mortenson','clark construction',
+      'suffolk construction','hensel phelps','kiewit','fluor','jacobs','aecom',
+      'brasfield gorrie','pcl construction','gilbane','balfour beatty','webcor',
+      'msccn','path','avalonbay','ferguson','wesco','grainger','hd supply',
+    ]);
+
     const icpFiltered = allCompanies.filter(c => {
       const name = (c.name||'').toLowerCase().trim();
       if (!name || name.length < 2) return false;
-      // Block obvious large companies by name
       const nameWords = name.split(/\s+/);
-      if (BLOCKED_COMPANIES.has(name)) return false;
-      // Match on ANY significant word (3+ chars), not just 4+
-      if (nameWords.some(w => BLOCKED_COMPANIES.has(w) && w.length >= 2)) return false;
-      // Match first 1-2 words against blocklist (catches "Anduril Industries", "The Cigna Group")
       const firstTwo = nameWords.slice(0, 2).join(' ');
-      const firstWord = nameWords[0] === 'the' ? nameWords[1] : nameWords[0];
+      const firstWord = nameWords[0] === 'the' ? (nameWords[1]||'') : nameWords[0];
+
+      // ── ORIGINAL BLOCKLIST (exact-ish) ──
+      if (BLOCKED_COMPANIES.has(name)) return false;
+      if (nameWords.some(w => BLOCKED_COMPANIES.has(w) && w.length >= 2)) return false;
       if (firstWord && BLOCKED_COMPANIES.has(firstWord)) return false;
       if (BLOCKED_COMPANIES.has(firstTwo)) return false;
-      // Block companies with "Inc." that are clearly enterprises (very long names = conglomerates)
+
+      // ── STAFFING + ENTERPRISE BRAND SETS (name, first word, first two words) ──
+      const nameNoThe = name.replace(/^the\s+/, '');
+      if (STAFFING_BRANDS.has(name) || STAFFING_BRANDS.has(nameNoThe) || STAFFING_BRANDS.has(firstTwo) || STAFFING_BRANDS.has(firstWord)) return false;
+      if (ENTERPRISE_BRANDS.has(name) || ENTERPRISE_BRANDS.has(nameNoThe) || ENTERPRISE_BRANDS.has(firstTwo) || ENTERPRISE_BRANDS.has(firstWord)) return false;
+
+      // ── PATTERN-BASED STAFFING DETECTION (catches variants we've never seen) ──
+      // These words in a company NAME almost always mean "we rent out labor."
+      if (/\b(staffing|recruiting|recruitment|recruiter|staffing solutions|talent solutions|talent group|talent partners|talent acquisition|workforce|personnel|placement|headhunt|temp agency|temporaries|manpower|employment agency|employer of record|professional employer|\bpeo\b|hr outsourc|consultants|consulting group|resourcing|resource group|human capital)\b/i.test(name)) return false;
+      // "talent" or "talents" as a standalone significant word (Talentrust, Talent Inc)
+      if (nameWords.some(w => w === 'talent' || w === 'talents' || w === 'staffing' || w === 'recruiters')) return false;
+
+      // ── PATTERN-BASED ENTERPRISE / REIT / PROPERTY-MGMT DETECTION ──
+      // Large REITs and property managers are never founder-led SMBs.
+      if (/\b(communities|residential|property company|property management|properties trust|realty trust|apartment homes|reit|worldwide|global logistics|international group|holdings corp)\b/i.test(name)) return false;
+
+      // ── SIZE / STRUCTURE HEURISTICS ──
       if (name.length > 55) return false;
-      // Block government/non-profit signals
-      if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center)\b/i.test(name)) return false;
-      // Block staffing agencies and workforce companies by keyword
-      if (/\b(staffing|recruiting|recruitment|temp agency|talent agency|placement agency|headhunter|workforce solutions|labor solutions|employment agency|talent solutions|workforce management|employer of record|professional employer|peo |hr outsourc)\b/i.test(name)) return false;
-      // Block defense/government/aerospace by keyword
+      // Government / non-profit / institution
+      if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center|clinic network)\b/i.test(name)) return false;
+      // Defense / aerospace
       if (/\b(defense contractor|aerospace|government contractor|department of defense|federal contractor)\b/i.test(name)) return false;
-      // Block by job title signals that indicate enterprise scale
+
+      // ── JOB-TITLE ENTERPRISE SIGNALS ──
       const jt = (c.jobTitle || c.jobSnippet || '').toLowerCase();
       if (/regional (sales|marketing) director|department of defense|intelligence community|federal (sales|accounts)|enterprise (sales|account)/i.test(jt)) return false;
+
       return true;
     });
 
@@ -3779,9 +3840,56 @@ app.post('/api/discover', async (req, res) => {
     // CEO/pain/revenue enrichment happens at Research time on leads you pursue.
     // This keeps Find fast and doesn't hammer DuckDuckGo.
     // Only enrich the top 40 by pre-score — the ones most likely to matter.
+const WEIGHTS = {
+      // Stage 4 — hottest, in market NOW
+      agency_review: 45,
+      social_pain_signal: 35,
+      founder_venting: 10,
+      // Stage 3-4 — actively in motion
+      hiring_marketing: 30,
+      salary_high: 20,
+      raised_funding: 25,
+      running_fb_ads: 30,       // confirmed budget + digital presence
+      stale_ads: 15,            // running same ads 90+ days = frustrated
+      // Exit prep — owner motivated to grow revenue fast
+      preparing_for_exit: 35,
+      needs_revenue_growth: 15,
+      owner_motivated: 10,
+      // AI-replacement labor signals (Adzuna re-aim) — Tier 1 $25k-$75k builds
+      ai_replacement_signal: 25,   // hiring any manual/repetitive role
+      ai_replacement_multi: 20,    // 2+ functions or 3+ postings — real bleeding
+      ai_replacement_heavy: 20,    // 3+ functions or 5+ postings — stacks on multi  
+      // Other signals 
+      hiring_ops: 10,
+      tool_frustration: 20,
+      recently_launched: 15,
+      needs_marketing: 10,
+      rebranding: 20,
+      expanding: 12,
+      recently_acquired: 18,
+      salary_mid: 10,
+      salary_low: 5,
+      salary_unknown: 5,
+    };
+
+    // PRE-SCORE for enrichment ordering. icpScore doesn't exist yet (computed
+    // ~270 lines below). Sorting by it was a no-op that took the first 40 in
+    // array order (all Adzuna). Score on raw signals we already have so the
+    // size gate, ad-check, and enrichment run on the most promising leads.
+    const preScore = (c) => {
+      const sig = c.signals || {};
+      let sc = Object.entries(sig).reduce((t,[k,v]) => v ? t + (WEIGHTS[k] || 5) : t, 0);
+      sc += ((c.stackedSources || c.sources || [c.source]).filter(Boolean).length - 1) * 20;
+      const f = c.signalFreshness;
+      sc += f === 'burning' ? 15 : f === 'hot' ? 10 : f === 'warm' ? 4 : 0;
+      sc += Math.min((c.manualRoleCount || 0) * 3, 15);
+      return sc;
+    };
     const toEnrich = icpFiltered
-      .sort((a,b) => (b.icpScore||0) - (a.icpScore||0))
-      .slice(0, 40);
+      .map(c => ({ c, _pre: preScore(c) }))
+      .sort((a,b) => b._pre - a._pre)
+      .slice(0, 40)
+      .map(x => x.c);
     const enrichResults = new Map();
     console.log(`Size enrichment: checking top ${toEnrich.length} leads...`);
 
@@ -3873,39 +3981,7 @@ app.post('/api/discover', async (req, res) => {
       }
     }
     
-    const WEIGHTS = {
-      // Stage 4 — hottest, in market NOW
-      agency_review: 45,
-      social_pain_signal: 35,
-      founder_venting: 10,
-      // Stage 3-4 — actively in motion
-      hiring_marketing: 30,
-      salary_high: 20,
-      raised_funding: 25,
-      running_fb_ads: 30,       // confirmed budget + digital presence
-      stale_ads: 15,            // running same ads 90+ days = frustrated
-      // Exit prep — owner motivated to grow revenue fast
-      preparing_for_exit: 35,
-      needs_revenue_growth: 15,
-      owner_motivated: 10,
-      // AI-replacement labor signals (Adzuna re-aim) — Tier 1 $25k-$75k builds
-      ai_replacement_signal: 25,   // hiring any manual/repetitive role
-      ai_replacement_multi: 20,    // 2+ functions or 3+ postings — real bleeding
-      ai_replacement_heavy: 20,    // 3+ functions or 5+ postings — stacks on multi  
-      // Other signals 
-      hiring_ops: 10,
-      tool_frustration: 20,
-      recently_launched: 15,
-      needs_marketing: 10,
-      rebranding: 20,
-      expanding: 12,
-      recently_acquired: 18,
-      salary_mid: 10,
-      salary_low: 5,
-      salary_unknown: 5,
-    };
-
-    // Apply enrichment + size gate
+        // Apply enrichment + size gate
     // ═══════════════════════════════════════════════════════════════════════
     // BULLETPROOF SIZE GATE — multi-signal waterfall
     // ═══════════════════════════════════════════════════════════════════════
@@ -4201,14 +4277,32 @@ app.post('/api/discover', async (req, res) => {
         // an unreachable enterprise is not a lead either.)
         const fit = reach.score;                 // 0-100
         const intentScore = intent.intentScore;  // 0-100
-        const blended = Math.sqrt(Math.max(fit, 1) * Math.max(intentScore, 1));
+        // BLEND: geometric mean when we have REAL fit data (size verified), because
+        // then a zero on either dimension should kill the lead. But at FIND time most
+        // leads have no size data, so fit is a flat ~26 for everyone — using the
+        // geometric mean there caps every score at sqrt(26*100)=51 and hides the
+        // intent spread entirely. So when fit is unverified, weight toward intent
+        // (70/30) so a company drowning in 8 roles outranks one hiring 1.
+        const hasRealFit = !!c.verifiedEmployees;
+        const blended = hasRealFit
+          ? Math.sqrt(Math.max(fit, 1) * Math.max(intentScore, 1))
+          : (intentScore * 0.7 + fit * 0.3);
 
         const icpScore = reach.hardBlock
           ? Math.min(Math.round(blended), 20)
           : Math.min(100, Math.round(blended));
 
+        // HONEST "EXACT ICP" — was: perfectFit = "came from an industry search",
+        // which fired on staffing firms and enterprises alike. Now it requires
+        // genuine fit: real manual-role volume AND a size that fits (or unknown,
+        // which for a company not in any DB means small/owner-run).
+        const sizeOk = !c.verifiedEmployees || (c.verifiedEmployees >= 5 && c.verifiedEmployees <= 200);
+        const realVolume = (c.manualRoleCount || 0) >= 2 || !!c.signals?.ai_replacement_multi;
+        const trueExactIcp = !!c.perfectFit && sizeOk && realVolume && !reach.hardBlock;
+
         return {
           ...c,
+          perfectFit: trueExactIcp,
           icpScore,
           // Intent
           intentScore,
