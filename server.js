@@ -5229,6 +5229,9 @@ const checkFacebookAds = async (name, fbToken) => {
 };
 
 app.post('/api/research', async (req, res) => {
+  // hasCTA is used across Brain audit + response assembly. Declared at
+  // outer scope so it's visible to all references (fixes scope-leak crash).
+  let hasCTA = false;
   FIRECRAWL_OUT_OF_CREDITS = false; // reset per run so the flag reflects THIS request
   const { company, keys, apiKey } = req.body;
   let website = req.body.website;  // mutable — the website guard may resolve/blank it
@@ -5677,7 +5680,7 @@ app.post('/api/research', async (req, res) => {
         const homepageSnippet = trustedContent.slice(0, 4000);
 
     // You cannot argue with it, and no competitor will ever tell them.
-    const hasCTA = (typeof visualAnalysis?.hasVisibleCTA === 'boolean')
+    hasCTA = (typeof visualAnalysis?.hasVisibleCTA === 'boolean')
       ? visualAnalysis.hasVisibleCTA
       : /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
 
