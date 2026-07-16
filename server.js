@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -5633,6 +5632,84 @@ app.post('/api/research', async (req, res) => {
 
         const homepageSnippet = trustedContent.slice(0, 4000);
 
+    // You cannot argue with it, and no competitor will ever tell them.
+    const hasCTA = (typeof visualAnalysis?.hasVisibleCTA === 'boolean')
+      ? visualAnalysis.hasVisibleCTA
+      : /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
+
+    const moneyOnFire = (() => {
+      const fires = [];
+      const adCount = fbAds.adCount || 0;
+      const hasAds = adCount > 0 || !!builtWith.hasGoogleAdsTag;
+
+      // FIRE 1 — Paying for traffic they cannot measure.
+      if (hasAds && !builtWith.hasMetaPixel && (fbAds.adCount || 0) > 0) {
+        fires.push({
+          severity: 'critical',
+          fire: `${adCount} paid ads running with NO Meta pixel installed`,
+          cost: 'Every dollar of that ad spend is unmeasurable. They cannot tell a winning ad from a losing one, cannot retarget a single visitor, and cannot optimize anything. They are flying completely blind.',
+        });
+      }
+      if (hasAds && !builtWith.hasPixel) {
+        fires.push({
+          severity: 'critical',
+          fire: 'Paying for ads with NO analytics of any kind on the page',
+          cost: 'Zero conversion tracking. They cannot answer "did that ad make money?" — for any ad, ever.',
+        });
+      }
+
+      // FIRE 2 — Paying for traffic that lands somewhere it cannot convert.
+      if (hasAds && !hasCTA) {
+        fires.push({
+          severity: 'critical',
+          fire: `Paid traffic landing on a page with no call-to-action`,
+          cost: 'They are renting attention and then giving it away. A visitor who WANTS to act has nowhere to click.',
+        });
+      }
+      if (hasAds && !builtWith.hasEmailCapture && !builtWith.hasBooking) {
+        fires.push({
+          severity: 'high',
+          fire: 'Paid traffic with no email capture and no booking tool',
+          cost: 'Every visitor who is not ready to buy TODAY is lost permanently. No second chance, no nurture, nothing.',
+        });
+      }
+
+      // FIRE 3 — Paying humans to do work software does once.
+      if (manualRoleCount >= 2) {
+        const annual = manualRoleCount * 55000;
+        fires.push({
+          severity: 'high',
+          fire: `${manualRoleCount} manual roles open — roughly $${(annual/1000).toFixed(0)}k/yr in loaded salary`,
+          cost: `That is a recurring, compounding cost for work a one-time build handles permanently. They pay it again every single year.`,
+        });
+      }
+
+      // FIRE 4 — No CRM. Every lead they generate leaks out the side.
+      if (hasAds && !builtWith.hasCRM) {
+        fires.push({
+          severity: 'high',
+          fire: 'Running paid ads with no CRM detected',
+          cost: 'Leads arrive and vanish. No follow-up, no pipeline, no idea which ones closed.',
+        });
+      }
+
+      const critical = fires.filter(f => f.severity === 'critical').length;
+      return {
+        fires,
+        count: fires.length,
+        criticalCount: critical,
+        // 3+ simultaneous fires with ad spend confirmed = the audit writes itself
+        isBurning: fires.length >= 3 && hasAds,
+        headline: fires.length === 0 ? '' :
+          critical > 0
+            ? `${fires.length} ways this business is losing money right now — ${critical} of them critical and provable`
+            : `${fires.length} confirmed leaks in how this business converts and operates`,
+      };
+    })();
+    if (moneyOnFire.count > 0) {
+      console.log(`MONEY ON FIRE [${company}]: ${moneyOnFire.count} leaks (${moneyOnFire.criticalCount} critical)${moneyOnFire.isBurning ? ' — BURNING' : ''}`);
+      moneyOnFire.fires.forEach(f => console.log(`  · [${f.severity}] ${f.fire}`));
+    }
         msgContent.push({
           type: 'text',
           text: `You are CROJungle's senior marketing auditor. Your job is to find the single most expensive problem in this business's digital presence and recommend the right CROJungle product to fix it.
@@ -6146,10 +6223,6 @@ Return ONLY valid JSON:
     // Merge text analysis with visual analysis
     // VISION FIRST: if the vision audit looked at the rendered page, its verdict is
     // authoritative. Fall back to source-regex only when there's no screenshot.
-    const hasCTA = (typeof visualAnalysis?.hasVisibleCTA === 'boolean')
-      ? visualAnalysis.hasVisibleCTA
-      : /call|contact|get started|book|schedule|buy|request|demo|try|sign up|free trial/i.test(content.slice(0,3000));
-
     // ═══════════════════════════════════════════════════════════════════
     // MONEY ON FIRE — the most undeniable audit finding we can produce
     // ═══════════════════════════════════════════════════════════════════
@@ -6159,80 +6232,6 @@ Return ONLY valid JSON:
     //
     // The brutal one is ads-without-a-pixel: they are paying for traffic they
     // physically cannot measure. Not "underperforming" — literally blind.
-    // You cannot argue with it, and no competitor will ever tell them.
-    const moneyOnFire = (() => {
-      const fires = [];
-      const adCount = fbAds.adCount || 0;
-      const hasAds = adCount > 0 || !!builtWith.hasGoogleAdsTag;
-
-      // FIRE 1 — Paying for traffic they cannot measure.
-      if (hasAds && !builtWith.hasMetaPixel && (fbAds.adCount || 0) > 0) {
-        fires.push({
-          severity: 'critical',
-          fire: `${adCount} paid ads running with NO Meta pixel installed`,
-          cost: 'Every dollar of that ad spend is unmeasurable. They cannot tell a winning ad from a losing one, cannot retarget a single visitor, and cannot optimize anything. They are flying completely blind.',
-        });
-      }
-      if (hasAds && !builtWith.hasPixel) {
-        fires.push({
-          severity: 'critical',
-          fire: 'Paying for ads with NO analytics of any kind on the page',
-          cost: 'Zero conversion tracking. They cannot answer "did that ad make money?" — for any ad, ever.',
-        });
-      }
-
-      // FIRE 2 — Paying for traffic that lands somewhere it cannot convert.
-      if (hasAds && !hasCTA) {
-        fires.push({
-          severity: 'critical',
-          fire: `Paid traffic landing on a page with no call-to-action`,
-          cost: 'They are renting attention and then giving it away. A visitor who WANTS to act has nowhere to click.',
-        });
-      }
-      if (hasAds && !builtWith.hasEmailCapture && !builtWith.hasBooking) {
-        fires.push({
-          severity: 'high',
-          fire: 'Paid traffic with no email capture and no booking tool',
-          cost: 'Every visitor who is not ready to buy TODAY is lost permanently. No second chance, no nurture, nothing.',
-        });
-      }
-
-      // FIRE 3 — Paying humans to do work software does once.
-      if (manualRoleCount >= 2) {
-        const annual = manualRoleCount * 55000;
-        fires.push({
-          severity: 'high',
-          fire: `${manualRoleCount} manual roles open — roughly $${(annual/1000).toFixed(0)}k/yr in loaded salary`,
-          cost: `That is a recurring, compounding cost for work a one-time build handles permanently. They pay it again every single year.`,
-        });
-      }
-
-      // FIRE 4 — No CRM. Every lead they generate leaks out the side.
-      if (hasAds && !builtWith.hasCRM) {
-        fires.push({
-          severity: 'high',
-          fire: 'Running paid ads with no CRM detected',
-          cost: 'Leads arrive and vanish. No follow-up, no pipeline, no idea which ones closed.',
-        });
-      }
-
-      const critical = fires.filter(f => f.severity === 'critical').length;
-      return {
-        fires,
-        count: fires.length,
-        criticalCount: critical,
-        // 3+ simultaneous fires with ad spend confirmed = the audit writes itself
-        isBurning: fires.length >= 3 && hasAds,
-        headline: fires.length === 0 ? '' :
-          critical > 0
-            ? `${fires.length} ways this business is losing money right now — ${critical} of them critical and provable`
-            : `${fires.length} confirmed leaks in how this business converts and operates`,
-      };
-    })();
-    if (moneyOnFire.count > 0) {
-      console.log(`MONEY ON FIRE [${company}]: ${moneyOnFire.count} leaks (${moneyOnFire.criticalCount} critical)${moneyOnFire.isBurning ? ' — BURNING' : ''}`);
-      moneyOnFire.fires.forEach(f => console.log(`  · [${f.severity}] ${f.fire}`));
-    }
 
 
     const hasWeakHeadline = visualAnalysis ? visualAnalysis.headlineQuality === 'generic' : /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
