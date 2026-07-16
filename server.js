@@ -1150,6 +1150,76 @@ const checkContentFreshness = async (domain) => {
   } catch { return { checked:false }; }
 };
 
+// ═══════════════════════════════════════════════════════════
+// SIGNAL SOURCE: SBA LOANS — the debt-funding equivalent of Form D, but for
+// MAIN STREET. A remodeler/trucker/contractor does not raise a seed round; they
+// get an SBA 7(a) or 504 loan. That is capital allocated + a 60-90 day growth
+// window at EXACTLY our ICP (owner-operated trades/service SMBs). Banks announce
+// these loans publicly as marketing, so we read the announcements and extract
+// the BORROWER (not the bank). Real, verifiable data — fails safe to [] if the
+// feed is empty. Never fabricates.
+// ═══════════════════════════════════════════════════════════
+const searchSBALoans = async () => {
+  const results = [];
+  const seen = new Set();
+  // Queries tuned to surface loan ANNOUNCEMENTS naming a borrower business.
+  const queries = [
+    '"SBA 7(a) loan" OR "SBA 504 loan" provides OR closes OR funds business 2026',
+    '"SBA loan" "to finance" OR "to acquire" OR "to expand" small business 2026',
+    'bank "provides" OR "closes" "SBA" loan manufacturing OR logistics OR contractor 2026',
+    '"receives" OR "secures" "SBA loan" family business OR "family-owned" 2026',
+  ];
+  // The bank/lender is the ANNOUNCER, not the lead — never return these as leads.
+  const LENDER_HINT = /\b(bank|bancorp|credit union|capital|lending|lender|financial|finance|fund|federal|first national|live oak|newtek|readycap|byline|celtic|huntington|wells fargo|chase|us bank)\b/i;
+
+  for (const q of queries) {
+    try {
+      const r = await fetchT(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`, {}, 8000);
+      const xml = await safeText(r);
+      const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+      items.slice(0, 12).forEach(item => {
+        const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
+        if (!title || !/sba/i.test(title)) return;
+
+        // Extract the BORROWER, not the lender. Two common headline shapes:
+        //  (A) "<Lender> provides/closes $X SBA loan to <Borrower>"    → after "to/for"
+        //  (B) "<Borrower> secures/receives/lands $X SBA loan"          → subject
+        let name = '';
+        const mTo = title.match(/\bSBA[^.]*?\b(?:loan|financing)\b[^.]*?\b(?:to|for)\s+([A-Z][A-Za-z0-9&'\.\- ]{2,45}?)(?:\s+(?:to|for|in|of|,|\u2014|-)|$)/);
+        if (mTo) name = mTo[1].trim();
+        if (!name) {
+          const mSubj = title.match(/^([A-Z][A-Za-z0-9&'\.\- ]{2,45}?)\s+(?:secures|receives|lands|obtains|closes on|gets|announces)\b[^.]*?\bSBA\b/i);
+          if (mSubj) name = mSubj[1].trim();
+        }
+        if (!name) return;
+
+        // Clean trailing amount/junk and normalize
+        name = name.replace(/\$[\d,\.]+[MKB]?/gi, '').replace(/\s{2,}/g, ' ').replace(/[,\-\u2014]+$/, '').trim();
+        if (name.length < 3 || name.length > 45) return;
+        // Never return the lender itself
+        if (LENDER_HINT.test(name)) return;
+        // Dedup
+        const key = name.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        // Try to pull the loan amount for context (optional)
+        const amtMatch = title.match(/\$[\d,\.]+\s*(?:million|[MKB])?/i);
+        results.push({
+          name,
+          source: 'sba_loan',
+          signals: { sba_funded: true, needs_revenue_growth: true },
+          jobTitle: `Just secured an SBA loan${amtMatch ? ` (${amtMatch[0]})` : ''} \u2014 growth capital allocated, 60-90 day window`,
+          signalFreshness: 'hot',
+          signalAgeDays: 14,
+        });
+      });
+    } catch (e) { console.log('SBA query failed:', e.message); }
+  }
+  console.log(`SBA loans: ${results.length} borrower businesses found`);
+  return results.slice(0, 25);
+};
+
 const searchSECEdgar = async () => {
   try {
     const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
@@ -3278,6 +3348,7 @@ const SIGNAL_TIERS = {
   // price of that one junior hire. We were completely blind to this until now.
   hiring_marketing:     { weight: 34, halfLife: 21, tier: 1, label: 'Hiring a marketing person — budget allocated, direction NOT chosen. The retainer pitch writes itself.' },
 
+  sba_funded:           { weight: 34, halfLife: 75, tier: 1, label: 'Just took an SBA loan — growth capital allocated at a MAIN-STREET SMB. Highest-ICP funding signal there is.' },
   perfect_icp_fit:      { weight: 20, halfLife: 21, tier: 1, label: 'Exact ICP match — found in their own industry, not by accident' },
   ai_replacement_heavy: { weight: 38, halfLife: 21, tier: 1, label: 'Drowning in manual labor — multiple roles across multiple functions' },
   ai_replacement_multi: { weight: 30, halfLife: 21, tier: 1, label: 'Hiring several manual roles — the owner is buried in ops' },
@@ -3467,11 +3538,18 @@ const scoreReachability = (c) => {
     else if (e <= 350) { score += 7;  reasons.push(`${e} employees — the founder is getting insulated`); }
     else if (e <= 500) { score += 3;  reasons.push(`${e} employees — mid-market, owner rarely reads cold email`); }
     // >500 is hard-blocked upstream and never reaches here.
+  } else if (c.sizeUnverified) {
+    // We ACTIVELY CHECKED and couldn't confirm size. This is NOT proof of small —
+    // it could be a national brand whose headcount just didn't resolve this run
+    // (this is exactly how US Foods / AECOM looked "reachable"). Give almost no
+    // reachability credit and say so honestly. Never claim it's small.
+    score += 3;
+    reasons.push('⚠ Size could not be verified — do NOT assume reachable until confirmed at Research');
   } else {
-    // NO DATA = almost certainly a small business (they're in no database).
-    // This is the "absence is the signal" principle that protects real SMBs.
-    score += 12;
-    reasons.push('Not in any company database — almost certainly a small owner-run business');
+    // Size was never checked at all (outside the enrichment window). Neutral,
+    // small cautious credit, honest label — no confident "small business" claim.
+    score += 6;
+    reasons.push('Size unchecked — verify headcount before pitching');
   }
 
   // ══ 2. DECISION-MAKER × SIZE FIT (0-30) — who we can actually reach ══
@@ -3636,12 +3714,15 @@ app.post('/api/discover', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════
     // EVERY SIGNAL SOURCE — each one catches a different buying window
     // ═══════════════════════════════════════════════════════════════════════
-    const [adzunaRes, secRes, newsRes, forSaleRes, ventingRes, fbAdsRes] = await Promise.allSettled([
+    const [adzunaRes, secRes, newsRes, forSaleRes, ventingRes, fbAdsRes, sbaRes] = await Promise.allSettled([
       // THE TWO HIRING WINDOWS — ops roles (build) and marketing roles (retainer)
       searchAdzuna(adzunaId, adzunaKey, req.body.location),
 
       // JUST RAISED — capital allocated, board pressure, pre-CMO, founder still owns GTM
       searchSECEdgar(),
+
+      // SBA LOANS — main-street growth capital, best-ICP funding signal
+      searchSBALoans(),
 
       // TRIGGER EVENTS — expansion, new location, agency fired, new sales leader
       scrapeGoogleNews(),
@@ -3675,6 +3756,7 @@ app.post('/api/discover', async (req, res) => {
     const allCompanies = [
       ...(adzunaRes.value || []),
       ...(secRes.value || []),
+      ...(sbaRes.value || []),
       ...(newsRes.value || []),
       ...(forSaleRes.value || []),
       ...(venting.leads || []),
@@ -3849,6 +3931,7 @@ const WEIGHTS = {
       hiring_marketing: 30,
       salary_high: 20,
       raised_funding: 25,
+      sba_funded: 34,
       running_fb_ads: 30,       // confirmed budget + digital presence
       stale_ads: 15,            // running same ads 90+ days = frustrated
       // Exit prep — owner motivated to grow revenue fast
@@ -3885,15 +3968,18 @@ const WEIGHTS = {
       sc += Math.min((c.manualRoleCount || 0) * 3, 15);
       return sc;
     };
-    const toEnrich = icpFiltered
+    // WIDENED SIZE GATE: simplified=true CompaniesAPI calls are FREE, so there's no
+    // reason to only size the top 40. Size-gate the top 90 — enough to cover the
+    // whole realistic queue — so enterprises get caught instead of waved through
+    // with a "probably small" default. Credit is still only spent on the top 16.
+    const preScored = icpFiltered
       .map(c => ({ c, _pre: preScore(c) }))
-      .sort((a,b) => b._pre - a._pre)
-      .slice(0, 40)
-      .map(x => x.c);
+      .sort((a,b) => b._pre - a._pre);
+    const toEnrich = preScored.slice(0, 90).map(x => x.c);
     const enrichResults = new Map();
-    console.log(`Size enrichment: checking top ${toEnrich.length} leads...`);
+    console.log(`Size enrichment: checking top ${toEnrich.length} of ${icpFiltered.length} leads (free simplified calls)...`);
 
-    const SIZE_BATCH = 4;
+    const SIZE_BATCH = 6;
     // Combined size lookup: CompaniesAPI (if key + domain) → Wikipedia fallback
     const lookupSize = async (c, allowCredit) => {
       // ── Source 1: The Companies API (exact headcount when available) ──
@@ -3933,7 +4019,7 @@ const WEIGHTS = {
     for (let i = 0; i < toEnrich.length; i += SIZE_BATCH) {
       const batch = toEnrich.slice(i, i + SIZE_BATCH);
       // Spend a credit for real headcount only on the top 15 by pre-score
-      const results = await Promise.allSettled(batch.map((c) => lookupSize(c, i < 16)));
+      const results = await Promise.allSettled(batch.map((c) => lookupSize(c, i < 18)));
       batch.forEach((c, idx) => {
         const r = results[idx];
         if (r.status === 'fulfilled' && r.value) {
@@ -4006,7 +4092,23 @@ const WEIGHTS = {
     // block anything showing clear enterprise markers (that wastes research).
     // Decision uses independent signals; verified headcount wins when present,
     // otherwise we combine name-pattern + public-company + no-data-is-SMB logic.
-    const ENTERPRISE_NAME = /\b(health system|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|state of|department of|social security|national health|regional medical|memorial hospital|health plan)\b/i;
+    const ENTERPRISE_NAME = /\b(health system|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|state of|department of|social security|national health|regional medical|memorial hospital|health plan|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|medical centers|healthcare allied|home depot|rentals inc|national|worldwide|enterprises inc|holdings inc|construction company|automotive group|dealer group|supermarkets|grocery|distribution center|fulfillment center)\b/i;
+    // KNOWN NATIONAL BRANDS that keep slipping through with no size data. These are
+    // household-name enterprises Adzuna surfaces constantly. A hard name-block is the
+    // only reliable stop when their headcount isn't in the free API tier.
+    const NATIONAL_BRANDS = new Set([
+      'us foods','united rentals','aecom','ryder','ryder system','u-haul','uhaul','carvana',
+      'albertsons','medtronic','abbott','penn medicine','bmw','bmw dealer careers','amentum',
+      'system one','tic','tic - the industrial company','cdm smith','david weekley homes',
+      'f.h. paschen','fh paschen','garney construction','faulconer construction','unifirst',
+      'unifirst corporation','rain for rent','cushman & wakefield','cushman wakefield',
+      'national automotive training academy','amn healthcare','amn healthcare allied',
+      'asset living','real property management','roers companies','lincoln property',
+      'greystar','cbre','jll','jones lang lasalle','colliers','marcus & millichap',
+      'us xpress','u.s. xpress','us xpress - dedicated','mtc','glc on-the-go','glc on the go',
+      'ace handyman services','ace handyman','capital one','abbott','solaris healthcare',
+      'legacy professional services','trc','trc companies','mri network','mrinetwork',
+    ]);
 
     let blockedCount = 0, blockReasons = {};
     const sizeGated = icpFiltered.filter(c => {
@@ -4038,21 +4140,33 @@ const WEIGHTS = {
       }
 
       // ── SIGNAL 2: No verified headcount — use cautious heuristics ───────
-      // 2a. Enterprise name patterns (health systems, gov, airlines, etc.)
+      // 2a. KNOWN NATIONAL BRANDS — hard block by name (no size data needed)
+      const nm = nameLower.replace(/^the\s+/, '').trim();
+      if (NATIONAL_BRANDS.has(nameLower) || NATIONAL_BRANDS.has(nm)) {
+        console.log(`BLOCKED [${c.name}]: known national brand`);
+        blockedCount++; blockReasons.nationalBrand = (blockReasons.nationalBrand||0)+1;
+        return false;
+      }
+
+      // 2b. Enterprise name patterns (health systems, logistics, gov, dealers, etc.)
       if (ENTERPRISE_NAME.test(nameLower)) {
         console.log(`BLOCKED [${c.name}]: enterprise name pattern`);
         blockedCount++; blockReasons.namePattern = (blockReasons.namePattern||0)+1;
         return false;
       }
 
-      // 2b. Very long multi-word names are usually enterprises/institutions
+      // 2c. Very long multi-word names are usually enterprises/institutions
       if ((c.name || '').length > 45) {
         c.sizeWarning = 'Long name — possible enterprise, verify';
       }
 
-      // 2c. No data at all + short simple name = almost certainly an SMB.
-      // This is the KEY insight: absence from all databases IS the SMB signal.
-      // We KEEP these — blocking them would lose real customers.
+      // 2d. No size data. OLD behavior trusted these as "probably SMB" and let them
+      // sit at full score — which is exactly how US Foods / AECOM reached the queue.
+      // NEW: keep them (absence CAN mean SMB) but FLAG them unverified so the score
+      // caps them below any size-verified lead. An unverified lead must never outrank
+      // a confirmed small business.
+      c.sizeUnverified = true;
+      c.sizeWarning = c.sizeWarning || 'Size not verified — confirm before pitching';
       return true;
     });
 
@@ -4284,9 +4398,21 @@ const WEIGHTS = {
         // intent spread entirely. So when fit is unverified, weight toward intent
         // (70/30) so a company drowning in 8 roles outranks one hiring 1.
         const hasRealFit = !!c.verifiedEmployees;
-        const blended = hasRealFit
+        let blended = hasRealFit
           ? Math.sqrt(Math.max(fit, 1) * Math.max(intentScore, 1))
           : (intentScore * 0.7 + fit * 0.3);
+        // UNVERIFIED-SIZE PENALTY: a lead whose size we couldn't confirm might be a
+        // hidden enterprise (US Foods, AECOM slip in this way). Cap it below any
+        // size-verified SMB so the trustworthy leads always sort to the top. A
+        // confirmed 30-person company must outrank an unknown-size national brand.
+        if (c.sizeUnverified && !c.verifiedEmployees) {
+          blended = Math.min(blended * 0.72, 70);
+        }
+        // CONFIRMED-SMB BONUS: verified ≤200 employees is the single best predictor
+        // in the data. Reward it so real ICP fits rise decisively above the noise.
+        if (c.verifiedEmployees && c.verifiedEmployees <= 200) {
+          blended = Math.min(blended * 1.12, 100);
+        }
 
         const icpScore = reach.hardBlock
           ? Math.min(Math.round(blended), 20)
