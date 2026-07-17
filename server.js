@@ -1325,24 +1325,41 @@ const searchTheirStack = async (theirstackKey) => {
 // ~40 calls — ~100+ runs/month stay free. Request format verified against
 // Google's official Text Search (New) docs.
 const GP_CATEGORIES = [
+  // Reliably $500k-$15M, founder-led. Dropped the often-solo/sub-$500k types
+  // (cleaning, catering, appliance repair) — category is a weak revenue proxy, so
+  // the review floor + Research's size verification are the real revenue gates.
   { q: 'HVAC contractor', label: 'HVAC' }, { q: 'roofing company', label: 'Roofing' },
-  { q: 'plumbing company', label: 'Plumbing' }, { q: 'electrician company', label: 'Electrical' },
-  { q: 'landscaping company', label: 'Landscaping' }, { q: 'auto repair shop', label: 'Auto Repair' },
+  { q: 'plumbing company', label: 'Plumbing' }, { q: 'electrical contractor', label: 'Electrical' },
+  { q: 'commercial landscaping company', label: 'Landscaping' }, { q: 'auto repair shop', label: 'Auto Repair' },
   { q: 'dental practice', label: 'Dental' }, { q: 'med spa', label: 'Med Spa' },
   { q: 'pest control company', label: 'Pest Control' }, { q: 'general contractor', label: 'Construction' },
   { q: 'flooring company', label: 'Flooring' }, { q: 'garage door company', label: 'Garage Doors' },
+  { q: 'pool construction company', label: 'Pool Construction' }, { q: 'tree service company', label: 'Tree Service' },
+  { q: 'fencing contractor', label: 'Fencing' }, { q: 'painting contractor', label: 'Painting' },
+  { q: 'physical therapy clinic', label: 'Physical Therapy' }, { q: 'veterinary hospital', label: 'Veterinary' },
+  { q: 'concrete contractor', label: 'Concrete' }, { q: 'water damage restoration company', label: 'Restoration' },
+  { q: 'solar installation company', label: 'Solar' }, { q: 'kitchen remodeling company', label: 'Remodeling' },
+  { q: 'commercial cleaning company', label: 'Commercial Cleaning' }, { q: 'paving contractor', label: 'Paving' },
+  { q: 'electrician company', label: 'Electrical' }, { q: 'moving company', label: 'Moving' },
 ];
-const GP_CITIES = ['Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX'];
+const GP_CITIES = [
+  'Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX',
+  'Kansas City MO','Indianapolis IN','Jacksonville FL','San Antonio TX','Raleigh NC','Salt Lake City UT',
+  'Oklahoma City OK','Louisville KY','Cincinnati OH','Richmond VA','Boise ID','Greenville SC',
+];
+// National franchises / DSOs / chains — the local operator does NOT own the marketing,
+// so they are not our ICP no matter how reachable the branch is.
+const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry)\b/i;
 const searchGooglePlaces = async (placesKey) => {
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
   const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber';
   const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
-  const RUN_CAP = parseInt(process.env.GP_QUERY_CAP || '40', 10);
+  const RUN_CAP = parseInt(process.env.GP_QUERY_CAP || '100', 10);
   const grid = [];
   for (const cat of GP_CATEGORIES) for (const city of GP_CITIES) grid.push({ cat, city });
   grid.sort(() => Math.random() - 0.5);                          // rotate coverage each run
   const out = [], seen = new Set();
-  let calls = 0;
+  let calls = 0, skippedFranchise = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     try {
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
@@ -1352,28 +1369,33 @@ const searchGooglePlaces = async (placesKey) => {
       }, 12000);
       calls++;
       const d = await r.json();
-      if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing/i.test(JSON.stringify(d.error))) break; continue; }
+      if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) break; continue; }
       for (const p of (d.places || [])) {
         const name = (p.displayName?.text || '').trim();
         const website = p.websiteUri || '';
         const reviews = p.userRatingCount || 0;
+        const rating = p.rating || null;
         if (!name || !website) continue;                          // must have a site to Research
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
         if (reviews < MIN_REVIEWS) continue;                      // established business only
+        if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
         const domainKey = website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
         if (seen.has(domainKey)) continue; seen.add(domainKey);
+        // A LOW review count at an established local business = they are NOT actively
+        // managing their online presence = a marketing gap we can open the pitch on.
+        const marketingGap = reviews >= MIN_REVIEWS && reviews < 60;
         out.push({
           name, website, location: p.formattedAddress || '',
           source: 'google_places', icpProfile: 'local_owner_operated',
-          industry: cat.label, reviewCount: reviews, rating: p.rating || null,
+          industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
-          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${p.rating ? `, ${p.rating}\u2605` : ''}. Owner-operated, high reachability.`,
-          signals: { local_owner_operated: true },
+          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. Owner-operated, high reachability.${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
+          signals: { local_owner_operated: true, ...(marketingGap ? { under_marketed: true } : {}) },
         });
       }
     } catch(e) { /* fail-safe per query */ }
   }
-  console.log(`Google Places: ${out.length} local owner-operated businesses from ${calls} queries`);
+  console.log(`Google Places: ${out.length} local owner-operated businesses from ${calls} queries (${skippedFranchise} franchises skipped)`);
   return out;
 };
 
@@ -4175,6 +4197,9 @@ app.get('/api/cron/discover', async (req, res) => {
 app.post('/api/discover', async (req, res) => {
   const { keywords, keys, apiKey } = req.body;
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
+  // Google Places key comes from Render env vars (not the frontend), so it stays
+  // server-side and can't leak. Set GOOGLE_PLACES_KEY in Render's environment tab.
+  const placesKey = process.env.GOOGLE_PLACES_KEY || '';
 
   console.log('\n=== DISCOVERY START ===');
   console.log('Keywords:', keywords);
@@ -4668,7 +4693,7 @@ const WEIGHTS = {
       // ── STAFFING / RECRUITING — never our ICP. Block by verified industry
       //    (Companies API tags these 'staffing-and-recruiting') OR by name. ──
       if (/staffing|recruit/i.test(c.verifiedIndustry || '') ||
-          (/\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services)|technical resources)\b|staff\b|\b(mrinetwork|mri network|teema|peopleshare|aerotek|adecco|randstad|kforce|robert half|insight global|beacon hill|roth staffing|ledgent|apex systems|cybercoders|teksystems|aptask)\b/i).test(c.name || '')) {
+          (/\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services)|technical resources)\b|staff\b|\b(mrinetwork|mri network|teema|peopleshare|aerotek|adecco|randstad|kforce|robert half|insight global|beacon hill|roth staffing|ledgent|apex systems|cybercoders|teksystems|aptask|amerit|actalent|tradesmen international|system one|magnit|allegis|populus group|tandym|beeline|cross country|maximus|integrated resources|artech|collabera|mastech)\b/i).test(c.name || '')) {
         console.log(`BLOCKED [${c.name}]: staffing/recruiting firm`);
         blockedCount++; blockReasons.staffing = (blockReasons.staffing||0)+1;
         return false;
@@ -5841,6 +5866,32 @@ app.post('/api/research', async (req, res) => {
       console.log(`MONEY ON FIRE [${company}]: ${moneyOnFire.count} leaks (${moneyOnFire.criticalCount} critical)${moneyOnFire.isBurning ? ' — BURNING' : ''}`);
       moneyOnFire.fires.forEach(f => console.log(`  · [${f.severity}] ${f.fire}`));
     }
+
+    // ═══ AUDIT-DRIVEN PRODUCT ELIGIBILITY ═══════════════════════════════════
+    // The brain may ONLY recommend from this list, computed from what the audit
+    // actually found. This is what stops the over-default to AI software: a
+    // product is only eligible if its triggering signal is present. Marketing and
+    // website are the defaults; software/AI Brain must be EARNED by a real signal.
+    const _psig = req.body.discoverySignals || {};
+    const _staleSite = builtWith.copyrightYear && builtWith.copyrightYear < 2021;
+    const _weakSite = !hasCTA || _staleSite || (visualAnalysis && (visualAnalysis.heroIsBlank || /dated/i.test(visualAnalysis.designObservation || '') || visualAnalysis.overallConversionReadiness === 'weak'));
+    const _hasAds = (fbAds.adCount || 0) > 0 || !!builtWith.hasGoogleAdsTag;
+    const _underMarketed = !!_psig.under_marketed || !!_psig.local_owner_operated || req.body.discoverySource === 'google_places';
+    const _realOpsSignal = (manualRoleCount || 0) >= 2;
+    const _exitSignal = !!_psig.preparing_for_exit || req.body.discoverySource === 'for_sale';
+    const _noSystems = builtWith.hasCRM === false && (!!_psig.raised_funding || !!_psig.sba_funded);
+    const _eligible = [];
+    if (_weakSite) _eligible.push(`Website Rebuild ($10k-$25k)${_hasAds ? ' and/or Landing Page ($5k-$15k)' : ''}`);
+    if (_hasAds || _underMarketed) _eligible.push('End-to-End Marketing / Ads Management ($8k-$35k/mo) or Revenue Growth / CRO Retainer ($8k-$35k/mo)');
+    if (_realOpsSignal) _eligible.push('Custom AI Software Build ($25k-$75k+) — a CONFIRMED ops-hiring signal exists for this lead');
+    if (_noSystems) _eligible.push('AI Brain ($40k-$70k) — funded with no marketing/CRM infrastructure detected');
+    if (_exitSignal) _eligible.push('Exit / Valuation Advisory — they are preparing to sell');
+    if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
+    const eligibleProductsGuidance = `═══ ELIGIBLE PRODUCTS — recommend ONLY from this audit-derived list ═══
+Based on THIS company's CONFIRMED audit signals, the only products you may recommend are:
+${_eligible.map((e, i) => `  ${i + 1}. ${e}`).join('\n')}
+Your recommendedProduct and every item in topThreeProducts MUST come from this list. If a product is not listed, its triggering signal was NOT found — do NOT recommend it.${_realOpsSignal ? '' : '\n⚠ There is NO confirmed manual-labor signal, so Custom AI Software Build is NOT eligible. Do not recommend it under any framing.'}`;
+
         msgContent.push({
           type: 'text',
           text: `You are CROJungle's senior marketing auditor. Your job is to find the single most expensive problem in this business's digital presence and recommend the right CROJungle product to fix it.
@@ -5885,10 +5936,15 @@ They have ALREADY DECIDED to spend money on marketing. The budget is allocated (
 THE PITCH: "You're about to hire one junior marketer for $70k. For that money you can have a senior team — strategy, ads, creative, and the technology behind it — that has already done this." A single junior hire cannot run strategy, build the funnel, produce creative, AND manage spend. A team can.
 This maps to the CEO's ICP #3 and #4 — CROJungle's CORE PRODUCT. Do NOT pitch a software build here unless the audit turns up an overwhelming ops problem.
 The strongest proof point here is Sean ($140k on $4k in one month, ~30x over 8 months) — it is exactly the "one marketing hire vs. a team" comparison, in dollars.`
-: `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
+: (manualRoleCount >= 2) ? `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
 They have already identified the problem and allocated the budget (~$55k/yr per role). They have started a hiring process but have NOT yet committed.
 THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $25k-$75k custom build.
-The strongest proof point is the seasonal business (relief + profit) for an owner-operator, or Kraft Heinz if they are larger and more technical.`}
+The strongest proof point is the seasonal business (relief + profit) for an owner-operator, or Kraft Heinz if they are larger and more technical.`
+: `🔎 AUDIT-DRIVEN WINDOW — there is NO confirmed hiring signal for this lead${req.body.discoverySource === 'google_places' ? ' (it is a local owner-operated business found via Google Places)' : ''}.
+CRITICAL: Do NOT default to a software/AI build. This lead did not post ops roles, so there is NO evidence they are drowning in manual labor. Pitch ONLY what the SITE AND AD AUDIT actually reveal. For a local owner-operated business the answer is almost always one of two things:
+  1) WEBSITE REBUILD / LANDING PAGE — if the site is dated, has no clear CTA, weak positioning, or looks like it predates 2021.
+  2) END-TO-END MARKETING / ADS RETAINER — if they are running ads, have a thin/under-managed online presence, or are clearly under-marketed for their size.
+Recommend AI Software or AI Brain ONLY if the audit surfaces a genuine, confirmed operational or systems gap — never as a default. Lead with the single sharpest confirmed problem from the audit.`}
 
 ICP LANE (secondary context — which profile they match and which proof point parallels their situation):
 ${icpLane.summary}
@@ -5997,18 +6053,20 @@ VOICE RULES:
 - Name the fire they are stuck putting out. That is the line that gets the reply.
 - No flattery, no "I hope this finds you well," no fake personalization. The proof-of-work IS the personalization.
 
+${eligibleProductsGuidance}
+
 CROJungle offerings (full-service — can combine):
 - Website Rebuild ($10k-$25k): homepage conversion failures, weak positioning, no CTA
 - Landing Page ($5k-$15k): running ads to homepage, no dedicated conversion page
 - End-to-End Marketing / Ads Management ($8k-$35k/month): running ads but leaking revenue, needs full-funnel ownership
 - AI Brain ($40k-$70k): no marketing intelligence layer, disconnected systems, no automation
-- Custom AI Software Build ($25k-$75k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — often the biggest ticket
+- Custom AI Software Build ($25k-$75k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — recommend ONLY when there is a CONFIRMED manual-labor signal (multiple ops job postings). Never default to it.
 - Revenue Growth / CRO Retainer ($8k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
 - Exit / Valuation Advisory (via Wall Street-backed partner): for companies preparing to sell — increase revenue AND advise on valuation/M&A. Nobody else offers this combination.
 
 DOLLAR-FIGURE RULE: job posting counts are FACTS; salary totals derived from them are ESTIMATES. Any labor-cost dollar figure MUST be framed as an estimate ("est.", "roughly") and must show its basis. Never present a derived number as a measured one.
 
-Prioritize by dollar impact: a confirmed manual-labor signal (AI software, $25k-$75k) or exit-prep company usually outweighs a homepage CTA fix. Only recommend what the evidence supports — never fabricate.
+Prioritize by CONFIRMED dollar impact, driven by what the AUDIT actually found — not by ticket size. Do NOT inflate to a bigger-ticket product (AI Software or AI Brain) without a confirmed signal for it: a Website Rebuild or Marketing Retainer they genuinely need beats an AI build they don't. The right recommendation is whatever the audit proves is bleeding the most money — usually that is marketing/website work, sometimes software, occasionally exit advisory. Only recommend what the evidence supports — never fabricate, never default.
 
 Return ONLY valid JSON, no markdown:
 {
