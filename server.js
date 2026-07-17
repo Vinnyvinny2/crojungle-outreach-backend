@@ -1325,22 +1325,62 @@ const searchTheirStack = async (theirstackKey) => {
 // ~40 calls — ~100+ runs/month stay free. Request format verified against
 // Google's official Text Search (New) docs.
 const GP_CATEGORIES = [
-  // Reliably $500k-$15M, founder-led. Dropped the often-solo/sub-$500k types
-  // (cleaning, catering, appliance repair) — category is a weak revenue proxy, so
-  // the review floor + Research's size verification are the real revenue gates.
+  // ── HIGH-TICKET CREW TRADES — a single job is $5k-$15k+, so any ESTABLISHED
+  //    one is already crewed and past the ~$800k affordability bar. Best fit. ──
   { q: 'HVAC contractor', label: 'HVAC' }, { q: 'roofing company', label: 'Roofing' },
-  { q: 'plumbing company', label: 'Plumbing' }, { q: 'electrical contractor', label: 'Electrical' },
-  { q: 'commercial landscaping company', label: 'Landscaping' }, { q: 'auto repair shop', label: 'Auto Repair' },
-  { q: 'dental practice', label: 'Dental' }, { q: 'med spa', label: 'Med Spa' },
-  { q: 'pest control company', label: 'Pest Control' }, { q: 'general contractor', label: 'Construction' },
-  { q: 'flooring company', label: 'Flooring' }, { q: 'garage door company', label: 'Garage Doors' },
-  { q: 'pool construction company', label: 'Pool Construction' }, { q: 'tree service company', label: 'Tree Service' },
-  { q: 'fencing contractor', label: 'Fencing' }, { q: 'painting contractor', label: 'Painting' },
-  { q: 'physical therapy clinic', label: 'Physical Therapy' }, { q: 'veterinary hospital', label: 'Veterinary' },
-  { q: 'concrete contractor', label: 'Concrete' }, { q: 'water damage restoration company', label: 'Restoration' },
-  { q: 'solar installation company', label: 'Solar' }, { q: 'kitchen remodeling company', label: 'Remodeling' },
-  { q: 'commercial cleaning company', label: 'Commercial Cleaning' }, { q: 'paving contractor', label: 'Paving' },
-  { q: 'electrician company', label: 'Electrical' }, { q: 'moving company', label: 'Moving' },
+  { q: 'water damage restoration company', label: 'Restoration' },
+  { q: 'foundation repair company', label: 'Foundation' },
+  { q: 'solar installation company', label: 'Solar' },
+  { q: 'kitchen remodeling company', label: 'Kitchen Remodel' },
+  { q: 'bathroom remodeling company', label: 'Bath Remodel' },
+  { q: 'window and door replacement company', label: 'Windows & Doors' },
+  { q: 'paving contractor', label: 'Paving' }, { q: 'concrete contractor', label: 'Concrete' },
+  { q: 'pool construction company', label: 'Pool Construction' },
+  { q: 'custom home builder', label: 'Home Builder' },
+  { q: 'general contractor', label: 'Construction' },
+  { q: 'fire protection sprinkler company', label: 'Fire Protection' },
+  { q: 'excavation and grading contractor', label: 'Excavation' },
+  { q: 'masonry contractor', label: 'Masonry' },
+  { q: 'hardscaping and landscape design company', label: 'Hardscaping' },
+  { q: 'commercial landscaping company', label: 'Landscaping' },
+  { q: 'tree service company', label: 'Tree Service' },
+  { q: 'insulation and spray foam company', label: 'Insulation' },
+  { q: 'electrical contractor', label: 'Electrical' },
+  { q: 'plumbing company', label: 'Plumbing' },
+  { q: 'flooring company', label: 'Flooring' },
+  { q: 'garage door company', label: 'Garage Doors' },
+  { q: 'deck and patio builder', label: 'Decks' },
+  { q: 'sign and signage company', label: 'Signage' },
+  { q: 'well drilling and septic company', label: 'Well & Septic' },
+  // ── RECURRING-REVENUE SERVICES — predictable cash flow, marketing-driven ──
+  { q: 'pest control company', label: 'Pest Control' },
+  { q: 'lawn care and treatment company', label: 'Lawn Care' },
+  // ── HIGH-REVENUE PRACTICES — marketing-hungry, owner-operated. NOTE: dental /
+  //    dermatology / vet are being PE/DSO-consolidated, so Research must confirm
+  //    the owner is still the buyer (not a group). Kept because the winners here
+  //    are exactly our ICP. ──
+  { q: 'med spa', label: 'Med Spa' },
+  { q: 'plastic surgery practice', label: 'Plastic Surgery' },
+  { q: 'dermatology practice', label: 'Dermatology', ownerRisk: true },
+  { q: 'orthodontist office', label: 'Orthodontics', ownerRisk: true },
+  { q: 'oral surgery practice', label: 'Oral Surgery', ownerRisk: true },
+  { q: 'cosmetic dentistry practice', label: 'Cosmetic Dentistry', ownerRisk: true },
+  { q: 'fertility clinic', label: 'Fertility', ownerRisk: true },
+  { q: 'LASIK eye center', label: 'LASIK', ownerRisk: true },
+  { q: 'chiropractic clinic', label: 'Chiropractic' },
+  { q: 'physical therapy clinic', label: 'Physical Therapy' },
+  { q: 'veterinary hospital', label: 'Veterinary', ownerRisk: true },
+  { q: 'dental practice', label: 'Dental', ownerRisk: true },
+  // ── PROFESSIONAL SERVICES — high revenue, owner-operated, spend heavily on
+  //    marketing, low consolidation. Excellent fit and net-new coverage. ──
+  { q: 'personal injury law firm', label: 'PI Law' },
+  { q: 'estate planning law firm', label: 'Estate Law' },
+  { q: 'accounting and CPA firm', label: 'Accounting' },
+  { q: 'independent insurance agency', label: 'Insurance' },
+  { q: 'assisted living facility', label: 'Senior Care' },
+  // Dropped vs. prior list: fencing, painting, commercial cleaning, moving,
+  // auto repair — low ticket, most stay solo/sub-$800k. The review-count revenue
+  // proxy would bury them anyway; not worth spending queries on them.
 ];
 const GP_CITIES = [
   'Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX',
@@ -1389,8 +1429,8 @@ const searchGooglePlaces = async (placesKey) => {
           source: 'google_places', icpProfile: 'local_owner_operated',
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
-          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. Owner-operated, high reachability.${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
-          signals: { local_owner_operated: true, ...(marketingGap ? { under_marketed: true } : {}) },
+          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \\u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
+          signals: { local_owner_operated: true, ...(cat.ownerRisk ? { consolidation_risk: true } : {}), ...(marketingGap ? { under_marketed: true } : {}) },
         });
       }
     } catch(e) { /* fail-safe per query */ }
@@ -3936,7 +3976,13 @@ const scoreReachability = (c) => {
     else                { score += 14; reasons.push('Owner is personally listing the business — maximally motivated AND directly reachable'); }
   }
   if (sig.founder_venting || sig.social_pain_signal) { score += 10; reasons.push('Founder publicly venting — personally in the weeds and clearly reachable'); }
-  if (sig.local_owner_operated) { score += 12; reasons.push('Local owner-operated business — the owner runs the shop and reads their own email (highest-reachability segment)'); }
+  if (sig.local_owner_operated) {
+    if (sig.consolidation_risk) {
+      score += 4; reasons.push('Practice in a PE/DSO-consolidating field — confirm a real owner reads this inbox before pitching (a group-owned location has no reachable owner)');
+    } else {
+      score += 12; reasons.push('Local owner-operated business — the owner runs the shop and reads their own email (highest-reachability segment)');
+    }
+  }
   if (sig.ai_replacement_multi) {
     const roles = c.manualRoleCount || 0;
     if (roles >= 2 && roles <= 8) { score += 8; reasons.push(`Hiring ${roles} manual roles at SMB scale — the owner runs ops and there is no CMO`); }
@@ -5197,6 +5243,12 @@ const WEIGHTS = {
             else if (rv >= 25)              base += 10;  // solid, likely clears the affordability bar
             else if (rv > 500)              base += 7;   // large — keep but Research confirms it's still owner-reachable
             else                            base += 2;   // thin reviews — likely a sub-$800k solo, deprioritize
+            // CONSOLIDATION RISK: dental/derm/vet/etc. are being PE/DSO-rolled-up.
+            // If it's group-owned there is NO owner who feels the pain and reads
+            // cold email — which is our whole thesis. Dock it so reliably owner-
+            // operated leads (trades, pro services) rank above it; Research then
+            // confirms whether a real owner exists before it can be approved.
+            if (c.signals?.consolidation_risk) base -= 12;
           }
           // GOLDEN TICKET: multiple RELEVANT AI-replaceable roles at a verified-
           // small co. Keys off the ai_replacement flags (which only fire on our
@@ -6066,15 +6118,24 @@ app.post('/api/research', async (req, res) => {
     const _weakSite = !hasCTA || _staleSite || (visualAnalysis && (visualAnalysis.heroIsBlank || /dated/i.test(visualAnalysis.designObservation || '') || visualAnalysis.overallConversionReadiness === 'weak'));
     const _hasAds = (fbAds.adCount || 0) > 0 || !!builtWith.hasGoogleAdsTag;
     const _underMarketed = !!_psig.under_marketed || !!_psig.local_owner_operated || req.body.discoverySource === 'google_places';
-    const _realOpsSignal = (manualRoleCount || 0) >= 2;
+    const _mktgHire = !!_psig.hiring_marketing;
+    // Ops-hiring (→ AI software build) requires ACTUAL manual/ops roles — the
+    // ai_replacement flags fire only on our curated ops searches (dispatcher,
+    // scheduler, CS rep, data entry, bookkeeper). A marketing coordinator or
+    // social media manager is a RETAINER problem, NOT something a software build
+    // replaces. This is the Eat Right Atlanta bug: 2 marketing roles wrongly
+    // triggered a $75k AI build pitch on an obvious retainer lead.
+    const _opsHire = !!_psig.ai_replacement_multi || !!_psig.ai_replacement_heavy || !!_psig.ai_replacement_signal;
+    const _realOpsSignal = _opsHire && !_mktgHire;
     const _exitSignal = !!_psig.preparing_for_exit || req.body.discoverySource === 'for_sale';
+    const _financialSignal = _exitSignal || !!_psig.raised_funding || !!_psig.sba_funded || req.body.discoverySource === 'sba_loan';
     const _noSystems = builtWith.hasCRM === false && (!!_psig.raised_funding || !!_psig.sba_funded);
     const _eligible = [];
     if (_weakSite) _eligible.push(`Website Rebuild ($10k-$25k)${_hasAds ? ' and/or Landing Page ($5k-$15k)' : ''}`);
-    if (_hasAds || _underMarketed) _eligible.push('End-to-End Marketing / Ads Management ($8k-$35k/mo) or Revenue Growth / CRO Retainer ($8k-$35k/mo)');
-    if (_realOpsSignal) _eligible.push('Custom AI Software Build ($25k-$75k+) — a CONFIRMED ops-hiring signal exists for this lead');
+    if (_hasAds || _underMarketed || _mktgHire) _eligible.push('End-to-End Marketing / Ads Management ($8k-$35k/mo) or Revenue Growth / CRO Retainer ($8k-$35k/mo)' + (_mktgHire ? ' — they are HIRING for marketing: budget allocated, direction not chosen. The retainer pitch writes itself; do NOT pitch a software build for marketing roles.' : ''));
+    if (_realOpsSignal) _eligible.push('Custom AI Software Build ($25k-$75k+) — a CONFIRMED ops/manual-labor hiring signal exists for this lead');
     if (_noSystems) _eligible.push('AI Brain ($40k-$70k) — funded with no marketing/CRM infrastructure detected');
-    if (_exitSignal) _eligible.push('Exit / Valuation Advisory — they are preparing to sell');
+    if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation');
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
     const eligibleProductsGuidance = `═══ ELIGIBLE PRODUCTS — recommend ONLY from this audit-derived list ═══
 Based on THIS company's CONFIRMED audit signals, the only products you may recommend are:
