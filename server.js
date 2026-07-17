@@ -5195,6 +5195,13 @@ app.post('/api/research', async (req, res) => {
     const companyCore = (company || '').toLowerCase().replace(/[^a-z0-9 ]/g,'').split(' ').filter(w=>w.length>3).slice(0,2);
     const pageMentionsCompany = companyCore.length === 0 || companyCore.some(w => lowerContent.includes(w));
     const scrapeTrustworthy = content.length > 300 && !scrapeLooksBroken && pageMentionsCompany;
+    // SITE UNREACHABLE — a genuine connection error / dead page, NOT bot-blocking.
+    // A1 Restoration returned "Connection Reset" (24 chars) and we then confidently
+    // pitched "your page shows a connection error" — auditing our own failed fetch.
+    // This may be transient or our-side, so we must NOT claim their site is broken.
+    const siteUnreachable = /connection reset|can'?t be reached|took too long|refused to connect|err_|dns_probe|502 bad gateway|503 service|504 gateway|temporarily unavailable|account suspended|domain (is )?(for sale|parked)/i.test(lowerContent.slice(0,600))
+      || (content.length > 0 && content.length < 60 && !scrapeTrustworthy);
+    if (siteUnreachable) console.log(`SITE UNREACHABLE [${company}]: page returned a connection/error state — auditing from signals only, NOT claiming their site is broken`);
     if (content.length > 50 && !scrapeTrustworthy) {
       console.log(`SCRAPE GUARD: content not trustworthy (broken:${scrapeLooksBroken}, mentionsCompany:${pageMentionsCompany}, len:${content.length}) — audit leans on discovery signals`);
     }
@@ -5244,7 +5251,7 @@ app.post('/api/research', async (req, res) => {
         const msgContent = [];
 
         let screenshotBase64 = null;
-        if (screenshotUrl) {
+        if (screenshotUrl && !siteUnreachable) {
           try {
             const imgRes = await fetchT(screenshotUrl, {}, 10000);
             const imgBuffer = await imgRes.buffer();
@@ -5533,7 +5540,7 @@ ADS:
 - Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
-${screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
+${siteUnreachable ? 'WARNING: The homepage could NOT be reached during our scan — it returned a connection/error state (e.g. "Connection Reset" or a timeout). This is very likely transient or on OUR side, NOT proof their site is down. DO NOT claim their website is broken, blank, or showing an error — that would be a fabrication. Do NOT audit the homepage at all. Audit ONLY from the discovery signals and tech-stack data, and note in the pitch angle that the site needs a manual look.' : screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
 
 ${stackCombo ? `STACKED SIGNAL COMBO — HIGHEST-CONFIDENCE LEAD TYPE:
 ${stackCombo.label} (Tier ${stackCombo.tier})
@@ -5896,7 +5903,7 @@ Return ONLY valid JSON:
   "correctedPitchAngle": "rewritten pitch using only confirmed evidence, 35 words max",
   "confidenceScore": 0-10,
   "critiqueNote": "one sentence summary of biggest accuracy risk in this audit",
-  "icpBlocker": "Flag this company as OUTSIDE our ICP (state the reason in one short phrase; otherwise empty string) if ANY of these are true: (a) revenue clearly above ~$15M or below ~$800k; (b) more than ~150 employees; (c) it is a holding company, portfolio/PE-owned rollup, or franchise system rather than a single founder-led operating business; (d) it is enterprise, government, a publicly-traded giant, a hospital/health system, or a staffing/recruiting firm; (e) the owner/founder is clearly NOT reachable — a C-suite layer (CMO, dedicated marketing dept) already sits between the owner and the marketing function. Our ICP is a FOUNDER-LED business, $800k-$15M revenue, where the OWNER still personally feels the marketing/revenue problem and can act on a cold email. If the decision-maker we found is not owner-level or not confirmed reachable, that is a blocker.",
+  "icpBlocker": "Flag this company OUTSIDE our ICP (one short phrase; otherwise empty string) ONLY on POSITIVE evidence — NEVER on missing or unknown data. Block only if the evidence clearly shows: (a) verified headcount over ~200 OR revenue clearly over ~$20M; (b) it is a holding company, PE/portfolio rollup, or a franchise SYSTEM (not a single local franchisee); (c) it is an enterprise, government body, publicly-traded giant, hospital/health system, or a staffing/recruiting firm; (d) a dedicated in-house marketing department or CMO clearly already exists. CRITICAL: DO NOT block for unverified or unknown headcount — most of our BEST leads are local owner-operated businesses we deliberately do not size, so 'size unknown' is EXPECTED and is NOT a disqualifier. DO NOT block on reachability — that is scored separately by the system. When in doubt, leave this EMPTY.",
   "estimatedEmployees": "your best estimate of employee count as a number if you can infer it from the evidence, otherwise null"
 }`;
 
