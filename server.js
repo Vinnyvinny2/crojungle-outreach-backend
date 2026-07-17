@@ -2584,7 +2584,21 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry) =
     const batches = await Promise.all(
       queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
     );
-    const hits = batches.flat().slice(0, 6);
+    // For a PRODUCT company, a "reviews/complaints" search surfaces rivals'
+    // "{company} alternatives" and "{X} vs {Y}" SEO pages — a competitor trashing
+    // the product, not the owner's operational fire (and nothing we can fix).
+    // This is exactly how the getjones.com "TrustLayer alternatives" page became
+    // TrustLayer's "fire". Drop competitor/comparison sources before the LLM.
+    const COMPETITOR_URL = /(alternativ|-vs-|\/vs\/|\bvs\b|compare|comparison|competitor|top-?\d+|best-?\d+|switch-from|-review-)/i;
+    const hits = batches.flat().filter(h => {
+      const u = String(h.url || '').toLowerCase();
+      const t = String(h.title || '').toLowerCase();
+      if (COMPETITOR_URL.test(u) || /alternativ|\bvs\.?\b|comparison|competitor/i.test(t)) {
+        console.log(`PAIN [${companyName}]: dropped competitor/comparison source — ${u.slice(0, 70)}`);
+        return false;
+      }
+      return true;
+    }).slice(0, 6);
     if (hits.length === 0) return { signals: [], summary: '' };
 
     const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.content}`).join('\n\n').slice(0, 18000);
@@ -2612,6 +2626,8 @@ CRITICAL RULES:
 - Verify the content is about THIS company, not a similarly-named one. If unsure, discard it.
 - Do NOT invent pain. Do NOT generalize from the industry. An empty result is CORRECT and expected when the evidence isn't there — a fabricated pain point would destroy the pitch's credibility instantly.
 - Ignore generic one-star rants with no operational detail ("bad service", "rude"). We want SPECIFIC, operational, fixable problems.
+- REJECT a COMPETITOR'S framing. A rival's "alternatives", "vs", or comparison page is marketing designed to make this company look bad — it is NOT the owner's reality. Discard it entirely.
+- REJECT criticism of the company's own PRODUCT quality (e.g. "their software/tool/OCR/algorithm is inaccurate", "the platform is buggy"). We fix how a business is MARKETED and RUN — not their product. A product complaint is not an operational fire we can address, so it is worthless to us here.
 
 Return ONLY valid JSON:
 {
@@ -3081,13 +3097,21 @@ const checkAdLibraryViaFirecrawl = async (company, fcKey) => {
     const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&search_type=keyword_search&q=${encodeURIComponent(company)}`;
     const md = await firecrawlScrape(fcKey, url, 30000);
     if (!md || md.length < 200) return { hasAds: false, adCount: 0, confirmed: false };
-    // "~340 results" header, or count Library ID occurrences as fallback
+    // CAUTION: this is a KEYWORD search (q=company), not a search by the
+    // advertiser's Page. The "results" header therefore counts every ad in the
+    // ENTIRE library matching the term — across ALL advertisers — and Facebook
+    // caps the display at "10,000+". A large or round number is NOT this
+    // company's ad count and must never be treated as fact (this is exactly how
+    // "TrustLayer → 10000 ads" happened). Trust only a small, specific header.
     const m = md.match(/~?\s*([\d,]+)\s+results/i);
-    const libIds = (md.match(/Library ID/gi) || []).length;
-    const adCount = m ? parseInt(m[1].replace(/,/g, ''), 10) : libIds;
+    const rawCount = m ? parseInt(m[1].replace(/,/g, ''), 10) : 0;
+    const libIds = (md.match(/Library ID/gi) || []).length; // ad cards rendered on page 1
+    const ceilingOrNoise = rawCount >= 500;                 // 10,000+ ceiling / cross-advertiser noise
+    const adCount = ceilingOrNoise ? Math.min(libIds, 30) : (rawCount || Math.min(libIds, 30));
+    const countReliable = !ceilingOrNoise;                  // false ⇒ downstream must not cite a number
     const hasAds = adCount > 0;
-    console.log(`Ad Library (Firecrawl): ${company} → ${adCount} ads`);
-    return { hasAds, adCount, confirmed: true, source: 'ad_library_scrape' };
+    console.log(`Ad Library (Firecrawl): ${company} → ${adCount} ads${countReliable ? '' : ' (count UNRELIABLE — keyword-search ceiling, not per-advertiser; will not drive money-on-fire)'}`);
+    return { hasAds, adCount, countReliable, confirmed: true, source: 'ad_library_scrape' };
   } catch(e) { console.log('Ad Library scrape error:', e.message); return { hasAds: false, adCount: 0, confirmed: false }; }
 };
 
@@ -5796,10 +5820,14 @@ app.post('/api/research', async (req, res) => {
     const moneyOnFire = (() => {
       const fires = [];
       const adCount = fbAds.adCount || 0;
-      const hasAds = adCount > 0 || !!builtWith.hasGoogleAdsTag;
+      // A keyword-search count (countReliable === false) is NOT this advertiser's
+      // ad volume — it must never manufacture a fire. Real ad presence still
+      // counts if we have a reliable FB count OR an actual Google Ads tag on the page.
+      const adCountReliable = fbAds.countReliable !== false;
+      const hasAds = (adCount > 0 && adCountReliable) || !!builtWith.hasGoogleAdsTag;
 
       // FIRE 1 — Paying for traffic they cannot measure.
-      if (hasAds && !builtWith.hasMetaPixel && (fbAds.adCount || 0) > 0) {
+      if (hasAds && adCountReliable && adCount > 0 && adCount < 500 && !builtWith.hasMetaPixel) {
         fires.push({
           severity: 'critical',
           fire: `${adCount} paid ads running with NO Meta pixel installed`,
