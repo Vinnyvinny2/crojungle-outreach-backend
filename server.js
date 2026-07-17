@@ -3352,171 +3352,91 @@ const scoreSignals = (c) => {
 };
 
 const scoreReachability = (c) => {
-  const name = (c.name || '').toLowerCase();
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REACHABILITY — the spine of the whole system. One question, plainly:
+  // CAN WE PUT AN EMAIL IN FRONT OF THE DECISION-MAKER WHO FEELS THE PROBLEM?
+  // Built only from live signals. Base is set by the reachability OUTCOME, then a
+  // few small modifiers. No inert Adzuna/Clutch logic, no name-guessing.
+  // ═══════════════════════════════════════════════════════════════════════════
   const sig = c.signals || {};
-  let score = 0;
   const reasons = [];
 
-  // ═══ THE SPINE: can we IDENTIFY and REACH the actual owner/decision-maker? ═══
-  // This is what reachability MEANS. Size is only a proxy for it — direct evidence
-  // (we found the owner AND we can email them) outweighs the proxy. A lead where we
-  // cannot name who to reach is, by definition, not reachable, so it is capped low
-  // at the end regardless of how hot the signal is.
   const dm = (c.decisionMaker && c.decisionMaker.name) ? c.decisionMaker : null;
-  let foundOwner = false;
+  const owner = (dm && dm.name) || c.verifiedCEO || null;
+  const foundOwner = !!owner;
 
-  // A DELIVERABLE personal email that matches the identified person is the single
-  // strongest reachability signal there is: at a small business, firstname@ that
-  // matches the owner we found confirms BOTH who they are and that we reach them
-  // directly. It outweighs "we only had one source for the name." Compute it here
-  // so it can lift the decision-maker score instead of only adding a late +12.
-  const _dmName = ((c.decisionMaker && c.decisionMaker.name) || c.verifiedCEO || '').toLowerCase();
-  const _dmTokens = _dmName.split(/\s+/).filter(w => w.length >= 3);
-  const _addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
-  const _local = (_addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
-  const _emailTier = c.emailResult ? c.emailResult.tier : null;
-  const emailMatchesOwner = _dmTokens.length > 0 && !!_local &&
-    _dmTokens.some(t => _local.includes(t)) && (_emailTier === 1 || _emailTier === 2);
-
-  if (dm) {
-    const ownerLevel = /ceo|founder|owner|president|principal|managing (director|partner)/i.test(dm.title || '') || emailMatchesOwner;
-    // A name-matched deliverable personal email counts as independent corroboration.
-    const effectivelyCorroborated = dm.corroborated || emailMatchesOwner;
-    if (effectivelyCorroborated) {
-      score += ownerLevel ? 40 : 28; foundOwner = ownerLevel;
-      reasons.push(emailMatchesOwner && !dm.corroborated
-        ? `${dm.name} (${dm.title||'?'}) — confirmed by their own name-matched personal email; we reach them directly`
-        : `${dm.name} (${dm.title||'?'}) confirmed across ${(dm.sources||[]).length} independent sources — we know exactly who to reach`);
-    } else {
-      const hunterOnly = (dm.sources||[]).length === 1 && (dm.sources||[])[0] === 'hunter';
-      if (hunterOnly) { score += ownerLevel ? 16 : 10; reasons.push(`${dm.name} (${dm.title||'?'}) — single unverified source (Hunter); verify before sending`); }
-      else { score += ownerLevel ? 26 : 16; foundOwner = ownerLevel; reasons.push(`${dm.name} (${dm.title||'?'}) — found via ${(dm.sources||[]).join('+')||'search'}`); }
-    }
-    // Only penalise authority when we have POSITIVE evidence of a sub-owner role
-    // (a real junior title) — NOT merely an unknown title. A named person with a
-    // personal mailbox at a small firm is almost certainly the principal.
-    const juniorTitle = /\b(vp|vice president|director|manager|coordinator|specialist|associate|assistant|\blead\b|representative|recruiter|hr)\b/i.test(dm.title || '');
-    if (dm.canBuy === false && juniorTitle && !emailMatchesOwner) {
-      score -= 20; reasons.push('⚠ Not a purchase authority — reaching them wastes the audit');
-    }
-  } else if (c.verifiedCEO) {
-    const ownerLevel = /ceo|founder|owner|president|principal/i.test(c.verifiedCEOTitle || '');
-    score += ownerLevel ? 14 : 8; foundOwner = ownerLevel;
-    reasons.push(`${c.verifiedCEO} (${c.verifiedCEOTitle||'?'}) identified — named but from an unverified source`);
-  } else {
-    reasons.push('No decision-maker identified — we cannot confirm who to reach');
-  }
-
-  // Owner publicly named on their OWN site = public-facing founder who reads their
-  // own mail (a real gatekeeper-bypass signal, not a guess).
-  if (c.ownerOnOwnSite && (dm || c.verifiedCEO)) {
-    score += 6; reasons.push('Owner is named on their own website — public-facing founder, reads their own inbox');
-  }
-
-  // ═══ CAN WE ACTUALLY EMAIL THEM? — the second half of reachability ═══
-  if (c.emailResult) {
-    const er = c.emailResult;
-    if (er.tier === 1)      { score += 28; reasons.push('Email published on their own site — confirmed real, owner is public-facing'); }
-    else if (er.tier === 2) { score += 28; reasons.push('Email SMTP-verified — the mailbox provably exists (2x reply rate)'); }
-    else if (er.tier === 3) { score += 14; reasons.push('Email built from their confirmed domain pattern — likely but unverified'); }
-    else if (er.tier === 4) { score -= 8;  reasons.push('⚠ Email is an unverified guess — a bounce would damage the sending domain'); }
-    else                    { score -= 12; reasons.push('⚠ No usable email — cannot reach them'); }
-  } else if (c.email) {
-    score += 8; reasons.push('Email present (confidence unknown)');
-  } else {
-    reasons.push('No email found yet');
-  }
-
-  // ═══ WHO reads that inbox? tier tells us the address is deliverable; this tells
-  // us whether it reaches the OWNER or a gatekeeper. A personal mailbox that matches
-  // the owner's name is the gold standard; a shared role inbox means a receptionist. ═══
+  const ownerTokens = String(owner || '').toLowerCase().split(/\s+/).filter(w => w.length >= 3);
   const addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
-  const localPart = (addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
-  if (localPart) {
-    const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
-    const ownerName = ((c.decisionMaker && c.decisionMaker.name) || c.verifiedCEO || '').toLowerCase();
-    const ownerTokens = ownerName.split(/\s+/).filter(w => w.length >= 3);
-    const matchesOwner = ownerTokens.length > 0 && ownerTokens.some(t => localPart.includes(t));
-    if (matchesOwner) {
-      score += 12; reasons.push(`Email is the owner's personal mailbox (${localPart}@\u2026) \u2014 lands directly with them, no gatekeeper`);
-    } else if (ROLE_INBOX.test(localPart)) {
-      score -= 12; reasons.push(`\u26a0 Only a shared inbox found (${localPart}@\u2026) \u2014 a receptionist/gatekeeper reads this, not the owner`);
-    } else if (/^[a-z]+(\.[a-z]+)?$/.test(localPart)) {
-      score += 3; reasons.push(`Personal-style mailbox (${localPart}@\u2026) \u2014 an individual, though not confirmed as the owner we identified`);
-    }
+  const local = (addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
+  const tier = c.emailResult ? c.emailResult.tier : null;
+  const deliverable = tier === 1 || tier === 2;      // verified real mailbox
+  const patternEmail = tier === 3;                   // built from pattern, unverified
+  const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
+  const isRoleInbox = !!local && ROLE_INBOX.test(local);
+  const personalMailbox = !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
+  const emailMatchesOwner = ownerTokens.length > 0 && !!local && ownerTokens.some(t => local.includes(t));
+  const juniorTitle = /\b(vp|vice president|director|manager|coordinator|specialist|associate|assistant|\blead\b|representative|recruiter|hr)\b/i.test((dm && dm.title) || '');
+
+  // ── CORE OUTCOME (sets the base) ──────────────────────────────────────────
+  let score;
+  if (foundOwner && deliverable && (emailMatchesOwner || personalMailbox) && !juniorTitle) {
+    score = 92; reasons.push(`${owner} identified with a verified personal mailbox (${local}@\u2026) — we reach the decision-maker directly`);
+  } else if (foundOwner && deliverable && !juniorTitle) {
+    score = 74; reasons.push(`${owner} identified and we have a verified email — reaches a real person (not confirmed as their personal box)`);
+  } else if (foundOwner && (patternEmail || personalMailbox) && !juniorTitle) {
+    score = 58; reasons.push(`${owner} identified; email likely but unverified — verify before sending`);
+  } else if (foundOwner && isRoleInbox) {
+    score = 38; reasons.push(`${owner} identified, but the only email is a shared inbox (${local}@\u2026) — a gatekeeper reads it, not them`);
+  } else if (foundOwner) {
+    score = 34; reasons.push(`${owner} identified, but no usable email yet`);
+  } else if (deliverable && personalMailbox) {
+    score = 30; reasons.push(`A verified personal mailbox exists (${local}@\u2026) but we could not confirm whose — identify the owner first`);
+  } else {
+    score = 12; reasons.push('No decision-maker identified — we cannot confirm who to reach');
+  }
+  if (foundOwner && juniorTitle && !emailMatchesOwner) {
+    score = Math.min(score, 40);
+    reasons.push(`Contact title "${dm && dm.title}" is below buying authority — find the owner/founder`);
   }
 
-  // ═══ SIZE — a MODIFIER now, not the spine. Small = the owner is hands-on. ═══
+  // ── BUSINESS-TYPE reachability confidence (who actually runs this place?) ──
+  if (sig.local_owner_operated && sig.consolidation_risk) {
+    reasons.push('Practice in a PE/DSO-consolidating field — confirm a real owner exists (a group-owned location has no reachable owner)');
+  } else if (sig.local_owner_operated) {
+    score += 6; reasons.push('Local owner-operated business — the owner runs the shop and reads their own email');
+  }
+  if (sig.preparing_for_exit || c.source === 'for_sale') {
+    if (c.brokerPosted) reasons.push('For-sale via broker — a middleman sits between us and the owner');
+    else { score += 8; reasons.push('Owner is personally selling — maximally motivated and directly reachable'); }
+  }
+  if (sig.founder_venting) { score += 6; reasons.push('Owner publicly asking for help — in the weeds and clearly reachable'); }
+
+  // ── SIZE sanity: too big = owner insulated (only when we VERIFIED the count) ──
   if (c.verifiedEmployees) {
     const e = c.verifiedEmployees;
-    if (e <= 25)       { score += 18; reasons.push(`${e} employees — the owner answers their own email`); }
-    else if (e <= 50)  { score += 15; reasons.push(`${e} employees — founder-led; most positive C-level replies come from this band`); }
-    else if (e <= 100) { score += 9;  reasons.push(`${e} employees — founder-led, still hands-on`); }
-    else if (e <= 200) { score += 4;  reasons.push(`${e} employees — reachable, but a marketing layer may exist`); }
-    else if (e <= 350) { score -= 4;  reasons.push(`${e} employees — the founder is getting insulated`); }
-    else               { score -= 10; reasons.push(`${e} employees — mid-market, owner rarely reads cold email`); }
-  } else if (foundOwner) {
-    score += 8; reasons.push('Headcount unconfirmed, but the owner is publicly reachable — consistent with a small, founder-led firm');
-  } else if (c.sizeUnverified) {
-    reasons.push('⚠ Size unverified and no owner found — do not assume reachable');
-  } else {
-    score += 3; reasons.push('Size unchecked — verify headcount before pitching');
+    if (e > 500)      { score -= 30; reasons.push(`${e} employees — too large, the owner does not read cold email`); }
+    else if (e > 200) { score -= 10; reasons.push(`${e} employees — a marketing/exec layer likely sits between us and the owner`); }
   }
 
-  // ═══ PERSONALIZATION / FOUNDER-LED SIGNALS — modifiers ═══
+  // ── DO WE HAVE A PAIN TO NAME? (the "how do they know this" hook that earns the reply) ──
   if (c.publicPainSignals && c.publicPainSignals.length > 0) {
-    const n = Math.min(c.publicPainSignals.length, 3);
-    score += 3 + n * 2; reasons.push(`${c.publicPainSignals.length} verified operational pain signals — we can name the fire he is fighting`);
+    score += 5; reasons.push('We have a specific, evidenced pain to open with — the "how do they know this" hook');
   }
-  if (c.companyTriggers && c.companyTriggers.length > 0) {
-    const fresh = c.companyTriggers.filter(t => (t.ageDays ?? 999) <= 45);
-    if (fresh.length) { score += 5; reasons.push(`Recent trigger (${fresh[0].type}, ${fresh[0].ageDays}d ago) — timely cold-open`); }
-  }
-  if (sig.preparing_for_exit || c.source === 'bizbuysell') {
-    if (c.brokerPosted) { score += 4; reasons.push('For-sale via broker — a middleman sits between us and the owner'); }
-    else                { score += 14; reasons.push('Owner is personally listing the business — maximally motivated AND directly reachable'); }
-  }
-  if (sig.founder_venting || sig.social_pain_signal) { score += 10; reasons.push('Founder publicly venting — personally in the weeds and clearly reachable'); }
-  if (sig.local_owner_operated) {
-    if (sig.consolidation_risk) {
-      score += 4; reasons.push('Practice in a PE/DSO-consolidating field — confirm a real owner reads this inbox before pitching (a group-owned location has no reachable owner)');
-    } else {
-      score += 12; reasons.push('Local owner-operated business — the owner runs the shop and reads their own email (highest-reachability segment)');
-    }
-  }
-  if (sig.ai_replacement_multi) {
-    const roles = c.manualRoleCount || 0;
-    if (roles >= 2 && roles <= 8) { score += 8; reasons.push(`Hiring ${roles} manual roles at SMB scale — the owner runs ops and there is no CMO`); }
-  } else if (sig.ai_replacement_signal) { score += 4; reasons.push('Hiring a manual role — small operation, owner-adjacent'); }
-  if (sig.raised_funding) { score += 6; reasons.push('Recently raised — early-stage, the founder still owns GTM'); }
 
-  // ═══ PENALTIES ═══
-  if (c.source === 'news_hire' && /cmo|chief marketing|vp.*marketing|head of marketing/i.test(c.jobTitle || '')) {
-    score -= 14; reasons.push('Just hired a CMO — the marketing layer we exist to bypass now exists');
-  }
-  if (OWNER_LED_HINTS.test(name))  { score += 4; reasons.push('Name suggests a family/owner-operated business'); }
-  if (ENTERPRISE_HINTS.test(name) && !OWNER_LED_HINTS.test(name)) { score -= 4; }
-
-  // ═══ STRUCTURAL CAP: no identified owner after Research => not reachable. ═══
-  // CRITICAL: only apply this after Research has actually run (emailResult or
-  // decisionMaker attempted). A Places lead before Research simply hasn't looked
-  // yet — that is NOT the same as "couldn't find one." Penalising it here would
-  // block the exact leads that Places exists to surface.
   let capped = Math.max(0, Math.min(100, Math.round(score)));
+  // After Research has actually run, no owner found = a poor send, full stop.
   const researchHasRun = !!(c.emailResult || c.decisionMaker !== undefined);
-  if (researchHasRun && !dm && !c.verifiedCEO) capped = Math.min(capped, 22);
-
-  const hardBlock = (sig.ai_replacement_multi && (c.manualRoleCount || 0) > 20);
+  if (researchHasRun && !foundOwner) capped = Math.min(capped, 25);
 
   return {
     score: capped,
     reasons,
-    hardBlock,
+    hardBlock: false,
     verdict:
-      capped >= 72 ? 'Excellent — owner identified, reachable, and can buy' :
-      capped >= 50 ? 'Good — likely reaches a real decision-maker' :
-      capped >= 30 ? 'Moderate — reachable, but verify the contact first' :
-                     'Poor — owner not confirmed reachable, likely wastes a send',
+      capped >= 80 ? 'Excellent — decision-maker identified and directly reachable' :
+      capped >= 60 ? 'Good — reaches a real person; verify the contact' :
+      capped >= 40 ? 'Moderate — reachable but the contact needs confirmation' :
+                     'Poor — decision-maker not confirmed reachable',
     stage: (c.decisionMaker || c.emailResult) ? 'researched' : 'pre-research',
   };
 };
@@ -4701,96 +4621,52 @@ const WEIGHTS = {
         //   • UNVERIFIED size → competitive second tier (Research will verify),
         //     never above a verified lead.
         // ═══════════════════════════════════════════════════════════════════
-        const fit = reach.score;                 // 0-100 (mostly size/title driven)
-        const intentScore = intent.intentScore;  // 0-100 (signal strength)
+        // ═══════════════════════════════════════════════════════════════════
+        // FIND TRIAGE (ICP score) — rough "is this worth Research?" rank.
+        // Built on the workflow: a REAL ICP-revenue business where the OWNER is
+        // LIKELY REACHABLE. At Find we don't have the email yet (that's Research),
+        // so we rank on business TYPE (reachability likelihood) + revenue proxy.
+        // ═══════════════════════════════════════════════════════════════════
         const emp = c.verifiedEmployees || 0;
-        // Size is only trustworthy from lead's OWN domain ('trusted') or TheirStack's
-        // at-source 10-200 band. A name-search-derived 'weak' number (Lennar dealer
-        // microsite emp=5) does NOT earn verified-small floor — it falls to unverified
-        // and Research confirms it.
-        const sourceBandVerified = c.source === 'theirstack';
-        // A Google Places lead is small-local BY CONSTRUCTION — franchise-filtered,
-        // review-gated, owner-operated. It earns the verified-small tier without a
-        // paid size check (we deliberately don't spend credits sizing Places). Without
-        // this, Places leads fall to the bottom bucket at fit×0.3 ≈ 5 — the exact
-        // "best leads ranked worst" bug.
-        const isPlaces = c.source === 'google_places' || !!(c.signals && c.signals.local_owner_operated);
-        const verifiedSmall = sourceBandVerified || isPlaces || (c.sizeConfidence === 'trusted' && emp > 0 && emp <= 200);
-        const roles = c.manualRoleCount || 0;
-        const hasRealSignal = intentScore > 0 || roles >= 1 ||
-          !!c.signals?.raised_funding || !!c.signals?.sba_funded ||
-          c.source === 'for_sale' || c.source === 'founder_venting' || c.source === 'theirstack';
-
+        const s = c.signals || {};
+        const isPlaces = c.source === 'google_places' || !!s.local_owner_operated;
+        const rv = c.reviewCount || 0;
         let triage;
-        if (reach.hardBlock) {
-          // Unreachable (enterprise CEO, etc.) — floored.
-          triage = Math.min(Math.round(fit * 0.3 + intentScore * 0.2), 25);
-        } else if (verifiedSmall) {
-          // ── VERIFIED SMALL: the trustworthy tier. Base is HIGH because the
-          // single most important thing (reachable owner) is confirmed. Signal
-          // and roles adjust WITHIN this tier, they don't gate it. ──
-          let base = 72;                                   // confirmed-reachable floor
-          base += Math.min(intentScore * 0.12, 12);        // signal strength: up to +12
-          // REVENUE PROXY (Places): a business must clear ~$800k to afford our
-          // products (50k site, 10-20k/mo retainer, 80-100k build). Review volume
-          // is the best Find-time proxy: a solo one-truck shop (<$500k) has thin
-          // reviews; a crewed $1M-$5M owner-operated firm sustains real volume; a
-          // 1,000-review mega-brand is likely a regional roll-up (too big — Research
-          // verifies). This also breaks the old flat-74 tie so we can tell great
-          // from good. Backed by industry data (HVAC/roofing owner-op revenue bands).
-          if (isPlaces) {
-            const rv = c.reviewCount || 0;
-            if (rv >= 40 && rv <= 500)      base += 16;  // sweet spot: established owner-operated, ~$800k-$5M
-            else if (rv >= 25)              base += 10;  // solid, likely clears the affordability bar
-            else if (rv > 500)              base += 7;   // large — keep but Research confirms it's still owner-reachable
-            else                            base += 2;   // thin reviews — likely a sub-$800k solo, deprioritize
-            // CONSOLIDATION RISK: dental/derm/vet/etc. are being PE/DSO-rolled-up.
-            // If it's group-owned there is NO owner who feels the pain and reads
-            // cold email — which is our whole thesis. Dock it so reliably owner-
-            // operated leads (trades, pro services) rank above it; Research then
-            // confirms whether a real owner exists before it can be approved.
-            if (c.signals?.consolidation_risk) base -= 12;
-          }
-          // GOLDEN TICKET: multiple RELEVANT AI-replaceable roles at a verified-
-          // small co. Keys off the ai_replacement flags (which only fire on our
-          // curated ops/marketing role searches — dispatcher, scheduler, CS rep,
-          // bookkeeper, marketing coordinator, etc.), NEVER on random roles like
-          // janitor/driver/warehouse. So volume only counts when it's the RIGHT
-          // kind of volume.
-          const relevantHeavy = !!c.signals?.ai_replacement_heavy && roles >= 3;
-          const relevantMulti = !!c.signals?.ai_replacement_multi && roles >= 2;
-          if (relevantHeavy) base += 14;        // golden ticket
-          else if (relevantMulti) base += 8;
-          // If roles are high but NOT flagged AI-replaceable, no volume bonus.
-          // High-intent source bonus (owner has money/motivation)
-          if (c.source === 'for_sale') base += 6;
-          if (c.signals?.raised_funding || c.signals?.sba_funded) base += 5;
-          if (c.source === 'founder_venting') base += 6;   // most reachable + motivated
-          // Very small = even more reachable (only when we have a real count)
-          if (emp > 0 && emp <= 50) base += 4;
-          // FOUNDER-LED NAME — a company named after a person is far more likely
-          // owner-reachable. High-precision patterns only (few false positives):
-          // "X & Associates/Partners/Sons/Co", possessive ("Dave's"), or initials
-          // ("J&M"). A weak-but-free reachability proxy available at Find time.
-          if (/\b\w+\s*&\s*(associates|partners|sons|daughters|co|company|son)\b|\b\w+'s\b|^[a-z]\s*&\s*[a-z]\b/i.test(c.name || '')) {
-            base += 3; c.founderLedName = true;
-          }
-          // Founder-led language mined from their own job postings — a direct
-          // reachability signal (owner is hands-on and writes/approves the posting).
-          if (c.founderLedPosting) { base += 5; }
-          triage = Math.min(Math.round(base), 98);
-        } else if (hasRealSignal) {
-          // ── UNVERIFIED but has a real signal: competitive SECOND tier.
-          // Research will verify size + reachability. Capped below verified so a
-          // verified lead always outranks an unverified one. ──
-          let base = 40 + Math.min(intentScore * 0.22, 20); // 40-60 range on signal
-          // Owner-pain / for-sale are inherently reachable-owner signals → nudge up
-          if (c.source === 'founder_venting' || c.source === 'for_sale') base += 5;
-          if (c.signals?.raised_funding || c.signals?.sba_funded) base += 3;
-          triage = Math.min(Math.round(base), 64);          // hard cap: never beats verified
+
+        if (emp > 500) {
+          // Verified enterprise — owner unreachable. Floored.
+          triage = 8;
+        } else if (isPlaces) {
+          // Local owner-operated: reachable by construction. Rank by revenue proxy
+          // (review volume ≈ can-they-afford-us), dock consolidation risk.
+          let base = 74;
+          if (rv >= 40 && rv <= 500)      base += 16;   // sweet spot ~$800k-$5M
+          else if (rv >= 25)              base += 10;   // solid
+          else if (rv > 500)              base += 6;    // large — Research confirms owner
+          else                            base += 2;    // thin reviews — likely sub-$800k solo
+          if (s.consolidation_risk)       base -= 12;   // maybe group-owned → no reachable owner
+          triage = Math.min(base, 94);
+        } else if (c.source === 'for_sale' || s.preparing_for_exit) {
+          // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
+          triage = c.brokerPosted ? 72 : 84;
+        } else if (s.sba_funded || c.source === 'sba_loan') {
+          // Just took growth capital, must deploy it — small biz owner, reachable.
+          triage = 80;
+        } else if (c.source === 'founder_venting' || s.founder_venting) {
+          // Owner literally asking for help — most reachable + motivated.
+          triage = 82;
+        } else if ((c.source === 'theirstack' || c.sizeConfidence === 'trusted') && emp > 0 && emp <= 200) {
+          // Verified-small (e.g. TheirStack when re-funded) — reachable size confirmed.
+          triage = 76;
+        } else if (s.raised_funding || c.source === 'sec_edgar' || c.source === 'news_funding') {
+          // Funded/scaling: real revenue signal, but reachability UNVERIFIED (could
+          // be VC-backed with layers). Middle tier — Research decides.
+          triage = 60;
+        } else if ((c.companyTriggers && c.companyTriggers.length) || c.source === 'google_news') {
+          // A news trigger (hire, expansion) — a reason to reach out, reachability TBD.
+          triage = 52;
         } else {
-          // No real signal at all — low.
-          triage = Math.min(Math.round(fit * 0.3), 30);
+          triage = emp > 200 ? 25 : 40;
         }
 
         const icpScore = triage;
@@ -4808,7 +4684,7 @@ const WEIGHTS = {
           perfectFit: trueExactIcp,
           icpScore,
           // Intent
-          intentScore,
+          intentScore: intent.intentScore,
           signalsFiring: intent.firing,
           urgency: intent.urgency,
           freshness: intent.freshness,
@@ -4819,7 +4695,7 @@ const WEIGHTS = {
           stackedSources: intent.stackedSources,
           sourceCount: intent.stackedSources.length,
           // Fit
-          reachability: fit,
+          reachability: reach.score,
           reachabilityReasons: reach.reasons,
           reachabilityVerdict: reach.verdict,
           reachabilityBlocked: reach.hardBlock,
