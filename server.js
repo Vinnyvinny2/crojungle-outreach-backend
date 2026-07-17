@@ -5446,8 +5446,8 @@ app.post('/api/research', async (req, res) => {
     const _financialSignal = _exitSignal || !!_psig.raised_funding || !!_psig.sba_funded || req.body.discoverySource === 'sba_loan';
     const _noSystems = builtWith.hasCRM === false && (!!_psig.raised_funding || !!_psig.sba_funded);
     const _eligible = [];
-    if (_weakSite) _eligible.push(`Website Rebuild ($10k-$25k)${_hasAds ? ' and/or Landing Page ($5k-$15k)' : ''}`);
-    if (_hasAds || _underMarketed || _mktgHire) _eligible.push('End-to-End Marketing / Ads Management ($8k-$35k/mo) or Revenue Growth / CRO Retainer ($8k-$35k/mo)' + (_mktgHire ? ' — they are HIRING for marketing: budget allocated, direction not chosen. The retainer pitch writes itself; do NOT pitch a software build for marketing roles.' : ''));
+    if (_weakSite) _eligible.push('Website Rebuild ($50k+) — pre-2021 site or missing CTA/structure confirmed');
+    if (_hasAds || _underMarketed || _mktgHire) _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) or Revenue Growth / CRO Retainer ($10k-$35k/mo)' + (_mktgHire ? ' — they are HIRING for marketing: budget allocated, direction not chosen. The retainer pitch writes itself; do NOT pitch a software build for marketing roles.' : ''));
     if (_realOpsSignal) _eligible.push('Custom AI Software Build ($25k-$75k+) — a CONFIRMED ops/manual-labor hiring signal exists for this lead');
     if (_noSystems) _eligible.push('AI Brain ($40k-$70k) — funded with no marketing/CRM infrastructure detected');
     if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation');
@@ -5621,12 +5621,11 @@ VOICE RULES:
 ${eligibleProductsGuidance}
 
 CROJungle offerings (full-service — can combine):
-- Website Rebuild ($10k-$25k): homepage conversion failures, weak positioning, no CTA
-- Landing Page ($5k-$15k): running ads to homepage, no dedicated conversion page
-- End-to-End Marketing / Ads Management ($8k-$35k/month): running ads but leaking revenue, needs full-funnel ownership
+- Website Rebuild ($50k+): homepage conversion failures, weak positioning, no CTA — full rebuild only
+- End-to-End Marketing / Ads Management ($10k-$35k/month): running ads but leaking revenue, needs full-funnel ownership
 - AI Brain ($40k-$70k): no marketing intelligence layer, disconnected systems, no automation
 - Custom AI Software Build ($25k-$75k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — recommend ONLY when there is a CONFIRMED manual-labor signal (multiple ops job postings). Never default to it.
-- Revenue Growth / CRO Retainer ($8k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
+- Revenue Growth / CRO Retainer ($10k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
 - Exit / Valuation Advisory (via Wall Street-backed partner): for companies preparing to sell — increase revenue AND advise on valuation/M&A. Nobody else offers this combination.
 
 DOLLAR-FIGURE RULE: job posting counts are FACTS; salary totals derived from them are ESTIMATES. Any labor-cost dollar figure MUST be framed as an estimate ("est.", "roughly") and must show its basis. Never present a derived number as a measured one.
