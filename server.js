@@ -1911,7 +1911,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
 
     // Read the real pages IN PARALLEL (was sequential — that alone cost ~20s)
-    const top = candidates.slice(0, 2); // 2 pages is plenty and keeps this fast
+    const top = candidates.slice(0, 1); // 1 page: the top leadership page almost always has the owner — halves the scrape cost
     const scrapes = await Promise.all(
       top.map(u => firecrawlScrape(fcKey, u, 9000).then(md => ({ u, md })).catch(() => ({ u, md: '' })))
     );
@@ -2013,7 +2013,7 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
 
     // Run both searches in parallel — sequential cost us ~15s for no reason
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 2, true).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 2, false).catch(() => [])) // snippet-only: owner names live in BBB/Manta snippets
     );
     const hits = batches.flat().slice(0, 4);
     if (hits.length === 0) return null;
@@ -2328,7 +2328,7 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, l
     ];
 
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 3, false).catch(() => [])) // snippet-only: complaints live in the snippet
     );
     // For a PRODUCT company, a "reviews/complaints" search surfaces rivals'
     // "{company} alternatives" and "{X} vs {Y}" SEO pages — a competitor trashing
@@ -2347,7 +2347,7 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, l
     }).slice(0, 6);
     if (hits.length === 0) return { signals: [], summary: '' };
 
-    const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.content}`).join('\n\n').slice(0, 18000);
+    const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`).join('\n\n').slice(0, 18000);
 
     const r = await fetchT('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -2865,7 +2865,7 @@ const findFounderVenting = async (fcKey, apiKey) => {
     ];
 
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 4, true).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 4, false).catch(() => []))
     );
     const hits = batches.flat().slice(0, 8);
     if (hits.length === 0) return { leads: [], painLanguage: [] };
@@ -2970,7 +2970,7 @@ const findBusinessesForSale = async (fcKey, apiKey) => {
       '"business for sale" "seller financing" OR "owner retiring" established revenue cash flow',
     ];
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 5, true).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 5, false).catch(() => []))
     );
     const hits = batches.flat().slice(0, 8);
     if (hits.length === 0) { console.log('For-sale: no listings found'); return []; }
@@ -5142,7 +5142,11 @@ app.post('/api/research', async (req, res) => {
     // public pages, D&B, Buzzfile and Manta all publish headcount and revenue for
     // private companies, free to read. Only runs when we still have no headcount.
     // CREDIT GATE: ~3 credits. Only if we genuinely have no headcount at all.
-    if (!verifiedEmployees && firecrawlKey && apiKey && company && req.body.deepMode !== false) {
+    // CREDIT GATE: skip entirely for Places/local-owner leads — we deliberately do
+    // NOT size them (trusted small-local), so paying ~5 Firecrawl credits to size a
+    // business we chose not to size was pure waste on our most common lead type.
+    if (!verifiedEmployees && firecrawlKey && apiKey && company && req.body.deepMode !== false
+        && discoverySource !== 'google_places' && !(discoverySignals && discoverySignals.local_owner_operated)) {
       try {
         const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey);
         if (sz && sz.employees) {
