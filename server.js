@@ -1397,8 +1397,17 @@ const scrapeGoogleNews = async () => {
 
         if (!name || name.length < 3 || name.length > 60) return;
         // Filter out news outlets and generic words
-        if (/^(the|a |an |in |on |at |by |for |with |from |this |new |top |best |how |why |what |when |where |who )/i.test(name)) return;
+        if (/^(the|a |an |in |on |at |by |for |with |from |this |new |top |best |how |why |what |when |where |who |after|amid|as |why|inside|meet |these |report|study|report)/i.test(name)) return;
         if (/news|times|post|herald|report|journal|magazine|media group|press$/i.test(name)) return;
+        // Reject headline fragments, not company names: a real company name is 1-5
+        // capitalized words, no sentence punctuation mid-string, no lowercase
+        // connective verbs. "After record year, Israeli tech brain drain" fails all.
+        const words = name.trim().split(/\s+/);
+        if (words.length > 5) return;                                   // company names are short
+        if (/[,;:]/.test(name)) return;                                 // clause/sentence punctuation
+        if (/\b(is|are|was|were|has|have|will|would|says|amid|after|record|year|drain|surge|rise|fall|report|study|according|billion|million)\b/i.test(name)) return; // headline verbs/nouns
+        const capWords = words.filter(w => /^[A-Z0-9]/.test(w)).length;
+        if (capWords < Math.ceil(words.length * 0.6)) return;           // real names are mostly Capitalized
 
         results.push({
           name,
@@ -1979,18 +1988,27 @@ ${corpus}` }]
 // infrastructure, so it is NOT IP-blocked the way DuckDuckGo and Google are).
 // This searches the ENTIRE web for who owns this company, then has the Brain read
 // the actual result pages. This is how a human would do it.
-const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey) => {
+const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, location = '') => {
   if (!companyName || !fcKey || !apiKey) return null;
   try {
     const clean = companyName.replace(/,?\s*(Inc|LLC|Corp|Ltd)\.?$/gi, '').trim();
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
+    // Pull a short "City ST" from the full address. Without this, a common local
+    // name ("A1 Restoration") matches dozens of unrelated companies nationwide and
+    // we find nothing confident — the #1 cause of a reachable owner scoring as
+    // unreachable. Location is the disambiguator.
+    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
+    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
+    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
+    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
+    const loc = [city, st].filter(Boolean).join(' ');
 
     // Two angles: who owns it, and their profile on business directories that
     // actually index SMB owners (BBB lists a "Principal Contact", Manta and
     // Buzzfile list officers — these are goldmines that LinkedIn-based tools miss)
     const queries = [
-      `"${clean}" owner OR founder OR "chief executive" OR president name`,
-      `"${clean}" ${domain ? domain + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
+      `"${clean}" ${loc ? loc + ' ' : ''}owner OR founder OR "chief executive" OR president name`,
+      `"${clean}" ${domain ? domain + ' ' : ''}${loc ? loc + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
     ];
 
     // Run both searches in parallel — sequential cost us ~15s for no reason
@@ -2010,12 +2028,12 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey) => {
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 600,
-        messages: [{ role: 'user', content: `These are real web search results about the company "${companyName}"${domain ? ' (' + domain + ')' : ''}.
+        messages: [{ role: 'user', content: `These are real web search results about the company "${companyName}"${domain ? ' (' + domain + ')' : ''}${loc ? ' located in ' + loc : ''}.
 
 TASK: Identify the OWNER / FOUNDER / CEO / PRESIDENT of THIS SPECIFIC COMPANY — the person with authority to buy.
 
 CRITICAL WARNINGS:
-- Search results often mix up DIFFERENT companies with similar names. Only report a person if the source clearly ties them to THIS company${domain ? ' (' + domain + ')' : ''}. If the source is about a different business, ignore it.
+- Search results often mix up DIFFERENT companies with similar names.${loc ? ' THIS company is located in ' + loc + ' — if a result is about a same-named business in a different city or state, IGNORE it completely.' : ''} Only report a person if the source clearly ties them to THIS company${domain ? ' (' + domain + ')' : ''}. If the source is about a different business, ignore it.
 - Do NOT report a journalist, an author of an article, a customer leaving a review, or an employee of a directory site.
 - Do NOT report someone below owner level (HR director, VP of maintenance, office manager cannot buy).
 - If you cannot confidently name the owner of THIS company, return null. Null is the correct answer when the evidence isn't there.
@@ -2289,16 +2307,24 @@ ${corpus}` }]
 // Sources that actually carry this: Google/Yelp reviews, BBB complaints (public),
 // Glassdoor (employees describe the operational chaos in brutal detail),
 // industry forums, local press.
-const findBusinessPain = async (companyName, website, fcKey, apiKey, industry) => {
+const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, location = '') => {
   if (!companyName || !fcKey || !apiKey) return { signals: [], summary: '' };
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
+    // Same disambiguation the DM search needs: without a city, a common name pulls
+    // reviews/complaints for the WRONG same-named business — which would then feed a
+    // fabricated "how do they know this" hook. Location keeps the pain on the right co.
+    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
+    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
+    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
+    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
+    const loc = [city, st].filter(Boolean).join(' ');
 
     // Two angles: what customers complain about, and what employees say about
     // how the place actually runs. Employees are the most honest source there is.
     const queries = [
-      `"${companyName}" reviews complaints problems slow response`,
-      `"${companyName}" glassdoor OR indeed employee review management`,
+      `"${companyName}" ${loc ? loc + ' ' : ''}reviews complaints problems slow response`,
+      `"${companyName}" ${loc ? loc + ' ' : ''}glassdoor OR indeed employee review management`,
     ];
 
     const batches = await Promise.all(
@@ -2473,7 +2499,7 @@ const findOwnerViaNews = async (companyName) => {
 // Runs every free source in parallel, then scores each candidate by how many
 // INDEPENDENT sources name them. Agreement across sources is what gets us to 90%,
 // because no single source can.
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location }) => {
   // Run every source in parallel. Web search is the new heavy hitter — it reaches
   // BBB, Manta, local press, and chamber directories where SMB owners actually live.
   // Registry search costs ~2 credits and has a very low hit rate (it mostly
@@ -2481,7 +2507,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // web-search sources do the real work. Still available in the test harness.
   const [brain, websearch, news] = await Promise.all([
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
-    findOwnerViaWebSearch(companyName, website, fcKey, apiKey).catch(() => null),
+    findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),  // free — Google News RSS
   ]);
 
@@ -2602,10 +2628,37 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
 
     const isSamePerson = !name || sameName(hunterName, name);
     if (isSamePerson) {
-      return {
-        email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED,
-        label: 'Verified by Hunter', name: hunterName, pattern: learned,
-      };
+      // "Hunter said so" is NOT the same as "we verified it" — and Hunter guesses
+      // patterns too. Put it through the SAME rigor as every other address: on a
+      // normal domain, SMTP-confirm before claiming T2; on a catch-all domain SMTP
+      // is useless so Hunter's own confirmation makes it T3; only trust it blindly
+      // when we have no verifier key at all.
+      if (verifierKey) {
+        const hunterCatchAll = await isCatchAllDomain(domain, verifierKey);
+        if (hunterCatchAll === false) {
+          const res = await verifyEmailSMTP(hunterEmail, verifierKey);
+          if (res.valid === true) {
+            console.log(`✓ EMAIL [${domain}] T2 CONFIRMED (Hunter + SMTP): ${hunterEmail}`);
+            return { email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED, label: 'Verified by Hunter + SMTP', name: hunterName, pattern: learned };
+          }
+          if (res.invalid === true) {
+            // Hunter's address does NOT exist on a normal domain — do not hand it
+            // back. Fall through to scrape/pattern logic to find the real one.
+            console.log(`EMAIL [${domain}]: Hunter's ${hunterEmail} REJECTED by SMTP — trying scrape/patterns instead`);
+          } else {
+            // SMTP inconclusive (greylist/timeout) — Hunter is still our best signal.
+            return { email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED, label: 'Verified by Hunter', name: hunterName, pattern: learned };
+          }
+        } else {
+          // Catch-all: SMTP can't confirm anything, so Hunter's confirmation is
+          // pattern-grade, not mailbox-grade. T3 (sendable, but honest about it).
+          console.log(`EMAIL [${domain}] T3 (Hunter on a catch-all domain — pattern confidence): ${hunterEmail}`);
+          return { email: hunterEmail, ...EMAIL_TIERS.PATTERN_LEARNED, label: 'Hunter-provided (catch-all domain — pattern confidence)', name: hunterName, pattern: learned };
+        }
+      } else {
+        // No verifier key — Hunter is the best we have.
+        return { email: hunterEmail, ...EMAIL_TIERS.SMTP_VERIFIED, label: 'Verified by Hunter', name: hunterName, pattern: learned };
+      }
     }
 
     // Different person. Hunter gave us the VP; we want the owner. Build the
@@ -4638,14 +4691,20 @@ const WEIGHTS = {
           triage = 8;
         } else if (isPlaces) {
           // Local owner-operated: reachable by construction. Rank by revenue proxy
-          // (review volume ≈ can-they-afford-us), dock consolidation risk.
+          // (review volume ≈ can-they-afford-us), refined by RATING (a thriving,
+          // highly-rated business is more likely the established $800k+ we want;
+          // a poorly-rated one is a shakier revenue bet), dock consolidation risk.
+          const rating = c.rating || 0;
           let base = 74;
           if (rv >= 40 && rv <= 500)      base += 16;   // sweet spot ~$800k-$5M
           else if (rv >= 25)              base += 10;   // solid
           else if (rv > 500)              base += 6;    // large — Research confirms owner
           else                            base += 2;    // thin reviews — likely sub-$800k solo
+          // Rating as an establishment/quality refinement (only meaningful with volume)
+          if (rv >= 25 && rating >= 4.5)  base += 4;    // thriving, well-run — strong revenue bet
+          else if (rv >= 25 && rating && rating < 3.5) base -= 5; // struggling — shakier it's a healthy $800k biz
           if (s.consolidation_risk)       base -= 12;   // maybe group-owned → no reachable owner
-          triage = Math.min(base, 94);
+          triage = Math.min(base, 96);
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
           triage = c.brokerPosted ? 72 : 84;
@@ -4990,13 +5049,26 @@ app.post('/api/research', async (req, res) => {
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 2000 }),
       }, timeout).then(r => r.json());
+      const looksEmpty = (res) => {
+        const md = (res?.data?.markdown || res?.markdown || '');
+        return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
+      };
+      let res;
       try {
-        return await doScrape(20000);
+        res = await doScrape(20000);
       } catch(e) {
         console.log('Firecrawl timeout — retrying once with longer timeout');
-        try { return await doScrape(35000); }
-        catch(e2) { console.log('Firecrawl retry also failed:', e2.message); return {}; }
+        try { res = await doScrape(35000); } catch(e2) { console.log('Firecrawl retry also failed:', e2.message); return {}; }
       }
+      // CONTENT-LEVEL RETRY: a "Connection Reset"/empty scrape is usually transient
+      // on the free tier (A1 Restoration lost its whole audit to one). Pause and try
+      // once more before we give up the homepage, the owner, and the audit.
+      if (looksEmpty(res)) {
+        console.log(`Firecrawl returned empty/error content for ${website} — retrying once after a pause`);
+        await new Promise(r => setTimeout(r, 2500));
+        try { const res2 = await doScrape(30000); if (!looksEmpty(res2)) { console.log(`Firecrawl retry recovered content for ${website}`); return res2; } } catch {}
+      }
+      return res || {};
     };
 
     const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
@@ -5100,7 +5172,7 @@ app.post('/api/research', async (req, res) => {
     // to the site audit — which is the correct behavior, not a skip.
     if (publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
       try {
-        const pain = await findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry);
+        const pain = await findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location);
         if (pain.signals && pain.signals.length > 0) {
           // Feed the Brain the pain WITH its evidence, so the pitch can quote it
           publicPainSignals = pain.signals.map(s =>
@@ -5128,6 +5200,7 @@ app.post('/api/research', async (req, res) => {
           homepageContent: content,
           hunterName: email.founderName || '',
           hunterTitle: email.title || '',
+          location: req.body.location || '',
         });
         // A corroborated owner beats whatever we had before. A lone weak hit does not
         // override an already-verified name.
@@ -6637,13 +6710,15 @@ app.post('/api/send-to-hunter', async (req, res) => {
       });
       continue;
     }
-    // AUTHORITY GUARD: never burn a lead by pitching someone who cannot buy.
-    // A VP of Maintenance or HR Director cannot authorize a $25k build. Emailing
-    // them wastes the audit AND permanently burns the company.
-    if (lead.decisionMaker && lead.decisionMaker.canBuy === false) {
+    // REACHABILITY GUARD: never burn a lead we cannot actually reach. This uses
+    // the SAME reachability score as the Research gate and the Generate checklist,
+    // so a lead that was approvable can never silently fail here. (Previously this
+    // used the old canBuy authority flag, which contradicted reachability — e.g. an
+    // owner with a verified personal email but an unknown title.)
+    if ((lead.reachability || 0) < 45) {
       results.failed.push({
         name: lead.name, email: lead.email,
-        reason: `${lead.decisionMaker.name} is "${lead.decisionMaker.title}" — cannot authorize a purchase. Find the owner first.`
+        reason: `Reachability ${lead.reachability || 0}/100 — decision-maker not confirmed reachable. Find the owner or verify the email before sending.`
       });
       continue;
     }
