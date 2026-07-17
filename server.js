@@ -4578,11 +4578,18 @@ const WEIGHTS = {
     const preScored = icpFiltered
       .map(c => ({ c, _pre: preScore(c) }))
       .sort((a,b) => b._pre - a._pre);
-    const toEnrich = preScored.slice(0, 140).map(x => x.c);
+    // Concentrate size credits where enterprises actually HIDE: Adzuna / EDGAR / News / SBA.
+    // Google Places is already franchise-filtered + review-gated to owner-operated local
+    // businesses — it is small-local by construction, so a paid size check there wastes
+    // a credit on a lead that can't be an enterprise. This is why 1,604 Places leads were
+    // starving the 140-slot budget and letting Adzuna whales (Nutanix, Danaher, WSP) slip
+    // through unsized. Skip Places; size the rest deeper.
+    const isPlacesLead = (c) => c.source === 'google_places' || !!(c.signals && c.signals.local_owner_operated);
+    const toEnrich = preScored.map(x => x.c).filter(c => !isPlacesLead(c)).slice(0, 180);
     const enrichResults = new Map();
     let creditsSpent = 0;
     const CREDIT_CAP = 220; // hard per-run ceiling — a bad run can never drain the balance
-    console.log(`Size enrichment: sizing top ${toEnrich.length} of ${icpFiltered.length} leads (cache-first, own-domain enrich)...`);
+    console.log(`Size enrichment: sizing ${toEnrich.length} enterprise-prone (non-Places) leads of ${icpFiltered.length} total (Places trusted small-local, not credit-sized)...`);
 
     const SIZE_BATCH = 6;
     // Combined size lookup: cache → CompaniesAPI own-domain (1 credit) → name → Wikipedia/EDGAR
@@ -5839,7 +5846,7 @@ app.post('/api/research', async (req, res) => {
           const roles = manualRoleCount || 0;
           const siteYear = builtWith.copyrightYear || null;
           const staleSite = siteYear && siteYear < 2021;
-          const adSpendSignal = (fbAds.adCount || 0) > 0;
+          const adSpendSignal = ((fbAds.adCount || 0) > 0 && fbAds.countReliable !== false) || !!builtWith.hasGoogleAdsTag;
           const lanes = [];
 
           // LANE 2 (software): grown fast then stagnated, high headcount:revenue ratio,
@@ -5867,9 +5874,12 @@ app.post('/api/research', async (req, res) => {
 
           // LANE 4 (retainer marketing, SMB): $1.5M-$50M, hiring marketing, poor digital, stagnant
           if (adSpendSignal) {
+            const reliableCount = (fbAds.countReliable !== false && (fbAds.adCount || 0) > 0) ? fbAds.adCount : null;
             lanes.push({
               lane: 'RETAINER_MARKETING',
-              why: `${fbAds.adCount} active paid ads confirmed — real budget flowing into a funnel we can audit.`,
+              why: reliableCount
+                ? `${reliableCount} active paid ads confirmed — real budget flowing into a funnel we can audit.`
+                : `Google Ads tag live on the site — real paid budget flowing into a funnel we can audit.`,
               product: 'End-to-End Marketing / Ads Management',
               proofPoint: 'Sean ($140k on $4k in one month, ~30x over 8 months)',
             });
@@ -6478,11 +6488,12 @@ Return ONLY valid JSON:
               if (opens > closes) repaired += '}'.repeat(opens - closes);
               critique = JSON.parse(repaired);
             }
+            const conf = Number.isFinite(Number(critique.confidenceScore)) ? Number(critique.confidenceScore) : 7;
             brainAudit.critique = {
               verifiedClaims: critique.verifiedClaims || [],
               flaggedClaims: critique.flaggedClaims || [],
               correctedPitchAngle: critique.correctedPitchAngle || parsed.pitchAngle,
-              confidenceScore: critique.confidenceScore ?? 7,
+              confidenceScore: conf,
               critiqueNote: critique.critiqueNote || '',
               icpBlocker: critique.icpBlocker || '',
               estimatedEmployees: critique.estimatedEmployees || null,
@@ -6494,10 +6505,10 @@ Return ONLY valid JSON:
               console.log(`ICP BLOCKED by critique [${company}]: ${critique.icpBlocker}`);
             }
             // Use corrected pitch angle if confidence is reasonable
-            if (critique.correctedPitchAngle && critique.confidenceScore >= 5) {
+            if (critique.correctedPitchAngle && conf >= 5) {
               brainAudit.pitchAngle = critique.correctedPitchAngle;
             }
-            console.log('Critique complete: confidence', critique.confidenceScore, '| flags:', (critique.flaggedClaims||[]).length);
+            console.log('Critique complete: confidence', conf, '| flags:', (critique.flaggedClaims||[]).length);
           } catch(e) {
             console.log('Critique call failed (non-fatal):', e.message);
             // Non-fatal — audit continues without critique
