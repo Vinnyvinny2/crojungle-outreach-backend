@@ -2250,15 +2250,24 @@ const findWebsiteViaSearch = async (companyName, fcKey, location) => {
 // The Companies API returns emp=? on a big share of private SMBs. But ZoomInfo's
 // PUBLIC pages, D&B, Buzzfile and Manta all publish revenue estimates and
 // headcount for private companies, free to read. Search reaches them.
-const findSizeViaSearch = async (companyName, website, fcKey, apiKey) => {
+const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location = '') => {
   if (!companyName || !fcKey || !apiKey) return null;
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
-    const q = `"${companyName}" ${domain ? domain + ' ' : ''}revenue employees company size`;
-    const results = await firecrawlSearch(fcKey, q, 4, true);
+    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
+    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
+    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
+    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
+    const loc = [city, st].filter(Boolean).join(' ');
+    // Target the revenue aggregators directly — Prospeo, RocketReach, Growjo,
+    // ZoomInfo publish private-SMB revenue and it sits right in the search SNIPPET
+    // (e.g. "Johns Roofing has revenue of $25,300,000"). So snippet-only = 1 credit,
+    // no page scrape needed. Location-locked so we don't grab a same-named company.
+    const q = `"${companyName}" ${loc ? loc + ' ' : ''}revenue (prospeo.io OR rocketreach.co OR growjo.com OR zoominfo.com OR dnb.com)`;
+    const results = await firecrawlSearch(fcKey, q, 4, false); // snippet-only
     if (results.length === 0) return null;
 
-    const corpus = results.map(r => `--- ${r.title}\nURL: ${r.url}\n${r.content}`).join('\n\n').slice(0, 14000);
+    const corpus = results.map(r => `--- ${r.title}\nURL: ${r.url}\n${r.description}`).join('\n\n').slice(0, 12000);
 
     const r2 = await fetchT('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -2266,18 +2275,18 @@ const findSizeViaSearch = async (companyName, website, fcKey, apiKey) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 400,
-        messages: [{ role: 'user', content: `Web results about "${companyName}"${domain ? ' (' + domain + ')' : ''}.
+        messages: [{ role: 'user', content: `Web results about "${companyName}"${domain ? ' (' + domain + ')' : ''}${loc ? ' located in ' + loc : ''}.
 
 Extract this company's EMPLOYEE COUNT and ANNUAL REVENUE if stated.
 
 RULES:
 - Only report figures the sources ACTUALLY state. Never estimate, never guess.
-- Make sure the figure is about THIS company, not a similarly-named one.
-- Directory sites (ZoomInfo, D&B, Buzzfile, Manta) often publish these for private companies — those are valid sources.
+- Make sure the figure is about THIS company${loc ? ' in ' + loc : ''}, not a similarly-named one in a different city. If a result is clearly a different-location business, ignore it.
+- Directory sites (Prospeo, RocketReach, Growjo, ZoomInfo, D&B) publish these for private companies — those are valid sources.
 - If a figure is not stated anywhere, return null for it. Null is correct.
 
 Return ONLY valid JSON:
-{"employees": number or null, "revenue": "e.g. $5M-$10M" or null, "source": "which site said it", "confidence": "high|medium|low"}
+{"employees": number or null, "revenue": "e.g. $5M" or null, "source": "which site said it", "confidence": "high|medium|low"}
 
 RESULTS:
 ${corpus}` }]
@@ -4364,6 +4373,7 @@ const WEIGHTS = {
       // Attach whatever verified data we got
       if (enrich) {
         if (enrich.employees) c.verifiedEmployees = enrich.employees;
+        if (enrich.empBand) c.verifiedRevenueBand = enrich.empBand;
         if (enrich.revenue) c.verifiedRevenue = enrich.revenue;
         if (enrich.website && !c.website) c.website = enrich.website;
         if (enrich.industry) c.verifiedIndustry = enrich.industry;
@@ -5145,16 +5155,23 @@ app.post('/api/research', async (req, res) => {
     // CREDIT GATE: skip entirely for Places/local-owner leads — we deliberately do
     // NOT size them (trusted small-local), so paying ~5 Firecrawl credits to size a
     // business we chose not to size was pure waste on our most common lead type.
-    if (!verifiedEmployees && firecrawlKey && apiKey && company && req.body.deepMode !== false
-        && discoverySource !== 'google_places' && !(discoverySignals && discoverySignals.local_owner_operated)) {
+    // ═══ REVENUE + SIZE VIA WEB SEARCH — the "Google their revenue" answer ═══
+    // Prospeo/RocketReach/Growjo/ZoomInfo publish private-SMB revenue and it sits
+    // in the search snippet, so this is now ~1 credit (snippet-only) — cheap enough
+    // to run on EVERY research lead, including Places, to CONFIRM they clear the
+    // ~$800k affordability bar instead of relying only on the review-count proxy.
+    if (!verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false) {
       try {
-        const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey);
-        if (sz && sz.employees) {
+        const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location);
+        if (sz && sz.employees && !verifiedEmployees) {
           verifiedEmployees = sz.employees;
           console.log(`SIZE [${company}]: recovered ${sz.employees} employees via web search (${sz.source})`);
         }
-        if (sz && sz.revenue) verifiedRevenue = sz.revenue;
-      } catch(e) { console.log('Size search skipped:', e.message); }
+        if (sz && sz.revenue) {
+          verifiedRevenue = sz.revenue;
+          console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`);
+        }
+      } catch(e) { console.log('Revenue search skipped:', e.message); }
     }
 
     // ═══ DEEP BUSINESS PAIN — what the owner is ACTUALLY fighting ══════════
