@@ -116,37 +116,6 @@ app.get('/api/email', async (req, res) => {
 // results you'd see if you Googled the company yourself.
 // ═══════════════════════════════════════════════════════════
 
-const googleSearch = async (query) => {
-  try {
-    // DDG Instant Answer API — designed for programmatic access, not blocked like the HTML endpoint
-    const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const r = await fetchT(CF_WORKER + encodeURIComponent(ddgUrl), {}, 15000);
-    const text = await r.text();
-    if (!text || text.includes('Host not in allowlist')) return '';
-    // DDG JSON API returns structured data — convert to text for our pattern matching
-    try {
-      const d = JSON.parse(text);
-      // Combine AbstractText, RelatedTopics snippets, and Answer into searchable text
-      const parts = [
-        d.AbstractText || '',
-        d.Answer || '',
-        d.AbstractSource || '',
-        ...(d.RelatedTopics || []).map(t => t.Text || t.Result || '').slice(0, 10),
-        ...(d.Results || []).map(r => r.Text || '').slice(0, 5),
-      ];
-      const combined = parts.join(' ');
-      console.log(`DDG [${query.slice(0,40)}]: ${combined.length} chars`);
-      return combined;
-    } catch {
-      // If not JSON, return raw text (may still be parseable)
-      return text;
-    }
-  } catch(e) {
-    console.log('DuckDuckGo search failed:', e.message);
-    return '';
-  }
-};
-
 // Size lookup using Wikipedia API — free, no key, works from any IP
 // Logic: if company has a Wikipedia page with employee data, extract it.
 // If NO Wikipedia page → almost certainly a small SMB → passes through.
@@ -423,178 +392,9 @@ const getSizeOnly = async (companyName) => {
 // Google "[company name] number of employees" — same thing you'd search manually.
 // Returns { employees, employeeRange, website, icpPass, icpReason }
 // ICP: 10–200 employees = PASS. 200–500 = SOFT (flag it). 500+ = BLOCK.
-const lookupCompanySize = async (companyName) => {
-  try {
-    const html = await googleSearch(`${companyName} number of employees`);
-    if (!html) return { employees: null, icpPass: null, icpReason: 'size lookup failed' };
-
-    // Extract employee count from search snippets
-    // Patterns: "1,234 employees", "~500 employees", "10,000+ employees", "50 to 200 employees"
-    const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ');
-    
-    const patterns = [
-      /(\d[\d,]+)\s*(?:to|-)\s*(\d[\d,]+)\s*employees/i,  // range: 50 to 200
-      /([\d,]+)\+?\s*employees/i,                            // 1,234 employees
-      /employees[:\s]+(\d[\d,]+)/i,                          // employees: 1234
-      /workforce\s+of\s+([\d,]+)/i,                          // workforce of 500
-      /staff\s+of\s+([\d,]+)/i,                              // staff of 500
-      /(\d[\d,]+)\s*(?:full.time\s+)?(?:staff|workers|people)/i,
-    ];
-
-    let employees = null;
-    let employeeRange = null;
-
-    for (const pat of patterns) {
-      const m = text.match(pat);
-      if (m) {
-        if (m[2]) {
-          // Range match
-          const low = parseInt(m[1].replace(/,/g,''));
-          const high = parseInt(m[2].replace(/,/g,''));
-          employees = Math.round((low + high) / 2);
-          employeeRange = `${m[1]}–${m[2]}`;
-        } else {
-          employees = parseInt(m[1].replace(/,/g,''));
-          employeeRange = m[1];
-        }
-        if (employees > 0 && employees < 10000000) break; // sanity check
-      }
-    }
-
-    // Also try to grab website from the same search
-    let website = null;
-    const siteMatch = text.match(/(?:website|visit)[:\s]+([a-z0-9.-]+\.[a-z]{2,})/i);
-    if (siteMatch) website = 'https://' + siteMatch[1];
-
-    // ICP decision
-    let icpPass = null;
-    let icpReason = '';
-    if (employees === null) {
-      icpPass = null; // unknown — don't block, but flag
-      icpReason = 'employee count not found in search results';
-    } else if (employees < 10) {
-      icpPass = false;
-      icpReason = `Too small (${employeeRange} employees) — likely no budget`;
-    } else if (employees <= 200) {
-      icpPass = true;
-      icpReason = `${employeeRange} employees — CEO likely still reachable`;
-    } else if (employees <= 500) {
-      icpPass = 'soft'; // show warning but let through
-      icpReason = `${employeeRange} employees — may have management layers, verify reachability`;
-    } else {
-      icpPass = false;
-      icpReason = `Too large (${employeeRange} employees) — owner not reachable`;
-    }
-
-    console.log(`Size lookup [${companyName}]: ${employees || 'unknown'} employees → ${icpPass}`);
-    return { employees, employeeRange, website, icpPass, icpReason };
-  } catch(e) {
-    console.log('Size lookup failed:', e.message);
-    return { employees: null, icpPass: null, icpReason: 'lookup error: ' + e.message };
-  }
-};
-
 // Extract company website from search results
-const findWebsiteFromSearch = async (companyName) => {
-  const html = await googleSearch(`${companyName} official website`);
-  if (!html) return null;
-
-  // Extract result URLs — DuckDuckGo puts them in result__url or result__a
-  const urlMatches = html.match(/class="result__url"[^>]*>([^<]+)</g) || [];
-  const hrefMatches = html.match(/href="([^"]+)"[^>]*class="result__a"/g) || [];
-
-  const candidates = [];
-
-  // From result URLs (displayed domain text)
-  for (const m of urlMatches) {
-    const domain = m.replace(/class="result__url"[^>]*>/, '').replace(/<.*/, '').trim();
-    if (domain && !domain.includes('duckduckgo') && !domain.includes('wikipedia') &&
-        !domain.includes('linkedin') && !domain.includes('facebook') &&
-        !domain.includes('yelp') && !domain.includes('indeed') && !domain.includes('glassdoor')) {
-      candidates.push('https://' + domain.replace(/^https?:\/\//, '').split('/')[0]);
-    }
-  }
-
-  // From actual href links
-  for (const m of hrefMatches) {
-    const href = m.match(/href="([^"]+)"/)?.[1];
-    if (href && href.startsWith('http') && !href.includes('duckduckgo')) {
-      try {
-        const domain = new URL(href).hostname.replace('www.', '');
-        if (!domain.includes('wikipedia') && !domain.includes('linkedin') &&
-            !domain.includes('facebook') && !domain.includes('yelp') &&
-            !domain.includes('indeed') && !domain.includes('glassdoor') &&
-            !domain.includes('bloomberg') && !domain.includes('crunchbase')) {
-          candidates.push('https://' + domain);
-        }
-      } catch {}
-    }
-  }
-
-  if (!candidates.length) return null;
-
-  // Pick the best match — prefer domains containing company name words
-  const nameWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-  for (const url of candidates) {
-    const domain = url.toLowerCase();
-    if (nameWords.some(w => domain.includes(w))) return url;
-  }
-
-  return candidates[0]; // Fallback to first result
-};
-
 // Extract headcount from search results — same as Googling "[company] number of employees"
-const getCompanyHeadcount = async (companyName) => {
-  const html = await googleSearch(`${companyName} number of employees headcount`);
-  if (!html) return null;
-
-  // Look for patterns like "X employees", "X,XXX employees", "X-XXX employees"
-  const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ');
-
-  const patterns = [
-    /(\d{1,3}(?:,\d{3})*)\s*(?:to|-)\s*(\d{1,3}(?:,\d{3})*)\s*employees/i,  // "1,000 to 5,000 employees"
-    /(\d{1,3}(?:,\d{3})+)\s*employees/i,  // "10,000 employees"
-    /employees?\s*[:·]\s*(\d{1,3}(?:,\d{3})*)/i,  // "Employees: 5,000"
-    /(\d{1,3}(?:,\d{3})*)\s*(?:full[- ]time\s*)?(?:staff|workers|people|team members)/i,
-    /workforce\s*of\s*(\d{1,3}(?:,\d{3})*)/i,
-    /(\d+)K\s*employees/i,  // "50K employees"
-    /(\d{1,4})\s*employees/i,  // small companies "250 employees"
-  ];
-
-  for (const pattern of patterns) {
-    const m = text.match(pattern);
-    if (m) {
-      let count;
-      if (m[2]) {
-        // Range — use the average
-        const lo = parseInt(m[1].replace(/,/g, ''));
-        const hi = parseInt(m[2].replace(/,/g, ''));
-        count = Math.round((lo + hi) / 2);
-      } else if (m[1].endsWith && m[0].includes('K')) {
-        count = parseInt(m[1]) * 1000;
-      } else {
-        count = parseInt(m[1].replace(/,/g, ''));
-      }
-      if (count > 0 && count < 10000000) {
-        console.log(`Headcount for ${companyName}: ~${count}`);
-        return count;
-      }
-    }
-  }
-
-  return null;
-};
-
 // ICP size gate — under 500 employees = passes, over 1000 = blocked, 500-1000 = borderline
-const checkCompanySize = async (companyName) => {
-  const headcount = await getCompanyHeadcount(companyName);
-  if (headcount === null) return { passes: true, headcount: null, reason: 'size unknown — allowing through' };
-  if (headcount <= 200) return { passes: true, headcount, reason: `${headcount} employees — strong ICP fit` };
-  if (headcount <= 500) return { passes: true, headcount, reason: `${headcount} employees — within ICP range` };
-  if (headcount <= 1000) return { passes: true, headcount, reason: `${headcount} employees — borderline, score reduced` };
-  return { passes: false, headcount, reason: `${headcount} employees — too large, outside ICP` };
-};
-
 app.get('/api/find-website', async (req, res) => {
   const { company } = req.query;
   if (!company) return res.status(400).json({ error: 'Company name required' });
@@ -680,66 +480,6 @@ app.get('/api/find-website', async (req, res) => {
 // ═══ GOOGLE ENRICHMENT — employee count + real website from Google search ════
 // Runs after initial ICP filter, before scoring. One search per company.
 // Returns { employees: number|null, website: string|null, revenue: string|null }
-const googleEnrich = async (companyName) => {
-  try {
-    // Size/website from Clearbit (reliable, fast, free)
-    // CEO/pain from DDG via CF Worker (best effort)
-    const [clearbitRes, ceoHtml, painHtml] = await Promise.all([
-      getSizeOnly(companyName),
-      googleSearch(`${companyName} CEO founder owner`),
-      googleSearch(`${companyName} reviews complaints problems`),
-    ]);
-
-    const clean = (h) => (h || '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ');
-
-    // HEADCOUNT + WEBSITE from Clearbit
-    const employees = clearbitRes ? clearbitRes.employees : null;
-    const website = clearbitRes ? clearbitRes.website : null;
-
-    // CEO / DECISION MAKER
-    let ceoName = null;
-    let ceoTitle = null;
-    const ceoText = clean(ceoHtml);
-    const ceoPatterns = [
-      /(?:CEO|Chief Executive Officer)[,\s]+([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/,
-      /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?),?\s+(?:CEO|Chief Executive Officer|founder|co-founder|President)/,
-      /founder(?:\s+and\s+CEO)?[,\s]+([A-Z][a-z]+ [A-Z][a-z]+)/i,
-      /led by\s+([A-Z][a-z]+ [A-Z][a-z]+)/,
-      /(?:CEO|founder|President)\s+([A-Z][a-z]+ [A-Z][a-z]+)/,
-    ];
-    for (const pat of ceoPatterns) {
-      const m = ceoText.match(pat);
-      if (m && m[1] && m[1].length < 40 && !/company|corporation|inc|llc/i.test(m[1])) {
-        ceoName = m[1].trim();
-        ceoTitle = 'CEO';
-        break;
-      }
-    }
-
-    // PAIN SIGNALS from reviews search
-    const painText = clean(painHtml);
-    const painSignals = [];
-    const painKeywords = ['slow', 'bad customer service', 'outdated', 'confusing', 'expensive', 'broken', 'poor', 'terrible', 'unresponsive', 'no support', 'buggy', 'clunky', 'ancient', 'legacy'];
-    const snippets = painText.match(/[A-Z][^.!?]{20,180}[.!?]/g) || [];
-    const firstWord = companyName.toLowerCase().split(' ')[0];
-    for (const snip of snippets.slice(0, 15)) {
-      const low = snip.toLowerCase();
-      if (painKeywords.some(k => low.includes(k)) && low.includes(firstWord)) {
-        painSignals.push(snip.trim().slice(0, 180));
-        if (painSignals.length >= 3) break;
-      }
-    }
-
-    // REVENUE — not available from Clearbit free tier, skip for now
-    const revenue = null;
-
-    console.log(`Enrich [${companyName}]: emp=${employees||'?'} site=${website||'?'} ceo=${ceoName||'?'} pain=${painSignals.length} rev=${revenue||'?'}`);
-    return { employees, website, revenue, ceoName, ceoTitle, painSignals };
-  } catch(e) {
-    console.log(`Enrich failed [${companyName}]:`, e.message);
-    return { employees: null, website: null, revenue: null, ceoName: null, ceoTitle: null, painSignals: [] };
-  }
-};
 const searchAdzuna = async (appId, appKey, location) => {
   if (!appId || !appKey) { console.log('Adzuna: no keys'); return []; }
   try {
@@ -1173,38 +913,7 @@ const searchAdzuna = async (appId, appKey, location) => {
 // ═══════════════════════════════════════════════════════════
 // EMAIL INFRASTRUCTURE CHECK — SPF/DMARC via Google DNS API. Free, factual.
 // No DMARC = they've never set up serious email marketing/deliverability.
-const checkEmailDNS = async (domain) => {
-  try {
-    const clean = domain.replace(/^www\./, '');
-    const [spfR, dmarcR] = await Promise.all([
-      fetchT(`https://dns.google/resolve?name=${clean}&type=TXT`, {}, 6000).then(r=>r.json()).catch(()=>({})),
-      fetchT(`https://dns.google/resolve?name=_dmarc.${clean}&type=TXT`, {}, 6000).then(r=>r.json()).catch(()=>({})),
-    ]);
-    const spfTxt = (spfR.Answer||[]).map(a=>a.data||'').join(' ');
-    const dmarcTxt = (dmarcR.Answer||[]).map(a=>a.data||'').join(' ');
-    return {
-      hasSPF: /v=spf1/i.test(spfTxt),
-      hasDMARC: /v=DMARC1/i.test(dmarcTxt),
-      dmarcPolicy: (dmarcTxt.match(/p=(none|quarantine|reject)/i)||[])[1] || '',
-      confirmed: true,
-    };
-  } catch { return { hasSPF:false, hasDMARC:false, dmarcPolicy:'', confirmed:false }; }
-};
-
 // CONTENT FRESHNESS — sitemap.xml lastmod dates. "Last update 14 months ago" is provable.
-const checkContentFreshness = async (domain) => {
-  try {
-    const r = await fetchT(`https://${domain}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 8000);
-    const xml = await safeText(r);
-    if (!xml || !xml.includes('<lastmod>')) return { checked:false };
-    const dates = [...xml.matchAll(/<lastmod>([^<]+)<\/lastmod>/g)].map(m=>new Date(m[1])).filter(d=>!isNaN(d));
-    if (!dates.length) return { checked:false };
-    const newest = new Date(Math.max(...dates));
-    const daysSince = Math.floor((Date.now()-newest)/(24*60*60*1000));
-    return { checked:true, lastUpdate: newest.toISOString().split('T')[0], daysSince, stale: daysSince > 180 };
-  } catch { return { checked:false }; }
-};
-
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE: THEIRSTACK — the size problem solved AT THE QUERY.
 // Unlike Adzuna, TheirStack filters by company size BEFORE returning results.
@@ -1592,28 +1301,6 @@ const searchSECEdgar = async () => {
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 3: CLUTCH RSS — agency frustration
 // ═══════════════════════════════════════════════════════════
-const scrapeClutchRSS = async () => {
-  const results = [];
-  const feeds = ['https://clutch.co/feed', 'https://clutch.co/agencies/digital-marketing/feed'];
-  for (const feedUrl of feeds) {
-    try {
-      const xml = await fetchViaProxy(feedUrl);
-      if (!xml || xml.trim().startsWith('<!DOCTYPE')) continue;
-      const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-      items.slice(0,10).forEach(item => {
-        const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
-        const reviewMatch = title.match(/^(.+?)\s+(?:Review|review)/);
-        if (reviewMatch && reviewMatch[1].length > 2 && reviewMatch[1].length < 60) {
-          results.push({ name: reviewMatch[1].trim(), source: 'clutch_review', jobTitle: 'Left agency review on Clutch', signals: { agency_review: true } });
-        }
-      });
-      if (results.length > 0) break;
-    } catch(e) { /* try next */ }
-  }
-  console.log('Clutch: ' + results.length);
-  return results;
-};
-
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 4: GOOGLE NEWS RSS — CMO hires + funding
 // ═══════════════════════════════════════════════════════════
@@ -2123,13 +1810,6 @@ const authorityScore = (title) => {
 
 // Generic inboxes: at a 15-person company info@ often IS the owner's desk, so
 // it beats reaching a junior employee. At a 200-person company it's a black hole.
-const genericInboxScore = (employees) => {
-  if (!employees) return 45;
-  if (employees <= 25) return 65;   // small shop — info@ likely lands on the owner
-  if (employees <= 75) return 45;
-  return 25;                        // bigger — info@ goes to a queue
-};
-
 // ═══════════════════════════════════════════════════════════════════════════
 // DECISION-MAKER ENGINE — finding the OWNER, not just a contact
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3058,76 +2738,6 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern };
 };
 
-const enrichFromAboutPage = async (website, fcKey, homepageContent) => {
-  const result = { ceoName: null, ceoTitle: null, teamSize: null, founderQuote: null };
-  if (!website || !fcKey) return result;
-
-  try {
-    const base = website.replace(/\/$/, '');
-    // Try common about/team page paths, and mine homepage content we already have
-    const textPool = [homepageContent || ''];
-
-    // Scrape the most likely leadership page (one extra Firecrawl call)
-    const candidates = ['/about', '/about-us', '/team', '/our-team', '/leadership', '/company'];
-    for (const path of candidates) {
-      const md = await firecrawlScrape(fcKey, base + path, 12000);
-      if (md && md.length > 300) {
-        textPool.push(md);
-        break; // one good page is enough
-      }
-    }
-
-    const text = textPool.join(' \n ').replace(/\s+/g, ' ');
-
-    // Extract founder/CEO/owner name + title
-    const titlePatterns = [
-      /([A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+)\s*,?\s*(?:is\s+the\s+)?(?:founder\s*(?:and|&)\s*CEO|CEO\s*(?:and|&)\s*founder|chief executive officer|founder|co-?founder|owner|president|managing (?:partner|director)|principal)/i,
-      /(?:founder\s*(?:and|&)\s*CEO|CEO|founder|co-?founder|owner|president|managing (?:partner|director)|principal)[:\s]+([A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+)/i,
-      /(?:led|founded|started|owned)\s+by\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+)/i,
-    ];
-    for (const pat of titlePatterns) {
-      const m = text.match(pat);
-      if (m && m[1] && m[1].length < 40) {
-        const name = m[1].trim();
-        const words = name.split(/\s+/);
-        // Must be 2-3 words, each a proper capitalized name-like token (3+ letters for first/last)
-        const looksLikeName = words.length >= 2 && words.length <= 3 &&
-          /^[A-Z][a-z]{2,}$/.test(words[0]) &&
-          /^[A-Z][a-z]{2,}$/.test(words[words.length - 1]);
-        // Reject company terms and common non-name words
-        const isJunk = /company|corporation|solutions|services|group|industries|systems|about|contact|our team|the team|core|home|welcome|our story|leadership|management team|meet the/i.test(name);
-        if (looksLikeName && !isJunk) {
-          result.ceoName = name;
-          const titleMatch = m[0].match(/founder\s*(?:and|&)\s*CEO|CEO\s*(?:and|&)\s*founder|chief executive officer|co-?founder|founder|owner|president|managing (?:partner|director)|principal/i);
-          result.ceoTitle = titleMatch ? titleMatch[0] : 'Owner';
-          break;
-        }
-      }
-    }
-
-    // Extract team size signal ("team of 40", "50+ employees", "our 200 professionals")
-    const sizePatterns = [
-      /team\s+of\s+(?:over\s+|more\s+than\s+)?([0-9,]+)/i,
-      /([0-9,]+)\+?\s*(?:employees|team members|professionals|staff|people|experts)/i,
-      /(?:over|more than)\s+([0-9,]+)\s*(?:employees|team members|professionals|staff)/i,
-    ];
-    for (const pat of sizePatterns) {
-      const m = text.match(pat);
-      if (m && m[1]) {
-        const n = parseInt(m[1].replace(/,/g, ''));
-        if (n > 0 && n < 100000) { result.teamSize = n; break; }
-      }
-    }
-
-    if (result.ceoName || result.teamSize) {
-      console.log(`About-page enrich: ceo=${result.ceoName||'?'} (${result.ceoTitle||'?'}) team=${result.teamSize||'?'}`);
-    }
-  } catch(e) {
-    console.log('About-page enrich failed (non-fatal):', e.message);
-  }
-  return result;
-};
-
 // FACEBOOK AD LIBRARY VIA FIRECRAWL — automates the manual "All ads" check.
 // The Ad Library is a JS app so plain fetch fails; Firecrawl renders it.
 // Returns confirmed ad presence + rough count, no Meta token needed.
@@ -3353,9 +2963,28 @@ ${corpus}` }]
 
     const d = await r.json();
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    const fb = text.indexOf('{'); let lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    // The listings array is long and often gets truncated at max_tokens, which
+    // made JSON.parse throw "Unexpected end of JSON input" and silently return
+    // [] every run — the whole reason BizBuySell looked dead. Repair a truncated
+    // object the same way the critique pass does: drop the last incomplete
+    // element, then close any open brackets/braces.
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      let repaired = text;
+      const lastComplete = repaired.lastIndexOf('}');
+      if (lastComplete > 0) repaired = repaired.slice(0, lastComplete + 1);
+      if ((repaired.match(/"/g) || []).length % 2 !== 0) repaired += '"';
+      const opensArr = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+      const opensObj = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
+      if (opensObj > 0) repaired += '}'.repeat(opensObj);
+      if (opensArr > 0) repaired += ']'.repeat(opensArr);
+      try { parsed = JSON.parse(repaired); }
+      catch { console.log('For-sale: JSON unrepairable, skipping run'); return []; }
+    }
 
     const out = (parsed.listings || [])
       .filter(l => l.name && l.name.length > 3)
@@ -3450,96 +3079,12 @@ const searchFacebookAds = async (fbToken) => {
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 5: REDDIT RSS — founders in active pain
 // ═══════════════════════════════════════════════════════════
-const scrapeReddit = async () => {
-  const results = [];
-  const searches = [
-    { url: 'https://www.reddit.com/r/entrepreneur/search.json?q=marketing+agency&sort=new&limit=15&restrict_sr=1&t=month', sub: 'entrepreneur' },
-    { url: 'https://www.reddit.com/r/smallbusiness/search.json?q=website+marketing&sort=new&limit=15&restrict_sr=1&t=month', sub: 'smallbusiness' },
-    { url: 'https://www.reddit.com/r/startups/search.json?q=marketing+hire&sort=new&limit=15&restrict_sr=1&t=month', sub: 'startups' },
-  ];
-  for (const { url, sub } of searches) {
-    try {
-      // Try direct first, fallback to proxy
-      let d = null;
-      try {
-        const r = await fetchT(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'CROJungle/1.0' } }, 8000);
-        if (r.ok) d = await safeJson(r);
-      } catch(e) {}
-      if (!d) {
-        const txt = await fetchViaProxy(url);
-        try { d = JSON.parse(txt); } catch(e) {}
-      }
-      const posts = d?.data?.children || [];
-      posts.forEach(post => {
-        const p = post?.data;
-        if (!p || !p.title || !p.author || p.author === '[deleted]') return;
-        const text = p.title + ' ' + (p.selftext||'').slice(0,200);
-        const isPain = /agency|website|marketing|ads|revenue|customers|growth|leads|conversion|redesign|CMO|branding|SEO/i.test(text);
-        if (!isPain) return;
-        results.push({
-          name: 'u/' + p.author + ' (r/' + sub + ')',
-          website: '',
-          jobTitle: p.title.slice(0,80),
-          jobSnippet: (p.selftext||'').slice(0,150),
-          source: 'reddit_pain',
-          signals: { social_pain_signal: true, founder_venting: true },
-        });
-      });
-    } catch(e) { console.log('Reddit ' + sub + ':', e.message); }
-  }
-  console.log('Reddit: ' + results.length);
-  return results;
-};
-
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 6: PRODUCT HUNT — just launched
 // ═══════════════════════════════════════════════════════════
-const scrapeProductHunt = async () => {
-  try {
-    const xml = await fetchViaProxy('https://www.producthunt.com/feed');
-    if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.length < 100) {
-      console.log('Product Hunt: blocked via proxy too');
-      return [];
-    }
-    const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-    const results = items.slice(0,20).map(item => {
-      const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
-      if (!title) return null;
-      return { name: title.split(' — ')[0].split(' - ')[0].trim().slice(0,60), source: 'product_hunt', jobTitle: 'Just launched on Product Hunt', signals: { recently_launched: true, needs_marketing: true } };
-    }).filter(Boolean);
-    console.log('Product Hunt: ' + results.length);
-    return results;
-  } catch(e) { console.error('Product Hunt error:', e.message); return []; }
-};
-
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE 7: PR NEWSWIRE — expansions + hires
 // ═══════════════════════════════════════════════════════════
-const scrapePRNewswire = async () => {
-  try {
-    const xml = await fetchViaProxy('https://www.prnewswire.com/rss/news-releases-list.rss', 10000);
-    if (!xml || xml.trim().startsWith('<!DOCTYPE') || xml.trim().startsWith('<html')) {
-      console.log('PR Newswire: blocked');
-      return [];
-    }
-    const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-    const results = [];
-    items.slice(0,30).forEach(item => {
-      const title = (item.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || item.match(/<title>([^<]+)<\/title>/))?.[1] || '';
-      if (!title) return;
-      const relevant = /launch|CMO|VP marketing|Series [AB]|funding|raise|rebrand|expand/i.test(title);
-      if (!relevant) return;
-      const m = title.match(/^([A-Z][A-Za-z0-9\s&\.\,]+?)(?:\s+(?:Announces|Launches|Raises|Hires|Appoints|Expands|Closes|Unveils))/);
-      if (!m) return;
-      const isFunding = /raises|funding|Series|closes/i.test(title);
-      const isHire = /hires|appoints|CMO|VP marketing/i.test(title);
-      results.push({ name: m[1].trim(), source: 'pr_newswire', jobTitle: title.slice(0,80), signals: { raised_funding: isFunding, hiring_marketing: isHire, recently_launched: /launch|unveil/i.test(title) } });
-    });
-    console.log(`PR Newswire: ${results.length}`);
-    return results;
-  } catch(e) { console.error('PR Newswire error:', e.message); return []; }
-};
-
 // ═══════════════════════════════════════════════════════════
 // MASTER DISCOVERY — all 7 sources fire simultaneously
 // Total budget: ~8 seconds (Render free tier safe)
@@ -3589,50 +3134,6 @@ const OWNER_LED_HINTS = /\b(family|family-owned|founder|owner|studio|shop|boutiq
 // reply AND be able to buy? The data shows this interaction matters enormously:
 // a founder at 20 people is the single best target on earth; a CEO at 400 is
 // insulated and slow; a Director at 300 replies well but cannot sign a $50k build.
-const titleSizeFit = (title, employees) => {
-  const t = (title || '').toLowerCase();
-  const emp = employees || 0;
-  const isOwner    = /founder|owner|co-?founder|proprietor/.test(t);
-  const isCEO      = /ceo|chief executive|president/.test(t);
-  const isPartner  = /managing (partner|director)|principal|partner/.test(t);
-  const isOps      = /coo|chief operating|general manager|\bgm\b|vp of operations/.test(t);
-  const isVP       = /\bvp\b|vice president|head of/.test(t);
-  const isDirector = /director/.test(t);
-
-  // Small (<=50): founders and CEOs dominate. This is the sweet spot.
-  if (emp > 0 && emp <= 50) {
-    if (isOwner) return { fit: 30, why: 'Owner at a sub-50 company — the single most responsive target in cold email' };
-    if (isCEO)   return { fit: 27, why: 'CEO at a small company — reads their own inbox, can say yes this week' };
-    if (isPartner) return { fit: 24, why: 'Managing partner at a small firm — direct authority' };
-    if (isOps)   return { fit: 18, why: 'Ops lead at a small company — close to the owner' };
-    if (isVP || isDirector) return { fit: 8, why: 'Below owner level at a small company — likely not the buyer' };
-    return { fit: 5, why: 'Unclear authority' };
-  }
-  // Mid (51-200): still founder-led, but ops leaders gain real budget authority.
-  if (emp > 50 && emp <= 200) {
-    if (isOwner) return { fit: 27, why: 'Owner of a 50-200 person company — still hands-on, still signs' };
-    if (isCEO)   return { fit: 24, why: 'CEO at 50-200 — reachable, holds the budget' };
-    if (isPartner) return { fit: 22, why: 'Managing partner — direct authority' };
-    if (isOps)   return { fit: 20, why: 'COO/GM at this size genuinely owns operational budget' };
-    if (isVP)    return { fit: 10, why: 'VP — may influence, rarely signs a build this size' };
-    if (isDirector) return { fit: 6, why: 'Director — needs approval for a purchase this size' };
-    return { fit: 5, why: 'Unclear authority' };
-  }
-  // Upper (201-500): the fuzzy edge. Founders get insulated; ops leaders take over.
-  if (emp > 200) {
-    if (isOwner || isCEO) return { fit: 14, why: `${emp} employees — the founder is getting insulated by layers` };
-    if (isOps)  return { fit: 16, why: `COO/GM at ${emp} — often the real operational buyer at this size` };
-    if (isVP)   return { fit: 10, why: 'VP at a larger company — influences, needs sign-off' };
-    if (isDirector) return { fit: 6, why: 'Director — replies well but cannot authorize this spend' };
-    return { fit: 4, why: 'Unclear authority at scale' };
-  }
-  // No headcount known — score the title alone, conservatively.
-  if (isOwner || isCEO) return { fit: 18, why: 'Owner/CEO identified (company size unconfirmed)' };
-  if (isPartner || isOps) return { fit: 12, why: 'Senior operator identified (size unconfirmed)' };
-  if (isVP || isDirector) return { fit: 5, why: 'Below owner level (size unconfirmed)' };
-  return { fit: 3, why: 'No clear decision-maker' };
-};
-
 // ═══════════════════════════════════════════════════════════════════════════
 // SIGNAL ENGINE — freshness, decay, and ACTIVE stacking
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5397,76 +4898,7 @@ const guessEmailFromName = (fullName, domain) => {
   return `${first}.${last}@${clean}`;
 };
 
-const getFounderEmail = async (domain, hunterKey, fallbackName) => {
-  if (!domain) return { email:'', founderName:'' };
-  if (!hunterKey) {
-    const guess = guessEmailFromName(fallbackName, domain);
-    return guess ? { email: guess, founderName: fallbackName || '', guessed: true } : { email:'', founderName:'' };
-  }
-  try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`);
-    const d = await safeJson(r);
-
-    // ═══ CREDIT EXHAUSTION DETECTION ═══════════════════════════════════════
-    // Hunter returns 401/403/429 with a specific error when credits run out.
-    const errCode = d?.errors?.[0]?.code;
-    const errId = d?.errors?.[0]?.id;
-    const outOfCredits = r.status === 402 || errCode === 402 ||
-      /credit|quota|limit/i.test(d?.errors?.[0]?.details || '') ||
-      errId === 'usage_limit_reached';
-
-    if (outOfCredits) {
-      console.log(`⚠️ HUNTER CREDITS EXHAUSTED — falling back to pattern guess for ${clean}`);
-      const guess = guessEmailFromName(fallbackName, clean);
-      return guess
-        ? { email: guess, founderName: fallbackName || '', guessed: true, creditsOut: true }
-        : { email: '', founderName: '', creditsOut: true };
-    }
-
-    const emails = d.data?.emails || [];
-    const priority = ['ceo','founder','co-founder','owner','president','cmo'];
-    const sorted = emails.sort((a,b) => {
-      const aS = priority.findIndex(p=>(a.position||'').toLowerCase().includes(p));
-      const bS = priority.findIndex(p=>(b.position||'').toLowerCase().includes(p));
-      return (aS===-1?99:aS)-(bS===-1?99:bS);
-    });
-    const best = sorted[0];
-    if (best?.value) {
-      return { email: best.value, founderName: `${best.first_name||''} ${best.last_name||''}`.trim(), title: best.position||'' };
-    }
-    // Hunter found nothing — try the free pattern guess before giving up
-    const guess = guessEmailFromName(fallbackName, clean);
-    return guess ? { email: guess, founderName: fallbackName || '', guessed: true } : { email:'', founderName:'' };
-  } catch {
-    const guess = guessEmailFromName(fallbackName, domain);
-    return guess ? { email: guess, founderName: fallbackName || '', guessed: true } : { email:'', founderName:'' };
-  }
-};
-
 const pageSpeedCache = new Map();
-const checkPageSpeed = async (url) => {
-  if (!url) return { mobileScore: null, confirmed: false };
-  // Cache results for 24 hours to avoid 429s
-  const cacheKey = url.toLowerCase();
-  if (pageSpeedCache.has(cacheKey)) {
-    const cached = pageSpeedCache.get(cacheKey);
-    if (Date.now() - cached.ts < 24*60*60*1000) return cached.data;
-  }
-  try {
-    const r = await fetchT(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`, {}, 15000);
-    if (r.status === 429) {
-      console.log('PageSpeed: rate limited — skipping');
-      return { mobileScore: null, confirmed: false };
-    }
-    const d = await safeJson(r);
-    const score = d.lighthouseResult?.categories?.performance?.score;
-    const data = { mobileScore: score ? Math.round(score*100) : null, lcp: d.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue||null, confirmed: !!score };
-    pageSpeedCache.set(cacheKey, { data, ts: Date.now() });
-    return data;
-  } catch { return { mobileScore: null, confirmed: false }; }
-};
-
 // DIRECT SITE FINGERPRINTING — fetch the raw HTML and detect the actual
 // scripts on the page. Far more reliable than scraping builtwith.com:
 // a Google Ads conversion tag (AW-xxxx) in their source = they run Google Ads.
