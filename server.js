@@ -1929,7 +1929,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 600,
         messages: [{ role: 'user', content: `Content scraped from ${companyName}'s own website (homepage + their about/team/leadership pages).
 
@@ -2026,7 +2026,7 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 600,
         messages: [{ role: 'user', content: `These are real web search results about the company "${companyName}"${domain ? ' (' + domain + ')' : ''}${loc ? ' located in ' + loc : ''}.
 
@@ -2116,7 +2116,7 @@ const visionAuditPage = async (screenshotBase64, companyName, apiKey) => {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 700,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } },
@@ -2362,7 +2362,7 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, l
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 900,
         messages: [{ role: 'user', content: `Real web content about "${companyName}"${industry ? ' (' + industry + ')' : ''} — reviews, complaints, employee feedback, press.
 
@@ -2886,7 +2886,7 @@ const findFounderVenting = async (fcKey, apiKey) => {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1400,
         messages: [{ role: 'user', content: `These are real Reddit posts from business owners.
 
@@ -2990,7 +2990,7 @@ const findBusinessesForSale = async (fcKey, apiKey) => {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 2000,
         messages: [{ role: 'user', content: `These are business-for-sale listings scraped from the web.
 
@@ -5771,7 +5771,16 @@ Return ONLY valid JSON, no markdown:
         const vd = await safeJson(visionRes);
         // Surface actual API errors instead of swallowing them
         if (vd.error) {
-          brainError = `Claude API error: ${vd.error.type || ''} — ${vd.error.message || JSON.stringify(vd.error).slice(0,200)}`;
+          const et = (vd.error.type || '') + ' ' + (vd.error.message || '');
+          if (/rate.?limit|429|too many requests/i.test(et)) {
+            brainError = 'Anthropic rate limit — too many requests too fast (NOT a billing/credits problem). Retry in a moment.';
+          } else if (/overloaded|529|503/i.test(et)) {
+            brainError = 'Anthropic servers are temporarily overloaded (NOT a billing problem). Retry in a moment.';
+          } else if (/credit balance|too low|billing|payment/i.test(et)) {
+            brainError = 'Anthropic credit balance is low — top up at console.anthropic.com.';
+          } else {
+            brainError = `Claude API error: ${vd.error.type || ''} — ${vd.error.message || JSON.stringify(vd.error).slice(0,200)}`;
+          }
           console.log('BRAIN ERROR:', brainError);
         }
         const vText = vd.content?.[0]?.text || '';
@@ -6331,7 +6340,7 @@ Return ONLY valid JSON:
         ? brainError
         : !firecrawlKey
         ? 'Firecrawl key missing — add fc-... key in Settings so we can scrape the homepage'
-        : 'Brain analysis failed — Claude API returned an error. Check your Anthropic key in Settings (sk-ant-...) and make sure it has credits.';
+        : 'Brain analysis failed — the Anthropic API returned an error. If this says "rate limit," it is NOT a billing problem — just retry. Otherwise check your key (sk-ant-...) in Settings.';
 
       console.log(`Brain gate blocked: ${reason}`);
       return res.status(422).json({
