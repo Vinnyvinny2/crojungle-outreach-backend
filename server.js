@@ -1911,7 +1911,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
 
     // Read the real pages IN PARALLEL (was sequential — that alone cost ~20s)
-    const top = candidates.slice(0, 1); // 1 page: the top leadership page almost always has the owner — halves the scrape cost
+    const top = candidates.slice(0, 2); // read the top 2 leadership pages — owner-finding is the essential step, and the owner-gate saves credits elsewhere to pay for this depth
     const scrapes = await Promise.all(
       top.map(u => firecrawlScrape(fcKey, u, 9000).then(md => ({ u, md })).catch(() => ({ u, md: '' })))
     );
@@ -3437,7 +3437,14 @@ const scoreReachability = (c) => {
   const isRoleInbox = !!local && ROLE_INBOX.test(local);
   const personalMailbox = !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
   const emailMatchesOwner = ownerTokens.length > 0 && !!local && ownerTokens.some(t => local.includes(t));
-  const juniorTitle = /\b(vp|vice president|director|manager|coordinator|specialist|associate|assistant|\blead\b|representative|recruiter|hr)\b/i.test((dm && dm.title) || '');
+  // A SENIOR OPERATOR (GM, VP, Director, Partner, Principal) at a small business is
+  // close to the owner, feels the pain, and can forward or influence the buy — worth
+  // reaching, just not as the confirmed owner. A TRUE JUNIOR (coordinator, assistant,
+  // HR, rep) would just burn the lead.
+  const seniorOperator = /\b(gm|general manager|vice president|\bvp\b|director|partner|principal|managing|owner|founder|president|ceo|coo|chief)\b/i.test((dm && dm.title) || '');
+  const trueJunior = /\b(coordinator|specialist|associate|assistant|recruiter|\bhr\b|clerk|receptionist|intern|apprentice|technician|customer service)\b/i.test((dm && dm.title) || '') && !seniorOperator;
+  const juniorTitle = trueJunior;
+  const ownerLevelTitle = /\b(owner|founder|president|ceo|principal|managing (partner|director))\b/i.test((dm && dm.title) || '') || emailMatchesOwner;
 
   // ── CORE OUTCOME (sets the base) ──────────────────────────────────────────
   let score;
@@ -3456,9 +3463,16 @@ const scoreReachability = (c) => {
   } else {
     score = 12; reasons.push('No decision-maker identified — we cannot confirm who to reach');
   }
-  if (foundOwner && juniorTitle && !emailMatchesOwner) {
-    score = Math.min(score, 40);
-    reasons.push(`Contact title "${dm && dm.title}" is below buying authority — find the owner/founder`);
+  // SENIOR-OPERATOR FALLBACK: not the owner, but a senior person we CAN reach — give
+  // a moderate, sendable score (they influence/forward the buy) with a verify flag.
+  if (foundOwner && seniorOperator && !ownerLevelTitle) {
+    if (deliverable) { score = Math.min(Math.max(score, 60), 66); }
+    else if (patternEmail || personalMailbox) { score = Math.min(Math.max(score, 52), 58); }
+    reasons.push(`Reaching ${dm && dm.name} (${(dm && dm.title) || 'senior'}) — a senior operator, not the confirmed owner. They likely feel the pain and can forward or influence the buy; verify authority before pitching hard.`);
+  }
+  if (foundOwner && trueJunior && !emailMatchesOwner) {
+    score = Math.min(score, 38);
+    reasons.push(`Contact title "${dm && dm.title}" is a junior role below buying authority — find the owner/founder`);
   }
 
   // ── BUSINESS-TYPE reachability confidence (who actually runs this place?) ──
@@ -3719,6 +3733,68 @@ const cacheSize = async (domain, data) => {
       band: data.band || data.empBand || null,
       industry: data.industry || null,
       src: data.source || 'companiesapi',
+      updated_at: new Date().toISOString(),
+    }]),
+  });
+};
+
+// ── CONTACT CACHE (Supabase) — the big credit saver ─────────────────────────
+// Owner-finding is the single most expensive step (Firecrawl map + 2 page scrapes
+// + web searches + LLM extraction). Owners and email patterns barely change, so we
+// cache them per domain and reuse — re-researching a lead becomes nearly free.
+// QUALITY GUARD: we ONLY cache a CONFIDENT result (a corroborated/high-confidence
+// owner, or a Tier 1-2 verified email). A weak guess is never cached, so the cache
+// can never lock in a bad answer — a low-confidence lead gets re-searched fresh.
+// Requires a Supabase table:
+//   create table contact_cache (
+//     domain text primary key, owner_name text, owner_title text,
+//     owner_sources text, owner_confidence text, owner_corroborated bool,
+//     email text, email_tier int, email_label text, revenue text,
+//     updated_at timestamptz default now());
+const CONTACT_CACHE_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
+const getCachedContact = async (domain) => {
+  if (!domain || !SB_URL || !SB_KEY) return null;
+  const rows = await sbRest(
+    `/contact_cache?domain=eq.${encodeURIComponent(domain)}&select=*`,
+    { method: 'GET', prefer: 'return=representation' }
+  );
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row) return null;
+  if (Date.now() - new Date(row.updated_at).getTime() > CONTACT_CACHE_TTL_MS) return null; // stale
+  return {
+    owner: row.owner_name ? {
+      name: row.owner_name, title: row.owner_title || null,
+      sources: (row.owner_sources || '').split('+').filter(Boolean),
+      confidence: row.owner_confidence || 'medium',
+      corroborated: !!row.owner_corroborated, score: 80, cached: true,
+    } : null,
+    email: row.email ? { email: row.email, tier: row.email_tier || 3, label: (row.email_label || 'cached') + ' (cached)', score: row.email_tier === 1 ? 100 : row.email_tier === 2 ? 95 : 75, sendable: (row.email_tier || 3) <= 3, cached: true } : null,
+    revenue: row.revenue || null,
+    pain: row.pain_json ? (()=>{ try { return JSON.parse(row.pain_json); } catch { return null; } })() : null,
+  };
+};
+const cacheContact = async (domain, { owner, email, revenue, pain }) => {
+  if (!domain || !SB_URL || !SB_KEY) return;
+  // Only cache CONFIDENT data — never lock in a weak guess.
+  const okOwner = owner && owner.name && (owner.corroborated || owner.confidence === 'high');
+  const okEmail = email && email.email && (email.tier === 1 || email.tier === 2);
+  const okPain = pain && Array.isArray(pain.signals) && pain.signals.length > 0;
+  if (!okOwner && !okEmail && !revenue && !okPain) return;
+  await sbRest('/contact_cache?on_conflict=domain', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=minimal',
+    body: JSON.stringify([{
+      domain,
+      owner_name: okOwner ? owner.name : null,
+      owner_title: okOwner ? (owner.title || null) : null,
+      owner_sources: okOwner ? (owner.sources || []).join('+') : null,
+      owner_confidence: okOwner ? (owner.confidence || 'medium') : null,
+      owner_corroborated: okOwner ? !!owner.corroborated : null,
+      email: okEmail ? email.email : null,
+      email_tier: okEmail ? email.tier : null,
+      email_label: okEmail ? (email.label || null) : null,
+      revenue: revenue || null,
+      pain_json: okPain ? JSON.stringify(pain) : null,
       updated_at: new Date().toISOString(),
     }]),
   });
@@ -5160,71 +5236,32 @@ app.post('/api/research', async (req, res) => {
     // in the search snippet, so this is now ~1 credit (snippet-only) — cheap enough
     // to run on EVERY research lead, including Places, to CONFIRM they clear the
     // ~$800k affordability bar instead of relying only on the review-count proxy.
-    if (!verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false) {
-      try {
-        const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location);
-        if (sz && sz.employees && !verifiedEmployees) {
-          verifiedEmployees = sz.employees;
-          console.log(`SIZE [${company}]: recovered ${sz.employees} employees via web search (${sz.source})`);
-        }
-        if (sz && sz.revenue) {
-          verifiedRevenue = sz.revenue;
-          console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`);
-        }
-      } catch(e) { console.log('Revenue search skipped:', e.message); }
+    // ═══ DECISION-MAKER FIRST — it's the gate for everything expensive ═════
+    // Owner-finding is the single most important step: no reachable owner = no
+    // send, so it must run BEFORE we spend Firecrawl/Anthropic on pain + revenue.
+    // (Previously those ran first and were wasted on unsendable leads.)
+    // ═══ CONTACT CACHE — read first, skip the expensive lookups on a hit ═══
+    // Owner + email + revenue barely change, so a fresh cached hit means near-zero
+    // credits for a re-research. "Re-run Research" (forceRefresh) bypasses it.
+    const forceRefresh = req.body.forceRefresh === true;
+    const cachedContact = (domain && !forceRefresh) ? await getCachedContact(domain).catch(() => null) : null;
+    if (cachedContact && (cachedContact.owner || cachedContact.email || cachedContact.revenue)) {
+      console.log(`CACHE HIT [${domain}]: ${cachedContact.owner ? 'owner ' : ''}${cachedContact.email ? 'email ' : ''}${cachedContact.revenue ? 'revenue' : ''}— skipping paid lookups`);
     }
+    if (cachedContact && cachedContact.revenue && !verifiedRevenue) verifiedRevenue = cachedContact.revenue;
 
-    // ═══ DEEP BUSINESS PAIN — what the owner is ACTUALLY fighting ══════════
-    // This is what turns "your website has no lead capture" (a website
-    // observation) into "your reviews say quotes take three weeks and you're
-    // hiring four schedulers" (the fire he's personally putting out).
-    //
-    // CREDIT DISCIPLINE: only run this when we don't already have pain signals,
-    // and only for leads worth the spend. Firecrawl free tier is 500/mo.
-    let painSummary = '';
-    // CREDIT GATE: the pain engine costs ~4 credits. Only spend it on leads that
-    // are actually worth pitching — i.e. we found a real decision-maker who can
-    // buy. Running it on every lead (including ones we'd never send to) was
-    // burning the monthly budget on companies that get discarded anyway.
-    // PAIN RESEARCH ALWAYS RUNS — it is the single most valuable input to the pitch.
-    // Skipping it on Quick mode was silently producing website-only audits with
-    // none of the story. This is the data that makes an owner think "how do they
-    // know this?" If Firecrawl is out of credits it returns empty and we fall back
-    // to the site audit — which is the correct behavior, not a skip.
-    if (publicPainSignals.length === 0 && firecrawlKey && apiKey && company) {
-      try {
-        const pain = await findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location);
-        if (pain.signals && pain.signals.length > 0) {
-          // Feed the Brain the pain WITH its evidence, so the pitch can quote it
-          publicPainSignals = pain.signals.map(s =>
-            `${s.pain} — evidence: "${String(s.evidence).slice(0, 140)}" (${s.source || 'web'})`
-          );
-          painSummary = pain.summary || '';
-        }
-      } catch(e) { console.log('Pain engine skipped:', e.message); }
-    }
-
-    // ═══ DECISION-MAKER ENGINE ═════════════════════════════════════════════
-    // Runs BEFORE the email engine, because knowing WHO we're targeting is what
-    // makes email pattern generation possible — and because reaching the wrong
-    // person (a marketing coordinator instead of the owner) wastes the entire
-    // audit. Corroborates across their website, public registries, news, and
-    // Hunter. Agreement across independent sources is what gets us near 90%.
     let decisionMaker = null;
-    if (company) {
+    if (cachedContact && cachedContact.owner) {
+      decisionMaker = cachedContact.owner;
+      if (!verifiedCEO) { verifiedCEO = decisionMaker.name; verifiedCEOTitle = decisionMaker.title || 'Owner'; }
+    } else if (company) {
       try {
         decisionMaker = await findDecisionMaker({
-          companyName: company,
-          website,
-          fcKey: firecrawlKey,
-          apiKey,
+          companyName: company, website, fcKey: firecrawlKey, apiKey,
           homepageContent: content,
-          hunterName: email.founderName || '',
-          hunterTitle: email.title || '',
+          hunterName: email.founderName || '', hunterTitle: email.title || '',
           location: req.body.location || '',
         });
-        // A corroborated owner beats whatever we had before. A lone weak hit does not
-        // override an already-verified name.
         if (decisionMaker && decisionMaker.name) {
           if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
             verifiedCEO = decisionMaker.name;
@@ -5233,13 +5270,47 @@ app.post('/api/research', async (req, res) => {
         }
       } catch(e) { console.log('Decision-maker engine failed (non-fatal):', e.message); }
     }
+    const ownerFound = !!(decisionMaker && decisionMaker.name) || !!verifiedCEO;
+    const isPlacesLead = discoverySource === 'google_places' || !!(discoverySignals && discoverySignals.local_owner_operated);
+
+    // ═══ PAIN + REVENUE — only if we can actually reach someone, run in PARALLEL ══
+    let painSummary = '';
+    if (cachedContact && cachedContact.pain && Array.isArray(cachedContact.pain.signals) && cachedContact.pain.signals.length) {
+      publicPainSignals = cachedContact.pain.signals;
+      painSummary = cachedContact.pain.summary || '';
+      console.log(`PAIN [${company}]: from cache (${publicPainSignals.length} signals)`);
+    }
+    if ((ownerFound || isPlacesLead) && !(cachedContact && cachedContact.pain)) {
+      const needPain = publicPainSignals.length === 0 && firecrawlKey && apiKey && company;
+      const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
+      const [painRes, revRes] = await Promise.allSettled([
+        needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
+        needRev  ? findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location) : Promise.resolve(null),
+      ]);
+      const pain = painRes.status === 'fulfilled' ? painRes.value : null;
+      if (pain && pain.signals && pain.signals.length > 0) {
+        publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source || 'web'})`);
+        painSummary = pain.summary || '';
+      }
+      const sz = revRes.status === 'fulfilled' ? revRes.value : null;
+      if (sz) {
+        if (sz.employees && !verifiedEmployees) { verifiedEmployees = sz.employees; console.log(`SIZE [${company}]: recovered ${sz.employees} employees (${sz.source})`); }
+        if (sz.revenue) { verifiedRevenue = sz.revenue; console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`); }
+      }
+    } else {
+      console.log(`Deep audit skipped for ${company}: no owner found (unsendable lead) — saved pain + revenue credits`);
+    }
 
     // ═══ FIREPROOF EMAIL ENGINE ════════════════════════════════════════════
     // Runs AFTER the CEO name is known (Hunter → About-page → Brain), because
     // the name is what makes pattern generation possible. Returns a scored,
     // tiered result — never a bare guess dressed up as a fact.
-    let emailResult = null;
-    if (website) {
+    let emailResult = (cachedContact && cachedContact.email) ? cachedContact.email : null;
+    if (emailResult) {
+      email.email = emailResult.email;
+      if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
+      console.log(`EMAIL [${company}]: from cache — ${emailResult.email}`);
+    } else if (website) {
       try {
         emailResult = await findEmailFireproof({
           website,
@@ -5262,6 +5333,13 @@ app.post('/api/research', async (req, res) => {
           if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
         }
       } catch(e) { console.log('Email engine failed (non-fatal):', e.message); }
+    }
+
+    // ═══ WRITE THE CONTACT CACHE — so this lead is near-free to re-research ═══
+    // Only confident results get stored (guard is inside cacheContact), so a weak
+    // guess never gets locked in. Fire-and-forget; never blocks the response.
+    if (domain && !cachedContact) {
+      cacheContact(domain, { owner: decisionMaker, email: emailResult, revenue: verifiedRevenue, pain: { signals: publicPainSignals, summary: painSummary } }).catch(() => {});
     }
 
     // ═══ COMPANY NEWS TRIGGERS — recent events for the pitch cold-open ═══════
