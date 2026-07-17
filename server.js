@@ -4122,6 +4122,49 @@ const sbRest = async (path, options = {}) => {
   } catch (e) { console.log('Supabase REST failed:', e.message); return null; }
 };
 
+// ── COMPANY SIZE CACHE (Supabase) ───────────────────────────────────────────
+// The Companies API charges 1 credit per full enrich. Company headcount barely
+// moves week to week, so we pay ONCE per domain and reuse it forever. This turns
+// 500 credits from a per-run burn into a durable asset — after the first couple
+// of runs, most sizing is free. TTL 45 days (re-verifies quarterly-ish).
+// Requires a Supabase table:
+//   create table company_size_cache (
+//     domain text primary key, employees int, band text, industry text,
+//     src text, updated_at timestamptz default now());
+const SIZE_CACHE_TTL_MS = 45 * 24 * 60 * 60 * 1000;
+const cleanDomainOf = (url) => (url || '')
+  .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
+const getCachedSize = async (domain) => {
+  if (!domain || !SB_URL || !SB_KEY) return null;
+  const rows = await sbRest(
+    `/company_size_cache?domain=eq.${encodeURIComponent(domain)}&select=domain,employees,band,industry,src,updated_at`,
+    { method: 'GET', prefer: 'return=representation' }
+  );
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row) return null;
+  if (Date.now() - new Date(row.updated_at).getTime() > SIZE_CACHE_TTL_MS) return null; // stale
+  return {
+    employees: row.employees || null, band: row.band || null, industry: row.industry || null,
+    source: (row.src || 'cache') + '-cached', sizeConfidence: 'trusted',
+    website: 'https://' + domain, cached: true,
+  };
+};
+const cacheSize = async (domain, data) => {
+  if (!domain || !SB_URL || !SB_KEY || !data) return;
+  await sbRest('/company_size_cache?on_conflict=domain', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=minimal',
+    body: JSON.stringify([{
+      domain,
+      employees: data.employees || null,
+      band: data.band || data.empBand || null,
+      industry: data.industry || null,
+      src: data.source || 'companiesapi',
+      updated_at: new Date().toISOString(),
+    }]),
+  });
+};
+
 // Map a discovered company to a discovered_queue row (mirrors the frontend shape)
 const companyToQueueRow = (c) => ({
   id: c.id || (c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40) + '_' + (c.source || 'find'),
@@ -4537,24 +4580,51 @@ const WEIGHTS = {
       .sort((a,b) => b._pre - a._pre);
     const toEnrich = preScored.slice(0, 140).map(x => x.c);
     const enrichResults = new Map();
-    console.log(`Size enrichment: checking top ${toEnrich.length} of ${icpFiltered.length} leads (free simplified calls)...`);
+    let creditsSpent = 0;
+    const CREDIT_CAP = 220; // hard per-run ceiling — a bad run can never drain the balance
+    console.log(`Size enrichment: sizing top ${toEnrich.length} of ${icpFiltered.length} leads (cache-first, own-domain enrich)...`);
 
     const SIZE_BATCH = 6;
-    // Combined size lookup: CompaniesAPI (if key + domain) → Wikipedia fallback
-    const lookupSize = async (c, allowCredit) => {
+    // Combined size lookup: cache → CompaniesAPI own-domain (1 credit) → name → Wikipedia/EDGAR
+    const lookupSize = async (c, allowEdgar) => {
       // ── Source 1: The Companies API (exact headcount when available) ──
       if (companiesApiKey) {
         const hadOwnSite = !!c.website;
-        let capi = null;
-        let viaOwnDomain = false;
-        if (c.website) { capi = await enrichViaCompaniesAPI(c.website, companiesApiKey); if (capi && capi.employees) viaOwnDomain = true; }
-        if (!capi || !capi.employees) capi = await searchCompaniesAPIByName(c.name, companiesApiKey);
-        if (capi && capi.website && !capi.employees && allowCredit) {
-          const full = await enrichViaCompaniesAPI(capi.website, companiesApiKey, true);
-          if (full && full.employees) capi.employees = full.employees;
+        let capi = null, viaOwnDomain = false;
+
+        // 0. Cache first — pay once per domain, ever.
+        const ownDomain = cleanDomainOf(c.website);
+        if (ownDomain) {
+          const cached = await getCachedSize(ownDomain);
+          if (cached && cached.employees) return { ...cached, website: c.website };
         }
+
+        // 1. Spend a credit on the lead's OWN domain — most accurate → 'trusted'.
+        if (c.website && creditsSpent < CREDIT_CAP) {
+          capi = await enrichViaCompaniesAPI(c.website, companiesApiKey, true); // full profile, 1 credit (0 if not found)
+          creditsSpent++;
+          if (capi && capi.employees) { viaOwnDomain = true; await cacheSize(ownDomain, { ...capi, source: 'companiesapi-domain' }); }
+        }
+
+        // 2. Fall back to strict name match (free), then a credit on the resolved domain.
+        if (!capi || !capi.employees) {
+          const byName = await searchCompaniesAPIByName(c.name, companiesApiKey);
+          if (byName && byName.employees) capi = byName;
+          else if (byName && byName.website && creditsSpent < CREDIT_CAP) {
+            const nd = cleanDomainOf(byName.website);
+            const ndCached = nd ? await getCachedSize(nd) : null;
+            if (ndCached && ndCached.employees) capi = { ...ndCached, website: byName.website };
+            else {
+              const full = await enrichViaCompaniesAPI(byName.website, companiesApiKey, true);
+              creditsSpent++;
+              if (full && full.employees) { capi = { ...byName, employees: full.employees, industry: full.industry || byName.industry }; await cacheSize(nd, { ...full, source: 'companiesapi-name' }); }
+              else capi = byName;
+            }
+          } else if (byName) capi = byName;
+        }
+
         if (capi && capi.employees) {
-          // sizeConfidence: 'trusted' ONLY when headcount came from lead's OWN website.
+          // sizeConfidence: 'trusted' ONLY when headcount came from the lead's OWN website.
           // Name-search-derived domain is 'weak' — how a $20B homebuilder (Lennar) resolved
           // to a 5-person dealer microsite. Weak-SMALL must NEVER earn verified-small floor;
           // weak-LARGE can still block (blocking big is always safe).
@@ -4573,7 +4643,7 @@ const WEIGHTS = {
       }
 
       // ── Source 3: SEC EDGAR (public company = enterprise, only on top leads) ──
-      if (allowCredit) {
+      if (allowEdgar) {
         const edgar = await getEdgarHeadcount(c.name);
         if (edgar && edgar.isPublic) {
           return { employees: edgar.employees, website: resolvedWebsite, source: 'edgar-public' };
@@ -4585,8 +4655,8 @@ const WEIGHTS = {
     };
     for (let i = 0; i < toEnrich.length; i += SIZE_BATCH) {
       const batch = toEnrich.slice(i, i + SIZE_BATCH);
-      // Spend a credit for real headcount only on the top 15 by pre-score
-      const results = await Promise.allSettled(batch.map((c) => lookupSize(c, i < 18)));
+      // EDGAR (public-company check) only on the top ~60 for speed; credits are budget-gated inside lookupSize.
+      const results = await Promise.allSettled(batch.map((c) => lookupSize(c, i < 60)));
       batch.forEach((c, idx) => {
         const r = results[idx];
         if (r.status === 'fulfilled' && r.value) {
@@ -4598,6 +4668,8 @@ const WEIGHTS = {
       });
       if (i + SIZE_BATCH < toEnrich.length) await new Promise(r => setTimeout(r, 600));
     }
+    const sizedCount = [...enrichResults.values()].filter(v => v && v.employees).length;
+    console.log(`Size enrichment done: ${sizedCount}/${toEnrich.length} leads got real headcount | ${creditsSpent} credits spent this run (cache serves repeats free)`);
 
     // ═══ AD-SPEND STACK CHECK — the strongest possible signal for CROJungle ══
     // A company hiring 4 schedulers AND running 800 paid ads is the perfect lead:
@@ -4659,7 +4731,7 @@ const WEIGHTS = {
     // block anything showing clear enterprise markers (that wastes research).
     // Decision uses independent signals; verified headcount wins when present,
     // otherwise we combine name-pattern + public-company + no-data-is-SMB logic.
-    const ENTERPRISE_NAME = /\b(health system|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|state of|department of|social security|national health|regional medical|memorial hospital|health plan|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|medical centers|healthcare allied|home depot|rentals inc|national|worldwide|enterprises inc|holdings inc|construction company|automotive group|dealer group|supermarkets|grocery|distribution center|fulfillment center)\b/i;
+    const ENTERPRISE_NAME = /\b(health systems?|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|town of|township|state of|department of|social security|national health|regional medical|memorial hospital|health plan|housing authority|housing finance|public schools?|municipal|cancer center|cancer institute|rehabilitation and nursing|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|medical centers|healthcare allied|home depot|rentals inc|national|worldwide|enterprises inc|holdings inc|construction company|automotive group|dealer group|supermarkets|grocery|distribution center|fulfillment center)\b/i;
     // KNOWN NATIONAL BRANDS that keep slipping through with no size data. These are
     // household-name enterprises Adzuna surfaces constantly. A hard name-block is the
     // only reliable stop when their headcount isn't in the free API tier.
@@ -4696,6 +4768,11 @@ const WEIGHTS = {
       'first student','penske','rush enterprises','ballard spahr','baptist health care',
       'roper st. francis','pruitthealth','fresenius medical','cross country healthcare',
       'american bureau of shipping','hersha hospitality management','isc2','flash appliance repair',
+      // Leaked in the 2026-07-17 run — Fortune 500 / enterprise / competitor / health system
+      'metlife','wabtec','md anderson','md anderson cancer center','ssm health','page group',
+      'michael page','amsive','hungrypanda','iqvia','bloomberg','houston methodist','georgia-pacific',
+      'carrier','owens & minor','owens and minor','sephora','idexx','sandisk','rippling','pvh',
+      'pvh corp','tidelands health','hawaii pacific health','centerwell','relias','select sires',
     ]);
 
     let blockedCount = 0, blockReasons = {};
