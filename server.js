@@ -3106,11 +3106,15 @@ const checkAdLibraryViaFirecrawl = async (company, fcKey) => {
     const m = md.match(/~?\s*([\d,]+)\s+results/i);
     const rawCount = m ? parseInt(m[1].replace(/,/g, ''), 10) : 0;
     const libIds = (md.match(/Library ID/gi) || []).length; // ad cards rendered on page 1
-    const ceilingOrNoise = rawCount >= 500;                 // 10,000+ ceiling / cross-advertiser noise
-    const adCount = ceilingOrNoise ? Math.min(libIds, 30) : (rawCount || Math.min(libIds, 30));
-    const countReliable = !ceilingOrNoise;                  // false ⇒ downstream must not cite a number
+    const adCount = rawCount >= 500 ? Math.min(libIds, 30) : (rawCount || Math.min(libIds, 30));
+    // A keyword search (q=company) matches ads across ALL advertisers, so its
+    // count is NEVER provably this company's — regardless of magnitude. 180 is
+    // as unverifiable as 10,000 (that's how Simplex got a phantom Marketing pitch).
+    // So the count is presence-only: it can never drive money-on-fire or the
+    // product recommendation. Only an on-page Google Ads tag counts as real spend.
+    const countReliable = false;
     const hasAds = adCount > 0;
-    console.log(`Ad Library (Firecrawl): ${company} → ${adCount} ads${countReliable ? '' : ' (count UNRELIABLE — keyword-search ceiling, not per-advertiser; will not drive money-on-fire)'}`);
+    console.log(`Ad Library (Firecrawl): ${company} → ${adCount} keyword hits (presence-only — not a verified per-advertiser count, won't drive recommendation)`);
     return { hasAds, adCount, countReliable, confirmed: true, source: 'ad_library_scrape' };
   } catch(e) { console.log('Ad Library scrape error:', e.message); return { hasAds: false, adCount: 0, confirmed: false }; }
 };
@@ -4165,6 +4169,22 @@ const cacheSize = async (domain, data) => {
   });
 };
 
+// Cheap name-only enterprise/staffing/health screen. Lets us SKIP paying The
+// Companies API to "confirm" what a name pattern already rejects for free — so a
+// credit is only ever spent on a lead that could plausibly be our ICP.
+const looksLikeEnterpriseByName = (rawName) => {
+  const n = (rawName || '').toLowerCase();
+  if (!n) return false;
+  const STAFFING = /\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services))\b/;
+  const ENTERPRISE = /\b(health systems?|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|town of|township|state of|department of|housing authority|public schools?|municipal|cancer center|cancer institute|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|worldwide|enterprises inc|holdings inc|construction company|automotive group|dealer group|distribution center|fulfillment center)\b/;
+  const BIG_HEALTH = /\b(health care|healthcare|medical care|health system|hospital|regional medical|health plan)\b/;
+  const SMALL_PRACTICE = /\b(dental|dentist|orthodont|veterinar|\bvet\b|derma|med spa|medspa|chiropract|optometr|physical therapy|family medicine|pediatric|urgent care|aesthetic)\b/;
+  if (STAFFING.test(n)) return true;
+  if (ENTERPRISE.test(n)) return true;
+  if (BIG_HEALTH.test(n) && !SMALL_PRACTICE.test(n)) return true;
+  return false;
+};
+
 // Map a discovered company to a discovered_queue row (mirrors the frontend shape)
 const companyToQueueRow = (c) => ({
   id: c.id || (c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40) + '_' + (c.source || 'find'),
@@ -4585,10 +4605,14 @@ const WEIGHTS = {
     // starving the 140-slot budget and letting Adzuna whales (Nutanix, Danaher, WSP) slip
     // through unsized. Skip Places; size the rest deeper.
     const isPlacesLead = (c) => c.source === 'google_places' || !!(c.signals && c.signals.local_owner_operated);
-    const toEnrich = preScored.map(x => x.c).filter(c => !isPlacesLead(c)).slice(0, 180);
+    // Skip Places (small-local by construction) AND obvious enterprises/staffing/health
+    // (a name pattern already blocks them for free downstream — no need to pay to confirm).
+    const toEnrich = preScored.map(x => x.c)
+      .filter(c => !isPlacesLead(c) && !looksLikeEnterpriseByName(c.name))
+      .slice(0, 180);
     const enrichResults = new Map();
     let creditsSpent = 0;
-    const CREDIT_CAP = 220; // hard per-run ceiling — a bad run can never drain the balance
+    const CREDIT_CAP = 150; // hard per-run ceiling; the Supabase cache makes repeat runs nearly free
     console.log(`Size enrichment: sizing ${toEnrich.length} enterprise-prone (non-Places) leads of ${icpFiltered.length} total (Places trusted small-local, not credit-sized)...`);
 
     const SIZE_BATCH = 6;
