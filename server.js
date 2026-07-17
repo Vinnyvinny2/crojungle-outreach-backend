@@ -3824,17 +3824,40 @@ const scoreReachability = (c) => {
   const dm = (c.decisionMaker && c.decisionMaker.name) ? c.decisionMaker : null;
   let foundOwner = false;
 
+  // A DELIVERABLE personal email that matches the identified person is the single
+  // strongest reachability signal there is: at a small business, firstname@ that
+  // matches the owner we found confirms BOTH who they are and that we reach them
+  // directly. It outweighs "we only had one source for the name." Compute it here
+  // so it can lift the decision-maker score instead of only adding a late +12.
+  const _dmName = ((c.decisionMaker && c.decisionMaker.name) || c.verifiedCEO || '').toLowerCase();
+  const _dmTokens = _dmName.split(/\s+/).filter(w => w.length >= 3);
+  const _addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
+  const _local = (_addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
+  const _emailTier = c.emailResult ? c.emailResult.tier : null;
+  const emailMatchesOwner = _dmTokens.length > 0 && !!_local &&
+    _dmTokens.some(t => _local.includes(t)) && (_emailTier === 1 || _emailTier === 2);
+
   if (dm) {
-    const ownerLevel = /ceo|founder|owner|president|principal|managing (director|partner)/i.test(dm.title || '');
-    if (dm.corroborated) {
+    const ownerLevel = /ceo|founder|owner|president|principal|managing (director|partner)/i.test(dm.title || '') || emailMatchesOwner;
+    // A name-matched deliverable personal email counts as independent corroboration.
+    const effectivelyCorroborated = dm.corroborated || emailMatchesOwner;
+    if (effectivelyCorroborated) {
       score += ownerLevel ? 40 : 28; foundOwner = ownerLevel;
-      reasons.push(`${dm.name} (${dm.title||'?'}) confirmed across ${(dm.sources||[]).length} independent sources — we know exactly who to reach`);
+      reasons.push(emailMatchesOwner && !dm.corroborated
+        ? `${dm.name} (${dm.title||'?'}) — confirmed by their own name-matched personal email; we reach them directly`
+        : `${dm.name} (${dm.title||'?'}) confirmed across ${(dm.sources||[]).length} independent sources — we know exactly who to reach`);
     } else {
       const hunterOnly = (dm.sources||[]).length === 1 && (dm.sources||[])[0] === 'hunter';
       if (hunterOnly) { score += ownerLevel ? 16 : 10; reasons.push(`${dm.name} (${dm.title||'?'}) — single unverified source (Hunter); verify before sending`); }
       else { score += ownerLevel ? 26 : 16; foundOwner = ownerLevel; reasons.push(`${dm.name} (${dm.title||'?'}) — found via ${(dm.sources||[]).join('+')||'search'}`); }
     }
-    if (dm.canBuy === false) { score -= 20; reasons.push('⚠ Not a purchase authority — reaching them wastes the audit'); }
+    // Only penalise authority when we have POSITIVE evidence of a sub-owner role
+    // (a real junior title) — NOT merely an unknown title. A named person with a
+    // personal mailbox at a small firm is almost certainly the principal.
+    const juniorTitle = /\b(vp|vice president|director|manager|coordinator|specialist|associate|assistant|\blead\b|representative|recruiter|hr)\b/i.test(dm.title || '');
+    if (dm.canBuy === false && juniorTitle && !emailMatchesOwner) {
+      score -= 20; reasons.push('⚠ Not a purchase authority — reaching them wastes the audit');
+    }
   } else if (c.verifiedCEO) {
     const ownerLevel = /ceo|founder|owner|president|principal/i.test(c.verifiedCEOTitle || '');
     score += ownerLevel ? 14 : 8; foundOwner = ownerLevel;
@@ -3927,11 +3950,14 @@ const scoreReachability = (c) => {
   if (OWNER_LED_HINTS.test(name))  { score += 4; reasons.push('Name suggests a family/owner-operated business'); }
   if (ENTERPRISE_HINTS.test(name) && !OWNER_LED_HINTS.test(name)) { score -= 4; }
 
-  // ═══ STRUCTURAL CAP: no identified owner => not reachable, full stop. ═══
-  // You cannot reach an owner you could not name. This makes reachability a genuine
-  // qualifier — a signal-95 lead with no findable owner is still a poor send.
+  // ═══ STRUCTURAL CAP: no identified owner after Research => not reachable. ═══
+  // CRITICAL: only apply this after Research has actually run (emailResult or
+  // decisionMaker attempted). A Places lead before Research simply hasn't looked
+  // yet — that is NOT the same as "couldn't find one." Penalising it here would
+  // block the exact leads that Places exists to surface.
   let capped = Math.max(0, Math.min(100, Math.round(score)));
-  if (!dm && !c.verifiedCEO) capped = Math.min(capped, 22);
+  const researchHasRun = !!(c.emailResult || c.decisionMaker !== undefined);
+  if (researchHasRun && !dm && !c.verifiedCEO) capped = Math.min(capped, 22);
 
   const hardBlock = (sig.ai_replacement_multi && (c.manualRoleCount || 0) > 20);
 
@@ -4311,8 +4337,12 @@ app.post('/api/discover', async (req, res) => {
       // THEIRSTACK — size-filtered at the query (10-200 employees). No whales returned.
       searchTheirStack(theirstackKey),
 
-      // THE TWO HIRING WINDOWS — ops roles (build) and marketing roles (retainer)
-      searchAdzuna(adzunaId, adzunaKey, req.body.location),
+      // ADZUNA — PULLED. It returned ~1,000 job-posters per run dominated by
+      // enterprises (MetLife, Medtronic, PepsiCo…), forcing the entire size gate,
+      // name blocklist, and credit spend just to filter its noise. Low yield vs.
+      // Places/EDGAR/News, so it's disabled. Re-enable by restoring the call below
+      // ONLY behind a hard at-source size filter.
+      Promise.resolve([]), // searchAdzuna(adzunaId, adzunaKey, req.body.location),
 
       // JUST RAISED — capital allocated, board pressure, pre-CMO, founder still owns GTM
       searchSECEdgar(),
@@ -5132,7 +5162,13 @@ const WEIGHTS = {
         // microsite emp=5) does NOT earn verified-small floor — it falls to unverified
         // and Research confirms it.
         const sourceBandVerified = c.source === 'theirstack';
-        const verifiedSmall = sourceBandVerified || (c.sizeConfidence === 'trusted' && emp > 0 && emp <= 200);
+        // A Google Places lead is small-local BY CONSTRUCTION — franchise-filtered,
+        // review-gated, owner-operated. It earns the verified-small tier without a
+        // paid size check (we deliberately don't spend credits sizing Places). Without
+        // this, Places leads fall to the bottom bucket at fit×0.3 ≈ 5 — the exact
+        // "best leads ranked worst" bug.
+        const isPlaces = c.source === 'google_places' || !!(c.signals && c.signals.local_owner_operated);
+        const verifiedSmall = sourceBandVerified || isPlaces || (c.sizeConfidence === 'trusted' && emp > 0 && emp <= 200);
         const roles = c.manualRoleCount || 0;
         const hasRealSignal = intentScore > 0 || roles >= 1 ||
           !!c.signals?.raised_funding || !!c.signals?.sba_funded ||
@@ -5148,6 +5184,20 @@ const WEIGHTS = {
           // and roles adjust WITHIN this tier, they don't gate it. ──
           let base = 72;                                   // confirmed-reachable floor
           base += Math.min(intentScore * 0.12, 12);        // signal strength: up to +12
+          // REVENUE PROXY (Places): a business must clear ~$800k to afford our
+          // products (50k site, 10-20k/mo retainer, 80-100k build). Review volume
+          // is the best Find-time proxy: a solo one-truck shop (<$500k) has thin
+          // reviews; a crewed $1M-$5M owner-operated firm sustains real volume; a
+          // 1,000-review mega-brand is likely a regional roll-up (too big — Research
+          // verifies). This also breaks the old flat-74 tie so we can tell great
+          // from good. Backed by industry data (HVAC/roofing owner-op revenue bands).
+          if (isPlaces) {
+            const rv = c.reviewCount || 0;
+            if (rv >= 40 && rv <= 500)      base += 16;  // sweet spot: established owner-operated, ~$800k-$5M
+            else if (rv >= 25)              base += 10;  // solid, likely clears the affordability bar
+            else if (rv > 500)              base += 7;   // large — keep but Research confirms it's still owner-reachable
+            else                            base += 2;   // thin reviews — likely a sub-$800k solo, deprioritize
+          }
           // GOLDEN TICKET: multiple RELEVANT AI-replaceable roles at a verified-
           // small co. Keys off the ai_replacement flags (which only fire on our
           // curated ops/marketing role searches — dispatcher, scheduler, CS rep,
