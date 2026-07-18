@@ -1136,6 +1136,7 @@ const searchGooglePlaces = async (placesKey) => {
         out.push({
           name, website, location: p.formattedAddress || '',
           source: 'google_places', icpProfile: 'local_owner_operated',
+          placeId: p.id || null,
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
           jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \\u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
@@ -2316,8 +2317,157 @@ ${corpus}` }]
 // Sources that actually carry this: Google/Yelp reviews, BBB complaints (public),
 // Glassdoor (employees describe the operational chaos in brutal detail),
 // industry forums, local press.
+// GOOGLE-REVIEWS PAIN — the most reliable, most specific pain source for a Places
+// lead: their OWN 1-3 star reviews. No disambiguation risk (it's their exact Place),
+// maximally specific, and the single most reply-worthy input the pitch can get.
+const fetchGoogleReviews = async (placeId, placesKey) => {
+  if (!placeId || !placesKey) return [];
+  try {
+    const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+      headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
+    }, 12000);
+    const d = await r.json();
+    return (d.reviews || [])
+      .map(rv => ({ rating: rv.rating || 0, text: (rv.text?.text || rv.originalText?.text || '').trim().slice(0, 600) }))
+      .filter(rv => rv.text);
+  } catch(e) { console.log('Google reviews fetch failed:', e.message); return []; }
+};
+
+// DEEP REVIEW PATTERN MINE — the send-path escalation. Scrapes the full public
+// reviews page (more than the API's 5) and finds pains that REPEAT across many
+// reviews, WITH counts. "Eleven of your reviews mention the same callback delay" is
+// the deepest "how do they know THIS" hit there is. ~2 credits — only on leads we
+// will actually send to (owner found + Places), so the spend lands where it pays off.
+const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
+  if (!placeId || !fcKey || !apiKey) return null;
+  try {
+    const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}`;
+    const md = await firecrawlScrape(fcKey, url, 18000);
+    if (!md || md.length < 400) return null;
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 700,
+        messages: [{ role: 'user', content: `This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md.slice(0, 22000)}` }]
+      }),
+    }, 25000);
+    const d = await res.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+    const total = parsed.totalReviews || 0;
+    const signals = (parsed.signals || [])
+      .filter(sg => (sg.count || 0) >= 2)
+      .map(sg => ({
+        pain: total ? `${sg.pain} — ${sg.count} of ~${total} reviews mention this` : `${sg.pain} — ${sg.count} reviews mention this`,
+        evidence: sg.evidence, source: 'their Google reviews (pattern across multiple)',
+      }));
+    if (signals.length) console.log(`DEEP PAIN [${companyName}]: ${signals.length} repeating patterns across ~${total} reviews — the "how do they know THIS" hit`);
+    return signals.length ? { signals, summary: parsed.summary || '' } : null;
+  } catch(e) { console.log('deepReviewMine failed:', e.message); return null; }
+};
+
+// Best-effort: scrape MORE than the API's 5 reviews from Google's own reviews page
+// for this exact place_id (no disambiguation — it's their Place). If Google blocks
+// it, we simply fall back to the 5 API reviews. Never fabricates: returns only text
+// Firecrawl actually rendered.
+const scrapeMoreGoogleReviews = async (placeId, fcKey) => {
+  if (!placeId || !fcKey) return [];
+  try {
+    const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en&sortby=newest`;
+    const md = await firecrawlScrape(fcKey, url, 15000);
+    if (!md || md.length < 200) return [];
+    // Split into review-sized chunks; keep ones that read like real review prose.
+    const chunks = md.split(/\n{2,}/).map(s => s.replace(/\s+/g, ' ').trim())
+      .filter(s => s.length > 40 && s.length < 800 && /[a-z]/.test(s) && !/^https?:|^\[|cookie|sign in|google llc/i.test(s));
+    return chunks.slice(0, 40).map(text => ({ rating: null, text }));
+  } catch(e) { console.log('scrapeMoreGoogleReviews failed:', e.message); return []; }
+};
+
+// DEEP REVIEW-MINE — the "how do they know THIS?" engine. Reads ALL available
+// reviews of their exact Place, finds the pain patterns that REPEAT, counts how
+// many reviews mention each, and keeps exact quotes. Every quote is verified to
+// actually exist in the source before it's allowed through — zero fabrication.
+const painFromGoogleReviews = async (companyName, placeId, placesKey, apiKey, fcKey = null, deep = false) => {
+  const apiReviews = await fetchGoogleReviews(placeId, placesKey);
+  let all = apiReviews.slice();
+  if (deep && fcKey) {
+    const more = await scrapeMoreGoogleReviews(placeId, fcKey);
+    // Dedupe against API reviews by first ~30 chars
+    const seen = new Set(apiReviews.map(r => r.text.slice(0, 30).toLowerCase()));
+    for (const m of more) { const k = m.text.slice(0, 30).toLowerCase(); if (!seen.has(k)) { seen.add(k); all.push(m); } }
+  }
+  // Prefer negative/critical reviews for pain, but keep the total count for context.
+  const totalCount = all.length;
+  const pool = all.filter(r => r.rating === null || r.rating <= 3);
+  if (pool.length === 0) return { signals: [], summary: '' };
+  const corpus = pool.map((r, i) => `Review ${i + 1}${r.rating ? ` (${r.rating} stars)` : ''}: ${r.text}`).join('\n\n');
+  const corpusFlat = corpus.toLowerCase().replace(/\s+/g, ' ');
+
+  try {
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 700,
+        messages: [{ role: 'user', content: `Below are ${pool.length} real critical Google reviews of "${companyName}" (out of ${totalCount} pulled).
+
+TASK: Find the OPERATIONAL pain patterns that REPEAT across multiple reviews — the fires an OWNER cares about and could fix: slow response/callbacks, scheduling chaos, missed/late appointments, communication gaps, quote/estimate delays, follow-up failures, understaffing, unfinished work, billing disputes.
+
+STRICT RULES — this feeds a real sales email, so accuracy is everything:
+- Report ONLY patterns that literally appear in the reviews below. NEVER infer, exaggerate, or invent.
+- Prefer patterns that appear in 2+ reviews. A single review only counts if it's specific and severe.
+- For each pattern, COUNT how many of these reviews mention it, and copy ONE exact short quote (verbatim, <18 words) as proof.
+- If there is no clear repeated operational pattern, return an empty signals array. Empty is the correct, honest answer.
+
+Return ONLY valid JSON:
+{"signals":[{"pain":"short operational pain","count":<number of reviews mentioning it>,"evidence":"exact verbatim quote"}],"summary":"one honest sentence an owner would recognize"}
+
+REVIEWS:
+${corpus}` }]
+      }),
+    }, 25000);
+    const d = await res.json();
+    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+    const parsed = JSON.parse(text);
+
+    // ANTI-FABRICATION: every evidence quote MUST actually appear in the reviews.
+    // Verify a distinctive 4-word span of each quote is present; drop anything that
+    // isn't. A quote the model invented can never reach the pitch.
+    const verified = (parsed.signals || []).filter(sg => {
+      const q = String(sg.evidence || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (q.length < 8) return false;
+      const words = q.split(' ');
+      if (words.length < 4) return corpusFlat.includes(q);
+      // check a few 4-word windows — at least one must be in the corpus verbatim
+      for (let i = 0; i + 4 <= words.length; i++) {
+        if (corpusFlat.includes(words.slice(i, i + 4).join(' '))) return true;
+      }
+      return false;
+    }).map(sg => ({
+      pain: sg.pain,
+      evidence: sg.evidence,
+      count: sg.count || 1,
+      source: (sg.count && sg.count >= 2)
+        ? `their Google reviews — ${sg.count} reviewers said this`
+        : 'their Google reviews',
+    }));
+
+    if (verified.length) console.log(`PAIN [${companyName}]: ${verified.length} verified pattern(s) from ${totalCount} of their OWN Google reviews (deep mine=${deep})`);
+    else console.log(`PAIN [${companyName}]: no verifiable repeated pattern in reviews (honest empty)`);
+    return { signals: verified, summary: parsed.summary || '' };
+  } catch(e) { console.log('painFromGoogleReviews failed:', e.message); return { signals: [], summary: '' }; }
+};
+
 const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, location = '') => {
   if (!companyName || !fcKey || !apiKey) return { signals: [], summary: '' };
+  // (deepReviewMine is defined below and used on the send-path only)
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
     // Same disambiguation the DM search needs: without a city, a common name pulls
@@ -4782,15 +4932,23 @@ const WEIGHTS = {
           // a poorly-rated one is a shakier revenue bet), dock consolidation risk.
           const rating = c.rating || 0;
           let base = 74;
-          if (rv >= 40 && rv <= 500)      base += 16;   // sweet spot ~$800k-$5M
-          else if (rv >= 25)              base += 10;   // solid
-          else if (rv > 500)              base += 6;    // large — Research confirms owner
-          else                            base += 2;    // thin reviews — likely sub-$800k solo
-          // Rating as an establishment/quality refinement (only meaningful with volume)
-          if (rv >= 25 && rating >= 4.5)  base += 4;    // thriving, well-run — strong revenue bet
-          else if (rv >= 25 && rating && rating < 3.5) base -= 5; // struggling — shakier it's a healthy $800k biz
-          if (s.consolidation_risk)       base -= 12;   // maybe group-owned → no reachable owner
-          triage = Math.min(base, 96);
+          // CONTINUOUS establishment curve (was stepped, which clustered everything
+          // at 94). Review volume ≈ revenue, so a 45-review shop and a 300-review shop
+          // should NOT score identically. Rises through the sweet spot, then tapers
+          // above ~450 where a huge review count signals a regional brand (less
+          // owner-reachable), not a bigger owner-operated business.
+          let revBonus;
+          if (rv <= 0)        revBonus = 0;
+          else if (rv < 40)   revBonus = 2 + (rv / 40) * 8;                     // 2 → 10 approaching 40
+          else if (rv <= 450) revBonus = 10 + ((rv - 40) / 410) * 12;          // 10 → 22 across the sweet spot
+          else                revBonus = Math.max(6, 22 - ((rv - 450) / 550) * 14); // taper 22 → 6 for mega-brands
+          base += Math.round(revBonus);
+          // Rating refines within the same review band — a thriving 4.8★ outranks a wobbly 3.9★
+          if (rv >= 20 && rating >= 4.7)      base += 3;
+          else if (rv >= 20 && rating >= 4.4) base += 1;
+          else if (rv >= 20 && rating && rating < 3.5) base -= 5; // struggling — shakier revenue bet
+          if (s.consolidation_risk)           base -= 12;         // maybe group-owned → no reachable owner
+          triage = Math.min(base, 97);
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
           triage = c.brokerPosted ? 72 : 84;
@@ -5281,6 +5439,34 @@ app.post('/api/research', async (req, res) => {
       console.log(`PAIN [${company}]: from cache (${publicPainSignals.length} signals)`);
     }
     if ((ownerFound || isPlacesLead) && !(cachedContact && cachedContact.pain)) {
+      // BEST pain source for a Places lead: their OWN Google reviews. Try it first —
+      // their exact business (no disambiguation), maximally specific, cheaper than a
+      // web search. Fall back to web-search pain only if reviews yield nothing.
+      const placesKey = process.env.GOOGLE_PLACES_KEY || '';
+      if (req.body.placeId && placesKey && apiKey && publicPainSignals.length === 0) {
+        try {
+          // Deep full-review scrape (~2 credits) ONLY when we found an owner and will
+          // actually send — otherwise the free 5-review API mine. Best material lands
+          // exactly where it pays off: the pitch that goes out.
+          const gr = await painFromGoogleReviews(company, req.body.placeId, placesKey, apiKey, firecrawlKey, ownerFound);
+          if (gr.signals && gr.signals.length > 0) {
+            publicPainSignals = gr.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
+            painSummary = gr.summary || '';
+          }
+        } catch(e) { console.log('Google-reviews pain skipped:', e.message); }
+      }
+      // SEND-PATH ESCALATION: if we found the owner (this lead will actually be
+      // pitched) and it's a Places lead, scrape the FULL reviews page and mine the
+      // REPEATING patterns with counts — the deepest "how do they know THIS" hit.
+      if (req.body.placeId && ownerFound && firecrawlKey && apiKey) {
+        try {
+          const deep = await deepReviewMine(company, req.body.placeId, firecrawlKey, apiKey);
+          if (deep && deep.signals && deep.signals.length > 0) {
+            publicPainSignals = deep.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
+            painSummary = deep.summary || painSummary;
+          }
+        } catch(e) { console.log('Deep review mine skipped:', e.message); }
+      }
       const needPain = publicPainSignals.length === 0 && firecrawlKey && apiKey && company;
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
       const [painRes, revRes] = await Promise.allSettled([
