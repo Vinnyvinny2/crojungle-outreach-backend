@@ -1,4 +1,4 @@
-require('dotenv').config();
+]require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
@@ -6257,19 +6257,11 @@ Prioritize by CONFIRMED dollar impact, driven by what the AUDIT actually found �
 
 Return ONLY valid JSON, no markdown:
 {
-  "hasCTAAboveFold": true/false,
   "ctaText": "exact CTA text or null",
   "heroHeadline": "exact headline",
   "headlineQuality": "specific/generic/missing",
-  "hasVideo": true/false,
-  "hasSocialProof": true/false,
-  "socialProofType": "testimonials/logos/reviews/none",
   "designQuality": "professional/dated/poor",
-  "mobileReady": true/false,
-  "aboveFoldClutter": true/false,
-  "trustSignals": ["visible trust signals"],
   "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
-  "biggestVisualIssue": "single most important visual problem with specific detail",
   "overallConversionRating": "strong/moderate/weak",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
   "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
@@ -6466,9 +6458,16 @@ Return ONLY valid JSON, no markdown:
           }
 
           // ── SELF-CRITIQUE CALL ─────────────────────────────────────────
-          // Second Claude call reviews the first audit's claims against the
-          // raw evidence — catches hallucinations, overstated numbers, unverified
-          // findings. Runs text-only (no vision) so it's fast: ~5-8s.
+          // Second Claude call reviews the first audit's claims against the raw
+          // evidence — catches overstated numbers and unverified findings.
+          // SPEED GATE: this is the single most expensive step after the audit
+          // itself (~30s, a third of total runtime). In QUICK mode we skip it so
+          // you can crank through leads; the audit's own anti-fabrication guards
+          // (source verification, evidence floors, ad-count reliability) still
+          // apply. Run Deep mode on a lead before you actually send it.
+          if (req.body.deepMode === false) {
+            console.log(`Critique SKIPPED (quick mode) — ~30s saved on ${company}`);
+          } else
           try {
             const critiquePrompt = `You are a quality-control auditor reviewing a marketing audit before it goes to a founder.
 
