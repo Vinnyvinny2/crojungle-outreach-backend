@@ -1,4 +1,4 @@
-]require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
@@ -6465,8 +6465,16 @@ Return ONLY valid JSON, no markdown:
           // you can crank through leads; the audit's own anti-fabrication guards
           // (source verification, evidence floors, ad-count reliability) still
           // apply. Run Deep mode on a lead before you actually send it.
-          if (req.body.deepMode === false) {
-            console.log(`Critique SKIPPED (quick mode) — ~30s saved on ${company}`);
+          // REMOVED FROM THE DEFAULT PATH. Two reasons, both measured:
+          //   1) It cost ~30s — a third of total research time.
+          //   2) It OVERWROTE the Brain's pitchAngle with its own conservative
+          //      35-word rewrite, which blunted the sharpest pitches the system
+          //      produced. A slower AND blander result is not a quality gate.
+          // The audit's real anti-fabrication guards (source verification, evidence
+          // floors, ad-count reliability, quote verification) all still run.
+          // Set deepMode:true explicitly if you ever want the second opinion back.
+          if (req.body.deepMode !== true) {
+            console.log(`Critique skipped — ~30s saved on ${company}`);
           } else
           try {
             const critiquePrompt = `You are a quality-control auditor reviewing a marketing audit before it goes to a founder.
