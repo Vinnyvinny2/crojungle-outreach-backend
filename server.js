@@ -2727,11 +2727,20 @@ ${corpus}` }]
 const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
   if (!website || !fcKey || !apiKey) return null;
   const base = website.replace(/\/$/, '');
-  const paths = ['/careers', '/jobs', '/employment']; // the three that actually exist on SMB sites; more paths = more dead round-trips
+  // Use the site map we already paid for (cached) to find the REAL careers URL.
+  // Guessing paths missed pages like /about-our-agency/join-our-team, which is where
+  // small firms actually put hiring. Fall back to guesses only if the map is empty.
+  let paths = [];
+  try {
+    const urls = await firecrawlMap(fcKey, website, 'careers jobs hiring join team');
+    const CAREER_RE = /(career|jobs?|employment|join[-_]?(our[-_]?)?team|hiring|work[-_]with[-_]us|opportunit)/i;
+    paths = urls.filter(u => CAREER_RE.test(u) && !/\.(pdf|jpg|png)$/i.test(u)).slice(0, 2);
+  } catch { /* fall through to guesses */ }
+  if (!paths.length) paths = ['/careers', '/jobs', '/employment'].map(p => base + p);
   let md = '';
   for (const p of paths) {
     try {
-      const r = await firecrawlScrape(fcKey, base + p, 7000);
+      const r = await firecrawlScrape(fcKey, p.startsWith('http') ? p : base + p, 7000);
       // A real careers page names roles; a 404 or redirect to home will not.
       if (r && r.length > 400 && /(hiring|apply|position|job|opening|career|full[- ]time|part[- ]time)/i.test(r)) { md = r; break; }
     } catch { /* try next */ }
@@ -3260,6 +3269,11 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // Cap attempts — the 4 most common conventions cover the vast majority.
     const toTry = ordered.slice(0, learnedFirst ? 5 : 4);
 
+    // Track whether the server actually DENIED these, or simply refused to answer.
+    // Many mail hosts (Microsoft 365, greylisting setups) return neither valid nor
+    // invalid. Treating "won't say" the same as "does not exist" was blocking real
+    // reachable owners — the most expensive false negative in the whole pipeline.
+    let anyDefiniteInvalid = false, anyUnknown = false;
     for (const c of toTry) {
       const res = await verifyEmailSMTP(c.email, verifierKey);
       if (res.valid === true) {
@@ -3267,6 +3281,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
         console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED (mailbox exists): ${c.email} — pattern ${c.pattern}`);
         return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
       }
+      if (res.invalid === true) anyDefiniteInvalid = true; else anyUnknown = true;
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
     }
     // Normal (non-catch-all) domain and none of the likely patterns resolve →
@@ -3294,8 +3309,24 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       }
     }
 
-    // this person genuinely has no mailbox here. Sending would guarantee a bounce,
-    // and a bounce damages the sending domain. Better to send nothing.
+    // If the server never actually DENIED anything, we have no evidence this person
+    // lacks a mailbox — we only have a server that refuses to answer. When we also
+    // know the house pattern (learned from a real address on this domain), the most
+    // likely address is a reasonable, honestly-labelled send rather than a dead end.
+    if (!anyDefiniteInvalid && anyUnknown) {
+      const housePattern = domainPatternMemory.get(domain);
+      if (housePattern) {
+        const built2 = applyPattern(housePattern, name, domain);
+        if (built2) {
+          console.log(`~ EMAIL [${domain}] SMTP could not confirm OR deny (server silent). Using the house pattern ${housePattern}: ${built2} — flagged unverified, not blocked.`);
+          return { email: built2, ...EMAIL_TIERS.PATTERN_LEARNED, name, pattern: housePattern,
+                   label: 'Built from this company\u2019s own confirmed email pattern — the mail server would not confirm it, so verify before a large send' };
+        }
+      }
+    }
+
+    // A server that actively DENIED the address means this person genuinely has no
+    // mailbox here. Sending would guarantee a bounce, and bounces damage the domain.
     console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here. BLOCKED.`);
     return fail;
   }
@@ -3941,7 +3972,12 @@ const scoreReachability = (c) => {
 
   const dm = (c.decisionMaker && c.decisionMaker.name) ? c.decisionMaker : null;
   const owner = (dm && dm.name) || c.verifiedCEO || null;
-  const foundOwner = !!owner;
+  // A contact the authority gate REJECTED is not a found decision-maker. Hunter's
+  // name gets assigned to verifiedCEO before the DM engine runs, so a "Team Member"
+  // that was explicitly HELD BACK was still scoring 92 as "decision-maker identified
+  // and directly reachable". Reaching a receptionist is not reaching a buyer.
+  const dmHeldBack = !!(dm && dm.canBuy === false);
+  const foundOwner = !!owner && !dmHeldBack;
 
   const ownerTokens = String(owner || '').toLowerCase().split(/\s+/).filter(w => w.length >= 3);
   const addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
@@ -3982,7 +4018,10 @@ const scoreReachability = (c) => {
     if (tier === 1) { score = 52; reasons.push(`Personal mailbox published on their own site (${local}@\u2026) — a real person reads this; confirm they're the owner/decision-maker before pitching hard`); }
     else { score = 30; reasons.push(`A verified personal mailbox exists (${local}@\u2026) but we could not confirm whose — identify the owner first`); }
   } else {
-    score = 12; reasons.push('No decision-maker identified — we cannot confirm who to reach');
+    score = 12;
+    reasons.push(dmHeldBack
+      ? `${dm.name} (${dm.title || 'unknown title'}) was found, but that role cannot authorize a purchase \u2014 we still do not have a buyer. Find the owner before pitching.`
+      : 'No decision-maker identified — we cannot confirm who to reach');
   }
   // SENIOR-OPERATOR FALLBACK: not the owner, but a senior person we CAN reach — give
   // a moderate, sendable score (they influence/forward the buy) with a verify flag.
@@ -6306,6 +6345,14 @@ app.post('/api/research', async (req, res) => {
     } else if (_hasAds && _siteConverts) {
       _bottleneck = 'SCALE';
       _bottleneckWhy = 'Foundation is sound (site converts, capture exists) and they are already spending. The opportunity is owning and compounding the full funnel, not rebuilding anything.';
+    } else if ((_siteBooking === 'form' || _siteBooking === 'phone_only') && !builtWith.hasCRM) {
+      // THE MISSING BOTTLENECK. A quote form is not capture if it drops the lead into
+      // a human callback queue — the prospect is captured and then made to WAIT. With
+      // no CRM there is nothing responding automatically, so interest decays to zero
+      // while a competitor answers first. This is a response-speed problem, which is
+      // software/automation work — NOT a reason to buy more traffic.
+      _bottleneck = 'FOLLOW-UP';
+      _bottleneckWhy = `They capture interest (${_siteBooking === 'form' ? 'a quote/contact form' : 'phone only'}) but nothing responds automatically \u2014 no CRM, no automated reply. The lead is caught and then left waiting for a human. In any market where a competitor answers in minutes, that wait IS the lost sale. Sending more traffic into this makes the leak bigger, not smaller.`;
     } else if (_mktgHire) {
       _bottleneck = 'DEMAND';
       _bottleneckWhy = 'They are HIRING for marketing: budget is allocated, direction is not chosen. A retainer outperforms one junior hire and they are actively deciding right now.';
@@ -6333,6 +6380,10 @@ app.post('/api/research', async (req, res) => {
     } else if (_bottleneck === 'SCALE') {
       _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) — PRIMARY: foundation is sound and spend is live. Own the full funnel and compound it. This is the rare case where ad management genuinely IS the answer.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: squeeze more from existing traffic.');
+    } else if (_bottleneck === 'FOLLOW-UP') {
+      _eligible.push('AI Brain ($40k-$70k) — PRIMARY: an automated response/follow-up layer that answers the moment someone submits, then keeps working the lead. Pitch the WAIT, not the software: what it costs to be second to reply.');
+      _eligible.push('Custom AI Software Build ($40k-$100k+) — SECONDARY: if the response gap is part of a bigger manual process (intake, quoting, scheduling), the full build replaces the whole chain.');
+      _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — TERTIARY: ongoing ownership once the response layer exists. Do NOT lead with ad management; more traffic into a queue that already waits makes it worse.');
     } else if (_bottleneck === 'FOUNDATION') {
       _eligible.push('Website Rebuild ($50k+) — PRIMARY: the site cannot convert and nothing is being spent driving traffic to it. Fix the foundation FIRST — buying traffic for this site would waste their money, and saying so earns trust.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: drive and convert demand once the foundation holds.');
@@ -6551,7 +6602,7 @@ Return ONLY valid JSON, no markdown:
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + broken funnel (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
-  "pitchAngle": "The one line that earns a reply. WRITTEN FOR A BUSINESS OWNER, NOT A MARKETER \u2014 he owns a roofing company or a CPA practice, has never heard of an H1 tag, and files anything with agency vocabulary next to every other agency email. BANNED WORDS: pixel, retargeting, H1, meta, schema, SEO, above the fold, funnel, CRM, conversion rate, CTA, landing page, attribution, impressions, nurture, optimization, UX. Say it as he would: not \u2018no retargeting layer\u2019 but \u2018when someone leaves your site there is no way to get back in front of them\u2019; not \u2018no lead capture\u2019 but \u2018if they do not call right then, you never hear from them again\u2019. FRAME IT AS LOSS, NOT UPSIDE \u2014 owners act on money already leaking, not on improvements available. Dollar figures may ONLY come from numbers HE published (his posted prices, posted salaries, visible ad count, review count, staff count) plus honest arithmetic on those. NEVER invent a loss figure and NEVER state his revenue back to him \u2014 our revenue number is a third-party estimate, it is frequently wrong, and quoting it reads as surveillance rather than research. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (1) Otherwise ONE confirmed pain only — never chain several. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
+  "pitchAngle": "The one line that earns a reply. \u26a0 WRITE THE MOMENT, NOT THE MECHANISM \u2014 this is the difference between an email that lands and one that gets deleted. Describing how a system works forces the owner to decode it; describing a moment he has already lived makes him feel it instantly. BAD (mechanism): \u2018no instant response system, meaning every lead waits for a human callback\u2019. GOOD (moment): \u2018Someone fills out your quote form at 9pm on a Sunday. Nobody sees it until Monday. By then they have three quotes from somebody else.\u2019 Name a real person doing a real thing at a real time, put a clock on it, then say what it cost him. If any sentence describes a SYSTEM rather than a PERSON, rewrite it. \u26a0 IT MUST ALSO DESCRIBE THE SAME PROBLEM THE RECOMMENDED PRODUCT FIXES. If you write about slow response times, the product must be the automation/AI build \u2014 not ad management. If you write about traffic they cannot catch, the product must be the capture/rebuild. A pitch that diagnoses one problem while the recommendation sells a different service reads as confused and salesy, and the owner cannot tell what he is being offered. State the problem, then the fix, and make sure they are the same story. WRITTEN FOR A BUSINESS OWNER, NOT A MARKETER \u2014 he owns a roofing company or a CPA practice, has never heard of an H1 tag, and files anything with agency vocabulary next to every other agency email. BANNED WORDS: pixel, retargeting, H1, meta, schema, SEO, above the fold, funnel, CRM, conversion rate, CTA, landing page, attribution, impressions, nurture, optimization, UX. Say it as he would: not \u2018no retargeting layer\u2019 but \u2018when someone leaves your site there is no way to get back in front of them\u2019; not \u2018no lead capture\u2019 but \u2018if they do not call right then, you never hear from them again\u2019. FRAME IT AS LOSS, NOT UPSIDE \u2014 owners act on money already leaking, not on improvements available. Dollar figures may ONLY come from numbers HE published (his posted prices, posted salaries, visible ad count, review count, staff count) plus honest arithmetic on those. NEVER invent a loss figure and NEVER state his revenue back to him \u2014 our revenue number is a third-party estimate, it is frequently wrong, and quoting it reads as surveillance rather than research. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (1) Otherwise ONE confirmed pain only — never chain several. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
 }`
         });
 
@@ -6562,7 +6613,10 @@ Return ONLY valid JSON, no markdown:
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
             model: 'claude-sonnet-4-6',
-            max_tokens: 6000,
+            // 3000 is well above what a complete audit actually needs (~1,500-2,000
+            // tokens). Sonnet output is the dominant Anthropic cost in this app, and
+            // a 6000 ceiling let verbose runs cost double for no extra quality.
+            max_tokens: 3000,
             messages: [{ role: 'user', content: msgContent }]
           }),
         }, 45000);
