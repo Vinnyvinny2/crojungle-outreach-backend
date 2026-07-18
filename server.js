@@ -1529,7 +1529,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 25000) => {
 // Free, works from Render (RSS, not a scrape). Queries by exact company name.
 // CRITICAL: every article is verified to actually be about THIS company before
 // use. A mismatched article would poison the pitch — reject anything ambiguous.
-const getCompanyNews = async (companyName, website) => {
+const getCompanyNews = async (companyName, website, location = '') => {
   const empty = { triggers: [], hasNews: false };
   if (!companyName || companyName.length < 3) return empty;
 
@@ -1547,6 +1547,22 @@ const getCompanyNews = async (companyName, website) => {
     try { domainRoot = new URL(website).hostname.replace('www.','').split('.')[0].toLowerCase(); } catch {}
   }
 
+  // LOCATION ANCHOR — the thing that was missing. Without it, a single-word company
+  // name ("Sagewood") matched a condo complex in Palm Springs, a street in Katy TX,
+  // a town in Alberta and a school in South Africa, and all four were logged as
+  // "verified triggers". A real article about THIS company almost always names its
+  // city or state, or links to its domain.
+  const locParts = String(location || '').split(',').map(x => x.trim()).filter(Boolean);
+  const stateZip = locParts.find(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x));
+  const stAbbr = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
+  const cityName = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
+  const STATE_NAMES = { AL:'alabama',AK:'alaska',AZ:'arizona',AR:'arkansas',CA:'california',CO:'colorado',CT:'connecticut',DE:'delaware',FL:'florida',GA:'georgia',HI:'hawaii',ID:'idaho',IL:'illinois',IN:'indiana',IA:'iowa',KS:'kansas',KY:'kentucky',LA:'louisiana',ME:'maine',MD:'maryland',MA:'massachusetts',MI:'michigan',MN:'minnesota',MS:'mississippi',MO:'missouri',MT:'montana',NE:'nebraska',NV:'nevada',NH:'new hampshire',NJ:'new jersey',NM:'new mexico',NY:'new york',NC:'north carolina',ND:'north dakota',OH:'ohio',OK:'oklahoma',OR:'oregon',PA:'pennsylvania',RI:'rhode island',SC:'south carolina',SD:'south dakota',TN:'tennessee',TX:'texas',UT:'utah',VT:'vermont',VA:'virginia',WA:'washington',WV:'west virginia',WI:'wisconsin',WY:'wyoming' };
+  const locTokens = [cityName.toLowerCase(), (STATE_NAMES[stAbbr] || ''), stAbbr ? stAbbr.toLowerCase() : ''].filter(t => t && t.length > 1);
+  const haveLocation = locTokens.length > 0;
+
+  // Headlines that are structurally NOT company news, no matter what they mention.
+  const JUNK_ARTICLE = /(realtor\.com|zillow|redfin|trulia|for sale|mls\s*#|\b\d{3,6}\s+[a-z]+\s+(st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|ct|court|way|pl|place)\b|obituary|obituaries|funeral|historic district|city council|weather|road closure|flood mitigation)/i;
+
   try {
     const q = `"${cleanName}"`;
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
@@ -1563,14 +1579,27 @@ const getCompanyNews = async (companyName, website) => {
       const cleanDesc = desc.replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').trim();
       const haystack = (cleanTitle + ' ' + cleanDesc).toLowerCase();
 
-      // STRICT VERIFICATION — must clearly be about THIS company
-      const allNameWordsPresent = nameWords.every(w => haystack.includes(w));
-      const domainMatch = domainRoot.length > 3 && haystack.includes(domainRoot);
-      const isVerified = nameWords.length >= 2
-        ? allNameWordsPresent
-        : (new RegExp(`\\b${nameWords[0]}\\b`).test(haystack) && (domainMatch || haystack.includes(cleanName.toLowerCase())));
+      // ── VERIFICATION — must clearly be about THIS company ──────────────────
+      // The old single-word test was circular: it required the haystack to contain
+      // the company name, which is guaranteed because we SEARCHED for that name.
+      // Every same-named business on earth passed. Now identity needs real evidence.
+      if (JUNK_ARTICLE.test(haystack)) continue;                     // structurally not company news
 
+      const allNameWordsPresent = nameWords.every(w => haystack.includes(w));
+      if (!allNameWordsPresent) continue;                            // name must appear, always
+
+      const domainMatch = domainRoot.length > 3 && haystack.includes(domainRoot);
+      const locationMatch = haveLocation && locTokens.some(t => haystack.includes(t));
+
+      // A DISTINCTIVE multi-word name ("Cool Change Heating and Air") is itself strong
+      // evidence. A short/common name ("Sagewood", "Simplex") is not — it needs the
+      // location or the domain to prove identity.
+      const distinctiveName = nameWords.length >= 3 || (nameWords.length === 2 && cleanName.length >= 14);
+      const isVerified = domainMatch || locationMatch || distinctiveName;
       if (!isVerified) continue;
+
+      // Record HOW we know, so a weak match can never masquerade as confirmed.
+      const idBasis = domainMatch ? 'domain' : locationMatch ? 'location' : 'distinctive name';
 
       let ageDays = 999;
       if (pubDate) {
@@ -1588,12 +1617,12 @@ const getCompanyNews = async (companyName, website) => {
       else if (/rebrand|new brand|new identity|new logo/i.test(haystack)) triggerType = 'rebrand';
       else if (/award|wins?|recognized|ranked|named best/i.test(haystack)) triggerType = 'award';
 
-      triggers.push({ headline: cleanTitle.slice(0, 160), type: triggerType, ageDays });
+      triggers.push({ headline: cleanTitle.slice(0, 160), type: triggerType, ageDays, idBasis });
       if (triggers.length >= 4) break;
     }
 
     if (triggers.length > 0) {
-      console.log(`News [${companyName}]: ${triggers.length} verified triggers (${triggers.map(t=>t.type).join(', ')})`);
+      console.log(`News [${companyName}]: ${triggers.length} verified triggers (${triggers.map(t=>t.type + ' via ' + t.idBasis).join(', ')})`);
     }
     return { triggers, hasNews: triggers.length > 0 };
   } catch(e) {
@@ -3713,7 +3742,11 @@ const scoreReachability = (c) => {
   const seniorOperator = /\b(gm|general manager|vice president|\bvp\b|director|partner|principal|managing|owner|founder|president|ceo|coo|chief)\b/i.test((dm && dm.title) || '');
   const trueJunior = /\b(coordinator|specialist|associate|assistant|recruiter|\bhr\b|clerk|receptionist|intern|apprentice|technician|customer service)\b/i.test((dm && dm.title) || '') && !seniorOperator;
   const juniorTitle = trueJunior;
-  const ownerLevelTitle = /\b(owner|founder|president|ceo|principal|managing (partner|director))\b/i.test((dm && dm.title) || '') || emailMatchesOwner;
+  // Owner-level is a TITLE question, not an email question. Matching the mailbox to
+  // the person only proves we found THEIR inbox — a Director of Marketing with a
+  // matching email is still a Director of Marketing. Including emailMatchesOwner here
+  // let a held-back contact (authority 35) score 92 as "decision-maker reachable".
+  const ownerLevelTitle = /\b(owner|founder|president|ceo|coo|principal|managing (partner|director)|proprietor)\b/i.test((dm && dm.title) || '');
 
   // ── CORE OUTCOME (sets the base) ──────────────────────────────────────────
   let score;
@@ -5661,7 +5694,7 @@ app.post('/api/research', async (req, res) => {
     // article would poison the pitch, so getCompanyNews rejects anything ambiguous.
     let companyTriggers = [];
     try {
-      const news = await getCompanyNews(company, website);
+      const news = await getCompanyNews(company, website, req.body.location || '');
       if (news.hasNews) companyTriggers = news.triggers;
     } catch(e) { console.log('News enrich skipped:', e.message); }
 
@@ -6058,7 +6091,7 @@ VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle 
 ═══ WHAT THEIR HOMEPAGE ACTUALLY LOOKS LIKE (vision — we SAW this, not guessed) ═══
 ${visualAnalysis ? `${visualAnalysis.heroIsBlank ? '⚠ THE HERO IS BLANK OR BROKEN-LOOKING. ' : ''}Headline visible: ${visualAnalysis.hasHeadline ? 'yes — "' + (visualAnalysis.headlineObserved || '') + '"' : 'NO — no value-proposition headline visible on arrival'}. CTA visible: ${visualAnalysis.hasVisibleCTA ? 'yes — "' + (visualAnalysis.ctaObserved || '') + '"' : 'NO — no clear call-to-action button above the fold'}. Social proof above fold: ${visualAnalysis.hasVisibleSocialProof ? 'yes' : 'no'}. Design: ${visualAnalysis.designObservation || (visualAnalysis.looksDated ? 'looks dated' : 'current')}. Conversion readiness: ${visualAnalysis.overallConversionReadiness || 'unknown'}.
 → These are VISUAL FACTS — we looked at their actual rendered homepage. "Your homepage loads with a blank hero and no call-to-action" is undeniable when we've literally seen it. This is your sharpest, most credible ammunition. Use the exact observation.
-${visualAnalysis.heroIsBlank && (fbAds.adCount||0) > 0 ? '→ ⚠ THEY ARE RUNNING ' + fbAds.adCount + ' PAID ADS INTO A BLANK HOMEPAGE. This is the single most expensive, most provable problem they have. Lead with it.' : ''}` : 'No screenshot available — audit the site from scraped text only. Do NOT describe what the page "looks like" — we did not see it.'}
+${visualAnalysis.heroIsBlank && (fbAds.adCount||0) > 0 && fbAds.countReliable !== false ? '→ ⚠ THEY ARE RUNNING ' + fbAds.adCount + ' PAID ADS INTO A BLANK HOMEPAGE. This is the single most expensive, most provable problem they have. Lead with it.' : ''}` : 'No screenshot available — audit the site from scraped text only. Do NOT describe what the page "looks like" — we did not see it.'}
 
 ═══ MONEY ON FIRE — provable, undeniable, and no competitor will ever tell them ═══
 ${moneyOnFire.count > 0 ? `${moneyOnFire.headline}
@@ -6077,7 +6110,7 @@ ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : '
 → A pitch that names the operational fire ("your reviews say quotes take three weeks and you're hiring four schedulers to keep up") is in a completely different league from one that names a website flaw ("your homepage has no lead capture form"). The first makes the owner feel SEEN. The second sounds like every other agency email.
 → CONNECT the operational pain to the website/ad finding wherever they genuinely link — that combination is the sharpest possible pitch. Example: "You are running 840 ads into a page with no form, while your reviews say quotes take three weeks. You are paying to generate leads you cannot answer."
 → NEVER quote the review verbatim in the email (it embarrasses them publicly). Reference the PATTERN, not the quote. "Your reviews mention slow quote turnaround" — not "one customer said you're incompetent."${_hasReviewPattern ? `\n\n\u2605\u2605 MANDATORY OPENING \u2605\u2605\nWe mined THEIR OWN Google reviews and found a pain that REPEATS across multiple reviews, with a count. This is the strongest opening line available to us and it MUST be where the pitch starts.\n\u2192 Your pitchAngle MUST open by naming this recurring pattern AND its count. The count is what makes it undeniable: one complaint is an anecdote, seven is a problem the owner already knows about and has not fixed.\n\u2192 Say the NUMBER out loud. "Seven of your last forty reviews mention the same thing" lands far harder than "some customers mention".\n\u2192 Never reproduce the review text and never name a reviewer \u2014 describe the PATTERN only. The count plus the theme is the punch; the raw quote is a liability.\n\u2192 THEN connect it to the money/product finding in the same breath. That pairing (their operational fire + what it costs) is the sharpest email this system can write.\n\u2192 RELEVANCE TEST \u2014 this mandate applies ONLY when the pattern is something CROJungle actually fixes (slow callbacks, missed calls, no follow-up, quote/estimate delays, scheduling chaos, leads going unanswered). If the recurring pattern is about PRICING, WORKMANSHIP, STAFF ATTITUDE or DAMAGE, do NOT open with it \u2014 we cannot fix that, and naming it makes us sound like a complaint tracker before an irrelevant pivot. Use the next-strongest confirmed fact instead and ignore the pattern.\n\u2192 The test: can the owner draw a straight line from the pain you named to what we sell? If yes, lead with it. If no, it is not our hook regardless of the count.\n\u2192 GOOD: "Nine of your recent reviews mention waiting days for a callback \u2014 and you are paying for 27 ads driving straight to a page with no way to capture those people. Worth 20 minutes?"\n\u2192 BAD: "Your website has no lead capture form." (True, generic, ignorable \u2014 and it buries the one thing that would make him stop scrolling.)` : ''}` : 'No verified operational pain found in public sources — pitch from the site/ad audit only. Do NOT invent operational pain: fabricating a complaint would destroy credibility instantly.'}
-RECENT NEWS TRIGGERS (verified to be about THIS company via Google News): ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago] ${t.headline}`).join('\n') + '\n→ These are CONFIRMED recent events about this exact company. Use the most relevant ONE as the pitch cold-open ("I saw you just..."). This is the strongest personalization signal — it proves we did our homework. Only reference a trigger that genuinely connects to the pain/product.' : 'No recent company-specific news found — do not invent any; pitch from the site audit.'}
+RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago, identified via ${t.idBasis}] ${t.headline}`).join('\n') + '\n\u2192 Each line shows HOW we tied it to this company. "via domain" or "via location" = strong evidence. "via distinctive name" = a NAME MATCH ONLY and is NOT confirmed to be them.\n\u2192 You may use a trigger as the cold-open (\"I saw you just...\") ONLY if it was identified via domain or location AND the headline obviously describes THIS business. Company names repeat across the country \u2014 a condo complex, a street address, a school, or a different town sharing the name is NOT them.\n\u2192 If you are not certain a headline is about this exact business, do NOT reference it at all. Opening with someone else\u2019s news proves we did not do our homework and kills the lead instantly.' : 'No recent company-specific news found \u2014 do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 ═══ THE BUYING WINDOW WE ARE INTERCEPTING (this determines the ENTIRE pitch) ═══
@@ -6093,11 +6126,11 @@ This maps to the CEO's ICP #3 and #4 — CROJungle's CORE PRODUCT. Do NOT pitch 
 The strongest proof point here is Sean ($140k on $4k in one month, ~30x over 8 months) — it is exactly the "one marketing hire vs. a team" comparison, in dollars.`
 : (manualRoleCount >= 2) ? `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
 They have already identified the problem and allocated the budget (~$55k/yr per role). They have started a hiring process but have NOT yet committed.
-THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $25k-$75k custom build.
+THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $40k-$100k+ custom build.
 The strongest proof point is the seasonal business (relief + profit) for an owner-operator, or Kraft Heinz if they are larger and more technical.`
 : `🔎 AUDIT-DRIVEN WINDOW — there is NO confirmed hiring signal for this lead${req.body.discoverySource === 'google_places' ? ' (it is a local owner-operated business found via Google Places)' : ''}.
 CRITICAL: Do NOT default to a software/AI build. This lead did not post ops roles, so there is NO evidence they are drowning in manual labor. Pitch ONLY what the SITE AND AD AUDIT actually reveal. For a local owner-operated business the answer is almost always one of two things:
-  1) WEBSITE REBUILD / LANDING PAGE — if the site is dated, has no clear CTA, weak positioning, or looks like it predates 2021.
+  1) WEBSITE REBUILD ($50k+) — if the site is dated, has no clear CTA, weak positioning, or looks like it predates 2021. Note: a standalone landing page is NOT one of our products and must never be recommended or priced as the offering. Describing dedicated conversion pages as part of a full rebuild is fine — just never present one as the product itself.
   2) END-TO-END MARKETING / ADS RETAINER — if they are running ads, have a thin/under-managed online presence, or are clearly under-marketed for their size.
 Recommend AI Software or AI Brain ONLY if the audit surfaces a genuine, confirmed operational or systems gap — never as a default. Lead with the single sharpest confirmed problem from the audit.`}
 
@@ -6127,7 +6160,7 @@ TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools;
 
 ADS:
 - Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
-- Facebook Ads: ${fbAds.hasAds ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
+- Facebook Ads: ${fbAds.hasAds && adCountReliable ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : fbAds.hasAds ? `Ad Library keyword search returned hits for this company name, but the count is NOT attribution-verified \u2014 it may include other advertisers or even a different company with a similar name. \u26a0 You MUST NOT state an ad count, imply a specific number of ads, or say they are \"running N ads\". Putting an unverified number in a real sales email is a fabrication. If ad spend matters to the pitch you may only reference it when the Meta pixel is ALSO present, and only as \"ads appear to be running\" with no number \u2014 otherwise leave Facebook ads out of the pitch entirely.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
 ${siteUnreachable ? 'WARNING: The homepage could NOT be reached during our scan — it returned a connection/error state (e.g. "Connection Reset" or a timeout). This is very likely transient or on OUR side, NOT proof their site is down. DO NOT claim their website is broken, blank, or showing an error — that would be a fabrication. Do NOT audit the homepage at all. Audit ONLY from the discovery signals and tech-stack data, and note in the pitch angle that the site needs a manual look.' : screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
@@ -6214,7 +6247,7 @@ CROJungle offerings (full-service — can combine):
 - Website Rebuild ($50k+): homepage conversion failures, weak positioning, no CTA — full rebuild only
 - End-to-End Marketing / Ads Management ($10k-$35k/month): running ads but leaking revenue, needs full-funnel ownership
 - AI Brain ($40k-$70k): no marketing intelligence layer, disconnected systems, no automation
-- Custom AI Software Build ($25k-$75k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — recommend ONLY when there is a CONFIRMED manual-labor signal (multiple ops job postings). Never default to it.
+- Custom AI Software Build ($40k-$100k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — recommend ONLY when there is a CONFIRMED manual-labor signal (multiple ops job postings). Never default to it.
 - Revenue Growth / CRO Retainer ($10k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
 - Exit / Valuation Advisory (via Wall Street-backed partner): for companies preparing to sell — increase revenue AND advise on valuation/M&A. Nobody else offers this combination.
 
@@ -6446,7 +6479,7 @@ RAW EVIDENCE (what we actually confirmed):
 - ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
 - Screenshot taken: ${!!screenshotUrl}
-- Facebook ads: ${fbAds.hasAds ? fbAds.adCount + ' ads verified as theirs (attribution-checked)' : fbAds.confirmed ? 'none found attributable to them' : 'not checked'}
+- Facebook ads: ${fbAds.hasAds && fbAds.countReliable !== false ? fbAds.adCount + ' ads verified as theirs (attribution-checked)' : fbAds.hasAds ? 'keyword hits only — NOT attribution-verified, no count may be stated' : fbAds.confirmed ? 'none found attributable to them' : 'not checked'}
 - Google Ads tag on page: ${builtWith.hasGoogleAdsTag ? 'YES (confirmed in source)' : 'NOT FOUND (may still run ads via tag manager)'}
 - Meta pixel on page: ${builtWith.hasMetaPixel ? 'YES (confirmed)' : 'NOT FOUND'}
 - CRM detected: ${builtWith.hasCRM ? 'YES' : 'not detected on-page'}
@@ -6631,7 +6664,7 @@ Return ONLY valid JSON:
           !builtWith.hasH1 ? 'no H1' : '',
           !builtWith.hasSchema ? 'no schema markup' : '',
         ].filter(Boolean).join(', ') : 'On-page SEO fundamentals in place (title, meta, H1, schema)' : '',
-        facebookAds: fbAds.hasAds ? `${fbAds.adCount || fbAds.ads?.length || ''}+ active Facebook ads verified as THEIRS in Ad Library (attribution-checked)`.trim() : builtWith.hasMetaPixel ? 'Meta pixel on site — ad infrastructure exists, but no ads verified as theirs in Ad Library' : fbAds.confirmed ? 'No Facebook ads attributable to them in Ad Library' : 'Facebook ads: could not check (Ad Library scrape failed)',
+        facebookAds: fbAds.hasAds && fbAds.countReliable !== false ? `${fbAds.adCount || fbAds.ads?.length || ''}+ active Facebook ads verified as THEIRS in Ad Library (attribution-checked)`.trim() : fbAds.hasAds ? 'Ad Library keyword hits found but NOT attribution-verified — no ad count can be claimed' : builtWith.hasMetaPixel ? 'Meta pixel on site — ad infrastructure exists, but no ads verified as theirs in Ad Library' : fbAds.confirmed ? 'No Facebook ads attributable to them in Ad Library' : 'Facebook ads: could not check (Ad Library scrape failed)',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
       },
@@ -6744,21 +6777,21 @@ Return ONLY valid JSON:
 
     // Top pain
     const painMap = [
-      { id:'heavy_manual_labor', pain:`Actively hiring ${manualRoleCount} manual/repetitive roles (confirmed job postings) — recurring labor that custom software could largely replace`, opportunity:'Custom AI software build to automate repetitive workflows', product:'Custom AI Software Build', price:'$25k–$75k+' },
+      { id:'heavy_manual_labor', pain:`Actively hiring ${manualRoleCount} manual/repetitive roles (confirmed job postings) — recurring labor that custom software could largely replace`, opportunity:'Custom AI software build to automate repetitive workflows', product:'Custom AI Software Build', price:'$40k–$100k+' },
       { id:'exit_prep', pain:'Preparing for exit — every dollar of new revenue and every efficiency gain directly raises the sale price', opportunity:'Revenue growth + valuation advisory before the sale closes', product:'Exit / Valuation Advisory', price:'Custom' },
-      { id:'manual_labor', pain:`Hiring ${manualRoleCount} manual roles — repetitive work that software could handle at a fraction of the cost`, opportunity:'Workflow automation / custom software', product:'Custom AI Software Build', price:'$25k–$50k' },
+      { id:'manual_labor', pain:`Hiring ${manualRoleCount} manual roles — repetitive work that software could handle at a fraction of the cost`, opportunity:'Workflow automation / custom software', product:'Custom AI Software Build', price:'$40k–$100k+' },
       { id:'funded_no_infra', pain:'Recently funded but no CRM or marketing infrastructure — capital to grow with nothing to capture or convert leads', opportunity:'Full marketing infrastructure + intelligence layer', product:'AI Brain', price:'$40k–$70k' },
-      { id:'stale_site', pain:`Footer copyright reads ${builtWith.copyrightYear} — the site has visibly not been touched in years, and prospects notice`, opportunity:'Full website rebuild', product:'Website Rebuild', price:'$10k–$25k' },
-      { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Landing page or homepage rebuild', product:'Website Rebuild', price:'$10k–$25k' },
-      { id:'no_email_capture', pain:'No email capture anywhere on the site — every visitor who does not convert today is lost forever', opportunity:'Lead capture + email nurture system', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
-      { id:'weak_positioning', pain:`Positioning ${positioningScore}/10 — generic messaging any competitor could use`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$15k–$40k' },
-      { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + landing page', product:'End-to-End Marketing', price:'$10k–$20k' },
-      { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
-      { id:'no_tracking', pain:'No tracking pixel — spending on marketing with no way to measure what works', opportunity:'Analytics + tracking infrastructure', product:'Revenue Growth Retainer', price:'$8k–$15k/month' },
-      { id:'slow_mobile', pain:`Mobile score ${pageSpeed.mobileScore}/100 — majority of traffic leaves before seeing the offer`, opportunity:'Site speed + mobile rebuild', product:'Website Rebuild', price:'$10k–$25k' },
-      { id:'no_google_ads', pain:'No Google Ads — competitors are capturing demand this company cannot see', opportunity:'Paid search + landing pages', product:'End-to-End Marketing', price:'$8k–$20k/month' },
-      { id:'no_social_proof', pain:'No testimonials or case studies — buyers cannot verify claims before buying', opportunity:'Social proof system', product:'Website Rebuild', price:'$8k–$20k' },
-      { id:'weak_hero', pain:'Homepage headline does not differentiate from a single competitor', opportunity:'Positioning + homepage rewrite', product:'Website Rebuild', price:'$10k–$30k' },
+      { id:'stale_site', pain:`Footer copyright reads ${builtWith.copyrightYear} — the site has visibly not been touched in years, and prospects notice`, opportunity:'Full website rebuild', product:'Website Rebuild', price:'$50k+' },
+      { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Homepage rebuild with a real conversion path', product:'Website Rebuild', price:'$50k+' },
+      { id:'no_email_capture', pain:'No email capture anywhere on the site — every visitor who does not convert today is lost forever', opportunity:'Lead capture + email nurture system', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
+      { id:'weak_positioning', pain:`Positioning ${positioningScore}/10 — generic messaging any competitor could use`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$50k+' },
+      { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + conversion path rebuild', product:'End-to-End Marketing', price:'$10k–$35k/mo' },
+      { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
+      { id:'no_tracking', pain:'No tracking pixel — spending on marketing with no way to measure what works', opportunity:'Analytics + tracking infrastructure', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
+      { id:'slow_mobile', pain:`Mobile score ${pageSpeed.mobileScore}/100 — majority of traffic leaves before seeing the offer`, opportunity:'Site speed + mobile rebuild', product:'Website Rebuild', price:'$50k+' },
+      { id:'no_google_ads', pain:'No Google Ads — competitors are capturing demand this company cannot see', opportunity:'Paid search with a conversion-ready destination', product:'End-to-End Marketing', price:'$10k–$35k/mo' },
+      { id:'no_social_proof', pain:'No testimonials or case studies — buyers cannot verify claims before buying', opportunity:'Social proof system', product:'Website Rebuild', price:'$50k+' },
+      { id:'weak_hero', pain:'Homepage headline does not differentiate from a single competitor', opportunity:'Positioning + homepage rewrite', product:'Website Rebuild', price:'$50k+' },
     ];
     const topPain = (() => {
       // Brain found a specific pain — use it, it's more accurate than rule-based
@@ -6781,7 +6814,7 @@ Return ONLY valid JSON:
       if (brainAudit?.recommendedProduct) {
         return {
           product: brainAudit.recommendedProduct,
-          price: brainAudit.recommendedPrice || '$10k–$25k',
+          price: brainAudit.recommendedPrice || '$50k+',
           reason: brainAudit.recommendedReason || brainAudit.realPain || '',
           pitchAngle: brainAudit.pitchAngle || '',
           flag: '',
@@ -6793,11 +6826,11 @@ Return ONLY valid JSON:
       const isAIOpportunity = !builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat;
       const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40);
       const isMediaOrAgency = /media|agency|creative|PR|communications|marketing firm|studio/i.test(content.slice(0,500));
-      if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$25k–$75k', reason:'Merged or growing operation with no unified tech stack', flag:'' };
-      if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$8k–$35k/month', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
+      if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$40k–$100k+', reason:'Merged or growing operation with no unified tech stack', flag:'' };
+      if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$10k–$35k/mo', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
       if (isAIOpportunity && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'No intelligence layer — disconnected systems, no automation, no tracking', flag:'' };
-      if (isBroken) return { product:'Website Rebuild', price:'$10k–$25k', reason:'Homepage has critical conversion failures', flag:'' };
-      return { product:'Website / Landing Page', price:'$5k–$25k', reason:'Homepage conversion gaps identified', flag:'' };
+      if (isBroken) return { product:'Website Rebuild', price:'$50k+', reason:'Homepage has critical conversion failures', flag:'' };
+      return { product:'Website Rebuild', price:'$50k+', reason:'Homepage conversion gaps identified', flag:'' };
     };
 
     const recommendedProduct = (() => {
