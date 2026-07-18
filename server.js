@@ -1435,8 +1435,18 @@ const scrapeGoogleNews = async () => {
 // guessing that the about page lived at /about. On most real sites it doesn't —
 // it's at /our-company, /who-we-are, /history, /meet-the-team, etc.
 // Map asks the site for its actual structure (sitemap + SERP + index cache).
+// Short-lived map cache. /map costs a credit, and within a single research run we
+// now want the site structure TWICE (once to find leadership pages, once to find
+// pricing/services/booking pages). Caching by domain for a few minutes makes the
+// second and third lookups free, so full-site auditing costs nothing extra to map.
+const _MAP_CACHE = new Map(); // domain -> { urls, at }
+const _MAP_TTL_MS = 10 * 60 * 1000;
 const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
   if (!fcKey || !url) return [];
+  let _mk = '';
+  try { _mk = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { _mk = url; }
+  const _hit = _MAP_CACHE.get(_mk);
+  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) return _hit.urls;
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/map', {
       method: 'POST',
@@ -1450,7 +1460,9 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
       return [];
     }
     const links = d.links || d.data?.links || [];
-    return links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
+    const out = links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
+    if (out.length) _MAP_CACHE.set(_mk, { urls: out, at: Date.now() });
+    return out;
   } catch(e) {
     console.log('firecrawlMap error:', e.message);
     return [];
@@ -2611,6 +2623,154 @@ ${corpus}` }]
     else console.log(`PAIN [${companyName}]: no verifiable repeated pattern in reviews (honest empty)`);
     return { signals: verified, summary: parsed.summary || '' };
   } catch(e) { console.log('painFromGoogleReviews failed:', e.message); return { signals: [], summary: '' }; }
+};
+
+// ── SITE-WIDE AUDIT — read the pages the audit is actually ABOUT ────────────
+// The audit used to be built almost entirely from the homepage, which caused two
+// real problems:
+//   1) FALSE CLAIMS. Telling an owner "you have no booking tool" when it lives on
+//      /schedule is the kind of wrong statement that ends the conversation. The
+//      homepage is a brochure; the machinery lives deeper.
+//   2) NO NUMBERS OF HIS OWN. His pricing page is where his published figures are,
+//      and those are the only dollar figures we are allowed to use in a pitch.
+// The site map is already paid for (cached above), so reading a few real pages is
+// cheap. We pick by intent, not by guessing paths.
+const PAGE_INTENT = [
+  { key: 'pricing',  re: /(pricing|prices|rates|plans|packages|cost|fees|tuition|membership)/i },
+  { key: 'services', re: /(services|what-we-do|solutions|offerings|specialt|practice-areas|treatments)/i },
+  { key: 'booking',  re: /(book|schedule|appointment|consult|estimate|quote|request|get-started|contact)/i },
+];
+
+const auditSitePages = async (website, fcKey, apiKey, companyName) => {
+  if (!website || !fcKey || !apiKey) return null;
+  try {
+    const urls = await firecrawlMap(fcKey, website, 'pricing services book schedule quote'); // cached — usually free
+    if (!urls.length) return null;
+    const clean = urls.filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u));
+    const picked = [];
+    for (const intent of PAGE_INTENT) {
+      const hit = clean.find(u => intent.re.test(u) && !picked.some(p => p.url === u));
+      if (hit) picked.push({ key: intent.key, url: hit });
+    }
+    if (!picked.length) return null;
+    const top = picked.slice(0, 3); // pricing + services + booking at most
+    console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
+
+    const scraped = await Promise.all(top.map(p =>
+      firecrawlScrape(fcKey, p.url, 10000).then(md => ({ ...p, md: md || '' })).catch(() => ({ ...p, md: '' }))
+    ));
+    const usable = scraped.filter(p => p.md && p.md.length > 200);
+    if (!usable.length) return null;
+
+    const corpus = usable.map(p => `--- ${p.key.toUpperCase()} PAGE (${p.url}) ---\n${p.md.slice(0, 7000)}`).join('\n\n');
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 700,
+        messages: [{ role: 'user', content: `These are real interior pages from ${companyName}'s website.
+
+Extract ONLY what is literally on these pages. Never infer, never estimate, never fill a gap.
+
+1. PUBLISHED PRICES — any price, rate, fee, or package cost they print publicly. Copy the figure and what it buys, verbatim. These are the company's OWN numbers and will be used in a sales conversation, so a wrong figure is worse than no figure. If nothing is printed, return an empty array.
+2. WHAT THEY ACTUALLY SELL — their real service lines, in their words.
+3. BOOKING MECHANISM — how a customer actually starts. One of: "online_booking" (real self-serve scheduler), "form" (submit and wait for a callback), "phone_only", "none_found".
+4. CAPTURE — is there any way to leave contact details other than a phone number? true/false.
+
+Return ONLY JSON:
+{"prices":[{"amount":"exact printed figure","what":"what it covers"}],"services":["service line"],"booking":"online_booking|form|phone_only|none_found","hasCapture":true|false}
+
+PAGES:
+${corpus}` }]
+      }),
+    }, 22000);
+    const d = await res.json();
+    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const parsed = JSON.parse(t);
+
+    // ANTI-FABRICATION: every price must literally appear in what we scraped.
+    const flat = corpus.toLowerCase().replace(/[\s,]/g, '');
+    const prices = (parsed.prices || []).filter(p => {
+      const digits = String(p.amount || '').toLowerCase().replace(/[^0-9.]/g, '');
+      return digits.length >= 2 && flat.includes(digits);
+    });
+    if ((parsed.prices || []).length !== prices.length) {
+      console.log(`SITE AUDIT [${companyName}]: dropped ${(parsed.prices||[]).length - prices.length} price(s) not found verbatim on the page`);
+    }
+    const out = {
+      pagesRead: usable.map(p => p.key),
+      prices,
+      services: parsed.services || [],
+      booking: parsed.booking || 'none_found',
+      hasCapture: parsed.hasCapture === true,
+    };
+    console.log(`SITE AUDIT [${companyName}]: booking=${out.booking} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
+    return out;
+  } catch(e) { console.log('auditSitePages failed:', e.message); return null; }
+};
+
+// ── CAREERS PAGE — the operations sensor, and the best source of HIS numbers ──
+// Adzuna gave us hiring signals; it is gone. But almost every business publishes the
+// same information on their own site for free. What they are hiring tells us whether
+// their constraint is LABOR (dispatchers, schedulers, CSRs, admins \u2192 software build)
+// or DEMAND (marketing hires \u2192 retainer). Posted salaries are also the strongest
+// dollar figure we can use in a pitch, because HE published them.
+const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
+  if (!website || !fcKey || !apiKey) return null;
+  const base = website.replace(/\/$/, '');
+  const paths = ['/careers', '/jobs', '/join-our-team', '/employment', '/work-with-us', '/join-us'];
+  let md = '';
+  for (const p of paths) {
+    try {
+      const r = await firecrawlScrape(fcKey, base + p, 12000);
+      // A real careers page names roles; a 404 or redirect to home will not.
+      if (r && r.length > 400 && /(hiring|apply|position|job|opening|career|full[- ]time|part[- ]time)/i.test(r)) { md = r; break; }
+    } catch { /* try next */ }
+  }
+  if (!md) return null;
+  try {
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: `This is the careers/jobs page for "${companyName}".
+
+Extract ONLY roles they are ACTUALLY hiring for right now. Ignore boilerplate, benefits copy, EEO statements, and generic "join our team" text with no named role.
+
+Classify each role:
+- "ops" = repetitive/manual back-office work software can absorb: dispatcher, scheduler, coordinator, customer service rep, receptionist, data entry, bookkeeper, billing clerk, admin assistant, intake, appointment setter
+- "marketing" = marketing/demand roles: marketing manager/coordinator, social media, content, SEO, ads
+- "sales" = sales roles
+- "skilled" = licensed/skilled trade or professional: technician, electrician, nurse, CPA, engineer, driver
+- "leadership" = manager/director/executive
+
+RULES: never invent a role or a salary. Only report a salary if it is literally printed on the page.
+
+Return ONLY JSON:
+{"roles":[{"title":"exact title","type":"ops|marketing|sales|skilled|leadership","salary":"exact posted salary or null"}],"totalOpenings":number}
+
+PAGE:
+${md.slice(0, 14000)}` }]
+      }),
+    }, 20000);
+    const d = await res.json();
+    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const parsed = JSON.parse(t);
+    const roles = Array.isArray(parsed.roles) ? parsed.roles : [];
+    if (!roles.length) return null;
+    const opsRoles = roles.filter(r => r.type === 'ops');
+    const mktgRoles = roles.filter(r => r.type === 'marketing');
+    const salaries = roles.filter(r => r.salary).map(r => `${r.title}: ${r.salary}`);
+    console.log(`CAREERS [${companyName}]: ${roles.length} open role(s) \u2014 ${opsRoles.length} ops, ${mktgRoles.length} marketing${salaries.length ? ` | posted salaries: ${salaries.join('; ')}` : ''}`);
+    return { roles, opsRoles, mktgRoles, salaries, totalOpenings: parsed.totalOpenings || roles.length };
+  } catch(e) { console.log('scrapeCareersPage failed:', e.message); return null; }
 };
 
 const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, location = '') => {
@@ -5584,8 +5744,10 @@ app.post('/api/research', async (req, res) => {
     const ownerFound = !!(decisionMaker && decisionMaker.name) || !!verifiedCEO;
     const isPlacesLead = discoverySource === 'google_places' || !!(discoverySignals && discoverySignals.local_owner_operated);
 
-    // ═══ PAIN + REVENUE — only if we can actually reach someone, run in PARALLEL ══
+    // ═══ PAIN + REVENUE + CAREERS — only if reachable, run in PARALLEL ══════════
     let painSummary = '';
+    let careers = null;
+    let sitePages = null;
     if (cachedContact && cachedContact.pain && Array.isArray(cachedContact.pain.signals) && cachedContact.pain.signals.length) {
       publicPainSignals = cachedContact.pain.signals;
       painSummary = cachedContact.pain.summary || '';
@@ -5626,10 +5788,14 @@ app.post('/api/research', async (req, res) => {
       }
       const needPain = publicPainSignals.length === 0 && firecrawlKey && apiKey && company;
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
-      const [painRes, revRes] = await Promise.allSettled([
+      const [painRes, revRes, carRes, siteRes] = await Promise.allSettled([
         needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
         needRev  ? findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location) : Promise.resolve(null),
+        website  ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
+        website  ? auditSitePages(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
       ]);
+      careers = carRes.status === 'fulfilled' ? carRes.value : null;
+      sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
       const pain = painRes.status === 'fulfilled' ? painRes.value : null;
       if (pain && pain.signals && pain.signals.length > 0) {
         publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source || 'web'})`);
@@ -5984,14 +6150,18 @@ app.post('/api/research', async (req, res) => {
     const _weakSite = !hasCTA || _staleSite || (visualAnalysis && (visualAnalysis.heroIsBlank || /dated/i.test(visualAnalysis.designObservation || '') || visualAnalysis.overallConversionReadiness === 'weak'));
     const _hasAds = (fbAds.adCount || 0) > 0 || !!builtWith.hasGoogleAdsTag;
     const _underMarketed = !!_psig.under_marketed || !!_psig.local_owner_operated || req.body.discoverySource === 'google_places';
-    const _mktgHire = !!_psig.hiring_marketing;
+    const _mktgHire = !!_psig.hiring_marketing || _careersMktg;
     // Ops-hiring (→ AI software build) requires ACTUAL manual/ops roles — the
     // ai_replacement flags fire only on our curated ops searches (dispatcher,
     // scheduler, CS rep, data entry, bookkeeper). A marketing coordinator or
     // social media manager is a RETAINER problem, NOT something a software build
     // replaces. This is the Eat Right Atlanta bug: 2 marketing roles wrongly
     // triggered a $75k AI build pitch on an obvious retainer lead.
-    const _opsHire = !!_psig.ai_replacement_multi || !!_psig.ai_replacement_heavy || !!_psig.ai_replacement_signal;
+    // Careers page is now a first-class hiring signal (Adzuna's replacement, from their
+    // own site): ops roles => software build, marketing roles => retainer.
+    const _careersOps = !!(careers && careers.opsRoles && careers.opsRoles.length > 0);
+    const _careersMktg = !!(careers && careers.mktgRoles && careers.mktgRoles.length > 0);
+    const _opsHire = !!_psig.ai_replacement_multi || !!_psig.ai_replacement_heavy || !!_psig.ai_replacement_signal || _careersOps;
     const _realOpsSignal = _opsHire && !_mktgHire;
     const _exitSignal = !!_psig.preparing_for_exit || req.body.discoverySource === 'for_sale';
     const _financialSignal = _exitSignal || !!_psig.raised_funding || !!_psig.sba_funded || req.body.discoverySource === 'sba_loan';
@@ -6015,7 +6185,12 @@ app.post('/api/research', async (req, res) => {
     // Money leaks at the FIRST broken link. Fixing a later link while an earlier
     // one is broken wastes their money — and they can tell, which kills the pitch.
     // ══════════════════════════════════════════════════════════════════════════
-    const _hasCapture = !!builtWith.hasCRM || !!builtWith.hasBooking || !!builtWith.hasEmailCapture;
+    // Site-wide evidence OVERRIDES the homepage-only read. Claiming "no booking tool"
+    // when it lives on /schedule is a false statement to an owner who knows better —
+    // the fastest way to lose a lead. Interior pages are the authority here.
+    const _siteBooking = sitePages ? sitePages.booking : null;
+    const _hasCapture = !!builtWith.hasCRM || !!builtWith.hasBooking || !!builtWith.hasEmailCapture
+      || (sitePages && (sitePages.hasCapture === true || _siteBooking === 'online_booking'));
     const _siteConverts = hasCTA && !_weakSite;
 
     // ══ OPERATIONAL SIGNALS — the missing half of the audit ══════════════════
@@ -6109,7 +6284,7 @@ app.post('/api/research', async (req, res) => {
     if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation' + (_exitSignal ? ' (they are preparing to exit — valuation is the emotional lever)' : ''));
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
 
-const eligibleProductsGuidance = `\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
+const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
 ${_bottleneckWhy}
 
 Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
