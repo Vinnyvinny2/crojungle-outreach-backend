@@ -1743,7 +1743,7 @@ const isCatchAllDomain = async (domain, verifierKey) => {
 // ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
 // An address published on their own site is the strongest evidence there is.
 // Also harvests EVERY address found, which feeds the pattern-learning corpus.
-const scrapeEmailsFromSite = async (website, fcKey, homepageContent) => {
+const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false) => {
   const out = { emails: [], source: '' };
   if (!website) return out;
   const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
@@ -1751,31 +1751,65 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent) => {
 
   const JUNK_DOMAIN = /@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i;
   const JUNK_LOCAL  = /^(noreply|no-reply|donotreply|postmaster|abuse|webmaster|privacy|legal|dmca|unsubscribe|mailer-daemon|bounce|test|user|name|email|your)@/i;
+  const ROLE_LOCAL_S = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media)@/i;
+  const FREE_PROVIDER = /@(gmail|yahoo|outlook|hotmail|aol|icloud|proton|live|msn)\./i;
+  const domainRoot = domain.split('.')[0];
+  // Does a different email domain plausibly belong to the SAME company? (shortened /
+  // abbreviated domains share a real chunk with the full name — vklnTRANS ⊂ landTRANSportation)
+  const relatedDomain = (edom) => {
+    const er = (edom || '').split('.')[0];
+    if (!er) return false;
+    if (er === domainRoot) return true;
+    for (let len = Math.min(er.length, domainRoot.length); len >= 4; len--) {
+      for (let i = 0; i + len <= er.length; i++) {
+        if (domainRoot.includes(er.substr(i, len))) return true;
+      }
+    }
+    return false;
+  };
 
-  const extract = (text) => {
+  const extract = (text, allowOffDomain) => {
     if (!text) return [];
     const found = new Set();
     (text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi) || [])
       .forEach(m => found.add(m.replace(/mailto:/i, '').toLowerCase()));
     (text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
       .forEach(e => found.add(e.toLowerCase()));
-    return [...found].filter(e =>
-      e.endsWith('@' + domain) && !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60
-    );
+    const clean = [...found].filter(e => !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60);
+    const same = clean.filter(e => e.endsWith('@' + domain));
+    if (same.length) return same;
+    if (!allowOffDomain) return [];
+    // No same-domain address — but a PERSONAL email sitting on their own homepage
+    // (jill@vklntrans.com) is clearly a reachable human, even on a shortened domain.
+    // Accept it only if the local is a real name (not a role inbox) AND the domain is
+    // plausibly theirs (shares a chunk with the company domain) or a free provider.
+    const off = clean.filter(e => {
+      const [local, edom] = e.split('@');
+      const personal = /^[a-z]+([._][a-z]+)?$/.test(local) && !ROLE_LOCAL_S.test(e);
+      // If we CONFIRMED this homepage belongs to the target company, any personal
+      // address published on it is theirs — no domain-shape guessing needed. That
+      // confirmation is stronger evidence than any string heuristic.
+      if (siteConfirmed) return personal;
+      return personal && (relatedDomain(edom) || FREE_PROVIDER.test(e));
+    });
+    if (off.length) console.log(`EMAIL scrape [${domain}]: no same-domain address; using personal off-domain email ${off[0]} from homepage`);
+    return off;
   };
 
-  // Pass 1: homepage content we already have — costs nothing extra
-  let emails = extract(homepageContent);
+  // Pass 1: homepage content we already have — costs nothing extra. Homepage header
+  // emails are theirs, so off-domain personal addresses are allowed here.
+  let emails = extract(homepageContent, true);
   if (emails.length > 0) return { emails, source: 'homepage' };
 
-  // Pass 2: the pages most likely to publish a real address
+  // Pass 2: the pages most likely to publish a real address (same-domain only — a
+  // contact page might list a vendor's/webdev's address, so stay strict there)
   if (!fcKey) return out;
   const base = website.replace(/\/$/, '');
   for (const path of ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team']) {
     try {
       const md = await firecrawlScrape(fcKey, base + path, 10000);
       if (!md || md.length < 100) continue;
-      emails = extract(md);
+      emails = extract(md, false);
       if (emails.length > 0) return { emails, source: 'contact_page' };
     } catch(e) { /* next path */ }
   }
@@ -1864,6 +1898,61 @@ const sameName = (a, b) => {
   if (A.length < 2 || B.length < 2) return false;
   // Same first AND last name = same person. Middle names/initials ignored.
   return A[0] === B[0] && A[A.length-1] === B[B.length-1];
+};
+
+// Nickname equivalences so "Mike Bacevich" + michael@ is correctly the SAME person
+// (was false-flagging real owners as "different person" and blocking good leads).
+const NICKNAMES = {
+  mike:['michael','mick','mikey'], michael:['mike','mick','mikey'],
+  bob:['robert','rob','bobby'], robert:['bob','rob','bobby','robbie'], rob:['robert','bob','robbie'],
+  bill:['william','will','billy'], william:['bill','will','billy','liam'], will:['william','bill'],
+  jim:['james','jimmy'], james:['jim','jimmy','jamie'], jimmy:['james','jim'],
+  dave:['david','davey'], david:['dave','davey'],
+  tom:['thomas','tommy'], thomas:['tom','tommy'],
+  rick:['richard','rich','ricky','dick'], richard:['rick','rich','ricky','dick'], dick:['richard','rick'], rich:['richard'],
+  chris:['christopher','christina','christine'], christopher:['chris'],
+  matt:['matthew'], matthew:['matt'],
+  dan:['daniel','danny'], daniel:['dan','danny'],
+  joe:['joseph','joey'], joseph:['joe','joey'],
+  steve:['steven','stephen'], steven:['steve','stephen'], stephen:['steve','steven'],
+  ed:['edward','eddie','ted','ned'], edward:['ed','eddie','ted','ned'], ted:['edward','theodore'],
+  jack:['john','johnny'], john:['jack','johnny','jon'], jon:['jonathan','john'], jonathan:['jon','john'],
+  tony:['anthony'], anthony:['tony'],
+  nick:['nicholas'], nicholas:['nick'],
+  sam:['samuel','sammy','samantha'], samuel:['sam','sammy'],
+  ben:['benjamin','benny'], benjamin:['ben','benny'],
+  andy:['andrew','drew'], andrew:['andy','drew'], drew:['andrew'],
+  alex:['alexander','alexandra','alec'], alexander:['alex','alec'], alexandra:['alex'],
+  greg:['gregory'], gregory:['greg'],
+  jeff:['jeffrey','jeffery'], jeffrey:['jeff'], jeffery:['jeff'],
+  ken:['kenneth','kenny'], kenneth:['ken','kenny'],
+  larry:['lawrence','laurence'], lawrence:['larry'],
+  ron:['ronald','ronnie'], ronald:['ron','ronnie'],
+  don:['donald','donnie'], donald:['don','donnie'],
+  charlie:['charles','chuck'], charles:['charlie','chuck','chas'], chuck:['charles'],
+  pat:['patrick','patricia'], patrick:['pat'], patricia:['pat','patty','trish'],
+  pete:['peter'], peter:['pete'],
+  frank:['francis','franklin'], francis:['frank'], franklin:['frank'],
+  gabe:['gabriel'], gabriel:['gabe'],
+  kate:['katherine','kathryn','katie'], katherine:['kate','katie','kathy'], katie:['katherine','kate'], kathryn:['kate','katie'],
+  liz:['elizabeth','beth','betty'], elizabeth:['liz','beth','betty','eliza','lisa'], beth:['elizabeth'],
+  sue:['susan','susie'], susan:['sue','susie'],
+  meg:['margaret','peggy','maggie'], margaret:['peggy','meg','maggie'], maggie:['margaret'], peggy:['margaret'],
+  cathy:['catherine'], catherine:['cathy','cath','kate'],
+  jen:['jennifer','jenny'], jennifer:['jen','jenny'], jenny:['jennifer'],
+  becky:['rebecca'], rebecca:['becky'],
+  tina:['christina','christine'], christina:['tina','chris'], christine:['tina','chris'],
+  deb:['deborah','debbie'], deborah:['deb','debbie'],
+  vin:['vincent','vinny'], vincent:['vin','vinny'],
+};
+// True if the email local-part contains an owner name token OR a nickname form of it.
+const localMatchesName = (local, tokens) => {
+  if (!local || !tokens || !tokens.length) return false;
+  for (const t of tokens) {
+    if (t.length >= 3 && local.includes(t)) return true;
+    for (const f of (NICKNAMES[t] || [])) { if (f.length >= 3 && local.includes(f)) return true; }
+  }
+  return false;
 };
 
 const looksLikeRealName = (n) => {
@@ -2135,8 +2224,16 @@ Return ONLY JSON:
   "hasVisibleSocialProof": true/false,// Are testimonials, review stars, client logos, or trust badges visible above the fold?
   "looksDated": true/false,           // Does the visual design look pre-2020 (old fonts, cluttered layout, dated styling)?
   "designObservation": "one factual sentence describing what the page looks like",
-  "overallConversionReadiness": "strong|moderate|weak"  // Based only on what's visible: can this page convert a paid-ad visitor?
-}` }
+  "overallConversionReadiness": "strong|moderate|weak",  // Based only on what's visible: can this page convert a paid-ad visitor?
+  "visibleEmail": "the FULL email address visible anywhere in this image, or null",
+  "visibleEmailRaw": "exactly how it was written on the page (e.g. 'jill [at] vklntrans dot com'), or null",
+  "visiblePhone": "the phone number visible in this image, or null"
+}
+
+ABOUT THE EMAIL — this matters a lot:
+- Many small businesses put their email in the HEADER as an IMAGE, or write it obfuscated ("jill [at] company dot com", "jill(at)company.com") to dodge scrapers. You can SEE those; a text scraper cannot. Read it carefully off the image.
+- Report it in "visibleEmail" NORMALIZED to a real address (jill [at] vklntrans dot com → jill@vklntrans.com), and put the original written form in "visibleEmailRaw".
+- Copy it EXACTLY as shown — character for character. Never guess a spelling, never complete a partial address, never invent a plausible one. If it is blurry, cut off, or you are not certain, return null. Null is the correct answer when unsure.` }
         ] }]
       }),
     }, 30000);
@@ -2146,7 +2243,14 @@ Return ONLY JSON:
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = JSON.parse(text);
-    console.log(`VISION [${companyName}]: CTA=${parsed.hasVisibleCTA} headline=${parsed.hasHeadline} blankHero=${parsed.heroIsBlank} readiness=${parsed.overallConversionReadiness}`);
+    // Sanity-check the vision-read email — if it isn't a well-formed address, drop it
+    // rather than let a misread string reach the email engine.
+    if (parsed.visibleEmail && !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(String(parsed.visibleEmail).trim())) {
+      console.log(`VISION [${companyName}]: discarded malformed email read "${parsed.visibleEmail}"`);
+      parsed.visibleEmail = null;
+    }
+    if (parsed.visibleEmail) parsed.visibleEmail = String(parsed.visibleEmail).trim().toLowerCase();
+    console.log(`VISION [${companyName}]: CTA=${parsed.hasVisibleCTA} headline=${parsed.hasHeadline} blankHero=${parsed.heroIsBlank} readiness=${parsed.overallConversionReadiness}${parsed.visibleEmail ? ` | SAW EMAIL: ${parsed.visibleEmail}${parsed.visibleEmailRaw && parsed.visibleEmailRaw !== parsed.visibleEmail ? ' (written as "' + parsed.visibleEmailRaw + '")' : ''}` : ''}`);
     return parsed;
   } catch(e) {
     console.log('visionAuditPage failed (non-fatal):', e.message);
@@ -2359,13 +2463,28 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = JSON.parse(text);
     const total = parsed.totalReviews || 0;
+    // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
+    // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
+    // would be catastrophic. Verify a distinctive 4-word span; drop anything unproven.
+    const corpusFlat = md.toLowerCase().replace(/\s+/g, ' ');
+    const quoteExists = (q) => {
+      const c = String(q || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (c.length < 8) return false;
+      const w = c.split(' ');
+      if (w.length < 4) return corpusFlat.includes(c);
+      for (let i = 0; i + 4 <= w.length; i++) if (corpusFlat.includes(w.slice(i, i + 4).join(' '))) return true;
+      return false;
+    };
+    const dropped = [];
     const signals = (parsed.signals || [])
       .filter(sg => (sg.count || 0) >= 2)
+      .filter(sg => { const ok = quoteExists(sg.evidence); if (!ok) dropped.push(sg.pain); return ok; })
       .map(sg => ({
         pain: total ? `${sg.pain} — ${sg.count} of ~${total} reviews mention this` : `${sg.pain} — ${sg.count} reviews mention this`,
-        evidence: sg.evidence, source: 'their Google reviews (pattern across multiple)',
+        evidence: sg.evidence, count: sg.count, source: 'their Google reviews (pattern across multiple)',
       }));
-    if (signals.length) console.log(`DEEP PAIN [${companyName}]: ${signals.length} repeating patterns across ~${total} reviews — the "how do they know THIS" hit`);
+    if (dropped.length) console.log(`DEEP PAIN [${companyName}]: dropped ${dropped.length} unverifiable quote(s) — anti-fabrication guard held`);
+    if (signals.length) console.log(`DEEP PAIN [${companyName}]: ${signals.length} verified repeating patterns across ~${total} reviews — the "how do they know THIS" hit`);
     return signals.length ? { signals, summary: parsed.summary || '' } : null;
   } catch(e) { console.log('deepReviewMine failed:', e.message); return null; }
 };
@@ -2764,7 +2883,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   };
 };
 
-const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey }) => {
+const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, siteConfirmed = false }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
   const name = ceoName || hunterName || '';
   const fail = { email: '', ...EMAIL_TIERS.NONE, name, pattern: null };
@@ -2867,7 +2986,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   }
 
   // ── TIER 1: published on their own website ────────────────────────────────
-  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent);
+  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed);
   if (scraped.emails.length > 0) {
     // Learn the company's convention from every address we found
     for (const e of scraped.emails) {
@@ -3586,7 +3705,7 @@ const scoreReachability = (c) => {
   const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
   const isRoleInbox = !!local && ROLE_INBOX.test(local);
   const personalMailbox = !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
-  const emailMatchesOwner = ownerTokens.length > 0 && !!local && ownerTokens.some(t => local.includes(t));
+  const emailMatchesOwner = ownerTokens.length > 0 && !!local && localMatchesName(local, ownerTokens);
   // A SENIOR OPERATOR (GM, VP, Director, Partner, Principal) at a small business is
   // close to the owner, feels the pain, and can forward or influence the buy — worth
   // reaching, just not as the confirmed owner. A TRUE JUNIOR (coordinator, assistant,
@@ -3609,7 +3728,8 @@ const scoreReachability = (c) => {
   } else if (foundOwner) {
     score = 34; reasons.push(`${owner} identified, but no usable email yet`);
   } else if (deliverable && personalMailbox) {
-    score = 30; reasons.push(`A verified personal mailbox exists (${local}@\u2026) but we could not confirm whose — identify the owner first`);
+    if (tier === 1) { score = 52; reasons.push(`Personal mailbox published on their own site (${local}@\u2026) — a real person reads this; confirm they're the owner/decision-maker before pitching hard`); }
+    else { score = 30; reasons.push(`A verified personal mailbox exists (${local}@\u2026) but we could not confirm whose — identify the owner first`); }
   } else {
     score = 12; reasons.push('No decision-maker identified — we cannot confirm who to reach');
   }
@@ -5443,29 +5563,33 @@ app.post('/api/research', async (req, res) => {
       // their exact business (no disambiguation), maximally specific, cheaper than a
       // web search. Fall back to web-search pain only if reviews yield nothing.
       const placesKey = process.env.GOOGLE_PLACES_KEY || '';
-      if (req.body.placeId && placesKey && apiKey && publicPainSignals.length === 0) {
-        try {
-          // Deep full-review scrape (~2 credits) ONLY when we found an owner and will
-          // actually send — otherwise the free 5-review API mine. Best material lands
-          // exactly where it pays off: the pitch that goes out.
-          const gr = await painFromGoogleReviews(company, req.body.placeId, placesKey, apiKey, firecrawlKey, ownerFound);
-          if (gr.signals && gr.signals.length > 0) {
-            publicPainSignals = gr.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
-            painSummary = gr.summary || '';
-          }
-        } catch(e) { console.log('Google-reviews pain skipped:', e.message); }
-      }
-      // SEND-PATH ESCALATION: if we found the owner (this lead will actually be
-      // pitched) and it's a Places lead, scrape the FULL reviews page and mine the
-      // REPEATING patterns with counts — the deepest "how do they know THIS" hit.
-      if (req.body.placeId && ownerFound && firecrawlKey && apiKey) {
+      // ══ REVIEW-PATTERN MINE — the highest-reply-rate asset the system produces ══
+      // Runs on EVERY Places lead, no exceptions: a pain named across MANY of their
+      // own reviews ("7 of ~40 reviewers mention the same callback delay") is the
+      // single strongest "how do they know THIS?" hook we can put in an email.
+      // Deep pattern-mine first (scrapes their full reviews page, counts repeats);
+      // if Google blocks the scrape, fall back to the free 5-review API mine so we
+      // ALWAYS have something real. Web-search pain is the last resort.
+      let reviewPainFound = false;
+      if (req.body.placeId && firecrawlKey && apiKey && publicPainSignals.length === 0) {
         try {
           const deep = await deepReviewMine(company, req.body.placeId, firecrawlKey, apiKey);
           if (deep && deep.signals && deep.signals.length > 0) {
             publicPainSignals = deep.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
             painSummary = deep.summary || painSummary;
+            reviewPainFound = true;
           }
         } catch(e) { console.log('Deep review mine skipped:', e.message); }
+      }
+      if (!reviewPainFound && req.body.placeId && placesKey && apiKey && publicPainSignals.length === 0) {
+        try {
+          const gr = await painFromGoogleReviews(company, req.body.placeId, placesKey, apiKey, null, false);
+          if (gr.signals && gr.signals.length > 0) {
+            publicPainSignals = gr.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
+            painSummary = gr.summary || '';
+            reviewPainFound = true;
+          }
+        } catch(e) { console.log('Google-reviews pain skipped:', e.message); }
       }
       const needPain = publicPainSignals.length === 0 && firecrawlKey && apiKey && company;
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
@@ -5509,6 +5633,9 @@ app.post('/api/research', async (req, res) => {
           hunterName: email.founderName || '',
           hunterTitle: email.title || '',
           verifierKey,
+          // We already PROVED this homepage belongs to the target company, so a
+          // personal address published on it is theirs regardless of its domain.
+          siteConfirmed: domainConfirmation ? (domainConfirmation.match === 'yes') : false,
         });
         if (emailResult && emailResult.email) {
           console.log(`EMAIL RESULT [${company}]: ${emailResult.email} | ${emailResult.label} | score ${emailResult.score} | sendable: ${emailResult.sendable}`);
@@ -5634,6 +5761,39 @@ app.post('/api/research', async (req, res) => {
           visualAnalysis = await visionAuditPage(screenshotBase64, company, apiKey);
           // visualAnalysis now carries the authoritative visual findings;
           // hasCTA (declared below) reads from it directly.
+
+          // ═══ VISION EMAIL RECOVERY — the big reachability unlock ═══════════
+          // Small businesses routinely publish their email as an IMAGE or write it
+          // obfuscated ("jill [at] company dot com") to dodge scrapers. Our regex
+          // scraper is structurally blind to both; the vision model READ the page
+          // and can see them. If the email engine came up empty (or only found a
+          // role inbox) and vision saw a real address on THEIR OWN confirmed
+          // homepage, use it — that's a genuinely reachable human we were throwing
+          // away. Tier 1 (published on their own site), same as a scraped email.
+          const vEmail = visualAnalysis && visualAnalysis.visibleEmail;
+          if (vEmail) {
+            const vLocal = vEmail.split('@')[0];
+            const vIsRole = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|billing|service|customer|hr|jobs|careers|press|media|noreply|no-reply)$/i.test(vLocal);
+            const haveNothing = !emailResult || !emailResult.email;
+            const haveOnlyRole = emailResult && emailResult.email && /^(info|sales|contact|office|admin|hello|team|support|general|mail)@/i.test(emailResult.email);
+            if (haveNothing || (haveOnlyRole && !vIsRole)) {
+              const ownerToks = String(verifiedCEO || '').toLowerCase().split(/\s+/).filter(w => w.length > 2);
+              const matchesOwner = ownerToks.length > 0 && localMatchesName(vLocal, ownerToks);
+              emailResult = {
+                email: vEmail,
+                tier: 1,
+                score: vIsRole ? 60 : 100,
+                label: vIsRole
+                  ? 'Shared inbox read from their homepage image'
+                  : (matchesOwner ? 'Personal mailbox read from their homepage image (matches owner)' : 'Personal mailbox read from their homepage image'),
+                sendable: true,
+                name: matchesOwner ? verifiedCEO : null,
+                source: 'vision_homepage',
+              };
+              email.email = vEmail;
+              console.log(`✓ EMAIL RECOVERED BY VISION [${company}]: ${vEmail} — text scraper was blind to it${visualAnalysis.visibleEmailRaw && visualAnalysis.visibleEmailRaw !== vEmail ? ` (page shows it as "${visualAnalysis.visibleEmailRaw}")` : ''}`);
+            }
+          }
         }
 
         // ═══ ICP LANE CLASSIFIER — maps to the CEO's four real client profiles ═══
@@ -5803,14 +5963,86 @@ app.post('/api/research', async (req, res) => {
     const _exitSignal = !!_psig.preparing_for_exit || req.body.discoverySource === 'for_sale';
     const _financialSignal = _exitSignal || !!_psig.raised_funding || !!_psig.sba_funded || req.body.discoverySource === 'sba_loan';
     const _noSystems = builtWith.hasCRM === false && (!!_psig.raised_funding || !!_psig.sba_funded);
+    // Is our pain the GOLD kind — a pattern across their OWN Google reviews with a
+    // count? That is the single most reply-worthy line we can open with, so the
+    // prompt must be told to LEAD with it rather than bury it.
+    const _reviewPain = publicPainSignals.filter(p => /their Google reviews/i.test(p));
+    const _hasReviewPattern = _reviewPain.some(p => /\d+\s+(of\s+~?\d+\s+)?reviews? mention/i.test(p) || /\d+ reviewers/i.test(p));
+
     const _eligible = [];
-    if (_weakSite) _eligible.push('Website Rebuild ($50k+) — pre-2021 site or missing CTA/structure confirmed');
-    if (_hasAds || _underMarketed || _mktgHire) _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) or Revenue Growth / CRO Retainer ($10k-$35k/mo)' + (_mktgHire ? ' — they are HIRING for marketing: budget allocated, direction not chosen. The retainer pitch writes itself; do NOT pitch a software build for marketing roles.' : ''));
-    if (_realOpsSignal) _eligible.push('Custom AI Software Build ($25k-$75k+) — a CONFIRMED ops/manual-labor hiring signal exists for this lead');
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ROOT-CAUSE PRODUCT SELECTION
+    // The old logic mapped a surface signal straight to a product ("they run ads
+    // → sell ad management"), which recommended the wrong fix whenever the real
+    // problem sat downstream of the signal. This diagnoses the actual BOTTLENECK
+    // in their revenue chain first, then prescribes the product that fixes THAT.
+    //
+    // The revenue chain:  DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS
+    // Money leaks at the FIRST broken link. Fixing a later link while an earlier
+    // one is broken wastes their money — and they can tell, which kills the pitch.
+    // ══════════════════════════════════════════════════════════════════════════
+    const _hasCapture = !!builtWith.hasCRM || !!builtWith.hasBooking || !!builtWith.hasEmailCapture;
+    const _siteConverts = hasCTA && !_weakSite;
+
+    let _bottleneck, _bottleneckWhy;
+    if (_realOpsSignal) {
+      _bottleneck = 'OPERATIONS';
+      _bottleneckWhy = 'They are hiring manual/ops roles — the constraint is labor cost and process, not demand. Software replaces the recurring salary.';
+    } else if (_hasAds && !_hasCapture) {
+      _bottleneck = 'CAPTURE';
+      _bottleneckWhy = 'They are PAYING for traffic but have no capture layer (no CRM, no booking, no email capture). The ads work; the catching does not. Every ad dollar buys a visitor the site cannot hold. Selling them more ad management here is selling more water for a leaking bucket.';
+    } else if (_hasAds && !_siteConverts) {
+      _bottleneck = 'CONVERSION';
+      _bottleneckWhy = 'They are paying for traffic that lands on a page which cannot convert it (no clear CTA / dated or weak structure). The traffic is already bought — the page is where it dies.';
+    } else if (_hasAds && _siteConverts) {
+      _bottleneck = 'SCALE';
+      _bottleneckWhy = 'Foundation is sound (site converts, capture exists) and they are already spending. The opportunity is owning and compounding the full funnel, not rebuilding anything.';
+    } else if (_mktgHire) {
+      _bottleneck = 'DEMAND';
+      _bottleneckWhy = 'They are HIRING for marketing: budget is allocated, direction is not chosen. A retainer outperforms one junior hire and they are actively deciding right now.';
+    } else if (!_siteConverts) {
+      _bottleneck = 'FOUNDATION';
+      _bottleneckWhy = 'No confirmed ad spend AND the site cannot convert. Driving traffic to this site would waste money — the site is the first broken link and must be fixed before demand is worth buying.';
+    } else {
+      _bottleneck = 'DEMAND';
+      _bottleneckWhy = 'The site is functional but nothing is driving qualified traffic to it. The constraint is demand generation.';
+    }
+
+    // Prescribe by bottleneck — PRIMARY first (that is what the pitch must lead with)
+    if (_bottleneck === 'OPERATIONS') {
+      _eligible.push('Custom AI Software Build ($40k-$100k+) — PRIMARY: a CONFIRMED ops/manual-labor hiring signal exists. Frame against the recurring salary they are about to commit to, not against software cost.');
+      if (!_siteConverts) _eligible.push('Website Rebuild ($50k+) — SECONDARY: the site is also weak, but the hiring signal is the live, time-boxed decision. Lead with the build.');
+    } else if (_bottleneck === 'CAPTURE') {
+      _eligible.push('Website Rebuild / Conversion System ($50k+) — PRIMARY: build the capture layer (lead capture, booking, follow-up path) so the traffic they ALREADY pay for stops disappearing. Do NOT lead with ad management; the ads are the one part working.');
+      _eligible.push('End-to-End Marketing / Ads Management OR Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: own the full funnel so ads + capture + follow-up compound together. Frame as sealing the leak, never as "run more ads."');
+    } else if (_bottleneck === 'CONVERSION') {
+      _eligible.push('Website Rebuild ($50k+) — PRIMARY: they are buying traffic that lands on a page which cannot convert it. Rebuild the page the ad money is already flowing to.');
+      _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: ongoing conversion optimization once the foundation converts.');
+    } else if (_bottleneck === 'SCALE') {
+      _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) — PRIMARY: foundation is sound and spend is live. Own the full funnel and compound it. This is the rare case where ad management genuinely IS the answer.');
+      _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: squeeze more from existing traffic.');
+    } else if (_bottleneck === 'FOUNDATION') {
+      _eligible.push('Website Rebuild ($50k+) — PRIMARY: the site cannot convert and nothing is being spent driving traffic to it. Fix the foundation FIRST — buying traffic for this site would waste their money, and saying so earns trust.');
+      _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: drive and convert demand once the foundation holds.');
+    } else { // DEMAND
+      _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) or Revenue Growth / CRO Retainer ($10k-$35k/mo) — PRIMARY: the constraint is qualified demand.' + (_mktgHire ? ' They are HIRING for marketing — budget allocated, direction not chosen. The retainer pitch writes itself; do NOT pitch a software build for marketing roles.' : ''));
+      if (!_siteConverts) _eligible.push('Website Rebuild ($50k+) — SECONDARY: the site also needs work; mention as the foundation that makes the demand work harder.');
+    }
+
+    // Cross-cutting products — independent of the funnel bottleneck
     if (_noSystems) _eligible.push('AI Brain ($40k-$70k) — funded with no marketing/CRM infrastructure detected');
-    if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation');
+    if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation' + (_exitSignal ? ' (they are preparing to exit — valuation is the emotional lever)' : ''));
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
-    const eligibleProductsGuidance = `═══ ELIGIBLE PRODUCTS — recommend ONLY from this audit-derived list ═══
+
+    const eligibleProductsGuidance = `═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
+${_bottleneckWhy}
+
+Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
+Money leaks at the FIRST broken link. Recommend the product that fixes THAT link — not a later one, and not the one their surface behaviour suggests. If they are already paying for something that works (e.g. ads), do NOT sell them more of it; sell the thing that stops the waste. Naming the real bottleneck instead of the obvious symptom is what makes the owner think "how do they know this?"
+
+═══ ELIGIBLE PRODUCTS — recommend ONLY from this audit-derived list ═══
+The list is ORDERED: the PRIMARY product is what your pitch must lead with.
 Based on THIS company's CONFIRMED audit signals, the only products you may recommend are:
 ${_eligible.map((e, i) => `  ${i + 1}. ${e}`).join('\n')}
 Your recommendedProduct and every item in topThreeProducts MUST come from this list. If a product is not listed, its triggering signal was NOT found — do NOT recommend it.${_realOpsSignal ? '' : '\n⚠ There is NO confirmed manual-labor signal, so Custom AI Software Build is NOT eligible. Do not recommend it under any framing.'}`;
@@ -5844,7 +6076,7 @@ ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : '
 → THIS IS THE MOST IMPORTANT INPUT IN THIS ENTIRE PROMPT. Mike's core insight is that owners are trapped putting out fires in areas they already delegated. THIS is that fire, and we can PROVE it.
 → A pitch that names the operational fire ("your reviews say quotes take three weeks and you're hiring four schedulers to keep up") is in a completely different league from one that names a website flaw ("your homepage has no lead capture form"). The first makes the owner feel SEEN. The second sounds like every other agency email.
 → CONNECT the operational pain to the website/ad finding wherever they genuinely link — that combination is the sharpest possible pitch. Example: "You are running 840 ads into a page with no form, while your reviews say quotes take three weeks. You are paying to generate leads you cannot answer."
-→ NEVER quote the review verbatim in the email (it embarrasses them publicly). Reference the PATTERN, not the quote. "Your reviews mention slow quote turnaround" — not "one customer said you're incompetent."` : 'No verified operational pain found in public sources — pitch from the site/ad audit only. Do NOT invent operational pain: fabricating a complaint would destroy credibility instantly.'}
+→ NEVER quote the review verbatim in the email (it embarrasses them publicly). Reference the PATTERN, not the quote. "Your reviews mention slow quote turnaround" — not "one customer said you're incompetent."${_hasReviewPattern ? `\n\n\u2605\u2605 MANDATORY OPENING \u2605\u2605\nWe mined THEIR OWN Google reviews and found a pain that REPEATS across multiple reviews, with a count. This is the strongest opening line available to us and it MUST be where the pitch starts.\n\u2192 Your pitchAngle MUST open by naming this recurring pattern AND its count. The count is what makes it undeniable: one complaint is an anecdote, seven is a problem the owner already knows about and has not fixed.\n\u2192 Say the NUMBER out loud. "Seven of your last forty reviews mention the same thing" lands far harder than "some customers mention".\n\u2192 Never reproduce the review text and never name a reviewer \u2014 describe the PATTERN only. The count plus the theme is the punch; the raw quote is a liability.\n\u2192 THEN connect it to the money/product finding in the same breath. That pairing (their operational fire + what it costs) is the sharpest email this system can write.\n\u2192 RELEVANCE TEST \u2014 this mandate applies ONLY when the pattern is something CROJungle actually fixes (slow callbacks, missed calls, no follow-up, quote/estimate delays, scheduling chaos, leads going unanswered). If the recurring pattern is about PRICING, WORKMANSHIP, STAFF ATTITUDE or DAMAGE, do NOT open with it \u2014 we cannot fix that, and naming it makes us sound like a complaint tracker before an irrelevant pivot. Use the next-strongest confirmed fact instead and ignore the pattern.\n\u2192 The test: can the owner draw a straight line from the pain you named to what we sell? If yes, lead with it. If no, it is not our hook regardless of the count.\n\u2192 GOOD: "Nine of your recent reviews mention waiting days for a callback \u2014 and you are paying for 27 ads driving straight to a page with no way to capture those people. Worth 20 minutes?"\n\u2192 BAD: "Your website has no lead capture form." (True, generic, ignorable \u2014 and it buries the one thing that would make him stop scrolling.)` : ''}` : 'No verified operational pain found in public sources — pitch from the site/ad audit only. Do NOT invent operational pain: fabricating a complaint would destroy credibility instantly.'}
 RECENT NEWS TRIGGERS (verified to be about THIS company via Google News): ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago] ${t.headline}`).join('\n') + '\n→ These are CONFIRMED recent events about this exact company. Use the most relevant ONE as the pitch cold-open ("I saw you just..."). This is the strongest personalization signal — it proves we did our homework. Only reference a trigger that genuinely connects to the pain/product.' : 'No recent company-specific news found — do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
@@ -6016,7 +6248,7 @@ Return ONLY valid JSON, no markdown:
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + broken funnel (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
-  "pitchAngle": "The one line that earns a reply. STRICT RULES: (1) ONE confirmed pain only — never chain several. (2) 40 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
+  "pitchAngle": "The one line that earns a reply. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (1) Otherwise ONE confirmed pain only — never chain several. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
 }`
         });
 
@@ -6636,7 +6868,7 @@ Return ONLY valid JSON:
     const ROLE_RE_M = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply)/;
     let ownerEmailMatch = 'unknown', ownerEmailMatchReason = '';
     if (ownerTokensM.length && emailLocalM) {
-      if (ownerTokensM.some(t => emailLocalM.includes(t))) {
+      if (localMatchesName(emailLocalM, ownerTokensM)) {
         ownerEmailMatch = 'match'; ownerEmailMatchReason = `Email (${emailLocalM}@\u2026) matches ${decisionMaker?.name || verifiedCEO} — reaching the right person`;
       } else if (ROLE_RE_M.test(emailLocalM)) {
         ownerEmailMatch = 'shared_inbox'; ownerEmailMatchReason = `Owner is ${decisionMaker?.name || verifiedCEO}, but the only email is a shared inbox (${emailLocalM}@\u2026) — a gatekeeper reads this, not them`;
