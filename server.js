@@ -3078,7 +3078,33 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   };
 };
 
-const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, siteConfirmed = false }) => {
+// ── HUNTER EMAIL FINDER — ask for OUR person, not whoever Hunter happens to have ──
+// The old flow ran domain-search and hoped the owner appeared in the list. When he
+// didn't (Cornerstone: found John Cullinane, got only info@), we fell back to guessing
+// patterns ourselves and SMTP-probing them. Hunter's email-finder endpoint takes the
+// NAME WE CONFIRMED and applies its own indexed data + learned domain pattern, and
+// returns a confidence score. 95+ means it was found in a public source; ~60 means it
+// inferred from the domain's pattern. We treat those very differently.
+const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
+  if (!domain || !fullName || !hunterKey) return null;
+  const parts = String(fullName).trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return null;
+  const first = parts[0], last = parts[parts.length - 1];
+  try {
+    const r = await fetchT(
+      `https://api.hunter.io/v2/email-finder?domain=${encodeURIComponent(domain)}&first_name=${encodeURIComponent(first)}&last_name=${encodeURIComponent(last)}&api_key=${hunterKey}`,
+      {}, 10000);
+    const d = await safeJson(r);
+    const email = d?.data?.email;
+    if (!email) return null;
+    const score = typeof d.data.score === 'number' ? d.data.score : 0;
+    const sourced = Array.isArray(d.data.sources) && d.data.sources.length > 0;
+    console.log(`HUNTER FINDER [${domain}]: ${fullName} \u2192 ${email} (confidence ${score}${sourced ? ', found in a public source' : ', pattern-inferred'})`);
+    return { email, score, sourced };
+  } catch(e) { console.log('hunterFindPersonEmail failed:', e.message); return null; }
+};
+
+const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
   const name = ceoName || hunterName || '';
   const fail = { email: '', ...EMAIL_TIERS.NONE, name, pattern: null };
@@ -3244,6 +3270,30 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
     }
     // Normal (non-catch-all) domain and none of the likely patterns resolve →
+    // WATERFALL STEP — before we give up, ask Hunter directly for THIS person.
+    // Our own pattern guesses failed SMTP, but Hunter may have the address indexed
+    // from a public source, or know a house pattern we never guessed (e.g. a
+    // nickname mailbox like sam@ instead of slotze@).
+    if (hunterKey) {
+      const hf = await hunterFindPersonEmail(domain, name, hunterKey);
+      if (hf && hf.email) {
+        // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
+        // pattern guess at ~60 confidence is how people get blacklisted.
+        if (hf.sourced && hf.score >= 80) {
+          console.log(`\u2713 EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
+          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
+        }
+        if (verifierKey) {
+          const v = await verifyEmailSMTP(hf.email, verifierKey);
+          if (v.valid === true) {
+            console.log(`\u2713 EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
+            return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
+          }
+        }
+        console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
+      }
+    }
+
     // this person genuinely has no mailbox here. Sending would guarantee a bounce,
     // and a bounce damages the sending domain. Better to send nothing.
     console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here. BLOCKED.`);
@@ -5511,6 +5561,8 @@ app.post('/api/research', async (req, res) => {
   const { company, keys, apiKey } = req.body;
   let website = req.body.website;  // mutable — the website guard may resolve/blank it
   const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey, verifierKey } = keys || {};
+  // Hunter key can arrive either inside keys{} or at the top level of the body.
+  const hunterKey = (keys && keys.hunterKey) || req.body.hunterKey || '';
   const browserData = req.body.browserData || {};
   const pageSpeed = browserData.pageSpeed || {};
   const emailData = browserData.emailData || {};
@@ -5840,6 +5892,7 @@ app.post('/api/research', async (req, res) => {
           hunterName: email.founderName || '',
           hunterTitle: email.title || '',
           verifierKey,
+          hunterKey,
           // We already PROVED this homepage belongs to the target company, so a
           // personal address published on it is theirs regardless of its domain.
           siteConfirmed: domainConfirmation ? (domainConfirmation.match === 'yes') : false,
@@ -7136,7 +7189,16 @@ Return ONLY valid JSON:
       if (localMatchesName(emailLocalM, ownerTokensM)) {
         ownerEmailMatch = 'match'; ownerEmailMatchReason = `Email (${emailLocalM}@\u2026) matches ${decisionMaker?.name || verifiedCEO} — reaching the right person`;
       } else if (ROLE_RE_M.test(emailLocalM)) {
-        ownerEmailMatch = 'shared_inbox'; ownerEmailMatchReason = `Owner is ${decisionMaker?.name || verifiedCEO}, but the only email is a shared inbox (${emailLocalM}@\u2026) — a gatekeeper reads this, not them`;
+        // At a genuinely small company there IS no gatekeeper. info@ lands in the
+        // owner's own inbox — he is the one who answers it. Treating that the same
+        // as info@ at a 200-person firm was throwing away perfectly reachable owners.
+        const tinyTeam = (typeof verifiedEmployees === 'number' && verifiedEmployees > 0 && verifiedEmployees <= 15);
+        if (tinyTeam) {
+          ownerEmailMatch = 'owner_reads_shared';
+          ownerEmailMatchReason = `Only a shared inbox (${emailLocalM}@\u2026) is published, but with ~${verifiedEmployees} employees there is no gatekeeper — ${decisionMaker?.name || verifiedCEO} reads this himself. Address him by name in the first line.`;
+        } else {
+          ownerEmailMatch = 'shared_inbox'; ownerEmailMatchReason = `Owner is ${decisionMaker?.name || verifiedCEO}, but the only email is a shared inbox (${emailLocalM}@\u2026) — a gatekeeper reads this, not them`;
+        }
       } else {
         ownerEmailMatch = 'different_person'; ownerEmailMatchReason = `\u26a0 Owner identified as ${decisionMaker?.name || verifiedCEO}, but the email (${emailLocalM}@\u2026) appears to belong to a DIFFERENT person — verify before sending`;
       }
@@ -7394,7 +7456,9 @@ app.post('/api/test-contact-engine', async (req, res) => {
       const s4 = Date.now();
       try {
         const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
-        const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${domain}&type=personal&limit=5&api_key=${hunterKey}`, {}, 10000);
+        // limit 10, not 5 \u2014 Hunter bills 1 credit per 1-10 emails, so 5 was leaving
+        // half the data (and half the pattern evidence) on the table for the same price.
+        const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${domain}&type=personal&limit=10&api_key=${hunterKey}`, {}, 10000);
         const d = await safeJson(r);
         const emails = (d?.data?.emails || []).map(e => ({
           email: e.value, name: `${e.first_name||''} ${e.last_name||''}`.trim(),
