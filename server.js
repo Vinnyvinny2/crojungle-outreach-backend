@@ -6018,10 +6018,48 @@ app.post('/api/research', async (req, res) => {
     const _hasCapture = !!builtWith.hasCRM || !!builtWith.hasBooking || !!builtWith.hasEmailCapture;
     const _siteConverts = hasCTA && !_weakSite;
 
+    // ══ OPERATIONAL SIGNALS — the missing half of the audit ══════════════════
+    // Every other signal we collect is a marketing/website signal, so every audit
+    // concluded "marketing problem" and the $40-100k software build was effectively
+    // unreachable. These derive an OPERATIONS read from data we already have.
+    //
+    // 1) REVENUE PER EMPLOYEE. A business doing $8.2M with 166 people ($49k/head) is
+    //    carrying its revenue on labor; one doing $7M with 31 ($226k/head) is not.
+    //    Low output per head is the clearest buy signal for automation there is.
+    const _revNum = (() => {
+      const r = String(verifiedRevenue || '');
+      const m = r.match(/\$?\s*([\d.]+)\s*([mkb])/i);
+      if (!m) return 0;
+      const n = parseFloat(m[1]); const u = m[2].toLowerCase();
+      return u === 'b' ? n * 1e9 : u === 'm' ? n * 1e6 : n * 1e3;
+    })();
+    const _revPerEmp = (_revNum > 0 && verifiedEmployees > 0) ? Math.round(_revNum / verifiedEmployees) : 0;
+    // Below ~$90k/head is labor-heavy for almost any service business; above ~$180k
+    // the business is already efficient and automation is a weaker pitch.
+    const _laborHeavy = _revPerEmp > 0 && _revPerEmp < 90000 && verifiedEmployees >= 8;
+
+    // 2) OPERATIONAL PAIN IN THEIR OWN REVIEWS. "Took three weeks for a quote",
+    //    "nobody called me back", "had to chase them" are NOT marketing failures —
+    //    they are process failures, and process failures are what software fixes.
+    const _opsPainWords = /callback|call ?back|never called|no one (called|answered|got back)|took (weeks|days|forever)|slow(er)? (response|to respond|quote)|quote (delay|took)|schedul|reschedul|missed (the )?appointment|no follow[- ]?up|had to chase|kept waiting|paperwork|double[- ]?book|lost my|disorganiz/i;
+    const _opsPainCount = (publicPainSignals || []).filter(p => _opsPainWords.test(String(p))).length;
+    const _opsPainConfirmed = _opsPainCount >= 1;
+
+    if (_revPerEmp) console.log(`OPS SIGNAL [${company}]: $${Math.round(_revPerEmp/1000)}k revenue per employee${_laborHeavy ? ' — LABOR-HEAVY, automation candidate' : ''}`);
+    if (_opsPainConfirmed) console.log(`OPS SIGNAL [${company}]: ${_opsPainCount} operational pain pattern(s) in their own reviews — process problem, not a traffic problem`);
+
     let _bottleneck, _bottleneckWhy;
     if (_realOpsSignal) {
       _bottleneck = 'OPERATIONS';
       _bottleneckWhy = 'They are hiring manual/ops roles — the constraint is labor cost and process, not demand. Software replaces the recurring salary.';
+    } else if (_laborHeavy && _opsPainConfirmed) {
+      // Both operational signals agree: low output per head AND customers describing
+      // process failures. That is an operations business, not a marketing business.
+      _bottleneck = 'OPERATIONS';
+      _bottleneckWhy = `They are carrying $${Math.round(_revPerEmp/1000)}k of revenue per employee across ${verifiedEmployees} people — labor-heavy for their size — AND their own reviews describe process failures (missed callbacks, scheduling, quote delays). That combination is not a traffic problem. Adding leads to a business that cannot service the ones it has makes the reviews worse. The constraint is throughput.`;
+    } else if (_laborHeavy && !_hasAds) {
+      _bottleneck = 'OPERATIONS';
+      _bottleneckWhy = `$${Math.round(_revPerEmp/1000)}k revenue per employee across ${verifiedEmployees} people is labor-heavy, and they are not buying traffic — so the constraint is what it costs them to deliver, not what it costs to get found. Automation moves margin before marketing moves revenue.`;
     } else if (_hasAds && !_hasCapture) {
       _bottleneck = 'CAPTURE';
       _bottleneckWhy = 'They are PAYING for traffic but have no capture layer (no CRM, no booking, no email capture). The ads work; the catching does not. Every ad dollar buys a visitor the site cannot hold. Selling them more ad management here is selling more water for a leaking bucket.';
@@ -6044,7 +6082,10 @@ app.post('/api/research', async (req, res) => {
 
     // Prescribe by bottleneck — PRIMARY first (that is what the pitch must lead with)
     if (_bottleneck === 'OPERATIONS') {
-      _eligible.push('Custom AI Software Build ($40k-$100k+) — PRIMARY: a CONFIRMED ops/manual-labor hiring signal exists. Frame against the recurring salary they are about to commit to, not against software cost.');
+      _eligible.push(_realOpsSignal
+        ? 'Custom AI Software Build ($40k-$100k+) — PRIMARY: a CONFIRMED ops/manual-labor hiring signal exists. Frame against the recurring salary they are about to commit to, not against software cost.'
+        : `Custom AI Software Build ($40k-$100k+) — PRIMARY: the operational evidence is ${_revPerEmp ? '$' + Math.round(_revPerEmp/1000) + 'k revenue per employee across ' + verifiedEmployees + ' people' : 'a labor-heavy operation'}${_opsPainConfirmed ? ' plus process failures customers describe in their own reviews' : ''}. Pitch the LABOR MATH, not software: what those people cost per year versus what a one-time build handles permanently. Never claim they are hiring unless a hiring signal was confirmed.`);
+      _eligible.push('AI Brain ($40k-$70k) — SECONDARY: an intelligence layer over their existing systems if a full build is too large a first step.');
       if (!_siteConverts) _eligible.push('Website Rebuild ($50k+) — SECONDARY: the site is also weak, but the hiring signal is the live, time-boxed decision. Lead with the build.');
     } else if (_bottleneck === 'CAPTURE') {
       _eligible.push('Website Rebuild / Conversion System ($50k+) — PRIMARY: build the capture layer (lead capture, booking, follow-up path) so the traffic they ALREADY pay for stops disappearing. Do NOT lead with ad management; the ads are the one part working.');
@@ -6068,7 +6109,7 @@ app.post('/api/research', async (req, res) => {
     if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation' + (_exitSignal ? ' (they are preparing to exit — valuation is the emotional lever)' : ''));
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
 
-    const eligibleProductsGuidance = `═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
+const eligibleProductsGuidance = `\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
 ${_bottleneckWhy}
 
 Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
@@ -6273,7 +6314,7 @@ Return ONLY valid JSON, no markdown:
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + broken funnel (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
-  "pitchAngle": "The one line that earns a reply. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (1) Otherwise ONE confirmed pain only — never chain several. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
+  "pitchAngle": "The one line that earns a reply. WRITTEN FOR A BUSINESS OWNER, NOT A MARKETER \u2014 he owns a roofing company or a CPA practice, has never heard of an H1 tag, and files anything with agency vocabulary next to every other agency email. BANNED WORDS: pixel, retargeting, H1, meta, schema, SEO, above the fold, funnel, CRM, conversion rate, CTA, landing page, attribution, impressions, nurture, optimization, UX. Say it as he would: not \u2018no retargeting layer\u2019 but \u2018when someone leaves your site there is no way to get back in front of them\u2019; not \u2018no lead capture\u2019 but \u2018if they do not call right then, you never hear from them again\u2019. FRAME IT AS LOSS, NOT UPSIDE \u2014 owners act on money already leaking, not on improvements available. Dollar figures may ONLY come from numbers HE published (his posted prices, posted salaries, visible ad count, review count, staff count) plus honest arithmetic on those. NEVER invent a loss figure and NEVER state his revenue back to him \u2014 our revenue number is a third-party estimate, it is frequently wrong, and quoting it reads as surveillance rather than research. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (1) Otherwise ONE confirmed pain only — never chain several. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) MATCH VOCABULARY TO THE READER: exit-prep / just-funded / financially sophisticated → unit-economics language is the sharpest weapon (margin, multiple, EBITDA). Owner-operator (trucking, clinics, local services, contractors) → plain dollars and salaries, zero finance vocabulary. (6) Lead with the diagnosis and the money, close with a small conversational ask — a short call to walk through what we found and hear their side. NEVER 'book a demo' or 'send a proposal'. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work software handles overnight — and you are still the one fixing it when it breaks. Worth a short call to show you the math?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. Want fifteen minutes to see what is automatable?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot convert — that combination is exactly the fire that never gets put out. Short call?'"
 }`
         });
 
