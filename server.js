@@ -2653,11 +2653,11 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
       if (hit) picked.push({ key: intent.key, url: hit });
     }
     if (!picked.length) return null;
-    const top = picked.slice(0, 3); // pricing + services + booking at most
+    const top = picked.slice(0, 2); // pricing + booking are the two that change the pitch; services is nice-to-have and not worth the seconds
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     const scraped = await Promise.all(top.map(p =>
-      firecrawlScrape(fcKey, p.url, 10000).then(md => ({ ...p, md: md || '' })).catch(() => ({ ...p, md: '' }))
+      firecrawlScrape(fcKey, p.url, 7000).then(md => ({ ...p, md: md || '' })).catch(() => ({ ...p, md: '' }))
     ));
     const usable = scraped.filter(p => p.md && p.md.length > 200);
     if (!usable.length) return null;
@@ -2721,11 +2721,11 @@ ${corpus}` }]
 const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
   if (!website || !fcKey || !apiKey) return null;
   const base = website.replace(/\/$/, '');
-  const paths = ['/careers', '/jobs', '/join-our-team', '/employment', '/work-with-us', '/join-us'];
+  const paths = ['/careers', '/jobs', '/employment']; // the three that actually exist on SMB sites; more paths = more dead round-trips
   let md = '';
   for (const p of paths) {
     try {
-      const r = await firecrawlScrape(fcKey, base + p, 12000);
+      const r = await firecrawlScrape(fcKey, base + p, 7000);
       // A real careers page names roles; a 404 or redirect to home will not.
       if (r && r.length > 400 && /(hiring|apply|position|job|opening|career|full[- ]time|part[- ]time)/i.test(r)) { md = r; break; }
     } catch { /* try next */ }
