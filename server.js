@@ -1033,6 +1033,55 @@ const searchTheirStack = async (theirstackKey) => {
 // category×city grid and cap per run (GP_QUERY_CAP, default 40) so a run costs
 // ~40 calls — ~100+ runs/month stay free. Request format verified against
 // Google's official Text Search (New) docs.
+// ── REACHABILITY PREDICTOR — which leads are WORTH the 11 credits ────────────
+// Every lead in the queue scored the same, so there was no way to know which to
+// research first. Research is the expensive step; guessing wastes hundreds of
+// credits on businesses whose owner we will never find. These signals are free
+// (they come from the name and domain we already have) and they measurably
+// predicted success across real runs:
+//   • A business named after a PERSON ("Claude Reynolds Insurance", "Hamilton-Martin",
+//     "David B. Robinson CPA") is owner-operated and the owner's name is on the door,
+//     in the domain, and in every directory. These resolved almost every time.
+//   • Generic institutional names ("Commonwealth Insurance Services", "Independent
+//     Agents of Kentucky") hide the owner behind a brand. These failed repeatedly.
+const CORP_WORDS = /\b(insurance|agency|agencies|group|services|solutions|associates|partners|company|inc|llc|corp|co|the|of|and|&|advisors|advisory|consulting|management|holdings|enterprises|systems|center|centre)\b/gi;
+const NON_NAME_WORDS = /\b(american|national|united|first|premier|elite|quality|choice|select|direct|express|advantage|independent|local|community|family|heritage|liberty|freedom|security|trust|guardian|shield|summit|pinnacle|apex|prime|superior|reliable|affordable|budget|value|smart|easy|simple|fast|quick|best|top|great|good|new|modern|future|next|global|world|international|state|county|city|north|south|east|west|central|midwest|southeast|northwest|kentucky|tennessee|florida|virginia|ohio|indiana|louisville|nashville|tampa|richmond|lexington)\b/gi;
+
+const predictReachability = (name, website) => {
+  if (!name) return { score: 0, why: 'no name' };
+  // Strip the corporate furniture and the geography/adjectives to see what's left.
+  const core = String(name)
+    .replace(/[.,]/g, ' ')
+    .replace(CORP_WORDS, ' ')
+    .replace(NON_NAME_WORDS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const leftover = core.split(' ').filter(w => w.length > 2 && /^[A-Za-z'\-]+$/.test(w));
+
+  // A hyphenated surname pair ("Hamilton-Martin") is a partnership of two people.
+  const hyphenPair = /\b[A-Z][a-z]{2,}-[A-Z][a-z]{2,}\b/.test(name);
+  // A possessive ("Sean's Agency") or an initial ("David B. Robinson") is a person.
+  const possessive = /\b[A-Z][a-z]+'s\b/.test(name);
+  const middleInitial = /\b[A-Z][a-z]+\s+[A-Z]\.\s+[A-Z][a-z]+/.test(name);
+
+  let score = 0; const why = [];
+  if (middleInitial)            { score += 30; why.push('full personal name with initial'); }
+  else if (hyphenPair)          { score += 24; why.push('hyphenated surname pair — partnership'); }
+  else if (possessive)          { score += 22; why.push('possessive personal name'); }
+  else if (leftover.length >= 2){ score += 22; why.push(`likely personal name (${leftover.slice(0,2).join(' ')})`); }
+  else if (leftover.length === 1){ score += 12; why.push(`possible surname (${leftover[0]})`); }
+  else                          { why.push('generic institutional name — owner is behind a brand'); }
+
+  // The domain echoing the personal name is strong corroboration.
+  if (website && leftover.length) {
+    try {
+      const host = new URL(website).hostname.replace('www.', '').split('.')[0].toLowerCase();
+      if (leftover.some(w => host.includes(w.toLowerCase()))) { score += 10; why.push('personal name is in the domain'); }
+    } catch {}
+  }
+  return { score: Math.min(score, 40), why: why.join('; ') };
+};
+
 const GP_CATEGORIES = [
   // ── HIGH-TICKET CREW TRADES — a single job is $5k-$15k+, so any ESTABLISHED
   //    one is already crewed and past the ~$800k affordability bar. Best fit. ──
@@ -1929,6 +1978,8 @@ const DM_SOURCE_WEIGHT = {
   own_website_brain: 45,   // they published it themselves — strongest single source there is
   web_search:        40,   // the whole web, read by an LLM. Catches BBB/Manta/local press.
   registry:          30,   // legal public record — but often lists a filing agent, not the owner
+  license_or_chamber: 38,  // licence holder / chamber listing — a REAL named person, not an agent
+  google_review_replies: 35, // whoever answers the reviews at an owner-run shop is the owner
   news:              30,   // press quotes them as owner — strong independent corroboration
   hunter:            20,   // real, but LinkedIn-biased: it surfaces VPs and HR, not owners
 };
@@ -2077,6 +2128,22 @@ STRICT RULES:
 - If several people are listed, choose by BUYING AUTHORITY: Owner/Founder > CEO > President > Managing Partner/Principal > COO/GM. Ignore anyone below that.
 - Owner-operated companies often say things like "Founded by X in 1998", "X started the company", "a message from our president, X", or a family name matching the company name.
 - If NOBODY with real buying authority is named anywhere, return null for name. Returning null is CORRECT — do not settle for a junior employee just to fill the field.
+
+HOW SMALL OWNER-OPERATED BUSINESSES ACTUALLY PRESENT THEMSELVES (this is most of what you will see):
+A 6-person insurance agency, CPA practice or contractor rarely writes "Owner" next to a name. The
+owner is there — he is just labelled "Agent", "Broker", "Partner", "CPA", or given no title at all.
+Returning null on these loses a completely reachable owner, so read them the way a customer would:
+- SURNAME MATCH IS NEAR-CONCLUSIVE. If a person's last name appears in the company name — Reynolds at
+  "Claude Reynolds Insurance", Schwartz at "Schwartz Insurance Group", Martin at "Hamilton-Martin" —
+  that person owns the business. Report them with high confidence even with no title.
+- FIRST-LISTED ON A SMALL TEAM PAGE. If a team/about page lists only a handful of people, the person
+  presented FIRST (or given the most prominent bio) is almost always the principal. Report them with
+  medium confidence and their exact written title.
+- SOLE NAMED PERSON. If exactly one human is named anywhere on the site, that is the owner-operator.
+- FOUNDING LANGUAGE without a title still counts: "Bill has served Louisville families since 1998",
+  "our agency was started by...", "a note from Matt".
+These are still names that LITERALLY APPEAR in the content — you are reading the page correctly, not
+inferring. The anti-fabrication rule is unchanged: never invent a name that is not written there.
 
 Return ONLY valid JSON, no markdown:
 {"name":"Full Name or null","title":"their exact title as written, or null","evidence":"the exact sentence naming them, verbatim from the content","confidence":"high|medium|low"}
@@ -2631,6 +2698,72 @@ ${corpus}` }]
   } catch(e) { console.log('painFromGoogleReviews failed:', e.message); return { signals: [], summary: '' }; }
 };
 
+// ── OWNER SIGNATURE IN REVIEW REPLIES — free, and nobody else does this ──────
+// At a small business the OWNER personally answers Google reviews, and he signs
+// them: "Thanks so much! - Bill", "We appreciate you. — Matt Carroll, Owner".
+// We already scrape that page for pain mining, so the owner's name is sitting in
+// data we have paid for and thrown away. This is often the ONLY place a small
+// agency names its principal, because the website just says "our team".
+const findOwnerInReviewReplies = async (companyName, placeId, fcKey, apiKey) => {
+  if (!placeId || !fcKey || !apiKey) return null;
+  try {
+    const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en`;
+    const md = await firecrawlScrape(fcKey, url, 15000, 12 * 60 * 60 * 1000); // cached with the pain mine
+    if (!md || md.length < 300) return null;
+    // Only the OWNER-RESPONSE portions matter; customer text is noise here.
+    const replyBlocks = md.split(/response from the owner/i).slice(1).join('\n').slice(0, 9000);
+    if (replyBlocks.length < 80) return null;
+
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: `Below are replies that "${companyName}" posted to their own Google reviews.
+
+TASK: Owners of small businesses sign these replies. Find the name the business OWNER signs off with.
+
+Look for sign-offs like: "- Bill", "Thanks, Matt", "— Sarah, Owner", "Best, John Cullinane",
+"Thank you! -Kelly", or a first name at the end of a reply.
+
+STRICT RULES:
+- Report ONLY a name that literally appears as a sign-off in these replies. Never infer or invent.
+- Ignore names of CUSTOMERS being thanked ("Thanks for the kind words, Susan!" — Susan is the customer, NOT the signer). The signer's name comes at the END of the reply, after the message.
+- If the same name signs multiple replies, that is the strongest possible signal — report it and say how many.
+- If no reply is signed with a name, return null. Null is the correct answer.
+
+Return ONLY JSON:
+{"name":"First Last or just First, exactly as written","title":"title if stated, else null","timesSigned":number,"evidence":"the exact sign-off text, verbatim"}
+
+REPLIES:
+${replyBlocks}` }]
+      }),
+    }, 18000);
+    const d = await res.json();
+    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const p = JSON.parse(t);
+    if (!p.name) return null;
+    // The sign-off must actually exist in what we scraped.
+    const flat = replyBlocks.toLowerCase();
+    const first = String(p.name).trim().split(/\s+/)[0].toLowerCase();
+    if (first.length < 3 || !flat.includes(first)) {
+      console.log(`DM/reviews [${companyName}]: discarded unverifiable signature "${p.name}"`);
+      return null;
+    }
+    const times = p.timesSigned || 1;
+    console.log(`DM/reviews [${companyName}]: ✓ ${p.name}${p.title ? ' (' + p.title + ')' : ''} personally signs their Google review replies${times > 1 ? ` — ${times} times` : ''}`);
+    return {
+      name: p.name, title: p.title || 'Owner (signs the business\u2019s review replies)',
+      confidence: times >= 2 ? 'high' : 'medium',
+      source: 'owner_signs_review_replies',
+      evidence: p.evidence || '',
+    };
+  } catch(e) { console.log('findOwnerInReviewReplies failed:', e.message); return null; }
+};
+
 // ── SITE-WIDE AUDIT — read the pages the audit is actually ABOUT ────────────
 // The audit used to be built almost entirely from the homepage, which caused two
 // real problems:
@@ -2909,6 +3042,144 @@ ${corpus}` }]
 // IMPORTANT CAVEAT: registries very often list the REGISTERED AGENT (a lawyer or
 // a filing service like LegalZoom), not the actual owner. So we hard-reject
 // agent-like entries, and this is treated as CORROBORATION, never a sole source.
+// ── OWNER VIA PROFESSIONAL LICENSE + LOCAL DIRECTORIES ───────────────────────
+// A huge share of SMBs operate under a licence held by a NAMED individual:
+// insurance agents, contractors, electricians, plumbers, HVAC, roofers, CPAs,
+// realtors, brokers, clinics, salons. Those licence registries are public and
+// free, and they name the actual person — not a registered agent. Chambers of
+// commerce and local business directories publish owner names for the same
+// businesses. This is the source that reaches the trades and local operators who
+// are invisible in every B2B database.
+const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKey) => {
+  if (!companyName || !fcKey || !apiKey) return null;
+  const clean = companyName.replace(/[^\w\s&'-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const loc = String(location || '').split(',').slice(-2).join(' ').trim(); // "Louisville KY"
+  const ind = String(industry || '').toLowerCase();
+
+  // Pick the query that matches how this trade is actually licensed/listed.
+  const q = [];
+  if (/insur/.test(ind))                          q.push(`"${clean}" ${loc} insurance agent license principal OR "agent of record"`);
+  else if (/contract|roof|plumb|hvac|electric|construc|restor/.test(ind))
+                                                  q.push(`"${clean}" ${loc} contractor license "license holder" OR qualifier OR owner`);
+  else if (/account|cpa|tax|bookkeep/.test(ind))  q.push(`"${clean}" ${loc} CPA license "licensed to" OR partner OR principal`);
+  else if (/real estate|realty|broker/.test(ind)) q.push(`"${clean}" ${loc} "principal broker" OR "broker of record"`);
+  else if (/dent|medic|clinic|health|care|therap/.test(ind))
+                                                  q.push(`"${clean}" ${loc} "practice owner" OR "medical director" OR DDS OR MD owner`);
+  else                                            q.push(`"${clean}" ${loc} owner OR proprietor OR "founded by"`);
+  // Chamber / local directory listings name owners for almost every local business.
+  q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
+
+  try {
+    const hits = [];
+    for (const query of q) {
+      const r = await firecrawlSearch(fcKey, query, 4, false);
+      if (Array.isArray(r)) hits.push(...r);
+    }
+    if (!hits.length) return null;
+    const corpus = hits.map(h => `${h.title || ''} — ${h.description || h.snippet || ''} (${h.url || ''})`).join('\n').slice(0, 6000);
+
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 350,
+        messages: [{ role: 'user', content: `Search results about "${clean}"${loc ? ' in ' + loc : ''}.
+
+TASK: find the name of the PERSON who owns or principally operates this specific business — a licence holder, principal, owner, president, broker of record, or managing partner.
+
+STRICT RULES — this feeds a real sales email, so a wrong name is worse than no name:
+- The result must clearly refer to THIS business, not a similarly-named one elsewhere. If the location does not match, reject it.
+- Reject registered agents, law firms, filing services ("Northwest Registered Agent", "CT Corporation", "Incfile").
+- Reject anyone described only as staff, agent, producer, associate, or employee unless they are also named as owner/principal.
+- If nothing clearly names an owner for THIS business, return null. Null is the correct answer.
+
+Return ONLY JSON: {"name":"full name or null","title":"their stated role or null","evidence":"the exact phrase that names them","confidence":"high|medium|low"}
+
+RESULTS:
+${corpus}` }]
+      }),
+    }, 20000);
+    const d = await res.json();
+    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const parsed = JSON.parse(t);
+    if (!parsed.name || String(parsed.name).toLowerCase() === 'null' || !looksLikeRealName(parsed.name)) return null;
+    if (parsed.confidence === 'low') { console.log(`DM/license [${clean}]: found ${parsed.name} but confidence low \u2014 discarded`); return null; }
+    console.log(`DM/license [${clean}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) via licence/chamber records \u2014 "${String(parsed.evidence||'').slice(0,70)}"`);
+    return { name: parsed.name, title: parsed.title || 'Owner', confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
+  } catch(e) { console.log('findOwnerViaLicense failed:', e.message); return null; }
+};
+
+// ── OWNER FROM GOOGLE REVIEW RESPONSES — free, universal, and almost unused ──
+// At an owner-operated business the person replying to reviews IS the owner, and
+// they sign the replies: "Thanks Sarah! - Mike, Owner", "We appreciate it. – Dave".
+// This works for ANY business with a Google profile — trades, agencies, clinics,
+// restaurants, shops — not just the ones with a leadership page. And we already
+// scrape this page for pain mining, so on a cached hit it costs nothing at all.
+const findOwnerViaReviewReplies = async (placeId, fcKey, apiKey, companyName) => {
+  if (!placeId || !fcKey || !apiKey) return null;
+  try {
+    const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en`;
+    const md = await firecrawlScrape(fcKey, url, 15000, 12 * 60 * 60 * 1000); // same cache as the pain mine
+    if (!md || !/response from the owner/i.test(md)) return null;
+
+    // Pull just the owner-reply blocks — the rest of the page is customer text.
+    const replies = [];
+    const re = /response from the owner[\s\S]{0,600}?(?=response from the owner|$)/gi;
+    let m; while ((m = re.exec(md)) !== null && replies.length < 12) replies.push(m[0]);
+    if (!replies.length) return null;
+
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: `These are replies written by the OWNER or MANAGER of "${companyName}" to their Google reviews.
+
+Owners very often sign these replies with their first name, sometimes their full name and role: "- Mike", "— Dave, Owner", "Thanks! Sarah M.", "Best, Tony (Owner)".
+
+TASK: extract the name of the person signing these replies, if one is clearly present.
+
+STRICT RULES:
+- Only report a name that is ACTUALLY SIGNED in the text. Never guess, never infer from the business name.
+- A first name alone is fine and useful — report it.
+- If several different names sign, report the one appearing most often.
+- If nobody signs, return null. Empty is the correct answer when unsure.
+- Do NOT return the customer/reviewer names, only the person REPLYING.
+
+Return ONLY JSON: {"name":"the signed name or null","title":"role if stated, else null","timesSeen":number}
+
+REPLIES:
+${replies.join('\n---\n').slice(0, 9000)}` }]
+      }),
+    }, 18000);
+    const d = await res.json();
+    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const parsed = JSON.parse(t);
+    if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
+
+    // Verify the name is literally signed in what we scraped — no invented names.
+    const flat = replies.join(' ').toLowerCase();
+    const first = String(parsed.name).trim().split(/\s+/)[0].toLowerCase();
+    if (first.length < 2 || !flat.includes(first)) {
+      console.log(`DM/reviews [${companyName}]: discarded "${parsed.name}" — not actually signed in the replies`);
+      return null;
+    }
+    console.log(`DM/reviews [${companyName}]: \u2713 ${parsed.name}${parsed.title ? ' (' + parsed.title + ')' : ''} signs their Google review replies (${parsed.timesSeen || 1}x) \u2014 at an owner-run business that IS the owner`);
+    return {
+      name: parsed.name,
+      title: parsed.title || 'Owner (signs their own review replies)',
+      confidence: (parsed.timesSeen || 1) >= 2 ? 'high' : 'medium',
+      source: 'google_review_replies',
+    };
+  } catch(e) { console.log('findOwnerViaReviewReplies failed:', e.message); return null; }
+};
+
 const findOwnerViaRegistry = async (companyName, fcKey) => {
   if (!companyName || !fcKey) return null;
   try {
@@ -2981,19 +3252,28 @@ const findOwnerViaNews = async (companyName) => {
 // Runs every free source in parallel, then scores each candidate by how many
 // INDEPENDENT sources name them. Agreement across sources is what gets us to 90%,
 // because no single source can.
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '' }) => {
   // Run every source in parallel. Web search is the new heavy hitter — it reaches
   // BBB, Manta, local press, and chamber directories where SMB owners actually live.
   // Registry search costs ~2 credits and has a very low hit rate (it mostly
   // surfaces filing agents, not owners). Skipped by default — the website and
   // web-search sources do the real work. Still available in the test harness.
-  const [brain, websearch, news] = await Promise.all([
+  const [brain, websearch, news, registry, reviewSig, license] = await Promise.all([
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
     findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),  // free — Google News RSS
+    findOwnerViaRegistry(companyName, fcKey).catch(() => null), // state LLC filings
+    // The owner signs their own Google review replies — often the only place a
+    // small business names its principal. Reuses the cached reviews scrape, and
+    // every name is verified to be literally signed before it is accepted.
+    placeId ? findOwnerViaReviewReplies(placeId, fcKey, apiKey, companyName).catch(() => null) : Promise.resolve(null),
+    // Licence registries + chamber directories. This is the source that reaches
+    // trades, agencies and local operators who are invisible in B2B databases —
+    // they hold a licence in a real person's name.
+    findOwnerViaLicense(companyName, industry, location, fcKey, apiKey).catch(() => null),
   ]);
 
-  const found = [brain, websearch, news].filter(Boolean);
+  const found = [brain, websearch, news, registry, reviewSig, license].filter(Boolean);
   if (hunterName && looksLikeRealName(hunterName)) {
     found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
   }
@@ -3289,7 +3569,13 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // Our own pattern guesses failed SMTP, but Hunter may have the address indexed
     // from a public source, or know a house pattern we never guessed (e.g. a
     // nickname mailbox like sam@ instead of slotze@).
-    if (hunterKey) {
+    // CREDIT GUARD: email-finder costs a Hunter credit and the free plan is 50/month.
+    // Only spend it when it is genuinely the deciding factor — we have a confirmed
+    // decision-maker, no address yet, and every free route has already failed. Never
+    // for a generic/role name, and never when the domain is catch-all (that path is
+    // already sendable without paying).
+    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
+    if (worthACredit) {
       const hf = await hunterFindPersonEmail(domain, name, hunterKey);
       if (hf && hf.email) {
         // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
@@ -3306,6 +3592,28 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
           }
         }
         console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
+      }
+    }
+
+    // EPONYMOUS BUSINESS = the address is the owner's, and we can say so.
+    // When the company is named after this person — "Claude Reynolds Insurance" with
+    // claude@claudereynoldsinsurance.com, "Schwartz Insurance Group" with matt@schwartz…
+    // — a first-name mailbox on their own eponymous domain is not a guess. The business
+    // IS the person. Blocking these on an unhelpful SMTP probe was throwing away the
+    // most reachable owners in the entire pipeline.
+    if (!anyDefiniteInvalid && name) {
+      const nameParts = String(name).toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const domRoot = domain.split('.')[0].toLowerCase();
+      const eponymous = nameParts.some(w => domRoot.includes(w));
+      if (eponymous) {
+        const firstName = nameParts[0];
+        const epEmail = `${firstName}@${domain}`;
+        console.log(`\u2713 EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
+        return {
+          email: epEmail, tier: 2, score: 88, sendable: true, name,
+          pattern: '{first}',
+          label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain`,
+        };
       }
     }
 
@@ -3341,9 +3649,31 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     }
   }
 
-  // ── TIER 4: catch-all, no learned pattern → statistical guess. NOT sendable. ──
+  // ── CATCH-ALL DOMAINS: the bounce risk is ZERO by definition ──────────────
+  // A catch-all domain accepts mail to EVERY address at that domain — that is what
+  // "catch-all" means. So an address we build here cannot bounce, and bouncing is
+  // the only thing that damages a sending domain. We were blocking sends that were
+  // guaranteed to be delivered, which threw away a large share of reachable owners
+  // for a risk that does not exist.
+  //
+  // The real (much smaller) risk is that it lands in a shared mailbox instead of
+  // the owner's personal one. At an owner-operated SMB that shared mailbox is
+  // usually the owner anyway — and we address him by name in the first line, so a
+  // human reading it knows exactly who it is for.
+  if (catchAll === true && name) {
+    const best = candidates[0];
+    if (best) {
+      console.log(`\u2713 EMAIL [${domain}] CATCH-ALL domain — every address is accepted, so ${best.email} cannot bounce. Sendable (delivery certain, recipient likely).`);
+      return {
+        email: best.email, tier: 3, score: 72, sendable: true, name, pattern: best.pattern,
+        label: 'Catch-all domain — delivery is certain (it cannot bounce), but we could not confirm this exact mailbox. Address them by name in the first line.',
+      };
+    }
+  }
+
+  // ── TIER 4: no catch-all, no pattern, no evidence → genuine guess. NOT sendable. ──
   const inferred = candidates[0];
-  console.log(`⚠ EMAIL [${domain}] T4 inferred only (catch-all, no evidence): ${inferred.email} — BLOCKED from sending`);
+  console.log(`⚠ EMAIL [${domain}] T4 inferred only (no evidence, bounce risk real): ${inferred.email} — BLOCKED from sending`);
   return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern };
 };
 
@@ -5358,7 +5688,14 @@ const WEIGHTS = {
           else if (rv >= 20 && rating >= 4.4) base += 1;
           else if (rv >= 20 && rating && rating < 3.5) base -= 5; // struggling — shakier revenue bet
           if (s.consolidation_risk)           base -= 12;         // maybe group-owned → no reachable owner
-          triage = Math.min(base, 97);
+          // REACHABILITY PREDICTION — research costs ~11 credits, so the queue must be
+          // ordered by which leads will actually yield a contact we can email. A business
+          // named after a person resolved almost every time in real runs; a generic
+          // institutional name repeatedly did not. Free signal, large credit saving.
+          const rp = predictReachability(c.name, c.website);
+          base += Math.round((rp.score - 14) * 0.45);  // ±~12 swing around the average
+          c.reachPredict = rp.score; c.reachPredictWhy = rp.why;
+          triage = Math.max(40, Math.min(base, 97));
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
           triage = c.brokerPosted ? 72 : 84;
@@ -5666,7 +6003,10 @@ app.post('/api/research', async (req, res) => {
     // as for-sale leads always are), it resolves the business's REAL domain via
     // search before anything is scraped. If it can't find a real domain, it runs
     // the audit WITHOUT a website rather than auditing the wrong one.
-    const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|businessbroker|loopnet|dealstream|flippa|businessmart|sunbeltnetwork|murphybusiness|transworld|acquisitions?\.com|empireflippers|quietlight|latonas|feinternational|crexi|costar|loopnet|linkedin|facebook|twitter|instagram|yelp|bbb\.org|manta|buzzfile|dnb\.com|dun|indeed|glassdoor|crunchbase|bloomberg|zoominfo|wikipedia|youtube|mapquest|yellowpages|angi\.com|thumbtack|houzz|google\.com\/maps)/i;
+    // BBB, Manta, and Buzzfile are allowed as sources because they list owner names —
+// that is exactly why we include them in the web search query. Blocking them here
+// was causing us to ask for their results and then refuse to read them.
+const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|businessbroker|loopnet|dealstream|flippa|businessmart|sunbeltnetwork|murphybusiness|transworld|acquisitions?\.com|empireflippers|quietlight|latonas|feinternational|crexi|costar|linkedin|facebook|twitter|instagram|yelp|dnb\.com|dun|indeed|glassdoor|crunchbase|bloomberg|zoominfo|wikipedia|youtube|mapquest|yellowpages|angi\.com|thumbtack|houzz|google\.com\/maps)/i;
 
     const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
     const handedHost = hostOf(website);
@@ -5831,6 +6171,8 @@ app.post('/api/research', async (req, res) => {
           homepageContent: content,
           hunterName: email.founderName || '', hunterTitle: email.title || '',
           location: req.body.location || '',
+          placeId: req.body.placeId || '',
+          industry: verifiedIndustry || req.body.industry || '',
         });
         if (decisionMaker && decisionMaker.name) {
           if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
