@@ -3155,7 +3155,9 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
               // Do NOT fall through and hand it back anyway — that would guarantee
               // a bounce. Try the other patterns instead.
               console.log(`EMAIL [${domain}]: ${built} REJECTED by SMTP — trying other patterns for ${name}`);
-              for (const c of candidates.filter(x => x.pattern !== learned).slice(0, 4)) {
+              // build locally: the shared `candidates` const is declared further down,
+              // so referencing it here threw "Cannot access 'candidates' before initialization"
+              for (const c of buildCandidates(name, domain).filter(x => x.pattern !== learned).slice(0, 4)) {
                 const r2 = await verifyEmailSMTP(c.email, verifierKey);
                 if (r2.valid === true) {
                   domainPatternMemory.set(domain, c.pattern);
@@ -6156,6 +6158,9 @@ app.post('/api/research', async (req, res) => {
     const _weakSite = !hasCTA || _staleSite || (visualAnalysis && (visualAnalysis.heroIsBlank || /dated/i.test(visualAnalysis.designObservation || '') || visualAnalysis.overallConversionReadiness === 'weak'));
     const _hasAds = (fbAds.adCount || 0) > 0 || !!builtWith.hasGoogleAdsTag;
     const _underMarketed = !!_psig.under_marketed || !!_psig.local_owner_operated || req.body.discoverySource === 'google_places';
+    // Careers-page hiring signals must be declared BEFORE the flags that read them.
+    const _careersOps = !!(careers && careers.opsRoles && careers.opsRoles.length > 0);
+    const _careersMktg = !!(careers && careers.mktgRoles && careers.mktgRoles.length > 0);
     const _mktgHire = !!_psig.hiring_marketing || _careersMktg;
     // Ops-hiring (→ AI software build) requires ACTUAL manual/ops roles — the
     // ai_replacement flags fire only on our curated ops searches (dispatcher,
@@ -6165,8 +6170,6 @@ app.post('/api/research', async (req, res) => {
     // triggered a $75k AI build pitch on an obvious retainer lead.
     // Careers page is now a first-class hiring signal (Adzuna's replacement, from their
     // own site): ops roles => software build, marketing roles => retainer.
-    const _careersOps = !!(careers && careers.opsRoles && careers.opsRoles.length > 0);
-    const _careersMktg = !!(careers && careers.mktgRoles && careers.mktgRoles.length > 0);
     const _opsHire = !!_psig.ai_replacement_multi || !!_psig.ai_replacement_heavy || !!_psig.ai_replacement_signal || _careersOps;
     const _realOpsSignal = _opsHire && !_mktgHire;
     const _exitSignal = !!_psig.preparing_for_exit || req.body.discoverySource === 'for_sale';
