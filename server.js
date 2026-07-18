@@ -1515,13 +1515,19 @@ const isCreditError = (d, status) =>
     String(d?.error || d?.message || '')
   );
 
-const firecrawlScrape = async (fcKey, url, timeout = 25000) => {
+// maxAge tells Firecrawl it may serve a recently-cached copy instead of re-rendering
+// the page. Cached hits come back in milliseconds rather than seconds (~5x faster) and
+// do not burn a credit. A company's homepage, team page, pricing page and careers page
+// do not change hour to hour, so a 2-day window is safe and makes re-research nearly
+// instant. Pass a shorter window for anything genuinely time-sensitive.
+const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+const firecrawlScrape = async (fcKey, url, timeout = 25000, maxAge = FC_CACHE_MS) => {
   if (!fcKey) return '';
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 3000 }),
+      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge, blockAds: true, removeBase64Images: true }),
     }, timeout);
     const d = await r.json();
     if (isCreditError(d, r.status)) {
@@ -2487,7 +2493,7 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
   if (!placeId || !fcKey || !apiKey) return null;
   try {
     const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}`;
-    const md = await firecrawlScrape(fcKey, url, 18000);
+    const md = await firecrawlScrape(fcKey, url, 18000, 12 * 60 * 60 * 1000); // reviews move faster than a homepage — 12h window
     if (!md || md.length < 400) return null;
     const res = await fetchT('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -2538,7 +2544,7 @@ const scrapeMoreGoogleReviews = async (placeId, fcKey) => {
   if (!placeId || !fcKey) return [];
   try {
     const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en&sortby=newest`;
-    const md = await firecrawlScrape(fcKey, url, 15000);
+    const md = await firecrawlScrape(fcKey, url, 15000, 12 * 60 * 60 * 1000);
     if (!md || md.length < 200) return [];
     // Split into review-sized chunks; keep ones that read like real review prose.
     const chunks = md.split(/\n{2,}/).map(s => s.replace(/\s+/g, ' ').trim())
@@ -3265,7 +3271,7 @@ const checkAdLibraryViaFirecrawl = async (company, fcKey) => {
   if (!fcKey || !company) return { hasAds: false, adCount: 0, confirmed: false };
   try {
     const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&search_type=keyword_search&q=${encodeURIComponent(company)}`;
-    const md = await firecrawlScrape(fcKey, url, 30000);
+    const md = await firecrawlScrape(fcKey, url, 30000, 6 * 60 * 60 * 1000); // ad activity is live — 6h window
     if (!md || md.length < 200) return { hasAds: false, adCount: 0, confirmed: false };
     // CAUTION: this is a KEYWORD search (q=company), not a search by the
     // advertiser's Page. The "results" header therefore counts every ad in the
@@ -5604,7 +5610,7 @@ app.post('/api/research', async (req, res) => {
       const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 2000 }),
+        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 1500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
       }, timeout).then(r => r.json());
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
