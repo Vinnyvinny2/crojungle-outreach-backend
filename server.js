@@ -1047,7 +1047,12 @@ const searchTheirStack = async (theirstackKey) => {
 const CORP_WORDS = /\b(insurance|agency|agencies|group|services|solutions|associates|partners|company|inc|llc|corp|co|the|of|and|&|advisors|advisory|consulting|management|holdings|enterprises|systems|center|centre)\b/gi;
 const NON_NAME_WORDS = /\b(american|national|united|first|premier|elite|quality|choice|select|direct|express|advantage|independent|local|community|family|heritage|liberty|freedom|security|trust|guardian|shield|summit|pinnacle|apex|prime|superior|reliable|affordable|budget|value|smart|easy|simple|fast|quick|best|top|great|good|new|modern|future|next|global|world|international|state|county|city|north|south|east|west|central|midwest|southeast|northwest|kentucky|tennessee|florida|virginia|ohio|indiana|louisville|nashville|tampa|richmond|lexington)\b/gi;
 
-const predictReachability = (name, website) => {
+// Trade/corporate words that are never half of a person's name. Shared by the Find-
+// stage reachability predictor and the eponymous-owner source further down.
+const TRADE_WORD = /^(insurance|insurers?|agency|agencies|chiropractic|chiropractor|dental|dentistry|orthodontics?|surgery|surgical|plastic|cosmetic|dermatology|medical|medicine|clinic|clinics|health|healthcare|wellness|spa|med|aesthetics?|vision|eye|optical|veterinary|animal|hospital|pediatrics?|family|physical|therapy|rehab|senior|assisted|living|care|memory|retirement|communit(y|ies)|law|legal|attorneys?|lawyers?|firm|associates?|partners?|accounting|cpa|tax|taxes|financial|finance|advisors?|advisory|wealth|realty|real|estate|properties|property|mortgage|title|roofing|roofers?|plumbing|plumbers?|electric|electrical|electricians?|hvac|heating|cooling|air|mechanical|construction|contractors?|contracting|builders?|building|remodeling|restoration|damage|water|fire|mold|excavation|excavating|grading|masonry|concrete|paving|landscaping|landscape|lawn|hardscaping|tree|service|services|insulation|flooring|floors|garage|doors?|deck|decks|patio|fence|fencing|painting|painters?|signs?|signage|well|drilling|septic|pool|pools|pest|control|exterminating|termite|solutions?|group|groups|company|companies|corp|corporation|inc|incorporated|llc|ltd|co|enterprises?|holdings?|industries|systems?|center|centre|centers?|studio|studios|shop|works|team|professional|professionals|premier|premium|quality|elite|advanced|modern|complete|total|first|national|american|united|general)$/i;
+const SITE_BUILDER_HOST = /(wixsite|squarespace|weebly|wordpress\.com|blogspot|godaddysites|business\.site|square\.site|myshopify|facebook\.com|instagram\.com|linktr\.ee|yelp\.com|carrd\.co|webnode|jimdo|strikingly|site123)/i;
+
+const predictReachability = (name, website, opts = {}) => {
   if (!name) return { score: 0, why: 'no name' };
   // Strip the corporate furniture and the geography/adjectives to see what's left.
   const core = String(name)
@@ -1056,13 +1061,18 @@ const predictReachability = (name, website) => {
     .replace(NON_NAME_WORDS, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  const leftover = core.split(' ').filter(w => w.length > 2 && /^[A-Za-z'\-]+$/.test(w));
+  const leftover = core.split(' ').filter(w => w.length > 2 && /^[A-Za-z'\-]+$/.test(w) && !TRADE_WORD.test(w));
 
   // A hyphenated surname pair ("Hamilton-Martin") is a partnership of two people.
   const hyphenPair = /\b[A-Z][a-z]{2,}-[A-Z][a-z]{2,}\b/.test(name);
   // A possessive ("Sean's Agency") or an initial ("David B. Robinson") is a person.
   const possessive = /\b[A-Z][a-z]+'s\b/.test(name);
   const middleInitial = /\b[A-Z][a-z]+\s+[A-Z]\.\s+[A-Z][a-z]+/.test(name);
+  // An honorific or licence credential in the business name means a named
+  // practitioner owns it and holds the licence — "Dr. Broc Pratt", "David B.
+  // Robinson, CPA". In real runs these resolve from multiple independent sources
+  // because the person is registered by name with a state board.
+  const credential = /\b(dr|doctor|dds|dmd|md|do|dc|dvm|od|cpa|esq|phd)\b\.?/i.test(name);
 
   let score = 0; const why = [];
   if (middleInitial)            { score += 30; why.push('full personal name with initial'); }
@@ -1072,6 +1082,8 @@ const predictReachability = (name, website) => {
   else if (leftover.length === 1){ score += 12; why.push(`possible surname (${leftover[0]})`); }
   else                          { why.push('generic institutional name — owner is behind a brand'); }
 
+  if (credential)               { score += 12; why.push('honorific/licence credential in the name — a named practitioner owns this'); }
+
   // The domain echoing the personal name is strong corroboration.
   if (website && leftover.length) {
     try {
@@ -1079,7 +1091,24 @@ const predictReachability = (name, website) => {
       if (leftover.some(w => host.includes(w.toLowerCase()))) { score += 10; why.push('personal name is in the domain'); }
     } catch {}
   }
-  return { score: Math.min(score, 40), why: why.join('; ') };
+
+  // ── WEBSITE QUALITY: the single strongest owner source is their own site ──
+  // findOwnerViaBrain carries the highest source weight (45) and it can only run on
+  // a real site. No website at all means that source, the site-scraped email, and
+  // the eponymous-mailbox path are ALL dead before Research starts.
+  if (!website) {
+    score -= 14; why.push('no website — their own site is the strongest owner source and it does not exist');
+  } else if (SITE_BUILDER_HOST.test(String(website))) {
+    score -= 8; why.push('site-builder or social page rather than an owned domain — thin site, rarely a leadership page or a real mailbox');
+  }
+
+  // ── SCALE: a very large review count is a regional brand or multi-location
+  // operator, where the owner sits behind a manager and a shared inbox.
+  const rv = Number(opts.reviewCount) || 0;
+  if (rv >= 700)      { score -= 8; why.push('very high review volume — reads as a multi-location brand, owner insulated'); }
+  else if (rv >= 450) { score -= 4; why.push('high review volume — may be multi-location'); }
+
+  return { score: Math.max(0, Math.min(score, 40)), why: why.join('; ') };
 };
 
 const GP_CATEGORIES = [
@@ -1135,7 +1164,11 @@ const GP_CATEGORIES = [
   { q: 'estate planning law firm', label: 'Estate Law' },
   { q: 'accounting and CPA firm', label: 'Accounting' },
   { q: 'independent insurance agency', label: 'Insurance' },
-  { q: 'assisted living facility', label: 'Senior Care' },
+  // Senior living is dominated by national operators and REITs (Life Care Services,
+  // Brookdale, Atria, Allegro). The community name rarely reveals the parent, so the
+  // franchise regex alone cannot catch them — flagging the whole category as
+  // consolidation-risk makes Research confirm a real owner before we spend on it.
+  { q: 'assisted living facility', label: 'Senior Care', ownerRisk: true },
   // Dropped vs. prior list: fencing, painting, commercial cleaning, moving,
   // auto repair — low ticket, most stay solo/sub-$800k. The review-count revenue
   // proxy would bury them anyway; not worth spending queries on them.
@@ -1147,7 +1180,7 @@ const GP_CITIES = [
 ];
 // National franchises / DSOs / chains — the local operator does NOT own the marketing,
 // so they are not our ICP no matter how reachable the branch is.
-const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry)\b/i;
+const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services)\b/i;
 const searchGooglePlaces = async (placesKey) => {
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
   const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber';
@@ -1981,7 +2014,18 @@ const DM_SOURCE_WEIGHT = {
   license_or_chamber: 38,  // licence holder / chamber listing — a REAL named person, not an agent
   google_review_replies: 35, // whoever answers the reviews at an owner-run shop is the owner
   news:              30,   // press quotes them as owner — strong independent corroboration
+  business_name:     34,   // the business is named after them AND their site confirms it
   hunter:            20,   // real, but LinkedIn-biased: it surfaces VPs and HR, not owners
+};
+
+// own_website_brain and business_name both read the SAME homepage. When they agree
+// that is one piece of evidence counted twice, not two independent confirmations —
+// so they are collapsed before anything is called "corroborated". Without this, a
+// single site could manufacture the corroboration bonus on its own.
+const independentSourceCount = (sources) => {
+  const s = new Set(sources);
+  if (s.has('own_website_brain') && s.has('business_name')) s.delete('business_name');
+  return s.size;
 };
 
 const normalizePersonName = (n) => String(n || '')
@@ -3054,18 +3098,43 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
   if (!companyName || !fcKey || !apiKey) return null;
   const clean = companyName.replace(/[^\w\s&'-]/g, ' ').replace(/\s+/g, ' ').trim();
   const loc = String(location || '').split(',').slice(-2).join(' ').trim(); // "Louisville KY"
-  const ind = String(industry || '').toLowerCase();
+  // Trade detection reads the industry label AND the company name. industry is
+  // frequently blank or generic ("Professional Services"), while the company name
+  // almost always names the trade — "Castle Hills Chiropractic", "Bespoke Plastic
+  // Surgery". Matching on both is what makes this fire for the practices and trades
+  // that the old industry-only router silently dropped into the generic branch.
+  const ind = `${String(industry || '')} ${String(companyName || '')}`.toLowerCase();
 
   // Pick the query that matches how this trade is actually licensed/listed.
+  // Every branch targets the register that names a REAL individual: a state board,
+  // a licence holder, a broker of record. Order runs specific → general.
   const q = [];
-  if (/insur/.test(ind))                          q.push(`"${clean}" ${loc} insurance agent license principal OR "agent of record"`);
-  else if (/contract|roof|plumb|hvac|electric|construc|restor/.test(ind))
-                                                  q.push(`"${clean}" ${loc} contractor license "license holder" OR qualifier OR owner`);
-  else if (/account|cpa|tax|bookkeep/.test(ind))  q.push(`"${clean}" ${loc} CPA license "licensed to" OR partner OR principal`);
-  else if (/real estate|realty|broker/.test(ind)) q.push(`"${clean}" ${loc} "principal broker" OR "broker of record"`);
-  else if (/dent|medic|clinic|health|care|therap/.test(ind))
-                                                  q.push(`"${clean}" ${loc} "practice owner" OR "medical director" OR DDS OR MD owner`);
-  else                                            q.push(`"${clean}" ${loc} owner OR proprietor OR "founded by"`);
+  if (/insur|agency|underwrit/.test(ind))
+    q.push(`"${clean}" ${loc} insurance agent license principal OR "agent of record"`);
+  // Clinical practices are licensed to a named practitioner by a state board. This
+  // branch previously matched only /dent|medic|clinic|health|care|therap/, which
+  // misses chiropractic, plastic surgery, med spas, vets, optometry and orthodontics
+  // — several of the highest-value categories we actually search for.
+  else if (/chiro|plastic surg|oral surg|surg|derm|med ?spa|medspa|aesthet|lasik|optom|ophthal|eye ?(center|care)|orthodont|periodont|endodont|dent|dds|dmd|fertil|ivf|vet(erinar)?\b|animal (hospital|clinic)|pet (hospital|clinic)|podiat|psychiat|physical therapy|\bpt\b|rehab|medic|clinic|health|wellness|therap|practice/.test(ind))
+    q.push(`"${clean}" ${loc} "practice owner" OR "medical director" OR "owned by" OR DC OR DDS OR MD OR DO OR DVM OR OD license`);
+  // Senior living / assisted living: the licence is held by an administrator, and
+  // the operator is often a group — naming the actual principal matters here.
+  else if (/assisted living|senior living|senior care|memory care|nursing home|retirement communit/.test(ind))
+    q.push(`"${clean}" ${loc} administrator OR "executive director" OR owner OR "operated by" license`);
+  else if (/law|attorney|lawyer|legal|counsel|esq/.test(ind))
+    q.push(`"${clean}" ${loc} "managing partner" OR "founding attorney" OR principal state bar`);
+  else if (/contract|roof|plumb|hvac|heating|cooling|electric|construc|remodel|restor|water damage|fire damage|flood|mold remediat|excavat|mason|concrete|paving|landscap|hardscap|tree service|insulat|floor|garage door|deck|patio|fenc|paint|sign|well drilling|septic|pool/.test(ind))
+    q.push(`"${clean}" ${loc} contractor license "license holder" OR qualifier OR owner`);
+  // Pest control and lawn treatment operate under a NAMED certified applicator
+  // licence in every state — a direct route to the owner at an owner-run shop.
+  else if (/pest|exterminat|termite|lawn care|lawn treatment|fertiliz|weed control/.test(ind))
+    q.push(`"${clean}" ${loc} "certified applicator" OR "licensed operator" OR owner pesticide license`);
+  else if (/account|cpa|tax|bookkeep|payroll|audit/.test(ind))
+    q.push(`"${clean}" ${loc} CPA license "licensed to" OR partner OR principal`);
+  else if (/real estate|realty|broker|mortgage|title/.test(ind))
+    q.push(`"${clean}" ${loc} "principal broker" OR "broker of record"`);
+  else
+    q.push(`"${clean}" ${loc} owner OR proprietor OR "founded by"`);
   // Chamber / local directory listings name owners for almost every local business.
   q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
 
@@ -3248,17 +3317,141 @@ const findOwnerViaNews = async (companyName) => {
   } catch(e) { return null; }
 };
 
+// ── SOURCE 7: THE BUSINESS IS NAMED AFTER ITS OWNER ─────────────────────────
+// "Dr. Broc Pratt - Bespoke Plastic Surgery" on drpratt.com. "Claude Reynolds
+// Insurance". "Matthew Loran Roofing". At an eponymous business the owner's name is
+// literally on the door — and the Find-stage reachability predictor deliberately
+// ranks person-named businesses HIGHEST, so these are exactly the leads Research
+// receives most of. Until now no source read the business name, so the single most
+// reachable owners in the pipeline were coming back "no decision-maker identified".
+//
+// THE TRAP: place names look exactly like person names — "Castle Hills
+// Chiropractic", "Allegro Hyde Park", "Senior Point Assisted Living". So a name is
+// NEVER accepted from the business name alone. It must be confirmed as a real
+// person on their own website. Free — reuses the homepage content already fetched.
+// Words that are a TRADE or a corporate suffix, never half of a person's name.
+// Without this stop-list the "two capitalised words" test matches every business on
+// earth ("Huebner Chiropractic", "Paramount Restoration") and the prefilter saves
+// nothing — it would spend a model call on every lead for no filtering at all.
+
+const NAMEY = (companyName) => {
+  const n = String(companyName || '');
+  // An honorific or professional credential is unambiguous — a person is named.
+  if (/\b(dr|doctor|dds|dmd|md|do|dc|cpa|esq|od|dvm|phd)\b\.?/i.test(n)) return true;
+  // Otherwise look for two adjacent capitalised words that are BOTH non-trade words
+  // ("Claude Reynolds Insurance", "Matthew Loran Roofing"). Place names such as
+  // "Castle Hills" also pass here — that judgment is the model's job below, and the
+  // prompt names those exact cases as rejects.
+  const toks = n.replace(/[^A-Za-z\s'’.-]/g, ' ').split(/\s+/).filter(Boolean);
+  for (let i = 0; i < toks.length - 1; i++) {
+    const a = toks[i], b = toks[i + 1].replace(/\.$/, '');
+    const capital = (w) => /^[A-Z][a-z'’-]{1,}$/.test(w);
+    const initial = (w) => /^[A-Z]\.?$/.test(w);
+    if (!capital(a) || TRADE_WORD.test(a)) continue;
+    if (initial(b) && toks[i + 2] && capital(toks[i + 2]) && !TRADE_WORD.test(toks[i + 2])) return true; // "David B. Robinson"
+    if (capital(b) && !TRADE_WORD.test(b)) return true;
+  }
+  return false;
+};
+
+// Role markers that prove the site is describing a PERSON, not repeating its own
+// brand name. Used to decide how much confidence a business-name match needs.
+const PERSON_ROLE_NEAR = /\b(dr|doctor|owner|founder|founded|co-?founder|president|principal|partner|proprietor|ceo|agent|broker|attorney|practitioner|surgeon|physician|dentist|chiropractor|veterinarian|therapist|licensed|dds|dmd|md|do|dc|cpa|esq|od|dvm)\b/i;
+const findOwnerViaBusinessName = async (companyName, homepageContent, domain, apiKey) => {
+  if (!companyName || !apiKey) return null;
+  const content = String(homepageContent || '').slice(0, 6000);
+  if (content.length < 200) return null;              // nothing to verify against
+  if (!NAMEY(companyName)) return null;               // no person-shaped token — skip the call
+
+  try {
+    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: `Business name: "${companyName}"${domain ? `\nDomain: ${domain}` : ''}
+
+TASK: decide whether this business is named after a REAL PERSON who owns or runs it, and return that person's full name.
+
+This feeds a real sales email. A wrong name is far worse than no name. Return null unless you are confident.
+
+ACCEPT only when BOTH are true:
+1. The business name contains a person's name — an honorific ("Dr. Broc Pratt"), a full personal name ("Claude Reynolds Insurance", "Matthew Loran Roofing"), or a credentialed name ("David B. Robinson, CPA").
+2. That same person is named in the WEBSITE TEXT below as an owner, founder, principal, doctor, practitioner, agent or partner of this business.
+
+REJECT — return null — when:
+- The name is a PLACE, street, neighbourhood or invented brand: "Castle Hills Chiropractic", "Allegro Hyde Park", "Senior Point Assisted Living", "Paramount Restoration", "Cornerstone", "Clarendale Arcadia". These read like people and are not.
+- Only a SURNAME appears with no first name ("Schwartz Insurance Group") — we cannot address an email to a surname.
+- The person named on the site is staff, a receptionist, or an associate rather than an owner/practitioner.
+- The person does not actually appear in the website text below. Do not infer, complete, or guess a first name.
+
+Return ONLY JSON, no other text:
+{"name":"Full Name or null","title":"their stated role or null","evidence":"the exact phrase from the website text that names them","confidence":"high|medium|low"}
+
+WEBSITE TEXT:
+${content}` }]
+      }),
+    }, 20000);
+
+    const d = await res.json();
+    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const parsed = JSON.parse(t);
+
+    if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
+    if (!looksLikeRealName(parsed.name)) {
+      console.log(`DM/bizname [${companyName}]: "${parsed.name}" is not a usable full name — REJECTED`);
+      return null;
+    }
+    if (parsed.confidence === 'low') {
+      console.log(`DM/bizname [${companyName}]: ${parsed.name} confidence low — discarded`);
+      return null;
+    }
+    // ANTI-FABRICATION GATE: every name token must actually appear in their own site
+    // copy. This is the same guard the website Brain uses, and it is what stops a
+    // plausible-sounding first name from being invented around a real surname.
+    const hay = content.toLowerCase();
+    const tokens = normalizePersonName(parsed.name).toLowerCase().split(' ').filter(w => w.length > 1);
+    const allPresent = tokens.length >= 2 && tokens.every(w => hay.includes(w));
+    if (!allPresent) {
+      console.log(`DM/bizname [${companyName}]: "${parsed.name}" not present in their own site copy — REJECTED as unverified`);
+      return null;
+    }
+    // PLACE-NAME DEFENCE: "Castle Hills Chiropractic" and "Allegro Hyde Park" read
+    // exactly like people, and their names obviously appear on their own site — so
+    // the presence check above cannot separate them. What separates them is whether
+    // the site ever describes that name in a PERSON role. When it does not, we only
+    // accept a high-confidence call and never a medium one.
+    const surname = tokens[tokens.length - 1];
+    let nearRole = false;
+    for (let i = hay.indexOf(surname); i !== -1 && !nearRole; i = hay.indexOf(surname, i + 1)) {
+      if (PERSON_ROLE_NEAR.test(content.slice(Math.max(0, i - 120), i + 120))) nearRole = true;
+    }
+    if (!nearRole && parsed.confidence !== 'high') {
+      console.log(`DM/bizname [${companyName}]: "${parsed.name}" appears on the site but never in an owner/practitioner context — REJECTED (likely a place or brand name)`);
+      return null;
+    }
+    console.log(`DM/bizname [${companyName}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) — the business is named after them and their own site confirms it — "${String(parsed.evidence || '').slice(0, 70)}"`);
+    return { name: String(parsed.name).trim(), title: parsed.title || null, evidence: parsed.evidence || '', confidence: parsed.confidence || 'medium', source: 'business_name' };
+  } catch (e) {
+    console.log(`DM/bizname [${companyName}] failed:`, e.message);
+    return null;
+  }
+};
+
 // ═══ THE ORCHESTRATOR — corroborate across sources, score the confidence ════
 // Runs every free source in parallel, then scores each candidate by how many
 // INDEPENDENT sources name them. Agreement across sources is what gets us to 90%,
 // because no single source can.
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '' }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '' }) => {
   // Run every source in parallel. Web search is the new heavy hitter — it reaches
   // BBB, Manta, local press, and chamber directories where SMB owners actually live.
   // Registry search costs ~2 credits and has a very low hit rate (it mostly
   // surfaces filing agents, not owners). Skipped by default — the website and
   // web-search sources do the real work. Still available in the test harness.
-  const [brain, websearch, news, registry, reviewSig, license] = await Promise.all([
+  const [brain, websearch, news, registry, reviewSig, license, bizName] = await Promise.all([
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
     findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),  // free — Google News RSS
@@ -3271,9 +3464,14 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // trades, agencies and local operators who are invisible in B2B databases —
     // they hold a licence in a real person's name.
     findOwnerViaLicense(companyName, industry, location, fcKey, apiKey).catch(() => null),
+    // The business is named after the owner — free, reuses homepage content we
+    // already have, and every name is checked against their own site copy before
+    // it is accepted. This is the source that reaches eponymous practices and
+    // trades, which is precisely what the Find predictor ranks to the top.
+    findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
   ]);
 
-  const found = [brain, websearch, news, registry, reviewSig, license].filter(Boolean);
+  const found = [brain, websearch, news, registry, reviewSig, license, bizName].filter(Boolean);
   if (hunterName && looksLikeRealName(hunterName)) {
     found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
   }
@@ -3303,11 +3501,12 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // Rank: corroboration first, then buying authority, then raw source weight.
   // A person named by 2 independent public records outranks a lone Hunter hit.
   clusters.forEach(c => {
-    c.corroborated = c.sources.length >= 2;
+    const independent = independentSourceCount(c.sources);
+    c.corroborated = independent >= 2;
     c.authority = authorityScore(c.title);
     // Corroboration bonus — this is the whole point of the multi-source design
-    if (c.sources.length >= 3) c.score += 35;
-    else if (c.sources.length === 2) c.score += 20;
+    if (independent >= 3) c.score += 35;
+    else if (independent === 2) c.score += 20;
     // Owner/founder titles are what we actually want for this ICP
     if (c.authority >= 90) c.score += 15;
     else if (c.authority < 40) c.score -= 20; // a coordinator is worse than useless
@@ -5692,7 +5891,7 @@ const WEIGHTS = {
           // ordered by which leads will actually yield a contact we can email. A business
           // named after a person resolved almost every time in real runs; a generic
           // institutional name repeatedly did not. Free signal, large credit saving.
-          const rp = predictReachability(c.name, c.website);
+          const rp = predictReachability(c.name, c.website, { reviewCount: rv });
           base += Math.round((rp.score - 14) * 0.45);  // ±~12 swing around the average
           c.reachPredict = rp.score; c.reachPredictWhy = rp.why;
           triage = Math.max(40, Math.min(base, 97));
