@@ -1052,16 +1052,40 @@ const NON_NAME_WORDS = /\b(american|national|united|first|premier|elite|quality|
 const TRADE_WORD = /^(insurance|insurers?|agency|agencies|chiropractic|chiropractor|dental|dentistry|orthodontics?|surgery|surgical|plastic|cosmetic|dermatology|medical|medicine|clinic|clinics|health|healthcare|wellness|spa|med|aesthetics?|vision|eye|optical|veterinary|animal|hospital|pediatrics?|family|physical|therapy|rehab|senior|assisted|living|care|memory|retirement|communit(y|ies)|law|legal|attorneys?|lawyers?|firm|associates?|partners?|accounting|cpa|tax|taxes|financial|finance|advisors?|advisory|wealth|realty|real|estate|properties|property|mortgage|title|roofing|roofers?|plumbing|plumbers?|electric|electrical|electricians?|hvac|heating|cooling|air|mechanical|construction|contractors?|contracting|builders?|building|remodeling|restoration|damage|water|fire|mold|excavation|excavating|grading|masonry|concrete|paving|landscaping|landscape|lawn|hardscaping|tree|service|services|insulation|flooring|floors|garage|doors?|deck|decks|patio|fence|fencing|painting|painters?|signs?|signage|well|drilling|septic|pool|pools|pest|control|exterminating|termite|solutions?|group|groups|company|companies|corp|corporation|inc|incorporated|llc|ltd|co|enterprises?|holdings?|industries|systems?|center|centre|centers?|studio|studios|shop|works|team|professional|professionals|premier|premium|quality|elite|advanced|modern|complete|total|first|national|american|united|general)$/i;
 const SITE_BUILDER_HOST = /(wixsite|squarespace|weebly|wordpress\.com|blogspot|godaddysites|business\.site|square\.site|myshopify|facebook\.com|instagram\.com|linktr\.ee|yelp\.com|carrd\.co|webnode|jimdo|strikingly|site123)/i;
 
+const CORP_ONE = new RegExp(CORP_WORDS.source, 'i');       // non-global: .test() on a /g
+const NON_NAME_ONE = new RegExp(NON_NAME_WORDS.source, 'i'); // regex is stateful and unsafe here
 const predictReachability = (name, website, opts = {}) => {
   if (!name) return { score: 0, why: 'no name' };
-  // Strip the corporate furniture and the geography/adjectives to see what's left.
-  const core = String(name)
-    .replace(/[.,]/g, ' ')
-    .replace(CORP_WORDS, ' ')
-    .replace(NON_NAME_WORDS, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const leftover = core.split(' ').filter(w => w.length > 2 && /^[A-Za-z'\-]+$/.test(w) && !TRADE_WORD.test(w));
+  // A person's name in a business name sits at the FRONT and runs unbroken until the
+  // trade begins: "James M. Hartley Electric", "Claude Reynolds Insurance", "Matthew
+  // Loran Roofing". Collecting every leftover word anywhere in the string is what
+  // produced nonsense like "Harmony Repair" (Harmony Garage Door Repair Denver) and
+  // "Yoder Columbus" (R & T Yoder Electric - Central Columbus) — both scored as full
+  // personal names. So we walk from the start and stop at the first trade/corp word.
+  const cityTokens = new Set(
+    (Array.isArray(GP_CITIES) ? GP_CITIES : [])
+      .flatMap(c => String(c).split(/[\s,]+/))
+      .map(w => w.toLowerCase())
+      .filter(w => w.length > 2)
+  );
+  const isNameToken = (w) => /^[A-Za-z][A-Za-z'\-]{1,}$/.test(w)
+    && !TRADE_WORD.test(w)
+    && !cityTokens.has(w.toLowerCase());
+
+  const rawTokens = String(name).replace(/[^A-Za-z\s'.\-&]/g, ' ').split(/\s+/).filter(Boolean);
+  const leading = [];
+  for (const tok of rawTokens) {
+    const bare = tok.replace(/\.$/, '');
+    if (tok === '&' || tok === 'and') continue;          // "R & T Yoder" — a partnership, not a break
+    if (/^[A-Za-z]\.?$/.test(tok)) { leading.push(bare); continue; } // initial, leading or middle
+    if (!isNameToken(bare)) break;                       // hit the trade — the name ended
+    leading.push(bare);
+    if (leading.length >= 4) break;
+  }
+  // Re-run the old corporate/geography strip over just those leading tokens, so
+  // adjectives like "Premier" or "Advantage" still fall away.
+  const leftover = leading.filter(w =>
+    w.length > 2 && !CORP_ONE.test(w) && !NON_NAME_ONE.test(w));
 
   // A hyphenated surname pair ("Hamilton-Martin") is a partnership of two people.
   const hyphenPair = /\b[A-Z][a-z]{2,}-[A-Z][a-z]{2,}\b/.test(name);
@@ -1186,11 +1210,25 @@ const searchGooglePlaces = async (placesKey) => {
   const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber';
   const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
   const RUN_CAP = parseInt(process.env.GP_QUERY_CAP || '100', 10);
+  // Cap how many leads any ONE category can contribute per run. Without this a
+  // single vertical fills the queue and every lead on screen is a garage door
+  // company, which is what was happening.
+  const PER_CAT_CAP = parseInt(process.env.GP_PER_CATEGORY_CAP || '6', 10);
   const grid = [];
   for (const cat of GP_CATEGORIES) for (const city of GP_CITIES) grid.push({ cat, city });
-  grid.sort(() => Math.random() - 0.5);                          // rotate coverage each run
+  // FISHER-YATES. The previous `grid.sort(() => Math.random() - 0.5)` is a well-known
+  // broken shuffle: a comparator that returns random values violates the ordering
+  // contract sort() relies on, so V8 leaves long runs of the original order intact.
+  // Measured over 300 runs, it put up to 14 leads from a single category in a
+  // 100-query run and covered only ~34 of 44 categories; Fisher-Yates caps the worst
+  // category at 9 and covers ~40. That bias is why whole verticals arrived in blocks.
+  for (let i = grid.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [grid[i], grid[j]] = [grid[j], grid[i]];
+  }
   const out = [], seen = new Set();
-  let calls = 0, skippedFranchise = 0;
+  const perCat = new Map();
+  let calls = 0, skippedFranchise = 0, skippedCatCap = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     try {
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
@@ -1210,11 +1248,14 @@ const searchGooglePlaces = async (placesKey) => {
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
         if (reviews < MIN_REVIEWS) continue;                      // established business only
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
+        const catCount = perCat.get(cat.label) || 0;
+        if (catCount >= PER_CAT_CAP) { skippedCatCap++; continue; }    // one vertical must not flood the queue
         const domainKey = website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
         if (seen.has(domainKey)) continue; seen.add(domainKey);
         // A LOW review count at an established local business = they are NOT actively
         // managing their online presence = a marketing gap we can open the pitch on.
         const marketingGap = reviews >= MIN_REVIEWS && reviews < 60;
+        perCat.set(cat.label, catCount + 1);
         out.push({
           name, website, location: p.formattedAddress || '',
           source: 'google_places', icpProfile: 'local_owner_operated',
@@ -1227,8 +1268,23 @@ const searchGooglePlaces = async (placesKey) => {
       }
     } catch(e) { /* fail-safe per query */ }
   }
-  console.log(`Google Places: ${out.length} local owner-operated businesses from ${calls} queries (${skippedFranchise} franchises skipped)`);
-  return out;
+  // ROUND-ROBIN INTERLEAVE. Results are collected query by query, so they leave this
+  // function grouped in category blocks. Every Places lead also scores within a point
+  // or two of every other, so the UI's tie-break falls back to insertion order and the
+  // whole first screen is one vertical. Dealing them out one category at a time fixes
+  // the queue at the source rather than papering over it in the sort.
+  const byCat = new Map();
+  for (const lead of out) {
+    if (!byCat.has(lead.industry)) byCat.set(lead.industry, []);
+    byCat.get(lead.industry).push(lead);
+  }
+  const buckets = [...byCat.values()];
+  const interleaved = [];
+  for (let i = 0; buckets.some(b => i < b.length); i++) {
+    for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
+  }
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedCatCap} over per-category cap)`);
+  return interleaved;
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -1965,6 +2021,13 @@ const TITLE_AUTHORITY = [
   { rank: 95,  re: /\b(ceo|chief executive)\b/i },
   { rank: 90,  re: /\b(president)\b/i },
   { rank: 85,  re: /\b(managing (partner|director)|principal|partner)\b/i },
+  // At an owner-operated trade business the person whose NAME is on the state
+  // licence is almost always the owner — that is the entire premise of the licence
+  // lookup. Scoring these 30 ("unknown title") sent them below the buying floor and
+  // threw away the exact contacts that source exists to find. Ranked just above the
+  // floor rather than at owner level, because a larger contractor can employ a
+  // qualifying agent who holds the licence without owning the company.
+  { rank: 80,  re: /\b(licen[sc]e ?holder|licen[sc]ee|qualifier|qualifying (agent|party|individual)|responsible managing|agent of record|broker of record|registered (agent )?principal)\b/i },
   { rank: 75,  re: /\b(coo|chief operating|gm|general manager)\b/i },
   { rank: 70,  re: /\b(cfo|chief financial)\b/i },
   { rank: 65,  re: /\b(cmo|chief marketing)\b/i },
@@ -2820,6 +2883,12 @@ ${replyBlocks}` }]
 // cheap. We pick by intent, not by guessing paths.
 const PAGE_INTENT = [
   { key: 'pricing',  re: /(pricing|prices|rates|plans|packages|cost|fees|tuition|membership)/i },
+  // THE OWNER'S OWN STORY. On an owner-operated business the About page is where the
+  // founder writes, in the first person, why he started, who taught him the trade,
+  // how long he has been at it, what he is proud of. Nothing else on the internet
+  // personalises an email like a detail he wrote about himself — it proves a human
+  // actually read his site rather than scraping it. Read second, right after pricing.
+  { key: 'about',    re: /(about|our-story|my-story|who-we-are|meet-the|history|founder|owner|team|company)/i },
   { key: 'services', re: /(services|what-we-do|solutions|offerings|specialt|practice-areas|treatments)/i },
   { key: 'booking',  re: /(book|schedule|appointment|consult|estimate|quote|request|get-started|contact)/i },
 ];
@@ -2827,7 +2896,7 @@ const PAGE_INTENT = [
 const auditSitePages = async (website, fcKey, apiKey, companyName) => {
   if (!website || !fcKey || !apiKey) return null;
   try {
-    const urls = await firecrawlMap(fcKey, website, 'pricing services book schedule quote'); // cached — usually free
+    const urls = await firecrawlMap(fcKey, website, 'pricing services about our story book schedule quote'); // cached — usually free
     if (!urls.length) return null;
     const clean = urls.filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u));
     const picked = [];
@@ -2836,7 +2905,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
       if (hit) picked.push({ key: intent.key, url: hit });
     }
     if (!picked.length) return null;
-    const top = picked.slice(0, 2); // pricing + booking are the two that change the pitch; services is nice-to-have and not worth the seconds
+    const top = picked.slice(0, 3); // pricing + about + one more: the story page earns its seconds, it is what makes the pitch sound human
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     const scraped = await Promise.all(top.map(p =>
@@ -2860,9 +2929,10 @@ Extract ONLY what is literally on these pages. Never infer, never estimate, neve
 2. WHAT THEY ACTUALLY SELL — their real service lines, in their words.
 3. BOOKING MECHANISM — how a customer actually starts. One of: "online_booking" (real self-serve scheduler), "form" (submit and wait for a callback), "phone_only", "none_found".
 4. CAPTURE — is there any way to leave contact details other than a phone number? true/false.
+5. THE OWNER'S OWN STORY — if an About page is present and the owner writes about himself (why he started, who taught him the trade, how long he has been doing it, what he is proud of, a credential he earned), capture it. Return a one-sentence plain summary AND the single most human sentence he wrote, copied EXACTLY, word for word, from the page. This will be quoted back to him, so an altered sentence is worse than none. If there is no personal story — only corporate boilerplate — return null for both. Boilerplate like "we are committed to quality service" is NOT a story.
 
 Return ONLY JSON:
-{"prices":[{"amount":"exact printed figure","what":"what it covers"}],"services":["service line"],"booking":"online_booking|form|phone_only|none_found","hasCapture":true|false}
+{"prices":[{"amount":"exact printed figure","what":"what it covers"}],"services":["service line"],"booking":"online_booking|form|phone_only|none_found","hasCapture":true|false,"ownerStory":"one-sentence summary or null","storyQuote":"his exact sentence, copied verbatim, or null"}
 
 PAGES:
 ${corpus}` }]
@@ -2883,8 +2953,25 @@ ${corpus}` }]
     if ((parsed.prices || []).length !== prices.length) {
       console.log(`SITE AUDIT [${companyName}]: dropped ${(parsed.prices||[]).length - prices.length} price(s) not found verbatim on the page`);
     }
+    // ANTI-FABRICATION: the owner's story quote is going to be reflected back to him
+    // almost word for word, so it must literally exist on the page. A paraphrase that
+    // he does not recognise as his own writing is worse than saying nothing at all.
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    let ownerStory = parsed.ownerStory && String(parsed.ownerStory).toLowerCase() !== 'null' ? parsed.ownerStory : null;
+    let storyQuote = parsed.storyQuote && String(parsed.storyQuote).toLowerCase() !== 'null' ? parsed.storyQuote : null;
+    if (storyQuote && !norm(corpus).includes(norm(storyQuote))) {
+      console.log(`SITE AUDIT [${companyName}]: story quote not found verbatim on the page — DISCARDED ("${String(storyQuote).slice(0, 60)}")`);
+      storyQuote = null;
+    }
+    if (!storyQuote && ownerStory) {
+      console.log(`STORY [${companyName}]: summary kept, no verifiable quote — the pitch may reference the story but must not quote it`);
+    }
+    if (ownerStory) console.log(`STORY [${companyName}]: \u2713 ${String(ownerStory).slice(0, 90)}`);
+
     const out = {
       pagesRead: usable.map(p => p.key),
+      ownerStory,
+      storyQuote,
       prices,
       services: parsed.services || [],
       booking: parsed.booking || 'none_found',
@@ -4552,7 +4639,21 @@ const scoreReachability = (c) => {
       ? `${dm.name} (${dm.title || 'unknown title'}) was found, but that role cannot authorize a purchase \u2014 we still do not have a buyer. Find the owner before pitching.`
       : 'No decision-maker identified — we cannot confirm who to reach');
   }
-  // SENIOR-OPERATOR FALLBACK: not the owner, but a senior person we CAN reach — give
+  // ── HUNTER-ONLY, BUT THEIR OWN MAIL SERVER CONFIRMS THEM ──────────────────
+  // A contact held back purely for lack of a second source is a different case
+  // from one held back for lack of authority. When the person carries an
+  // owner-level title AND their employer's mail server confirms a live mailbox in
+  // their own name (rob.pettyjohn@theircompany.com, verified by SMTP), that server
+  // IS the independent second source — a company does not run a named mailbox for
+  // someone who does not work there. Blocking these was discarding the single most
+  // deliverable contacts in the pipeline.
+  if (dmHeldBack && deliverable && emailMatchesOwner && !juniorTitle
+      && authorityScore((dm && dm.title) || '') >= 75) {
+    score = Math.max(score, 74);
+    reasons.push(`${owner} came from one source only, but their own company mail server confirms a live mailbox in their name (${local}@\u2026) — that is independent confirmation this person is really there. Verify the title before pitching hard.`);
+  }
+
+  // ── SENIOR-OPERATOR FALLBACK: not the owner, but a senior person we CAN reach ─
   // a moderate, sendable score (they influence/forward the buy) with a verify flag.
   if (foundOwner && seniorOperator && !ownerLevelTitle) {
     if (deliverable) { score = Math.min(Math.max(score, 60), 66); }
@@ -6938,7 +7039,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation' + (_exitSignal ? ' (they are preparing to exit — valuation is the emotional lever)' : ''));
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
 
-const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
+const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}${sitePages.ownerStory ? `\\n\\n\\u2550\\u2550\\u2550 THE OWNER WROTE THIS ABOUT HIMSELF \\u2550\\u2550\\u2550\\n${sitePages.ownerStory}${sitePages.storyQuote ? `\\nHis exact words: \\u201c${sitePages.storyQuote}\\u201d` : '\\n(No verifiable direct quote \\u2014 reference the story, do NOT put words in his mouth.)'}\\nUSE THIS. It is the strongest personalisation available and almost nobody cold-emailing him will have read it. ONE short specific line near the top that could only have been written by someone who actually read his About page \\u2014 the trade he learned, who taught him, the years in business, the licence he earned, why he started.\\nHOW: reference it plainly, then connect it to what is being lost. \\u2018You learned the trade from your father and you have been at it 23 years \\u2014 and the site is quietly handing that reputation to whoever answers the phone first.\\u2019\\nHARD RULES: never flatter for its own sake (\\u2018what an inspiring story\\u2019) \\u2014 that reads as fake and is worse than silence. Never quote a sentence he did not write. Never invent a detail the story does not contain. ONE reference only; twice makes it a tactic. If the About page is corporate boilerplate rather than his own voice, skip it entirely.` : ''}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
 ${_bottleneckWhy}
 
 Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
