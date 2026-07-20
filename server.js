@@ -1907,6 +1907,27 @@ const isCreditError = (d, status) =>
     String(d?.error || d?.message || '')
   );
 
+// ═══ RATE LIMITING — THE SILENT FALSE NEGATIVE ═════════════════════════════
+// Firecrawl throttles per minute (roughly 20/min on free, 60-200 on paid tiers),
+// and until now NOTHING in this file detected it. A throttled scrape returned an
+// empty string, which the owner finder read as "this page has no owner on it" and
+// the audit reported as "No decision-maker identified — we cannot confirm who to
+// reach". The lead then scored 18/100 and looked genuinely unreachable when in
+// fact we were never allowed to look. An entire batch can fail this way and every
+// symptom points at the prospect instead of at us.
+// Their throttle surfaces in more than one shape: a 429, an error string, or the
+// literal marker `local_rate_limited` returned in the body — which is how a
+// homepage screenshot ended up rendering that text as if it were page content.
+const isRateLimited = (d, status) =>
+  status === 429 ||
+  /local_rate_limited|rate.?limit|too many requests|slow down/i.test(
+    String(d?.error || d?.message || d?.data?.markdown || d?.markdown || '')
+  );
+
+// Process-wide flag so a throttled run can say so plainly instead of reporting a
+// confident "no owner found". Reset per research run.
+let FIRECRAWL_RATE_LIMIT_HITS = 0;
+
 // maxAge tells Firecrawl it may serve a recently-cached copy instead of re-rendering
 // the page. Cached hits come back in milliseconds rather than seconds (~5x faster) and
 // do not burn a credit. A company's homepage, team page, pricing page and careers page
@@ -2041,12 +2062,28 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     return _c.md;
   }
   try {
-    const r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge, blockAds: true, removeBase64Images: true }),
-    }, timeout);
-    const d = await r.json();
+    // RETRY ON THROTTLE. A rate-limited scrape used to return '' and the owner
+    // finder read that as "no owner on this page" — a confident false negative.
+    // Backing off and asking again is both correct and cheap: Firecrawl does not
+    // bill a request it refused to serve.
+    let r, d;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge, blockAds: true, removeBase64Images: true }),
+      }, timeout);
+      d = await r.json();
+      if (!isRateLimited(d, r.status)) break;
+      FIRECRAWL_RATE_LIMIT_HITS++;
+      const waitMs = 4000 * (attempt + 1);   // 4s, then 8s
+      console.log(`\u23f3 FIRECRAWL RATE LIMITED on ${String(url).slice(0, 70)} — backing off ${waitMs / 1000}s (attempt ${attempt + 1}/3). This is throttling, NOT a missing owner.`);
+      if (attempt === 2) {
+        console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED after 3 attempts — this lead's audit is INCOMPLETE. Any "no decision-maker found" result for it is untrustworthy; re-run it in a minute.`);
+        return '';
+      }
+      await new Promise(res => setTimeout(res, waitMs));
+    }
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true;
       console.log('🔴 FIRECRAWL OUT OF CREDITS — scrapes, searches, and maps will all fail until topped up.');
@@ -6866,7 +6903,7 @@ const runResearch = async (req, res) => {
   // both of which actually work.
 
   // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
-  const _fcAtStart = { spent: FC_CREDITS_SPENT, saved: FC_CREDITS_SAVED };
+  const _fcAtStart = { spent: FC_CREDITS_SPENT, saved: FC_CREDITS_SAVED, throttled: FIRECRAWL_RATE_LIMIT_HITS };
   console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? apiKey.slice(0,12)+'...' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
 
   // Pre-flight check — return 400 immediately if Anthropic key is missing
@@ -8652,6 +8689,12 @@ Return ONLY valid JSON:
     // for free. Grep FIRECRAWL SPEND across a batch and the real per-lead cost
     // falls out of the log instead of being estimated from the dashboard total.
     console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} paid operations | ${FC_CREDITS_SAVED - _fcAtStart.saved} served free from our cache`);
+    // Throttling during a run makes every downstream "not found" untrustworthy.
+    // Say so loudly rather than letting the lead look genuinely unreachable.
+    const _throttled = FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled;
+    if (_throttled > 0) {
+      console.log(`\u26a0 FIRECRAWL THROTTLED ${_throttled}x during [${company}] — pages were refused, not empty. Treat any "no decision-maker found" here as UNKNOWN and re-run this lead.`);
+    }
 
     res.json({
       reachability: reach.score,
@@ -8659,6 +8702,7 @@ Return ONLY valid JSON:
       reachabilityReasons: reach.reasons,
       outreachChannel: reach.outreachChannel,
       lsa,   // { eligible, badgeFound, evidence, marker, status }
+      rateLimited: (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0,
       ownerEmailMatch,
       ownerEmailMatchReason,
       email: email.email||'',
