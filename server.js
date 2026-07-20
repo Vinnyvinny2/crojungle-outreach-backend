@@ -1174,6 +1174,73 @@ const predictReachability = (name, website, opts = {}) => {
   return { score: Math.max(0, Math.min(score, 40)), why: why.join('; ') };
 };
 
+// ═══ CAN THIS BUSINESS ACTUALLY WRITE THE CHECK? ═══════════════════════════
+// The old comment on this list claimed an established crew trade clears a
+// "~$800k affordability bar". That number does not survive contact with the
+// benchmarks. The SBA's published guidance is that a business under $5M in revenue
+// should put 7-8% of GROSS revenue into marketing; home services specifically runs
+// 8-12%, rising to 12-15% in competitive metros; Gartner's 2025 CMO survey puts the
+// all-industry average at 7.7%. Every one of those figures is TOTAL marketing, with
+// ad spend inside it. A cited worked example: a plumbing company at $1M revenue has
+// a whole marketing budget of $80k-$150k a year. A $10k/mo retainer is $120k/yr in
+// agency fees alone, before a dollar of ad budget. At 10% of revenue that implies
+// roughly $2.4M in revenue to be comfortable, and the $35k/mo tier implies $5M+.
+// An $800k shop writing a $120k cheque would be spending 15% of revenue on the
+// agency fee alone. They will not do it, and they should not.
+//
+// The second, sharper filter is AVERAGE JOB VALUE, because it decides whether the
+// ROI story is even sayable on the call:
+//   · Pool build ~$60k, custom home $300k+   → a fraction of one job pays the year
+//   · Roof $10-15k at 35-50% margin          → 3 extra jobs pays a $15k/mo retainer
+//   · Foundation repair $8-15k               → 2-3 extra jobs
+//   · Garage door $300-700 average ticket    → 40-100 extra jobs a month. No.
+//   · Tree service $500-2k, CPL ~$28         → 15-20 extra jobs a month. No.
+//   · Lawn care $50-200/mo recurring         → structurally impossible
+// A trade is not "bad" because it is small — it is a bad fit for a $10k-$35k/month
+// retainer and a $50k rebuild, which is the only thing we sell.
+//
+// TIER A — one extra job pays for a meaningful slice of the retainer. Lead-driven,
+//          owner-operated, and already spending on acquisition.
+// TIER B — mid-ticket or recurring-LTV. Real prospects, but only at the top of
+//          their revenue range, so they are ranked below tier A rather than cut.
+// TIER C — the maths does not work at any plausible revenue. Not searched.
+const CATEGORY_TIER = {
+  Roofing:'A', Restoration:'A', Foundation:'A', Solar:'A', 'Kitchen Remodel':'A',
+  'Bath Remodel':'A', 'Windows & Doors':'A', 'Pool Construction':'A', 'Home Builder':'A',
+  Construction:'A', Decks:'A', HVAC:'A', 'Med Spa':'A', 'Plastic Surgery':'A',
+  Dermatology:'A', Orthodontics:'A', 'Oral Surgery':'A', 'Cosmetic Dentistry':'A',
+  Fertility:'A', LASIK:'A', 'PI Law':'A',
+
+  Paving:'B', Concrete:'B', Masonry:'B', Hardscaping:'B', Flooring:'B', Plumbing:'B',
+  Electrical:'B', 'Pest Control':'B', Veterinary:'B', Dental:'B', 'Estate Law':'B',
+  Accounting:'B', Insurance:'B', 'Senior Care':'B', Chiropractic:'B',
+  // Both of these were cut in the first pass and both cuts were WRONG on the data.
+  // Insulation: the average residential spray-foam job is ~$5,500 at ~50% gross
+  // margin, whole-house runs $10-30k, and a single-rig operator does $800k-$1.2M
+  // with multi-rig firms reaching $3M. That is HVAC-class economics, not low-ticket.
+  Insulation:'B',
+  // Well & Septic: wells run $3,500-$15,000, septic $3,600-$12,500, and a combined
+  // rural install is $8,000-$30,000. Mid-ticket. The weaker argument against it is
+  // marketing dependence in thin rural markets — a reason to rank it below tier A,
+  // not a reason to refuse to look at it.
+  'Well & Septic':'B',
+
+  // Cut. Average ticket too low, or the work is won by bid and relationship rather
+  // than by inbound marketing, so nothing we sell moves their revenue.
+  'Tree Service':'C',      // $500-2k a job
+  'Garage Doors':'C',      // $300-700 average ticket
+  'Lawn Care':'C',         // $50-200/mo recurring
+  Signage:'C',             // B2B, low volume, relationship-won
+  Landscaping:'C',         // COMMERCIAL landscape contracts are won by bid, not by
+                           // inbound marketing. Hardscaping/design-build stays at B.
+  Excavation:'C',          // sub-contracted by builders — the buyer is a GC, not a
+                           // homeowner searching Google, so nothing we sell moves it
+  'Fire Protection':'C',   // B2B compliance work, won on bid and relationship
+  'Physical Therapy':'C',  // insurance-capped reimbursement caps what a visit is worth
+};
+// Set GP_INCLUDE_TIER_C=1 to search the cut trades again (e.g. to test the thesis).
+const GP_TIER_C_ON = process.env.GP_INCLUDE_TIER_C === '1';
+
 const GP_CATEGORIES = [
   // ── HIGH-TICKET CREW TRADES — a single job is $5k-$15k+, so any ESTABLISHED
   //    one is already crewed and past the ~$800k affordability bar. Best fit. ──
@@ -1254,7 +1321,14 @@ const searchGooglePlaces = async (placesKey) => {
   // company, which is what was happening.
   const PER_CAT_CAP = parseInt(process.env.GP_PER_CATEGORY_CAP || '6', 10);
   const grid = [];
-  for (const cat of GP_CATEGORIES) for (const city of GP_CITIES) grid.push({ cat, city });
+  // Skip the trades whose average job value cannot support the only products we
+  // sell. Every query we do not run is ~2 credits and a queue slot saved, and every
+  // tier-C lead we would have researched is ~10 more credits spent on a business
+  // that was never going to buy.
+  const _cats = GP_CATEGORIES.filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C');
+  const _cut = GP_CATEGORIES.length - _cats.length;
+  if (_cut) console.log(`ICP FILTER: searching ${_cats.length} of ${GP_CATEGORIES.length} categories — ${_cut} cut for average job value too low to fund a $10k+/mo retainer`);
+  for (const cat of _cats) for (const city of GP_CITIES) grid.push({ cat, city });
   // FISHER-YATES. The previous `grid.sort(() => Math.random() - 0.5)` is a well-known
   // broken shuffle: a comparator that returns random values violates the ordering
   // contract sort() relies on, so V8 leaves long runs of the original order intact.
@@ -6182,6 +6256,13 @@ const WEIGHTS = {
           // institutional name repeatedly did not. Free signal, large credit saving.
           const rp = predictReachability(c.name, c.website, { reviewCount: rv });
           base += (rp.score - 18) * 0.85;   // roughly -15 → +19 swing
+          // AFFORDABILITY TIER. A tier-A trade can pay for a retainer out of a
+          // couple of extra jobs; a tier-B one needs to be at the top of its
+          // revenue range first. Rank accordingly rather than treating a $60k pool
+          // build and a $600 garage door call as the same opportunity.
+          const _tier = CATEGORY_TIER[c.industry] || null;   // c.industry is set to cat.label at discovery
+          if (_tier === 'A') base += 7;
+          else if (_tier === 'C') base -= 25;
           c.reachPredict = rp.score; c.reachPredictWhy = rp.why;
           triage = Math.max(30, Math.min(Math.round(base), 97));
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
