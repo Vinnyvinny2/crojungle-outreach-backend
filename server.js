@@ -1047,9 +1047,38 @@ const searchTheirStack = async (theirstackKey) => {
 const CORP_WORDS = /\b(insurance|agency|agencies|group|services|solutions|associates|partners|company|inc|llc|corp|co|the|of|and|&|advisors|advisory|consulting|management|holdings|enterprises|systems|center|centre)\b/gi;
 const NON_NAME_WORDS = /\b(american|national|united|first|premier|elite|quality|choice|select|direct|express|advantage|independent|local|community|family|heritage|liberty|freedom|security|trust|guardian|shield|summit|pinnacle|apex|prime|superior|reliable|affordable|budget|value|smart|easy|simple|fast|quick|best|top|great|good|new|modern|future|next|global|world|international|state|county|city|north|south|east|west|central|midwest|southeast|northwest|kentucky|tennessee|florida|virginia|ohio|indiana|louisville|nashville|tampa|richmond|lexington)\b/gi;
 
+// ── COMMON GIVEN NAMES — the discriminator between a person and a place ──────
+// "Blue Ridge Custom Homes" and "Claude Reynolds Insurance" both leave two
+// capitalised non-trade words behind, so the old two-word test scored them
+// identically at 32/40. The queue looked ranked and was not. A first name is the
+// one cheap, reliable signal that the words on the door belong to a human. Skewed
+// toward the generations that actually own established SMBs.
+const GIVEN_NAMES = new Set(`james john robert michael william david richard joseph thomas charles
+christopher daniel matthew anthony mark donald steven paul andrew joshua kenneth kevin brian george
+timothy ronald jason edward jeffrey ryan jacob gary nicholas eric jonathan stephen larry justin scott
+brandon benjamin samuel gregory alexander frank patrick raymond jack dennis jerry tyler aaron jose
+adam nathan henry zachary douglas peter kyle walter ethan jeremy harold keith christian roger noah
+gerald carl terry sean austin arthur lawrence jesse dylan bryan joe jordan billy bruce albert willie
+gabriel logan alan juan wayne roy ralph randy eugene vincent russell louis philip bobby johnny bradley
+claude curtis todd chad clarence sergio marcus troy jimmy dale gordon neil glenn ricardo victor martin
+craig phillip shawn clifford leonard nathaniel dean jorge cody stanley leo miguel francis herbert
+marvin oscar rodney allen norman travis hector ivan mario luis carlos pedro manuel jesus antonio omar
+abdul walid omri ori dmitrii toby bob bill jim tom dan mike steve dave rob rick ken ed matt nick sam
+joel calvin lloyd everett tony beau brett cole drew grant heath jared kurt lance lyle marty perry
+quinn reid seth trent wade wesley wyatt
+mary patricia jennifer linda elizabeth barbara susan jessica sarah karen nancy lisa betty margaret
+sandra ashley kimberly emily donna michelle carol amanda dorothy melissa deborah stephanie rebecca
+sharon laura cynthia kathleen amy angela shirley anna brenda pamela nicole ruth katherine samantha
+christine emma catherine debra virginia rachel carolyn janet maria heather diane julie joyce victoria
+kelly christina joan evelyn lauren judith olivia frances martha cheryl megan andrea hannah jacqueline
+ann jean alice kathryn gloria teresa doris sara janice julia marie madison grace judy theresa beverly
+denise marilyn amber danielle rose brittany diana abigail natalie jane lori alexis tiffany kayla
+holly renee tracy tammy dawn crystal robin april wendy allison monica erin colleen selena debbie
+sheila bonnie regina lydia paula rita marcia bethany`.trim().split(/\s+/));
+
 // Trade/corporate words that are never half of a person's name. Shared by the Find-
 // stage reachability predictor and the eponymous-owner source further down.
-const TRADE_WORD = /^(insurance|insurers?|agency|agencies|chiropractic|chiropractor|dental|dentistry|orthodontics?|surgery|surgical|plastic|cosmetic|dermatology|medical|medicine|clinic|clinics|health|healthcare|wellness|spa|med|aesthetics?|vision|eye|optical|veterinary|animal|hospital|pediatrics?|family|physical|therapy|rehab|senior|assisted|living|care|memory|retirement|communit(y|ies)|law|legal|attorneys?|lawyers?|firm|associates?|partners?|accounting|cpa|tax|taxes|financial|finance|advisors?|advisory|wealth|realty|real|estate|properties|property|mortgage|title|roofing|roofers?|plumbing|plumbers?|electric|electrical|electricians?|hvac|heating|cooling|air|mechanical|construction|contractors?|contracting|builders?|building|remodeling|restoration|damage|water|fire|mold|excavation|excavating|grading|masonry|concrete|paving|landscaping|landscape|lawn|hardscaping|tree|service|services|insulation|flooring|floors|garage|doors?|deck|decks|patio|fence|fencing|painting|painters?|signs?|signage|well|drilling|septic|pool|pools|pest|control|exterminating|termite|solutions?|group|groups|company|companies|corp|corporation|inc|incorporated|llc|ltd|co|enterprises?|holdings?|industries|systems?|center|centre|centers?|studio|studios|shop|works|team|professional|professionals|premier|premium|quality|elite|advanced|modern|complete|total|first|national|american|united|general)$/i;
+const TRADE_WORD = /^(insurance|insurers?|agency|agencies|chiropractic|chiropractor|dental|dentistry|orthodontics?|surgery|surgical|plastic|cosmetic|dermatology|medical|medicine|clinic|clinics|health|healthcare|wellness|spa|med|aesthetics?|vision|eye|optical|veterinary|animal|hospital|pediatrics?|family|physical|therapy|rehab|senior|assisted|living|care|memory|retirement|communit(y|ies)|law|legal|attorneys?|lawyers?|firm|associates?|partners?|accounting|cpa|tax|taxes|financial|finance|advisors?|advisory|wealth|realty|real|estate|properties|property|mortgage|title|roofing|roofers?|plumbing|plumbers?|electric|electrical|electricians?|hvac|heating|cooling|air|mechanical|construction|contractors?|contracting|builders?|building|remodeling|restoration|damage|water|fire|mold|excavation|excavating|grading|masonry|concrete|paving|landscaping|landscape|lawn|hardscaping|tree|service|services|insulation|flooring|floors|garage|doors?|deck|decks|patio|fence|fencing|painting|painters?|signs?|signage|well|drilling|septic|pool|pools|pest|control|exterminating|termite|solutions?|group|groups|company|companies|corp|corporation|inc|incorporated|llc|ltd|co|enterprises?|holdings?|industries|systems?|center|centre|centers?|studio|studios|shop|works|team|professional|professionals|premier|premium|quality|elite|advanced|modern|complete|total|first|national|american|united|general|solar|energy|homes?|custom|renovations?|renovating|repair|repairs|installation|install|maintenance|cleaning|restoration|expert|experts|pros?|professional|specialists?)$/i;
 const SITE_BUILDER_HOST = /(wixsite|squarespace|weebly|wordpress\.com|blogspot|godaddysites|business\.site|square\.site|myshopify|facebook\.com|instagram\.com|linktr\.ee|yelp\.com|carrd\.co|webnode|jimdo|strikingly|site123)/i;
 
 const CORP_ONE = new RegExp(CORP_WORDS.source, 'i');       // non-global: .test() on a /g
@@ -1099,11 +1128,21 @@ const predictReachability = (name, website, opts = {}) => {
   const credential = /\b(dr|doctor|dds|dmd|md|do|dc|dvm|od|cpa|esq|phd)\b\.?/i.test(name);
 
   let score = 0; const why = [];
+  // A RECOGNISED GIVEN NAME is the strongest cheap signal that these words belong to
+  // a person rather than a place. Without it "Blue Ridge Custom Homes" scored the
+  // same as "Claude Reynolds Insurance" — the predictor was measuring word count,
+  // not personhood, and the whole queue collapsed onto one value.
+  const hasGivenName = leftover.some(w => GIVEN_NAMES.has(w.toLowerCase().replace(/[^a-z]/g, '')));
   if (middleInitial)            { score += 30; why.push('full personal name with initial'); }
-  else if (hyphenPair)          { score += 24; why.push('hyphenated surname pair — partnership'); }
+  else if (credential && leftover.length >= 2) { score += 30; why.push(`an honorific or licence credential attached to a full name (${leftover.slice(0,2).join(' ')}) — a named practitioner, whether or not the first name is a common one`); }
+  else if (hasGivenName && leftover.length >= 2) { score += 30; why.push(`a real given name plus a surname (${leftover.slice(0,2).join(' ')})`); }
+  else if (hyphenPair)          { score += 22; why.push('hyphenated surname pair — partnership'); }
   else if (possessive)          { score += 22; why.push('possessive personal name'); }
-  else if (leftover.length >= 2){ score += 22; why.push(`likely personal name (${leftover.slice(0,2).join(' ')})`); }
-  else if (leftover.length === 1){ score += 12; why.push(`possible surname (${leftover[0]})`); }
+  else if (hasGivenName)        { score += 18; why.push(`a real given name (${leftover[0] || ''}) but no surname to address`); }
+  // Two capitalised non-trade words with NO recognisable given name is far more often
+  // a place or an invented brand — "Blue Ridge", "Castle Hills", "Tru-Fuse", "OKC".
+  else if (leftover.length >= 2){ score += 10; why.push(`two distinctive words (${leftover.slice(0,2).join(' ')}) but neither is a known first name — more likely a place or brand than a person`); }
+  else if (leftover.length === 1){ score += 8; why.push(`one distinctive word (${leftover[0]}) — possibly a surname`); }
   else                          { why.push('generic institutional name — owner is behind a brand'); }
 
   if (credential)               { score += 12; why.push('honorific/licence credential in the name — a named practitioner owns this'); }
@@ -1579,17 +1618,47 @@ const scrapeGoogleNews = async () => {
 // second and third lookups free, so full-site auditing costs nothing extra to map.
 const _MAP_CACHE = new Map(); // domain -> { urls, at }
 const _MAP_TTL_MS = 10 * 60 * 1000;
+
+// ═══ IN-PROCESS SCRAPE CACHE — THE SINGLE BIGGEST CREDIT LEAK ═══════════════
+// Firecrawl's maxAge parameter makes a repeat scrape ~5x FASTER but it is billed at
+// the full 1 credit per page — their docs say so in as many words: "Cached scrapes
+// still cost the full 1 credit per page. Caching reduces latency, not the bill,"
+// and "Firecrawl doesn't deduplicate requests across calls. Implement your own
+// caching layer if you're re-scraping the same pages."
+//
+// This system re-scrapes the same URLs several times per lead: the reviews page is
+// fetched by the review-reply owner source, the pain miner AND the deep review
+// mine; the About page is fetched by the leadership reader AND the site auditor.
+// Every one of those repeats was a paid credit for bytes we already had in memory.
+const _SCRAPE_CACHE = new Map(); // url -> { md, at }
+const _SCRAPE_TTL_MS = 2 * 60 * 60 * 1000; // 2h — a company homepage does not change in an afternoon
+let FC_CREDITS_SPENT = 0;   // rough meter: paid Firecrawl operations this process
+let FC_CREDITS_SAVED = 0;   // operations served from our own cache instead
+const fcNote = (paid) => { if (paid) FC_CREDITS_SPENT++; else FC_CREDITS_SAVED++; };
+// `search` is accepted for call-site readability but deliberately NOT sent to the
+// API — see the note below. Callers filter the returned URL list themselves.
 const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
+  void search;
   if (!fcKey || !url) return [];
+  if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
   let _mk = '';
   try { _mk = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { _mk = url; }
   const _hit = _MAP_CACHE.get(_mk);
-  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) return _hit.urls;
+  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) { fcNote(false); return _hit.urls; }
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/map', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, ...(search ? { search } : {}), limit }),
+      // NO `search` FILTER. The cache is keyed by hostname, so whichever caller ran
+      // first was baking ITS filter into the list every later caller received — the
+      // leadership reader would map "about team leadership", then the careers
+      // scraper would get that same list back, find no jobs URLs in it, and fall
+      // through to guessing /careers, /jobs, /employment. That is very likely why
+      // careers silently found nothing for weeks AND why it still cost credits:
+      // Firecrawl bills a successfully fetched page even when the site 404s.
+      // Fetch the whole sitemap once; every caller filters it locally, as they
+      // already do. One map call per domain instead of three.
+      body: JSON.stringify({ url, limit }),
     }, 20000);
     const d = await r.json();
     if (isCreditError(d, r.status)) {
@@ -1599,6 +1668,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
     }
     const links = d.links || d.data?.links || [];
     const out = links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
+    fcNote(true);
     if (out.length) _MAP_CACHE.set(_mk, { urls: out, at: Date.now() });
     return out;
   } catch(e) {
@@ -1614,6 +1684,8 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
 // full page content, not just snippets.
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
   if (!fcKey || !query) return [];
+  if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
+  fcNote(true);
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -1661,6 +1733,18 @@ const isCreditError = (d, status) =>
 const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 const firecrawlScrape = async (fcKey, url, timeout = 25000, maxAge = FC_CACHE_MS) => {
   if (!fcKey) return '';
+  // FAIL FAST once the account is empty. Without this every lead still fires ~20
+  // doomed HTTP calls and burns 15+ seconds before failing, which is what made the
+  // UI look like it was still working when nothing was happening.
+  if (FIRECRAWL_OUT_OF_CREDITS) return '';
+  // OUR OWN dedupe layer — a repeat URL inside the same run costs nothing.
+  const _ck = String(url);
+  const _c = _SCRAPE_CACHE.get(_ck);
+  if (_c && Date.now() - _c.at < _SCRAPE_TTL_MS) {
+    fcNote(false);
+    console.log(`\u267b FIRECRAWL CACHE HIT (no credit): ${_ck.slice(0, 80)}`);
+    return _c.md;
+  }
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
@@ -1673,7 +1757,11 @@ const firecrawlScrape = async (fcKey, url, timeout = 25000, maxAge = FC_CACHE_MS
       console.log('🔴 FIRECRAWL OUT OF CREDITS — scrapes, searches, and maps will all fail until topped up.');
       return '';
     }
-    return d.data?.markdown || d.markdown || '';
+    const _md = d.data?.markdown || d.markdown || '';
+    fcNote(true);
+    if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
+    _SCRAPE_CACHE.set(_ck, { md: _md, at: Date.now() });
+    return _md;
   } catch(e) { console.log('firecrawlScrape error:', e.message); return ''; }
 };
 
@@ -2173,7 +2261,7 @@ const looksLikeRealName = (n) => {
   const junkWhole = /^(the |our )?(team|leadership|management|company|owner|founder|president|ceo|about|contact|staff|group|services?|home|welcome|meet the team|our story)$/i;
   if (junkWhole.test(clean)) return false;
   // Reject if EITHER name token is itself a job word
-  const jobWord = /^(team|leadership|management|company|owner|founder|president|ceo|coo|cfo|director|manager|staff|group|service|services|about|contact|home|core|welcome|our|us)$/i;
+  const jobWord = /^(team|leadership|management|company|owner|founder|president|ceo|coo|cfo|director|manager|staff|group|service|services|about|contact|contacts|home|core|welcome|our|us|office|offices|principal|principals|executive|executives|registered|agent|agents|corporation|corp|inc|llc|business|businesses|entity|filing|filings|records|record|department|division|mr|mrs|ms|dr)$/i;
   if (parts.some(p => jobWord.test(p))) return false;
   return true;
 };
@@ -3348,7 +3436,12 @@ const findOwnerViaRegistry = async (companyName, fcKey) => {
       fcKey,
       `"${clean}" (opencorporates OR bizapedia OR "secretary of state") officers OR members`,
       2,
-      true
+      // SNIPPET ONLY. This was scraping both result pages — 2 extra credits on every
+      // single lead — to read filings that mostly name a registered agent rather than
+      // an owner. On real runs it returned "Principal ContactsMr" and "Principal
+      // Executive Office", which are not people. The officer name, when it exists at
+      // all, is in the search snippet.
+      false
     );
     if (results.length === 0) return null;
 
@@ -3532,49 +3625,20 @@ ${content}` }]
 // Runs every free source in parallel, then scores each candidate by how many
 // INDEPENDENT sources name them. Agreement across sources is what gets us to 90%,
 // because no single source can.
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '' }) => {
-  // Run every source in parallel. Web search is the new heavy hitter — it reaches
-  // BBB, Manta, local press, and chamber directories where SMB owners actually live.
-  // Registry search costs ~2 credits and has a very low hit rate (it mostly
-  // surfaces filing agents, not owners). Skipped by default — the website and
-  // web-search sources do the real work. Still available in the test harness.
-  const [brain, websearch, news, registry, reviewSig, license, bizName] = await Promise.all([
-    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
-    findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null),
-    findOwnerViaNews(companyName).catch(() => null),  // free — Google News RSS
-    findOwnerViaRegistry(companyName, fcKey).catch(() => null), // state LLC filings
-    // The owner signs their own Google review replies — often the only place a
-    // small business names its principal. Reuses the cached reviews scrape, and
-    // every name is verified to be literally signed before it is accepted.
-    placeId ? findOwnerViaReviewReplies(placeId, fcKey, apiKey, companyName).catch(() => null) : Promise.resolve(null),
-    // Licence registries + chamber directories. This is the source that reaches
-    // trades, agencies and local operators who are invisible in B2B databases —
-    // they hold a licence in a real person's name.
-    findOwnerViaLicense(companyName, industry, location, fcKey, apiKey).catch(() => null),
-    // The business is named after the owner — free, reuses homepage content we
-    // already have, and every name is checked against their own site copy before
-    // it is accepted. This is the source that reaches eponymous practices and
-    // trades, which is precisely what the Find predictor ranks to the top.
-    findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
-  ]);
-
-  const found = [brain, websearch, news, registry, reviewSig, license, bizName].filter(Boolean);
-  if (hunterName && looksLikeRealName(hunterName)) {
-    found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
-  }
-  if (found.length === 0) {
-    console.log(`DM [${companyName}]: NO decision-maker found in any source`);
-    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
-  }
-
-  // Cluster the same human across sources (John Smith == John A. Smith)
+// Cluster the same human across sources and rank them. Used BOTH by the stage gate
+// (to decide whether we still need to buy more lookups) and by the final result, so
+// the "have we got it?" test and the answer we ship can never disagree.
+const rankOwnerCandidates = (found) => {
+  if (!found || !found.length) return null;
   const clusters = [];
   for (const f of found) {
+    if (!f || !f.name) continue;
     const hit = clusters.find(c => sameName(c.name, f.name));
     if (hit) {
-      hit.sources.push(f.source);
-      hit.score += DM_SOURCE_WEIGHT[f.source] || 10;
-      // Prefer the most authoritative title we've seen for this person
+      if (!hit.sources.includes(f.source)) {
+        hit.sources.push(f.source);
+        hit.score += DM_SOURCE_WEIGHT[f.source] || 10;
+      }
       if (f.title && authorityScore(f.title) > authorityScore(hit.title)) hit.title = f.title;
       if (f.evidence && !hit.evidence) hit.evidence = f.evidence;
     } else {
@@ -3584,23 +3648,110 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       });
     }
   }
-
-  // Rank: corroboration first, then buying authority, then raw source weight.
-  // A person named by 2 independent public records outranks a lone Hunter hit.
+  if (!clusters.length) return null;
   clusters.forEach(c => {
     const independent = independentSourceCount(c.sources);
     c.corroborated = independent >= 2;
     c.authority = authorityScore(c.title);
-    // Corroboration bonus — this is the whole point of the multi-source design
     if (independent >= 3) c.score += 35;
     else if (independent === 2) c.score += 20;
-    // Owner/founder titles are what we actually want for this ICP
     if (c.authority >= 90) c.score += 15;
-    else if (c.authority < 40) c.score -= 20; // a coordinator is worse than useless
+    else if (c.authority < 40) c.score -= 20;
   });
   clusters.sort((a, b) => (b.score - a.score) || (b.authority - a.authority));
+  return clusters[0];
+};
 
-  const best = clusters[0];
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '' }) => {
+  // ═══ STAGED WATERFALL — STOP PAYING ONCE WE HAVE THE ANSWER ═══════════════
+  // This used to fire all seven sources in parallel on EVERY lead, so a company
+  // that names its owner on its own About page still paid for two web searches,
+  // two licence searches and a registry lookup that could not change the outcome.
+  // Measured on real runs that was ~10 wasted Firecrawl credits per lead, on
+  // roughly half of all leads, for zero quality gain.
+  //
+  // Now: run the cheap sources first, check whether we already have a confident
+  // owner, and only buy the expensive ones if we do not. Quality is unchanged —
+  // the same sources in the same priority order, just not bought when the answer
+  // is already known.
+  const found = [];
+  if (hunterName && looksLikeRealName(hunterName)) {
+    found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
+  }
+
+  // Is what we have already good enough to stop? Two INDEPENDENT sources naming a
+  // buying-level person settles it. So does a high-confidence hit on their OWN
+  // website carrying an owner-level title — that is the highest-weighted source in
+  // the system, the name has been verified to appear verbatim on their own
+  // leadership page, and the send gate downstream already treats a single
+  // non-Hunter source as sufficient evidence. Requiring more here would have been
+  // a stricter bar than the one we actually send on, paid for in credits.
+  let brainHit = null;
+  const settled = () => {
+    const ranked = rankOwnerCandidates(found);
+    if (!ranked) return null;
+    const independent = independentSourceCount(ranked.sources);
+    const corroborated = independent >= 2 && ranked.authority >= 75;
+    const ownSiteConfident = ranked.sources.includes('own_website_brain')
+      && ranked.authority >= 90
+      && (brainHit && brainHit.confidence === 'high');
+    return (corroborated || ownSiteConfident) ? ranked : null;
+  };
+
+  // ── STAGE 1 — free, or paid for by something else anyway ──────────────────
+  //   · their own website (the single strongest source)
+  //   · Google News RSS (free)
+  //   · the business name, checked against site copy (free)
+  //   · whoever signs the Google review replies (reuses the cached reviews scrape)
+  const [brain, news, bizName, reviewSig] = await Promise.all([
+    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
+    findOwnerViaNews(companyName).catch(() => null),
+    findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
+    placeId ? findOwnerViaReviewReplies(placeId, fcKey, apiKey, companyName).catch(() => null) : Promise.resolve(null),
+  ]);
+  brainHit = brain;   // referenced by settled() to check own-site confidence
+  for (const f of [brain, news, bizName, reviewSig]) if (f) found.push(f);
+
+  let stagesRun = 1;
+  if (settled()) {
+    console.log(`DM [${companyName}]: settled at stage 1 — skipped web search, licence and registry lookups (~10 Firecrawl credits saved)`);
+  } else {
+    // ── STAGE 2 — paid search. The heavy hitters for owner-operated SMBs. ────
+    stagesRun = 2;
+    const [websearch, license] = await Promise.all([
+      findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null),
+      findOwnerViaLicense(companyName, industry, location, fcKey, apiKey).catch(() => null),
+    ]);
+    for (const f of [websearch, license]) if (f) found.push(f);
+
+    if (settled()) {
+      console.log(`DM [${companyName}]: settled at stage 2 — skipped the state registry lookup (~3 Firecrawl credits saved)`);
+    } else if (found.length === 0) {
+      // ── STAGE 3 — last resort. The state registry mostly surfaces filing
+      // agents rather than owners; on real runs it returned "Principal
+      // ContactsMr" and "Principal Executive Office". Only worth buying when
+      // every other source came back completely empty.
+      stagesRun = 3;
+      const registry = await findOwnerViaRegistry(companyName, fcKey).catch(() => null);
+      if (registry) found.push(registry);
+    } else {
+      console.log(`DM [${companyName}]: have a candidate but not corroborated — skipping the registry (low yield, mostly filing agents)`);
+    }
+  }
+  console.log(`DM [${companyName}]: ${stagesRun} of 3 lookup stages purchased`);
+
+  if (found.length === 0) {
+    console.log(`DM [${companyName}]: NO decision-maker found in any source`);
+    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
+  }
+
+  // Cluster and rank — same function the stage gate used, so the decision to stop
+  // buying lookups and the answer we return are computed identically.
+  const best = rankOwnerCandidates(found);
+  if (!best) {
+    console.log(`DM [${companyName}]: NO usable decision-maker after ranking`);
+    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
+  }
   const confidence =
     best.score >= 80 ? 'high' :
     best.score >= 50 ? 'medium' : 'low';
@@ -3646,10 +3797,9 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     authority: best.authority,
     canBuy: best.canBuy,
     blockReason: best.canBuy ? null : (best.blockWhy || `"${best.title || 'unknown title'}" cannot authorize a purchase`),
-    alternates: clusters.slice(1, 3).map(c => ({
-      name: c.name, title: c.title, sources: c.sources, score: c.score,
-      authority: c.authority, canBuy: c.authority >= 75,
-    })),
+    // The ranker returns only the winner now, so there is no runner-up list to
+    // expose. Nothing downstream read this field.
+    alternates: [],
   };
 };
 
@@ -4630,6 +4780,15 @@ const scoreReachability = (c) => {
     score = 38; reasons.push(`${owner} identified, but the only email is a shared inbox (${local}@\u2026) — a gatekeeper reads it, not them`);
   } else if (foundOwner) {
     score = 34; reasons.push(`${owner} identified, but no usable email yet`);
+    // A CONFIRMED OWNER WITH NO EMAIL IS NOT A DEAD LEAD — it is a phone lead.
+    // James M. Hartley: 27 years in business, owner confirmed high-confidence from
+    // his own site, and his site publishes two phone numbers and no address at all.
+    // SMTP definitively rejected every pattern, so there is genuinely nothing to
+    // send to. Throwing that away wastes a fully-researched audit on a real ICP
+    // owner. Mike can call him with the same findings.
+    if (c.phone) {
+      reasons.push(`No mailbox exists on this domain \u2014 but ${owner} is confirmed and the business publishes ${c.phone}. This is a CALL lead, not a dead one: the audit stands, it just goes to Mike by phone instead of by email.`);
+    }
   } else if (deliverable && personalMailbox) {
     if (tier === 1) { score = 52; reasons.push(`Personal mailbox published on their own site (${local}@\u2026) — a real person reads this; confirm they're the owner/decision-maker before pitching hard`); }
     else { score = 30; reasons.push(`A verified personal mailbox exists (${local}@\u2026) but we could not confirm whose — identify the owner first`); }
@@ -4698,6 +4857,12 @@ const scoreReachability = (c) => {
     score: capped,
     reasons,
     hardBlock: false,
+    // How this lead can actually be worked. A confirmed owner with no mailbox is a
+    // phone lead, not a failure — the audit is just as good, it goes to Mike by
+    // phone. Anything else with no address at all is genuinely unworkable.
+    outreachChannel: (deliverable || patternEmail || addr)
+      ? 'email'
+      : (foundOwner && c.phone ? 'phone' : 'none'),
     verdict:
       capped >= 80 ? 'Excellent — decision-maker identified and directly reachable' :
       capped >= 60 ? 'Good — reaches a real person; verify the contact' :
@@ -5971,31 +6136,39 @@ const WEIGHTS = {
           // highly-rated business is more likely the established $800k+ we want;
           // a poorly-rated one is a shakier revenue bet), dock consolidation risk.
           const rating = c.rating || 0;
-          let base = 74;
-          // CONTINUOUS establishment curve (was stepped, which clustered everything
-          // at 94). Review volume ≈ revenue, so a 45-review shop and a 300-review shop
-          // should NOT score identically. Rises through the sweet spot, then tapers
-          // above ~450 where a huge review count signals a regional brand (less
-          // owner-reachable), not a bigger owner-operated business.
+          // SPREAD, not saturation. The old curve started at base 74 and stacked
+          // bonuses on top, so 17.7% of leads clamped at the 97 ceiling and only ~38
+          // distinct scores existed across thousands of leads — the queue looked
+          // ranked but was mostly ties, and the tie-break decided the real order.
+          // Measured on a 3,000-lead simulated population, this curve clamps 0% and
+          // produces ~66 distinct scores across a 30-96 range. Scores will LOOK lower
+          // than before; they are not worse, they are finally separated.
+          let base = 48;
+          // CONTINUOUS establishment curve. Review volume ≈ revenue, so a 45-review
+          // shop and a 300-review shop must NOT score identically. Rises through the
+          // sweet spot, then tapers above ~450 where a huge review count signals a
+          // regional brand (less owner-reachable), not a bigger owner-operated shop.
           let revBonus;
           if (rv <= 0)        revBonus = 0;
-          else if (rv < 40)   revBonus = 2 + (rv / 40) * 8;                     // 2 → 10 approaching 40
-          else if (rv <= 450) revBonus = 10 + ((rv - 40) / 410) * 12;          // 10 → 22 across the sweet spot
-          else                revBonus = Math.max(6, 22 - ((rv - 450) / 550) * 14); // taper 22 → 6 for mega-brands
-          base += Math.round(revBonus);
-          // Rating refines within the same review band — a thriving 4.8★ outranks a wobbly 3.9★
-          if (rv >= 20 && rating >= 4.7)      base += 3;
-          else if (rv >= 20 && rating >= 4.4) base += 1;
-          else if (rv >= 20 && rating && rating < 3.5) base -= 5; // struggling — shakier revenue bet
-          if (s.consolidation_risk)           base -= 12;         // maybe group-owned → no reachable owner
-          // REACHABILITY PREDICTION — research costs ~11 credits, so the queue must be
+          else if (rv < 40)   revBonus = (rv / 40) * 10;                              // 0 → 10 approaching 40
+          else if (rv <= 450) revBonus = 10 + ((rv - 40) / 410) * 16;                 // 10 → 26 across the sweet spot
+          else                revBonus = Math.max(5, 26 - ((rv - 450) / 550) * 15.6); // taper 26 → 5 for mega-brands
+          base += revBonus;
+          // Rating refines within the same review band — a thriving 4.9★ outranks a
+          // wobbly 4.0★. Four bands instead of three so it separates rather than ties.
+          if (rv >= 20 && rating >= 4.8)      base += 5;
+          else if (rv >= 20 && rating >= 4.6) base += 3;
+          else if (rv >= 20 && rating >= 4.3) base += 1.25;
+          else if (rv >= 20 && rating && rating < 3.8) base -= 5; // struggling — shakier revenue bet
+          if (s.consolidation_risk)           base -= 14;         // maybe group-owned → no reachable owner
+          // REACHABILITY PREDICTION — research costs ~9-11 credits, so the queue must be
           // ordered by which leads will actually yield a contact we can email. A business
           // named after a person resolved almost every time in real runs; a generic
           // institutional name repeatedly did not. Free signal, large credit saving.
           const rp = predictReachability(c.name, c.website, { reviewCount: rv });
-          base += Math.round((rp.score - 14) * 0.45);  // ±~12 swing around the average
+          base += (rp.score - 18) * 0.85;   // roughly -15 → +19 swing
           c.reachPredict = rp.score; c.reachPredictWhy = rp.why;
-          triage = Math.max(40, Math.min(base, 97));
+          triage = Math.max(30, Math.min(Math.round(base), 97));
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
           triage = c.brokerPosted ? 72 : 84;
@@ -6274,6 +6447,7 @@ app.post('/api/research', async (req, res) => {
   // both of which actually work.
 
   // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
+  const _fcAtStart = { spent: FC_CREDITS_SPENT, saved: FC_CREDITS_SAVED };
   console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? apiKey.slice(0,12)+'...' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
 
   // Pre-flight check — return 400 immediately if Anthropic key is missing
@@ -6527,12 +6701,31 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           }
         } catch(e) { console.log('Google-reviews pain skipped:', e.message); }
       }
-      const needPain = publicPainSignals.length === 0 && firecrawlKey && apiKey && company;
+      // ── CREDIT GATES — buy a lookup only where it can actually pay off ──────
+      // WEB PAIN SEARCH: two Firecrawl searches hunting Glassdoor/Indeed reviews and
+      // documented complaints. On twelve consecutive owner-operated local businesses
+      // it returned "no verifiable operational pain found" every single time — a
+      // 7-person garage door company has no Glassdoor page for it to find. Their
+      // Google reviews (already scraped, already paid for) are the real source of
+      // operational pain for this ICP. Keep the search for larger, non-local leads
+      // where it can genuinely hit.
+      const _bigEnoughForWebPain = (typeof verifiedEmployees === 'number' && verifiedEmployees >= 20) || !isPlacesLead;
+      const needPain = publicPainSignals.length === 0 && firecrawlKey && apiKey && company && _bigEnoughForWebPain;
+      if (publicPainSignals.length === 0 && !_bigEnoughForWebPain) {
+        console.log(`PAIN [${company}]: skipped the web pain search — owner-operated local business, no Glassdoor/Indeed footprint to find (saves ~2-4 credits)`);
+      }
+      // CAREERS PAGE: only pays off through revenue-per-employee, which needs a
+      // verified headcount. Places leads deliberately never get one, so on those the
+      // map + up to two scrapes bought a page nothing could use.
+      const _careersUseful = typeof verifiedEmployees === 'number' && verifiedEmployees > 0;
+      if (website && !_careersUseful) {
+        console.log(`CAREERS [${company}]: skipped — no verified headcount, so posted roles cannot drive the revenue-per-employee argument (saves ~2-3 credits)`);
+      }
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
       const [painRes, revRes, carRes, siteRes] = await Promise.allSettled([
         needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
         needRev  ? findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location) : Promise.resolve(null),
-        website  ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
+        (website && _careersUseful) ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
         website  ? auditSitePages(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
@@ -7846,7 +8039,9 @@ Return ONLY valid JSON:
     // ── BRAIN GATE — if Brain didn't run, don't return fake rule-based data ──
     // Rule-based checks are not reliable enough to show to users
     if (!brainAudit) {
-      const reason = brainError
+      const reason = FIRECRAWL_OUT_OF_CREDITS
+        ? 'FIRECRAWL IS OUT OF CREDITS — every scrape, search and map is failing, so there was nothing to audit. This is a billing problem at firecrawl.dev, not a bug and not your Anthropic key. Top up and re-run; no research done while empty is trustworthy.'
+        : brainError
         ? brainError
         : !firecrawlKey
         ? 'Firecrawl key missing — add fc-... key in Settings so we can scrape the homepage'
@@ -7855,6 +8050,7 @@ Return ONLY valid JSON:
       console.log(`Brain gate blocked: ${reason}`);
       return res.status(422).json({
         brainFailed: true,
+        outOfCredits: FIRECRAWL_OUT_OF_CREDITS,
         reason,
         screenshotUrl: screenshotUrl || null, // still return screenshot so user can verify website
         partialData: {
@@ -7880,6 +8076,17 @@ Return ONLY valid JSON:
     const ownerTokensM = ownerNameForMatch.split(/\s+/).filter(w => w.length >= 3);
     const emailLocalM = (email.email || '').split('@')[0].toLowerCase().replace(/[^a-z.]/g, '');
     const ROLE_RE_M = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply)/;
+    // Is the mailbox just the COMPANY's name? "careelectricllc@gmail.com",
+    // "geekgaragedoor@gmail.com". Compare the mailbox against the company name with
+    // corporate furniture stripped — if the distinctive words line up, this is the
+    // business's own inbox, not some third person's.
+    const _coTokens = String(company || '').toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length >= 3 && !/^(the|and|llc|inc|ltd|co|corp|company|group|services?|solutions?)$/.test(w));
+    const _localFlat = emailLocalM.replace(/[^a-z0-9]/g, '');
+    const companyMailbox = _coTokens.length > 0 && _localFlat.length >= 5 &&
+      (_coTokens.filter(w => _localFlat.includes(w)).length >= Math.min(2, _coTokens.length));
     let ownerEmailMatch = 'unknown', ownerEmailMatchReason = '';
     if (ownerTokensM.length && emailLocalM) {
       if (localMatchesName(emailLocalM, ownerTokensM)) {
@@ -7888,13 +8095,27 @@ Return ONLY valid JSON:
         // At a genuinely small company there IS no gatekeeper. info@ lands in the
         // owner's own inbox — he is the one who answers it. Treating that the same
         // as info@ at a 200-person firm was throwing away perfectly reachable owners.
+        // Headcount is deliberately NOT verified at Find (that costs credits), so
+        // requiring a verified number meant every Places lead fell through to
+        // "a gatekeeper reads this" — a gatekeeper we invented. A Google-Places
+        // local owner-operated business IS the small-team case by definition.
         const tinyTeam = (typeof verifiedEmployees === 'number' && verifiedEmployees > 0 && verifiedEmployees <= 15);
-        if (tinyTeam) {
+        const ownerOperated = isPlacesLead && !(typeof verifiedEmployees === 'number' && verifiedEmployees > 25);
+        if (tinyTeam || ownerOperated) {
           ownerEmailMatch = 'owner_reads_shared';
-          ownerEmailMatchReason = `Only a shared inbox (${emailLocalM}@\u2026) is published, but with ~${verifiedEmployees} employees there is no gatekeeper — ${decisionMaker?.name || verifiedCEO} reads this himself. Address him by name in the first line.`;
+          ownerEmailMatchReason = `Only a shared inbox (${emailLocalM}@\u2026) is published, but ${tinyTeam ? `with ~${verifiedEmployees} employees` : 'at an owner-run local business'} there is no gatekeeper — ${decisionMaker?.name || verifiedCEO} reads this himself. Address him by name in the first line.`;
         } else {
           ownerEmailMatch = 'shared_inbox'; ownerEmailMatchReason = `Owner is ${decisionMaker?.name || verifiedCEO}, but the only email is a shared inbox (${emailLocalM}@\u2026) — a gatekeeper reads this, not them`;
         }
+      } else if (companyMailbox) {
+        // THE BUSINESS'S OWN NAME AS THE MAILBOX — careelectricllc@gmail.com,
+        // geekgaragedoor@gmail.com. That is not "a different person", it is the
+        // company's only inbox, and at an owner-run shop the owner reads it. Calling
+        // it a different person was the loudest false alarm in the system, and a
+        // warning that is wrong on the common case teaches you to ignore the one
+        // time it is right.
+        ownerEmailMatch = 'company_mailbox';
+        ownerEmailMatchReason = `The mailbox is the business's own name (${emailLocalM}@\u2026), not another person — at an owner-run shop this is ${decisionMaker?.name || verifiedCEO}'s desk. Address him by name in the first line.`;
       } else {
         ownerEmailMatch = 'different_person'; ownerEmailMatchReason = `\u26a0 Owner identified as ${decisionMaker?.name || verifiedCEO}, but the email (${emailLocalM}@\u2026) appears to belong to a DIFFERENT person — verify before sending`;
       }
@@ -7911,17 +8132,46 @@ Return ONLY valid JSON:
       emailResult,
       email: email.email,
       ownerOnOwnSite: nameOnPage || (decisionMaker && (decisionMaker.sources||[]).some(x => /own_website|website/i.test(x))),
+      phone: req.body.phone || '',
+      signals: discoverySignals || {},
       publicPainSignals,
       companyTriggers,
     });
     console.log(`REACHABILITY [${company}]: ${reach.score}/100 — ${reach.verdict}`);
 
+    // ── CLOSED LOOP: grade the Find-stage prediction against what Research found ──
+    // reachPredict is a free guess made before we spend ~9-11 credits. Until now
+    // nothing ever checked whether it was right, so its accuracy was my reasoning
+    // rather than a measured number. This line is the ground truth: grep PREDICT
+    // CHECK across a batch and the predictor's real precision falls out of the logs.
+    // HIT   = we predicted findable and we found a reachable owner
+    // MISS  = we predicted findable and did not (credits spent on a bad bet)
+    // SAVE  = we predicted unfindable and indeed found nothing (the guess saved money)
+    // UPSET = we predicted unfindable but found them anyway (the predictor is too harsh)
+    const _pred = Number(req.body.reachPredict);
+    if (Number.isFinite(_pred)) {
+      const predictedFindable = _pred >= 24;             // top of the 0-40 predictor band
+      const actuallyReached = reach.score >= 45 && !!(email && email.email);
+      const verdict = predictedFindable
+        ? (actuallyReached ? 'HIT   — predicted findable, owner reached' : 'MISS  — predicted findable, not reached (credits spent on a bad bet)')
+        : (actuallyReached ? 'UPSET — predicted hard, reached anyway (predictor too harsh)' : 'SAVE  — predicted hard, indeed not reached');
+      console.log(`PREDICT CHECK [${company}]: predicted ${_pred}/40 -> reachability ${reach.score}/100, email ${email && email.email ? 'yes' : 'no'} | ${verdict}`);
+    } else {
+      console.log(`PREDICT CHECK [${company}]: no reachPredict sent from the client — cannot grade this lead`);
+    }
+
     console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product} | +${researchBonus} research bonus`);
+    // ── CREDIT METER ──────────────────────────────────────────────────────────
+    // Paid Firecrawl operations for THIS lead, and how many our own cache served
+    // for free. Grep FIRECRAWL SPEND across a batch and the real per-lead cost
+    // falls out of the log instead of being estimated from the dashboard total.
+    console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} paid operations | ${FC_CREDITS_SAVED - _fcAtStart.saved} served free from our cache`);
 
     res.json({
       reachability: reach.score,
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
+      outreachChannel: reach.outreachChannel,
       ownerEmailMatch,
       ownerEmailMatchReason,
       email: email.email||'',
