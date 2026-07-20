@@ -1634,7 +1634,18 @@ const _SCRAPE_CACHE = new Map(); // url -> { md, at }
 const _SCRAPE_TTL_MS = 2 * 60 * 60 * 1000; // 2h — a company homepage does not change in an afternoon
 let FC_CREDITS_SPENT = 0;   // rough meter: paid Firecrawl operations this process
 let FC_CREDITS_SAVED = 0;   // operations served from our own cache instead
-const fcNote = (paid) => { if (paid) FC_CREDITS_SPENT++; else FC_CREDITS_SAVED++; };
+// Every PAID operation is logged with what it actually bought. "~30 operations" is
+// not actionable; a list of thirty URLs and queries is. Grep FC PAID for one company
+// and the entire bill is itemised in order, so cuts are made against evidence rather
+// than against a model of where the credits probably went.
+const fcNote = (paid, kind, what) => {
+  if (paid) {
+    FC_CREDITS_SPENT++;
+    console.log(`FC PAID [${kind}] ${String(what || '').slice(0, 110)}`);
+  } else {
+    FC_CREDITS_SAVED++;
+  }
+};
 // `search` is accepted for call-site readability but deliberately NOT sent to the
 // API — see the note below. Callers filter the returned URL list themselves.
 const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
@@ -1644,7 +1655,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
   let _mk = '';
   try { _mk = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { _mk = url; }
   const _hit = _MAP_CACHE.get(_mk);
-  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) { fcNote(false); return _hit.urls; }
+  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) { fcNote(false, 'map', _mk); return _hit.urls; }
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/map', {
       method: 'POST',
@@ -1668,7 +1679,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
     }
     const links = d.links || d.data?.links || [];
     const out = links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
-    fcNote(true);
+    fcNote(true, 'map', _mk);
     if (out.length) _MAP_CACHE.set(_mk, { urls: out, at: Date.now() });
     return out;
   } catch(e) {
@@ -1685,7 +1696,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
   if (!fcKey || !query) return [];
   if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
-  fcNote(true);
+  fcNote(true, `search x${limit}`, query);
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -1731,7 +1742,11 @@ const isCreditError = (d, status) =>
 // do not change hour to hour, so a 2-day window is safe and makes re-research nearly
 // instant. Pass a shorter window for anything genuinely time-sensitive.
 const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
-const firecrawlScrape = async (fcKey, url, timeout = 25000, maxAge = FC_CACHE_MS) => {
+// TIMEOUT = PAYING TWICE. Aborting on our side does not cancel Firecrawl's fetch —
+// they finish it and bill it, we discard the bytes, and then the retry buys the same
+// page again. Real runs showed five `firecrawlScrape error: timeout` lines in a
+// single batch. Waiting longer is strictly cheaper than retrying.
+const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS) => {
   if (!fcKey) return '';
   // FAIL FAST once the account is empty. Without this every lead still fires ~20
   // doomed HTTP calls and burns 15+ seconds before failing, which is what made the
@@ -1741,7 +1756,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 25000, maxAge = FC_CACHE_MS
   const _ck = String(url);
   const _c = _SCRAPE_CACHE.get(_ck);
   if (_c && Date.now() - _c.at < _SCRAPE_TTL_MS) {
-    fcNote(false);
+    fcNote(false, 'scrape', _ck);
     console.log(`\u267b FIRECRAWL CACHE HIT (no credit): ${_ck.slice(0, 80)}`);
     return _c.md;
   }
@@ -1758,7 +1773,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 25000, maxAge = FC_CACHE_MS
       return '';
     }
     const _md = d.data?.markdown || d.markdown || '';
-    fcNote(true);
+    fcNote(true, 'scrape', _ck);
     if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
     _SCRAPE_CACHE.set(_ck, { md: _md, at: Date.now() });
     return _md;
@@ -6518,17 +6533,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 1500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-      }, timeout).then(r => r.json());
+      }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
         return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
       };
       let res;
       try {
-        res = await doScrape(20000);
+        // Wait properly the FIRST time. The old 20s ceiling was below what a heavy
+        // site takes, so the common path was: pay, time out, discard, pay again.
+        res = await doScrape(50000);
       } catch(e) {
-        console.log('Firecrawl timeout — retrying once with longer timeout');
-        try { res = await doScrape(35000); } catch(e2) { console.log('Firecrawl retry also failed:', e2.message); return {}; }
+        console.log('Firecrawl timeout even at 50s — retrying once (this DOES cost a second credit)');
+        try { res = await doScrape(60000); } catch(e2) { console.log('Firecrawl retry also failed:', e2.message); return {}; }
       }
       // CONTENT-LEVEL RETRY: a "Connection Reset"/empty scrape is usually transient
       // on the free tier (A1 Restoration lost its whole audit to one). Pause and try
