@@ -1973,9 +1973,49 @@ const rankUrlsByIntent = (urls, re, limit = 4) => {
 
 const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
 
+// ── REAL CREDIT ACCOUNTING ─────────────────────────────────────────────────
+// Two faults made the old meter unusable, and they pushed in opposite directions
+// so the number looked plausible while being wrong twice over.
+//
+// 1. IT COUNTED OPERATIONS, NOT CREDITS. Firecrawl's published rate card: Scrape,
+//    Crawl and Map are 1 credit per page, and SEARCH IS 2 CREDITS PER 10 RESULTS —
+//    not 1 per result. So `search x4` costs 2 credits, and dropping that limit from
+//    4 to 2 would have saved exactly nothing, because both sit inside the same
+//    10-result block. Batch scrape is 0.5. The label "x4" implied a 4-credit charge
+//    that does not exist.
+// 2. IT WAS SHARED ACROSS CONCURRENT LEADS. `_fcAtStart` snapshotted a module-level
+//    counter, but research jobs run in parallel. A live run of two leads reported
+//    "~20" and "~22 paid operations" when each had only ~10 FC PAID lines — every
+//    lead was billed for its neighbour. Per-lead cost was therefore uninterpretable,
+//    and per-lead cost is the only number that decides what to cut.
+// AsyncLocalStorage gives each request its own ledger that survives every await.
+const { AsyncLocalStorage } = require('node:async_hooks');
+const FC_LEDGER = new AsyncLocalStorage();
+
+// Screenshots are the one rate the public sources disagree on: Firecrawl's own blog
+// lists surcharges for JSON extraction, enhanced proxy and audio but NOT screenshots,
+// while several third-party guides claim screenshot/action scrapes bill at 5. Rather
+// than bake in a guess, this is a dial: measure one lead with and one without, then
+// set FC_SCREENSHOT_CREDITS to whatever the dashboard actually moved by.
+const FC_SCREENSHOT_CREDITS = Number(process.env.FC_SCREENSHOT_CREDITS || 1);
+
+const fcCreditCost = (kind) => {
+  const k = String(kind || '');
+  if (/^search/.test(k)) {
+    const n = parseInt((k.match(/x(\d+)/) || [])[1] || '10', 10);
+    return 2 * Math.max(1, Math.ceil(n / 10));   // 2 credits per 10 results
+  }
+  if (/batch-scrape/.test(k)) return 0.5;
+  if (/screenshot/.test(k)) return FC_SCREENSHOT_CREDITS;
+  return 1;                                       // scrape, map
+};
+
 const fcNote = (paid, kind, what) => {
+  const _led = FC_LEDGER.getStore();
   if (paid) {
-    FC_CREDITS_SPENT++;
+    const _cost = fcCreditCost(kind);
+    FC_CREDITS_SPENT += _cost;
+    if (_led) { _led.spent += _cost; _led.ops += 1; }
     // MIDDLE-ellipsis, not a head slice. A flat .slice(0,110) truncated six
     // different mangled URLs down to the same visible prefix, so a log that was
     // recording six distinct wasted credits read as one call retried six times.
@@ -1984,6 +2024,7 @@ const fcNote = (paid, kind, what) => {
     console.log(`FC PAID [${kind}] ${_w.length <= 130 ? _w : _w.slice(0, 85) + '…' + _w.slice(-40)}`);
   } else {
     FC_CREDITS_SAVED++;
+    if (_led) _led.saved += 1;
   }
 };
 // `search` is accepted for call-site readability but deliberately NOT sent to the
@@ -2077,6 +2118,49 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
 // Global flag — set the moment Firecrawl reports it's out of credits, so the
 // whole run can report it honestly instead of silently producing empty results.
 let FIRECRAWL_OUT_OF_CREDITS = false;
+
+// ═══ HUNTER QUOTA — THE OTHER SILENT FALSE NEGATIVE ════════════════════════
+// hunterFindPersonEmail ended in `if (!email) return null`. When Hunter has quota
+// that null honestly means "no address exists for this person". When Hunter is OUT
+// OF CREDITS the response carries an `errors` array and no `data.email`, so the
+// function returns the SAME null — and the lead is reported as "no defensible
+// address found". That is an assertion about the prospect built on a failure of
+// ours, which is the one thing this system is not allowed to do.
+//
+// Hunter signals exhaustion through several shapes: HTTP 402/429, and error ids
+// like `usage_limit`, `too_many_requests` or `quota_exceeded`. Auth failures
+// (`invalid_api_key`, `wrong_auth`, 401) are kept SEPARATE — a dead key is a
+// different problem from a spent one and needs a different fix from the operator.
+const hunterErrText = (d) => {
+  try {
+    const errs = Array.isArray(d?.errors) ? d.errors : [];
+    return errs.map(e => `${e.id || ''} ${e.code || ''} ${e.details || ''}`).join(' ') + ' ' + String(d?.message || '');
+  } catch { return ''; }
+};
+const isHunterQuotaError = (d, status) =>
+  status === 402 || status === 429 ||
+  /usage_limit|quota|too_many_requests|rate limit|exceeded your|no requests left|upgrade/i.test(hunterErrText(d));
+const isHunterAuthError = (d, status) =>
+  status === 401 || /invalid_api_key|wrong_auth|invalid api key|unauthorized/i.test(hunterErrText(d));
+
+// Process-wide latch. Once Hunter is spent, every further call is a guaranteed
+// failure that still costs a round trip and, worse, still produces a null that
+// reads as a fact about the prospect. Latch it, say so once, and stop asking.
+let HUNTER_EXHAUSTED = false;
+let HUNTER_AUTH_DEAD = false;
+const hunterGuard = (d, status, where) => {
+  if (isHunterAuthError(d, status)) {
+    if (!HUNTER_AUTH_DEAD) console.log(`\ud83d\udd11 HUNTER KEY REJECTED (${where}) — the key is invalid or revoked. This is NOT "no email found"; nothing was ever looked up.`);
+    HUNTER_AUTH_DEAD = true;
+    return true;
+  }
+  if (isHunterQuotaError(d, status)) {
+    if (!HUNTER_EXHAUSTED) console.log(`\ud83d\udd34 HUNTER OUT OF CREDITS (${where}) — every email lookup from here returns nothing because we cannot ask, NOT because the address does not exist. Leads researched now will understate reachability.`);
+    HUNTER_EXHAUSTED = true;
+    return true;
+  }
+  return false;
+};
 
 const isCreditError = (d, status) =>
   status === 402 ||
@@ -4437,6 +4521,9 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
 // inferred from the domain's pattern. We treat those very differently.
 const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   if (!domain || !fullName || !hunterKey) return null;
+  // Already known spent or dead — do not spend a round trip to be told again, and
+  // do not manufacture another null that reads as a fact about this business.
+  if (HUNTER_EXHAUSTED || HUNTER_AUTH_DEAD) return { unavailable: true, reason: HUNTER_AUTH_DEAD ? 'hunter_key_rejected' : 'hunter_out_of_credits' };
   const parts = String(fullName).trim().split(/\s+/).filter(Boolean);
   if (parts.length < 2) return null;
   const first = parts[0], last = parts[parts.length - 1];
@@ -4445,6 +4532,12 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
       `https://api.hunter.io/v2/email-finder?domain=${encodeURIComponent(domain)}&first_name=${encodeURIComponent(first)}&last_name=${encodeURIComponent(last)}&api_key=${hunterKey}`,
       {}, 10000);
     const d = await safeJson(r);
+    // DISTINGUISH "we could not ask" FROM "there is no address". Returning a bare
+    // null for both is what let an empty Hunter balance masquerade as an
+    // unreachable prospect.
+    if (hunterGuard(d, r.status, 'email-finder')) {
+      return { unavailable: true, reason: HUNTER_AUTH_DEAD ? 'hunter_key_rejected' : 'hunter_out_of_credits' };
+    }
     const email = d?.data?.email;
     if (!email) return null;
     const score = typeof d.data.score === 'number' ? d.data.score : 0;
@@ -4457,8 +4550,12 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
 const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
   const name = ceoName || hunterName || '';
-  const fail = { email: '', ...EMAIL_TIERS.NONE, name, pattern: null };
-  if (!domain) return fail;
+  // Set when a PAID lookup was refused (spent quota / dead key) rather than
+  // returning empty. Travels out on the failure object so the caller can label the
+  // result "not checked" instead of asserting the prospect has no address.
+  let _lookupBlocked = null;
+  const fail = () => ({ email: '', ...EMAIL_TIERS.NONE, name, pattern: null, lookupBlocked: _lookupBlocked });
+  if (!domain) return fail();
 
   // ── Hunter found an address — but is it the RIGHT PERSON? ─────────────────
   // CRITICAL: Hunter's LinkedIn-biased index surfaces VPs and HR directors, not
@@ -4543,7 +4640,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
                 await new Promise(r => setTimeout(r, 200));
               }
               console.log(`✗ EMAIL [${domain}]: no mailbox exists for ${name}. BLOCKED — sending would bounce.`);
-              return fail;
+              return fail();
             }
           }
         }
@@ -4583,9 +4680,9 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   }
 
   // Everything below needs a name to build candidates from
-  if (!name) return fail;
+  if (!name) return fail();
   const candidates = buildCandidates(name, domain);
-  if (candidates.length === 0) return fail;
+  if (candidates.length === 0) return fail();
 
   // ── Is this domain catch-all? Determines whether SMTP means anything. ─────
   // Cached per domain, so we only pay this probe ONCE per company domain ever.
@@ -4638,6 +4735,14 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
     if (worthACredit) {
       const hf = await hunterFindPersonEmail(domain, name, hunterKey);
+      // Record that the last paid route was CLOSED rather than empty, so nothing
+      // downstream reports "no defensible address found" for a lookup we never got
+      // to make. The distinction is the whole point: one is a fact about them, the
+      // other is a fact about our account.
+      if (hf && hf.unavailable) {
+        _lookupBlocked = hf.reason;
+        console.log(`EMAIL [${domain}]: could NOT check ${name} — ${hf.reason === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+      }
       if (hf && hf.email) {
         // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
         // pattern guess at ~60 confidence is how people get blacklisted.
@@ -4697,7 +4802,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // A server that actively DENIED the address means this person genuinely has no
     // mailbox here. Sending would guarantee a bounce, and bounces damage the domain.
     console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here. BLOCKED.`);
-    return fail;
+    return fail();
   }
 
   // ── TIER 3: catch-all, but we know this company's convention ──────────────
@@ -7075,7 +7180,7 @@ const checkFacebookAds = async (name, fbToken) => {
 // a slow site takes minutes; browsers throttle background tabs and Render's proxy
 // severs long connections, which is why switching tabs mid-run killed the request
 // and why one lead sat at 359 seconds with the UI spinning on a dead socket.
-const runResearch = async (req, res) => {
+const _runResearchInner = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
   // outer scope so it's visible to all references (fixes scope-leak crash).
   let hasCTA = false;
@@ -8935,7 +9040,12 @@ Return ONLY valid JSON:
     // Paid Firecrawl operations for THIS lead, and how many our own cache served
     // for free. Grep FIRECRAWL SPEND across a batch and the real per-lead cost
     // falls out of the log instead of being estimated from the dashboard total.
-    console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} paid operations | ${FC_CREDITS_SAVED - _fcAtStart.saved} served free from our cache`);
+    const _led = FC_LEDGER.getStore();
+    if (_led) {
+      console.log(`FIRECRAWL SPEND [${company}]: ${_led.spent} credits across ${_led.ops} paid operations | ${_led.saved} served free from our cache`);
+    } else {
+      console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} credits (no per-request ledger — figure may include concurrent leads)`);
+    }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
     const _throttled = FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled;
@@ -9014,6 +9124,11 @@ Return ONLY valid JSON:
     res.status(500).json({ error: e.message });
   }
 };
+// Each research run gets its OWN credit ledger. Without this, two leads researched
+// at the same time each reported the other's spend as their own — the exact reason
+// the per-lead FIRECRAWL SPEND figures were roughly double reality.
+const runResearch = (req, res) => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => _runResearchInner(req, res));
+
 app.post('/api/research', runResearch);
 
 // ═══ JOB QUEUE ═════════════════════════════════════════════════════════════
