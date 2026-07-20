@@ -1809,17 +1809,194 @@ let FC_CREDITS_SAVED = 0;   // operations served from our own cache instead
 // not actionable; a list of thirty URLs and queries is. Grep FC PAID for one company
 // and the entire bill is itemised in order, so cuts are made against evidence rather
 // than against a model of where the credits probably went.
+// ── siteBase — THE ONLY CORRECT WAY TO BUILD A SUBPAGE URL ─────────────────
+// Leads now arrive from Google Places, and Places hands back the website with its
+// tracking query string attached:
+//   https://tuckandhowell.com/?utm_source=google&utm_medium=organic&utm_id=GBP_Greenville
+// The old code did `website.replace(/\/$/,'') + '/contact'`, which appends the path
+// AFTER the query string and produces:
+//   https://tuckandhowell.com/?utm_source=...&utm_id=GBP_Greenville/contact
+// That is a 404 on every site, and Firecrawl bills a 404 as a successful fetch. Six
+// guessed paths x every Places lead = six wasted credits AND a guaranteed "no email
+// found" / "no owner found", because the contact and about pages were never actually
+// read. This is why leads with a resolved owner still came back with no mailbox.
+// Strip query and hash, keep any real subpath, drop the trailing slash.
+const siteBase = (website) => {
+  const raw = String(website || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw.startsWith('http') ? raw : 'https://' + raw);
+    return (u.origin + u.pathname).replace(/\/+$/, '');
+  } catch {
+    // Not parseable as a URL — fall back to cutting at the first ? or # by hand
+    // rather than returning something that will be concatenated into nonsense.
+    return raw.split(/[?#]/)[0].replace(/\/+$/, '');
+  }
+};
+
+// ── parseLLMJSON — SURVIVE THE WAYS A MODEL BREAKS ITS OWN JSON ────────────
+// Every extraction step in this file ends in JSON.parse on model output, and a
+// throw there is caught and turned into `return null` — which is indistinguishable
+// from "this business genuinely has no owner listed". A live run failed exactly
+// this way:
+//   findOwnerViaLicense failed: Expected ',' or '}' after property value at position 95
+// That was not a business with no owner. That was a model emitting an unescaped
+// quote inside its `evidence` string, and an entire owner-discovery source
+// silently dropping out of the waterfall.
+//
+// The three failures that actually occur, in order of frequency:
+//   1. an unescaped " inside a string value (models quote the source verbatim)
+//   2. a raw newline inside a string value
+//   3. truncation at max_tokens, leaving brackets open
+// Each repair is attempted only after the plainer parse has already failed, so
+// well-formed output takes the fast path and is never touched.
+const _jsonEscapeStrays = (s) => {
+  let out = '', inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { out += c; esc = false; continue; }
+    if (c === '\\') { out += c; esc = true; continue; }
+    if (!inStr) { out += c; if (c === '"') inStr = true; continue; }
+    if (c === '"') {
+      // A real closing quote is followed by structure. Anything else means the
+      // model put a quote inside its own string value.
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j])) j++;
+      const nxt = s[j];
+      if (nxt === undefined || nxt === ',' || nxt === '}' || nxt === ']' || nxt === ':') { out += c; inStr = false; }
+      else out += '\\"';
+      continue;
+    }
+    if (c === '\n') { out += '\\n'; continue; }
+    if (c === '\r') { continue; }
+    if (c === '\t') { out += '\\t'; continue; }
+    out += c;
+  }
+  return out;
+};
+
+const _jsonCloseTruncated = (s) => {
+  let inStr = false, esc = false;
+  const stack = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') stack.push(c);
+    else if (c === '}' || c === ']') stack.pop();
+  }
+  let out = s;
+  if (inStr) {
+    // Truncated mid-VALUE. Closing the quote keeps the partial text, which is
+    // usually still the answer we wanted.
+    out += '"';
+  } else {
+    out = out.replace(/,\s*$/, '');
+    // Truncated after a KEY, which can never be closed — drop the dangling pair.
+    // Only safe in this branch: in the inStr branch the trailing quoted run is a
+    // recovered value, and stripping it would throw away the extraction.
+    out = out.replace(/,?\s*"[^"]*"\s*:\s*$/, '');
+    out = out.replace(/,\s*$/, '');
+  }
+  while (stack.length) out += (stack.pop() === '{' ? '}' : ']');
+  return out;
+};
+
+const parseLLMJSON = (raw) => {
+  if (raw == null) return null;
+  let t = String(raw).replace(/```json|```/g, '').trim();
+  const ob = t.indexOf('{'), cb = t.lastIndexOf('}');
+  const oa = t.indexOf('['), ca = t.lastIndexOf(']');
+  // Whichever container opens first is the payload; arrays are returned by the
+  // listing extractors, objects by everything else.
+  if (ob >= 0 && (oa < 0 || ob < oa) && cb > ob) t = t.slice(ob, cb + 1);
+  else if (oa >= 0 && ca > oa) t = t.slice(oa, ca + 1);
+  const attempts = [
+    () => JSON.parse(t),
+    () => JSON.parse(t.replace(/,(\s*[}\]])/g, '$1')),
+    () => JSON.parse(_jsonEscapeStrays(t)),
+    () => JSON.parse(_jsonCloseTruncated(t)),
+    () => JSON.parse(_jsonCloseTruncated(_jsonEscapeStrays(t))),
+  ];
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const v = attempts[i]();
+      if (i > 0) console.log(`JSON REPAIR: model output was malformed; recovered on strategy ${i + 1}/5`);
+      return v;
+    } catch { /* next strategy */ }
+  }
+  console.log(`JSON UNRECOVERABLE: ${t.slice(0, 200).replace(/\s+/g, ' ')}`);
+  return null;
+};
+
+// ── cityState — ONE CORRECT WAY TO TURN AN ADDRESS INTO A SEARCH QUALIFIER ──
+// Google Places returns "Garden City, ID 83714, USA". The licence-registry source
+// built its queries with `.split(',').slice(-2)`, which takes the LAST two parts
+// and yields "ID 83714  USA" — the city dropped, the ZIP kept, and "USA" welded on.
+// That is why the registry searches in the last run read:
+//     "Done Right Flood & Fire Services Inc" ID 83714  USA contractor license
+// while the web-search source, which parsed correctly, searched "Garden City ID"
+// and was the ONLY source that resolved an owner all run. Location is the
+// disambiguator between a business and its same-named twin two states over, so a
+// malformed one does not merely weaken the query, it invites a wrong match.
+//
+// Also fixes a second fault in the three copies of the "correct" version: they all
+// required a STATE+ZIP part to exist, so a plain "Greenville, SC" produced an EMPTY
+// location and dropped the qualifier entirely.
+const cityState = (location) => {
+  const parts = String(location || '').split(',').map(s => s.trim()).filter(Boolean)
+    .filter(p => !/^(usa|u\.s\.a\.|united states|us)$/i.test(p));
+  if (!parts.length) return '';
+  let idx = parts.findIndex(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
+  let st = '';
+  if (idx >= 0) st = (parts[idx].match(/\b([A-Z]{2})\b/) || [])[1] || '';
+  else {
+    idx = parts.findIndex(p => /^[A-Z]{2}$/.test(p));
+    if (idx >= 0) st = parts[idx];
+  }
+  const city = idx > 0 ? parts[idx - 1] : '';
+  return [city, st].filter(Boolean).join(' ');
+};
+
+const rankUrlsByIntent = (urls, re, limit = 4) => {
+  const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
+  return (urls || [])
+    .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
+    .filter(u => re.test(pathOf(u)))
+    .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, limit)
+    .map(x => x.u);
+};
+
+const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
+
 const fcNote = (paid, kind, what) => {
   if (paid) {
     FC_CREDITS_SPENT++;
-    console.log(`FC PAID [${kind}] ${String(what || '').slice(0, 110)}`);
+    // MIDDLE-ellipsis, not a head slice. A flat .slice(0,110) truncated six
+    // different mangled URLs down to the same visible prefix, so a log that was
+    // recording six distinct wasted credits read as one call retried six times.
+    // The distinguishing part of a URL is its TAIL, so always keep the tail.
+    const _w = String(what || '');
+    console.log(`FC PAID [${kind}] ${_w.length <= 130 ? _w : _w.slice(0, 85) + '…' + _w.slice(-40)}`);
   } else {
     FC_CREDITS_SAVED++;
   }
 };
 // `search` is accepted for call-site readability but deliberately NOT sent to the
 // API — see the note below. Callers filter the returned URL list themselves.
-const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
+// LIMIT 500, NOT 60. /map bills ONE credit regardless of how many links it returns,
+// so a low limit buys nothing and costs coverage. It became actively harmful once the
+// `search` parameter was dropped below: with `search` the API returned RELEVANCE-ranked
+// links, so the first 60 reliably contained /about and /our-team. Without it the order
+// is the site's own sitemap order, so on any site with more than 60 pages the 60-cap
+// truncates an unranked list and the leadership page can be cut off before
+// rankUrlsByIntent ever sees it. Two leads in the last run mapped EXACTLY 60 — they
+// were both being truncated. Same credit, full sitemap, ranking now has real input.
+const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   void search;
   if (!fcKey || !url) return [];
   if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
@@ -2409,14 +2586,32 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   // Pass 2: the pages most likely to publish a real address (same-domain only — a
   // contact page might list a vendor's/webdev's address, so stay strict there)
   if (!fcKey) return out;
-  const base = website.replace(/\/$/, '');
-  for (const path of ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team']) {
+  const base = siteBase(website);
+  if (!base) return out;
+
+  // Ask the SITE MAP where its contact page actually is before guessing. The map is
+  // cached per hostname and already paid for by the owner finder, so this costs
+  // nothing. Guessing six fixed paths bought six 404s on every lead that publishes
+  // no address — and Firecrawl bills a 404 as a successful fetch. It also missed
+  // real pages that simply live somewhere else (/about/contact-us, /get-in-touch).
+  let targets = [];
+  try {
+    const urls = await firecrawlMap(fcKey, website);
+    targets = rankUrlsByIntent(urls, /(contact|about|team|our-?story|get-?in-?touch|reach-?us|staff|people)/i, 4);
+    // FREE GATE: if the map came back healthy and contains nothing contact-shaped,
+    // the site has no such page. Guessing would buy 404s to learn what we know.
+    if (!targets.length && urls.length > 3) return out;
+  } catch { /* map unavailable — fall through to guesses */ }
+
+  if (!targets.length) targets = ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team'].map(p => base + p);
+
+  for (const target of targets) {
     try {
-      const md = await firecrawlScrape(fcKey, base + path, 10000);
+      const md = await firecrawlScrape(fcKey, target, 10000);
       if (!md || md.length < 100) continue;
       emails = extract(md, false);
       if (emails.length > 0) return { emails, source: 'contact_page' };
-    } catch(e) { /* next path */ }
+    } catch(e) { /* next page */ }
   }
   return out;
 };
@@ -2622,19 +2817,6 @@ const looksLikeRealName = (n) => {
 // This helper is the single correct implementation. Match the PATH only, prefer
 // shallower paths, then shorter ones. Every caller uses it so the bug cannot
 // come back in one place while being fixed in another.
-const rankUrlsByIntent = (urls, re, limit = 4) => {
-  const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
-  return (urls || [])
-    .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
-    .filter(u => re.test(pathOf(u)))
-    .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
-    .sort((a, b) => a.score - b.score)
-    .slice(0, limit)
-    .map(x => x.u);
-};
-
-const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
-
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
   if (!website || !apiKey || !fcKey) return null;
   try {
@@ -2650,7 +2832,17 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     // difference between resolving an owner and returning nothing.
     const candidates = rankUrlsByIntent(urls, LEADERSHIP_URL_HINTS, 4);
 
+    // When candidates is ZERO this line used to print nothing further, which made
+    // the single most important failure in the system undiagnosable: "mapped 33
+    // URLs, 0 leadership candidates" is equally consistent with a site that has no
+    // about page and a ranker whose regex is too narrow, and there was no way to
+    // tell which from the log. Show the evidence in exactly the case where it is
+    // needed — a healthy run stays quiet.
     console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
+    if (!candidates.length && urls.length) {
+      const paths = urls.map(u => { try { return new URL(u).pathname; } catch { return String(u); } });
+      console.log(`DM/brain [${companyName}]: NO leadership page matched. Sitemap paths (${paths.length}): ${paths.slice(0, 25).join(' ')}${paths.length > 25 ? ` …+${paths.length - 25} more` : ''}`);
+    }
 
     // Read the real pages IN PARALLEL (was sequential — that alone cost ~20s)
     const top = candidates.slice(0, 2); // read the top 2 leadership pages — owner-finding is the essential step, and the owner-gate saves credits elsewhere to pay for this depth
@@ -2724,7 +2916,7 @@ ${corpus}` }]
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
       console.log(`DM/brain [${companyName}]: no owner-level person named on their site`);
@@ -2765,11 +2957,7 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
     // name ("A1 Restoration") matches dozens of unrelated companies nationwide and
     // we find nothing confident — the #1 cause of a reachable owner scoring as
     // unreachable. Location is the disambiguator.
-    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
-    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
-    const loc = [city, st].filter(Boolean).join(' ');
+    const loc = cityState(location);
 
     // Two angles: who owns it, and their profile on business directories that
     // actually index SMB owners (BBB lists a "Principal Contact", Manta and
@@ -2819,7 +3007,7 @@ ${corpus}` }]
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
       console.log(`DM/websearch [${companyName}]: no owner found in web results`);
@@ -2920,7 +3108,7 @@ ABOUT THE EMAIL — this matters a lot:
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     // Sanity-check the vision-read email — if it isn't a well-formed address, drop it
     // rather than let a misread string reach the email engine.
     if (parsed.visibleEmail && !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(String(parsed.visibleEmail).trim())) {
@@ -2990,7 +3178,7 @@ Return ONLY JSON:
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     return { match: parsed.match || 'unclear', confidence: parsed.confidence || 'low', reason: parsed.reason || '' };
   } catch(e) {
     console.log('confirmDomainMatch failed (non-fatal):', e.message);
@@ -3037,11 +3225,7 @@ const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location =
   if (!companyName || !fcKey || !apiKey) return null;
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
-    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
-    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
-    const loc = [city, st].filter(Boolean).join(' ');
+    const loc = cityState(location);
     // Target the revenue aggregators directly — Prospeo, RocketReach, Growjo,
     // ZoomInfo publish private-SMB revenue and it sits right in the search SNIPPET
     // (e.g. "Johns Roofing has revenue of $25,300,000"). So snippet-only = 1 credit,
@@ -3080,7 +3264,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     if (!parsed.employees && !parsed.revenue) return null;
     console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'} rev=${parsed.revenue || '?'} (${parsed.source || '?'})`);
     return parsed;
@@ -3139,7 +3323,7 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     const total = parsed.totalReviews || 0;
     // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
     // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
@@ -3232,7 +3416,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     // ANTI-FABRICATION: every evidence quote MUST actually appear in the reviews.
     // Verify a distinctive 4-word span of each quote is present; drop anything that
@@ -3308,7 +3492,7 @@ ${replyBlocks}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const p = JSON.parse(t);
+    const p = parseLLMJSON(t) || {};
     if (!p.name) return null;
     // The sign-off must actually exist in what we scraped.
     const flat = replyBlocks.toLowerCase();
@@ -3431,7 +3615,7 @@ ${corpus}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
 
     // ANTI-FABRICATION: every price must literally appear in what we scraped.
     const flat = corpus.toLowerCase().replace(/[\s,]/g, '');
@@ -3485,7 +3669,7 @@ ${corpus}` }]
 // dollar figure we can use in a pitch, because HE published them.
 const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
   if (!website || !fcKey || !apiKey) return null;
-  const base = website.replace(/\/$/, '');
+  const base = siteBase(website);
   // Use the site map we already paid for (cached) to find the REAL careers URL.
   // Guessing paths missed pages like /about-our-agency/join-our-team, which is where
   // small firms actually put hiring. Fall back to guesses only if the map is empty.
@@ -3544,7 +3728,7 @@ ${md.slice(0, 14000)}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
     const roles = Array.isArray(parsed.roles) ? parsed.roles : [];
     if (!roles.length) return null;
     const opsRoles = roles.filter(r => r.type === 'ops');
@@ -3563,11 +3747,7 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, l
     // Same disambiguation the DM search needs: without a city, a common name pulls
     // reviews/complaints for the WRONG same-named business — which would then feed a
     // fabricated "how do they know this" hook. Location keeps the pain on the right co.
-    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
-    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
-    const loc = [city, st].filter(Boolean).join(' ');
+    const loc = cityState(location);
 
     // Two angles: what customers complain about, and what employees say about
     // how the place actually runs. Employees are the most honest source there is.
@@ -3641,7 +3821,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     // Anti-fabrication: every quoted piece of evidence must actually exist in
     // the scraped content. This is the same guard as the Brain audit — a pitch
@@ -3687,7 +3867,10 @@ ${corpus}` }]
 const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKey) => {
   if (!companyName || !fcKey || !apiKey) return null;
   const clean = companyName.replace(/[^\w\s&'-]/g, ' ').replace(/\s+/g, ' ').trim();
-  const loc = String(location || '').split(',').slice(-2).join(' ').trim(); // "Louisville KY"
+  // Was `.split(',').slice(-2)`, which produced "ID 83714  USA" instead of
+  // "Garden City ID" — see cityState. This function's queries were the weakest in
+  // the waterfall purely because of this line.
+  const loc = cityState(location);
   // Trade detection reads the industry label AND the company name. industry is
   // frequently blank or generic ("Professional Services"), while the company name
   // almost always names the trade — "Castle Hills Chiropractic", "Bespoke Plastic
@@ -3763,7 +3946,7 @@ ${corpus}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null' || !looksLikeRealName(parsed.name)) return null;
     if (parsed.confidence === 'low') { console.log(`DM/license [${clean}]: found ${parsed.name} but confidence low \u2014 discarded`); return null; }
     console.log(`DM/license [${clean}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) via licence/chamber records \u2014 "${String(parsed.evidence||'').slice(0,70)}"`);
@@ -3819,7 +4002,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
 
     // Verify the name is literally signed in what we scraped — no invented names.
@@ -3993,7 +4176,7 @@ ${content}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
 
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
     if (!looksLikeRealName(parsed.name)) {
@@ -4649,7 +4832,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     // Anti-hallucination: the quote must actually exist in what we scraped
     const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
@@ -4762,7 +4945,11 @@ ${corpus}` }]
     // element, then close any open brackets/braces.
     let parsed;
     try {
-      parsed = JSON.parse(text);
+      // Tolerant parser first: it repairs unescaped quotes and raw newlines, which
+      // the brace-counting fallback below cannot. The fallback still runs if this
+      // exhausts every strategy.
+      parsed = parseLLMJSON(text);
+      if (!parsed) throw new Error('parseLLMJSON exhausted');
     } catch {
       let repaired = text;
       const lastComplete = repaired.lastIndexOf('}');
@@ -6807,7 +6994,11 @@ const checkBuiltWith = async (domain) => {
       hasH1: /<h1[\s>]/i.test(html),
       hasSchema: /application\/ld\+json/i.test(html),
       hasEmailCapture: /type=["']email["']|newsletter|subscribe/i.test(html),
-      hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet/i.test(html),
+      // MERGED. This key was declared twice in the same object literal, so the
+      // second silently overwrote this one and the detector lost cal.com,
+      // savvycal and appointlet entirely, while `acuity` was narrowed to
+      // `acuityscheduling` and stopped matching acuity's other domains.
+      hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
       copyrightYear: (() => { const ys = [...html.matchAll(/(?:©|&copy;|copyright)[^0-9]{0,20}(20\d\d)/gi)].map(m=>parseInt(m[1])); return ys.length ? Math.max(...ys) : 0; })(),
       // ── CONTACT INTELLIGENCE — extracted from THEIR page (facts, not guesses) ──
       contacts: (() => {
@@ -6821,7 +7012,6 @@ const checkBuiltWith = async (domain) => {
         const contactPage = (html.match(/href=["']([^"']*(?:contact|about|team|our-story)[^"']*)["']/i)||[])[1] || '';
         return { emails, phones, linkedin, facebook, owners, contactPage };
       })(),
-      hasBooking: /calendly|acuityscheduling|youcanbook|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
       confirmed: true,
     };
   } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false }; }
@@ -7999,7 +8189,8 @@ Return ONLY valid JSON, no markdown:
           const clean = vText.replace(/```json|```/g,'').trim();
           let parsed;
           try {
-            parsed = JSON.parse(clean);
+            parsed = parseLLMJSON(clean);
+            if (!parsed) throw new Error('parseLLMJSON exhausted');
           } catch(parseErr) {
             // Try to repair truncated JSON by finding the last valid closing brace
             let repaired = clean;
@@ -8252,7 +8443,8 @@ Return ONLY valid JSON:
             }
             let critique;
             try {
-              critique = JSON.parse(cClean);
+              critique = parseLLMJSON(cClean);
+              if (!critique) throw new Error('parseLLMJSON exhausted');
             } catch(parseErr) {
               // Repair truncated JSON
               let repaired = cClean;
@@ -8260,7 +8452,9 @@ Return ONLY valid JSON:
               const opens = (repaired.match(/\{/g)||[]).length;
               const closes = (repaired.match(/\}/g)||[]).length;
               if (opens > closes) repaired += '}'.repeat(opens - closes);
-              critique = JSON.parse(repaired);
+              // Was a bare JSON.parse with no guard — a throw here escaped the
+              // critique block entirely instead of degrading to "no critique".
+              critique = parseLLMJSON(repaired) || {};
             }
             const conf = Number.isFinite(Number(critique.confidenceScore)) ? Number(critique.confidenceScore) : 7;
             brainAudit.critique = {
@@ -9351,9 +9545,8 @@ Return ONLY valid JSON, no markdown:
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
     if (fb >= 0 && lb > fb) clean = clean.slice(fb, lb + 1);
 
-    let parsed;
-    try { parsed = JSON.parse(clean); }
-    catch(e) { return res.status(502).json({ error: 'Draft generation returned invalid JSON', raw: clean.slice(0, 500) }); }
+    const parsed = parseLLMJSON(clean);
+    if (!parsed) return res.status(502).json({ error: 'Draft generation returned invalid JSON', raw: clean.slice(0, 500) });
 
     console.log(`LinkedIn drafts: ${(parsed.drafts||[]).length} generated from ${researched.length} real audits`);
     res.json({ drafts: parsed.drafts || [], batchSize: researched.length, aggregateSummary });
