@@ -2607,7 +2607,15 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
 
   for (const target of targets) {
     try {
-      const md = await firecrawlScrape(fcKey, target, 10000);
+      // 45s, NOT 10s. Aborting on our side does NOT cancel Firecrawl's fetch — they
+      // finish it and bill it, and we throw the bytes away. A live run proved it:
+      //   FC PAID [scrape] https://tuckandhowell.com/about/contact-us
+      //   firecrawlScrape error: timeout          (exactly 10.0s later)
+      //   ✗ EMAIL no pattern resolved — BLOCKED
+      // We asked for the right page, paid for it, and discarded the answer. This is
+      // the ONE page most likely to carry the owner's address, so it is the last
+      // place to be impatient. Same reasoning as the note on firecrawlScrape itself.
+      const md = await firecrawlScrape(fcKey, target, 45000);
       if (!md || md.length < 100) continue;
       emails = extract(md, false);
       if (emails.length > 0) return { emails, source: 'contact_page' };
@@ -3911,13 +3919,13 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
   // Chamber / local directory listings name owners for almost every local business.
   q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
 
-  try {
-    const hits = [];
-    for (const query of q) {
-      const r = await firecrawlSearch(fcKey, query, 4, false);
-      if (Array.isArray(r)) hits.push(...r);
-    }
-    if (!hits.length) return null;
+  // EARLY EXIT INSTEAD OF SHALLOWER SEARCH. Both queries used to run every time,
+  // 4 credits each. The trade-specific licence query is the stronger of the two and
+  // resolved Jay Mahaffey on its own in the last run — the chamber query behind it
+  // was 4 credits for an answer already in hand. Running query 2 only when query 1
+  // fails to name anyone keeps FULL depth on both (cutting 4 results to 2 would have
+  // traded recall for the same saving) and makes the saving conditional on success.
+  const evaluate = async (hits) => {
     const corpus = hits.map(h => `${h.title || ''} — ${h.description || h.snippet || ''} (${h.url || ''})`).join('\n').slice(0, 6000);
 
     const res = await fetchT('https://api.anthropic.com/v1/messages', {
@@ -3951,6 +3959,25 @@ ${corpus}` }]
     if (parsed.confidence === 'low') { console.log(`DM/license [${clean}]: found ${parsed.name} but confidence low \u2014 discarded`); return null; }
     console.log(`DM/license [${clean}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) via licence/chamber records \u2014 "${String(parsed.evidence||'').slice(0,70)}"`);
     return { name: parsed.name, title: parsed.title || 'Owner', confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
+  };
+
+  try {
+    const hits = [];
+    const r0 = await firecrawlSearch(fcKey, q[0], 4, false);
+    if (Array.isArray(r0)) hits.push(...r0);
+    if (hits.length) {
+      const early = await evaluate(hits);
+      if (early) {
+        if (q.length > 1) console.log(`DM/license [${clean}]: resolved on the trade query \u2014 skipped the chamber search (~4 Firecrawl credits saved)`);
+        return early;
+      }
+    }
+    for (let i = 1; i < q.length; i++) {
+      const r = await firecrawlSearch(fcKey, q[i], 4, false);
+      if (Array.isArray(r)) hits.push(...r);
+    }
+    if (!hits.length) return null;
+    return await evaluate(hits);
   } catch(e) { console.log('findOwnerViaLicense failed:', e.message); return null; }
 };
 
@@ -7402,7 +7429,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
       const [painRes, revRes, carRes, siteRes] = await Promise.allSettled([
         needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
-        needRev  ? findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location) : Promise.resolve(null),
+        Promise.resolve(null),   // revenue moved BELOW the email gate — see findSizeViaSearch call
         (website && _careersUseful) ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
         website  ? auditSitePages(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
       ]);
@@ -7413,11 +7440,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source || 'web'})`);
         painSummary = pain.summary || '';
       }
-      const sz = revRes.status === 'fulfilled' ? revRes.value : null;
-      if (sz) {
-        if (sz.employees && !verifiedEmployees) { verifiedEmployees = sz.employees; console.log(`SIZE [${company}]: recovered ${sz.employees} employees (${sz.source})`); }
-        if (sz.revenue) { verifiedRevenue = sz.revenue; console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`); }
-      }
+      void revRes;   // revenue now runs after the email gate — handled there
+
     } else {
       console.log(`Deep audit skipped for ${company}: no owner found (unsendable lead) — saved pain + revenue credits`);
     }
@@ -7475,6 +7499,35 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
         }
       } catch(e) { console.log('Email engine failed (non-fatal):', e.message); }
+    }
+
+    // ═══ REVENUE — LAST, AND ONLY FOR A LEAD WE CAN ACTUALLY EMAIL ══════════
+    // This is a 4-credit search and it used to run in the parallel block above,
+    // before we knew whether the lead was reachable at all. A live run spent those
+    // 4 credits sizing a restoration company whose owner was never found and whose
+    // audit could never be sent — the most expensive single line in the log, bought
+    // for a lead that was already dead.
+    // Revenue changes nothing about reachability. It is pitch-sizing data: which
+    // product tier to lead with, what the retainer should cost. That question only
+    // exists once there is a named owner AND a deliverable address, so it now runs
+    // after both are settled and is skipped entirely on every unreachable lead.
+    // `needRev` is scoped to the deep-audit block above, which has already closed —
+    // recompute it here rather than reach into a dead scope.
+    const _wantRev = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
+    if (_wantRev) {
+      const _haveOwner = !!(decisionMaker && decisionMaker.name) || !!verifiedCEO;
+      const _haveEmail = !!(emailResult && emailResult.email) || !!(email && email.email);
+      if (_haveOwner && _haveEmail) {
+        try {
+          const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location);
+          if (sz) {
+            if (sz.employees && !verifiedEmployees) { verifiedEmployees = sz.employees; console.log(`SIZE [${company}]: recovered ${sz.employees} employees (${sz.source})`); }
+            if (sz.revenue) { verifiedRevenue = sz.revenue; console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`); }
+          }
+        } catch(e) { console.log('Revenue lookup failed (non-fatal):', e.message); }
+      } else {
+        console.log(`REVENUE [${company}]: skipped — ${!_haveOwner ? 'no owner confirmed' : 'owner found but no deliverable email'}, so there is no pitch to size (saves ~4 credits)`);
+      }
     }
 
     // ═══ WRITE THE CONTACT CACHE — so this lead is near-free to re-research ═══
