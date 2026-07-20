@@ -1047,6 +1047,86 @@ const searchTheirStack = async (theirstackKey) => {
 const CORP_WORDS = /\b(insurance|agency|agencies|group|services|solutions|associates|partners|company|inc|llc|corp|co|the|of|and|&|advisors|advisory|consulting|management|holdings|enterprises|systems|center|centre)\b/gi;
 const NON_NAME_WORDS = /\b(american|national|united|first|premier|elite|quality|choice|select|direct|express|advantage|independent|local|community|family|heritage|liberty|freedom|security|trust|guardian|shield|summit|pinnacle|apex|prime|superior|reliable|affordable|budget|value|smart|easy|simple|fast|quick|best|top|great|good|new|modern|future|next|global|world|international|state|county|city|north|south|east|west|central|midwest|southeast|northwest|kentucky|tennessee|florida|virginia|ohio|indiana|louisville|nashville|tampa|richmond|lexington)\b/gi;
 
+// ═══ GOOGLE LOCAL SERVICES ADS ═════════════════════════════════════════════
+// LSA and Google Search are CRO Jungle's strongest capability, and until now the
+// audit never checked for either. That is the one gap where the firm's actual
+// competence and the prospect's actual problem line up exactly.
+//
+// Two separate facts matter and they must never be conflated:
+//   1. IS THIS TRADE ELIGIBLE?  A pure lookup, free, and certain. Google supports
+//      70+ business types across home, business, health, learning, care, wellness,
+//      beauty and automotive. Personal-injury lawyers, dentists, optometrists and
+//      accountants are eligible under the professional/health pathway.
+//   2. ARE THEY RUNNING IT?  We can only ever prove YES, never NO. Finding a badge
+//      on their site is proof they run LSA. NOT finding one proves nothing — plenty
+//      of advertisers never put the badge on their website. Absence is silence.
+//
+// BADGE NAMING — this trips up every stale guide on the internet. On 20 October
+// 2025 Google folded the old "Google Guaranteed" (home services) and "Google
+// Screened" (professional services) badges into a single "Google Verified" mark,
+// and the $2,000 money-back guarantee ended on 7 November 2025. Sites updated
+// since then say "Google Verified"; sites that have not been touched in a year
+// still say "Google Guaranteed". Matching only one term misses half the market,
+// so we match all three plus the localservices URL pattern.
+const LSA_ELIGIBLE = new Set([
+  // Home services
+  'HVAC','Roofing','Restoration','Foundation','Solar','Kitchen Remodel','Bath Remodel',
+  'Windows & Doors','Paving','Concrete','Construction','Masonry','Hardscaping','Landscaping',
+  'Tree Service','Insulation','Electrical','Plumbing','Flooring','Garage Doors','Decks',
+  'Well & Septic','Pest Control','Lawn Care','Pool Construction',
+  // Health / wellness pathway
+  'Dental','Cosmetic Dentistry','Orthodontics','Oral Surgery','Dermatology','LASIK',
+  'Chiropractic','Physical Therapy','Veterinary','Med Spa','Senior Care',
+  // Professional pathway
+  'PI Law','Estate Law','Accounting',
+]);
+
+// Markers split by how much they actually prove.
+// DEFINITE — these phrases and URLs exist only in the Local Services Ads product.
+const LSA_DEFINITE_RE = /google\s*guaranteed|google\s*screened|localservices\.google|google\.com\/localservices|\/localservices\/profile/i;
+// AMBIGUOUS — "Google Verified" is the post-Oct-2025 LSA badge, but the same words
+// are also used for ordinary Google Business Profile verification, which any
+// business can get for free and which has nothing to do with paid LSA. On its own
+// it is a hint, never proof. Treated as definite ONLY when the trade is eligible
+// AND a second LSA-shaped signal is present.
+const LSA_AMBIGUOUS_RE = /google\s*verified|verified\s+on\s+google/i;
+
+// Detect LSA participation from content we ALREADY paid to scrape. Zero new
+// credits. Returns a positive finding or an explicit "unknown" — never a negative
+// claim, because we have no way to prove a business is NOT advertising.
+const detectLSA = (industryLabel, siteText, companyName) => {
+  const eligible = LSA_ELIGIBLE.has(String(industryLabel || ''));
+  const hay = String(siteText || '');
+  if (!hay || hay.length < 200) {
+    return { eligible, badgeFound: false, evidence: '', status: eligible ? 'eligible_unknown' : 'not_eligible' };
+  }
+  const quote = (match) => {
+    const i = hay.indexOf(match);
+    return hay.slice(Math.max(0, i - 90), i + 110).replace(/\s+/g, ' ').trim();
+  };
+
+  const definite = hay.match(LSA_DEFINITE_RE);
+  if (definite) {
+    // A "Google Guaranteed"/"Google Screened" badge or a localservices URL is only
+    // ever issued through LSA, so this is proof of participation even if our own
+    // category label for the business is imperfect.
+    console.log(`LSA [${companyName}]: \u2713 RUNNING — "${definite[0]}" on their own site (LSA-only marker)`);
+    return { eligible: true, badgeFound: true, evidence: quote(definite[0]), marker: definite[0], status: 'running_lsa' };
+  }
+
+  const ambiguous = hay.match(LSA_AMBIGUOUS_RE);
+  if (ambiguous && eligible) {
+    // Hint only. Do NOT let this become a claim that they advertise — the same
+    // words appear on any business that verified its free Google Business Profile.
+    console.log(`LSA [${companyName}]: ambiguous "${ambiguous[0]}" found — could be the LSA badge or just Business Profile verification. NOT treated as proof.`);
+    return { eligible: true, badgeFound: false, evidence: quote(ambiguous[0]), marker: ambiguous[0], status: 'eligible_ambiguous_badge' };
+  }
+
+  // No marker. This proves nothing about whether they advertise — many LSA
+  // advertisers never put the badge on their website at all.
+  return { eligible, badgeFound: false, evidence: '', status: eligible ? 'eligible_no_badge_on_site' : 'not_eligible' };
+};
+
 // ── COMMON GIVEN NAMES — the discriminator between a person and a place ──────
 // "Blue Ridge Custom Homes" and "Claude Reynolds Insurance" both leave two
 // capitalised non-trade words behind, so the old two-word test scored them
@@ -1816,6 +1896,107 @@ const isCreditError = (d, status) =>
 // do not change hour to hour, so a 2-day window is safe and makes re-research nearly
 // instant. Pass a shorter window for anything genuinely time-sensitive.
 const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+// ═══ BATCH SCRAPE — HALF PRICE FOR PAGES WE ALREADY KNOW WE WANT ═══════════
+// Firecrawl bills a single /scrape at 1 credit per page but a /batch/scrape at
+// 0.5. Every place this system reads several interior pages of the SAME site, it
+// already knows all the URLs up front — the site auditor reads pricing/about/
+// booking, the leadership reader reads about/team/our-story — so those are exactly
+// the calls that should be batched. Roughly five of the ~10 credits a lead costs
+// are these interior reads, so halving them is the single largest saving left that
+// costs nothing in quality.
+//
+// Batch is ASYNCHRONOUS: submit, receive a job id, poll until done. That is more
+// moving parts than a plain await, so the contract here is deliberately strict —
+// if ANYTHING goes wrong (submit fails, poll times out, partial results) the caller
+// falls back to individual scrapes and the audit is unaffected. A cheaper scrape is
+// never worth a lost audit.
+const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
+  const out = new Map();
+  if (!fcKey || !Array.isArray(urls) || urls.length === 0) return out;
+  if (FIRECRAWL_OUT_OF_CREDITS) return out;
+
+  // Serve anything we already hold for free, and only pay for the rest.
+  const need = [];
+  for (const u of urls) {
+    const hit = _SCRAPE_CACHE.get(String(u));
+    if (hit && Date.now() - hit.at < _SCRAPE_TTL_MS) {
+      out.set(u, hit.md);
+      fcNote(false, 'scrape', u);
+      console.log(`\u267b FIRECRAWL CACHE HIT (no credit): ${String(u).slice(0, 80)}`);
+    } else {
+      need.push(u);
+    }
+  }
+  if (need.length === 0) return out;
+  // One URL is not worth the async round trip — a plain scrape is simpler and the
+  // saving is half a credit.
+  if (need.length === 1) {
+    const md = await firecrawlScrape(fcKey, need[0], perPageTimeoutMs);
+    if (md) out.set(need[0], md);
+    return out;
+  }
+
+  try {
+    const submit = await fetchT('https://api.firecrawl.dev/v1/batch/scrape', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        urls: need,
+        formats: ['markdown'],
+        onlyMainContent: true,
+        blockAds: true,
+        removeBase64Images: true,
+        maxAge: FC_CACHE_MS,
+      }),
+    }, 20000);
+    const sub = await submit.json();
+    if (isCreditError(sub, submit.status)) {
+      FIRECRAWL_OUT_OF_CREDITS = true;
+      console.log('\ud83d\udd34 FIRECRAWL OUT OF CREDITS (batch)');
+      return out;
+    }
+    const jobId = sub && (sub.id || sub.jobId);
+    if (!submit.ok || !jobId) {
+      console.log(`BATCH: submit failed (HTTP ${submit.status}) — falling back to individual scrapes`);
+      return out;
+    }
+
+    // Poll. Bounded by both attempts and wall clock so a stuck job can never hang
+    // a research run — that is the failure mode that produced the 359-second lead.
+    const deadline = Date.now() + Math.max(30000, perPageTimeoutMs);
+    let data = null;
+    for (let attempt = 0; Date.now() < deadline; attempt++) {
+      await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 3000));
+      const poll = await fetchT(`https://api.firecrawl.dev/v1/batch/scrape/${jobId}`, {
+        headers: { 'Authorization': `Bearer ${fcKey}` },
+      }, 15000);
+      const pd = await poll.json();
+      if (pd && (pd.status === 'completed' || pd.status === 'complete')) { data = pd.data || []; break; }
+      if (pd && pd.status === 'failed') { console.log('BATCH: job failed — falling back to individual scrapes'); return out; }
+    }
+    if (!data) {
+      console.log(`BATCH: job ${jobId} did not finish in time — falling back to individual scrapes`);
+      return out;
+    }
+
+    for (const item of data) {
+      const u = item?.metadata?.sourceURL || item?.metadata?.url || item?.url;
+      const md = item?.markdown || '';
+      if (!u || !md) continue;
+      out.set(u, md);
+      if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
+      _SCRAPE_CACHE.set(String(u), { md, at: Date.now() });
+      fcNote(true, 'batch-scrape (0.5cr)', u);
+    }
+    const saved = (out.size - (urls.length - need.length)) * 0.5;
+    console.log(`BATCH: ${out.size - (urls.length - need.length)} pages at 0.5 credits each \u2014 ~${saved} credits saved vs individual scrapes`);
+    return out;
+  } catch (e) {
+    console.log('BATCH: error —', e.message, '— falling back to individual scrapes');
+    return out;
+  }
+};
+
 // TIMEOUT = PAYING TWICE. Aborting on our side does not cancel Firecrawl's fetch —
 // they finish it and bill it, we discard the bytes, and then the retry buys the same
 // page again. Real runs showed five `firecrawlScrape error: timeout` lines in a
@@ -2384,8 +2565,18 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     // Read the real pages IN PARALLEL (was sequential — that alone cost ~20s)
     const top = candidates.slice(0, 2); // read the top 2 leadership pages — owner-finding is the essential step, and the owner-gate saves credits elsewhere to pay for this depth
+    // BATCH: same site, both URLs known up front — 0.5 credits per page instead of
+    // 1. Falls back to an individual scrape per URL if the batch returns nothing,
+    // because finding the owner is the step this whole system exists for and it must
+    // never be weakened to save half a credit.
+    const _batched = await firecrawlBatchScrape(fcKey, top, 40000);
     const scrapes = await Promise.all(
-      top.map(u => firecrawlScrape(fcKey, u, 9000).then(md => ({ u, md })).catch(() => ({ u, md: '' })))
+      top.map(async (u) => {
+        const b = _batched.get(u);
+        if (b && b.length > 200) return { u, md: b };
+        try { return { u, md: (await firecrawlScrape(fcKey, u, 20000)) || '' }; }
+        catch { return { u, md: '' }; }
+      })
     );
     for (const { u, md } of scrapes) {
       if (md && md.length > 200) pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
@@ -3085,9 +3276,21 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     const top = picked.slice(0, 3); // pricing + about + one more: the story page earns its seconds, it is what makes the pitch sound human
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
-    const scraped = await Promise.all(top.map(p =>
-      firecrawlScrape(fcKey, p.url, 7000).then(md => ({ ...p, md: md || '' })).catch(() => ({ ...p, md: '' }))
-    ));
+    // BATCH: these URLs are all known up front and all on the same site, which is
+    // exactly the shape Firecrawl bills at 0.5 credits per page instead of 1. Any
+    // page the batch does not return — a failed submit, a slow job, a single URL —
+    // falls straight back to an individual scrape, so the audit can never be thinner
+    // because we tried to save money.
+    const batched = await firecrawlBatchScrape(fcKey, top.map(p => p.url), 45000);
+    const scraped = await Promise.all(top.map(async (p) => {
+      const fromBatch = batched.get(p.url);
+      if (fromBatch && fromBatch.length > 200) return { ...p, md: fromBatch };
+      try {
+        const md = await firecrawlScrape(fcKey, p.url, 20000);
+        if (md) console.log(`SITE AUDIT [${companyName}]: ${p.key} page fell back to an individual scrape (1 credit)`);
+        return { ...p, md: md || '' };
+      } catch { return { ...p, md: '' }; }
+    }));
     const usable = scraped.filter(p => p.md && p.md.length > 200);
     if (!usable.length) return null;
 
@@ -5357,7 +5560,25 @@ app.get('/api/cron/discover', async (req, res) => {
 });
 
 app.post('/api/discover', async (req, res) => {
-  const { keywords, keys, apiKey } = req.body;
+  const { keywords, keys, apiKey, knownDomains } = req.body;
+  // ── DEDUPE ────────────────────────────────────────────────────────────────
+  // Nothing previously stopped a company you have already researched from coming
+  // back in a later scan, taking a queue slot and — if you did not recognise the
+  // name — another ~10 Firecrawl credits for an audit you already own. The client
+  // sends every domain it already has; anything on that list never re-enters the
+  // queue. Matching is on the registrable host only (www stripped, lowercased) so
+  // http/https and trailing-path differences cannot sneak a duplicate through.
+  const _knownHosts = new Set();
+  for (const d of (Array.isArray(knownDomains) ? knownDomains : [])) {
+    const h = String(d || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('?')[0];
+    if (h && h.includes('.')) _knownHosts.add(h);
+  }
+  const _hostOf = (u) => {
+    try { return new URL(String(u).startsWith('http') ? u : 'https://' + u).hostname.replace(/^www\./, '').toLowerCase(); }
+    catch { return ''; }
+  };
+  if (_knownHosts.size) console.log(`DEDUPE: client already holds ${_knownHosts.size} domains — those will be skipped`);
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
   // Google Places key comes from Render env vars (not the frontend), so it stays
   // server-side and can't leak. Set GOOGLE_PLACES_KEY in Render's environment tab.
@@ -6339,7 +6560,15 @@ const WEIGHTS = {
     const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.70); // 84 max from Adzuna
     const srcTally = {};
     const scored = [];
+    let _skippedKnown = 0;
     for (const c of allScored) {
+      // Already in the client's pipeline — skip before it takes a queue slot.
+      // Done here rather than earlier so the dedupe count reflects leads that
+      // would genuinely have been returned, not ones filtered for other reasons.
+      if (_knownHosts.size) {
+        const h = _hostOf(c.website || '');
+        if (h && _knownHosts.has(h)) { _skippedKnown++; continue; }
+      }
       const isPureAdzuna = c.sourceCount === 1 && c.source === 'adzuna_ai';
       if (isPureAdzuna) {
         srcTally['_adzuna'] = (srcTally['_adzuna']||0) + 1;
@@ -6348,6 +6577,7 @@ const WEIGHTS = {
       scored.push(c);
       if (scored.length >= MAX_TOTAL) break;
     }
+    if (_skippedKnown) console.log(`DEDUPE: skipped ${_skippedKnown} companies already in your pipeline (~${_skippedKnown * 10} Firecrawl credits not re-spent)`);
 
     // Breakdown by source
     const breakdown = {};
@@ -6498,7 +6728,14 @@ const checkFacebookAds = async (name, fbToken) => {
   } catch { return { hasAds: false, ads: [], confirmed: false }; }
 };
 
-app.post('/api/research', async (req, res) => {
+// ═══ RESEARCH — now callable both as an HTTP handler AND programmatically ═══
+// Nothing inside this function changed. It was only given a name so the async job
+// runner below can invoke it with a stub response object and capture the result,
+// instead of streaming it down a single very long-lived HTTP request. Research on
+// a slow site takes minutes; browsers throttle background tabs and Render's proxy
+// severs long connections, which is why switching tabs mid-run killed the request
+// and why one lead sat at 359 seconds with the UI spinning on a dead socket.
+const runResearch = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
   // outer scope so it's visible to all references (fixes scope-leak crash).
   let hasCTA = false;
@@ -6641,7 +6878,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
       scrapeHomepage(),
-      fbToken ? checkFacebookAds(company, fbToken) : checkAdLibraryViaFirecrawl(company, firecrawlKey),
+      // ── AD LIBRARY: OFF BY DEFAULT ──────────────────────────────────────
+      // The Firecrawl fallback costs 1 credit and up to 30s on EVERY lead, and it
+      // cannot influence a single decision. Its `countReliable` flag is hardcoded
+      // to false — deliberately, because q=company is a keyword search across ALL
+      // advertisers, not a search by Page — and every consumer downstream gates on
+      // `countReliable !== false`, which can therefore never be true. So the count
+      // never reaches money-on-fire, never reaches the product recommendation, and
+      // in practice returns "not detected" on essentially every local business
+      // because facebook.com is heavily bot-protected.
+      // The Meta TOKEN path is different: that IS a real per-advertiser lookup, so
+      // it still runs whenever a token is present. Only the scrape fallback is
+      // gated. Set AD_LIBRARY_SCRAPE=on to restore it.
+      fbToken
+        ? checkFacebookAds(company, fbToken)
+        : (process.env.AD_LIBRARY_SCRAPE === 'on'
+            ? checkAdLibraryViaFirecrawl(company, firecrawlKey)
+            : Promise.resolve({ hasAds: false, adCount: 0, confirmed: false, countReliable: false, skipped: true })),
       domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
       domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
       enrichCompany(domain, ninjaPearKey),
@@ -6761,6 +7014,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     let painSummary = '';
     let careers = null;
     let sitePages = null;
+    // GOOGLE LOCAL SERVICES ADS — declared out here, alongside sitePages, on
+    // purpose. The first version sat inside the `if (apiKey && ...) { try {` block
+    // that wraps the Brain, so it was invisible to the response object 400 lines
+    // later — a guaranteed ReferenceError on every research run, and the exact
+    // shape of the `industry` bug that silently disabled owner resolution for
+    // weeks. LSA detection reads scraped text only; it has no dependency on the
+    // Brain, so there is no reason for it to live inside that block.
+    let lsa = { eligible: false, badgeFound: false, evidence: '', status: 'not_checked' };
     if (cachedContact && cachedContact.pain && Array.isArray(cachedContact.pain.signals) && cachedContact.pain.signals.length) {
       publicPainSignals = cachedContact.pain.signals;
       painSummary = cachedContact.pain.summary || '';
@@ -6828,6 +7089,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
+      // Free: reuses the homepage plus whatever interior pages the auditor read.
+      // The badge is frequently in a footer or on the About page, not above the fold.
+      lsa = detectLSA(
+        verifiedIndustry || req.body.industry || '',
+        [content, sitePages && sitePages.ownerStory, sitePages && sitePages.storyQuote].filter(Boolean).join('\n') || content,
+        company
+      );
       const pain = painRes.status === 'fulfilled' ? painRes.value : null;
       if (pain && pain.signals && pain.signals.length > 0) {
         publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source || 'web'})`);
@@ -7072,7 +7340,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                 ? `${reliableCount} active paid ads confirmed — real budget flowing into a funnel we can audit.`
                 : `Google Ads tag live on the site — real paid budget flowing into a funnel we can audit.`,
               product: 'End-to-End Marketing / Ads Management',
-              proofPoint: 'Sean ($140k on $4k in one month, ~30x over 8 months)',
+              proofPoint: 'Sean, a plumbing company ($140k on $4k in one month, ~30x over 8 months) — describe only as "a plumbing company", never named',
             });
           }
 
@@ -7385,7 +7653,7 @@ THIS IS THE MOST IMPORTANT THING TO UNDERSTAND ABOUT THIS LEAD:
 They have ALREADY DECIDED to spend money on marketing. The budget is allocated (~$70k/yr). What they have NOT decided is HOW to spend it. We are not asking them to open their wallet — it is already open.
 THE PITCH: "You're about to hire one junior marketer for $70k. For that money you can have a senior team — strategy, ads, creative, and the technology behind it — that has already done this." A single junior hire cannot run strategy, build the funnel, produce creative, AND manage spend. A team can.
 This maps to the CEO's ICP #3 and #4 — CROJungle's CORE PRODUCT. Do NOT pitch a software build here unless the audit turns up an overwhelming ops problem.
-The strongest proof point here is Sean ($140k on $4k in one month, ~30x over 8 months) — it is exactly the "one marketing hire vs. a team" comparison, in dollars.`
+The strongest proof point here is Sean, a plumbing company ($140k on $4k in one month, ~30x over 8 months) — it is exactly the "one marketing hire vs. a team" comparison, in dollars. Describe him only as "a plumbing company"; never name him and never invent surrounding detail.`
 : (manualRoleCount >= 2) ? `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
 They have already identified the problem and allocated the budget (~$55k/yr per role). They have started a hiring process but have NOT yet committed.
 THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $40k-$100k+ custom build.
@@ -7422,6 +7690,13 @@ TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools;
 
 ADS:
 - Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
+- GOOGLE LOCAL SERVICES ADS (LSA): ${lsa.status === 'running_lsa'
+  ? `\u2705 THEY ARE RUNNING LSA. Proof: "${String(lsa.evidence).slice(0,140)}" — the "${lsa.marker}" mark is issued only through Local Services Ads. This is the STRONGEST possible qualifying signal we have: they are already paying Google per lead, which means budget exists, intent exists, and the only question is what happens to those leads after they arrive. Lead with what happens AFTER the LSA call comes in — LSA charges per lead, so an unanswered or un-followed-up lead is money already spent and wasted. You MAY state that they run Local Services Ads. You may NOT state or guess their budget, lead volume, cost per lead, or ranking.`
+  : lsa.status === 'eligible_ambiguous_badge'
+  ? `Their site says "${lsa.marker}", but that exact wording is ALSO used for a free Google Business Profile verification that has nothing to do with paid advertising. It is NOT proof they run LSA. Do NOT claim they advertise on LSA. You may reference Local Services Ads only as a question or an opportunity, never as something they are doing.`
+  : lsa.status === 'eligible_no_badge_on_site' || lsa.status === 'eligible_unknown'
+  ? `Their trade IS eligible for Local Services Ads (the Google-verified pack that sits ABOVE both paid ads and organic results, where the searcher contacts the business directly). We found no badge on their site — but that proves NOTHING, because many advertisers never display it. So: NEVER say they are not running LSA, never say they are missing from it, never say competitors outrank them there. What you MAY do is raise the placement itself as the thing worth a conversation, because it is true regardless: for "<trade> near me" searches in their market, that verified pack is the first thing a customer sees. Use this only if it genuinely fits the diagnosed bottleneck.`
+  : `This trade is not an eligible Local Services Ads category. Do not mention LSA at all.`}
 - Facebook Ads: ${fbAds.hasAds && (fbAds.countReliable !== false) ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend into a weak funnel IS the pitch.` : fbAds.hasAds ? `Ad Library keyword search returned hits for this company name, but the count is NOT attribution-verified \u2014 it may include other advertisers or even a different company with a similar name. \u26a0 You MUST NOT state an ad count, imply a specific number of ads, or say they are \"running N ads\". Putting an unverified number in a real sales email is a fabrication. If ad spend matters to the pitch you may only reference it when the Meta pixel is ALSO present, and only as \"ads appear to be running\" with no number \u2014 otherwise leave Facebook ads out of the pitch entirely.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
@@ -7483,7 +7758,14 @@ A CROJ conversation sounds like: "revenue dipped across these three product line
 We are also structurally built for scale a small shop cannot touch: optimized for $20k+/month ad spend, capable up to $5M+/month.
 
 REAL PROOF POINTS (use ONE, only where it genuinely parallels this prospect's situation — never stack them, never stretch them):
-- Small business (Sean): $140k returned on a $4k investment in a single month; ~30x average ROI over 8 months.
+- Small business (Sean, a residential PLUMBING company): $140k returned on a $4k investment in a single month; ~30x average ROI over 8 months.
+  DESCRIBE THIS CLIENT EXACTLY ONE WAY: "a plumbing company". Do NOT paraphrase it into
+  "a home-services business", "a local service business", or "a contractor" — earlier
+  batches invented a different description in every email while quoting the identical
+  $140k figure, which reads as fabricated the moment two prospects compare notes. It is
+  ONE real client. Never name him, never add a city, a team size, a timeframe or any
+  other detail that is not on this line. If a plumbing comparison does not genuinely
+  parallel this prospect, use a different proof point or none at all.
 - Small business, seasonal/high-margin, $1M topline: +$65k revenue in 3 months; on track for +$130k net profit year one and +$400k more by end of year two. Critically, that $65k offset their off-season losses for the first time in company history — the owner got a stress-free off-season for the first time ever. (This is the best proof point for an owner-operator: it is about relief, not just revenue.)
 - Enterprise (Kraft Heinz): end-to-end research, product planning, and implementation of a mobile app — 500k+ downloads.
 - Enterprise (University of Canada West): rebuilt a decayed 70,000-page digital footprint into a consolidated ~250-page site with custom CMS — turned digital decay into a working recruitment and donor tool.
@@ -8173,7 +8455,11 @@ Return ONLY valid JSON:
     const ownerNameForMatch = ((decisionMaker && decisionMaker.name) || verifiedCEO || '').toLowerCase();
     const ownerTokensM = ownerNameForMatch.split(/\s+/).filter(w => w.length >= 3);
     const emailLocalM = (email.email || '').split('@')[0].toLowerCase().replace(/[^a-z.]/g, '');
-    const ROLE_RE_M = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply)/;
+    // Home-services shops name their shared inbox after the JOB, not the department:
+    // schedule@, booking@, estimates@, dispatch@, quotes@. Joe Schmo Electrical's
+    // schedule@joe-schmo.co fell through this list and got flagged "appears to belong
+    // to a DIFFERENT person" — a false alarm on a lead that scored 98/100.
+    const ROLE_RE_M = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|schedul|book|appoint|estimat|quote|dispatch|frontdesk|front-desk|newpatient|new-patient|patients?|clients?|orders?|shop|studio|hi|hey|ask|connect|talk|reach|getstarted|get-started)/;
     // Is the mailbox just the COMPANY's name? "careelectricllc@gmail.com",
     // "geekgaragedoor@gmail.com". Compare the mailbox against the company name with
     // corporate furniture stripped — if the distinctive words line up, this is the
@@ -8270,6 +8556,7 @@ Return ONLY valid JSON:
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
       outreachChannel: reach.outreachChannel,
+      lsa,   // { eligible, badgeFound, evidence, marker, status }
       ownerEmailMatch,
       ownerEmailMatchReason,
       email: email.email||'',
@@ -8333,6 +8620,126 @@ Return ONLY valid JSON:
     console.error('Research error:', e.message);
     res.status(500).json({ error: e.message });
   }
+};
+app.post('/api/research', runResearch);
+
+// ═══ JOB QUEUE ═════════════════════════════════════════════════════════════
+// THE PROBLEM: research takes 60-360 seconds. Sending that down one HTTP request
+// fails three different ways, all of which we have actually seen:
+//   1. Switching browser tabs — background tabs get throttled, timers fire late,
+//      the fetch is aborted mid-flight and the work is lost after being paid for.
+//   2. Render's proxy severs long-lived connections on the free tier.
+//   3. When the socket dies there is no error to render, so the card spins forever.
+//      That is exactly what "A Team Garage Doors, 359s, still loading" was.
+//
+// THE FIX: accept the job, answer immediately with an id, do the work in the
+// background, and let the client poll. A poll is a sub-second request, so tab
+// throttling and proxy timeouts have nothing long-lived to kill. Close the laptop
+// mid-run and the result is waiting when you come back.
+//
+// Storage is in-process and deliberately so: a Render dyno restart loses in-flight
+// jobs, which is correct — a half-finished audit should be re-run, not resurrected.
+const _jobs = new Map();          // id -> { status, startedAt, finishedAt, company, result, error, httpStatus, progress }
+const JOB_TTL_MS = 30 * 60 * 1000;
+const JOB_MAX = 200;
+
+const _sweepJobs = () => {
+  const now = Date.now();
+  for (const [id, j] of _jobs) {
+    const age = now - (j.finishedAt || j.startedAt || now);
+    if (j.status !== 'running' && age > JOB_TTL_MS) _jobs.delete(id);
+  }
+  // Hard ceiling so a long-running process can never grow this without bound.
+  if (_jobs.size > JOB_MAX) {
+    const oldest = [..._jobs.entries()]
+      .filter(([, j]) => j.status !== 'running')
+      .sort((a, b) => (a[1].finishedAt || 0) - (b[1].finishedAt || 0));
+    for (const [id] of oldest.slice(0, _jobs.size - JOB_MAX)) _jobs.delete(id);
+  }
+};
+
+// Minimal Express-response stand-in. runResearch calls res.json(...) and
+// res.status(n).json(...) and nothing else, so this captures the outcome without
+// requiring a single change inside those 1,886 lines.
+const _captureRes = (job) => {
+  let code = 200;
+  const api = {
+    status(n) { code = n; return api; },
+    json(payload) {
+      job.httpStatus = code;
+      job.finishedAt = Date.now();
+      if (code >= 400) {
+        job.status = 'error';
+        job.error = (payload && (payload.reason || payload.error)) || `HTTP ${code}`;
+        job.result = payload;   // 422 brain-failure still carries a usable reason + screenshot
+      } else {
+        job.status = 'done';
+        job.result = payload;
+      }
+      const secs = ((job.finishedAt - job.startedAt) / 1000).toFixed(1);
+      console.log(`JOB ${job.id} [${job.company}]: ${job.status} in ${secs}s (HTTP ${code})`);
+      return api;
+    },
+  };
+  return api;
+};
+
+app.post('/api/research-async', (req, res) => {
+  _sweepJobs();
+  const id = 'job_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  const job = {
+    id,
+    status: 'running',
+    company: req.body?.company || 'unknown',
+    startedAt: Date.now(),
+    finishedAt: null,
+    result: null,
+    error: null,
+    httpStatus: null,
+  };
+  _jobs.set(id, job);
+  console.log(`JOB ${id} [${job.company}]: accepted — running in background, client will poll`);
+
+  // Fire and forget. Deliberately NOT awaited: the whole point is that the HTTP
+  // response returns now. Any throw is captured onto the job so the client sees a
+  // real error instead of a spinner that never stops.
+  Promise.resolve()
+    .then(() => runResearch(req, _captureRes(job)))
+    .catch((e) => {
+      job.status = 'error';
+      job.error = e && e.message ? e.message : String(e);
+      job.finishedAt = Date.now();
+      console.log(`JOB ${id} [${job.company}]: threw — ${job.error}`);
+    });
+
+  res.json({ jobId: id, status: 'running' });
+});
+
+app.get('/api/research-job/:id', (req, res) => {
+  const job = _jobs.get(req.params.id);
+  if (!job) {
+    // Either a dyno restart or a job swept after its TTL. Say so plainly — the
+    // client should re-run rather than poll something that will never arrive.
+    return res.status(404).json({ status: 'gone', error: 'Job not found — the server restarted or the job expired. Re-run Research for this lead.' });
+  }
+  const elapsedMs = (job.finishedAt || Date.now()) - job.startedAt;
+  if (job.status === 'running') {
+    // A run that has genuinely stopped making progress must surface as an error
+    // rather than polling forever — the exact failure this queue exists to end.
+    if (elapsedMs > 8 * 60 * 1000) {
+      job.status = 'error';
+      job.error = 'Research exceeded 8 minutes and was abandoned. This usually means Firecrawl is rate-limiting or the site never responded.';
+      job.finishedAt = Date.now();
+    }
+    return res.json({ status: job.status, elapsedMs, error: job.error || null });
+  }
+  return res.json({
+    status: job.status,
+    elapsedMs,
+    httpStatus: job.httpStatus,
+    error: job.error || null,
+    result: job.result || null,
+  });
 });
 
 app.listen(PORT, () => console.log(`CROJungle v6 — port ${PORT}`));
@@ -8585,6 +8992,21 @@ app.post('/api/send-to-hunter', async (req, res) => {
   const pitchSlug = await ensureHunterAttribute(hunterKey, 'Pitch Body');
   const subjectSlug = await ensureHunterAttribute(hunterKey, 'Pitch Subject');
   const angleSlug = await ensureHunterAttribute(hunterKey, 'Pitch Angle');
+  // ── FOLLOW-UPS ────────────────────────────────────────────────────────────
+  // A Hunter sequence step is ONE template shared by every recipient, so the only
+  // way a per-lead follow-up can reach a specific person is as a custom attribute
+  // inserted into that step. Generate has been writing followUp1/followUp2 for
+  // every lead and this route dropped them on the floor — steps 2 and 3 would have
+  // gone out generic, or not at all. Roughly a third of replies live in those two
+  // emails, so this was the largest silent loss in the send path.
+  const fu1SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Subject');
+  const fu1BodySlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Body');
+  const fu2SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 2 Subject');
+  const fu2BodySlug = await ensureHunterAttribute(hunterKey, 'Follow Up 2 Body');
+  const fuSlugsReady = !!(fu1SubjSlug && fu1BodySlug && fu2SubjSlug && fu2BodySlug);
+  if (!fuSlugsReady) {
+    console.log('HUNTER: could not create all four follow-up attributes — steps 2 and 3 will fall back to whatever static text is in the sequence. Check the Hunter key\'s permissions.');
+  }
 
   for (const lead of leads) {
     if (!lead.email) { results.failed.push({ name: lead.name, reason: 'no email' }); continue; }
@@ -8628,6 +9050,25 @@ app.post('/api/send-to-hunter', async (req, res) => {
       if (pitchSlug) customAttrs[pitchSlug] = (lead.pitch || '').slice(0, 5000);
       if (subjectSlug) customAttrs[subjectSlug] = lead.subject || '';
       if (angleSlug) customAttrs[angleSlug] = lead.brainAudit?.pitchAngle || '';
+
+      // Generate stores these as { subject, body }. Push all four so steps 2 and 3
+      // of the sequence carry THIS lead's follow-ups rather than a shared template.
+      const fu1 = lead.followUp1 || {};
+      const fu2 = lead.followUp2 || {};
+      if (fu1SubjSlug) customAttrs[fu1SubjSlug] = String(fu1.subject || '').slice(0, 500);
+      if (fu1BodySlug) customAttrs[fu1BodySlug] = String(fu1.body || '').slice(0, 5000);
+      if (fu2SubjSlug) customAttrs[fu2SubjSlug] = String(fu2.subject || '').slice(0, 500);
+      if (fu2BodySlug) customAttrs[fu2BodySlug] = String(fu2.body || '').slice(0, 5000);
+
+      // Visible warning rather than a silent gap: a lead pushed without follow-up
+      // copy will receive whatever static text sits in steps 2 and 3, which is
+      // exactly the generic bump the whole follow-up design exists to avoid.
+      const missingFu = [];
+      if (!fu1.body) missingFu.push('follow-up 1');
+      if (!fu2.body) missingFu.push('follow-up 2');
+      if (missingFu.length) {
+        console.log(`HUNTER [${lead.name}]: pushed WITHOUT ${missingFu.join(' and ')} — re-run Generate for this lead or steps 2/3 will send generic text.`);
+      }
 
       // Upsert (create-or-update by email) — avoids duplicate-email errors if
       // this lead was already saved in Hunter from an earlier find/enrich step.
