@@ -1095,7 +1095,24 @@ const LSA_AMBIGUOUS_RE = /google\s*verified|verified\s+on\s+google/i;
 // credits. Returns a positive finding or an explicit "unknown" — never a negative
 // claim, because we have no way to prove a business is NOT advertising.
 const detectLSA = (industryLabel, siteText, companyName) => {
-  const eligible = LSA_ELIGIBLE.has(String(industryLabel || ''));
+  const label = String(industryLabel || '').trim();
+  const eligible = LSA_ELIGIBLE.has(label);
+  // THREE STATES, NOT TWO. LSA_ELIGIBLE is keyed to our own Google-Places category
+  // labels. A lead from any other source (SBA loans, news, job boards) arrives with
+  // a free-text industry like "Construction Services" that matches nothing here —
+  // and the old code reported that as "Not an LSA category", which is a claim we
+  // have no basis for. If the label is not one we recognise at all, we do not know,
+  // and the honest answer is that we did not check. Only a label we DO recognise,
+  // and that is absent from the eligible set, is a real "not eligible".
+  // CATEGORY_TIER is declared later in the file but this function only ever runs
+  // long after module load, so it is always initialised by call time. (A guard like
+  // `CATEGORY_TIER ? ... : false` would be theatre — a const in the temporal dead
+  // zone throws a ReferenceError rather than evaluating falsy, so it would not
+  // protect anything.)
+  const labelRecognised = Object.prototype.hasOwnProperty.call(CATEGORY_TIER, label);
+  if (!eligible && !labelRecognised) {
+    return { eligible: false, badgeFound: false, evidence: '', status: 'not_checked' };
+  }
   const hay = String(siteText || '');
   if (!hay || hay.length < 200) {
     return { eligible, badgeFound: false, evidence: '', status: eligible ? 'eligible_unknown' : 'not_eligible' };
@@ -1943,7 +1960,15 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
       body: JSON.stringify({
         urls: need,
         formats: ['markdown'],
-        onlyMainContent: true,
+        // MUST MATCH firecrawlScrape EXACTLY. Both write into the same URL-keyed
+        // cache, so if batch stripped nav/header/footer and the single scrape did
+        // not, a cached page would mean something different depending on which
+        // path happened to fetch it first. That is not academic: Google Guaranteed
+        // and Google Verified badges usually sit in a FOOTER, so onlyMainContent:
+        // true would have silently blinded the LSA detector on every interior page
+        // the batch handled. Same credits either way — there is no reason to differ.
+        onlyMainContent: false,
+        waitFor: 1500,
         blockAds: true,
         removeBase64Images: true,
         maxAge: FC_CACHE_MS,
@@ -2544,6 +2569,33 @@ const looksLikeRealName = (n) => {
 //
 // THE FIX: Firecrawl /map asks the site for its ACTUAL structure. We then pick
 // the pages most likely to name a human, and read those.
+// ═══ URL RANKING — SHARED BY EVERY CALLER THAT PICKS PAGES OFF A SITEMAP ═══
+// The map call no longer passes a `search` term (one unfiltered map serves all
+// callers, which fixed the careers bug and cut two credits a lead). That was the
+// right change, but it silently broke a hidden assumption in EVERY consumer:
+// they all took the FIRST regex match in the returned list, which only worked
+// because Firecrawl used to return results already ranked by relevance. With a
+// raw sitemap, "first match" is close to arbitrary.
+//
+// Two failure modes it introduced, both real:
+//   1. The pattern was tested against the FULL url, so a domain like
+//      aboutusroofing.com matched an "about" pattern on every single page.
+//   2. /blog/2019/about-our-new-truck outranked /about purely by list position.
+//
+// This helper is the single correct implementation. Match the PATH only, prefer
+// shallower paths, then shorter ones. Every caller uses it so the bug cannot
+// come back in one place while being fixed in another.
+const rankUrlsByIntent = (urls, re, limit = 4) => {
+  const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
+  return (urls || [])
+    .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
+    .filter(u => re.test(pathOf(u)))
+    .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, limit)
+    .map(x => x.u);
+};
+
 const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
 
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
@@ -2556,10 +2608,10 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     // Ask the site for its real URLs, filtered toward leadership pages
     const urls = await firecrawlMap(fcKey, website, 'about team leadership founder owner');
-    const candidates = urls
-      .filter(u => LEADERSHIP_URL_HINTS.test(u))
-      .filter(u => !/\.(pdf|jpg|png|gif|zip|mp4)$/i.test(u))
-      .slice(0, 4);
+    // Ranked, not first-in-list. This is the function the whole system exists for;
+    // reading /blog/meet-the-team-at-our-new-location instead of /about is the
+    // difference between resolving an owner and returning nothing.
+    const candidates = rankUrlsByIntent(urls, LEADERSHIP_URL_HINTS, 4);
 
     console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
 
@@ -3267,13 +3319,33 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     const urls = await firecrawlMap(fcKey, website, 'pricing services about our story book schedule quote'); // cached — usually free
     if (!urls.length) return null;
     const clean = urls.filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u));
+
+    // ── PICK THE RIGHT PAGE, NOT THE FIRST ONE THAT MATCHES ──────────────────
+    // This used to be `clean.find(...)` against the FULL url, which worked only
+    // because the map call passed a search term and Firecrawl returned results
+    // already ranked by relevance. The map is now unfiltered (one call serves every
+    // caller), so "first match in sitemap order" became close to random — and
+    // testing the whole url meant a domain like aboutusroofing.com matched the
+    // About pattern on every single page. The owner-story extraction quietly
+    // stopped firing as a result, which is the single best personalisation the
+    // system has. Rank the candidates instead:
+    //   · match against the PATH only, so the domain cannot create false hits
+    //   · prefer shallower paths — /about beats /blog/2019/about-our-new-truck
+    //   · prefer shorter paths — /about beats /about-our-service-area-and-team
     const picked = [];
     for (const intent of PAGE_INTENT) {
-      const hit = clean.find(u => intent.re.test(u) && !picked.some(p => p.url === u));
-      if (hit) picked.push({ key: intent.key, url: hit });
+      const ranked = rankUrlsByIntent(clean, intent.re, 4).filter(u => !picked.some(p => p.url === u));
+      if (ranked.length) picked.push({ key: intent.key, url: ranked[0] });
     }
     if (!picked.length) return null;
-    const top = picked.slice(0, 3); // pricing + about + one more: the story page earns its seconds, it is what makes the pitch sound human
+
+    // ALWAYS keep the About page if one was found. The slice used to cut on
+    // PAGE_INTENT order alone, so a site with pricing + services + booking pages
+    // could push the story page out — losing the one detail that makes a cold
+    // email sound like a person read the site.
+    const about = picked.find(p => p.key === 'about');
+    const rest = picked.filter(p => p.key !== 'about');
+    const top = about ? [about, ...rest].slice(0, 3) : picked.slice(0, 3);
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     // BATCH: these URLs are all known up front and all on the same site, which is
@@ -3350,6 +3422,12 @@ ${corpus}` }]
 
     const out = {
       pagesRead: usable.map(p => p.key),
+      // RAW TEXT of the interior pages we read. The LLM summary fields below are
+      // useful for the pitch but useless for pattern detection — a "Google
+      // Guaranteed" badge in a footer never survives summarisation. Keeping the
+      // corpus lets free, mechanical checks (LSA today, others later) scan pages
+      // we have ALREADY paid to fetch instead of paying again.
+      rawText: usable.map(p => p.md).join('\n\n').slice(0, 40000),
       ownerStory,
       storyQuote,
       prices,
@@ -3378,7 +3456,15 @@ const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
   try {
     const urls = await firecrawlMap(fcKey, website, 'careers jobs hiring join team');
     const CAREER_RE = /(career|jobs?|employment|join[-_]?(our[-_]?)?team|hiring|work[-_]with[-_]us|opportunit)/i;
-    paths = urls.filter(u => CAREER_RE.test(u) && !/\.(pdf|jpg|png)$/i.test(u)).slice(0, 2);
+    paths = rankUrlsByIntent(urls, CAREER_RE, 2);
+    // FREE GATE: the map is already cached, so this costs nothing. If the sitemap
+    // contains no careers-shaped URL at all, the site almost certainly has no
+    // careers page — and guessing /careers, /jobs, /employment means paying for
+    // up to three 404s, which Firecrawl still bills as successful fetches.
+    if (!paths.length && urls.length > 3) {
+      console.log(`CAREERS [${companyName}]: sitemap has ${urls.length} URLs and none look like a careers page — skipping (saves up to 3 credits on guessed 404s)`);
+      return null;
+    }
   } catch { /* fall through to guesses */ }
   if (!paths.length) paths = ['/careers', '/jobs', '/employment'].map(p => base + p);
   let md = '';
@@ -7073,13 +7159,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (publicPainSignals.length === 0 && !_bigEnoughForWebPain) {
         console.log(`PAIN [${company}]: skipped the web pain search — owner-operated local business, no Glassdoor/Indeed footprint to find (saves ~2-4 credits)`);
       }
-      // CAREERS PAGE: only pays off through revenue-per-employee, which needs a
-      // verified headcount. Places leads deliberately never get one, so on those the
-      // map + up to two scrapes bought a page nothing could use.
-      const _careersUseful = typeof verifiedEmployees === 'number' && verifiedEmployees > 0;
-      if (website && !_careersUseful) {
-        console.log(`CAREERS [${company}]: skipped — no verified headcount, so posted roles cannot drive the revenue-per-employee argument (saves ~2-3 credits)`);
-      }
+      // CAREERS PAGE — GATE CORRECTED.
+      // A previous version skipped this whenever headcount was unverified, on the
+      // reasoning that careers "only pays off through revenue-per-employee". That
+      // was wrong and expensive. The careers page ALSO produces the ops-hiring
+      // signal (_careersOps -> _realOpsSignal -> OPERATIONS), which is the only
+      // route to the $40k-$100k Custom Software Build, and it needs no headcount
+      // whatsoever. It likewise produces the marketing-hire signal that routes to
+      // the retainer. Skipping it to save ~3 credits was trading the highest-value
+      // pitch in the catalogue for pennies — and, because Places leads NEVER have
+      // verified headcount, it disabled the branch on essentially every lead.
+      // The scrape now runs; the cheap gate below decides whether it is worth it,
+      // and that gate reads a sitemap we have already paid for.
+      const _careersUseful = true;
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
       const [painRes, revRes, carRes, siteRes] = await Promise.allSettled([
         needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
@@ -7089,13 +7181,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
-      // Free: reuses the homepage plus whatever interior pages the auditor read.
-      // The badge is frequently in a footer or on the About page, not above the fold.
-      lsa = detectLSA(
-        verifiedIndustry || req.body.industry || '',
-        [content, sitePages && sitePages.ownerStory, sitePages && sitePages.storyQuote].filter(Boolean).join('\n') || content,
-        company
-      );
       const pain = painRes.status === 'fulfilled' ? painRes.value : null;
       if (pain && pain.signals && pain.signals.length > 0) {
         publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source || 'web'})`);
@@ -7109,6 +7194,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     } else {
       console.log(`Deep audit skipped for ${company}: no owner found (unsendable lead) — saved pain + revenue credits`);
     }
+
+    // ═══ GOOGLE LSA — ALWAYS, FOR EVERY LEAD ═══════════════════════════════
+    // This used to sit inside the deep-audit block above, which meant it silently
+    // did NOT run whenever that block was skipped (no owner found and not a Places
+    // lead, or a cached contact already carried pain data). On those leads `lsa`
+    // kept its default and the UI then rendered "Eligible - participation unknown"
+    // for a check that had never happened — asserting eligibility we never
+    // determined, which is precisely the class of unearned claim this system
+    // exists to avoid.
+    // It costs ZERO credits: it reads the homepage we already scraped plus the raw
+    // text of any interior pages the site auditor already fetched. There is no
+    // reason to gate a free check behind an expensive one.
+    lsa = detectLSA(
+      verifiedIndustry || req.body.industry || '',
+      [content, sitePages && sitePages.rawText].filter(Boolean).join('\n') || content,
+      company
+    );
 
     // ═══ FIREPROOF EMAIL ENGINE ════════════════════════════════════════════
     // Runs AFTER the CEO name is known (Hunter → About-page → Brain), because
@@ -9053,8 +9155,12 @@ app.post('/api/send-to-hunter', async (req, res) => {
 
       // Generate stores these as { subject, body }. Push all four so steps 2 and 3
       // of the sequence carry THIS lead's follow-ups rather than a shared template.
-      const fu1 = lead.followUp1 || {};
-      const fu2 = lead.followUp2 || {};
+      // Belt and braces: prefer the lead-level fields, fall back to the full
+      // Generate payload. A lead restored from storage may carry only the latter,
+      // and steps 2 and 3 going out generic is a silent failure — the email still
+      // sends, it just stops being personalised, which is the whole point.
+      const fu1 = lead.followUp1 || (lead.generatedResult && lead.generatedResult.followUp1) || {};
+      const fu2 = lead.followUp2 || (lead.generatedResult && lead.generatedResult.followUp2) || {};
       if (fu1SubjSlug) customAttrs[fu1SubjSlug] = String(fu1.subject || '').slice(0, 500);
       if (fu1BodySlug) customAttrs[fu1BodySlug] = String(fu1.body || '').slice(0, 5000);
       if (fu2SubjSlug) customAttrs[fu2SubjSlug] = String(fu2.subject || '').slice(0, 500);
