@@ -2567,24 +2567,45 @@ const applyPattern = (pattern, fullName, domain) => {
 // free verification API. MyEmailVerifier: 100 free/day, no credit card, credits
 // never expire — 60x Hunter's monthly ceiling.
 // Returns: { valid, catchAll, unknown }
+// The verifier can also simply STOP WORKING — free tier is a daily allowance, and
+// a spent or rejected key returns no Status at all. The old code folded that into
+// `unknown`, which is indistinguishable from a mail server that declined to answer.
+// Same disease as the Hunter null: an outage of ours gets reported as a fact about
+// the prospect. Latched and named so a dead verifier can never masquerade as a
+// verified negative.
+let VERIFIER_EXHAUSTED = false;
+let VERIFIER_DEAD = false;
 const verifyEmailSMTP = async (email, verifierKey) => {
-  if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true };
+  if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
+  if (VERIFIER_EXHAUSTED || VERIFIER_DEAD) return { valid: null, catchAll: null, unknown: true, error: true };
   try {
     const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
     const r = await fetchT(url, {}, 12000);
     const d = await safeJson(r);
     const status = String(d?.Status || d?.status || '').toLowerCase();
+    const blob = JSON.stringify(d || {}).toLowerCase();
+    // No status at all means the call did not actually run a check.
+    if (!status) {
+      if (/limit|quota|credit|exceed|insufficient|upgrade/.test(blob)) {
+        if (!VERIFIER_EXHAUSTED) console.log(`\ud83d\udd34 EMAIL VERIFIER OUT OF CREDITS — SMTP checks are no longer running. Nothing below can be read as "this mailbox does not exist"; it means we could not ask.`);
+        VERIFIER_EXHAUSTED = true;
+      } else if (r.status === 401 || r.status === 403 || /invalid.?key|unauthor|forbidden/.test(blob)) {
+        if (!VERIFIER_DEAD) console.log(`\ud83d\udd11 EMAIL VERIFIER KEY REJECTED — SMTP verification is off. This is not evidence about any prospect.`);
+        VERIFIER_DEAD = true;
+      }
+      return { valid: null, catchAll: null, unknown: true, error: true };
+    }
     const catchAll = /true|yes/i.test(String(d?.Catch_All_Status ?? d?.catch_all ?? ''));
     return {
       valid: status === 'valid',
       invalid: status === 'invalid',
       catchAll,
-      unknown: !status || status === 'unknown',
+      unknown: status === 'unknown',
       raw: status,
     };
   } catch(e) {
     console.log('SMTP verify failed:', e.message);
-    return { valid: null, catchAll: null, unknown: true };
+    return { valid: null, catchAll: null, unknown: true, error: true };
   }
 };
 
@@ -2599,7 +2620,14 @@ const isCatchAllDomain = async (domain, verifierKey) => {
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
   const nonsense = `zz9x${Math.random().toString(36).slice(2, 10)}qq@${domain}`;
   const res = await verifyEmailSMTP(nonsense, verifierKey);
-  // If a mailbox that cannot possibly exist comes back "valid", it's catch-all.
+  // A FAILED probe is not a normal domain. The old line printed "normal domain
+  // (SMTP trustworthy)" whenever the probe errored, which asserted that every
+  // subsequent SMTP result could be trusted at exactly the moment none of them
+  // could. Return null — genuinely unknown — and say so.
+  if (res.error) {
+    console.log(`Catch-all probe [${domain}]: COULD NOT RUN — the verifier did not answer, so SMTP results for this domain prove nothing either way.`);
+    return null;
+  }
   const isCatchAll = res.valid === true || res.catchAll === true;
   catchAllCache.set(domain, isCatchAll);
   console.log(`Catch-all probe [${domain}]: ${isCatchAll ? 'CATCH-ALL (SMTP unreliable here)' : 'normal domain (SMTP trustworthy)'}`);
@@ -4799,9 +4827,56 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       }
     }
 
-    // A server that actively DENIED the address means this person genuinely has no
-    // mailbox here. Sending would guarantee a bounce, and bounces damage the domain.
-    console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here. BLOCKED.`);
+    // ── COMPANY MAILBOX — the route this ICP actually uses ────────────────
+    // buildCandidates only ever builds PERSONAL patterns (first.last, flast, ...).
+    // For an owner-operated local service business that is frequently the one
+    // address that does not exist: the owner runs the shop from info@ and gives out
+    // a phone number. Four consecutive live leads proved it — Roof Panda, Garage
+    // Service Co, Carolina ChiroCare, Tuck & Howell all resolved an owner at high
+    // confidence, published a phone number on every page, and had every personal
+    // pattern fail. Every one scored 40/100 against a 45 floor and could not be
+    // approved. The pipeline had no route left, so Generate never ran.
+    //
+    // This does NOT relax the send bar. The address still has to be SMTP-VERIFIED
+    // on a domain we have already confirmed is not catch-all, so it is a real
+    // mailbox and cannot bounce — tier 2, exactly like any other verified address.
+    // The scorer then reads it correctly on its own: a confirmed owner plus a
+    // verified mailbox is 74, while an UNVERIFIED role inbox stays at 38. The
+    // distinction that matters was already encoded; nothing was ever trying it.
+    //
+    // Honesty is preserved by labelling: we do not claim this is his personal box.
+    // We say it is the company's, that he runs the company, and that the mail
+    // should open with his name.
+    if (verifierKey && name && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+      for (const box of ['info', 'office', 'contact', 'service']) {
+        const candidate = `${box}@${domain}`;
+        const v = await verifyEmailSMTP(candidate, verifierKey);
+        if (v.valid === true) {
+          console.log(`✓ EMAIL [${domain}] T2 COMPANY MAILBOX (SMTP-verified): ${candidate} — ${name}'s personal address does not resolve, but this mailbox is real. At an owner-run business it reaches him.`);
+          return {
+            email: candidate, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null,
+            companyMailbox: true,
+            label: `Company mailbox, SMTP-verified. ${name}'s personal address could not be resolved; at an owner-operated business this inbox is his desk. Open the email with his name.`,
+          };
+        }
+        if (v.error) break;   // verifier died mid-loop — stop, do not draw conclusions
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    // Genuinely nothing left. Say WHICH kind of nothing: a server that actively
+    // denied every address is evidence about the prospect; a spent Hunter balance
+    // or a dead verifier is evidence about us, and must never be reported as the
+    // former.
+    const _why = _lookupBlocked
+      ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits')
+      : (VERIFIER_EXHAUSTED || VERIFIER_DEAD) ? 'the email verifier stopped answering'
+      : null;
+    if (_why) {
+      console.log(`⚠ EMAIL [${domain}] NOT RESOLVED for ${name} — but a paid lookup was unavailable (${_why}). This is NOT proof that no mailbox exists; re-run once credits are restored.`);
+    } else {
+      console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here, and no company mailbox is live either. BLOCKED.`);
+    }
     return fail();
   }
 
