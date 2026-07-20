@@ -4912,10 +4912,42 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     }
   }
 
+  // ── EPONYMOUS, second placement ───────────────────────────────────────────
+  // The eponymous test lives inside the SMTP branch above, which only runs when the
+  // catch-all probe came back a definite `false`. When the verifier is unavailable
+  // that probe returns null, the whole branch is skipped, and this — the strongest
+  // free signal we have — was skipped with it. It needs no verifier: if the company
+  // is named after the person, a first-name mailbox on their own domain is a fact
+  // about the business, not a guess.
+  if (name && catchAll !== true) {
+    const nameParts = String(name).toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const domRoot = domain.split('.')[0].toLowerCase();
+    if (nameParts.some(w => domRoot.includes(w))) {
+      const epEmail = `${nameParts[0]}@${domain}`;
+      console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
+      return {
+        email: epEmail, tier: 2, score: 88, sendable: true, name, pattern: '{first}',
+        label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain`,
+      };
+    }
+  }
+
   // ── TIER 4: no catch-all, no pattern, no evidence → genuine guess. NOT sendable. ──
+  // Kept as DATA, never as a result. It is returned so the UI can show what the
+  // address would probably be, with sendable:false so every gate refuses it. Say
+  // plainly whether this is a fact about them or an outage of ours — a lead blocked
+  // because our verifier is down is worth re-running, and one blocked because the
+  // mail server denied every address is not.
   const inferred = candidates[0];
-  console.log(`⚠ EMAIL [${domain}] T4 inferred only (no evidence, bounce risk real): ${inferred.email} — BLOCKED from sending`);
-  return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern };
+  const _blockWhy = (VERIFIER_EXHAUSTED || VERIFIER_DEAD)
+    ? 'the email verifier is unavailable, so nothing could be checked'
+    : catchAll === null
+    ? 'the catch-all probe could not run, so SMTP results would prove nothing'
+    : _lookupBlocked
+    ? (_lookupBlocked === 'hunter_key_rejected' ? 'the Hunter key was rejected' : 'Hunter is out of credits')
+    : 'no evidence of this mailbox from any source';
+  console.log(`⚠ EMAIL [${domain}] T4 inferred only \u2014 ${inferred.email} is a GUESS and is BLOCKED from sending. Reason: ${_blockWhy}.`);
+  return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern, blockReason: _blockWhy };
 };
 
 // FACEBOOK AD LIBRARY VIA FIRECRAWL — automates the manual "All ads" check.
@@ -5558,11 +5590,25 @@ const scoreReachability = (c) => {
   const addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
   const local = (addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
   const tier = c.emailResult ? c.emailResult.tier : null;
-  const deliverable = tier === 1 || tier === 2;      // verified real mailbox
-  const patternEmail = tier === 3;                   // built from pattern, unverified
+  // SENDABILITY IS THE ONLY THING THAT COUNTS AS "WE HAVE AN EMAIL".
+  // The tier table already decides this: T1/T2/T3 are sendable, T4 (inferred guess)
+  // and T5 (nothing) are not. Reachability used to ignore that and judge the address
+  // by its SHAPE — `personalMailbox` is a regex on the local part — so a pure T4
+  // guess that happened to look like first.last scored 58, cleared the 45 floor,
+  // passed Research, passed Generate, and landed in the Send tab, where the send
+  // guard then refused it for being unsendable. Three gates, three different
+  // answers about the same lead, and the disagreement only surfaced at the very end.
+  // Garage Service Co. did exactly this: aviram.azulay@ was never verified, the
+  // Generate checklist said "may bounce (40/100)", and reachability still said 64.
+  const emailSendable = !!(c.emailResult && c.emailResult.sendable === true);
+  const deliverable = emailSendable && (tier === 1 || tier === 2);   // verified real mailbox
+  const patternEmail = emailSendable && tier === 3;                  // sendable, not SMTP-proven
   const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
   const isRoleInbox = !!local && ROLE_INBOX.test(local);
-  const personalMailbox = !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
+  // Shape of the mailbox, NOT evidence that it exists. Only ever used to decide how
+  // GOOD a sendable address is — never to decide that we have one. Gated on
+  // sendability for exactly that reason.
+  const personalMailbox = emailSendable && !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
   const emailMatchesOwner = ownerTokens.length > 0 && !!local && localMatchesName(local, ownerTokens);
   // A SENIOR OPERATOR (GM, VP, Director, Partner, Principal) at a small business is
   // close to the owner, feels the pain, and can forward or influence the buy — worth
