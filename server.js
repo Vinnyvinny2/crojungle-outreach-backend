@@ -1324,8 +1324,20 @@ const CATEGORY_TIER = {
 
   // Cut. Average ticket too low, or the work is won by bid and relationship rather
   // than by inbound marketing, so nothing we sell moves their revenue.
-  'Tree Service':'C',      // $500-2k a job
-  'Garage Doors':'C',      // $300-700 average ticket
+  // RESTORED TO B on the industry data. The 'C' cut cited a $300-700 ticket, but
+  // that is the REPAIR-only figure: replacements run $1,200-$4,500+, the trade
+  // benchmarks 10-15% of gross revenue on marketing for growth (5-8% in maintenance
+  // mode) — ABOVE the SBA's 7-8% general figure — $2M single-location operators are
+  // ordinary, and ownership is still overwhelmingly independent rather than
+  // consolidated. At 10-15% of $2M that is $17-25k/month of marketing budget, which
+  // funds the retainer twice over. Gated behind a higher review floor below so we
+  // get the crewed operators rather than the one-van repair guys.
+  'Garage Doors':'B',
+  // Same correction, same shape. A 2-truck tree crew is $750k-$1.5M and a
+  // crane-capable operator is $2M-$4M, benchmarking 5-10% on marketing. The small
+  // ones genuinely cannot fund us; the large ones clearly can. Size, not category,
+  // is the real filter — so this is reinstated behind the high review floor.
+  'Tree Service':'B',
   'Lawn Care':'C',         // $50-200/mo recurring
   Signage:'C',             // B2B, low volume, relationship-won
   Landscaping:'C',         // COMMERCIAL landscape contracts are won by bid, not by
@@ -1400,6 +1412,34 @@ const GP_CATEGORIES = [
   // auto repair — low ticket, most stay solo/sub-$800k. The review-count revenue
   // proxy would bury them anyway; not worth spending queries on them.
 ];
+// ── REVIEW FLOOR BY TICKET SIZE ────────────────────────────────────────────
+// One global MIN_REVIEWS treats every trade as if a review meant the same thing.
+// It does not. A roofer's review represents a $8k-$25k job; a garage-door review
+// is as likely to represent a $200 spring replacement. So the same 15 reviews
+// implies a materially different business depending on the trade.
+//
+// This is NOT a revenue estimate — review count cannot give us one. Industry data
+// is blunt about it: a 20-technician contractor completes 40-60 jobs A DAY, yet
+// the recommended review pace for home services is 6-12 a MONTH. Review count
+// measures whether a business ASKS, not how big it is. What it can do honestly is
+// set a floor on demonstrated VOLUME, and volume is what a low-ticket trade needs
+// in order to clear the revenue bar a high-ticket trade clears on job value alone.
+//
+// High-ticket trades keep the standard floor. Low-ticket, high-frequency trades
+// must show sustained volume before we spend ~10 research credits on them.
+const HIGH_VOLUME_LOW_TICKET = new Set([
+  'Garage Doors', 'Tree Service', 'Pest Control', 'Flooring', 'Chiropractic',
+]);
+const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40) : base;
+
+// ── UPPER BOUND ────────────────────────────────────────────────────────────
+// Past a certain review volume a local business is no longer our ICP: it is
+// multi-location, private-equity backed, or already running a serious marketing
+// operation with an agency in place. Those are the leads that read the audit and
+// reply that they already have someone. Not a hard truth, but a good default —
+// raise GP_MAX_REVIEWS if the pipeline ever runs thin.
+const GP_MAX_REVIEWS = parseInt(process.env.GP_MAX_REVIEWS || '750', 10);
+
 const GP_CITIES = [
   'Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX',
   'Kansas City MO','Indianapolis IN','Jacksonville FL','San Antonio TX','Raleigh NC','Salt Lake City UT',
@@ -1416,7 +1456,18 @@ const searchGooglePlaces = async (placesKey) => {
   // Cap how many leads any ONE category can contribute per run. Without this a
   // single vertical fills the queue and every lead on screen is a garage door
   // company, which is what was happening.
-  const PER_CAT_CAP = parseInt(process.env.GP_PER_CATEGORY_CAP || '6', 10);
+  // WAS 6, WHICH WAS THROWING AWAY 87% OF QUALIFIED LEADS. A live run logged
+  // "216 kept ... 1471 over per-category cap" — 36 categories x 6 = exactly 216, so
+  // the cap, not lead supply, was the binding constraint on the entire Find engine.
+  //
+  // The cap exists to stop one vertical filling the queue. But the round-robin
+  // interleave at the bottom of this function ALREADY fixes that by dealing leads
+  // out one category at a time, so the cap was solving a problem twice and paying
+  // for it in coverage. Worse, Places returns results in ITS OWN prominence order,
+  // so keeping only the first 6 skims the largest, most-established operator in
+  // each city — frequently the one big enough to have an agency already — and
+  // discards the mid-tail where an owner-operated $1-5M business actually lives.
+  const PER_CAT_CAP = parseInt(process.env.GP_PER_CATEGORY_CAP || '14', 10);
   const grid = [];
   // Skip the trades whose average job value cannot support the only products we
   // sell. Every query we do not run is ~2 credits and a queue slot saved, and every
@@ -1425,20 +1476,38 @@ const searchGooglePlaces = async (placesKey) => {
   const _cats = GP_CATEGORIES.filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C');
   const _cut = GP_CATEGORIES.length - _cats.length;
   if (_cut) console.log(`ICP FILTER: searching ${_cats.length} of ${GP_CATEGORIES.length} categories — ${_cut} cut for average job value too low to fund a $10k+/mo retainer`);
-  for (const cat of _cats) for (const city of GP_CITIES) grid.push({ cat, city });
-  // FISHER-YATES. The previous `grid.sort(() => Math.random() - 0.5)` is a well-known
-  // broken shuffle: a comparator that returns random values violates the ordering
-  // contract sort() relies on, so V8 leaves long runs of the original order intact.
-  // Measured over 300 runs, it put up to 14 leads from a single category in a
-  // 100-query run and covered only ~34 of 44 categories; Fisher-Yates caps the worst
-  // category at 9 and covers ~40. That bias is why whole verticals arrived in blocks.
-  for (let i = grid.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [grid[i], grid[j]] = [grid[j], grid[i]];
+  // ── STRATIFIED, NOT RANDOM ────────────────────────────────────────────────
+  // Fisher-Yates fixed the broken `sort(() => Math.random() - 0.5)`, but a uniform
+  // shuffle still samples the grid blindly: with 40 categories x 20 cities = 800
+  // combinations and only RUN_CAP queries actually run, some categories draw four
+  // slots and others draw none. A live run covered 36 of 38 — two whole verticals
+  // contributed nothing, purely by luck of the draw.
+  //
+  // Stratifying costs nothing and removes the variance. Shuffle the CITIES inside
+  // each category, then deal the categories out round-robin, so the first pass gives
+  // every category exactly one query, the second pass a second, and so on. Whatever
+  // RUN_CAP happens to be, coverage is now as even as the budget allows and no
+  // vertical can be skipped while another gets seconds.
+  const _byCat = _cats.map(cat => {
+    const cities = [...GP_CITIES];
+    for (let i = cities.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cities[i], cities[j]] = [cities[j], cities[i]];
+    }
+    return cities.map(city => ({ cat, city }));
+  });
+  // Rotate the starting category each run so the same vertical is not always first
+  // to be served when RUN_CAP does not divide evenly.
+  const _offset = Math.floor(Math.random() * _byCat.length);
+  for (let round = 0; round < GP_CITIES.length; round++) {
+    for (let k = 0; k < _byCat.length; k++) {
+      const bucket = _byCat[(k + _offset) % _byCat.length];
+      if (round < bucket.length) grid.push(bucket[round]);
+    }
   }
   const out = [], seen = new Set();
   const perCat = new Map();
-  let calls = 0, skippedFranchise = 0, skippedCatCap = 0;
+  let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     try {
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
@@ -1456,7 +1525,12 @@ const searchGooglePlaces = async (placesKey) => {
         const rating = p.rating || null;
         if (!name || !website) continue;                          // must have a site to Research
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
-        if (reviews < MIN_REVIEWS) continue;                      // established business only
+        // Trade-aware floor, not one number for every vertical — see reviewFloorFor.
+        if (reviews < reviewFloorFor(cat.label, MIN_REVIEWS)) continue;
+        // Too big is as disqualifying as too small: at this volume they are
+        // multi-location or already agency-managed, and the audit lands on someone
+        // who will reply that they have a team for that.
+        if (reviews > GP_MAX_REVIEWS) { skippedTooBig++; continue; }
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
         const catCount = perCat.get(cat.label) || 0;
         if (catCount >= PER_CAT_CAP) { skippedCatCap++; continue; }    // one vertical must not flood the queue
@@ -1493,7 +1567,7 @@ const searchGooglePlaces = async (placesKey) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedCatCap} over per-category cap)`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig} too big, ${skippedCatCap} over per-category cap)`);
   return interleaved;
 };
 
@@ -1809,17 +1883,236 @@ let FC_CREDITS_SAVED = 0;   // operations served from our own cache instead
 // not actionable; a list of thirty URLs and queries is. Grep FC PAID for one company
 // and the entire bill is itemised in order, so cuts are made against evidence rather
 // than against a model of where the credits probably went.
+// ── siteBase — THE ONLY CORRECT WAY TO BUILD A SUBPAGE URL ─────────────────
+// Leads now arrive from Google Places, and Places hands back the website with its
+// tracking query string attached:
+//   https://tuckandhowell.com/?utm_source=google&utm_medium=organic&utm_id=GBP_Greenville
+// The old code did `website.replace(/\/$/,'') + '/contact'`, which appends the path
+// AFTER the query string and produces:
+//   https://tuckandhowell.com/?utm_source=...&utm_id=GBP_Greenville/contact
+// That is a 404 on every site, and Firecrawl bills a 404 as a successful fetch. Six
+// guessed paths x every Places lead = six wasted credits AND a guaranteed "no email
+// found" / "no owner found", because the contact and about pages were never actually
+// read. This is why leads with a resolved owner still came back with no mailbox.
+// Strip query and hash, keep any real subpath, drop the trailing slash.
+const siteBase = (website) => {
+  const raw = String(website || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw.startsWith('http') ? raw : 'https://' + raw);
+    return (u.origin + u.pathname).replace(/\/+$/, '');
+  } catch {
+    // Not parseable as a URL — fall back to cutting at the first ? or # by hand
+    // rather than returning something that will be concatenated into nonsense.
+    return raw.split(/[?#]/)[0].replace(/\/+$/, '');
+  }
+};
+
+// ── parseLLMJSON — SURVIVE THE WAYS A MODEL BREAKS ITS OWN JSON ────────────
+// Every extraction step in this file ends in JSON.parse on model output, and a
+// throw there is caught and turned into `return null` — which is indistinguishable
+// from "this business genuinely has no owner listed". A live run failed exactly
+// this way:
+//   findOwnerViaLicense failed: Expected ',' or '}' after property value at position 95
+// That was not a business with no owner. That was a model emitting an unescaped
+// quote inside its `evidence` string, and an entire owner-discovery source
+// silently dropping out of the waterfall.
+//
+// The three failures that actually occur, in order of frequency:
+//   1. an unescaped " inside a string value (models quote the source verbatim)
+//   2. a raw newline inside a string value
+//   3. truncation at max_tokens, leaving brackets open
+// Each repair is attempted only after the plainer parse has already failed, so
+// well-formed output takes the fast path and is never touched.
+const _jsonEscapeStrays = (s) => {
+  let out = '', inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { out += c; esc = false; continue; }
+    if (c === '\\') { out += c; esc = true; continue; }
+    if (!inStr) { out += c; if (c === '"') inStr = true; continue; }
+    if (c === '"') {
+      // A real closing quote is followed by structure. Anything else means the
+      // model put a quote inside its own string value.
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j])) j++;
+      const nxt = s[j];
+      if (nxt === undefined || nxt === ',' || nxt === '}' || nxt === ']' || nxt === ':') { out += c; inStr = false; }
+      else out += '\\"';
+      continue;
+    }
+    if (c === '\n') { out += '\\n'; continue; }
+    if (c === '\r') { continue; }
+    if (c === '\t') { out += '\\t'; continue; }
+    out += c;
+  }
+  return out;
+};
+
+const _jsonCloseTruncated = (s) => {
+  let inStr = false, esc = false;
+  const stack = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') stack.push(c);
+    else if (c === '}' || c === ']') stack.pop();
+  }
+  let out = s;
+  if (inStr) {
+    // Truncated mid-VALUE. Closing the quote keeps the partial text, which is
+    // usually still the answer we wanted.
+    out += '"';
+  } else {
+    out = out.replace(/,\s*$/, '');
+    // Truncated after a KEY, which can never be closed — drop the dangling pair.
+    // Only safe in this branch: in the inStr branch the trailing quoted run is a
+    // recovered value, and stripping it would throw away the extraction.
+    out = out.replace(/,?\s*"[^"]*"\s*:\s*$/, '');
+    out = out.replace(/,\s*$/, '');
+  }
+  while (stack.length) out += (stack.pop() === '{' ? '}' : ']');
+  return out;
+};
+
+const parseLLMJSON = (raw) => {
+  if (raw == null) return null;
+  let t = String(raw).replace(/```json|```/g, '').trim();
+  const ob = t.indexOf('{'), cb = t.lastIndexOf('}');
+  const oa = t.indexOf('['), ca = t.lastIndexOf(']');
+  // Whichever container opens first is the payload; arrays are returned by the
+  // listing extractors, objects by everything else.
+  if (ob >= 0 && (oa < 0 || ob < oa) && cb > ob) t = t.slice(ob, cb + 1);
+  else if (oa >= 0 && ca > oa) t = t.slice(oa, ca + 1);
+  const attempts = [
+    () => JSON.parse(t),
+    () => JSON.parse(t.replace(/,(\s*[}\]])/g, '$1')),
+    () => JSON.parse(_jsonEscapeStrays(t)),
+    () => JSON.parse(_jsonCloseTruncated(t)),
+    () => JSON.parse(_jsonCloseTruncated(_jsonEscapeStrays(t))),
+  ];
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const v = attempts[i]();
+      if (i > 0) console.log(`JSON REPAIR: model output was malformed; recovered on strategy ${i + 1}/5`);
+      return v;
+    } catch { /* next strategy */ }
+  }
+  console.log(`JSON UNRECOVERABLE: ${t.slice(0, 200).replace(/\s+/g, ' ')}`);
+  return null;
+};
+
+// ── cityState — ONE CORRECT WAY TO TURN AN ADDRESS INTO A SEARCH QUALIFIER ──
+// Google Places returns "Garden City, ID 83714, USA". The licence-registry source
+// built its queries with `.split(',').slice(-2)`, which takes the LAST two parts
+// and yields "ID 83714  USA" — the city dropped, the ZIP kept, and "USA" welded on.
+// That is why the registry searches in the last run read:
+//     "Done Right Flood & Fire Services Inc" ID 83714  USA contractor license
+// while the web-search source, which parsed correctly, searched "Garden City ID"
+// and was the ONLY source that resolved an owner all run. Location is the
+// disambiguator between a business and its same-named twin two states over, so a
+// malformed one does not merely weaken the query, it invites a wrong match.
+//
+// Also fixes a second fault in the three copies of the "correct" version: they all
+// required a STATE+ZIP part to exist, so a plain "Greenville, SC" produced an EMPTY
+// location and dropped the qualifier entirely.
+const cityState = (location) => {
+  const parts = String(location || '').split(',').map(s => s.trim()).filter(Boolean)
+    .filter(p => !/^(usa|u\.s\.a\.|united states|us)$/i.test(p));
+  if (!parts.length) return '';
+  let idx = parts.findIndex(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
+  let st = '';
+  if (idx >= 0) st = (parts[idx].match(/\b([A-Z]{2})\b/) || [])[1] || '';
+  else {
+    idx = parts.findIndex(p => /^[A-Z]{2}$/.test(p));
+    if (idx >= 0) st = parts[idx];
+  }
+  const city = idx > 0 ? parts[idx - 1] : '';
+  return [city, st].filter(Boolean).join(' ');
+};
+
+const rankUrlsByIntent = (urls, re, limit = 4) => {
+  const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
+  return (urls || [])
+    .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
+    .filter(u => re.test(pathOf(u)))
+    .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, limit)
+    .map(x => x.u);
+};
+
+const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
+
+// ── REAL CREDIT ACCOUNTING ─────────────────────────────────────────────────
+// Two faults made the old meter unusable, and they pushed in opposite directions
+// so the number looked plausible while being wrong twice over.
+//
+// 1. IT COUNTED OPERATIONS, NOT CREDITS. Firecrawl's published rate card: Scrape,
+//    Crawl and Map are 1 credit per page, and SEARCH IS 2 CREDITS PER 10 RESULTS —
+//    not 1 per result. So `search x4` costs 2 credits, and dropping that limit from
+//    4 to 2 would have saved exactly nothing, because both sit inside the same
+//    10-result block. Batch scrape is 0.5. The label "x4" implied a 4-credit charge
+//    that does not exist.
+// 2. IT WAS SHARED ACROSS CONCURRENT LEADS. `_fcAtStart` snapshotted a module-level
+//    counter, but research jobs run in parallel. A live run of two leads reported
+//    "~20" and "~22 paid operations" when each had only ~10 FC PAID lines — every
+//    lead was billed for its neighbour. Per-lead cost was therefore uninterpretable,
+//    and per-lead cost is the only number that decides what to cut.
+// AsyncLocalStorage gives each request its own ledger that survives every await.
+const { AsyncLocalStorage } = require('node:async_hooks');
+const FC_LEDGER = new AsyncLocalStorage();
+
+// Screenshots are the one rate the public sources disagree on: Firecrawl's own blog
+// lists surcharges for JSON extraction, enhanced proxy and audio but NOT screenshots,
+// while several third-party guides claim screenshot/action scrapes bill at 5. Rather
+// than bake in a guess, this is a dial: measure one lead with and one without, then
+// set FC_SCREENSHOT_CREDITS to whatever the dashboard actually moved by.
+const FC_SCREENSHOT_CREDITS = Number(process.env.FC_SCREENSHOT_CREDITS || 1);
+
+const fcCreditCost = (kind) => {
+  const k = String(kind || '');
+  if (/^search/.test(k)) {
+    const n = parseInt((k.match(/x(\d+)/) || [])[1] || '10', 10);
+    const base = 2 * Math.max(1, Math.ceil(n / 10));   // 2 credits per 10 results
+    return /\+scrape/.test(k) ? base + n : base;      // + 1 per page actually read
+  }
+  if (/batch-scrape/.test(k)) return 0.5;
+  if (/screenshot/.test(k)) return FC_SCREENSHOT_CREDITS;
+  return 1;                                       // scrape, map
+};
+
 const fcNote = (paid, kind, what) => {
+  const _led = FC_LEDGER.getStore();
   if (paid) {
-    FC_CREDITS_SPENT++;
-    console.log(`FC PAID [${kind}] ${String(what || '').slice(0, 110)}`);
+    const _cost = fcCreditCost(kind);
+    FC_CREDITS_SPENT += _cost;
+    if (_led) { _led.spent += _cost; _led.ops += 1; }
+    // MIDDLE-ellipsis, not a head slice. A flat .slice(0,110) truncated six
+    // different mangled URLs down to the same visible prefix, so a log that was
+    // recording six distinct wasted credits read as one call retried six times.
+    // The distinguishing part of a URL is its TAIL, so always keep the tail.
+    const _w = String(what || '');
+    console.log(`FC PAID [${kind}] ${_w.length <= 130 ? _w : _w.slice(0, 85) + '…' + _w.slice(-40)}`);
   } else {
     FC_CREDITS_SAVED++;
+    if (_led) _led.saved += 1;
   }
 };
 // `search` is accepted for call-site readability but deliberately NOT sent to the
 // API — see the note below. Callers filter the returned URL list themselves.
-const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
+// LIMIT 500, NOT 60. /map bills ONE credit regardless of how many links it returns,
+// so a low limit buys nothing and costs coverage. It became actively harmful once the
+// `search` parameter was dropped below: with `search` the API returned RELEVANCE-ranked
+// links, so the first 60 reliably contained /about and /our-team. Without it the order
+// is the site's own sitemap order, so on any site with more than 60 pages the 60-cap
+// truncates an unranked list and the leadership page can be cut off before
+// rankUrlsByIntent ever sees it. Two leads in the last run mapped EXACTLY 60 — they
+// were both being truncated. Same credit, full sitemap, ranking now has real input.
+const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   void search;
   if (!fcKey || !url) return [];
   if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
@@ -1867,7 +2160,10 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 60) => {
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
   if (!fcKey || !query) return [];
   if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
-  fcNote(true, `search x${limit}`, query);
+  // Flag whether the results are being SCRAPED, not just listed — search bills 2
+  // per 10 results, and each page read on top is a further credit. Without this the
+  // meter reported 2 for a call that actually cost 5.
+  fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -1900,6 +2196,49 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
 // Global flag — set the moment Firecrawl reports it's out of credits, so the
 // whole run can report it honestly instead of silently producing empty results.
 let FIRECRAWL_OUT_OF_CREDITS = false;
+
+// ═══ HUNTER QUOTA — THE OTHER SILENT FALSE NEGATIVE ════════════════════════
+// hunterFindPersonEmail ended in `if (!email) return null`. When Hunter has quota
+// that null honestly means "no address exists for this person". When Hunter is OUT
+// OF CREDITS the response carries an `errors` array and no `data.email`, so the
+// function returns the SAME null — and the lead is reported as "no defensible
+// address found". That is an assertion about the prospect built on a failure of
+// ours, which is the one thing this system is not allowed to do.
+//
+// Hunter signals exhaustion through several shapes: HTTP 402/429, and error ids
+// like `usage_limit`, `too_many_requests` or `quota_exceeded`. Auth failures
+// (`invalid_api_key`, `wrong_auth`, 401) are kept SEPARATE — a dead key is a
+// different problem from a spent one and needs a different fix from the operator.
+const hunterErrText = (d) => {
+  try {
+    const errs = Array.isArray(d?.errors) ? d.errors : [];
+    return errs.map(e => `${e.id || ''} ${e.code || ''} ${e.details || ''}`).join(' ') + ' ' + String(d?.message || '');
+  } catch { return ''; }
+};
+const isHunterQuotaError = (d, status) =>
+  status === 402 || status === 429 ||
+  /usage_limit|quota|too_many_requests|rate limit|exceeded your|no requests left|upgrade/i.test(hunterErrText(d));
+const isHunterAuthError = (d, status) =>
+  status === 401 || /invalid_api_key|wrong_auth|invalid api key|unauthorized/i.test(hunterErrText(d));
+
+// Process-wide latch. Once Hunter is spent, every further call is a guaranteed
+// failure that still costs a round trip and, worse, still produces a null that
+// reads as a fact about the prospect. Latch it, say so once, and stop asking.
+let HUNTER_EXHAUSTED = false;
+let HUNTER_AUTH_DEAD = false;
+const hunterGuard = (d, status, where) => {
+  if (isHunterAuthError(d, status)) {
+    if (!HUNTER_AUTH_DEAD) console.log(`\ud83d\udd11 HUNTER KEY REJECTED (${where}) — the key is invalid or revoked. This is NOT "no email found"; nothing was ever looked up.`);
+    HUNTER_AUTH_DEAD = true;
+    return true;
+  }
+  if (isHunterQuotaError(d, status)) {
+    if (!HUNTER_EXHAUSTED) console.log(`\ud83d\udd34 HUNTER OUT OF CREDITS (${where}) — every email lookup from here returns nothing because we cannot ask, NOT because the address does not exist. Leads researched now will understate reachability.`);
+    HUNTER_EXHAUSTED = true;
+    return true;
+  }
+  return false;
+};
 
 const isCreditError = (d, status) =>
   status === 402 ||
@@ -2247,10 +2586,47 @@ const EMAIL_TIERS = {
 };
 
 // Every standard corporate naming convention, ordered by real-world frequency.
+// ── cleanPersonForEmail — ONE CORRECT READING OF A HUMAN NAME ──────────────
+// Every candidate the SMTP verifier checks is built from this parse, so a wrong
+// parse doesn't just weaken the search — it spends the whole verifier budget on a
+// person who does not exist. Three real inputs from tonight's live run broke the
+// old inline parse, each in a different way:
+//
+//   "MAXWELL, SCOTT DAVID (Primary Name (License Holder))"   ← licence registry
+//     Old parse: comma stripped, order kept → first="maxwell", last="david" →
+//     maxwell.david@theroofpanda.com. The man is Scott Maxwell. Every check on
+//     that lead verified addresses for a fictional person, and the licence
+//     registry — now our BEST owner source — returns exactly this format.
+//
+//   "Mr. Jay Mahaffey"          → first="mr"  → mr.mahaffey@
+//   "Dr. Jeffrey Gerdes"        → first="dr"  → dr.gerdes@  (every practice lead)
+//
+// Rules, in order: cut trailing parentheticals; if "LAST, FIRST …", reorder;
+// strip honorifics from the front and credential suffixes from the back. Suffix
+// stripping requires 3+ tokens so a real two-token name like "Jay Do" survives.
+const _HONORIFICS = new Set(['mr','mrs','ms','miss','dr','prof','professor','rev','sir','madam','mx']);
+const _SUFFIXES = new Set(['jr','sr','ii','iii','iv','esq','phd','md','dds','dmd','dc','dvm','od','cpa','pe','mba','rn','np','pa','do','jd','llm','pllc','llc','inc']);
+const cleanPersonForEmail = (fullName) => {
+  let n = String(fullName || '').trim();
+  n = n.replace(/\(.*$/s, '').trim();                 // "(Primary Name (License Holder))" → gone
+  const cm = n.match(/^([A-Za-z'\u2019\-\s]{2,40}),\s*([A-Za-z'\u2019\-\s\.]{2,40})$/);
+  if (cm) {
+    const pre = cm[1].trim().split(/\s+/), post = cm[2].trim().split(/\s+/);
+    // Registry surname-first shape only: short alpha runs both sides. A company
+    // name with a comma ("Tuck & Howell Plumbing, Heating") never matches because
+    // of the & and length, and longer prose fails the token caps.
+    if (pre.length <= 3 && post.length <= 3) n = post.join(' ') + ' ' + pre.join(' ');
+  }
+  let parts = n.toLowerCase()
+    .replace(/[^a-z\s'\u2019\-]/g, ' ').replace(/['\u2019\-]/g, '')
+    .split(/\s+/).filter(Boolean);
+  while (parts.length > 1 && _HONORIFICS.has(parts[0])) parts.shift();
+  while (parts.length > 2 && _SUFFIXES.has(parts[parts.length - 1])) parts.pop();
+  return parts;
+};
+
 const buildCandidates = (fullName, domain) => {
-  const parts = String(fullName || '').trim().toLowerCase()
-    .replace(/[^a-z\s'-]/g, '').replace(/[''-]/g, '')
-    .split(/\s+/).filter(Boolean)
+  const parts = cleanPersonForEmail(fullName)
     // Drop middle initials and middle names — "Jeffrey R Jewett" must yield
     // jeffrey.jewett@, never jeffrey.r@. Keep only first and last.
     .filter((p, i, arr) => i === 0 || i === arr.length - 1 || p.length > 1);
@@ -2276,9 +2652,10 @@ const buildCandidates = (fullName, domain) => {
 // This is how we learn a company's pattern from one confirmed address.
 const inferPattern = (email, fullName) => {
   const local = String(email).split('@')[0].toLowerCase();
-  const parts = String(fullName || '').trim().toLowerCase()
-    .replace(/[^a-z\s'-]/g, '').replace(/[''-]/g, '')
-    .split(/\s+/).filter(Boolean);
+  // Same canonical parse as buildCandidates — a pattern learned from a
+  // "LAST, FIRST"-format name would otherwise be inverted and then applied
+  // inverted to every future lead on the domain.
+  const parts = cleanPersonForEmail(fullName);
   if (parts.length < 2) return null;
   // Only first + last matter for pattern inference; middle names are noise
   const first = parts[0], last = parts[parts.length - 1];
@@ -2306,24 +2683,45 @@ const applyPattern = (pattern, fullName, domain) => {
 // free verification API. MyEmailVerifier: 100 free/day, no credit card, credits
 // never expire — 60x Hunter's monthly ceiling.
 // Returns: { valid, catchAll, unknown }
+// The verifier can also simply STOP WORKING — free tier is a daily allowance, and
+// a spent or rejected key returns no Status at all. The old code folded that into
+// `unknown`, which is indistinguishable from a mail server that declined to answer.
+// Same disease as the Hunter null: an outage of ours gets reported as a fact about
+// the prospect. Latched and named so a dead verifier can never masquerade as a
+// verified negative.
+let VERIFIER_EXHAUSTED = false;
+let VERIFIER_DEAD = false;
 const verifyEmailSMTP = async (email, verifierKey) => {
-  if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true };
+  if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
+  if (VERIFIER_EXHAUSTED || VERIFIER_DEAD) return { valid: null, catchAll: null, unknown: true, error: true };
   try {
     const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
     const r = await fetchT(url, {}, 12000);
     const d = await safeJson(r);
     const status = String(d?.Status || d?.status || '').toLowerCase();
+    const blob = JSON.stringify(d || {}).toLowerCase();
+    // No status at all means the call did not actually run a check.
+    if (!status) {
+      if (/limit|quota|credit|exceed|insufficient|upgrade/.test(blob)) {
+        if (!VERIFIER_EXHAUSTED) console.log(`\ud83d\udd34 EMAIL VERIFIER OUT OF CREDITS — SMTP checks are no longer running. Nothing below can be read as "this mailbox does not exist"; it means we could not ask.`);
+        VERIFIER_EXHAUSTED = true;
+      } else if (r.status === 401 || r.status === 403 || /invalid.?key|unauthor|forbidden/.test(blob)) {
+        if (!VERIFIER_DEAD) console.log(`\ud83d\udd11 EMAIL VERIFIER KEY REJECTED — SMTP verification is off. This is not evidence about any prospect.`);
+        VERIFIER_DEAD = true;
+      }
+      return { valid: null, catchAll: null, unknown: true, error: true };
+    }
     const catchAll = /true|yes/i.test(String(d?.Catch_All_Status ?? d?.catch_all ?? ''));
     return {
       valid: status === 'valid',
       invalid: status === 'invalid',
       catchAll,
-      unknown: !status || status === 'unknown',
+      unknown: status === 'unknown',
       raw: status,
     };
   } catch(e) {
     console.log('SMTP verify failed:', e.message);
-    return { valid: null, catchAll: null, unknown: true };
+    return { valid: null, catchAll: null, unknown: true, error: true };
   }
 };
 
@@ -2338,7 +2736,14 @@ const isCatchAllDomain = async (domain, verifierKey) => {
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
   const nonsense = `zz9x${Math.random().toString(36).slice(2, 10)}qq@${domain}`;
   const res = await verifyEmailSMTP(nonsense, verifierKey);
-  // If a mailbox that cannot possibly exist comes back "valid", it's catch-all.
+  // A FAILED probe is not a normal domain. The old line printed "normal domain
+  // (SMTP trustworthy)" whenever the probe errored, which asserted that every
+  // subsequent SMTP result could be trusted at exactly the moment none of them
+  // could. Return null — genuinely unknown — and say so.
+  if (res.error) {
+    console.log(`Catch-all probe [${domain}]: COULD NOT RUN — the verifier did not answer, so SMTP results for this domain prove nothing either way.`);
+    return null;
+  }
   const isCatchAll = res.valid === true || res.catchAll === true;
   catchAllCache.set(domain, isCatchAll);
   console.log(`Catch-all probe [${domain}]: ${isCatchAll ? 'CATCH-ALL (SMTP unreliable here)' : 'normal domain (SMTP trustworthy)'}`);
@@ -2351,7 +2756,7 @@ const isCatchAllDomain = async (domain, verifierKey) => {
 const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false) => {
   const out = { emails: [], source: '' };
   if (!website) return out;
-  const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
+  const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   if (!domain) return out;
 
   const JUNK_DOMAIN = /@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i;
@@ -2375,6 +2780,15 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
 
   const extract = (text, allowOffDomain) => {
     if (!text) return [];
+    // DE-OBFUSCATE FIRST. Small owner-run sites write "jay [at] tuckandhowell
+    // [dot] com" precisely to beat scrapers — which means the sites most likely to
+    // belong to our ICP are the ones the plain regex below cannot read. Rewrite the
+    // two common disguises into real addresses before matching. Anchored to a
+    // word[sep]word[sep]tld shape so ordinary prose ("we are at home") cannot match.
+    text = String(text)
+      .replace(/([A-Za-z0-9._%+-]+)\s*[\[\(]\s*at\s*[\]\)]\s*([A-Za-z0-9-]+(?:\s*[\[\(]?\s*dot\s*[\]\)]?\s*[A-Za-z0-9-]+)*)\s*[\[\(]?\s*dot\s*[\]\)]?\s*([A-Za-z]{2,})/gi,
+        (_, u, mid, tld) => `${u}@${mid.replace(/\s*[\[\(]?\s*dot\s*[\]\)]?\s*/gi, '.')}.${tld}`)
+      .replace(/([A-Za-z0-9._%+-]+)\s+at\s+([A-Za-z0-9-]+)\s+dot\s+([A-Za-z]{2,})\b/gi, '$1@$2.$3');
     const found = new Set();
     (text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi) || [])
       .forEach(m => found.add(m.replace(/mailto:/i, '').toLowerCase()));
@@ -2409,14 +2823,40 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   // Pass 2: the pages most likely to publish a real address (same-domain only — a
   // contact page might list a vendor's/webdev's address, so stay strict there)
   if (!fcKey) return out;
-  const base = website.replace(/\/$/, '');
-  for (const path of ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team']) {
+  const base = siteBase(website);
+  if (!base) return out;
+
+  // Ask the SITE MAP where its contact page actually is before guessing. The map is
+  // cached per hostname and already paid for by the owner finder, so this costs
+  // nothing. Guessing six fixed paths bought six 404s on every lead that publishes
+  // no address — and Firecrawl bills a 404 as a successful fetch. It also missed
+  // real pages that simply live somewhere else (/about/contact-us, /get-in-touch).
+  let targets = [];
+  try {
+    const urls = await firecrawlMap(fcKey, website);
+    targets = rankUrlsByIntent(urls, /(contact|about|team|our-?story|get-?in-?touch|reach-?us|staff|people)/i, 4);
+    // FREE GATE: if the map came back healthy and contains nothing contact-shaped,
+    // the site has no such page. Guessing would buy 404s to learn what we know.
+    if (!targets.length && urls.length > 3) return out;
+  } catch { /* map unavailable — fall through to guesses */ }
+
+  if (!targets.length) targets = ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team'].map(p => base + p);
+
+  for (const target of targets) {
     try {
-      const md = await firecrawlScrape(fcKey, base + path, 10000);
+      // 45s, NOT 10s. Aborting on our side does NOT cancel Firecrawl's fetch — they
+      // finish it and bill it, and we throw the bytes away. A live run proved it:
+      //   FC PAID [scrape] https://tuckandhowell.com/about/contact-us
+      //   firecrawlScrape error: timeout          (exactly 10.0s later)
+      //   ✗ EMAIL no pattern resolved — BLOCKED
+      // We asked for the right page, paid for it, and discarded the answer. This is
+      // the ONE page most likely to carry the owner's address, so it is the last
+      // place to be impatient. Same reasoning as the note on firecrawlScrape itself.
+      const md = await firecrawlScrape(fcKey, target, 45000);
       if (!md || md.length < 100) continue;
       emails = extract(md, false);
       if (emails.length > 0) return { emails, source: 'contact_page' };
-    } catch(e) { /* next path */ }
+    } catch(e) { /* next page */ }
   }
   return out;
 };
@@ -2517,14 +2957,6 @@ const normalizePersonName = (n) => String(n || '')
   .replace(/\s+/g, ' ')
   .trim();
 
-const sameName = (a, b) => {
-  const A = normalizePersonName(a).toLowerCase().split(' ').filter(Boolean);
-  const B = normalizePersonName(b).toLowerCase().split(' ').filter(Boolean);
-  if (A.length < 2 || B.length < 2) return false;
-  // Same first AND last name = same person. Middle names/initials ignored.
-  return A[0] === B[0] && A[A.length-1] === B[B.length-1];
-};
-
 // Nickname equivalences so "Mike Bacevich" + michael@ is correctly the SAME person
 // (was false-flagging real owners as "different person" and blocking good leads).
 const NICKNAMES = {
@@ -2571,6 +3003,21 @@ const NICKNAMES = {
   vin:['vincent','vinny'], vincent:['vin','vinny'],
 };
 // True if the email local-part contains an owner name token OR a nickname form of it.
+const sameName = (a, b) => {
+  // Canonical parse first, so "MAHAFFEY, JAY" ≡ "Mr. Jay Mahaffey" — registry,
+  // Hunter and site each hand us the same human in a different costume.
+  const A = cleanPersonForEmail(a);
+  const B = cleanPersonForEmail(b);
+  if (A.length < 2 || B.length < 2) return false;
+  // Nickname-equivalent FIRST names are the same person: the DM engine says
+  // "Mike Bacevich", Hunter's verified address says "Michael Bacevich". The old
+  // exact match called them different people and threw away a REAL, indexed
+  // address in favour of building mike@ — which then failed SMTP. The NICKNAMES
+  // table existed for exactly this and was never consulted here.
+  const firstEq = (x, y) => x === y || (NICKNAMES[x] || []).includes(y) || (NICKNAMES[y] || []).includes(x);
+  return firstEq(A[0], B[0]) && A[A.length - 1] === B[B.length - 1];
+};
+
 const localMatchesName = (local, tokens) => {
   if (!local || !tokens || !tokens.length) return false;
   for (const t of tokens) {
@@ -2622,19 +3069,6 @@ const looksLikeRealName = (n) => {
 // This helper is the single correct implementation. Match the PATH only, prefer
 // shallower paths, then shorter ones. Every caller uses it so the bug cannot
 // come back in one place while being fixed in another.
-const rankUrlsByIntent = (urls, re, limit = 4) => {
-  const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
-  return (urls || [])
-    .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
-    .filter(u => re.test(pathOf(u)))
-    .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
-    .sort((a, b) => a.score - b.score)
-    .slice(0, limit)
-    .map(x => x.u);
-};
-
-const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?we-?are|meet|staff|people|founder|owner|history|company|executives?|bios?|principals?)/i;
-
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
   if (!website || !apiKey || !fcKey) return null;
   try {
@@ -2650,7 +3084,17 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     // difference between resolving an owner and returning nothing.
     const candidates = rankUrlsByIntent(urls, LEADERSHIP_URL_HINTS, 4);
 
+    // When candidates is ZERO this line used to print nothing further, which made
+    // the single most important failure in the system undiagnosable: "mapped 33
+    // URLs, 0 leadership candidates" is equally consistent with a site that has no
+    // about page and a ranker whose regex is too narrow, and there was no way to
+    // tell which from the log. Show the evidence in exactly the case where it is
+    // needed — a healthy run stays quiet.
     console.log(`DM/brain [${companyName}]: mapped ${urls.length} URLs, ${candidates.length} leadership candidates${candidates.length ? ': ' + candidates.slice(0,3).join(', ') : ''}`);
+    if (!candidates.length && urls.length) {
+      const paths = urls.map(u => { try { return new URL(u).pathname; } catch { return String(u); } });
+      console.log(`DM/brain [${companyName}]: NO leadership page matched. Sitemap paths (${paths.length}): ${paths.slice(0, 25).join(' ')}${paths.length > 25 ? ` …+${paths.length - 25} more` : ''}`);
+    }
 
     // Read the real pages IN PARALLEL (was sequential — that alone cost ~20s)
     const top = candidates.slice(0, 2); // read the top 2 leadership pages — owner-finding is the essential step, and the owner-gate saves credits elsewhere to pay for this depth
@@ -2724,7 +3168,7 @@ ${corpus}` }]
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
       console.log(`DM/brain [${companyName}]: no owner-level person named on their site`);
@@ -2765,11 +3209,7 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
     // name ("A1 Restoration") matches dozens of unrelated companies nationwide and
     // we find nothing confident — the #1 cause of a reachable owner scoring as
     // unreachable. Location is the disambiguator.
-    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
-    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
-    const loc = [city, st].filter(Boolean).join(' ');
+    const loc = cityState(location);
 
     // Two angles: who owns it, and their profile on business directories that
     // actually index SMB owners (BBB lists a "Principal Contact", Manta and
@@ -2819,7 +3259,7 @@ ${corpus}` }]
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
       console.log(`DM/websearch [${companyName}]: no owner found in web results`);
@@ -2920,7 +3360,7 @@ ABOUT THE EMAIL — this matters a lot:
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     // Sanity-check the vision-read email — if it isn't a well-formed address, drop it
     // rather than let a misread string reach the email engine.
     if (parsed.visibleEmail && !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(String(parsed.visibleEmail).trim())) {
@@ -2990,7 +3430,7 @@ Return ONLY JSON:
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     return { match: parsed.match || 'unclear', confidence: parsed.confidence || 'low', reason: parsed.reason || '' };
   } catch(e) {
     console.log('confirmDomainMatch failed (non-fatal):', e.message);
@@ -3037,11 +3477,7 @@ const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location =
   if (!companyName || !fcKey || !apiKey) return null;
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
-    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
-    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
-    const loc = [city, st].filter(Boolean).join(' ');
+    const loc = cityState(location);
     // Target the revenue aggregators directly — Prospeo, RocketReach, Growjo,
     // ZoomInfo publish private-SMB revenue and it sits right in the search SNIPPET
     // (e.g. "Johns Roofing has revenue of $25,300,000"). So snippet-only = 1 credit,
@@ -3080,7 +3516,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     if (!parsed.employees && !parsed.revenue) return null;
     console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'} rev=${parsed.revenue || '?'} (${parsed.source || '?'})`);
     return parsed;
@@ -3139,7 +3575,7 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
     const total = parsed.totalReviews || 0;
     // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
     // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
@@ -3232,7 +3668,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     // ANTI-FABRICATION: every evidence quote MUST actually appear in the reviews.
     // Verify a distinctive 4-word span of each quote is present; drop anything that
@@ -3308,7 +3744,7 @@ ${replyBlocks}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const p = JSON.parse(t);
+    const p = parseLLMJSON(t) || {};
     if (!p.name) return null;
     // The sign-off must actually exist in what we scraped.
     const flat = replyBlocks.toLowerCase();
@@ -3431,7 +3867,7 @@ ${corpus}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
 
     // ANTI-FABRICATION: every price must literally appear in what we scraped.
     const flat = corpus.toLowerCase().replace(/[\s,]/g, '');
@@ -3485,7 +3921,7 @@ ${corpus}` }]
 // dollar figure we can use in a pitch, because HE published them.
 const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
   if (!website || !fcKey || !apiKey) return null;
-  const base = website.replace(/\/$/, '');
+  const base = siteBase(website);
   // Use the site map we already paid for (cached) to find the REAL careers URL.
   // Guessing paths missed pages like /about-our-agency/join-our-team, which is where
   // small firms actually put hiring. Fall back to guesses only if the map is empty.
@@ -3544,7 +3980,7 @@ ${md.slice(0, 14000)}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
     const roles = Array.isArray(parsed.roles) ? parsed.roles : [];
     if (!roles.length) return null;
     const opsRoles = roles.filter(r => r.type === 'ops');
@@ -3563,11 +3999,7 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, l
     // Same disambiguation the DM search needs: without a city, a common name pulls
     // reviews/complaints for the WRONG same-named business — which would then feed a
     // fabricated "how do they know this" hook. Location keeps the pain on the right co.
-    const locParts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-    const stateZip = locParts.find(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
-    const st = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-    const city = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
-    const loc = [city, st].filter(Boolean).join(' ');
+    const loc = cityState(location);
 
     // Two angles: what customers complain about, and what employees say about
     // how the place actually runs. Employees are the most honest source there is.
@@ -3641,7 +4073,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     // Anti-fabrication: every quoted piece of evidence must actually exist in
     // the scraped content. This is the same guard as the Brain audit — a pitch
@@ -3687,7 +4119,10 @@ ${corpus}` }]
 const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKey) => {
   if (!companyName || !fcKey || !apiKey) return null;
   const clean = companyName.replace(/[^\w\s&'-]/g, ' ').replace(/\s+/g, ' ').trim();
-  const loc = String(location || '').split(',').slice(-2).join(' ').trim(); // "Louisville KY"
+  // Was `.split(',').slice(-2)`, which produced "ID 83714  USA" instead of
+  // "Garden City ID" — see cityState. This function's queries were the weakest in
+  // the waterfall purely because of this line.
+  const loc = cityState(location);
   // Trade detection reads the industry label AND the company name. industry is
   // frequently blank or generic ("Professional Services"), while the company name
   // almost always names the trade — "Castle Hills Chiropractic", "Bespoke Plastic
@@ -3728,13 +4163,13 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
   // Chamber / local directory listings name owners for almost every local business.
   q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
 
-  try {
-    const hits = [];
-    for (const query of q) {
-      const r = await firecrawlSearch(fcKey, query, 4, false);
-      if (Array.isArray(r)) hits.push(...r);
-    }
-    if (!hits.length) return null;
+  // EARLY EXIT INSTEAD OF SHALLOWER SEARCH. Both queries used to run every time,
+  // 4 credits each. The trade-specific licence query is the stronger of the two and
+  // resolved Jay Mahaffey on its own in the last run — the chamber query behind it
+  // was 4 credits for an answer already in hand. Running query 2 only when query 1
+  // fails to name anyone keeps FULL depth on both (cutting 4 results to 2 would have
+  // traded recall for the same saving) and makes the saving conditional on success.
+  const evaluate = async (hits) => {
     const corpus = hits.map(h => `${h.title || ''} — ${h.description || h.snippet || ''} (${h.url || ''})`).join('\n').slice(0, 6000);
 
     const res = await fetchT('https://api.anthropic.com/v1/messages', {
@@ -3763,11 +4198,30 @@ ${corpus}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null' || !looksLikeRealName(parsed.name)) return null;
     if (parsed.confidence === 'low') { console.log(`DM/license [${clean}]: found ${parsed.name} but confidence low \u2014 discarded`); return null; }
     console.log(`DM/license [${clean}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) via licence/chamber records \u2014 "${String(parsed.evidence||'').slice(0,70)}"`);
     return { name: parsed.name, title: parsed.title || 'Owner', confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
+  };
+
+  try {
+    const hits = [];
+    const r0 = await firecrawlSearch(fcKey, q[0], 4, false);
+    if (Array.isArray(r0)) hits.push(...r0);
+    if (hits.length) {
+      const early = await evaluate(hits);
+      if (early) {
+        if (q.length > 1) console.log(`DM/license [${clean}]: resolved on the trade query \u2014 skipped the chamber search (~4 Firecrawl credits saved)`);
+        return early;
+      }
+    }
+    for (let i = 1; i < q.length; i++) {
+      const r = await firecrawlSearch(fcKey, q[i], 4, false);
+      if (Array.isArray(r)) hits.push(...r);
+    }
+    if (!hits.length) return null;
+    return await evaluate(hits);
   } catch(e) { console.log('findOwnerViaLicense failed:', e.message); return null; }
 };
 
@@ -3819,7 +4273,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
 
     // Verify the name is literally signed in what we scraped — no invented names.
@@ -3993,7 +4447,7 @@ ${content}` }]
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
-    const parsed = JSON.parse(t);
+    const parsed = parseLLMJSON(t) || {};
 
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
     if (!looksLikeRealName(parsed.name)) {
@@ -4227,6 +4681,9 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
 // inferred from the domain's pattern. We treat those very differently.
 const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   if (!domain || !fullName || !hunterKey) return null;
+  // Already known spent or dead — do not spend a round trip to be told again, and
+  // do not manufacture another null that reads as a fact about this business.
+  if (HUNTER_EXHAUSTED || HUNTER_AUTH_DEAD) return { unavailable: true, reason: HUNTER_AUTH_DEAD ? 'hunter_key_rejected' : 'hunter_out_of_credits' };
   const parts = String(fullName).trim().split(/\s+/).filter(Boolean);
   if (parts.length < 2) return null;
   const first = parts[0], last = parts[parts.length - 1];
@@ -4235,6 +4692,12 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
       `https://api.hunter.io/v2/email-finder?domain=${encodeURIComponent(domain)}&first_name=${encodeURIComponent(first)}&last_name=${encodeURIComponent(last)}&api_key=${hunterKey}`,
       {}, 10000);
     const d = await safeJson(r);
+    // DISTINGUISH "we could not ask" FROM "there is no address". Returning a bare
+    // null for both is what let an empty Hunter balance masquerade as an
+    // unreachable prospect.
+    if (hunterGuard(d, r.status, 'email-finder')) {
+      return { unavailable: true, reason: HUNTER_AUTH_DEAD ? 'hunter_key_rejected' : 'hunter_out_of_credits' };
+    }
     const email = d?.data?.email;
     if (!email) return null;
     const score = typeof d.data.score === 'number' ? d.data.score : 0;
@@ -4244,11 +4707,15 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   } catch(e) { console.log('hunterFindPersonEmail failed:', e.message); return null; }
 };
 
-const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false }) => {
-  const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '').toLowerCase();
+const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, industry = '' }) => {
+  const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
-  const fail = { email: '', ...EMAIL_TIERS.NONE, name, pattern: null };
-  if (!domain) return fail;
+  // Set when a PAID lookup was refused (spent quota / dead key) rather than
+  // returning empty. Travels out on the failure object so the caller can label the
+  // result "not checked" instead of asserting the prospect has no address.
+  let _lookupBlocked = null;
+  const fail = () => ({ email: '', ...EMAIL_TIERS.NONE, name, pattern: null, lookupBlocked: _lookupBlocked });
+  if (!domain) return fail();
 
   // ── Hunter found an address — but is it the RIGHT PERSON? ─────────────────
   // CRITICAL: Hunter's LinkedIn-biased index surfaces VPs and HR directors, not
@@ -4333,7 +4800,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
                 await new Promise(r => setTimeout(r, 200));
               }
               console.log(`✗ EMAIL [${domain}]: no mailbox exists for ${name}. BLOCKED — sending would bounce.`);
-              return fail;
+              return fail();
             }
           }
         }
@@ -4373,9 +4840,9 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   }
 
   // Everything below needs a name to build candidates from
-  if (!name) return fail;
+  if (!name) return fail();
   const candidates = buildCandidates(name, domain);
-  if (candidates.length === 0) return fail;
+  if (candidates.length === 0) return fail();
 
   // ── Is this domain catch-all? Determines whether SMTP means anything. ─────
   // Cached per domain, so we only pay this probe ONCE per company domain ever.
@@ -4415,6 +4882,36 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       if (res.invalid === true) anyDefiniteInvalid = true; else anyUnknown = true;
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
     }
+
+    // ── NICKNAME SECOND PASS ──────────────────────────────────────────────────
+    // Registries and review replies hand us the CASUAL name — "Mike", "Bill",
+    // "Dave" — but the mailbox a business creates is very often the FORMAL one:
+    // michael@, william@, david@. When every pattern built from the casual first
+    // name has just failed on a domain whose server gives real answers, the
+    // formal variant is the single most likely address we have not yet checked.
+    // Capped at 2 checks, and only after the primaries are exhausted, so the
+    // typical lead never pays for it.
+    if (!VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+      const _canon = cleanPersonForEmail(name);
+      const _first = _canon[0] || '', _last = _canon[_canon.length - 1] || '';
+      const _variants = (NICKNAMES[_first] || []).filter(v => v.length >= 3 && v !== _first);
+      let _vChecks = 0;
+      for (const v of _variants) {
+        if (_vChecks >= 2) break;
+        for (const cand of [`${v}@${domain}`, `${v}.${_last}@${domain}`]) {
+          if (_vChecks >= 2) break;
+          _vChecks++;
+          const rv = await verifyEmailSMTP(cand, verifierKey);
+          if (rv.valid === true) {
+            console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED via formal-name variant: ${cand} — "${_first}" goes by "${v}" on the mail server`);
+            return { email: cand, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null,
+                     label: `SMTP-verified (mailbox exists) — the mailbox uses "${v}", the formal form of "${_first}"` };
+          }
+          if (rv.invalid === true) anyDefiniteInvalid = true; else anyUnknown = true;
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+    }
     // Normal (non-catch-all) domain and none of the likely patterns resolve →
     // WATERFALL STEP — before we give up, ask Hunter directly for THIS person.
     // Our own pattern guesses failed SMTP, but Hunter may have the address indexed
@@ -4428,6 +4925,14 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
     if (worthACredit) {
       const hf = await hunterFindPersonEmail(domain, name, hunterKey);
+      // Record that the last paid route was CLOSED rather than empty, so nothing
+      // downstream reports "no defensible address found" for a lookup we never got
+      // to make. The distinction is the whole point: one is a fact about them, the
+      // other is a fact about our account.
+      if (hf && hf.unavailable) {
+        _lookupBlocked = hf.reason;
+        console.log(`EMAIL [${domain}]: could NOT check ${name} — ${hf.reason === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+      }
       if (hf && hf.email) {
         // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
         // pattern guess at ~60 confidence is how people get blacklisted.
@@ -4484,10 +4989,69 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       }
     }
 
-    // A server that actively DENIED the address means this person genuinely has no
-    // mailbox here. Sending would guarantee a bounce, and bounces damage the domain.
-    console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here. BLOCKED.`);
-    return fail;
+    // ── COMPANY MAILBOX — the route this ICP actually uses ────────────────
+    // buildCandidates only ever builds PERSONAL patterns (first.last, flast, ...).
+    // For an owner-operated local service business that is frequently the one
+    // address that does not exist: the owner runs the shop from info@ and gives out
+    // a phone number. Four consecutive live leads proved it — Roof Panda, Garage
+    // Service Co, Carolina ChiroCare, Tuck & Howell all resolved an owner at high
+    // confidence, published a phone number on every page, and had every personal
+    // pattern fail. Every one scored 40/100 against a 45 floor and could not be
+    // approved. The pipeline had no route left, so Generate never ran.
+    //
+    // This does NOT relax the send bar. The address still has to be SMTP-VERIFIED
+    // on a domain we have already confirmed is not catch-all, so it is a real
+    // mailbox and cannot bounce — tier 2, exactly like any other verified address.
+    // The scorer then reads it correctly on its own: a confirmed owner plus a
+    // verified mailbox is 74, while an UNVERIFIED role inbox stays at 38. The
+    // distinction that matters was already encoded; nothing was ever trying it.
+    //
+    // Honesty is preserved by labelling: we do not claim this is his personal box.
+    // We say it is the company's, that he runs the company, and that the mail
+    // should open with his name.
+    if (verifierKey && name && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+      // WHICH four boxes to probe depends on the trade. A plumbing shop lives in
+      // info@/office@/service@; a chiropractic or dental practice answers from
+      // frontdesk@ — a box the fixed list never checked, which is why practice
+      // leads blocked while home-services leads passed. Same probe budget (4),
+      // reordered by what the vertical actually uses.
+      const _ind = String(industry || '').toLowerCase();
+      const _boxes =
+        /chiro|dental|dent|ortho|surg|derma|spa|clinic|vet|fertility|lasik|therapy|medical|health|practice/.test(_ind)
+          ? ['info', 'office', 'frontdesk', 'contact']
+          : /law|legal|attorney|account|cpa|insurance|estate/.test(_ind)
+          ? ['info', 'office', 'contact', 'admin']
+          : ['info', 'office', 'contact', 'service'];
+      for (const box of _boxes) {
+        const candidate = `${box}@${domain}`;
+        const v = await verifyEmailSMTP(candidate, verifierKey);
+        if (v.valid === true) {
+          console.log(`✓ EMAIL [${domain}] T2 COMPANY MAILBOX (SMTP-verified): ${candidate} — ${name}'s personal address does not resolve, but this mailbox is real. At an owner-run business it reaches him.`);
+          return {
+            email: candidate, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null,
+            companyMailbox: true,
+            label: `Company mailbox, SMTP-verified. ${name}'s personal address could not be resolved; at an owner-operated business this inbox is his desk. Open the email with his name.`,
+          };
+        }
+        if (v.error) break;   // verifier died mid-loop — stop, do not draw conclusions
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    // Genuinely nothing left. Say WHICH kind of nothing: a server that actively
+    // denied every address is evidence about the prospect; a spent Hunter balance
+    // or a dead verifier is evidence about us, and must never be reported as the
+    // former.
+    const _why = _lookupBlocked
+      ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits')
+      : (VERIFIER_EXHAUSTED || VERIFIER_DEAD) ? 'the email verifier stopped answering'
+      : null;
+    if (_why) {
+      console.log(`⚠ EMAIL [${domain}] NOT RESOLVED for ${name} — but a paid lookup was unavailable (${_why}). This is NOT proof that no mailbox exists; re-run once credits are restored.`);
+    } else {
+      console.log(`✗ EMAIL [${domain}] no pattern resolved on a normal domain — ${name} has no mailbox here, and no company mailbox is live either. BLOCKED.`);
+    }
+    return fail();
   }
 
   // ── TIER 3: catch-all, but we know this company's convention ──────────────
@@ -4522,10 +5086,42 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     }
   }
 
+  // ── EPONYMOUS, second placement ───────────────────────────────────────────
+  // The eponymous test lives inside the SMTP branch above, which only runs when the
+  // catch-all probe came back a definite `false`. When the verifier is unavailable
+  // that probe returns null, the whole branch is skipped, and this — the strongest
+  // free signal we have — was skipped with it. It needs no verifier: if the company
+  // is named after the person, a first-name mailbox on their own domain is a fact
+  // about the business, not a guess.
+  if (name && catchAll !== true) {
+    const nameParts = String(name).toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const domRoot = domain.split('.')[0].toLowerCase();
+    if (nameParts.some(w => domRoot.includes(w))) {
+      const epEmail = `${nameParts[0]}@${domain}`;
+      console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
+      return {
+        email: epEmail, tier: 2, score: 88, sendable: true, name, pattern: '{first}',
+        label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain`,
+      };
+    }
+  }
+
   // ── TIER 4: no catch-all, no pattern, no evidence → genuine guess. NOT sendable. ──
+  // Kept as DATA, never as a result. It is returned so the UI can show what the
+  // address would probably be, with sendable:false so every gate refuses it. Say
+  // plainly whether this is a fact about them or an outage of ours — a lead blocked
+  // because our verifier is down is worth re-running, and one blocked because the
+  // mail server denied every address is not.
   const inferred = candidates[0];
-  console.log(`⚠ EMAIL [${domain}] T4 inferred only (no evidence, bounce risk real): ${inferred.email} — BLOCKED from sending`);
-  return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern };
+  const _blockWhy = (VERIFIER_EXHAUSTED || VERIFIER_DEAD)
+    ? 'the email verifier is unavailable, so nothing could be checked'
+    : catchAll === null
+    ? 'the catch-all probe could not run, so SMTP results would prove nothing'
+    : _lookupBlocked
+    ? (_lookupBlocked === 'hunter_key_rejected' ? 'the Hunter key was rejected' : 'Hunter is out of credits')
+    : 'no evidence of this mailbox from any source';
+  console.log(`⚠ EMAIL [${domain}] T4 inferred only \u2014 ${inferred.email} is a GUESS and is BLOCKED from sending. Reason: ${_blockWhy}.`);
+  return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern, blockReason: _blockWhy };
 };
 
 // FACEBOOK AD LIBRARY VIA FIRECRAWL — automates the manual "All ads" check.
@@ -4649,7 +5245,7 @@ ${corpus}` }]
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = JSON.parse(text);
+    const parsed = parseLLMJSON(text) || {};
 
     // Anti-hallucination: the quote must actually exist in what we scraped
     const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
@@ -4702,12 +5298,22 @@ ${corpus}` }]
 const findBusinessesForSale = async (fcKey, apiKey) => {
   if (!fcKey || !apiKey) return [];
   try {
+    // THE BUG WAS THE LAST ARGUMENT. This ran with scrapeContent=false, so
+    // Firecrawl returned only a title, URL and one-line snippet per result — and
+    // then the extraction prompt below demanded a revenue and cash-flow figure
+    // before it would keep a listing. Those figures live on the listing PAGE, never
+    // in a search snippet, so the model correctly discarded every hit and logged
+    // "0 businesses actively listed" on every run. The rule and the input
+    // contradicted each other; the scraper was never broken.
+    //
+    // Now: ONE query instead of two, 3 results instead of 5, and the pages are
+    // actually read. 2 credits for the search + 3 for the pages = 5 a run, versus
+    // the 4 previously spent to guarantee nothing.
     const queries = [
       'site:bizbuysell.com business for sale established cash flow owner retiring',
-      '"business for sale" "seller financing" OR "owner retiring" established revenue cash flow',
     ];
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 5, false).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
     );
     const hits = batches.flat().slice(0, 8);
     if (hits.length === 0) { console.log('For-sale: no listings found'); return []; }
@@ -4762,7 +5368,11 @@ ${corpus}` }]
     // element, then close any open brackets/braces.
     let parsed;
     try {
-      parsed = JSON.parse(text);
+      // Tolerant parser first: it repairs unescaped quotes and raw newlines, which
+      // the brace-counting fallback below cannot. The fallback still runs if this
+      // exhausts every strategy.
+      parsed = parseLLMJSON(text);
+      if (!parsed) throw new Error('parseLLMJSON exhausted');
     } catch {
       let repaired = text;
       const lastComplete = repaired.lastIndexOf('}');
@@ -5164,11 +5774,25 @@ const scoreReachability = (c) => {
   const addr = (c.email || (c.emailResult && c.emailResult.email) || '').toLowerCase();
   const local = (addr.split('@')[0] || '').replace(/[^a-z.]/g, '');
   const tier = c.emailResult ? c.emailResult.tier : null;
-  const deliverable = tier === 1 || tier === 2;      // verified real mailbox
-  const patternEmail = tier === 3;                   // built from pattern, unverified
+  // SENDABILITY IS THE ONLY THING THAT COUNTS AS "WE HAVE AN EMAIL".
+  // The tier table already decides this: T1/T2/T3 are sendable, T4 (inferred guess)
+  // and T5 (nothing) are not. Reachability used to ignore that and judge the address
+  // by its SHAPE — `personalMailbox` is a regex on the local part — so a pure T4
+  // guess that happened to look like first.last scored 58, cleared the 45 floor,
+  // passed Research, passed Generate, and landed in the Send tab, where the send
+  // guard then refused it for being unsendable. Three gates, three different
+  // answers about the same lead, and the disagreement only surfaced at the very end.
+  // Garage Service Co. did exactly this: aviram.azulay@ was never verified, the
+  // Generate checklist said "may bounce (40/100)", and reachability still said 64.
+  const emailSendable = !!(c.emailResult && c.emailResult.sendable === true);
+  const deliverable = emailSendable && (tier === 1 || tier === 2);   // verified real mailbox
+  const patternEmail = emailSendable && tier === 3;                  // sendable, not SMTP-proven
   const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
   const isRoleInbox = !!local && ROLE_INBOX.test(local);
-  const personalMailbox = !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
+  // Shape of the mailbox, NOT evidence that it exists. Only ever used to decide how
+  // GOOD a sendable address is — never to decide that we have one. Gated on
+  // sendability for exactly that reason.
+  const personalMailbox = emailSendable && !!local && !isRoleInbox && /^[a-z]+(\.[a-z]+)?$/.test(local);
   const emailMatchesOwner = ownerTokens.length > 0 && !!local && localMatchesName(local, ownerTokens);
   // A SENIOR OPERATOR (GM, VP, Director, Partner, Principal) at a small business is
   // close to the owner, feels the pain, and can forward or influence the buy — worth
@@ -5754,13 +6378,18 @@ app.post('/api/discover', async (req, res) => {
       // The listing also hands us revenue, cash flow, and headcount for free.
       findBusinessesForSale(firecrawlKey, apiKey),
 
-      // ═══ GOLDEN TICKET: OWNERS PUBLICLY ASKING FOR HELP ═══════════════════
-      // An owner posting "I'm drowning in scheduling, how do I automate this?" is
-      // the highest-intent signal that exists — they are literally raising their
-      // hand. Reddit is IP-blocked from Render, but Firecrawl reaches it.
-      // Most posts are anonymous; when one IS identifiable, it's red hot.
-      // Either way we harvest their ACTUAL LANGUAGE for the pitch.
-      findFounderVenting(firecrawlKey, apiKey),
+      // ═══ FOUNDER VENTING — OFF ════════════════════════════════════════════
+      // 4 credits a run (2 Reddit searches) and it has never produced a single
+      // identifiable lead — only 2 verbatim pain quotes, which the Brain audit
+      // already generates better copy without. The theory is sound (an owner
+      // posting "I'm drowning in scheduling" is maximum intent) but Reddit posts
+      // are overwhelmingly anonymous, so there is rarely a company to reach.
+      // Those 4 credits now fund the businesses-for-sale scrape instead, which
+      // returns named companies WITH revenue and cash flow attached.
+      // Set VENTING_ON=1 to restore.
+      process.env.VENTING_ON === '1'
+        ? findFounderVenting(firecrawlKey, apiKey)
+        : Promise.resolve({ leads: [], painLanguage: [] }),
 
       // CONFIRMED AD BUDGET (dormant until a Meta token is added)
       searchFacebookAds(fbToken),
@@ -6807,7 +7436,11 @@ const checkBuiltWith = async (domain) => {
       hasH1: /<h1[\s>]/i.test(html),
       hasSchema: /application\/ld\+json/i.test(html),
       hasEmailCapture: /type=["']email["']|newsletter|subscribe/i.test(html),
-      hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet/i.test(html),
+      // MERGED. This key was declared twice in the same object literal, so the
+      // second silently overwrote this one and the detector lost cal.com,
+      // savvycal and appointlet entirely, while `acuity` was narrowed to
+      // `acuityscheduling` and stopped matching acuity's other domains.
+      hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
       copyrightYear: (() => { const ys = [...html.matchAll(/(?:©|&copy;|copyright)[^0-9]{0,20}(20\d\d)/gi)].map(m=>parseInt(m[1])); return ys.length ? Math.max(...ys) : 0; })(),
       // ── CONTACT INTELLIGENCE — extracted from THEIR page (facts, not guesses) ──
       contacts: (() => {
@@ -6821,7 +7454,6 @@ const checkBuiltWith = async (domain) => {
         const contactPage = (html.match(/href=["']([^"']*(?:contact|about|team|our-story)[^"']*)["']/i)||[])[1] || '';
         return { emails, phones, linkedin, facebook, owners, contactPage };
       })(),
-      hasBooking: /calendly|acuityscheduling|youcanbook|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
       confirmed: true,
     };
   } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false }; }
@@ -6858,7 +7490,7 @@ const checkFacebookAds = async (name, fbToken) => {
 // a slow site takes minutes; browsers throttle background tabs and Render's proxy
 // severs long connections, which is why switching tabs mid-run killed the request
 // and why one lead sat at 359 seconds with the UI spinning on a dead socket.
-const runResearch = async (req, res) => {
+const _runResearchInner = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
   // outer scope so it's visible to all references (fixes scope-leak crash).
   let hasCTA = false;
@@ -7212,7 +7844,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
       const [painRes, revRes, carRes, siteRes] = await Promise.allSettled([
         needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
-        needRev  ? findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location) : Promise.resolve(null),
+        Promise.resolve(null),   // revenue moved BELOW the email gate — see findSizeViaSearch call
         (website && _careersUseful) ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
         website  ? auditSitePages(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
       ]);
@@ -7223,11 +7855,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source || 'web'})`);
         painSummary = pain.summary || '';
       }
-      const sz = revRes.status === 'fulfilled' ? revRes.value : null;
-      if (sz) {
-        if (sz.employees && !verifiedEmployees) { verifiedEmployees = sz.employees; console.log(`SIZE [${company}]: recovered ${sz.employees} employees (${sz.source})`); }
-        if (sz.revenue) { verifiedRevenue = sz.revenue; console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`); }
-      }
+      void revRes;   // revenue now runs after the email gate — handled there
+
     } else {
       console.log(`Deep audit skipped for ${company}: no owner found (unsendable lead) — saved pain + revenue credits`);
     }
@@ -7272,6 +7901,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           hunterTitle: email.title || '',
           verifierKey,
           hunterKey,
+          // The trade decides WHICH company mailboxes are worth probing —
+          // frontdesk@ for a practice, service@ for a trade. Without this the
+          // finder probed a plumbing-shaped list on every dental clinic.
+          industry: req.body.industry || '',
           // We already PROVED this homepage belongs to the target company, so a
           // personal address published on it is theirs regardless of its domain.
           siteConfirmed: domainConfirmation ? (domainConfirmation.match === 'yes') : false,
@@ -7285,6 +7918,35 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
         }
       } catch(e) { console.log('Email engine failed (non-fatal):', e.message); }
+    }
+
+    // ═══ REVENUE — LAST, AND ONLY FOR A LEAD WE CAN ACTUALLY EMAIL ══════════
+    // This is a 4-credit search and it used to run in the parallel block above,
+    // before we knew whether the lead was reachable at all. A live run spent those
+    // 4 credits sizing a restoration company whose owner was never found and whose
+    // audit could never be sent — the most expensive single line in the log, bought
+    // for a lead that was already dead.
+    // Revenue changes nothing about reachability. It is pitch-sizing data: which
+    // product tier to lead with, what the retainer should cost. That question only
+    // exists once there is a named owner AND a deliverable address, so it now runs
+    // after both are settled and is skipped entirely on every unreachable lead.
+    // `needRev` is scoped to the deep-audit block above, which has already closed —
+    // recompute it here rather than reach into a dead scope.
+    const _wantRev = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
+    if (_wantRev) {
+      const _haveOwner = !!(decisionMaker && decisionMaker.name) || !!verifiedCEO;
+      const _haveEmail = !!(emailResult && emailResult.email) || !!(email && email.email);
+      if (_haveOwner && _haveEmail) {
+        try {
+          const sz = await findSizeViaSearch(company, website, firecrawlKey, apiKey, req.body.location);
+          if (sz) {
+            if (sz.employees && !verifiedEmployees) { verifiedEmployees = sz.employees; console.log(`SIZE [${company}]: recovered ${sz.employees} employees (${sz.source})`); }
+            if (sz.revenue) { verifiedRevenue = sz.revenue; console.log(`REVENUE [${company}]: ${sz.revenue} via ${sz.source} (${sz.confidence})`); }
+          }
+        } catch(e) { console.log('Revenue lookup failed (non-fatal):', e.message); }
+      } else {
+        console.log(`REVENUE [${company}]: skipped — ${!_haveOwner ? 'no owner confirmed' : 'owner found but no deliverable email'}, so there is no pitch to size (saves ~4 credits)`);
+      }
     }
 
     // ═══ WRITE THE CONTACT CACHE — so this lead is near-free to re-research ═══
@@ -7999,7 +8661,8 @@ Return ONLY valid JSON, no markdown:
           const clean = vText.replace(/```json|```/g,'').trim();
           let parsed;
           try {
-            parsed = JSON.parse(clean);
+            parsed = parseLLMJSON(clean);
+            if (!parsed) throw new Error('parseLLMJSON exhausted');
           } catch(parseErr) {
             // Try to repair truncated JSON by finding the last valid closing brace
             let repaired = clean;
@@ -8252,7 +8915,8 @@ Return ONLY valid JSON:
             }
             let critique;
             try {
-              critique = JSON.parse(cClean);
+              critique = parseLLMJSON(cClean);
+              if (!critique) throw new Error('parseLLMJSON exhausted');
             } catch(parseErr) {
               // Repair truncated JSON
               let repaired = cClean;
@@ -8260,7 +8924,9 @@ Return ONLY valid JSON:
               const opens = (repaired.match(/\{/g)||[]).length;
               const closes = (repaired.match(/\}/g)||[]).length;
               if (opens > closes) repaired += '}'.repeat(opens - closes);
-              critique = JSON.parse(repaired);
+              // Was a bare JSON.parse with no guard — a throw here escaped the
+              // critique block entirely instead of degrading to "no critique".
+              critique = parseLLMJSON(repaired) || {};
             }
             const conf = Number.isFinite(Number(critique.confidenceScore)) ? Number(critique.confidenceScore) : 7;
             brainAudit.critique = {
@@ -8688,7 +9354,12 @@ Return ONLY valid JSON:
     // Paid Firecrawl operations for THIS lead, and how many our own cache served
     // for free. Grep FIRECRAWL SPEND across a batch and the real per-lead cost
     // falls out of the log instead of being estimated from the dashboard total.
-    console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} paid operations | ${FC_CREDITS_SAVED - _fcAtStart.saved} served free from our cache`);
+    const _led = FC_LEDGER.getStore();
+    if (_led) {
+      console.log(`FIRECRAWL SPEND [${company}]: ${_led.spent} credits across ${_led.ops} paid operations | ${_led.saved} served free from our cache`);
+    } else {
+      console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} credits (no per-request ledger — figure may include concurrent leads)`);
+    }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
     const _throttled = FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled;
@@ -8767,6 +9438,11 @@ Return ONLY valid JSON:
     res.status(500).json({ error: e.message });
   }
 };
+// Each research run gets its OWN credit ledger. Without this, two leads researched
+// at the same time each reported the other's spend as their own — the exact reason
+// the per-lead FIRECRAWL SPEND figures were roughly double reality.
+const runResearch = (req, res) => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => _runResearchInner(req, res));
+
 app.post('/api/research', runResearch);
 
 // ═══ JOB QUEUE ═════════════════════════════════════════════════════════════
@@ -9351,9 +10027,8 @@ Return ONLY valid JSON, no markdown:
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
     if (fb >= 0 && lb > fb) clean = clean.slice(fb, lb + 1);
 
-    let parsed;
-    try { parsed = JSON.parse(clean); }
-    catch(e) { return res.status(502).json({ error: 'Draft generation returned invalid JSON', raw: clean.slice(0, 500) }); }
+    const parsed = parseLLMJSON(clean);
+    if (!parsed) return res.status(502).json({ error: 'Draft generation returned invalid JSON', raw: clean.slice(0, 500) });
 
     console.log(`LinkedIn drafts: ${(parsed.drafts||[]).length} generated from ${researched.length} real audits`);
     res.json({ drafts: parsed.drafts || [], batchSize: researched.length, aggregateSummary });
