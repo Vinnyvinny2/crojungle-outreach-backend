@@ -1324,8 +1324,20 @@ const CATEGORY_TIER = {
 
   // Cut. Average ticket too low, or the work is won by bid and relationship rather
   // than by inbound marketing, so nothing we sell moves their revenue.
-  'Tree Service':'C',      // $500-2k a job
-  'Garage Doors':'C',      // $300-700 average ticket
+  // RESTORED TO B on the industry data. The 'C' cut cited a $300-700 ticket, but
+  // that is the REPAIR-only figure: replacements run $1,200-$4,500+, the trade
+  // benchmarks 10-15% of gross revenue on marketing for growth (5-8% in maintenance
+  // mode) — ABOVE the SBA's 7-8% general figure — $2M single-location operators are
+  // ordinary, and ownership is still overwhelmingly independent rather than
+  // consolidated. At 10-15% of $2M that is $17-25k/month of marketing budget, which
+  // funds the retainer twice over. Gated behind a higher review floor below so we
+  // get the crewed operators rather than the one-van repair guys.
+  'Garage Doors':'B',
+  // Same correction, same shape. A 2-truck tree crew is $750k-$1.5M and a
+  // crane-capable operator is $2M-$4M, benchmarking 5-10% on marketing. The small
+  // ones genuinely cannot fund us; the large ones clearly can. Size, not category,
+  // is the real filter — so this is reinstated behind the high review floor.
+  'Tree Service':'B',
   'Lawn Care':'C',         // $50-200/mo recurring
   Signage:'C',             // B2B, low volume, relationship-won
   Landscaping:'C',         // COMMERCIAL landscape contracts are won by bid, not by
@@ -1400,6 +1412,34 @@ const GP_CATEGORIES = [
   // auto repair — low ticket, most stay solo/sub-$800k. The review-count revenue
   // proxy would bury them anyway; not worth spending queries on them.
 ];
+// ── REVIEW FLOOR BY TICKET SIZE ────────────────────────────────────────────
+// One global MIN_REVIEWS treats every trade as if a review meant the same thing.
+// It does not. A roofer's review represents a $8k-$25k job; a garage-door review
+// is as likely to represent a $200 spring replacement. So the same 15 reviews
+// implies a materially different business depending on the trade.
+//
+// This is NOT a revenue estimate — review count cannot give us one. Industry data
+// is blunt about it: a 20-technician contractor completes 40-60 jobs A DAY, yet
+// the recommended review pace for home services is 6-12 a MONTH. Review count
+// measures whether a business ASKS, not how big it is. What it can do honestly is
+// set a floor on demonstrated VOLUME, and volume is what a low-ticket trade needs
+// in order to clear the revenue bar a high-ticket trade clears on job value alone.
+//
+// High-ticket trades keep the standard floor. Low-ticket, high-frequency trades
+// must show sustained volume before we spend ~10 research credits on them.
+const HIGH_VOLUME_LOW_TICKET = new Set([
+  'Garage Doors', 'Tree Service', 'Pest Control', 'Flooring', 'Chiropractic',
+]);
+const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40) : base;
+
+// ── UPPER BOUND ────────────────────────────────────────────────────────────
+// Past a certain review volume a local business is no longer our ICP: it is
+// multi-location, private-equity backed, or already running a serious marketing
+// operation with an agency in place. Those are the leads that read the audit and
+// reply that they already have someone. Not a hard truth, but a good default —
+// raise GP_MAX_REVIEWS if the pipeline ever runs thin.
+const GP_MAX_REVIEWS = parseInt(process.env.GP_MAX_REVIEWS || '750', 10);
+
 const GP_CITIES = [
   'Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX',
   'Kansas City MO','Indianapolis IN','Jacksonville FL','San Antonio TX','Raleigh NC','Salt Lake City UT',
@@ -1416,7 +1456,18 @@ const searchGooglePlaces = async (placesKey) => {
   // Cap how many leads any ONE category can contribute per run. Without this a
   // single vertical fills the queue and every lead on screen is a garage door
   // company, which is what was happening.
-  const PER_CAT_CAP = parseInt(process.env.GP_PER_CATEGORY_CAP || '6', 10);
+  // WAS 6, WHICH WAS THROWING AWAY 87% OF QUALIFIED LEADS. A live run logged
+  // "216 kept ... 1471 over per-category cap" — 36 categories x 6 = exactly 216, so
+  // the cap, not lead supply, was the binding constraint on the entire Find engine.
+  //
+  // The cap exists to stop one vertical filling the queue. But the round-robin
+  // interleave at the bottom of this function ALREADY fixes that by dealing leads
+  // out one category at a time, so the cap was solving a problem twice and paying
+  // for it in coverage. Worse, Places returns results in ITS OWN prominence order,
+  // so keeping only the first 6 skims the largest, most-established operator in
+  // each city — frequently the one big enough to have an agency already — and
+  // discards the mid-tail where an owner-operated $1-5M business actually lives.
+  const PER_CAT_CAP = parseInt(process.env.GP_PER_CATEGORY_CAP || '14', 10);
   const grid = [];
   // Skip the trades whose average job value cannot support the only products we
   // sell. Every query we do not run is ~2 credits and a queue slot saved, and every
@@ -1425,20 +1476,38 @@ const searchGooglePlaces = async (placesKey) => {
   const _cats = GP_CATEGORIES.filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C');
   const _cut = GP_CATEGORIES.length - _cats.length;
   if (_cut) console.log(`ICP FILTER: searching ${_cats.length} of ${GP_CATEGORIES.length} categories — ${_cut} cut for average job value too low to fund a $10k+/mo retainer`);
-  for (const cat of _cats) for (const city of GP_CITIES) grid.push({ cat, city });
-  // FISHER-YATES. The previous `grid.sort(() => Math.random() - 0.5)` is a well-known
-  // broken shuffle: a comparator that returns random values violates the ordering
-  // contract sort() relies on, so V8 leaves long runs of the original order intact.
-  // Measured over 300 runs, it put up to 14 leads from a single category in a
-  // 100-query run and covered only ~34 of 44 categories; Fisher-Yates caps the worst
-  // category at 9 and covers ~40. That bias is why whole verticals arrived in blocks.
-  for (let i = grid.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [grid[i], grid[j]] = [grid[j], grid[i]];
+  // ── STRATIFIED, NOT RANDOM ────────────────────────────────────────────────
+  // Fisher-Yates fixed the broken `sort(() => Math.random() - 0.5)`, but a uniform
+  // shuffle still samples the grid blindly: with 40 categories x 20 cities = 800
+  // combinations and only RUN_CAP queries actually run, some categories draw four
+  // slots and others draw none. A live run covered 36 of 38 — two whole verticals
+  // contributed nothing, purely by luck of the draw.
+  //
+  // Stratifying costs nothing and removes the variance. Shuffle the CITIES inside
+  // each category, then deal the categories out round-robin, so the first pass gives
+  // every category exactly one query, the second pass a second, and so on. Whatever
+  // RUN_CAP happens to be, coverage is now as even as the budget allows and no
+  // vertical can be skipped while another gets seconds.
+  const _byCat = _cats.map(cat => {
+    const cities = [...GP_CITIES];
+    for (let i = cities.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cities[i], cities[j]] = [cities[j], cities[i]];
+    }
+    return cities.map(city => ({ cat, city }));
+  });
+  // Rotate the starting category each run so the same vertical is not always first
+  // to be served when RUN_CAP does not divide evenly.
+  const _offset = Math.floor(Math.random() * _byCat.length);
+  for (let round = 0; round < GP_CITIES.length; round++) {
+    for (let k = 0; k < _byCat.length; k++) {
+      const bucket = _byCat[(k + _offset) % _byCat.length];
+      if (round < bucket.length) grid.push(bucket[round]);
+    }
   }
   const out = [], seen = new Set();
   const perCat = new Map();
-  let calls = 0, skippedFranchise = 0, skippedCatCap = 0;
+  let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     try {
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
@@ -1456,7 +1525,12 @@ const searchGooglePlaces = async (placesKey) => {
         const rating = p.rating || null;
         if (!name || !website) continue;                          // must have a site to Research
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
-        if (reviews < MIN_REVIEWS) continue;                      // established business only
+        // Trade-aware floor, not one number for every vertical — see reviewFloorFor.
+        if (reviews < reviewFloorFor(cat.label, MIN_REVIEWS)) continue;
+        // Too big is as disqualifying as too small: at this volume they are
+        // multi-location or already agency-managed, and the audit lands on someone
+        // who will reply that they have a team for that.
+        if (reviews > GP_MAX_REVIEWS) { skippedTooBig++; continue; }
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
         const catCount = perCat.get(cat.label) || 0;
         if (catCount >= PER_CAT_CAP) { skippedCatCap++; continue; }    // one vertical must not flood the queue
@@ -1493,7 +1567,7 @@ const searchGooglePlaces = async (placesKey) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedCatCap} over per-category cap)`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig} too big, ${skippedCatCap} over per-category cap)`);
   return interleaved;
 };
 
@@ -2003,7 +2077,8 @@ const fcCreditCost = (kind) => {
   const k = String(kind || '');
   if (/^search/.test(k)) {
     const n = parseInt((k.match(/x(\d+)/) || [])[1] || '10', 10);
-    return 2 * Math.max(1, Math.ceil(n / 10));   // 2 credits per 10 results
+    const base = 2 * Math.max(1, Math.ceil(n / 10));   // 2 credits per 10 results
+    return /\+scrape/.test(k) ? base + n : base;      // + 1 per page actually read
   }
   if (/batch-scrape/.test(k)) return 0.5;
   if (/screenshot/.test(k)) return FC_SCREENSHOT_CREDITS;
@@ -2085,7 +2160,10 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
   if (!fcKey || !query) return [];
   if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
-  fcNote(true, `search x${limit}`, query);
+  // Flag whether the results are being SCRAPED, not just listed — search bills 2
+  // per 10 results, and each page read on top is a further credit. Without this the
+  // meter reported 2 for a call that actually cost 5.
+  fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -5124,12 +5202,22 @@ ${corpus}` }]
 const findBusinessesForSale = async (fcKey, apiKey) => {
   if (!fcKey || !apiKey) return [];
   try {
+    // THE BUG WAS THE LAST ARGUMENT. This ran with scrapeContent=false, so
+    // Firecrawl returned only a title, URL and one-line snippet per result — and
+    // then the extraction prompt below demanded a revenue and cash-flow figure
+    // before it would keep a listing. Those figures live on the listing PAGE, never
+    // in a search snippet, so the model correctly discarded every hit and logged
+    // "0 businesses actively listed" on every run. The rule and the input
+    // contradicted each other; the scraper was never broken.
+    //
+    // Now: ONE query instead of two, 3 results instead of 5, and the pages are
+    // actually read. 2 credits for the search + 3 for the pages = 5 a run, versus
+    // the 4 previously spent to guarantee nothing.
     const queries = [
       'site:bizbuysell.com business for sale established cash flow owner retiring',
-      '"business for sale" "seller financing" OR "owner retiring" established revenue cash flow',
     ];
     const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 5, false).catch(() => []))
+      queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
     );
     const hits = batches.flat().slice(0, 8);
     if (hits.length === 0) { console.log('For-sale: no listings found'); return []; }
@@ -6194,13 +6282,18 @@ app.post('/api/discover', async (req, res) => {
       // The listing also hands us revenue, cash flow, and headcount for free.
       findBusinessesForSale(firecrawlKey, apiKey),
 
-      // ═══ GOLDEN TICKET: OWNERS PUBLICLY ASKING FOR HELP ═══════════════════
-      // An owner posting "I'm drowning in scheduling, how do I automate this?" is
-      // the highest-intent signal that exists — they are literally raising their
-      // hand. Reddit is IP-blocked from Render, but Firecrawl reaches it.
-      // Most posts are anonymous; when one IS identifiable, it's red hot.
-      // Either way we harvest their ACTUAL LANGUAGE for the pitch.
-      findFounderVenting(firecrawlKey, apiKey),
+      // ═══ FOUNDER VENTING — OFF ════════════════════════════════════════════
+      // 4 credits a run (2 Reddit searches) and it has never produced a single
+      // identifiable lead — only 2 verbatim pain quotes, which the Brain audit
+      // already generates better copy without. The theory is sound (an owner
+      // posting "I'm drowning in scheduling" is maximum intent) but Reddit posts
+      // are overwhelmingly anonymous, so there is rarely a company to reach.
+      // Those 4 credits now fund the businesses-for-sale scrape instead, which
+      // returns named companies WITH revenue and cash flow attached.
+      // Set VENTING_ON=1 to restore.
+      process.env.VENTING_ON === '1'
+        ? findFounderVenting(firecrawlKey, apiKey)
+        : Promise.resolve({ leads: [], painLanguage: [] }),
 
       // CONFIRMED AD BUDGET (dormant until a Meta token is added)
       searchFacebookAds(fbToken),
