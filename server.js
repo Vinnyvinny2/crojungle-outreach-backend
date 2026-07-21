@@ -2457,9 +2457,19 @@ const getCompanyNews = async (companyName, website, location = '') => {
   const nameWords = cleanName.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !/^(the|and|for|inc|llc|corp|group|new|usa)$/.test(w));
   if (nameWords.length === 0) return empty;
 
-  let domainRoot = '';
+  // FULL HOSTNAME, not just the root label. Matching on the bare root is circular
+  // whenever the domain is simply the company name — sagewood.com gives root
+  // "sagewood", which appears in EVERY article we found by searching for "Sagewood",
+  // so "verified via domain" fired on a condo complex, a street in Katy TX and a
+  // school in South Africa. Requiring "sagewood.com" means someone actually cited
+  // their website, which is real evidence rather than a restatement of the query.
+  let domainRoot = '', domainFull = '';
   if (website) {
-    try { domainRoot = new URL(website).hostname.replace('www.','').split('.')[0].toLowerCase(); } catch {}
+    try {
+      const h = new URL(website).hostname.replace(/^www\./, '').toLowerCase();
+      domainFull = h;
+      domainRoot = h.split('.')[0];
+    } catch {}
   }
 
   // LOCATION ANCHOR — the thing that was missing. Without it, a single-word company
@@ -2468,11 +2478,29 @@ const getCompanyNews = async (companyName, website, location = '') => {
   // "verified triggers". A real article about THIS company almost always names its
   // city or state, or links to its domain.
   const locParts = String(location || '').split(',').map(x => x.trim()).filter(Boolean);
-  const stateZip = locParts.find(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x));
-  const stAbbr = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
-  const cityName = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
+  // Handles BOTH "Concord, NC 28025, USA" and a plain "Concord, NC". The old parse
+  // required a ZIP to be present, so an address without one produced no city and no
+  // state at all — which silently disabled location verification entirely and left
+  // the weaker distinctive-name test as the only gate on that lead's news.
+  let stateZip = locParts.find(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x));
+  let stAbbr = stateZip ? (stateZip.match(/\b([A-Z]{2})\b/) || [])[1] : '';
+  let cityName = stateZip && locParts.indexOf(stateZip) > 0 ? locParts[locParts.indexOf(stateZip) - 1] : '';
+  if (!stAbbr) {
+    const bare = locParts.findIndex(x => /^[A-Z]{2}$/.test(x.trim()));
+    if (bare >= 0) {
+      stAbbr = locParts[bare].trim();
+      if (bare > 0) cityName = locParts[bare - 1];
+    }
+  }
   const STATE_NAMES = { AL:'alabama',AK:'alaska',AZ:'arizona',AR:'arkansas',CA:'california',CO:'colorado',CT:'connecticut',DE:'delaware',FL:'florida',GA:'georgia',HI:'hawaii',ID:'idaho',IL:'illinois',IN:'indiana',IA:'iowa',KS:'kansas',KY:'kentucky',LA:'louisiana',ME:'maine',MD:'maryland',MA:'massachusetts',MI:'michigan',MN:'minnesota',MS:'mississippi',MO:'missouri',MT:'montana',NE:'nebraska',NV:'nevada',NH:'new hampshire',NJ:'new jersey',NM:'new mexico',NY:'new york',NC:'north carolina',ND:'north dakota',OH:'ohio',OK:'oklahoma',OR:'oregon',PA:'pennsylvania',RI:'rhode island',SC:'south carolina',SD:'south dakota',TN:'tennessee',TX:'texas',UT:'utah',VT:'vermont',VA:'virginia',WA:'washington',WV:'west virginia',WI:'wisconsin',WY:'wyoming' };
-  const locTokens = [cityName.toLowerCase(), (STATE_NAMES[stAbbr] || ''), stAbbr ? stAbbr.toLowerCase() : ''].filter(t => t && t.length > 1);
+  // THE BARE TWO-LETTER STATE CODE IS NOT AN IDENTITY SIGNAL. It was in this list
+  // and matched by SUBSTRING, which is how a UK story — "CANcer survivor begins
+  // medical career as foundation doctor at local NHS Trust" — was logged as a
+  // verified trigger for a crawl-space repair company in Concord NC: the letters
+  // "nc" sit inside the word "cancer". The same two letters occur in since, once,
+  // finance, announce, chance, France and branch. A city name or a full state name
+  // is real evidence that an article is local; "nc" is a coincidence generator.
+  const locTokens = [cityName.toLowerCase(), (STATE_NAMES[stAbbr] || '')].filter(t => t && t.length > 3);
   const haveLocation = locTokens.length > 0;
 
   // Headlines that are structurally NOT company news, no matter what they mention.
@@ -2500,16 +2528,63 @@ const getCompanyNews = async (companyName, website, location = '') => {
       // Every same-named business on earth passed. Now identity needs real evidence.
       if (JUNK_ARTICLE.test(haystack)) continue;                     // structurally not company news
 
-      const allNameWordsPresent = nameWords.every(w => haystack.includes(w));
-      if (!allNameWordsPresent) continue;                            // name must appear, always
+      // WORD BOUNDARIES, NOT SUBSTRINGS. `haystack.includes('doctor')` is true of
+      // "doctoral", "doctorate" and "doctors" — which is exactly how "Mastercard
+      // Foundation DOCTORAL Scholarships" was accepted as news about a crawl-space
+      // repair company called Foundation Doctor. Allow a trailing s/es/'s so a real
+      // plural still matches, and nothing else.
+      const wordPresent = (w) => new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "(?:s|es|'s)?\\b", 'i').test(haystack);
+      // The hostname WITH its TLD — see the note on domainFull above. A bare root
+      // match is just the search query echoed back at us.
+      const domainMatch = domainFull.length > 5 && haystack.includes(domainFull);
+      // Word-boundary matched for the same reason the company name is — a city name
+      // buried inside a longer word proves nothing about where a business operates.
+      const locationMatch = haveLocation && locTokens.some(t =>
+        new RegExp('\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(haystack));
 
-      const domainMatch = domainRoot.length > 3 && haystack.includes(domainRoot);
-      const locationMatch = haveLocation && locTokens.some(t => haystack.includes(t));
+      // The domain is the strongest identity evidence there is, and it SHORT-CIRCUITS
+      // the name-word test rather than being gated behind it. "foundationdoctornc.com
+      // announces a new Gastonia location" is unambiguously them, yet the spaced name
+      // "foundation doctor" has no word boundary inside the domain string, so a
+      // name-words-first ordering rejected the single best match available.
+      const allNameWordsPresent = nameWords.every(wordPresent);
+      if (!allNameWordsPresent && !domainMatch) continue;
 
       // A DISTINCTIVE multi-word name ("Cool Change Heating and Air") is itself strong
       // evidence. A short/common name ("Sagewood", "Simplex") is not — it needs the
       // location or the domain to prove identity.
-      const distinctiveName = nameWords.length >= 3 || (nameWords.length === 2 && cleanName.length >= 14);
+      //
+      // LENGTH IS NOT DISTINCTIVENESS. The old rule accepted any 2-word name of 14+
+      // characters, so "Foundation Doctor" (17 chars, both words in everyday English)
+      // was treated as proof of identity — and a live run surfaced a UK junior-doctor
+      // story and a Mastercard scholarship as that company's "I saw you just..."
+      // openers. A name is only self-identifying if at least one of its words is a
+      // word you would NOT expect to meet by chance: a surname, a coined word, an
+      // unusual noun. "Tuck", "Howell", "Panda", "Sagewood" qualify. "Foundation",
+      // "Doctor", "Quality", "Service" do not.
+      //
+      // Deliberately biased toward rejecting. A missed trigger costs one sentence of
+      // an opener; a wrong trigger opens the email with a stranger's news and proves
+      // we never looked, which ends the conversation permanently.
+      const COMMON_NAME_WORDS = new Set([
+        'foundation','doctor','doctors','service','services','home','homes','pro','pros','plus','star','stars',
+        'quality','expert','experts','master','masters','first','best','premier','elite','advanced','superior',
+        'precision','reliable','complete','total','american','america','national','united','general','standard',
+        'custom','modern','classic','family','brothers','sons','group','company','solutions','systems','associates',
+        'partners','enterprises','industries','construction','plumbing','roofing','roof','electric','electrical',
+        'heating','cooling','air','garage','door','doors','tree','lawn','care','repair','repairs','cleaning','clean',
+        'design','build','builders','building','contracting','contractors','remodeling','restoration','landscaping',
+        'paving','concrete','flooring','windows','doorway','pest','control','solar','pool','pools','spa','spas',
+        'dental','dentistry','medical','health','clinic','center','centre','associates','law','legal','insurance',
+        'financial','tax','accounting','realty','property','properties','management','maintenance','supply','supplies',
+        'the','and','for','inc','llc','ltd','corp','co','company','of','your','our','new','great','good','right','done',
+      ]);
+      // Character count is NOT a measure of distinctiveness and never was — it is
+      // what let "Foundation Doctor" through at 17 characters while rejecting "Roof
+      // Panda" at 10, even though "panda" is the far rarer word. The uncommon-word
+      // test alone decides it; length adds nothing but noise.
+      const hasUncommonWord = nameWords.some(w => w.length >= 4 && !COMMON_NAME_WORDS.has(w));
+      const distinctiveName = nameWords.length >= 2 && hasUncommonWord;
       const isVerified = domainMatch || locationMatch || distinctiveName;
       if (!isVerified) continue;
 
@@ -3599,7 +3674,12 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
       }));
     if (dropped.length) console.log(`DEEP PAIN [${companyName}]: dropped ${dropped.length} unverifiable quote(s) — anti-fabrication guard held`);
     if (signals.length) console.log(`DEEP PAIN [${companyName}]: ${signals.length} verified repeating patterns across ~${total} reviews — the "how do they know THIS" hit`);
-    return signals.length ? { signals, summary: parsed.summary || '' } : null;
+    // ALWAYS AN OBJECT once the page was actually read. Returning null both when the
+    // scrape failed AND when it succeeded but found no repeated pattern collapsed two
+    // very different outcomes into one, so the caller could not tell "Google blocked
+    // us" from "this business has no recurring complaint" — and only the first is
+    // worth retrying. totalReviews travels out too, so the log can say how deep we read.
+    return { signals, summary: parsed.summary || '', totalReviews: total, read: true };
   } catch(e) { console.log('deepReviewMine failed:', e.message); return null; }
 };
 
@@ -3635,8 +3715,18 @@ const painFromGoogleReviews = async (companyName, placeId, placesKey, apiKey, fc
   }
   // Prefer negative/critical reviews for pain, but keep the total count for context.
   const totalCount = all.length;
-  const pool = all.filter(r => r.rating === null || r.rating <= 3);
-  if (pool.length === 0) return { signals: [], summary: '' };
+  // FOUR STARS COUNTS. A 4-star review is the most common place an operational
+  // complaint hides in an otherwise happy business: "great work, but it took three
+  // calls to get on the schedule" is a five-word callback problem wrapped in praise,
+  // and the owner recognises it instantly. Restricting the pool to 3-and-below threw
+  // those away and left well-reviewed businesses — which is most of our ICP — with
+  // nothing minable at all. The model is still instructed to report only patterns
+  // that REPEAT and to quote verbatim, so widening the pool cannot invent a pain.
+  const pool = all.filter(r => r.rating === null || r.rating <= 4);
+  if (pool.length === 0) {
+    console.log(`REVIEW MINE [${companyName}]: ${totalCount} review(s) pulled, none at 4 stars or below — nothing to mine. Not a failure; this business has no repeated complaint.`);
+    return { signals: [], summary: '' };
+  }
   const corpus = pool.map((r, i) => `Review ${i + 1}${r.rating ? ` (${r.rating} stars)` : ''}: ${r.text}`).join('\n\n');
   const corpusFlat = corpus.toLowerCase().replace(/\s+/g, ' ');
 
@@ -7343,12 +7433,19 @@ const WEIGHTS = {
       // signal), not just "small company." Otherwise 86% score high and the metric
       // is useless as a filter. The REAL reachability score is computed post-research
       // once we have a decision-maker and verified email.
-      high: scored.filter(c => c.reachability >= 24).length,
-      medium: scored.filter(c => c.reachability >= 12 && c.reachability < 24).length,
-      low: scored.filter(c => c.reachability < 12).length,
+      // READS reachPredict, NOT reachability. `c.reachability` is the POST-RESEARCH
+      // scorer, and at discovery there is no decision-maker and no email for it to
+      // score — so it returned the same base value for every lead and this summary
+      // printed { high: 0, medium: 120, low: 0 } on a live run. 120 leads, one bucket,
+      // zero information. reachPredict is the free name-based estimate (0-40) that
+      // discovery actually computes, and it genuinely separates: a business named
+      // after a person predicts far higher than an institutional name.
+      high: scored.filter(c => (c.reachPredict || 0) >= 28).length,
+      medium: scored.filter(c => (c.reachPredict || 0) >= 14 && (c.reachPredict || 0) < 28).length,
+      low: scored.filter(c => (c.reachPredict || 0) < 14).length,
       blocked: scored.filter(c => c.reachabilityBlocked).length,
     };
-    console.log('Owner-reachability:', reachSummary);
+    console.log('Predicted owner-reachability (0-40, free name-based estimate):', reachSummary);
     console.log('=== DISCOVERY END ===\n');
 
     res.json({ companies: scored, total: scored.length, breakdown });
@@ -7490,6 +7587,151 @@ const checkFacebookAds = async (name, fbToken) => {
 // a slow site takes minutes; browsers throttle background tabs and Render's proxy
 // severs long connections, which is why switching tabs mid-run killed the request
 // and why one lead sat at 359 seconds with the UI spinning on a dead socket.
+// ══ LOCAL SEARCH RANK — WHERE THEY ACTUALLY SIT WHEN A CUSTOMER LOOKS ══════
+// The single most revenue-legible thing we can tell an owner. Not "your SEO could
+// be better" — "you are ninth for foundation repair in Charlotte, and four of the
+// eight above you have FEWER reviews than you do." That is checkable in ten
+// seconds, impossible to argue with, and it separates the two explanations an
+// owner will reach for: it is not that customers do not like them (the reviews
+// prove otherwise), it is that customers never see them.
+//
+// This queries the SAME surface Find already uses — Google's local results for
+// "{what a customer types} in {their city}". For a local service business that is
+// the map pack, which takes the majority of clicks and calls. One Places text
+// search, no Firecrawl credit, using a key we already hold.
+//
+// The comparison is what makes it land. Anyone can say "you rank ninth". Counting
+// how many of the businesses ABOVE them have a weaker review profile turns a rank
+// into a diagnosis: the reputation is already there, the visibility is not — which
+// is precisely the gap the retainer and the ads product close.
+const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey }) => {
+  if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
+  if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
+
+  // The customer-facing phrase for this trade, reused from the Find category map so
+  // the two always agree. Falls back to the raw industry label.
+  const cat = GP_CATEGORIES.find(c => c.label.toLowerCase() === String(industry).toLowerCase());
+  const phrase = cat ? cat.q : String(industry).toLowerCase();
+
+  // City only. A state or ZIP makes the query national or absurdly narrow, and
+  // "foundation repair company in NC 28025" is not a search any human performs.
+  const city = (() => {
+    const parts = String(location || '').split(',').map(x => x.trim()).filter(Boolean)
+      .filter(x => !/^(usa|united states|us)$/i.test(x));
+    if (!parts.length) return '';
+    const stIdx = parts.findIndex(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x) || /^[A-Z]{2}$/.test(x));
+    return stIdx > 0 ? parts[stIdx - 1] : parts[0];
+  })();
+  if (!city) return { checked: false, why: 'no city could be parsed from the location' };
+
+  const query = `${phrase} in ${city}`;
+  try {
+    const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
+                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.rating,places.userRatingCount' },
+      body: JSON.stringify({ textQuery: query, includePureServiceAreaBusinesses: true }),
+    }, 12000);
+    const d = await r.json();
+    if (d.error) return { checked: false, why: `Places error: ${d.error.message || d.error.status}` };
+    const places = d.places || [];
+    if (!places.length) return { checked: false, why: `no results at all for "${query}"` };
+
+    const ourDomain = (() => { try { return new URL(website).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } })();
+    const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const ourName = norm(companyName);
+
+    // placeId is exact and always preferred. Domain is next. Name last, and only on
+    // a full normalised match — a substring test would match "Foundation Doctor"
+    // against any other foundation company in the city.
+    const idx = places.findIndex(p => {
+      if (placeId && p.id === placeId) return true;
+      if (ourDomain && p.websiteUri) {
+        try { if (new URL(p.websiteUri).hostname.replace(/^www\./, '').toLowerCase() === ourDomain) return true; } catch {}
+      }
+      return ourName.length > 5 && norm(p.displayName?.text) === ourName;
+    });
+
+    const row = (p) => ({ name: p.displayName?.text || '', rating: p.rating || null, reviews: p.userRatingCount || 0 });
+    if (idx < 0) {
+      return { checked: true, found: false, query, city, phrase, scanned: places.length,
+               topRivals: places.slice(0, 3).map(row) };
+    }
+    const ours = row(places[idx]);
+    const above = places.slice(0, idx).map(row);
+    // The line that does the work: businesses ranking ABOVE them on a WEAKER
+    // reputation. If this is non-zero, reviews are not the reason they are losing.
+    const weakerAbove = above.filter(a => a.reviews < ours.reviews).length;
+    return { checked: true, found: true, rank: idx + 1, scanned: places.length,
+             query, city, phrase, ours, above: above.slice(0, 3), weakerAbove };
+  } catch (e) {
+    return { checked: false, why: `local rank check failed: ${e.message}` };
+  }
+};
+
+// ══ SERVICE-LEVEL VISIBILITY — THE STRONGEST SEO SIGNAL WE CAN PRODUCE ═════
+// Ranking for one head term is a thin story. The real one is service by service,
+// and their own sitemap hands us the keyword list for free: a business with
+// /services/crawl-space-encapsulation has TOLD us that is a service they sell and
+// want found for. Checking each one turns a vague "your SEO is weak" into:
+//
+//   "You have a dedicated page for crawl space encapsulation. When someone in
+//    Concord searches that, you are not in the results at all."
+//
+// That is undeniable (it is their own page), checkable in ten seconds, and it is
+// exactly what the retainer fixes. It also finds gaps the owner does not know he
+// has — he assumes the page ranks because he paid someone to build it.
+//
+// Free keyword source, one cheap Places call per service, no Firecrawl credit.
+const serviceKeywordsFromSitemap = (urls) => {
+  const seen = new Set(); const out = [];
+  for (const u of urls || []) {
+    let path = '';
+    try { path = new URL(u).pathname.toLowerCase(); } catch { continue; }
+    // Only real service pages. /areas-served/ is geography, not a service, and
+    // blog posts describe rather than sell.
+    const m = path.match(/\/(?:services?|solutions?)\/([a-z0-9-]{4,60})\/?$/);
+    if (!m) continue;
+    const slug = m[1];
+    if (/^(index|home|all|overview|list)$/.test(slug)) continue;
+    const phrase = slug.replace(/-/g, ' ').trim();
+    // Two words minimum: a single word like "waterproofing" is too broad to give a
+    // meaningful local rank, and too generic to prove anything to the owner.
+    if (phrase.split(/\s+/).length < 2) continue;
+    if (seen.has(phrase)) continue;
+    seen.add(phrase); out.push(phrase);
+  }
+  return out;
+};
+
+const auditLocalVisibility = async ({ companyName, placeId, website, industry, location, placesKey, sitemapUrls, maxServices = 3 }) => {
+  if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
+  const results = [];
+
+  // 1. The head term for their trade — the query with the most volume behind it.
+  const head = await checkLocalRank({ companyName, placeId, website, industry, location, placesKey });
+  if (head.checked) results.push({ ...head, kind: 'primary trade' });
+
+  // 2. Their own service pages, shortest first. A shorter slug is usually the
+  //    broader, higher-volume service and the one they most want to win.
+  const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
+  for (const svc of services) {
+    const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey });
+    if (r.checked) results.push({ ...r, kind: 'their own service page' });
+  }
+
+  if (!results.length) return { checked: false, why: head.why || 'no queries could be built' };
+  const invisible = results.filter(r => !r.found);
+  const ranked = results.filter(r => r.found);
+  return {
+    checked: true, results, invisible, ranked,
+    // The headline number: how many of the services they publish a page for they
+    // are simply not visible for.
+    invisibleCount: invisible.length, totalChecked: results.length,
+    bestRank: ranked.length ? Math.min(...ranked.map(r => r.rank)) : null,
+  };
+};
+
 const _runResearchInner = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
   // outer scope so it's visible to all references (fixes scope-leak crash).
@@ -7519,6 +7761,11 @@ const _runResearchInner = async (req, res) => {
   let verifiedCEO = req.body.verifiedCEO || null;
   let verifiedCEOTitle = req.body.verifiedCEOTitle || null;
   let publicPainSignals = req.body.publicPainSignals || [];
+  // Declared HERE, not inside the deep-audit block, because the Brain prompt sits
+  // outside that block — a lower declaration is invisible by the time the prompt is
+  // built and the whole signal would silently never reach the audit.
+  let localRank = null;
+  let localVisibility = null;
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -7794,7 +8041,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Deep pattern-mine first (scrapes their full reviews page, counts repeats);
       // if Google blocks the scrape, fall back to the free 5-review API mine so we
       // ALWAYS have something real. Web-search pain is the last resort.
+      // THIS BLOCK PRODUCES THE "HOW DO THEY KNOW THIS?" LINE, so it logs every
+      // outcome. Previously it was silent in all three failure modes — no placeId,
+      // scrape blocked, or no repeated pattern — which made the single
+      // highest-value asset in the system impossible to verify from a log. A live
+      // run showed no review lines at all and there was no way to tell whether it
+      // had run and found nothing or never run.
       let reviewPainFound = false;
+      if (!req.body.placeId) {
+        console.log(`REVIEW MINE [${company}]: SKIPPED — no Google placeId on this lead, so their reviews cannot be located. Non-Places leads have no review mine.`);
+      } else if (!firecrawlKey && !placesKey) {
+        console.log(`REVIEW MINE [${company}]: SKIPPED — no Firecrawl key and no GOOGLE_PLACES_KEY, so neither the deep scrape nor the API fallback can run.`);
+      }
       if (req.body.placeId && firecrawlKey && apiKey && publicPainSignals.length === 0) {
         try {
           const deep = await deepReviewMine(company, req.body.placeId, firecrawlKey, apiKey);
@@ -7802,8 +8060,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             publicPainSignals = deep.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
             painSummary = deep.summary || painSummary;
             reviewPainFound = true;
+            const _top = deep.signals.map(sg => `${sg.pain} (${sg.count || '?'}x)`).join(' | ');
+            console.log(`\u2713 REVIEW MINE [${company}]: DEEP scrape found ${deep.signals.length} repeated pattern(s) across ~${deep.totalReviews || '?'} reviews — ${_top}. This is the "how do they know this" hook.`);
+          } else if (deep && deep.read) {
+            console.log(`REVIEW MINE [${company}]: deep scrape read ~${deep.totalReviews || '?'} reviews and found no pain repeating across 2+ of them. Honest empty — this business has no recurring complaint to name.`);
+          } else {
+            console.log(`REVIEW MINE [${company}]: deep scrape returned nothing (Google likely blocked the reviews page) — falling back to the review API.`);
           }
-        } catch(e) { console.log('Deep review mine skipped:', e.message); }
+        } catch(e) { console.log(`REVIEW MINE [${company}]: deep scrape errored (${e.message}) — falling back to the review API.`); }
       }
       if (!reviewPainFound && req.body.placeId && placesKey && apiKey && publicPainSignals.length === 0) {
         try {
@@ -7812,9 +8076,47 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             publicPainSignals = gr.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
             painSummary = gr.summary || '';
             reviewPainFound = true;
+            console.log(`\u2713 REVIEW MINE [${company}]: API fallback found ${gr.signals.length} pattern(s) from the 5 reviews Google exposes — ${gr.signals.map(sg => sg.pain).join(' | ')}`);
+          } else {
+            console.log(`REVIEW MINE [${company}]: API fallback found no repeated pattern either. No review hook for this lead — the pitch will lead on the site audit instead.`);
           }
-        } catch(e) { console.log('Google-reviews pain skipped:', e.message); }
+        } catch(e) { console.log(`REVIEW MINE [${company}]: API fallback errored: ${e.message}`); }
       }
+      // ══ LOCAL SEARCH RANK ══════════════════════════════════════════════════
+      // Sits beside the review mine because they are the same kind of asset: a fact
+      // about their business the owner has never had put in front of him. Costs one
+      // Places call and no Firecrawl credit, so it runs on every Places lead.
+      try {
+        // The sitemap is already cached from the owner/email passes, so re-asking
+        // for it costs nothing and hands us their own service list as keywords.
+        let _siteUrls = [];
+        try { _siteUrls = await firecrawlMap(firecrawlKey, website); } catch {}
+        const lv = await auditLocalVisibility({
+          companyName: company, placeId: req.body.placeId, website,
+          industry: req.body.industry || '', location: req.body.location || '',
+          placesKey, sitemapUrls: _siteUrls,
+        });
+        if (lv.checked) {
+          localVisibility = lv;
+          localRank = lv.results.find(r => r.kind === 'primary trade' && r.found) || lv.results.find(r => r.found) || lv.results[0];
+          for (const r of lv.results) {
+            if (r.found) {
+              const weak = r.weakerAbove
+                ? ` ${r.weakerAbove} of the ${r.rank - 1} above them have FEWER reviews — reputation is not the problem, visibility is.`
+                : '';
+              console.log(`LOCAL RANK [${company}]: #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind}).${weak}`);
+            } else {
+              console.log(`LOCAL RANK [${company}]: NOT IN TOP ${r.scanned} for "${r.query}" (${r.kind}) — top of that list: ${r.topRivals.map(t => `${t.name} (${t.reviews} rev)`).join(', ')}`);
+            }
+          }
+          if (lv.invisibleCount) {
+            console.log(`\u2605 VISIBILITY GAP [${company}]: invisible for ${lv.invisibleCount} of ${lv.totalChecked} searches checked${lv.invisible.some(r => r.kind === 'their own service page') ? ' — including services they publish a dedicated page for. This is the retainer pitch, in their own words.' : '.'}`);
+          }
+        } else {
+          console.log(`LOCAL RANK [${company}]: skipped — ${lv.why}`);
+        }
+      } catch(e) { console.log(`LOCAL RANK [${company}]: errored (non-fatal): ${e.message}`); }
+
       // ── CREDIT GATES — buy a lookup only where it can actually pay off ──────
       // WEB PAIN SEARCH: two Firecrawl searches hunting Glassdoor/Indeed reviews and
       // documented complaints. On twelve consecutive owner-operated local businesses
@@ -8441,6 +8743,8 @@ ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : '
 → A pitch that names the operational fire ("your reviews say quotes take three weeks and you're hiring four schedulers to keep up") is in a completely different league from one that names a website flaw ("your homepage has no lead capture form"). The first makes the owner feel SEEN. The second sounds like every other agency email.
 → CONNECT the operational pain to the website/ad finding wherever they genuinely link — that combination is the sharpest possible pitch. Example: "You are running 840 ads into a page with no form, while your reviews say quotes take three weeks. You are paying to generate leads you cannot answer."
 → NEVER quote the review verbatim in the email (it embarrasses them publicly). Reference the PATTERN, not the quote. "Your reviews mention slow quote turnaround" — not "one customer said you're incompetent."${_hasReviewPattern ? `\n\n\u2605\u2605 MANDATORY OPENING \u2605\u2605\nWe mined THEIR OWN Google reviews and found a pain that REPEATS across multiple reviews, with a count. This is the strongest opening line available to us and it MUST be where the pitch starts.\n\u2192 Your pitchAngle MUST open by naming this recurring pattern AND its count. The count is what makes it undeniable: one complaint is an anecdote, seven is a problem the owner already knows about and has not fixed.\n\u2192 Say the NUMBER out loud. "Seven of your last forty reviews mention the same thing" lands far harder than "some customers mention".\n\u2192 Never reproduce the review text and never name a reviewer \u2014 describe the PATTERN only. The count plus the theme is the punch; the raw quote is a liability.\n\u2192 THEN connect it to the money/product finding in the same breath. That pairing (their operational fire + what it costs) is the sharpest email this system can write.\n\u2192 RELEVANCE TEST \u2014 this mandate applies ONLY when the pattern is something CROJungle actually fixes (slow callbacks, missed calls, no follow-up, quote/estimate delays, scheduling chaos, leads going unanswered). If the recurring pattern is about PRICING, WORKMANSHIP, STAFF ATTITUDE or DAMAGE, do NOT open with it \u2014 we cannot fix that, and naming it makes us sound like a complaint tracker before an irrelevant pivot. Use the next-strongest confirmed fact instead and ignore the pattern.\n\u2192 The test: can the owner draw a straight line from the pain you named to what we sell? If yes, lead with it. If no, it is not our hook regardless of the count.\n\u2192 GOOD: "Nine of your recent reviews mention waiting days for a callback \u2014 and you are paying for 27 ads driving straight to a page with no way to capture those people. Worth 20 minutes?"\n\u2192 BAD: "Your website has no lead capture form." (True, generic, ignorable \u2014 and it buries the one thing that would make him stop scrolling.)` : ''}` : 'No verified operational pain found in public sources — pitch from the site/ad audit only. Do NOT invent operational pain: fabricating a complaint would destroy credibility instantly.'}
+${localRank && localRank.checked && localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" — the exact phrase a customer in their city types — they come up #${localRank.rank} of ${localRank.scanned}, with ${localRank.ours.reviews} reviews at ${localRank.ours.rating}\u2605.\nAhead of them: ${localRank.above.map(a => `${a.name} (${a.reviews} reviews, ${a.rating || '?'}\u2605)`).join(', ')}${localRank.weakerAbove ? `\n\u2605 ${localRank.weakerAbove} of the ${localRank.rank - 1} businesses ABOVE them have FEWER reviews than they do.` : ''}\n\u2192 This is a FACT the owner can check in ten seconds, and most have never checked it.\n\u2192 ${localRank.weakerAbove ? 'The weaker-reputation-ranking-higher comparison is the whole point: it proves customers are not choosing competitors, they are never seeing this business at all. The reputation is already built. The visibility is not. Say the numbers out loud.' : 'State the position plainly. Do not speculate about WHY they rank there — we measured position, not cause.'}\n\u2192 Do NOT claim to know their traffic, their spend, or their conversion rate. We measured one thing: where they appear. Overstating it destroys the credibility the number earns.` : ''}${localRank && localRank.checked && !localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" they do NOT appear in the top ${localRank.scanned} at all. A customer looking for exactly what they sell, in their own city, does not see them.\nWho does appear: ${localRank.topRivals.map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}\n\u2192 Absence is a stronger fact than a low rank, and it is verifiable in one search. Say it plainly and without exaggeration: they are not in the results, and name who is.\n\u2192 Do NOT infer why. We measured absence, not cause.` : ''}
+${localVisibility && localVisibility.checked && localVisibility.invisible.some(r => r.kind === 'their own service page') ? `\n═══ SERVICES THEY SELL BUT CANNOT BE FOUND FOR ═══\nTheir OWN sitemap publishes a dedicated page for each of these. We searched each one the way a customer in ${localVisibility.results[0].city} would, and they do not appear in the results at all:\n${localVisibility.invisible.filter(r => r.kind === 'their own service page').map(r => `- "${r.query}" — not in the top ${r.scanned}. Who is: ${r.topRivals.slice(0,2).map(t => t.name).join(', ')}`).join('\n')}\n\u2192 THIS IS THE SHARPEST SEO FACT WE CAN GIVE AN OWNER. He paid to have that service page built. He assumes it works. It does not, and he has never checked.\n\u2192 Name the SERVICE, not the abstraction. "You have a page for crawl space encapsulation and you are not in the results when someone in Concord searches it" beats "your SEO needs work" by a mile.\n\u2192 Tie it to money the way an owner counts it: that is a service he staffs for and wants to sell, and the calls are going to whoever does appear.\n\u2192 Do NOT claim to know his traffic, keyword volume, spend, or why he ranks where he does. We measured presence and absence on one search each. Nothing more.` : ''}
 RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago, identified via ${t.idBasis}] ${t.headline}`).join('\n') + '\n\u2192 Each line shows HOW we tied it to this company. "via domain" or "via location" = strong evidence. "via distinctive name" = a NAME MATCH ONLY and is NOT confirmed to be them.\n\u2192 You may use a trigger as the cold-open (\"I saw you just...\") ONLY if it was identified via domain or location AND the headline obviously describes THIS business. Company names repeat across the country \u2014 a condo complex, a street address, a school, or a different town sharing the name is NOT them.\n\u2192 If you are not certain a headline is about this exact business, do NOT reference it at all. Opening with someone else\u2019s news proves we did not do our homework and kills the lead instantly.' : 'No recent company-specific news found \u2014 do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
