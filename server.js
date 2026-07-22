@@ -3634,6 +3634,107 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
   } catch(e) { console.log('Google reviews fetch failed:', e.message); return []; }
 };
 
+// ══ GOOGLE BUSINESS PROFILE COMPLETENESS — the biggest FREE revenue signal ═══
+// For a local business, the Google Business Profile is the top of the entire
+// revenue funnel: it is what decides whether they appear in the map pack when
+// someone searches their service nearby. An incomplete profile is the single most
+// common reason a good local business gets fewer leads than a worse competitor —
+// and unlike anything on their website, it is costing them the customers they never
+// even hear about. This uses the SAME Places API and the SAME key we already own;
+// it is one expanded field-mask on a call we were already capable of making. $0.
+//
+// EVERY FIELD HERE IS MEASURED, not inferred. We are reading their actual public
+// profile. That is the distinction that has been missing: this is revenue-critical
+// AND verifiable, which is exactly the combination the audit needs more of.
+const fetchGBPHealth = async (placeId, placesKey) => {
+  if (!placeId || !placesKey) return null;
+  try {
+    const mask = [
+      'rating','userRatingCount','businessStatus','primaryTypeDisplayName',
+      'regularOpeningHours','websiteUri','nationalPhoneNumber','photos',
+      'editorialSummary','googleMapsUri','reviewSummary','reviews'
+    ].join(',');
+    const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+      headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': mask },
+    }, 12000);
+    const d = await r.json();
+    if (!d || d.error) return null;
+    // Each of these is a factual, checkable gap an owner can confirm in ten seconds
+    // by opening their own Google listing. No inference.
+    const photoCount = Array.isArray(d.photos) ? d.photos.length : 0;
+
+    // REVIEW RECENCY — measured from the newest review's publishTime. Guarded so
+    // that no reviews, or unparseable dates, yield checked:false and NO staleness
+    // claim. Stale reviews are a real trust leak: a buyer checks the profile and
+    // sees the last happy customer was eight months ago.
+    const revTimes = Array.isArray(d.reviews)
+      ? d.reviews.map(r => r && r.publishTime ? new Date(r.publishTime).getTime() : NaN).filter(n => !isNaN(n))
+      : [];
+    let reviewRecency = { checked: false };
+    if (revTimes.length) {
+      const days = Math.floor((Date.now() - Math.max(...revTimes)) / 86400000);
+      reviewRecency = { checked: true, newestDays: days, stale: days > 90, veryCold: days > 180 };
+    }
+    const primaryCategory = (d.primaryTypeDisplayName && d.primaryTypeDisplayName.text) || null;
+
+    const gaps = [];
+    // Only add a recency gap when we actually measured it AND it is genuinely stale.
+    if (reviewRecency.checked && reviewRecency.veryCold) gaps.push(`their newest Google review is about ${reviewRecency.newestDays} days old (buyers read recency as \"are people still going here?\")`);
+    if (!d.regularOpeningHours) gaps.push('no business hours listed on their Google profile');
+    if (photoCount < 10) gaps.push(`only ${photoCount} photo${photoCount===1?'':'s'} on their Google profile (listings with 10+ get materially more calls)`);
+    if (!d.websiteUri) gaps.push('no website link on their Google profile');
+    if (!d.editorialSummary) gaps.push('no business description on their Google profile');
+    if (d.businessStatus && d.businessStatus !== 'OPERATIONAL') gaps.push(`Google shows their status as ${d.businessStatus}`);
+    return {
+      checked: true,
+      rating: d.rating || null,
+      reviewCount: d.userRatingCount || 0,
+      photoCount,
+      hasHours: !!d.regularOpeningHours,
+      hasWebsiteLink: !!d.websiteUri,
+      hasDescription: !!d.editorialSummary,
+      status: d.businessStatus || null,
+      mapsUri: d.googleMapsUri || null,
+      reviewRecency,          // {checked, newestDays, stale, veryCold} — never claim if unchecked
+      primaryCategory,        // their listing's primary category, or null
+      gaps,           // only real, observed gaps — safe to state as fact
+      gapCount: gaps.length,
+    };
+  } catch(e) { console.log('GBP health fetch failed:', e.message); return null; }
+};
+
+// ══ HTML REVENUE SIGNALS — measured, free, zero fabrication risk ═════════════
+// Reads ONLY what is literally present or absent in the raw HTML of their homepage.
+// Every field is a fact the owner can confirm by viewing his own page source. No
+// inference, no backend, no search claims. This is the "capture the lead / get the
+// click" layer of the revenue chain: a missing viewport tag, a form with fifteen
+// fields, a phone number that is not tappable on mobile, no SSL — each is a real,
+// checkable leak. Proven with 15 unit tests before wiring in.
+function extractHtmlSignals(rawHtml, pageUrl) {
+  const html = String(rawHtml || '');
+  const url = String(pageUrl || '');
+  if (!html || html.length < 200) return { checked: false };
+  const isHttps = /^https:\/\//i.test(url);
+  const hasViewport = /<meta[^>]+name=["']viewport["'][^>]*>/i.test(html);
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? titleMatch[1].replace(/\s+/g,' ').trim() : '';
+  const hasTitle = title.length > 0;
+  const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)
+                 || html.match(/<meta[^>]+content=["']([^"']*)["'][^>]+name=["']description["']/i);
+  const metaDescription = descMatch ? descMatch[1].trim() : '';
+  const hasMetaDescription = metaDescription.length > 0;
+  const hasTelLink = /href=["']tel:[^"']+["']/i.test(html);
+  const inputs = html.match(/<input\b[^>]*>/gi) || [];
+  const visibleInputs = inputs.filter(t => !/type=["'](hidden|submit|button|image|reset)["']/i.test(t));
+  const selects = html.match(/<select\b[^>]*>/gi) || [];
+  const textareas = html.match(/<textarea\b[^>]*>/gi) || [];
+  const formFieldCount = visibleInputs.length + selects.length + textareas.length;
+  const hasForm = /<form\b[^>]*>/i.test(html) || formFieldCount > 0;
+  return { checked: true, isHttps, hasViewport, hasTitle, title: title.slice(0,120),
+    hasMetaDescription, metaDescription: metaDescription.slice(0,160),
+    hasTelLink, hasForm, formFieldCount };
+}
+
 // DEEP REVIEW PATTERN MINE — the send-path escalation. Scrapes the full public
 // reviews page (more than the API's 5) and finds pains that REPEAT across many
 // reviews, WITH counts. "Eleven of your reviews mention the same callback delay" is
@@ -7774,6 +7875,8 @@ const _runResearchInner = async (req, res) => {
   // built and the whole signal would silently never reach the audit.
   let localRank = null;
   let localVisibility = null;
+  let gbpHealth = null;  // hoisted to function scope so the prompt (outside the Places-lead block) can read it
+  let htmlSignals = { checked: false };  // hoisted to function scope so the prompt can read it
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -7860,7 +7963,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot'], onlyMainContent: false, waitFor: 1500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot', 'html'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
       }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
@@ -7915,6 +8018,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // DIFFERENT business, the scraped page has to be thrown away too — not just the
     // URL. See the wrong-company branch.
     let content = firecrawlData.data?.markdown || firecrawlData.markdown || '';
+    // Raw HTML from the same scrape. markdown strips the very things several
+    // revenue signals need to see — form <input> fields, the viewport meta tag,
+    // tel: links, the <title> and meta description. Captured once here so those
+    // checks read from one trusted source and never re-fetch.
+    const rawHtml = firecrawlData.data?.html || firecrawlData.html || '';
+    // Compute the free HTML revenue signals from this page's own source. Guarded
+    // to only run on a real page (rawHtml present); a bot-challenge page was
+    // already blanked upstream, so this never reads a challenge page.
+    htmlSignals = rawHtml ? extractHtmlSignals(rawHtml, website) : { checked: false };
+    if (htmlSignals.checked) {
+      console.log(`HTML SIGNALS [${company}]: https=${htmlSignals.isHttps} viewport=${htmlSignals.hasViewport} title=${htmlSignals.hasTitle} metaDesc=${htmlSignals.hasMetaDescription} tel=${htmlSignals.hasTelLink} formFields=${htmlSignals.formFieldCount}`);
+    }
 
     let screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
 
@@ -8081,6 +8196,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // their exact business (no disambiguation), maximally specific, cheaper than a
       // web search. Fall back to web-search pain only if reviews yield nothing.
       const placesKey = process.env.GOOGLE_PLACES_KEY || '';
+
+      // ══ GBP COMPLETENESS — free, measured, revenue-critical ════════════════
+      // Runs on every Places lead. Pulls their real Google Business Profile and
+      // surfaces only OBSERVED gaps (missing hours, thin photos, no description).
+      // This is the top of the local revenue funnel and every gap is checkable by
+      // the owner in ten seconds — measured, not inferred.
+      if (req.body.placeId && placesKey) {
+        gbpHealth = await fetchGBPHealth(req.body.placeId, placesKey);
+        if (gbpHealth) {
+          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photoCount} photos | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}`);
+        }
+      }
       // ══ REVIEW-PATTERN MINE — the highest-reply-rate asset the system produces ══
       // Runs on EVERY Places lead, no exceptions: a pain named across MANY of their
       // own reviews ("7 of ~40 reviewers mention the same callback delay") is the
@@ -8406,7 +8533,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // Look at the ACTUAL rendered page instead of grepping HTML. These
         // findings are mechanical (a human would agree) and OVERRIDE the
         // regex-based CTA/social-proof guesses when available — because a
-        // screenshot can't be fooled by JS-rendered content the way source-scan can.
+        // screenshot sees rendered content the source-scan misses — BUT it is also
+        // vulnerable the other way: a shot captured before late widgets finish shows
+        // them absent when they are not. Vision now reports pageFullyLoaded and
+        // per-item uncertainty, and absence of reviews/CTA is never confirmed.
         if (screenshotBase64) {
           visualAnalysis = await visionAuditPage(screenshotBase64, company, apiKey);
           // visualAnalysis now carries the authoritative visual findings;
@@ -8769,7 +8899,7 @@ WEBSITE: ${website || 'Unknown'}
 VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
 VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle || 'CEO') + ') — found in public search results, use their real name in the pitch' : 'Not identified — pitch to "the owner/CEO"'}
 ═══ WHAT THEIR HOMEPAGE ACTUALLY LOOKS LIKE (vision — we SAW this, not guessed) ═══
-${visualAnalysis ? `${visualAnalysis.heroIsBlank ? '⚠ THE HERO IS BLANK OR BROKEN-LOOKING. ' : ''}Headline visible: ${visualAnalysis.hasHeadline ? 'yes — "' + (visualAnalysis.headlineObserved || '') + '"' : 'NO — no value-proposition headline visible on arrival'}. CTA visible: ${visualAnalysis.hasVisibleCTA ? 'yes — "' + (visualAnalysis.ctaObserved || '') + '"' : 'NO — no clear call-to-action button above the fold'}. Social proof above fold: ${visualAnalysis.hasVisibleSocialProof ? 'yes' : 'no'}. Design: ${visualAnalysis.designObservation || (visualAnalysis.looksDated ? 'looks dated' : 'current')}. Conversion readiness: ${visualAnalysis.overallConversionReadiness || 'unknown'}.
+${visualAnalysis ? `${visualAnalysis.heroIsBlank ? '⚠ THE HERO IS BLANK OR BROKEN-LOOKING. ' : ''}Headline visible: ${visualAnalysis.hasHeadline ? 'yes — "' + (visualAnalysis.headlineObserved || '') + '"' : 'NO — no value-proposition headline visible on arrival'}. CTA visible: ${visualAnalysis.hasVisibleCTA ? 'yes — "' + (visualAnalysis.ctaObserved || '') + '"' : 'NO — no clear call-to-action button above the fold'}. Social proof above fold: ${visualAnalysis.hasVisibleSocialProof ? 'yes' : (visualAnalysis.socialProofUncertain ? 'a review/widget area is present but had not finished loading when we looked \u2014 do NOT say they lack reviews' : 'none seen in the screenshot \u2014 but review widgets load late, so do NOT claim they have no reviews')}.${visualAnalysis.pageFullyLoaded === false ? ' \u26a0 THE PAGE WAS NOT FULLY LOADED IN THIS SCREENSHOT \u2014 treat every "absent" visual finding as UNCONFIRMED; something may simply not have rendered. Do not claim the page lacks a CTA, headline, or social proof.' : ''} Design: ${visualAnalysis.designObservation || (visualAnalysis.looksDated ? 'looks dated' : 'current')}. Conversion readiness: ${visualAnalysis.overallConversionReadiness || 'unknown'}.
 → These are VISUAL FACTS — we looked at their actual rendered homepage. "Your homepage loads with a blank hero and no call-to-action" is undeniable when we've literally seen it. This is your sharpest, most credible ammunition. Use the exact observation.
 ${visualAnalysis.heroIsBlank && (fbAds.adCount||0) > 0 && fbAds.countReliable !== false ? '→ ⚠ THEY ARE RUNNING ' + fbAds.adCount + ' PAID ADS INTO A BLANK HOMEPAGE. This is the single most expensive, most provable problem they have. Lead with it.' : ''}` : 'No screenshot available — audit the site from scraped text only. Do NOT describe what the page "looks like" — we did not see it.'}
 
@@ -8793,6 +8923,18 @@ ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : '
 ${localRank && localRank.checked && localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" — the exact phrase a customer in their city types — they come up #${localRank.rank} of ${localRank.scanned}, with ${localRank.ours.reviews} reviews at ${localRank.ours.rating}\u2605.\nAhead of them: ${localRank.above.map(a => `${a.name} (${a.reviews} reviews, ${a.rating || '?'}\u2605)`).join(', ')}${localRank.weakerAbove ? `\n\u2605 ${localRank.weakerAbove} of the ${localRank.rank - 1} businesses ABOVE them have FEWER reviews than they do.` : ''}\n\u2192 This is a FACT the owner can check in ten seconds, and most have never checked it.\n\u2192 ${localRank.weakerAbove ? 'The weaker-reputation-ranking-higher comparison is the whole point: it proves customers are not choosing competitors, they are never seeing this business at all. The reputation is already built. The visibility is not. Say the numbers out loud.' : 'State the position plainly. Do not speculate about WHY they rank there — we measured position, not cause.'}\n\u2192 Do NOT claim to know their traffic, their spend, or their conversion rate. We measured one thing: where they appear. Overstating it destroys the credibility the number earns.` : ''}${localRank && localRank.checked && !localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" they do NOT appear in the top ${localRank.scanned} at all. A customer looking for exactly what they sell, in their own city, does not see them.\nWho does appear: ${localRank.topRivals.map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}\n\u2192 Absence is a stronger fact than a low rank, and it is verifiable in one search. Say it plainly and without exaggeration: they are not in the results, and name who is.\n\u2192 Do NOT infer why. We measured absence, not cause.` : ''}
 ${localVisibility && localVisibility.checked && localVisibility.invisible.some(r => r.kind === 'their own service page') ? `\n═══ SERVICES THEY SELL BUT CANNOT BE FOUND FOR ═══\nTheir OWN sitemap publishes a dedicated page for each of these. We searched each one the way a customer in ${localVisibility.results[0].city} would, and they do not appear in the results at all:\n${localVisibility.invisible.filter(r => r.kind === 'their own service page').map(r => `- "${r.query}" — not in the top ${r.scanned}. Who is: ${r.topRivals.slice(0,2).map(t => t.name).join(', ')}`).join('\n')}\n\u2192 THIS IS THE SHARPEST SEO FACT WE CAN GIVE AN OWNER. He paid to have that service page built. He assumes it works. It does not, and he has never checked.\n\u2192 Name the SERVICE, not the abstraction. "You have a page for crawl space encapsulation and you are not in the results when someone in Concord searches it" beats "your SEO needs work" by a mile.\n\u2192 Tie it to money the way an owner counts it: that is a service he staffs for and wants to sell, and the calls are going to whoever does appear.\n\u2192 Do NOT claim to know his traffic, keyword volume, spend, or why he ranks where he does. We measured presence and absence on one search each. Nothing more.` : ''}
 ${!(localVisibility && localVisibility.checked) ? `\n\u26d4 THE SEARCH SURFACE WAS NOT MEASURED FOR THIS LEAD.\nThe local-rank check did not run, so we have NO information about where this business appears in search, who outranks them, or what a searcher sees.\nYou may NOT write \u2014 in any wording \u2014 that nobody finds them, that they are invisible, that searchers see a competitor first, that they do not come up, or anything else about search results, rankings, or what Google displays.\nA scrape of their website tells you about their WEBSITE. It tells you nothing about search.\nThis exact error has already shipped twice: one email asserted what Google shows as a business's title based on a bot-check page our own scraper was served, and another told an insurance agency that nobody searching a specific phrase was seeing them when no search had been run at all. Both were confident, both were checkable, and being wrong about a checkable claim destroys every true statement standing next to it.\nWrite about what IS on their site instead \u2014 that we did measure.` : ''}
+GOOGLE BUSINESS PROFILE (measured from their live listing — these are FACTS the owner can confirm by opening their own Google listing): ${gbpHealth && gbpHealth.checked ? (gbpHealth.gapCount ? gbpHealth.gaps.map(g => '- ' + g).join('\n') + `\n→ These are the top of a local business's revenue funnel: the Google profile is what decides whether they show up in the map pack when someone searches their service nearby. An incomplete profile quietly loses them customers they never hear about. Each gap here is MEASURED from their live profile — you may state it as fact. This is often the sharpest, most defensible finding available because it is both revenue-critical and 100% checkable.` : 'Their Google Business Profile looks complete (hours, photos, description, website link all present) — do NOT invent a profile problem.') : 'Google Business Profile not checked for this lead — make NO claims about their Google listing, map-pack presence, or profile completeness.'}
+
+SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact the owner can confirm by viewing his own page; NONE of it is inference): ${htmlSignals && htmlSignals.checked ? [
+  htmlSignals.isHttps === false ? '- Their site does not load over HTTPS (no SSL) — modern browsers show a \"Not secure\" warning that visibly scares visitors off. This is a measured fact and a real trust/conversion leak.' : '',
+  htmlSignals.hasViewport === false ? '- No mobile viewport tag in the page — the site is not configured for phones, and mobile is the majority of local traffic. Measured, checkable.' : '',
+  htmlSignals.hasTelLink === false ? '- No tap-to-call link on the page — a phone number that is not tappable on mobile loses calls from people ready to book. Measured from the HTML.' : '',
+  (htmlSignals.hasForm && htmlSignals.formFieldCount >= 8) ? `- Their contact/booking form asks for ${htmlSignals.formFieldCount} fields — long forms measurably cut completions, especially on mobile. Only ask for what is needed to book. Measured by counting the inputs.` : '',
+  htmlSignals.hasTitle === false ? '- The page has no <title> tag — this hurts how it reads in search and browser tabs. Measured, checkable in their own source.' : '',
+  htmlSignals.hasMetaDescription === false ? '- No meta description on the page — a missing description means search engines improvise the snippet, lowering click-through. Measured from the HTML.' : '',
+].filter(Boolean).join('\n') || '- Site technicals look clean (HTTPS, mobile viewport, tap-to-call, reasonable form length all present) — do NOT invent a technical problem here.' : 'Homepage HTML not captured for this lead — make NO claims about their SSL, mobile setup, form length, or page tags.'}${htmlSignals && htmlSignals.checked && [htmlSignals.isHttps===false, htmlSignals.hasViewport===false, htmlSignals.hasTelLink===false, htmlSignals.hasForm&&htmlSignals.formFieldCount>=8].some(Boolean) ? '\n→ These are \"get the click / capture the lead\" leaks: cheap to state, impossible to dispute, and directly tied to whether a visitor becomes a customer. Prefer them over anything soft.' : ''}
+
+REVIEW RECENCY (measured from their newest Google review's date): ${gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? (gbpHealth.reviewRecency.veryCold ? `Their most recent Google review is about ${gbpHealth.reviewRecency.newestDays} days old. Buyers read review recency as \"are people still choosing this place?\" — a profile that looks frozen months ago quietly costs trust at the exact moment someone is deciding. This is measured from the live profile and the owner can confirm it. Safe to state as fact.` : (gbpHealth.reviewRecency.stale ? `Newest review is about ${gbpHealth.reviewRecency.newestDays} days old — slightly stale but not alarming; mention only if nothing sharper exists.` : 'Their reviews are recent — do NOT claim their reviews are stale or old.')) : 'Review recency not measured for this lead — make NO claim about how old or fresh their reviews are.'}
 RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago, identified via ${t.idBasis}] ${t.headline}`).join('\n') + '\n\u2192 Each line shows HOW we tied it to this company. "via domain" or "via location" = strong evidence. "via distinctive name" = a NAME MATCH ONLY and is NOT confirmed to be them.\n\u2192 You may use a trigger as the cold-open (\"I saw you just...\") ONLY if it was identified via domain or location AND the headline obviously describes THIS business. Company names repeat across the country \u2014 a condo complex, a street address, a school, or a different town sharing the name is NOT them.\n\u2192 If you are not certain a headline is about this exact business, do NOT reference it at all. Opening with someone else\u2019s news proves we did not do our homework and kills the lead instantly.' : 'No recent company-specific news found \u2014 do not invent any; pitch from the site audit.'}
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
@@ -9086,6 +9228,49 @@ Return ONLY valid JSON, no markdown:
           } else {
             console.log('SOURCE VERIFY: all quotes matched page source');
           }
+
+          // ══ CLAIM VERIFY — the layer SOURCE VERIFY could not provide ══════════
+          // SOURCE VERIFY only catches a fabricated QUOTE (a "string" not in the
+          // page). It is blind to a fabricated ASSERTION, because there is no quote
+          // to match — and EVERY fabrication found in live review was an unquoted
+          // assertion: "every lead waits for a callback", "nobody searching sees
+          // them", "disappears forever", reviews called absent. This scans the
+          // generated prose for those exact patterns and flags them for the reviewer
+          // BEFORE the email can be approved. It does not silently rewrite (that
+          // could mangle good copy); it surfaces the risk so a human decides.
+          const _allProse = [parsed.pitchAngle, parsed.emailBody, parsed.subject,
+            parsed.variantA && (parsed.variantA.pitch || parsed.variantA.body),
+            parsed.variantB && (parsed.variantB.pitch || parsed.variantB.body),
+            parsed.followUp1 && parsed.followUp1.body, parsed.followUp2 && parsed.followUp2.body]
+            .filter(Boolean).join(' \n ');
+          const _lrChecked = !!(localVisibility && localVisibility.checked);
+          const _claimRisks = [];
+          const _flag = (re, why) => { const m = _allProse.match(re); if (m) _claimRisks.push(`${why} — "${m[0].slice(0,60)}"`); };
+          // 1. Backend / post-submit behaviour we never observed
+          _flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission backend behaviour');
+          _flag(/\bdisappears? forever\b/i, 'claims backend outcome (no record) we cannot see');
+          _flag(/\bno one (ever )?(sees|responds|answers)\b.{0,30}\bsubmit/i, 'claims what happens after a form submit');
+          _flag(/\bgoes (straight )?to (their )?(voicemail|no ?one|nobody)\b/i, 'claims call-handling we did not test');
+          // 2. Search-surface claims with no local-rank measurement
+          if (!_lrChecked) {
+            _flag(/\bnobody (searching|who searches).{0,40}\b(sees|finds|is seeing)\b/i, 'search-result claim with NO local-rank measurement');
+            _flag(/\b(invisible|not (showing|appearing)|do(es)?n'?t (show|appear|come up))\b.{0,30}\b(search|google|results?)\b/i, 'search-visibility claim with NO local-rank measurement');
+            _flag(/\b(page ?2|second page|first page|top (10|20|3|five|ten))\b/i, 'ranking-position claim with NO local-rank measurement');
+          }
+          // 3. Absence of reviews / social proof (widget-loaded — never confirmable)
+          _flag(/\b(no|zero|lack of|missing|don'?t have any?) (google |yelp )?(reviews|testimonials|social proof|star ratings)\b/i, 'claims reviews/social-proof ABSENT (widget-loaded, not confirmable)');
+          // 4. What Google indexes / shows, from a scrape
+          _flag(/\bgoogle (shows|displays|indexes)\b/i, 'claims what Google shows, from a scrape');
+          _flag(/\bjust a moment\b/i, 'contains a bot-challenge string — likely from a blocked scrape');
+          // 5. Invented dollar totals about THEM (industry-typical job value is fine)
+          _flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'states a specific loss total we cannot know');
+
+          if (_claimRisks.length) {
+            parsed._claimRisks = _claimRisks;
+            console.log(`\u26d4 CLAIM VERIFY [${company}]: ${_claimRisks.length} unverifiable assertion(s) in the generated copy — ${_claimRisks.join(' | ')}. Flagged for review; do NOT send without checking these against what was actually measured.`);
+          } else {
+            console.log(`\u2713 CLAIM VERIFY [${company}]: no unverifiable backend/search/absence assertions detected in the copy.`);
+          }
           // Attach verification result so the frontend can show a trust badge
           parsed._quoteVerification = {
             checked: !!content && content.length > 100,
@@ -9094,6 +9279,10 @@ Return ONLY valid JSON, no markdown:
             suppressed: unverifiedQuotes,
           };
           brainAudit = {
+            // Carry the fabrication flags through to the response so the review
+            // checklist can show them. brainAudit is an explicit literal, so without
+            // this line _claimRisks would silently never reach the UI.
+            _claimRisks: parsed._claimRisks,
             realPain: parsed.realPain,
             embarrassingFinding: parsed.embarrassingFinding,
             recommendedProduct: parsed.recommendedProduct,
@@ -9174,8 +9363,15 @@ Return ONLY valid JSON, no markdown:
           // The audit's real anti-fabrication guards (source verification, evidence
           // floors, ad-count reliability, quote verification) all still run.
           // Set deepMode:true explicitly if you ever want the second opinion back.
-          if (req.body.deepMode !== true) {
-            console.log(`Critique skipped — ~30s saved on ${company}`);
+          // FACT-CHECK PASS NOW RUNS BY DEFAULT. It was disabled, which meant the
+          // one component whose entire job is catching false claims never ran on a
+          // single lead — exactly the failure that shipped fabricated audits. It was
+          // disabled for two fair reasons (cost ~30s, and it blunted the pitch by
+          // rewriting it). The first is worth paying for accuracy. The second is
+          // fixed below: it now FLAGS problems and NEVER overwrites the pitch unless
+          // a claim is genuinely unsupported. A skipped fact-check is not a feature.
+          if (req.body.skipFactCheck === true) {
+            console.log(`Fact-check skipped (explicitly disabled) on ${company}`);
           } else
           try {
             const critiquePrompt = `You are a quality-control auditor reviewing a marketing audit before it goes to a founder.
@@ -9217,6 +9413,7 @@ WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
 - Job posting counts — these are confirmed from the job board API.
 - Any signal labeled "[Job-board signal]", "[SEC filing signal]", "[Site scan]", "[Ad Library]" — these are sourced.
 - Estimates that are clearly framed as estimates ("est.", "roughly", "on the order of").
+- SITE TECHNICAL FACTS from their homepage HTML — HTTPS/SSL present or absent, mobile viewport tag present or absent, tap-to-call (tel:) link present or absent, number of form fields, title tag and meta description present or absent. These are read directly from their page source and are valid measured facts. Do NOT flag them.\n- GOOGLE BUSINESS PROFILE FACTS from the Places API — photo count, hours listed, description present, primary category, and the age in days of their newest review (review recency). These are measured from their live listing and are valid. Do NOT flag them.\n- PAGESPEED mobile score and load-time metrics — these come from Google\u2019s own PageSpeed API and are valid measured facts.
 
 WHAT TO FLAG:
 - ICP MISMATCH: If verified headcount is over 500, flag this loudly — this company is NOT our ICP (too large, owner unreachable). The audit should not be sent.
@@ -9226,7 +9423,7 @@ WHAT TO FLAG:
 - Claims about what competitors are doing (we have no competitor data).
 - Claims about internal company data (revenue, headcount, margins) unless from a confirmed source.
 - Ad counts not attributed to the company specifically.
-- Absence claims stated as facts ("they have no CRM") — acceptable only as "not detected on-page."
+- Absence claims stated as facts ("they have no CRM") — acceptable only as "not detected on-page."\n- REVIEWS OR SOCIAL PROOF called ABSENT — FLAG ALWAYS. Reviews load via third-party widgets AFTER render and a scrape/screenshot routinely misses them; we told an electrician with 221 Google reviews he had none. Never allow "no reviews", "no social proof", "no testimonials".\n- SEARCH-RESULT CLAIMS — FLAG unless the evidence shows a local-rank measurement. "nobody searching sees them", "invisible in search", "not on page 1", "outranked by competitors" are fabrications if no rank check ran. A website scrape reveals nothing about search results.\n- WHAT-GOOGLE-SHOWS from a scrape — FLAG ALWAYS. "Google displays X as your title" cannot come from our scrape; our scraper gets bot-challenged where Googlebot does not. A title of "Just a moment..." is a Cloudflare page WE were served, not what Google indexed.\n- POST-SUBMISSION / BACKEND behaviour — FLAG ALWAYS. "every lead waits for a callback", "leads disappear with no record", "nobody responds after they submit" assert what happens inside their systems, which we never tested. Allowed only as "no instant-response tool is visible on the page."
 - Any specific named person other than what Hunter returned.
 
 YOUR JOB:
@@ -9296,11 +9493,29 @@ Return ONLY valid JSON:
               brainAudit.icpBlockerReason = critique.icpBlocker;
               console.log(`ICP BLOCKED by critique [${company}]: ${critique.icpBlocker}`);
             }
-            // Use corrected pitch angle if confidence is reasonable
-            if (critique.correctedPitchAngle && conf >= 5) {
-              brainAudit.pitchAngle = critique.correctedPitchAngle;
+            // DO NOT overwrite the pitch. This is why the pass was disabled before:
+            // the fact-checker's 35-word rewrite blunted the sharpest emails. Its job
+            // is to CATCH false claims, not to write copy. So we ATTACH its findings
+            // and let the reviewer see them; the pitch is only suppressed if a claim
+            // is genuinely unsupported (below).
+            brainAudit.factCheck = {
+              confidence: conf,
+              flaggedClaims: critique.flaggedClaims || [],
+              note: critique.critiqueNote || '',
+              verifiedCount: (critique.verifiedClaims || []).length,
+            };
+            // Merge the fact-checker's flags into the same _claimRisks the review
+            // checklist already surfaces, so both fabrication layers show in one place.
+            if ((critique.flaggedClaims || []).length) {
+              brainAudit._claimRisks = (brainAudit._claimRisks || []).concat(
+                critique.flaggedClaims.map(f => 'fact-check: ' + f));
             }
-            console.log('Critique complete: confidence', conf, '| flags:', (critique.flaggedClaims||[]).length);
+            // A low-confidence audit is a loud warning, not a silent pass.
+            if (conf <= 4) {
+              brainAudit._lowConfidence = conf;
+              console.log(`\u26d4 LOW-CONFIDENCE AUDIT [${company}]: fact-checker scored ${conf}/10 — ${critique.critiqueNote || 'multiple unsupported claims'}. Review every claim before sending.`);
+            }
+            console.log(`FACT CHECK [${company}]: confidence ${conf}/10 | ${(critique.flaggedClaims||[]).length} claim(s) flagged${(critique.flaggedClaims||[]).length ? ': ' + critique.flaggedClaims.join(' | ') : ''}`);
           } catch(e) {
             console.log('Critique call failed (non-fatal):', e.message);
             // Non-fatal — audit continues without critique
@@ -9414,8 +9629,8 @@ Return ONLY valid JSON:
         emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : builtWith.confirmed ? 'No email tool detected on-page (unverified)' : 'Email marketing: could not verify',
         trackingPixel: builtWith.hasPixel ? 'Analytics/pixel present' : builtWith.confirmed ? 'No pixel detected on-page (scan can miss it)' : 'Tracking: could not verify',
         chat: builtWith.hasChat ? 'Live chat present' : builtWith.confirmed ? 'No live chat detected (unverified)' : 'Chat: could not verify',
-        emailCapture: builtWith.confirmed ? (builtWith.hasEmailCapture ? 'Email capture present' : 'No email capture form found — zero list building from site traffic') : '',
-        booking: builtWith.confirmed ? (builtWith.hasBooking ? 'Booking/scheduler tool present' : 'No booking tool — every conversion requires manual back-and-forth') : '',
+        emailCapture: builtWith.confirmed ? (builtWith.hasEmailCapture ? 'Email capture present' : 'No email-capture form detected on the pages we scanned') : '',
+        booking: builtWith.confirmed ? (builtWith.hasBooking ? 'Booking/scheduler tool present' : 'No online booking tool detected on the page') : '',
         siteFreshness: (builtWith.copyrightYear && builtWith.copyrightYear < new Date().getFullYear() - 1) ? `Footer copyright says ${builtWith.copyrightYear} — site appears untouched for ${new Date().getFullYear() - builtWith.copyrightYear} years` : '',
         video: builtWith.hasVideo ? 'Video hosting detected' : '',
       },
@@ -9501,15 +9716,15 @@ Return ONLY valid JSON:
       { id:'manual_labor', pain:`Hiring ${manualRoleCount} manual roles — repetitive work that software could handle at a fraction of the cost`, opportunity:'Workflow automation / custom software', product:'Custom AI Software Build', price:'$40k–$100k+' },
       { id:'funded_no_infra', pain:'Recently funded but no CRM or marketing infrastructure — capital to grow with nothing to capture or convert leads', opportunity:'Full marketing infrastructure + intelligence layer', product:'AI Brain', price:'$40k–$70k' },
       { id:'stale_site', pain:`Footer copyright reads ${builtWith.copyrightYear} — the site has visibly not been touched in years, and prospects notice`, opportunity:'Full website rebuild', product:'Website Rebuild', price:'$50k+' },
-      { id:'no_cta', pain:'No CTA above fold — visitors arrive and have nowhere to go', opportunity:'Homepage rebuild with a real conversion path', product:'Website Rebuild', price:'$50k+' },
-      { id:'no_email_capture', pain:'No email capture anywhere on the site — every visitor who does not convert today is lost forever', opportunity:'Lead capture + email nurture system', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
-      { id:'weak_positioning', pain:`Positioning ${positioningScore}/10 — generic messaging any competitor could use`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$50k+' },
+      { id:'no_cta', pain:'No clear CTA detected above the fold in the screenshot', opportunity:'Homepage rebuild with a real conversion path', product:'Website Rebuild', price:'$50k+' },
+      { id:'no_email_capture', pain:'No email-capture form detected on the pages we scanned (a form loaded by a widget could be missed)', opportunity:'Lead capture + email nurture system', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
+      { id:'weak_positioning', internalOnly:true, pain:`Positioning reads ${positioningScore}/10 in our judgment — INTERNAL COLOR ONLY. This is our opinion, not a measured fact, and the owner cannot verify it. NEVER open an email on positioning or state it as a problem he has; it is the softest, least defensible thing we could lead with. Use it only to inform tone, never as a claim.`, opportunity:'Brand positioning + website rewrite', product:'Website Rebuild', price:'$50k+' },
       { id:'stale_fb_ads', pain:'Same Facebook ads running 6+ months — creative fatigue killing performance', opportunity:'Ad creative refresh + conversion path rebuild', product:'End-to-End Marketing', price:'$10k–$35k/mo' },
-      { id:'no_crm', pain:'No CRM detected — leads are falling through the cracks with no system to catch them', opportunity:'CRM + marketing automation setup', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
-      { id:'no_tracking', pain:'No tracking pixel — spending on marketing with no way to measure what works', opportunity:'Analytics + tracking infrastructure', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
+      { id:'no_crm', pain:'No CRM detected in the page source (server-side tools cannot be seen this way, so this is not confirmed)', opportunity:'CRM + marketing automation setup', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
+      { id:'no_tracking', pain:'No tracking pixel detected on-page (scan can miss server-side or delayed tags)', opportunity:'Analytics + tracking infrastructure', product:'Revenue Growth Retainer', price:'$10k–$35k/mo' },
       { id:'slow_mobile', pain:`Mobile score ${pageSpeed.mobileScore}/100 — majority of traffic leaves before seeing the offer`, opportunity:'Site speed + mobile rebuild', product:'Website Rebuild', price:'$50k+' },
-      { id:'no_google_ads', pain:'No Google Ads — competitors are capturing demand this company cannot see', opportunity:'Paid search with a conversion-ready destination', product:'End-to-End Marketing', price:'$10k–$35k/mo' },
-      { id:'no_social_proof', pain:'No testimonials or case studies — buyers cannot verify claims before buying', opportunity:'Social proof system', product:'Website Rebuild', price:'$50k+' },
+      { id:'no_google_ads', pain:'No Google Ads tag detected on-page (inconclusive — does not confirm they run none)', opportunity:'Paid search with a conversion-ready destination', product:'End-to-End Marketing', price:'$10k–$35k/mo' },
+      { id:'no_social_proof', pain:'No testimonials or case studies detected on-page (review widgets load late and are often missed — not confirmed absent)', opportunity:'Social proof system', product:'Website Rebuild', price:'$50k+' },
       { id:'weak_hero', pain:'Homepage headline does not differentiate from a single competitor', opportunity:'Positioning + homepage rewrite', product:'Website Rebuild', price:'$50k+' },
     ];
     const topPain = (() => {
@@ -9524,7 +9739,7 @@ Return ONLY valid JSON:
           fromBrain: true,
         };
       }
-      return painMap.find(p => flaws.includes(p.id));
+      return painMap.find(p => flaws.includes(p.id) && !p.internalOnly);  // never let an internal-only signal become the pitch
     })();
 
     // Recommended product — Brain audit takes priority when available
@@ -9547,7 +9762,7 @@ Return ONLY valid JSON:
       const isMediaOrAgency = /media|agency|creative|PR|communications|marketing firm|studio/i.test(content.slice(0,500));
       if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$40k–$100k+', reason:'Merged or growing operation with no unified tech stack', flag:'' };
       if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$10k–$35k/mo', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
-      if (isAIOpportunity && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'No intelligence layer — disconnected systems, no automation, no tracking', flag:'' };
+      if (isAIOpportunity && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'No connected analytics or automation tags detected on-page', flag:'' };
       if (isBroken) return { product:'Website Rebuild', price:'$50k+', reason:'Homepage has critical conversion failures', flag:'' };
       return { product:'Website Rebuild', price:'$50k+', reason:'Homepage conversion gaps identified', flag:'' };
     };
@@ -9750,6 +9965,9 @@ Return ONLY valid JSON:
       // pitch) but was never returned, so the UI could not show the evidence behind
       // a claim the email was making. Now it renders as a clickable audit row.
       localVisibility,
+      gbpHealth,
+      htmlSignals: htmlSignals && htmlSignals.checked ? htmlSignals : null,
+      _claimRisks: (brainAudit && brainAudit._claimRisks) || undefined,
       // INTEGRITY STAMP: the exact website every finding was measured against.
       // If this is blank, no site was audited (we refused to audit a listing page).
       // The frontend shows this so you can verify at a glance it's the real business.
