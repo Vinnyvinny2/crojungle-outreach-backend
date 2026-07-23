@@ -8337,6 +8337,45 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       console.log(`Deep audit skipped for ${company}: no owner found (unsendable lead) — saved pain + revenue credits`);
     }
 
+    // ═══ LOCAL SEARCH RANK — GUARANTEED PASS, FOR EVERY LEAD ═══════════════
+    // The primary local-rank check above lives inside the deep-audit block, so it
+    // silently did NOT run whenever that block was skipped — a non-Places lead, or
+    // a cached contact that already carried pain. On those leads localVisibility
+    // stayed null, and the email was then free to make search-invisibility claims
+    // with no measurement behind them. That is EXACTLY the fabrication that shipped
+    // in the Thomas Nabors audit ("not in the top 20 for dental crowns" with the
+    // rank row reading "Not checked").
+    //
+    // This guaranteed pass closes that gap. It runs ONLY if the primary pass did
+    // not already produce a result, and checkLocalRank/auditLocalVisibility are
+    // fully self-guarding: with no city, no industry, or no key they return
+    // {checked:false, why:...} and we make NO claim. So this can never fabricate —
+    // it either measures the search surface or records honestly that it could not.
+    // One Places call, zero Firecrawl credits.
+    if (!localVisibility && website) {
+      try {
+        let _srUrls = [];
+        try { _srUrls = await firecrawlMap(firecrawlKey, website); } catch {}
+        const lv2 = await auditLocalVisibility({
+          companyName: company, placeId: req.body.placeId, website,
+          industry: verifiedIndustry || req.body.industry || '',
+          location: req.body.location || '',
+          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: _srUrls,
+        });
+        if (lv2.checked) {
+          localVisibility = lv2;
+          localRank = lv2.results.find(r => r.kind === 'primary trade' && r.found) || lv2.results.find(r => r.found) || lv2.results[0];
+          for (const r of lv2.results) {
+            console.log(r.found
+              ? `LOCAL RANK [${company}] (guaranteed pass): #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind})`
+              : `LOCAL RANK [${company}] (guaranteed pass): NOT IN TOP ${r.scanned} for "${r.query}" (${r.kind})`);
+          }
+        } else {
+          console.log(`LOCAL RANK [${company}] (guaranteed pass): could not run — ${lv2.why}. No search claim will be permitted for this lead.`);
+        }
+      } catch(e) { console.log(`LOCAL RANK [${company}] (guaranteed pass): errored (non-fatal): ${e.message}`); }
+    }
+
     // ═══ GOOGLE LSA — ALWAYS, FOR EVERY LEAD ═══════════════════════════════
     // This used to sit inside the deep-audit block above, which meant it silently
     // did NOT run whenever that block was skipped (no owner found and not a Places
@@ -8903,6 +8942,23 @@ ${visualAnalysis ? `${visualAnalysis.heroIsBlank ? '⚠ THE HERO IS BLANK OR BRO
 → These are VISUAL FACTS — we looked at their actual rendered homepage. "Your homepage loads with a blank hero and no call-to-action" is undeniable when we've literally seen it. This is your sharpest, most credible ammunition. Use the exact observation.
 ${visualAnalysis.heroIsBlank && (fbAds.adCount||0) > 0 && fbAds.countReliable !== false ? '→ ⚠ THEY ARE RUNNING ' + fbAds.adCount + ' PAID ADS INTO A BLANK HOMEPAGE. This is the single most expensive, most provable problem they have. Lead with it.' : ''}` : 'No screenshot available — audit the site from scraped text only. Do NOT describe what the page "looks like" — we did not see it.'}
 
+═══ POSITIONING & OFFER (Hormozi's highest-leverage layer — market > offer > persuasion) ═══
+${trustedContent && trustedContent.length > 200 ? `Read their homepage copy below and assess TWO things, stated ONLY as an observation about what their own website says — never as a metric, a score, or a claim about their revenue:
+
+1. WHO ARE THEY TARGETING (market)? A strong site names a specific customer ("custom homes for families building on their own lot in Austin"). A weak one speaks to everyone ("quality service for all your needs"), which means it speaks to no one. Hormozi's rule: the market matters more than the offer or the pitch — a business aimed at everyone competes on price against everyone.
+
+2. IS THERE A REAL OFFER, OR JUST "CONTACT US" (offer)? A real offer gives a stranger a reason to act now ("free build-on-your-lot consultation", "same-week estimate"). A generic "contact us" / "get a quote" / "learn more" is what every competitor says, so the buyer defaults to price. Hormozi calls this the commodity trap.
+
+HOW TO USE THIS — the honest framing that makes it safe:
+- This is an OBSERVATION about their website copy, which the owner can read himself. It is NOT a measurement and NOT a number. Never say "your positioning scores X" or "you're losing $Y from this" — both are invented.
+- The RIGHT way: "your homepage leads with 'quality custom homes you can trust' — that's the same promise every builder in your market makes, so nothing tells a buyer why you over the next guy." That is observed from their own page, it is true, and it is Hormozi's #1 lever.
+- Tie it to the buyer's behaviour, not to a fake number: "when the site doesn't say who it's for, the buyer can't tell if it's for them, so they keep clicking." That is how people actually behave.
+- This is the UNIVERSAL FALLBACK. Every business has a homepage, so a positioning read is ALWAYS available. When no sharper measured signal exists (no stale reviews, no search-rank finding, no glaring technical leak), THIS is the pitch — because per Hormozi it is the most important thing about the business anyway, not a consolation prize.
+- BUT: if a sharper MEASURED signal exists (their own reviews naming a pain, a search-rank absence, a real technical leak), lead with THAT — it is more concrete. Positioning is the strongest thing you can say when nothing more concrete was found, and a legitimately strong lead-in even when something was.
+
+THEIR HOMEPAGE COPY (first ~2000 chars, verbatim — quote from it, do not invent):
+${trustedContent.slice(0, 2000)}` : 'Their homepage copy was not captured, so make NO claim about their positioning or offer — do not guess what their site says.'}
+
 ═══ MONEY ON FIRE — provable, undeniable, and no competitor will ever tell them ═══
 ${moneyOnFire.count > 0 ? `${moneyOnFire.headline}
 
@@ -9102,6 +9158,7 @@ Return ONLY valid JSON, no markdown:
   "designQuality": "professional/dated/poor",
   "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
   "overallConversionRating": "strong/moderate/weak",
+  "positioningRead": "An OBSERVATION about their market positioning and offer, drawn ONLY from their homepage copy printed above — never a score, never a dollar figure. Object {targetsSpecificCustomer: true/false, hasRealOffer: true/false, observation: 'one plain sentence quoting or closely paraphrasing what their site actually says about who it is for and what it offers, and why that is or is not differentiated'}. If the homepage copy was not captured, return null. Example: {targetsSpecificCustomer:false, hasRealOffer:false, observation:'The homepage leads with \"quality you can trust\" and a \"Contact Us\" button — the same promise and the same ask as every competitor, so nothing tells a buyer why to pick them.'} This must be TRUE to their page and checkable by the owner; do not invent copy they did not write.",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
   "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
   "realPain": "The single most expensive confirmed problem — expressed in terms of wasted money, lost revenue, or bleeding labor cost. Must reference a specific confirmed signal (ad spend, job postings, conversion gap). No technical jargon. One founder-facing sentence.",
@@ -9283,6 +9340,7 @@ Return ONLY valid JSON, no markdown:
             // checklist can show them. brainAudit is an explicit literal, so without
             // this line _claimRisks would silently never reach the UI.
             _claimRisks: parsed._claimRisks,
+            positioningRead: parsed.positioningRead || null,
             realPain: parsed.realPain,
             embarrassingFinding: parsed.embarrassingFinding,
             recommendedProduct: parsed.recommendedProduct,
@@ -9414,6 +9472,7 @@ WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
 - Any signal labeled "[Job-board signal]", "[SEC filing signal]", "[Site scan]", "[Ad Library]" — these are sourced.
 - Estimates that are clearly framed as estimates ("est.", "roughly", "on the order of").
 - SITE TECHNICAL FACTS from their homepage HTML — HTTPS/SSL present or absent, mobile viewport tag present or absent, tap-to-call (tel:) link present or absent, number of form fields, title tag and meta description present or absent. These are read directly from their page source and are valid measured facts. Do NOT flag them.\n- GOOGLE BUSINESS PROFILE FACTS from the Places API — photo count, hours listed, description present, primary category, and the age in days of their newest review (review recency). These are measured from their live listing and are valid. Do NOT flag them.\n- PAGESPEED mobile score and load-time metrics — these come from Google\u2019s own PageSpeed API and are valid measured facts.
+- POSITIONING / MARKET / OFFER OBSERVATIONS drawn from their homepage copy — e.g. "your homepage leads with \u2018quality you can trust\u2019, the same promise as every competitor" or "your only CTA is \u2018contact us\u2019 with no specific offer". These are OBSERVATIONS about what their own site says, which the owner can verify by reading his page. They are valid and must NOT be flagged AS LONG AS they describe the site\u2019s actual copy and do NOT attach a fabricated number (a positioning "score" or a dollar loss). Flag ONLY if the positioning claim invents copy the site does not contain, or states a made-up metric.
 
 WHAT TO FLAG:
 - ICP MISMATCH: If verified headcount is over 500, flag this loudly — this company is NOT our ICP (too large, owner unreachable). The audit should not be sent.
@@ -9967,6 +10026,7 @@ Return ONLY valid JSON:
       localVisibility,
       gbpHealth,
       htmlSignals: htmlSignals && htmlSignals.checked ? htmlSignals : null,
+      positioningRead: (brainAudit && brainAudit.positioningRead) || null,
       _claimRisks: (brainAudit && brainAudit._claimRisks) || undefined,
       // INTEGRITY STAMP: the exact website every finding was measured against.
       // If this is blank, no site was audited (we refused to audit a listing page).
