@@ -8354,13 +8354,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // One Places call, zero Firecrawl credits.
     if (!localVisibility && website) {
       try {
-        let _srUrls = [];
-        try { _srUrls = await firecrawlMap(firecrawlKey, website); } catch {}
+        // NO firecrawlMap here — deliberately. The primary pass above maps the
+        // sitemap to harvest extra service keywords, but /map costs a Firecrawl
+        // credit on a cache miss (10-min TTL), and this guaranteed pass runs on
+        // exactly the leads where that cache is coldest. Running it here would
+        // raise Firecrawl spend on every lead that previously skipped the deep
+        // audit. We pass no sitemap instead: we still get the PRIMARY-TRADE rank
+        // check, which is the claim that matters ("not in the results for what
+        // they sell in their own city"). We only lose the extra per-service
+        // keyword checks on these particular leads. Zero Firecrawl cost.
         const lv2 = await auditLocalVisibility({
           companyName: company, placeId: req.body.placeId, website,
           industry: verifiedIndustry || req.body.industry || '',
           location: req.body.location || '',
-          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: _srUrls,
+          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: [],
         });
         if (lv2.checked) {
           localVisibility = lv2;
@@ -8947,17 +8954,44 @@ ${trustedContent && trustedContent.length > 200 ? `Read their homepage copy belo
 
 1. WHO ARE THEY TARGETING (market)? A strong site names a specific customer ("custom homes for families building on their own lot in Austin"). A weak one speaks to everyone ("quality service for all your needs"), which means it speaks to no one. Hormozi's rule: the market matters more than the offer or the pitch — a business aimed at everyone competes on price against everyone.
 
-2. IS THERE A REAL OFFER, OR JUST "CONTACT US" (offer)? A real offer gives a stranger a reason to act now ("free build-on-your-lot consultation", "same-week estimate"). A generic "contact us" / "get a quote" / "learn more" is what every competitor says, so the buyer defaults to price. Hormozi calls this the commodity trap.
+2. IS THERE A REAL OFFER, OR JUST "CONTACT US" (offer)? A real offer gives a stranger a reason to act now ("free build-on-your-lot consultation", "same-week estimate"). A generic "contact us" / "get a quote" / "learn more" is what every competitor says, so the buyer defaults to price. Hormozi calls this the commodity trap. FOUR THINGS MAKE AN OFFER STRONG AND ALL FOUR ARE VISIBLE ON THEIR OWN PAGES — read for each, and report only what you actually see: (a) A GUARANTEE or risk reversal ("if you don’t love it we redo it", warranty, money-back). Hormozi treats this as the biggest single lever on whether a stranger believes it will work for them. Most owner-operated businesses have none, and their competitors don’t either — which is exactly why it is available. (b) ANY URGENCY OR SCARCITY that is real (limited install slots this season, a booking window) versus evergreen "call today", which every site says and nobody believes. (c) BONUSES or stacked value (free design consult, free inspection included) versus a bare quote request. (d) IS THE OFFER NAMED? "The 48-Hour Roof Assessment" is a thing a buyer can hold in their head; "Contact Us" is not. Report these as OBSERVATIONS about their pages — "there is no guarantee anywhere on the site" is checkable and fair; "your guarantee is too weak" is an opinion you cannot support. Do NOT invent an offer they do not have, and do NOT claim they lack one if the page shows it.
 
 HOW TO USE THIS — the honest framing that makes it safe:
 - This is an OBSERVATION about their website copy, which the owner can read himself. It is NOT a measurement and NOT a number. Never say "your positioning scores X" or "you're losing $Y from this" — both are invented.
 - The RIGHT way: "your homepage leads with 'quality custom homes you can trust' — that's the same promise every builder in your market makes, so nothing tells a buyer why you over the next guy." That is observed from their own page, it is true, and it is Hormozi's #1 lever.
 - Tie it to the buyer's behaviour, not to a fake number: "when the site doesn't say who it's for, the buyer can't tell if it's for them, so they keep clicking." That is how people actually behave.
 - This is the UNIVERSAL FALLBACK. Every business has a homepage, so a positioning read is ALWAYS available. When no sharper measured signal exists (no stale reviews, no search-rank finding, no glaring technical leak), THIS is the pitch — because per Hormozi it is the most important thing about the business anyway, not a consolation prize.
-- BUT: if a sharper MEASURED signal exists (their own reviews naming a pain, a search-rank absence, a real technical leak), lead with THAT — it is more concrete. Positioning is the strongest thing you can say when nothing more concrete was found, and a legitimately strong lead-in even when something was.
+WHICH SIGNAL LEADS THE EMAIL — SCORE THE INSTANCES, DO NOT JUST TAKE THE TOP CATEGORY. You have a lot of evidence and the documented failure mode is leading with whatever was easiest to write. So you will score every candidate finding in "candidateFindings" BEFORE writing anything, and build the pitch on the winner.
+THE DEFAULT ORDERING BELOW IS A STARTING POINT AND A TIEBREAKER — it reflects how these categories usually rank once scored. It is NOT a rule that overrides your scoring:
+  1. A PAIN REPEATING ACROSS THEIR OWN GOOGLE REVIEWS, with a count. Their customers said it, it is quantified, and no competitor has shown him. Usually unbeatable — but only if it is something WE FIX (slow callbacks, missed calls, quote delays). If the pattern is about pricing, workmanship or staff attitude, it scores 1 on weFixIt and must NOT lead.
+  2. A SEARCH-RANK ABSENCE we measured — a service they publish a page for and do not appear for in their own city. Verifiable in one search on his phone.
+  3. A GOOGLE BUSINESS PROFILE gap we measured — free map-pack traffic leaking, confirmable in ten seconds on his own listing.
+  4. A HARD TECHNICAL LEAK we measured — no HTTPS, no mobile viewport, no tap-to-call, a fifteen-field form, a slow mobile score.
+  5. THE POSITIONING / OFFER READ — per Hormozi the highest-LEVERAGE problem of all, but an OBSERVATION rather than a measurement, so it usually scores lower on VERIFIABLE. It leads whenever it genuinely outscores the others, and it is never a consolation prize.
+  6. Analytics tags, CRM signatures, pixels — CONTEXT for us. These score near-zero on SURPRISE and OWNERLEVEL; an owner does not feel a missing tag as lost money. They almost never belong in the email.
+⚠ A STRONG INSTANCE OF A LOWER CATEGORY BEATS A WEAK INSTANCE OF A HIGHER ONE. "No SSL, so every browser warns visitors away" (category 4) beats "#12 instead of #8 for one minor term" (category 2) every time. If your scored winner is not the highest category that fired, that is CORRECT behaviour — just state why in "leadSignalReason" so a human can see the trade you made.
+ONE STORY, NOT A LIST: build on the winner, then use other findings ONLY if they form a single chain of cause and effect with it. If a second finding needs its own sentence to justify itself, it goes in the write-up, not the email.
+  1. A PAIN REPEATING ACROSS THEIR OWN GOOGLE REVIEWS, with a count. Their customers said it, it is quantified, and no competitor has ever shown him. Unbeatable.
+  2. A SEARCH-RANK ABSENCE we actually measured — a service they publish a page for and do not appear for in their own city. Verifiable in one search on his phone.
+  3. A GOOGLE BUSINESS PROFILE gap we measured (no hours, thin photos, no description) — free map-pack traffic leaking, confirmable in ten seconds on his own listing.
+  4. A HARD TECHNICAL LEAK we measured — no HTTPS, no mobile viewport, no tap-to-call, a fifteen-field form, a slow mobile score. Undeniable, and directly costs him the visitor.
+  5. THE POSITIONING / OFFER READ (this section) — the same generic promise repeating across his pages, no named offer, no guarantee. Per Hormozi this is the highest-LEVERAGE problem of all, but it is an OBSERVATION rather than a measurement, so it leads only when nothing above it fired. It is never a weak pitch — it is the most important thing about the business — it simply ranks below things he can check in one click.
+  6. Everything else (analytics tags, CRM signatures, pixels) — these are CONTEXT for us. They almost never belong in the email at all; an owner does not feel a missing tag as lost money.
+ONE STORY, NOT A LIST: pick the highest item that fired, then use lower items ONLY if they form a single chain of cause and effect with it. If a second finding needs its own justification, it goes in the write-up.
 
-THEIR HOMEPAGE COPY (first ~2000 chars, verbatim — quote from it, do not invent):
-${trustedContent.slice(0, 2000)}` : 'Their homepage copy was not captured, so make NO claim about their positioning or offer — do not guess what their site says.'}
+3. DOES THE SAME GENERIC PROMISE REPEAT ACROSS THEIR PAGES? This is the sharpest, most verifiable positioning finding available, and it needs no framework score. If the homepage, the service pages and the landing pages all open with the same interchangeable line ("quality workmanship you can trust", "your satisfaction is our priority"), then every page is competing on the same nothing, and a buyer comparing three companies has no reason to pick this one. Name the ACTUAL repeated phrase and the ACTUAL pages it appears on — that is checkable by the owner in thirty seconds and impossible to argue with.
+
+TURNING THIS INTO SOMETHING HE ACTS ON (this is the part that decides whether the finding lands):
+A positioning observation stated flatly is a critique, and a critique gets ignored or resented. The SAME observation written as exposure is something he has to look at. Do NOT write "your positioning is generic" — that is an opinion about him. Write what it is COSTING, in the present continuous, about buyers who are deciding right now: "the homeowner comparing you against two other builders tonight is reading the same sentence on all three sites, so she picks on price — and that is the only thing left to pick on." Same fact, but it is happening now, it names the buyer's behaviour, and the loss is concrete.
+- LOSS, NOT UPSIDE: never "clearer positioning would win you more work" (an improvement he can do in Q3). Always what is leaking while the copy stays as it is.
+- PRESENT AND ONGOING, NOT HYPOTHETICAL: not "if someone compares you", but "the ones comparing you are".
+- NAME THE UNIT HE COUNTS: a build, a case, a roof, a retainer — one of those lost to a competitor who was easier to choose.
+- STILL NO INVENTED NUMBERS: never a positioning score, never a dollar total. The typical value of one job in his trade is allowed (public industry knowledge); his revenue, his close rate, his volume are not.
+
+THEIR HOMEPAGE COPY (verbatim — quote from it, do not invent):
+${trustedContent.slice(0, 1800)}
+
+${sitePages && sitePages.rawText ? `THE OTHER PAGES WE READ (${(sitePages.pagesRead || []).join(', ')}) — these are ALREADY SCRAPED, so use them: compare the promise on these pages against the homepage and against each other. If they all say the same interchangeable thing, that is the finding.${(sitePages.services && sitePages.services.length) ? `\nWhat they actually sell, per their own pages: ${sitePages.services.slice(0,8).join(', ')}. If the copy does not differentiate between these, a buyer cannot either.` : ''}\n${sitePages.rawText.slice(0, 2200)}` : 'Only the homepage was read for this lead — assess positioning from the homepage alone, and do NOT claim anything about their service or landing pages.'}` : 'Their homepage copy was not captured, so make NO claim about their positioning or offer — do not guess what their site says.'}
 
 ═══ MONEY ON FIRE — provable, undeniable, and no competitor will ever tell them ═══
 ${moneyOnFire.count > 0 ? `${moneyOnFire.headline}
@@ -9158,7 +9192,10 @@ Return ONLY valid JSON, no markdown:
   "designQuality": "professional/dated/poor",
   "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
   "overallConversionRating": "strong/moderate/weak",
-  "positioningRead": "An OBSERVATION about their market positioning and offer, drawn ONLY from their homepage copy printed above — never a score, never a dollar figure. Object {targetsSpecificCustomer: true/false, hasRealOffer: true/false, observation: 'one plain sentence quoting or closely paraphrasing what their site actually says about who it is for and what it offers, and why that is or is not differentiated'}. If the homepage copy was not captured, return null. Example: {targetsSpecificCustomer:false, hasRealOffer:false, observation:'The homepage leads with \"quality you can trust\" and a \"Contact Us\" button — the same promise and the same ask as every competitor, so nothing tells a buyer why to pick them.'} This must be TRUE to their page and checkable by the owner; do not invent copy they did not write.",
+  "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|technical_leak|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
+  "leadSignal": "The winner from candidateFindings above \u2014 the ONE finding your pitch will be built on. Answer with EXACTLY ONE of: \"review_pattern\", \"search_absence\", \"gbp_gap\", \"technical_leak\", \"positioning_offer\". This is a DECISION you are making now, before writing, not a description of something already written. The pitch that follows must be built on this finding. Answer with EXACTLY ONE of these strings and nothing else: \"review_pattern\" (a pain repeating across their own Google reviews), \"search_absence\" (a measured search-rank absence), \"gbp_gap\" (a measured Google Business Profile gap), \"technical_leak\" (a measured site/technical leak \u2014 no HTTPS, no mobile viewport, no tap-to-call, an over-long form, slow mobile), \"positioning_offer\" (their market positioning, generic promise, or missing offer/guarantee). Be honest \u2014 name what the FIRST sentence of the pitch is actually about, not what you wish it led with. This is checked against what we measured.",
+  "leadSignalReason": "ONLY fill this in if you deliberately did NOT lead with the highest-ranked signal available. Explain in one sentence why \u2014 for example the recurring review pain is about pricing or workmanship, which we do not fix, so leading with it would make us sound like a complaint tracker. Leave as null if you led with the highest-ranked signal.",
+  "positioningRead": "An OBSERVATION about their market positioning and offer, drawn ONLY from their homepage copy printed above — never a score, never a dollar figure. Object {targetsSpecificCustomer: true/false, hasRealOffer: true/false, hasGuarantee: true/false (is any guarantee, warranty or risk reversal visible on the pages we read?), offerIsNamed: true/false (is the offer a named thing a buyer can hold in their head, or just 'Contact Us'?), repeatedGenericPromise: 'the exact interchangeable phrase that appears across multiple pages, or null if the pages genuinely differentiate', observation: 'one plain sentence quoting or closely paraphrasing what their site actually says about who it is for and what it offers, and why that is or is not differentiated'}. If the homepage copy was not captured, return null. Example: {targetsSpecificCustomer:false, hasRealOffer:false, observation:'The homepage leads with \"quality you can trust\" and a \"Contact Us\" button — the same promise and the same ask as every competitor, so nothing tells a buyer why to pick them.'} This must be TRUE to their page and checkable by the owner; do not invent copy they did not write.",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
   "exitValueAngle": "if exit/funding signal present: what would increase their revenue or valuation, else null",
   "realPain": "The single most expensive confirmed problem — expressed in terms of wasted money, lost revenue, or bleeding labor cost. Must reference a specific confirmed signal (ad spend, job postings, conversion gap). No technical jargon. One founder-facing sentence.",
@@ -9328,6 +9365,65 @@ Return ONLY valid JSON, no markdown:
           } else {
             console.log(`\u2713 CLAIM VERIFY [${company}]: no unverifiable backend/search/absence assertions detected in the copy.`);
           }
+
+          // ══ LADDER CHECK — did the email lead with the STRONGEST finding? ═══
+          // v2: the model DECLARES its lead in a schema enum and we compare that
+          // against what we measured. The first version inferred the lead from the
+          // prose with keyword regexes, and stress-testing it against realistic
+          // phrasings showed it missed 4 of 5 ways an email can describe a search
+          // absence ("invisible to anyone looking tonight", "nobody searching is
+          // seeing that page"). It would have fired spurious warnings on most
+          // CORRECT emails, and a check that cries wolf is worse than no check —
+          // it teaches the reviewer to ignore flags. Comparing two strings cannot
+          // have that failure mode.
+          const _tierFired = [
+            ['review_pattern',   !!_hasReviewPattern],
+            ['search_absence',   !!(localVisibility && localVisibility.checked && localVisibility.invisible && localVisibility.invisible.length)],
+            ['gbp_gap',          !!(gbpHealth && gbpHealth.checked && gbpHealth.gapCount)],
+            ['technical_leak',   !!(htmlSignals && htmlSignals.checked && (htmlSignals.isHttps === false || htmlSignals.hasViewport === false || htmlSignals.hasTelLink === false || (htmlSignals.hasForm && htmlSignals.formFieldCount >= 8)))],
+          ];
+          const _topKey = (_tierFired.find(([, fired]) => fired) || ['positioning_offer'])[0];
+          const _declared = typeof parsed.leadSignal === 'string' ? parsed.leadSignal.trim() : '';
+          const _reason = typeof parsed.leadSignalReason === 'string' ? parsed.leadSignalReason.trim() : '';
+          const _LABEL = {
+            review_pattern: 'a repeating pain in their own Google reviews',
+            search_absence: 'a MEASURED search-rank absence',
+            gbp_gap: 'a MEASURED Google Business Profile gap',
+            technical_leak: 'a MEASURED technical leak on their site',
+            positioning_offer: 'the positioning / offer read',
+          };
+          // Log the model's own scoring so the selection is auditable in the logs.
+          // If a bad email ships, this shows WHY that finding was chosen.
+          if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
+            const _ranked = parsed.candidateFindings
+              .slice()
+              .sort((a, b) => (Number(b && b.total) || 0) - (Number(a && a.total) || 0))
+              .slice(0, 4)
+              .map(c => `${c && c.signal ? c.signal : '?'}=${Number(c && c.total) || 0} (${String((c && c.finding) || '').slice(0, 50)})`)
+              .join(' | ');
+            console.log(`FINDING SCORES [${company}]: ${_ranked}`);
+          }
+
+          if (!_declared) {
+            // Truncated or malformed JSON dropped the field. Do not guess from prose —
+            // that is the failure mode we just removed. Record the gap honestly.
+            console.log(`\u26a0 LADDER CHECK [${company}]: the audit did not declare which signal it led with (likely truncated JSON). Strongest available was ${_LABEL[_topKey]}. Verify the email leads with that before sending.`);
+          } else if (_declared === _topKey) {
+            console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_topKey]} \u2014 the strongest signal available for this lead.`);
+          } else if (_reason.length > 15) {
+            // A deliberate, explained override. The prompt legitimately allows this:
+            // e.g. the recurring review pain is about pricing or workmanship, which
+            // we do not fix. Surface it for review rather than treating it as a fault.
+            console.log(`\u2139 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared} instead of ${_LABEL[_topKey]} \u2014 stated reason: ${_reason}`);
+          } else {
+            const _msg = `LADDER: the email leads with ${_LABEL[_declared] || _declared}, while the usually-stronger ${_LABEL[_topKey]} was also available — and no reason was given for the trade. Deviating is legitimate when the scores justify it (a strong technical leak genuinely beats a weak search finding), but an UNEXPLAINED deviation is the signature of leading with whatever was easiest to write. Check the finding scores above before sending.`;
+            _claimRisks.push(_msg);
+            console.log(`\u26d4 LADDER CHECK [${company}]: ${_msg}`);
+          }
+
+          // Re-attach after the ladder check so a ladder flag reaches the UI too.
+          if (_claimRisks.length) parsed._claimRisks = _claimRisks;
+
           // Attach verification result so the frontend can show a trust badge
           parsed._quoteVerification = {
             checked: !!content && content.length > 100,
