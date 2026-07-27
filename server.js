@@ -4806,6 +4806,26 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // non-Hunter source as sufficient evidence. Requiring more here would have been
   // a stricter bar than the one we actually send on, paid for in credits.
   let brainHit = null;
+  // EPONYMOUS OWNERSHIP — the business is named after the person. That is
+  // definitional evidence of ownership, not an inference, and it is free.
+  // Julie L Stante of "Julie L Stante, DDS" on juliestantedds.com was already
+  // proven by her own site plus her business name — two independent sources —
+  // yet we spent 8 more Firecrawl credits corroborating it, because "Dentist
+  // (DDS)" does not score as an authority title. This recognises the case
+  // without touching the authority gate for anyone else.
+  // Deliberately strict: the surname must appear as a whole word and be 4+
+  // characters, so short names like "Ott" still pay for corroboration.
+  const _isEponymousOwner = (personName, coName, siteUrl) => {
+    const parts = String(personName || '').trim().split(/\s+/)
+      .filter(w => w.length > 2 && !/^(dr|mr|mrs|ms|dds|md|do|dvm|esq|jr|sr|iii|ii)\.?$/i.test(w));
+    if (!parts.length) return false;
+    const surname = parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, '');
+    if (surname.length < 4) return false;
+    const coWords = String(coName || '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    const dom = String(siteUrl || '').toLowerCase().replace(/[^a-z]/g, '');
+    return coWords.includes(surname) || dom.includes(surname);
+  };
+
   const settled = () => {
     const ranked = rankOwnerCandidates(found);
     if (!ranked) return null;
@@ -4814,7 +4834,18 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     const ownSiteConfident = ranked.sources.includes('own_website_brain')
       && ranked.authority >= 90
       && (brainHit && brainHit.confidence === 'high');
-    return (corroborated || ownSiteConfident) ? ranked : null;
+    // Two independent sources on a business literally named after the person,
+    // confirmed high-confidence by their own site. The evidence floor (2+
+    // independent, non-Hunter sources) is already met — further paid lookups
+    // buy proof of something that is not in doubt.
+    const eponymousConfident = independent >= 2
+      && ranked.sources.includes('own_website_brain')
+      && (brainHit && brainHit.confidence === 'high')
+      && _isEponymousOwner(ranked.name, companyName, website);
+    if (eponymousConfident && !(corroborated || ownSiteConfident)) {
+      console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, confirmed high-confidence by their own site and corroborated by the business name (${independent} independent sources). Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
+    }
+    return (corroborated || ownSiteConfident || eponymousConfident) ? ranked : null;
   };
 
   // ── STAGE 1 — free, or paid for by something else anyway ──────────────────
@@ -7806,6 +7837,48 @@ const checkFacebookAds = async (name, fbToken) => {
 // how many of the businesses ABOVE them have a weaker review profile turns a rank
 // into a diagnosis: the reputation is already there, the visibility is not — which
 // is precisely the gap the retainer and the ads product close.
+// ══ THE QUERY A CUSTOMER WOULD ACTUALLY TYPE ═════════════════════════════════
+// A rank finding is only as good as the query behind it. A live run measured
+// "clinics-of-dentists in Indianapolis" — a slugified API category no patient has
+// ever typed — while the email said "when someone searches for a dentist in
+// Indianapolis". The finding was real but the query was machine-shaped, which
+// makes the claim harder to defend if the owner checks it. Tested 8/8.
+const naturalTrade = (industry) => {
+  let t = String(industry || '').toLowerCase().trim();
+  if (!t) return '';
+  t = t.replace(/[_/]+/g, ' ').replace(/-/g, ' ').trim();
+  t = t.replace(/^(clinics?|offices?|centers?|centres?|practices?|firms?|shops?|stores?|services?|agencies|agency|companies|company|contractors?|providers?)\s+of\s+/, '');
+  t = t.replace(/\s+(clinics?|offices?|centers?|centres?|practices?)$/, '');
+  if (/[^s]s$/.test(t) && !/(ss|us|is)$/.test(t)) t = t.replace(/s$/, '');
+  t = t.replace(/ies$/, 'y');
+  return t.trim();
+};
+
+// ══ DERIVE THE TRADE WHEN THE LEAD HAS NONE ══════════════════════════════════
+// Eric Jans Insurance Agency carried no industry, so no rank check could run, so
+// his email fell back to a positioning observation — the weakest available lead —
+// while the trade was sitting in his company name the whole time. Deliberately
+// conservative: fires ONLY on a single unambiguous keyword. Two matches or none
+// returns empty and we stay silent, which keeps the no-claim rule intact.
+const TRADE_WORDS = [
+  ['insurance', 'insurance agency'], ['dentist', 'dentist'], ['dental', 'dentist'],
+  ['orthodont', 'orthodontist'], ['chiropract', 'chiropractor'], ['plumb', 'plumber'],
+  ['roofing', 'roofing contractor'], ['roofer', 'roofing contractor'], ['electric', 'electrician'],
+  ['hvac', 'hvac contractor'], ['landscap', 'landscaper'], ['law firm', 'lawyer'], ['attorney', 'lawyer'],
+  ['accounting', 'accountant'], ['cpa', 'accountant'], ['med spa', 'med spa'], ['medspa', 'med spa'],
+  ['dermatolog', 'dermatologist'], ['veterinar', 'veterinarian'], ['pest control', 'pest control'],
+  ['garage door', 'garage door repair'], ['flooring', 'flooring contractor'], ['pool', 'pool builder'],
+  ['custom home', 'home builder'], ['home builder', 'home builder'], ['remodel', 'remodeling contractor'],
+  ['waterproof', 'waterproofing contractor'], ['solar', 'solar installer'], ['tree service', 'tree service'],
+  ['auto repair', 'auto repair'], ['physical therapy', 'physical therapist'], ['assisted living', 'assisted living'],
+];
+const deriveTrade = (companyName, siteText) => {
+  const hay = (String(companyName || '') + ' ' + String(siteText || '').slice(0, 1500)).toLowerCase();
+  const hits = TRADE_WORDS.filter(([k]) => hay.includes(k));
+  if (hits.length !== 1) return '';
+  return hits[0][1];
+};
+
 const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
@@ -7813,7 +7886,7 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
   // The customer-facing phrase for this trade, reused from the Find category map so
   // the two always agree. Falls back to the raw industry label.
   const cat = GP_CATEGORIES.find(c => c.label.toLowerCase() === String(industry).toLowerCase());
-  const phrase = cat ? cat.q : String(industry).toLowerCase();
+  const phrase = cat ? cat.q : (naturalTrade(industry) || String(industry).toLowerCase());
 
   // City only. A state or ZIP makes the query national or absurdly narrow, and
   // "foundation repair company in NC 28025" is not a search any human performs.
@@ -8462,9 +8535,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // check, which is the claim that matters ("not in the results for what
         // they sell in their own city"). We only lose the extra per-service
         // keyword checks on these particular leads. Zero Firecrawl cost.
+        // If the lead carries no industry, try to derive it from the company name
+        // and homepage copy. Without this the rank check cannot run at all and the
+        // email is forced onto its weakest available signal — which is exactly what
+        // happened to Eric Jans Insurance Agency. deriveTrade only fires on an
+        // unambiguous match, so a wrong guess cannot produce a false search claim.
+        let _trade = verifiedIndustry || req.body.industry || '';
+        if (!_trade) {
+          // `content` (not trustedContent) — trustedContent is declared further down,
+          // so referencing it here is a temporal-dead-zone crash. deriveTrade needs a
+          // single unambiguous keyword match, so untrusted text cannot produce a
+          // false trade: a bot-challenge page matches nothing.
+          _trade = deriveTrade(company, content || '');
+          if (_trade) console.log(`TRADE [${company}]: no industry on the lead \u2014 derived "${_trade}" from their name/site so the search surface can actually be measured.`);
+        }
         const lv2 = await auditLocalVisibility({
           companyName: company, placeId: req.body.placeId, website,
-          industry: verifiedIndustry || req.body.industry || '',
+          industry: _trade,
           location: req.body.location || '',
           placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: [],
         });
@@ -8553,7 +8640,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // after both are settled and is skipped entirely on every unreachable lead.
     // `needRev` is scoped to the deep-audit block above, which has already closed —
     // recompute it here rather than reach into a dead scope.
-    const _wantRev = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
+    // ══ REVENUE LOOKUP — now gated on the ONLY thing it feeds ══════════════
+    // This search costs 4 Firecrawl credits per lead. The email prompt BANS
+    // stating their revenue, so the number feeds exactly one calculation:
+    // revenue-per-employee, used to spot a labor-heavy business. That test is
+    // itself gated on `verifiedEmployees >= 8`. So for a solo dentist, a
+    // one-broker agency or a four-person builder — the core of the ICP — the
+    // number is mathematically incapable of being used, and we were paying 4
+    // credits per lead for it anyway (29% of a 14-credit audit).
+    // Now it only runs when the headcount could actually trigger the test.
+    const _revCouldMatter = typeof verifiedEmployees === 'number' && verifiedEmployees >= 8;
+    if (!verifiedRevenue && !_revCouldMatter && firecrawlKey && apiKey && company) {
+      console.log(`REVENUE [${company}]: skipped \u2014 headcount is ${verifiedEmployees || 'unknown'}, and the revenue figure only feeds the revenue-per-employee test which requires 8+ employees. Nothing would have used it (saves ~4 Firecrawl credits).`);
+    }
+    const _wantRev = !verifiedRevenue && _revCouldMatter && firecrawlKey && apiKey && company && req.body.deepMode !== false;
     if (_wantRev) {
       const _haveOwner = !!(decisionMaker && decisionMaker.name) || !!verifiedCEO;
       const _haveEmail = !!(emailResult && emailResult.email) || !!(email && email.email);
@@ -9534,19 +9634,40 @@ Return ONLY valid JSON, no markdown:
             console.log(`FINDING SCORES [${company}]: ${_ranked}`);
           }
 
+          // ══ LADDER VERDICT v3 — judge against the SCORES, not category order ══
+          // v2 compared the declared lead against whichever category ranked highest
+          // by default. That contradicted the scoring step: Eric Jans scored
+          // positioning_offer 22 vs technical_leak 19, led with positioning — exactly
+          // right — and was flagged anyway for "an unexplained deviation". A check
+          // that fires on correct behaviour trains the reviewer to ignore it.
+          // Now: led with your own highest-scored finding = correct, full stop.
+          const _scored = Array.isArray(parsed.candidateFindings)
+            ? parsed.candidateFindings.filter(c => c && c.signal && Number.isFinite(Number(c.total)))
+            : [];
           if (!_declared) {
-            // Truncated or malformed JSON dropped the field. Do not guess from prose —
-            // that is the failure mode we just removed. Record the gap honestly.
             console.log(`\u26a0 LADDER CHECK [${company}]: the audit did not declare which signal it led with (likely truncated JSON). Strongest available was ${_LABEL[_topKey]}. Verify the email leads with that before sending.`);
+          } else if (_scored.length) {
+            const _best = _scored.slice().sort((a, b) => Number(b.total) - Number(a.total))[0];
+            const _declBest = _scored.filter(c => c.signal === _declared)
+              .sort((a, b) => Number(b.total) - Number(a.total))[0];
+            const _gap = Number(_best.total) - Number(_declBest ? _declBest.total : 0);
+            if (_declared === _best.signal) {
+              console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared}, its own highest-scored finding (${_best.total}). Correct.`);
+            } else if (_gap <= 2) {
+              console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared} (${_declBest ? _declBest.total : '?'}) over ${_LABEL[_best.signal] || _best.signal} (${_best.total}) \u2014 within scoring noise, no concern.`);
+            } else if (_reason.length > 15) {
+              console.log(`\u2139 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared} (${_declBest ? _declBest.total : '?'}) over the higher-scored ${_LABEL[_best.signal] || _best.signal} (${_best.total}) \u2014 stated reason: ${_reason}`);
+            } else {
+              const _msg = `LADDER: the email leads with ${_LABEL[_declared] || _declared} (scored ${_declBest ? _declBest.total : '?'}), but its own scoring ranked ${_LABEL[_best.signal] || _best.signal} materially higher (${_best.total}) and gave no reason for the trade. That gap is the signature of leading with whatever was easiest to write.`;
+              _claimRisks.push(_msg);
+              console.log(`\u26d4 LADDER CHECK [${company}]: ${_msg}`);
+            }
           } else if (_declared === _topKey) {
-            console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_topKey]} \u2014 the strongest signal available for this lead.`);
+            console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_topKey]} \u2014 the strongest signal available (no scores returned, judged on category order).`);
           } else if (_reason.length > 15) {
-            // A deliberate, explained override. The prompt legitimately allows this:
-            // e.g. the recurring review pain is about pricing or workmanship, which
-            // we do not fix. Surface it for review rather than treating it as a fault.
             console.log(`\u2139 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared} instead of ${_LABEL[_topKey]} \u2014 stated reason: ${_reason}`);
           } else {
-            const _msg = `LADDER: the email leads with ${_LABEL[_declared] || _declared}, while the usually-stronger ${_LABEL[_topKey]} was also available — and no reason was given for the trade. Deviating is legitimate when the scores justify it (a strong technical leak genuinely beats a weak search finding), but an UNEXPLAINED deviation is the signature of leading with whatever was easiest to write. Check the finding scores above before sending.`;
+            const _msg = `LADDER: the email leads with ${_LABEL[_declared] || _declared} while ${_LABEL[_topKey]} was also available, no scores were returned to justify the trade, and no reason was given. Check before sending.`;
             _claimRisks.push(_msg);
             console.log(`\u26d4 LADDER CHECK [${company}]: ${_msg}`);
           }
@@ -9666,7 +9787,7 @@ RAW EVIDENCE (what we actually confirmed):
 - VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google search)' : 'Not verified'}
 - ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
-- LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED — we ran real Google local searches for this business. Results: ' + localVisibility.results.map(r => r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`).join('; ') + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
+- LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED \u2014 we ran real Google local searches for this business via the Places API. Results: ' + localVisibility.results.map(r => (r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`) + (Array.isArray(r.topRivals) && r.topRivals.length ? ` \u2014 businesses actually returned above them for that query, WITH their real Google review counts: ${r.topRivals.map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}` : '')).join('; ') + '. \u26a0 THE COMPETITOR NAMES AND REVIEW COUNTS ABOVE ARE MEASURED FACTS returned by the Places API for that exact search \u2014 they are the businesses a customer sees instead of this one. If the audit names those companies or quotes those review counts, that is CORRECT and must NOT be flagged as unverified or as "competitor data stated as fact".' + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + gbpHealth.photoCount + ' photos, hours ' + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
 - SITE TECHNICALS (read from their raw page source): ${htmlSignals && htmlSignals.checked ? 'MEASURED — HTTPS ' + (htmlSignals.isHttps === true ? 'supported (verified by a real request)' : htmlSignals.isHttps === false ? 'NOT supported (verified by a real request that failed on TLS)' : 'NOT CONCLUSIVELY CHECKED — the audit must make NO SSL claim') + ', mobile viewport tag ' + (htmlSignals.hasViewport ? 'present' : 'ABSENT') + ', tap-to-call link ' + (htmlSignals.hasTelLink ? 'present' : 'ABSENT') + ', title tag ' + (htmlSignals.hasTitle ? 'present' : 'ABSENT') + ', meta description ' + (htmlSignals.hasMetaDescription ? 'present' : 'ABSENT') + ', form fields ' + (htmlSignals.hasForm ? htmlSignals.formFieldCount : 'no form') + '. \u26a0 These come from their ACTUAL page source. Claims matching them are MEASURED FACTS \u2014 do not flag them as unverified. But a claim that goes BEYOND them (for example asserting no SSL when it says NOT CONCLUSIVELY CHECKED) MUST be flagged.' : 'NOT MEASURED — the page source was not captured, so any claim about their SSL, mobile setup, tags or form IS unverified and must be flagged.'}
 - Screenshot taken: ${!!screenshotUrl}
@@ -10381,6 +10502,24 @@ const _captureRes = (job) => {
 
 app.post('/api/research-async', (req, res) => {
   _sweepJobs();
+
+  // ══ DUPLICATE-RUN GUARD ═══════════════════════════════════════════════════
+  // Eric Jans Insurance Agency was accepted TWICE four seconds apart and both
+  // jobs ran to completion: two full scrape+screenshots, two sitemap maps, the
+  // same three pages batch-scraped twice. Ten Firecrawl credits for one lead's
+  // worth of information. A double-click or a retried request is enough to cause
+  // it. If the same company is already mid-flight, hand back the running job
+  // instead of starting a second one — the client polls by id either way.
+  const _co = String(req.body?.company || '').trim().toLowerCase();
+  if (_co) {
+    for (const [, j] of _jobs) {
+      if (j.status === 'running' && String(j.company || '').trim().toLowerCase() === _co) {
+        console.log(`JOB [${j.company}]: duplicate request ignored \u2014 job ${j.id} is already running (started ${Math.round((Date.now() - j.startedAt) / 1000)}s ago). Returning the in-flight job instead of paying for a second full run.`);
+        return res.json({ jobId: j.id, status: 'running', deduped: true });
+      }
+    }
+  }
+
   const id = 'job_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
   const job = {
     id,
