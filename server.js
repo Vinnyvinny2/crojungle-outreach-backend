@@ -2977,7 +2977,12 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       //    THIS IS THE "oe@" BUG: 'j<oe@domain.com>' -> 'joe@domain.com'
       .replace(/([A-Za-z0-9._%+-])<([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>/g, '$1$2')
       // 4. A plain autolink: '<joe@domain.com>' -> 'joe@domain.com'
-      .replace(/<([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>/g, '$1');
+      .replace(/<([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>/g, '$1')
+      // 5. Same swallow, but rendered as a markdown LINK instead of an autolink.
+      //    Firecrawl emits this shape where the raw page emits <...>:
+      //    'j[oe@domain.com](mailto:oe@domain.com)' -> 'joe@domain.com'
+      //    Must run BEFORE the mailto scan below, or the mailto grabs 'oe@'.
+      .replace(/([A-Za-z0-9._%+-])\[([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\]\((?:mailto:)?[^)]*\)/g, '$1$2');
 
     // ── STRIP MARKDOWN EMPHASIS BEFORE MATCHING ──────────────────────────
     // The lookbehind below refuses a match that starts mid-word, which stopped
@@ -6477,6 +6482,32 @@ const scoreSignals = (c) => {
 // "David". A real address is never the tail of the owner's own name with the front
 // bitten off. We deliberately do NOT flag on shortness alone — "jo@", "cm@" and
 // "hr@" are all legitimate.
+// ══ RECONSTRUCT A TRUNCATED ADDRESS ══════════════════════════════════════════
+// Detecting "oe@" and refusing to send it is safe but it is not the goal — the
+// goal is Joe's actual mailbox. When the local part is the tail of the owner's own
+// name, the missing prefix is not a guess: it is the front of a name we already
+// know from an independent source. "oe" + owner "Joe Panyard" can only reconstruct
+// to "joe". This works no matter HOW the page mangled the address — autolink,
+// markdown link, entity, split text node — because it never looks at the page.
+//
+// The output is still a CANDIDATE, never a fact: it is SMTP-verified before use,
+// exactly like any pattern-built address, so a wrong reconstruction cannot send.
+const reconstructTruncatedEmail = (email, ownerName) => {
+  const at = String(email || '').indexOf('@');
+  if (at < 1) return null;
+  const local = String(email).slice(0, at).toLowerCase();
+  const domain = String(email).slice(at + 1);
+  const bare = local.replace(/[^a-z]/g, '');
+  if (!bare || !domain) return null;
+  for (const part of String(ownerName || '').toLowerCase().split(/[^a-z]+/)) {
+    // strict suffix only — "oe" ends "joe" and is shorter than it
+    if (part.length > bare.length && part.endsWith(bare)) {
+      return `${part}@${domain}`;
+    }
+  }
+  return null;
+};
+
 const looksTruncatedAgainstOwner = (email, ownerName) => {
   const local = String(email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
   const owner = String(ownerName || '').toLowerCase();
@@ -9282,12 +9313,36 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // tested wherever it came from, at the last point before it is used.
           const _dmName = (decisionMaker && decisionMaker.name) || verifiedCEO || '';
           if (emailResult.email && looksTruncatedAgainstOwner(emailResult.email, _dmName)) {
-            console.log(`\u26d4 EMAIL BLOCKED [${company}]: "${emailResult.email}" is the owner's name "${_dmName}" with the front cut off \u2014 a scrape artefact, not a mailbox. Refusing to send to it. Better to have no address than to bounce off the warming domain.`);
-            emailResult.sendable = false;
-            emailResult.score = 0;
-            emailResult.label = 'BLOCKED — truncated address, does not match the owner';
-            emailResult.blockedReason = 'truncated_vs_owner';
-            email.email = '';
+            // RECOVER FIRST, BLOCK ONLY IF RECOVERY FAILS OR CANNOT BE PROVEN.
+            // Blocking alone leaves a reachable owner unreachable. The missing
+            // prefix is recoverable from the owner name we already hold, and the
+            // rebuilt address is SMTP-verified before it is allowed to send, so a
+            // wrong reconstruction can never leave the building.
+            const _fixed = reconstructTruncatedEmail(emailResult.email, _dmName);
+            let _recovered = false;
+            if (_fixed && verifierKey && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+              try {
+                const _v = await verifyEmailSMTP(_fixed, verifierKey);
+                if (_v.valid === true) {
+                  console.log(`\u2713 EMAIL RECOVERED [${company}]: the page yielded "${emailResult.email}" (front of the local part lost to the page markup). Rebuilt from owner "${_dmName}" as "${_fixed}" and SMTP-VERIFIED as a real mailbox.`);
+                  emailResult.email = _fixed;
+                  emailResult.label = `Rebuilt from a mangled address on their site and SMTP-verified. ${_dmName}'s mailbox.`;
+                  emailResult.recoveredFromTruncation = true;
+                  email.email = _fixed;
+                  _recovered = true;
+                } else {
+                  console.log(`EMAIL [${company}]: rebuilt "${_fixed}" from the mangled address but SMTP did NOT confirm it (${_v.valid === false ? 'server denied it' : 'server would not say'}) \u2014 not sending to an unconfirmed guess.`);
+                }
+              } catch (e) { console.log(`EMAIL [${company}]: reconstruction check errored (${e.message}) \u2014 falling through to block.`); }
+            }
+            if (!_recovered) {
+              console.log(`\u26d4 EMAIL BLOCKED [${company}]: "${emailResult.email}" is the owner's name "${_dmName}" with the front cut off \u2014 a scrape artefact, not a mailbox. Refusing to send to it. Better to have no address than to bounce off the warming domain.`);
+              emailResult.sendable = false;
+              emailResult.score = 0;
+              emailResult.label = 'BLOCKED — truncated address, does not match the owner';
+              emailResult.blockedReason = 'truncated_vs_owner';
+              email.email = '';
+            }
           }
           console.log(`EMAIL RESULT [${company}]: ${emailResult.email} | ${emailResult.label} | score ${emailResult.score} | sendable: ${emailResult.sendable}`);
           // Only overwrite the browser-found email if ours is better evidence
