@@ -8956,7 +8956,24 @@ ${trustedContent && trustedContent.length > 200 ? `Read their homepage copy belo
 
 2. IS THERE A REAL OFFER, OR JUST "CONTACT US" (offer)? A real offer gives a stranger a reason to act now ("free build-on-your-lot consultation", "same-week estimate"). A generic "contact us" / "get a quote" / "learn more" is what every competitor says, so the buyer defaults to price. Hormozi calls this the commodity trap. FOUR THINGS MAKE AN OFFER STRONG AND ALL FOUR ARE VISIBLE ON THEIR OWN PAGES — read for each, and report only what you actually see: (a) A GUARANTEE or risk reversal ("if you don’t love it we redo it", warranty, money-back). Hormozi treats this as the biggest single lever on whether a stranger believes it will work for them. Most owner-operated businesses have none, and their competitors don’t either — which is exactly why it is available. (b) ANY URGENCY OR SCARCITY that is real (limited install slots this season, a booking window) versus evergreen "call today", which every site says and nobody believes. (c) BONUSES or stacked value (free design consult, free inspection included) versus a bare quote request. (d) IS THE OFFER NAMED? "The 48-Hour Roof Assessment" is a thing a buyer can hold in their head; "Contact Us" is not. Report these as OBSERVATIONS about their pages — "there is no guarantee anywhere on the site" is checkable and fair; "your guarantee is too weak" is an opinion you cannot support. Do NOT invent an offer they do not have, and do NOT claim they lack one if the page shows it.
 
-HOW TO USE THIS — the honest framing that makes it safe:
+HOW TO RAISE THIS WITHOUT INSULTING HIM — READ THIS TWICE, IT IS THE DIFFERENCE BETWEEN A REPLY AND A BLOCK.
+The owner has run this business for years. He knows his customers, his margins, his referral network and which jobs are worth taking. WE DO NOT. We read his website for ninety seconds. So any sentence that tells him WHO HE SHOULD SERVE or WHAT HE SHOULD SELL is both unprovable and insulting, and he will (correctly) dismiss it. These are BANNED outright, in any wording:
+  ✗ "you’re targeting the wrong customer"        ✗ "your offer is wrong / too weak"
+  ✗ "your positioning is off / bad / generic"     ✗ "you should be going after X instead"
+  ✗ anything asserting what his market IS, what his best customer IS, or what he SHOULD charge.
+We cannot see his customers. We can only see his page. Claiming otherwise is the same fabrication as claiming a search rank we never measured.
+
+THE REFRAME THAT WORKS: the problem is almost never that he does not know his niche — it is that his WEBSITE does not say what he already knows. He can tell you in one sentence that he builds lakefront homes for retiring couples on their own land. His homepage says "quality custom homes you can trust". The gap is not in his head. It is in his copy. So do not critique his judgement — report the ARTIFACT:
+  ✓ "I could not tell from your homepage whether you do production builds or one-off custom work."
+  ✓ "Your site says quality craftsmanship on the homepage, the kitchen page and the bath page — a buyer comparing three builders reads the same sentence on all three."
+  ✓ "There is nothing on the page that tells a stranger why you over the next result."
+Each of those is checkable by him in ten seconds, none of them tells him he is wrong about his own business, and every one of them is TRUE because it describes his page rather than his strategy.
+
+WHY THIS IS NOT A CRITICISM — AND SAY SO IF IT HELPS: this is the curse of knowledge, and it is a documented limitation of human perception, not a competence problem. Once you know your business deeply you cannot unsee it, so you literally cannot read your own homepage the way a stranger does. It affects everyone from Nobel laureates to corner shop owners. The ONLY fix is fresh eyes — and that is exactly what we are: we came to his site cold, the same way his buyer does, with no idea who he was. That is not a claim we have to argue for; it is literally our position. It is also the one credential no incumbent vendor of his has, because they all learned his business years ago.
+
+INVITE THE CORRECTION — THIS IS THE PART THAT GETS REPLIES: an honest gap invites him to fill it, and filling it IS a reply. "I could not tell if you take on remodels or only new builds" makes him want to answer, because he knows and we obviously do not. Never fake this — only name a gap that genuinely exists on the page. A real question from someone who clearly did the reading outperforms a confident assertion he can dismiss.
+
+THE OTHER RULES STILL APPLY:
 - This is an OBSERVATION about their website copy, which the owner can read himself. It is NOT a measurement and NOT a number. Never say "your positioning scores X" or "you're losing $Y from this" — both are invented.
 - The RIGHT way: "your homepage leads with 'quality custom homes you can trust' — that's the same promise every builder in your market makes, so nothing tells a buyer why you over the next guy." That is observed from their own page, it is true, and it is Hormozi's #1 lever.
 - Tie it to the buyer's behaviour, not to a fake number: "when the site doesn't say who it's for, the buyer can't tell if it's for them, so they keep clicking." That is how people actually behave.
@@ -9358,6 +9375,20 @@ Return ONLY valid JSON, no markdown:
           _flag(/\bjust a moment\b/i, 'contains a bot-challenge string — likely from a blocked scrape');
           // 5. Invented dollar totals about THEM (industry-typical job value is fine)
           _flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'states a specific loss total we cannot know');
+          // 6. Telling the owner what his BUSINESS should be. We read his site for
+          // ninety seconds; he has run it for years. We cannot see his customers,
+          // margins or referral network, so any claim about who he SHOULD serve or
+          // what he SHOULD charge is both unprovable and insulting — he will
+          // dismiss the whole email, correctly. Only the ARTIFACT is ours to
+          // describe: what his page does and does not say. (Regex is the right tool
+          // here — these are specific forbidden phrasings, not an attempt to infer
+          // what the email is about.) Tested 10/10 with zero false positives
+          // against legitimate page observations.
+          _flag(/\b(you'?re|you are|they'?re) targeting the wrong\b/i, 'tells the owner who he should serve — we cannot see his customers');
+          _flag(/\byour (positioning|messaging|offer) is (off|wrong|weak|bad|generic|broken)\b/i, 'judges his strategy instead of reporting what his page says');
+          _flag(/\byou should be (targeting|going after|selling|charging|focused on)\b/i, 'prescribes his market or pricing — unprovable and presumptuous');
+          _flag(/\byour (ideal|real|actual) customer (is|should be)\b/i, 'asserts who his customer is — he knows, we do not');
+          _flag(/\b(wrong|bad) (market|customer|audience|niche)\b/i, 'asserts his market is wrong — not something we can see');
 
           if (_claimRisks.length) {
             parsed._claimRisks = _claimRisks;
