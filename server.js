@@ -2881,6 +2881,19 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       .replace(/([A-Za-z0-9._%+-]+)\s*[\[\(]\s*at\s*[\]\)]\s*([A-Za-z0-9-]+(?:\s*[\[\(]?\s*dot\s*[\]\)]?\s*[A-Za-z0-9-]+)*)\s*[\[\(]?\s*dot\s*[\]\)]?\s*([A-Za-z]{2,})/gi,
         (_, u, mid, tld) => `${u}@${mid.replace(/\s*[\[\(]?\s*dot\s*[\]\)]?\s*/gi, '.')}.${tld}`)
       .replace(/([A-Za-z0-9._%+-]+)\s+at\s+([A-Za-z0-9-]+)\s+dot\s+([A-Za-z]{2,})\b/gi, '$1@$2.$3');
+    // ── STRIP MARKDOWN EMPHASIS BEFORE MATCHING ──────────────────────────
+    // The lookbehind below refuses a match that starts mid-word, which stopped
+    // "J**oe@domain.com" yielding the fake address "oe@domain.com". But refusing
+    // is not recovering: it ALSO made "**joe@domain.com**" match nothing at all,
+    // so a bolded address — extremely common in scraped markdown — was silently
+    // lost. Removing the emphasis markers instead recovers the REAL address in
+    // both cases: "J**oe@" becomes "Joe@" and "**joe@" becomes "joe@". Verified
+    // against 8 emphasis shapes. Word boundaries are untouched, so "tojoe@" is
+    // still (correctly) read as written.
+    text = String(text)
+      .replace(/([A-Za-z0-9._%+-])[*_`~]{1,3}(?=[A-Za-z0-9._%+-]*@)/g, '$1')
+      .replace(/[*_`~]{1,3}(?=[A-Za-z0-9._%+-]+@)/g, '')
+      .replace(/(@[A-Za-z0-9.-]+)[*_`~]{1,3}/g, '$1');
     const found = new Set();
     (text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi) || [])
       .forEach(m => found.add(m.replace(/mailto:/i, '').toLowerCase()));
@@ -6322,6 +6335,29 @@ const scoreSignals = (c) => {
   };
 };
 
+// ══ TRUNCATED-ADDRESS DETECTOR — the last line of defence ════════════════════
+// A scraped address can be silently mangled ("J**oe@x.com" -> "oe@x.com") and once
+// it is written to contact_cache no extraction fix can repair it: every later run
+// reads the stored value and skips the lookup entirely. That is exactly how
+// "oe@panyardsealcoating.com" survived a corrected regex and kept scoring 100/100
+// for a contractor named JOE.
+//
+// The signature is specific and safe to test for: the local part is a strict SUFFIX
+// of the owner's first or last name. "oe" of "Joe", "ike" of "Mike", "avid" of
+// "David". A real address is never the tail of the owner's own name with the front
+// bitten off. We deliberately do NOT flag on shortness alone — "jo@", "cm@" and
+// "hr@" are all legitimate.
+const looksTruncatedAgainstOwner = (email, ownerName) => {
+  const local = String(email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
+  const owner = String(ownerName || '').toLowerCase();
+  if (!local || !owner || local.length < 2) return false;
+  for (const part of owner.split(/[^a-z]+/).filter(w => w.length >= 3)) {
+    // strict suffix: "oe" ends "joe" but is not "joe" itself
+    if (part.length > local.length && part.endsWith(local)) return true;
+  }
+  return false;
+};
+
 const scoreReachability = (c) => {
   // ═══════════════════════════════════════════════════════════════════════════
   // REACHABILITY — the spine of the whole system. One question, plainly:
@@ -6759,7 +6795,15 @@ const cacheContact = async (domain, { owner, email, revenue, pain }) => {
   if (!domain || !SB_URL || !SB_KEY) return;
   // Only cache CONFIDENT data — never lock in a weak guess.
   const okOwner = owner && owner.name && (owner.corroborated || owner.confidence === 'high');
-  const okEmail = email && email.email && (email.tier === 1 || email.tier === 2);
+  // NEVER cache an address that looks like the owner's own name with the front
+  // bitten off. Once written, the read path skips every lookup and the bad value
+  // becomes permanent — that is how "oe@" outlived the regex fix that corrected it.
+  // Cheaper to pay for a fresh lookup than to store a mailbox that cannot receive.
+  let okEmail = email && email.email && (email.tier === 1 || email.tier === 2);
+  if (okEmail && owner && owner.name && looksTruncatedAgainstOwner(email.email, owner.name)) {
+    console.log(`\u26d4 CACHE WRITE BLOCKED [${domain}]: "${email.email}" looks truncated against owner "${owner.name}" \u2014 refusing to store it.`);
+    okEmail = false;
+  }
   const okPain = pain && Array.isArray(pain.signals) && pain.signals.length > 0;
   if (!okOwner && !okEmail && !revenue && !okPain) return;
   await sbRest('/contact_cache?on_conflict=domain', {
@@ -9046,6 +9090,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // the name is what makes pattern generation possible. Returns a scored,
     // tiered result — never a bare guess dressed up as a fact.
     let emailResult = (cachedContact && cachedContact.email) ? cachedContact.email : null;
+    // ── SELF-HEALING CACHE ───────────────────────────────────────────────
+    // A stored address is only trustworthy if it still passes the truncation
+    // test against the owner we just identified. If it does not, we throw the
+    // cached value away and pay for a fresh lookup — a few credits is a trivial
+    // price next to sending to an address that does not exist, from a domain we
+    // are still warming.
+    if (emailResult && emailResult.email) {
+      const _owner = (decisionMaker && decisionMaker.name) || verifiedCEO || '';
+      if (looksTruncatedAgainstOwner(emailResult.email, _owner)) {
+        console.log(`\u26d4 EMAIL [${company}]: cached address "${emailResult.email}" looks TRUNCATED against owner "${_owner}" \u2014 discarding the cache entry and re-deriving. This is the "oe@" class of failure.`);
+        emailResult = null;
+        email.email = '';
+      }
+    }
     if (emailResult) {
       email.email = emailResult.email;
       if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
