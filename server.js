@@ -3839,17 +3839,105 @@ function extractHtmlSignals(rawHtml, pageUrl) {
     hasTelLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount };
 }
 
+// ══ APIFY GOOGLE REVIEWS ══════════════════════════════════════════════════════
+// The previous path scraped search.google.com/local/reviews. That endpoint died for
+// our access pattern: Google made search pages require JavaScript, and in Feb 2026
+// put reviews behind a "limited view" for non-logged-in users. Firecrawl was handed
+// Google's search chrome, the Brain correctly said "these aren't reviews", and the
+// code then logged "no recurring complaint" — a CLEAN result from a sample of ZERO.
+// That is the exact failure class this system exists to prevent, so the fix is not a
+// better scraper: it is a path that reports its own sample size and says NOT MEASURED
+// when it fails. The Places API cannot substitute — it is hard-capped at 5 reviews
+// with no pagination, which can never support "this repeats across N reviews".
+//
+// Actor: compass/google-maps-reviews-scraper (maintained by Apify). Takes placeIds
+// directly, returns responseFromOwnerText (restores free owner discovery) and
+// reviewsCount (the place's TRUE total, so we can state "read 40 of 54").
+// reviewsOrigin:'google' — NOT 'all', which mixes in Tripadvisor; a claim about
+// "your Google reviews" must actually be Google's. personalData:false — reviewer
+// identity is GDPR-protected and finding a repeating pain does not need it.
+//
+// EVERY unknown shape degrades to {checked:false}. There is no path from a failure
+// to "no complaints found".
+const APIFY_ACTOR = 'compass~google-maps-reviews-scraper';
+const APIFY_MAX_REVIEWS = 40;
+
+const normalizeApifyReview = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const text = raw.text || raw.textTranslated || raw.reviewText || raw.review || '';
+  let stars = raw.stars;
+  if (typeof stars !== 'number') stars = (typeof raw.rating === 'number' ? raw.rating : null);
+  if (typeof stars === 'number' && (stars < 1 || stars > 5)) stars = null;
+  const ownerReply = raw.responseFromOwnerText || raw.ownerResponse || raw.responseFromOwner || '';
+  if (!String(text).trim() && stars === null) return null;
+  return { text: String(text).trim(), stars, ownerReply: String(ownerReply).trim(),
+           when: raw.publishedAtDate || raw.publishAt || null };
+};
+
+const readApifyPlaceMeta = (items) => {
+  for (const it of items) {
+    if (it && typeof it === 'object') {
+      const total = (typeof it.reviewsCount === 'number') ? it.reviewsCount : null;
+      const score = (typeof it.totalScore === 'number') ? it.totalScore : null;
+      if (total !== null || score !== null) return { totalReviews: total, rating: score };
+    }
+  }
+  return { totalReviews: null, rating: null };
+};
+
+const fetchApifyReviews = async ({ placeId, apifyToken, companyName = '', timeoutMs = 90000,
+                                   maxReviews = APIFY_MAX_REVIEWS }) => {
+  if (!placeId) return { checked: false, why: 'no placeId for this lead' };
+  if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
+  const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}`;
+  const body = { placeIds: [placeId], maxReviews, reviewsSort: 'newest',
+                 reviewsOrigin: 'google', language: 'en', personalData: false };
+  let res;
+  try {
+    res = await fetchT(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(body) }, timeoutMs);
+  } catch (e) { return { checked: false, why: `Apify request failed: ${e.message}` }; }
+  if (!res || !res.ok) {
+    const code = res ? res.status : 'no response';
+    const hint = (code === 401 || code === 403) ? ' (token rejected — check Settings)'
+               : code === 402 ? ' (Apify credits exhausted for this month)' : '';
+    return { checked: false, why: `Apify returned ${code}${hint}` };
+  }
+  let items;
+  try { items = await res.json(); }
+  catch (e) { return { checked: false, why: `Apify response was not JSON: ${e.message}` }; }
+  if (!Array.isArray(items)) return { checked: false, why: 'Apify response was not an array — actor output shape changed' };
+  if (!items.length) return { checked: false, why: 'Apify returned no rows — cannot distinguish "no reviews" from a failed run' };
+  const meta = readApifyPlaceMeta(items);
+  const reviews = items.map(normalizeApifyReview).filter(Boolean);
+  if (!reviews.length) return { checked: false, why: `Apify returned ${items.length} row(s) but none parsed as reviews — output shape changed` };
+  const withText = reviews.filter(r => r.text.length > 0);
+  const negative = reviews.filter(r => typeof r.stars === 'number' && r.stars <= 3);
+  const ownerReplies = reviews.filter(r => r.ownerReply.length > 0).map(r => r.ownerReply);
+  const coverage = meta.totalReviews ? `${reviews.length} of ${meta.totalReviews} reviews`
+                                     : `${reviews.length} reviews (total on the profile unknown)`;
+  console.log(`APIFY REVIEWS [${companyName}]: read ${coverage} — ${withText.length} with text, ${negative.length} at 3 stars or below, ${ownerReplies.length} owner replies`);
+  return { checked: true, reviews, read: reviews.length, totalReviews: meta.totalReviews,
+           rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage,
+           sampleComplete: meta.totalReviews ? reviews.length >= meta.totalReviews : false };
+};
+
 // DEEP REVIEW PATTERN MINE — the send-path escalation. Scrapes the full public
 // reviews page (more than the API's 5) and finds pains that REPEAT across many
 // reviews, WITH counts. "Eleven of your reviews mention the same callback delay" is
 // the deepest "how do they know THIS" hit there is. ~2 credits — only on leads we
 // will actually send to (owner found + Places), so the spend lands where it pays off.
-const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
-  if (!placeId || !fcKey || !apiKey) return null;
+const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
+  if (!placeId || !apifyToken || !apiKey) return { read: 0, why: 'no placeId, Apify token or Anthropic key' };
   try {
-    const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}`;
-    const md = await firecrawlScrape(fcKey, url, 18000, 12 * 60 * 60 * 1000); // reviews move faster than a homepage — 12h window
-    if (!md || md.length < 400) return null;
+    const rv = await fetchApifyReviews({ placeId, apifyToken, companyName });
+    // NOT MEASURED is a first-class outcome. It must never collapse into "clean".
+    if (!rv.checked) return { read: 0, why: rv.why };
+    const md = rv.reviews.map(r =>
+      `[${r.stars === null ? 'no rating' : r.stars + ' stars'}] ${r.text}` +
+      (r.ownerReply ? `\nResponse from the owner: ${r.ownerReply}` : '')
+    ).join('\n\n');
+    if (!md || md.length < 200) return { read: 0, why: `read ${rv.read} review(s) but they carried almost no text` };
     const res = await fetchT('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
@@ -3864,7 +3952,9 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
-    const total = parsed.totalReviews || 0;
+    // The model's own totalReviews guess is NOT used — it produced the "~?"
+    // in live logs. Use the place's real count from the actor, else what we read.
+    const total = rv.totalReviews || rv.read;
     // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
     // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
     // would be catastrophic. Verify a distinctive 4-word span; drop anything unproven.
@@ -3892,15 +3982,22 @@ const deepReviewMine = async (companyName, placeId, fcKey, apiKey) => {
     // very different outcomes into one, so the caller could not tell "Google blocked
     // us" from "this business has no recurring complaint" — and only the first is
     // worth retrying. totalReviews travels out too, so the log can say how deep we read.
-    return { signals, summary: parsed.summary || '', totalReviews: total, read: true };
-  } catch(e) { console.log('deepReviewMine failed:', e.message); return null; }
+    return { signals, summary: parsed.summary || '', totalReviews: total,
+             read: rv.read, coverage: rv.coverage, sampleComplete: rv.sampleComplete,
+             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount };
+  } catch(e) { console.log('deepReviewMine failed:', e.message); return { read: 0, why: e.message }; }
 };
 
 // Best-effort: scrape MORE than the API's 5 reviews from Google's own reviews page
 // for this exact place_id (no disambiguation — it's their Place). If Google blocks
 // it, we simply fall back to the 5 API reviews. Never fabricates: returns only text
 // Firecrawl actually rendered.
+// ⛔ DEAD ENDPOINT. search.google.com/local/reviews returns Google's search chrome
+// to datacentre IPs since Feb 2026. Currently never invoked (painFromGoogleReviews
+// is only ever called with deep=false), so it costs nothing — but do NOT re-enable
+// it. Use fetchApifyReviews instead, which returns the full review set.
 const scrapeMoreGoogleReviews = async (placeId, fcKey) => {
+  return [];   // hard-disabled: the endpoint cannot return reviews
   if (!placeId || !fcKey) return [];
   try {
     const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en&sortby=newest`;
@@ -4007,7 +4104,10 @@ ${corpus}` }]
 // We already scrape that page for pain mining, so the owner's name is sitting in
 // data we have paid for and thrown away. This is often the ONLY place a small
 // agency names its principal, because the website just says "our team".
+// ⛔ DEAD ENDPOINT + never invoked anywhere. Superseded by findOwnerViaReviewReplies,
+// which now reads owner replies from Apify. Kept only so the intent is documented.
 const findOwnerInReviewReplies = async (companyName, placeId, fcKey, apiKey) => {
+  return null;   // hard-disabled: see fetchApifyReviews
   if (!placeId || !fcKey || !apiKey) return null;
   try {
     const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en`;
@@ -4534,17 +4634,18 @@ ${corpus}` }]
 // This works for ANY business with a Google profile — trades, agencies, clinics,
 // restaurants, shops — not just the ones with a leadership page. And we already
 // scrape this page for pain mining, so on a cached hit it costs nothing at all.
-const findOwnerViaReviewReplies = async (placeId, fcKey, apiKey, companyName) => {
-  if (!placeId || !fcKey || !apiKey) return null;
+const findOwnerViaReviewReplies = async (placeId, apifyToken, apiKey, companyName) => {
+  if (!placeId || !apifyToken || !apiKey) return null;
   try {
-    const url = `https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}&hl=en`;
-    const md = await firecrawlScrape(fcKey, url, 15000, 12 * 60 * 60 * 1000); // same cache as the pain mine
-    if (!md || !/response from the owner/i.test(md)) return null;
-
-    // Pull just the owner-reply blocks — the rest of the page is customer text.
-    const replies = [];
-    const re = /response from the owner[\s\S]{0,600}?(?=response from the owner|$)/gi;
-    let m; while ((m = re.exec(md)) !== null && replies.length < 12) replies.push(m[0]);
+    // WAS: a Firecrawl scrape of search.google.com/local/reviews, which has returned
+    // Google's search chrome (never an actual reply) since Feb 2026. It cost a credit
+    // on every single lead and never once produced an owner. The comment claiming it
+    // shared the pain-mine cache was also false — the URLs differed by "&hl=en", so
+    // they were separate cache keys and we paid twice. Now it reuses the Apify pull,
+    // where responseFromOwnerText is a first-class field.
+    const rv = await fetchApifyReviews({ placeId, apifyToken, companyName });
+    if (!rv.checked || !rv.ownerReplies.length) return null;
+    const replies = rv.ownerReplies.slice(0, 12).map(t => `Response from the owner: ${t}`);
     if (!replies.length) return null;
 
     const res = await fetchT('https://api.anthropic.com/v1/messages', {
@@ -4834,7 +4935,7 @@ const rankOwnerCandidates = (found) => {
   return clusters[0];
 };
 
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '' }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '' }) => {
   // ═══ STAGED WATERFALL — STOP PAYING ONCE WE HAVE THE ANSWER ═══════════════
   // This used to fire all seven sources in parallel on EVERY lead, so a company
   // that names its owner on its own About page still paid for two web searches,
@@ -4910,7 +5011,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),
     findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
-    placeId ? findOwnerViaReviewReplies(placeId, fcKey, apiKey, companyName).catch(() => null) : Promise.resolve(null),
+    (placeId && apifyToken) ? findOwnerViaReviewReplies(placeId, apifyToken, apiKey, companyName).catch(() => null) : Promise.resolve(null),
   ]);
   brainHit = brain;   // referenced by settled() to check own-site confidence
   for (const f of [brain, news, bizName, reviewSig]) if (f) found.push(f);
@@ -8159,6 +8260,9 @@ const _runResearchInner = async (req, res) => {
   const { company, keys, apiKey } = req.body;
   let website = req.body.website;  // mutable — the website guard may resolve/blank it
   const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey, verifierKey } = keys || {};
+  // Apify powers the review mine and the free owner-from-review-replies path.
+  // Accepted from keys{} or the body top level, same tolerance as hunterKey.
+  const apifyToken = (keys && keys.apifyToken) || req.body.apifyToken || '';
   // Hunter key can arrive either inside keys{} or at the top level of the body.
   const hunterKey = (keys && keys.hunterKey) || req.body.hunterKey || '';
   const browserData = req.body.browserData || {};
@@ -8525,6 +8629,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           location: req.body.location || '',
           placeId: effectivePlaceId,
           industry: customerTrade || verifiedIndustry || req.body.industry || '',
+          apifyToken,
         });
         if (decisionMaker && decisionMaker.name) {
           if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
@@ -8590,19 +8695,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       } else if (!firecrawlKey && !placesKey) {
         console.log(`REVIEW MINE [${company}]: SKIPPED — no Firecrawl key and no GOOGLE_PLACES_KEY, so neither the deep scrape nor the API fallback can run.`);
       }
-      if (effectivePlaceId && firecrawlKey && apiKey && publicPainSignals.length === 0) {
+      if (effectivePlaceId && apifyToken && apiKey && publicPainSignals.length === 0) {
         try {
-          const deep = await deepReviewMine(company, effectivePlaceId, firecrawlKey, apiKey);
+          const deep = await deepReviewMine(company, effectivePlaceId, apifyToken, apiKey);
           if (deep && deep.signals && deep.signals.length > 0) {
             publicPainSignals = deep.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
             painSummary = deep.summary || painSummary;
             reviewPainFound = true;
             const _top = deep.signals.map(sg => `${sg.pain} (${sg.count || '?'}x)`).join(' | ');
             console.log(`\u2713 REVIEW MINE [${company}]: DEEP scrape found ${deep.signals.length} repeated pattern(s) across ~${deep.totalReviews || '?'} reviews — ${_top}. This is the "how do they know this" hook.`);
-          } else if (deep && deep.read) {
-            console.log(`REVIEW MINE [${company}]: deep scrape read ~${deep.totalReviews || '?'} reviews and found no pain repeating across 2+ of them. Honest empty — this business has no recurring complaint to name.`);
+          } else if (deep && deep.read > 0) {
+            // MEASURED-AND-CLEAN. Only sayable because we know the sample size.
+            console.log(`REVIEW MINE [${company}]: read ${deep.coverage} and found no pain repeating across 2+ of them.${deep.sampleComplete ? ' That is EVERY review on the profile — this business genuinely has no recurring complaint.' : ' NOTE: this is a sample, not the full profile — say nothing about reviews we did not read.'}`);
           } else {
-            console.log(`REVIEW MINE [${company}]: deep scrape returned nothing (Google likely blocked the reviews page) — falling back to the review API.`);
+            // NOT MEASURED. Distinct from clean, and it must never be described as
+            // "no complaints" — reading zero reviews tells us nothing about them.
+            console.log(`\u26d4 REVIEW MINE [${company}]: NOT MEASURED — ${deep && deep.why ? deep.why : 'review lookup returned nothing'}. No claim about their reviews is permitted on this lead.`);
           }
         } catch(e) { console.log(`REVIEW MINE [${company}]: deep scrape errored (${e.message}) — falling back to the review API.`); }
       }
