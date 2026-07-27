@@ -7669,12 +7669,54 @@ const enrichCompany = async (domain, ninjaPearKey) => {
   } catch(e) { console.log('NinjaPear error:', e.message); return null; }
 };
 
+// Is this response an error page or a bot wall rather than their real site?
+// Our direct fetch comes from a datacenter IP and gets blocked far more often than
+// Firecrawl, which uses residential proxies. When we are blocked we must return
+// NOTHING KNOWN — never a page full of `false`, which downstream reads as "they
+// have no CRM, no pixel, no ads, no schema". That single bug produced the whole
+// "no ads / no pixel / no CRM" strip AND the "your title tag reads 403 - Forbidden"
+// claim on a live audit of a perfectly healthy dental practice, while Firecrawl
+// simultaneously pulled 13,460 characters of her real homepage. Tested 7/7.
+const _blockedPageReason = (status, html) => {
+  if (typeof status === 'number' && status >= 400) return `HTTP ${status}`;
+  const h = String(html || '');
+  const title = (h.match(/<title[^>]*>([^<]{0,160})/i)?.[1] || '').trim();
+  if (/^\s*(4\d\d|5\d\d)\b/.test(title)) return `error page title "${title.slice(0,40)}"`;
+  if (/\berror\s*\d{3}\b/i.test(title)) return `error page title "${title.slice(0,40)}"`;
+  if (/^(forbidden|not found|access denied|unauthorized|bad gateway|service unavailable|too many requests)[\s.!|\u2014-]*$/i.test(title)) return `error page title "${title.slice(0,40)}"`;
+  if (/just a moment|attention required|checking your browser|enable javascript|ddos protection|cf-browser-verification/i.test(h.slice(0, 4000))) return 'bot-challenge page';
+  if (/access denied|request blocked|you have been blocked|security check/i.test(title)) return `blocked page "${title.slice(0,40)}"`;
+  return null;
+};
+
 const checkBuiltWith = async (domain) => {
   try {
     const url = `https://${domain}`;
     const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html' } }, 10000);
     const html = await safeText(r);
-    if (!html || html.length < 500) return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, titleTag:'', hasMetaDesc:false, hasH1:false, hasSchema:false, hasEmailCapture:false, hasBooking:false, copyrightYear:0, contacts:{emails:[],phones:[],linkedin:[],facebook:[],owners:[],contactPage:''}, confirmed:false };
+    // ══ BLOCKED-RESPONSE GATE ══════════════════════════════════════════════
+    // Everything below reads absence off this HTML. If we were served an error
+    // or challenge page, every "not detected" is meaningless. Bail out with
+    // confirmed:false and NULLS so nothing can be reported as absent.
+    const _blocked = _blockedPageReason(r && r.status, html);
+    if (_blocked) {
+      console.log(`SITE FINGERPRINT [${domain}]: BLOCKED — ${_blocked}. Our direct fetch was refused, so NOTHING about their tags, CRM, pixel, ads, schema or title is known. No absence claim is permitted from this source.`);
+      return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null,
+        hasGoogleAdsTag:null, hasMetaPixel:null, titleTag:'', hasMetaDesc:null, hasH1:null,
+        hasSchema:null, hasEmailCapture:null, hasBooking:null, copyrightYear:0,
+        contacts:{emails:[],phones:[],linkedin:[],facebook:[],owners:[],contactPage:''},
+        confirmed:false, blocked:true, blockedWhy:_blocked };
+    }
+    // Too little HTML to read anything. Same rule: NULLS, never `false` — an empty
+    // response is not evidence that their site lacks a CRM, a pixel or ads.
+    if (!html || html.length < 500) {
+      console.log(`SITE FINGERPRINT [${domain}]: only ${(html||'').length} chars returned — nothing readable, so NO absence claim is permitted from this source.`);
+      return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null,
+        hasGoogleAdsTag:null, hasMetaPixel:null, titleTag:'', hasMetaDesc:null, hasH1:null,
+        hasSchema:null, hasEmailCapture:null, hasBooking:null, copyrightYear:0,
+        contacts:{emails:[],phones:[],linkedin:[],facebook:[],owners:[],contactPage:''},
+        confirmed:false, blocked:true, blockedWhy:'empty or truncated response' };
+    }
     return {
       // CRM / marketing automation — script fingerprints
       hasCRM: /hubspot|hs-scripts|salesforce|pardot|marketo|pipedrive|zoho.*crm/i.test(html),
@@ -9132,23 +9174,23 @@ This company is being contacted COLD. That means the pitch has to earn a convers
 HOMEPAGE CONTENT (scraped):
 ${homepageSnippet || 'Not available'}
 
-ON-PAGE SEO & SITE FRESHNESS (from their page source — facts):
+ON-PAGE SEO & SITE FRESHNESS: ${builtWith.blocked || builtWith.confirmed === false ? `\u26d4 NOT READABLE \u2014 our direct fetch of their site was refused (${builtWith.blockedWhy || 'no usable response'}). This happens because we request from a datacenter IP; their real visitors and Googlebot are served the normal page. THEREFORE: make NO claim about their title tag, meta description, H1, schema, email capture, booking tool, CRM, pixel, ads tag or copyright year. You do NOT know that any of these are missing \u2014 you only know we were blocked. NEVER quote an error-page title such as "403 - Forbidden" as if it were their real page title; that was OUR blocked response, not what a customer sees.` : `(from their page source \u2014 facts)
 - Title tag: ${builtWith.titleTag ? `"${builtWith.titleTag}"` : 'missing or unreadable'}
-- Meta description: ${builtWith.hasMetaDesc ? 'present' : 'MISSING'}
-- H1: ${builtWith.hasH1 ? 'present' : 'MISSING'}
-- Schema markup: ${builtWith.hasSchema ? 'present' : 'none'}
-- Email capture: ${builtWith.hasEmailCapture ? 'present' : 'NONE — no list building'}
-- Booking tool: ${builtWith.hasBooking ? 'present' : 'none'}
-- Copyright year in footer: ${builtWith.copyrightYear || 'not found'}${builtWith.copyrightYear && builtWith.copyrightYear < new Date().getFullYear() - 1 ? ' — STALE, site looks abandoned' : ''}
+- Meta description: ${builtWith.hasMetaDesc === true ? 'present' : builtWith.hasMetaDesc === false ? 'MISSING' : 'not readable \u2014 make no claim'}
+- H1: ${builtWith.hasH1 === true ? 'present' : builtWith.hasH1 === false ? 'MISSING' : 'not readable \u2014 make no claim'}
+- Schema markup: ${builtWith.hasSchema === true ? 'present' : builtWith.hasSchema === false ? 'none' : 'not readable \u2014 make no claim'}
+- Email capture: ${builtWith.hasEmailCapture === true ? 'present' : builtWith.hasEmailCapture === false ? 'NONE \u2014 no list building' : 'not readable \u2014 make no claim'}
+- Booking tool: ${builtWith.hasBooking === true ? 'present' : builtWith.hasBooking === false ? 'none' : 'not readable \u2014 make no claim'}
+- Copyright year in footer: ${builtWith.copyrightYear || 'not found'}`}
 
-TECH STACK (page-level scan — CAUTION: can miss server-side/tag-managed tools; a positive is reliable, a "none detected" is NOT proof of absence. Do not build the pitch on claimed absence of CRM/pixel/email unless the company is clearly small):
-- CRM: ${builtWith.hasCRM ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
-- Email Marketing: ${builtWith.hasEmailMarketing ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
-- Tracking Pixel: ${builtWith.hasPixel ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
-- Live Chat: ${builtWith.hasChat ? 'Yes (confirmed)' : 'None detected on page (unverified)'}
+TECH STACK: ${builtWith.blocked || builtWith.confirmed === false ? `\u26d4 NOT SCANNED \u2014 our direct fetch was refused, so we could not read their page source at all. Make NO claim about their CRM, email tool, tracking pixel or live chat. "Not detected" is NOT a finding here \u2014 we never got to look.` : `(page-level scan \u2014 CAUTION: can miss server-side/tag-managed tools; a positive is reliable, a "none detected" is NOT proof of absence. Do not build the pitch on claimed absence of CRM/pixel/email unless the company is clearly small)
+- CRM: ${builtWith.hasCRM === true ? 'Yes (confirmed)' : builtWith.hasCRM === false ? 'None detected on page (unverified)' : 'not readable'}
+- Email Marketing: ${builtWith.hasEmailMarketing === true ? 'Yes (confirmed)' : builtWith.hasEmailMarketing === false ? 'None detected on page (unverified)' : 'not readable'}
+- Tracking Pixel: ${builtWith.hasPixel === true ? 'Yes (confirmed)' : builtWith.hasPixel === false ? 'None detected on page (unverified)' : 'not readable'}
+- Live Chat: ${builtWith.hasChat === true ? 'Yes (confirmed)' : builtWith.hasChat === false ? 'None detected on page (unverified)' : 'not readable'}`}
 
 ADS:
-- Google Ads: ${builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
+- Google Ads: ${(builtWith.blocked || builtWith.confirmed === false) ? '\u26d4 not readable \u2014 our fetch was refused, so make NO claim about whether they run Google Ads' : builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
 - GOOGLE LOCAL SERVICES ADS (LSA): ${lsa.status === 'running_lsa'
   ? `\u2705 THEY ARE RUNNING LSA. Proof: "${String(lsa.evidence).slice(0,140)}" — the "${lsa.marker}" mark is issued only through Local Services Ads. This is the STRONGEST possible qualifying signal we have: they are already paying Google per lead, which means budget exists, intent exists, and the only question is what happens to those leads after they arrive. Lead with what happens AFTER the LSA call comes in — LSA charges per lead, so an unanswered or un-followed-up lead is money already spent and wasted. You MAY state that they run Local Services Ads. You may NOT state or guess their budget, lead volume, cost per lead, or ranking.`
   : lsa.status === 'eligible_ambiguous_badge'
@@ -9297,7 +9339,7 @@ Return ONLY valid JSON, no markdown:
             max_tokens: 3000,
             messages: [{ role: 'user', content: msgContent }]
           }),
-        }, 45000);
+        }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
 
         const vd = await safeJson(visionRes);
         // Surface actual API errors instead of swallowing them
@@ -9772,7 +9814,7 @@ Return ONLY valid JSON:
         }
       } catch(e) {
         brainError = e.message.includes('abort') || e.message.includes('timeout')
-          ? 'Claude API call timed out after 45s — Render free tier may be too slow, retry usually works'
+          ? 'Claude API call timed out after 90s \u2014 the audit did NOT regenerate, so anything on screen is the PREVIOUS run. Re-run before trusting it.'
           : `Brain call failed: ${e.message}`;
         console.log('Brain audit error:', e.message);
       }
@@ -9871,9 +9913,9 @@ Return ONLY valid JSON:
         linkedinNote: 'Check LinkedIn manually for CMO presence and last post date',
       },
       INFRASTRUCTURE: {
-        crm: builtWith.hasCRM ? 'CRM detected' : builtWith.confirmed ? 'No CRM detected on-page (scan can miss server-side tools)' : 'CRM: could not verify (scan blocked)',
+        crm: builtWith.hasCRM === true ? 'CRM detected' : (builtWith.confirmed === true && !builtWith.blocked) ? 'No CRM detected on-page (scan can miss server-side tools)' : 'CRM: not readable \u2014 our fetch of their site was refused, so nothing is known either way',
         emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : builtWith.confirmed ? 'No email tool detected on-page (unverified)' : 'Email marketing: could not verify',
-        trackingPixel: builtWith.hasPixel ? 'Analytics/pixel present' : builtWith.confirmed ? 'No pixel detected on-page (scan can miss it)' : 'Tracking: could not verify',
+        trackingPixel: builtWith.hasPixel === true ? 'Analytics/pixel present' : (builtWith.confirmed === true && !builtWith.blocked) ? 'No pixel detected on-page (scan can miss it)' : 'Tracking: not readable \u2014 our fetch of their site was refused, so nothing is known either way',
         chat: builtWith.hasChat ? 'Live chat present' : builtWith.confirmed ? 'No live chat detected (unverified)' : 'Chat: could not verify',
         emailCapture: builtWith.confirmed ? (builtWith.hasEmailCapture ? 'Email capture present' : 'No email-capture form detected on the pages we scanned') : '',
         booking: builtWith.confirmed ? (builtWith.hasBooking ? 'Booking/scheduler tool present' : 'No online booking tool detected on the page') : '',
@@ -9933,8 +9975,10 @@ Return ONLY valid JSON:
     else if (!hasTestimonials && !visualAnalysis && content.length > 500) flaws.push('no_social_proof');
 
     // MEDIUM CONFIDENCE — BuiltWith confirmed absence (only flag if content is rich enough to be reliable)
-    if (!builtWith.hasCRM && builtWith.checked && content.length > 1000) flaws.push('no_crm');
-    if (!builtWith.hasPixel && builtWith.checked) flaws.push('no_tracking');
+    // builtWith.checked never existed — the field is `confirmed`. Now also requires
+    // a real, unblocked scan, so a refused fetch can never produce an absence flaw.
+    if (builtWith.hasCRM === false && builtWith.confirmed === true && !builtWith.blocked && content.length > 1000) flaws.push('no_crm');
+    if (builtWith.hasPixel === false && builtWith.confirmed === true && !builtWith.blocked) flaws.push('no_tracking');
 
     // HIGH CONFIDENCE — confirmed running via API
     if (fbAds.hasAds && fbAds.ads?.some(a=>a.runningDays>180)) flaws.push('stale_fb_ads');
@@ -10248,7 +10292,7 @@ Return ONLY valid JSON:
         operational_pain: { level: publicPainSignals.length ? 'mechanical' : 'limited', method: 'verified against exact quotes from real reviews' },
       },
       firecrawlOutOfCredits: FIRECRAWL_OUT_OF_CREDITS,
-      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:!builtWith.hasCRM, no_tracking:!builtWith.hasPixel, running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
+      signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:(builtWith.hasCRM === false && builtWith.confirmed === true && !builtWith.blocked), no_tracking:(builtWith.hasPixel === false && builtWith.confirmed === true && !builtWith.blocked), running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
       homepageContent: content.slice(0,3000),
       richData: {
         googleAds: buckets.ACQUISITION.googleAds,
