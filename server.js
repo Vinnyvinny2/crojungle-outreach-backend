@@ -2952,6 +2952,33 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       .replace(/([A-Za-z0-9._%+-]+)\s*[\[\(]\s*at\s*[\]\)]\s*([A-Za-z0-9-]+(?:\s*[\[\(]?\s*dot\s*[\]\)]?\s*[A-Za-z0-9-]+)*)\s*[\[\(]?\s*dot\s*[\]\)]?\s*([A-Za-z]{2,})/gi,
         (_, u, mid, tld) => `${u}@${mid.replace(/\s*[\[\(]?\s*dot\s*[\]\)]?\s*/gi, '.')}.${tld}`)
       .replace(/([A-Za-z0-9._%+-]+)\s+at\s+([A-Za-z0-9-]+)\s+dot\s+([A-Za-z]{2,})\b/gi, '$1@$2.$3');
+    // ── REPAIR THE TEXT BEFORE MATCHING ──────────────────────────────────
+    // Every address this system got WRONG was mangled by the page, not by the
+    // regex. The live example, from panyardsealcoating.com/contact verbatim:
+    //     \uFEFFj<oe@panyardsealcoating.com>
+    // His address is joe@. On a Wix site the "j" sits in its own text node, so
+    // the markdown converter emitted a bare "j" and then AUTOLINKED the rest as
+    // <oe@...>. Every extractor started matching inside the angle bracket and
+    // produced "oe@" — a real-looking address that does not exist. We scored it
+    // 100/100 and marked it sendable. There is also an invisible BOM in front of
+    // the "j"; Wix, Squarespace and Word-pasted copy are full of them.
+    //
+    // So: repair first, THEN match. Refusing to match (the previous approach) only
+    // turned a wrong address into no address — it also silently killed every
+    // bolded email, which is a common way to publish one.
+    text = String(text)
+      // 1. Invisible characters that split a local part in half.
+      .replace(/[\uFEFF\u200B-\u200D\u2060\u00AD]/g, '')
+      // 2. HTML entities — the standard way small sites hide an address from bots.
+      .replace(/&#(\d{2,6});/g, (_, d) => { const n = +d; return (n > 31 && n < 0x2FFFF) ? String.fromCodePoint(n) : ''; })
+      .replace(/&#x([0-9a-f]{2,6});/gi, (_, h) => { const n = parseInt(h, 16); return (n > 31 && n < 0x2FFFF) ? String.fromCodePoint(n) : ''; })
+      .replace(/&commat;/gi, '@').replace(/&period;/gi, '.')
+      // 3. A markdown autolink that swallowed only PART of the address.
+      //    THIS IS THE "oe@" BUG: 'j<oe@domain.com>' -> 'joe@domain.com'
+      .replace(/([A-Za-z0-9._%+-])<([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>/g, '$1$2')
+      // 4. A plain autolink: '<joe@domain.com>' -> 'joe@domain.com'
+      .replace(/<([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>/g, '$1');
+
     // ── STRIP MARKDOWN EMPHASIS BEFORE MATCHING ──────────────────────────
     // The lookbehind below refuses a match that starts mid-word, which stopped
     // "J**oe@domain.com" yielding the fake address "oe@domain.com". But refusing
@@ -2975,7 +3002,7 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
     // scored exactly that 100/100 and marked it sendable for a contractor named
     // JOE; the bounce would have landed on the warming domain. Refusing a match
     // that begins mid-word means we sometimes find no address, which is safe.
-    (text.match(/(?<![A-Za-z0-9*_`~])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
+    (text.match(/(?<![A-Za-z0-9*_`~<])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
       .forEach(e => found.add(e.toLowerCase()));
     const clean = [...found].filter(e => !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60);
     const same = clean.filter(e => e.endsWith('@' + domain));
@@ -8962,7 +8989,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       painSummary = cachedContact.pain.summary || '';
       console.log(`PAIN [${company}]: from cache (${publicPainSignals.length} signals)`);
     }
-    if ((ownerFound || isPlacesLead) && !(cachedContact && cachedContact.pain)) {
+    // ── DO NOT GATE THE WHOLE BLOCK ON CACHED PAIN ────────────────────────
+    // This condition used to carry `&& !(cachedContact && cachedContact.pain)`,
+    // intending to skip a paid web pain-search we already had cached. But the
+    // pain search is only ONE of four things in this block: the site audit, the
+    // Google Business Profile health check, review recency and the primary local
+    // rank all live here too. So a lead whose pain was cached silently lost its
+    // site read — sitePages came back null, which meant no booking mechanism, no
+    // published prices, and the Value Equation reporting "not measured".
+    // A live re-run of the same company scored 51 instead of 60 for this reason
+    // alone: the cache made the audit WORSE, which is the opposite of the point.
+    // The inner `needPain` flag already checks publicPainSignals.length === 0, and
+    // cached pain populates that array, so the paid search is still correctly
+    // skipped. This clause was pure collateral damage.
+    if (ownerFound || isPlacesLead) {
       // BEST pain source for a Places lead: their OWN Google reviews. Try it first —
       // their exact business (no disambiguation), maximally specific, cheaper than a
       // web search. Fall back to web-search pain only if reviews yield nothing.
