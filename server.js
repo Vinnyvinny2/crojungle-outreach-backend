@@ -2874,7 +2874,14 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
     const found = new Set();
     (text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi) || [])
       .forEach(m => found.add(m.replace(/mailto:/i, '').toLowerCase()));
-    (text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
+    // The negative lookbehind is load-bearing. Scraped markdown carries emphasis
+    // markers mid-word (a styled first letter becomes "J**oe@domain.com"), and the
+    // local-part class excludes "*", so the match STARTS after it and silently
+    // yields "oe@domain.com" — a real-looking address that does not exist. We
+    // scored exactly that 100/100 and marked it sendable for a contractor named
+    // JOE; the bounce would have landed on the warming domain. Refusing a match
+    // that begins mid-word means we sometimes find no address, which is safe.
+    (text.match(/(?<![A-Za-z0-9*_`~])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
       .forEach(e => found.add(e.toLowerCase()));
     const clean = [...found].filter(e => !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60);
     const same = clean.filter(e => e.endsWith('@' + domain));
@@ -3777,6 +3784,21 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const metaDescription = descMatch ? descMatch[1].trim() : '';
   const hasMetaDescription = metaDescription.length > 0;
   const hasTelLink = /href=["']tel:[^"']+["']/i.test(html);
+  // ══ A MISSING tel: LINK IS NOT A MISSING TAP-TO-CALL ═══════════════════════
+  // Apple's own docs: "By default, Safari on iOS detects any string formatted
+  // like a phone number and makes it a link that calls the number." So on the
+  // iPhones that make up most local mobile traffic, a plain-text number IS
+  // tappable — unless the page explicitly opts out with
+  // <meta name="format-detection" content="telephone=no">.
+  // We shipped "pull up the site and tap the number — it doesn't dial" to a
+  // sealcoating contractor whose page had no opt-out, which means the claim was
+  // almost certainly FALSE and trivially disprovable by the owner in five
+  // seconds on his own phone. The worst kind of error we can make.
+  // The claim is now permitted ONLY when both conditions hold. Tested 5/5.
+  const blocksPhoneAutoDetect =
+    /<meta[^>]+name=["']format-detection["'][^>]*content=["'][^"']*telephone\s*=\s*no/i.test(html) ||
+    /<meta[^>]+content=["'][^"']*telephone\s*=\s*no[^"']*["'][^>]*name=["']format-detection["']/i.test(html);
+  const tapToCallGenuinelyBroken = !hasTelLink && blocksPhoneAutoDetect;
   const inputs = html.match(/<input\b[^>]*>/gi) || [];
   const visibleInputs = inputs.filter(t => !/type=["'](hidden|submit|button|image|reset)["']/i.test(t));
   const selects = html.match(/<select\b[^>]*>/gi) || [];
@@ -3785,7 +3807,7 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const hasForm = /<form\b[^>]*>/i.test(html) || formFieldCount > 0;
   return { checked: true, isHttps: null, hasViewport, hasTitle, title: title.slice(0,120), titleIsErrorPage,
     hasMetaDescription, metaDescription: metaDescription.slice(0,160),
-    hasTelLink, hasForm, formFieldCount };
+    hasTelLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount };
 }
 
 // DEEP REVIEW PATTERN MINE — the send-path escalation. Scrapes the full public
@@ -8152,6 +8174,14 @@ const _runResearchInner = async (req, res) => {
 
   let domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
   let verifiedIndustry = null;  // declared early — the domain-confirmation step uses it
+  // The phrase a CUSTOMER would type, read from their own homepage. Kept apart from
+  // verifiedIndustry because the Companies API overwrites that with a LinkedIn-style
+  // SECTOR: a LASIK surgeon whose trade we correctly read as "LASIK surgeon" was
+  // relabelled "hospital and health care", so the rank check searched "hospital and
+  // health care in Salt Lake City" — a phrase no patient has ever typed — found him
+  // absent, and recorded "Invisible for 1 of 1 searches". A false finding produced
+  // entirely by a nonsense query. Search always prefers this.
+  let customerTrade = '';
   console.log(`Research: ${company} | ${website||'no website'}`);
 
   try {
@@ -8339,6 +8369,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Only fills a GAP; a trade already on the lead always wins.
       if (!verifiedIndustry && domainConfirmation.trade && domainConfirmation.match !== 'no') {
         verifiedIndustry = domainConfirmation.trade;
+        customerTrade = domainConfirmation.trade;   // preserved separately — see below
         console.log(`TRADE [${company}]: "${verifiedIndustry}" \u2014 read from their homepage during domain confirmation (no extra call, no credit). The search surface can now actually be measured.`);
       }
 
@@ -8449,7 +8480,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           hunterName: email.founderName || '', hunterTitle: email.title || '',
           location: req.body.location || '',
           placeId: effectivePlaceId,
-          industry: verifiedIndustry || req.body.industry || '',
+          industry: customerTrade || verifiedIndustry || req.body.industry || '',
         });
         if (decisionMaker && decisionMaker.name) {
           if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
@@ -8656,7 +8687,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // email is forced onto its weakest available signal — which is exactly what
         // happened to Eric Jans Insurance Agency. deriveTrade only fires on an
         // unambiguous match, so a wrong guess cannot produce a false search claim.
-        let _trade = verifiedIndustry || req.body.industry || '';
+        let _trade = customerTrade || verifiedIndustry || req.body.industry || '';
         if (!_trade) {
           // `content` (not trustedContent) — trustedContent is declared further down,
           // so referencing it here is a temporal-dead-zone crash. deriveTrade needs a
@@ -9302,7 +9333,7 @@ THE DEFAULT ORDERING BELOW IS A STARTING POINT AND A TIEBREAKER — it reflects 
   5. THE POSITIONING / OFFER READ — per Hormozi the highest-LEVERAGE problem of all, but an OBSERVATION rather than a measurement, so it usually scores lower on VERIFIABLE. It leads whenever it genuinely outscores the others, and it is never a consolation prize.
   6. Analytics tags, CRM signatures, pixels — CONTEXT for us. These score near-zero on SURPRISE and OWNERLEVEL; an owner does not feel a missing tag as lost money. They almost never belong in the email.
 ⚠ A STRONG INSTANCE OF A LOWER CATEGORY BEATS A WEAK INSTANCE OF A HIGHER ONE. "No SSL, so every browser warns visitors away" (category 4) beats "#12 instead of #8 for one minor term" (category 2) every time. If your scored winner is not the highest category that fired, that is CORRECT behaviour — just state why in "leadSignalReason" so a human can see the trade you made.
-\u26a0 THE TEN-MINUTE TEST \u2014 THE SECOND WAY AN EMAIL DIES. The delegation test catches the email he FORWARDS. This one catches the email he simply FIXES. If the entire problem you named can be closed by him in ten minutes \u2014 add a tel: link, upload photos to the Google profile, shorten a form \u2014 then he does it, feels vaguely grateful, and never replies. That is worse than being ignored: he got the value, we did unpaid work for a stranger, and nothing in the email suggested he needed anyone. THE CHECKABLE FACT IS PROOF THAT WE LOOKED. IT IS NOT THE PROBLEM. Lead with it \u2014 it is what earns the right to be believed \u2014 but the problem you name has to be the SYSTEM the fact reveals, and it must survive the ten-minute fix. WORKED EXAMPLE from our own best-scoring audit: the fact was \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial\u2019 (a ten-minute fix). The problem was \u2018you are paying to acquire visitors who then have no way to reach you, and that job goes to whoever was easier to contact\u2019 \u2014 paid acquisition with no capture layer. He can fix the link tonight and STILL have that problem tomorrow. That is the bar. BEFORE YOU FINISH, ASK: if he fixed the specific thing I named, would the problem I described be solved? If yes, you have written a free tip, not a diagnosis \u2014 go up one level to the system it sits inside. \u26a0 THE ALTITUDE YOU SCORED IS A PROMISE YOU HAVE TO KEEP. If you gave your winning finding a 4 or 5 on OWNERLEVEL, you committed to writing it as a revenue decision, not a to-do. Before you finish, read your own first two sentences and ask the delegation question honestly: could he forward this to his web person or his office manager and consider it handled? If yes, you scored an altitude you did not deliver \u2014 go back and name what the leak costs in the unit he counts (a case, a job, a retainer, an install), because that is the part he cannot hand to anyone else. A tactical to-do list gets pushed down the chain and the conversation dies there, no matter how accurate the observation was. ONE STORY, NOT A LIST: build on the winner, then use other findings ONLY if they form a single chain of cause and effect with it. If a second finding needs its own sentence to justify itself, it goes in the write-up, not the email.
+\u26a0 GIVE THE PROOF. WITHHOLD THE DIAGNOSIS AND THE FIX LIST. This is the difference between a free consultation and a reply, and it is the most commercially expensive mistake in the emails so far. A live send handed a sealcoating contractor his complete to-do list \u2014 no tap-to-call link, no Google profile description, second in the map pack behind a competitor with more reviews. Three items, all ten-minute fixes, all itemised for free. He does them, thanks nobody, and never replies. We performed his audit for him and left him no reason to hire anyone. THE SPLIT: \u2022 PROOF \u2014 GIVE IT AWAY. Exactly ONE checkable symptom, stated plainly, verifiable by him in seconds. This is what earns the right to be believed, and without it the email is just another stranger claiming to have found something. \u2022 DIAGNOSIS \u2014 WITHHOLD. Name that the symptom belongs to a larger pattern, but do NOT walk him through the pattern. \u2018Your newest review is 951 days old\u2019 is proof. WHY that happened, what else it is doing to him, and what a working version looks like is the conversation. \u2022 THE FIX LIST \u2014 NEVER ITEMISE. The moment you write a second and a third thing to fix, you have delivered the engagement in an email. One symptom, then the reference to what else is there. THE OPEN LOOP MUST BE REAL. Research on the Zeigarnik effect is clear that an unclosed loop compels a response \u2014 and equally clear that the gap has to be backed by substance: promising something specific only works if it actually exists. Ours does; the write-up is genuinely assembled from the audit. So \u2018I mapped exactly what the profile is missing\u2019 is honest and it is an open loop. \u2018I found a few things\u2019 is vague and reads as bait. Be specific about the CATEGORY of what you found and silent on its CONTENTS. THE TEST: after reading your email, could he close the problem without ever replying to you? If yes, rewrite \u2014 you sold nothing and gave away the work. \u26a0 THE TEN-MINUTE TEST \u2014 THE SECOND WAY AN EMAIL DIES. The delegation test catches the email he FORWARDS. This one catches the email he simply FIXES. If the entire problem you named can be closed by him in ten minutes \u2014 add a tel: link, upload photos to the Google profile, shorten a form \u2014 then he does it, feels vaguely grateful, and never replies. That is worse than being ignored: he got the value, we did unpaid work for a stranger, and nothing in the email suggested he needed anyone. THE CHECKABLE FACT IS PROOF THAT WE LOOKED. IT IS NOT THE PROBLEM. Lead with it \u2014 it is what earns the right to be believed \u2014 but the problem you name has to be the SYSTEM the fact reveals, and it must survive the ten-minute fix. WORKED EXAMPLE from our own best-scoring audit: the fact was \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial\u2019 (a ten-minute fix). The problem was \u2018you are paying to acquire visitors who then have no way to reach you, and that job goes to whoever was easier to contact\u2019 \u2014 paid acquisition with no capture layer. He can fix the link tonight and STILL have that problem tomorrow. That is the bar. BEFORE YOU FINISH, ASK: if he fixed the specific thing I named, would the problem I described be solved? If yes, you have written a free tip, not a diagnosis \u2014 go up one level to the system it sits inside. \u26a0 THE ALTITUDE YOU SCORED IS A PROMISE YOU HAVE TO KEEP. If you gave your winning finding a 4 or 5 on OWNERLEVEL, you committed to writing it as a revenue decision, not a to-do. Before you finish, read your own first two sentences and ask the delegation question honestly: could he forward this to his web person or his office manager and consider it handled? If yes, you scored an altitude you did not deliver \u2014 go back and name what the leak costs in the unit he counts (a case, a job, a retainer, an install), because that is the part he cannot hand to anyone else. A tactical to-do list gets pushed down the chain and the conversation dies there, no matter how accurate the observation was. ONE STORY, NOT A LIST: build on the winner, then use other findings ONLY if they form a single chain of cause and effect with it. If a second finding needs its own sentence to justify itself, it goes in the write-up, not the email.
   1. A PAIN REPEATING ACROSS THEIR OWN GOOGLE REVIEWS, with a count. Their customers said it, it is quantified, and no competitor has ever shown him. Unbeatable.
   2. A SEARCH-RANK ABSENCE we actually measured — a service they publish a page for and do not appear for in their own city. Verifiable in one search on his phone.
   3. A GOOGLE BUSINESS PROFILE gap we measured (no hours, thin photos, no description) — free map-pack traffic leaking, confirmable in ten seconds on his own listing.
@@ -9350,7 +9381,7 @@ GOOGLE BUSINESS PROFILE (measured from their live listing — these are FACTS th
 SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact the owner can confirm by viewing his own page; NONE of it is inference): ${htmlSignals && htmlSignals.checked ? [
   htmlSignals.isHttps === false ? '- Their site does not load over HTTPS (no SSL) — modern browsers show a \"Not secure\" warning that visibly scares visitors off. This is a measured fact and a real trust/conversion leak.' : '',
   htmlSignals.hasViewport === false ? '- No mobile viewport tag in the page — the site is not configured for phones, and mobile is the majority of local traffic. Measured, checkable.' : '',
-  htmlSignals.hasTelLink === false ? '- No tap-to-call link on the page — a phone number that is not tappable on mobile loses calls from people ready to book. Measured from the HTML.' : '',
+  htmlSignals.tapToCallGenuinelyBroken === true ? '- The phone number is not tappable on mobile: there is no tel: link AND the page carries <meta name="format-detection" content="telephone=no">, which switches off the automatic phone-number linking iPhones would otherwise apply. BOTH conditions hold, so a mobile visitor genuinely cannot tap to dial. This is safe to state.' : (htmlSignals.hasTelLink === false ? '- There is no explicit tel: link in the page source. \u26d4 DO NOT TURN THIS INTO A CLAIM. iOS Safari auto-detects phone numbers and makes them tappable by default, so on the iPhones that make up most local mobile traffic the number very likely DOES dial. Saying \u2018tap the number, it doesn\u2019t dial\u2019 would be disproved by the owner in five seconds on his own phone, and one disproved sentence discredits every true thing in the email. Make no tap-to-call claim for this lead.' : ''),
   (htmlSignals.hasForm && htmlSignals.formFieldCount >= 8) ? `- Their contact/booking form asks for ${htmlSignals.formFieldCount} fields — long forms measurably cut completions, especially on mobile. Only ask for what is needed to book. Measured by counting the inputs.` : '',
   htmlSignals.hasTitle === false ? '- The page has no <title> tag — this hurts how it reads in search and browser tabs. Measured, checkable in their own source.' : '',
   htmlSignals.hasMetaDescription === false ? '- No meta description on the page — a missing description means search engines improvise the snippet, lowering click-through. Measured from the HTML.' : '',
@@ -9724,6 +9755,11 @@ Return ONLY valid JSON, no markdown:
           _flag(/\bis simply lost\b/i, 'states the visitor is lost \u2014 unobserved outcome');
           _flag(/\b(are ?n'?t|is ?n'?t|do ?n'?t|does ?n'?t|never) com(e|ing) back\b/i, 'states they do not return \u2014 unknowable');
           _flag(/\bdisappears?\b/i, 'states the visitor disappears \u2014 unobserved');
+          // Tap-to-call: only claimable when the page ALSO disables iOS auto-linking.
+          if (!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken === true)) {
+            _flag(/\b(does ?n'?t|won'?t|can'?t) dial\b/i, 'claims the number will not dial \u2014 iOS Safari auto-links phone numbers, so this is unproven and the owner can disprove it on his own phone in seconds');
+            _flag(/\bnot? tap[- ]to[- ]call\b|\bisn'?t tappable\b|\bnot tappable\b/i, 'claims the number is not tappable \u2014 unproven unless the page disables iOS auto-detection');
+          }
           // 7. Ad SPEND asserted from the mere presence of a conversion tag.
           // A Google Ads tag in the page source proves the tag is there. It does
           // NOT prove ads are live today, that budget is flowing, or that any
@@ -9762,6 +9798,21 @@ Return ONLY valid JSON, no markdown:
           _flag(/\byou should be (targeting|going after|selling|charging|focused on)\b/i, 'prescribes his market or pricing — unprovable and presumptuous');
           _flag(/\byour (ideal|real|actual) customer (is|should be)\b/i, 'asserts who his customer is — he knows, we do not');
           _flag(/\b(wrong|bad) (market|customer|audience|niche)\b/i, 'asserts his market is wrong — not something we can see');
+
+          // ══ GAVE-AWAY-THE-ENGAGEMENT CHECK ═════════════════════════════════
+          // An email that itemises three or more distinct fixable items has
+          // handed over the work. A live send listed a contractor's missing
+          // tap-to-call link, his missing Google profile description AND his
+          // map-pack position — three ten-minute fixes, delivered free. He can
+          // close all of it without ever replying. Proof earns belief; the fix
+          // list is the engagement. Tested 3/3.
+          const _fixMentions = ((_allProse.match(/\bno (tap-to-call|booking|email capture|description|photos|chat|online scheduling)\b/gi) || []).length)
+            + ((_allProse.match(/\bmissing (a |the )?(description|photos|booking|capture)\b/gi) || []).length);
+          if (_fixMentions >= 3) {
+            const _m = `GAVE AWAY THE WORK: the copy itemises ${_fixMentions} separate fixable items. Each one is something the owner can close himself in minutes, so together they are a free to-do list rather than a reason to reply. Keep ONE checkable symptom as proof and refer to the rest without naming it.`;
+            _claimRisks.push(_m);
+            console.log(`\u26a0 ENGAGEMENT CHECK [${company}]: ${_m}`);
+          }
 
           if (_claimRisks.length) {
             parsed._claimRisks = _claimRisks;
