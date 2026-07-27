@@ -1875,6 +1875,16 @@ const _MAP_TTL_MS = 10 * 60 * 1000;
 // fetched by the review-reply owner source, the pain miner AND the deep review
 // mine; the About page is fetched by the leadership reader AND the site auditor.
 // Every one of those repeats was a paid credit for bytes we already had in memory.
+const _APIFY_CACHE = new Map(); // placeId::max -> { promise, at, ok }
+// 30m for a good pull: reviews do not change inside a research run, and TWO
+// separate consumers (the pain mine and the owner-reply lookup) legitimately
+// want the same data. A live run billed 80 reviews instead of 40 because each
+// consumer called the actor independently. Failures cache for only 2 minutes so
+// a transient error does not lock the lead out for half an hour.
+const _APIFY_TTL_OK_MS = 30 * 60 * 1000;
+const _APIFY_TTL_FAIL_MS = 2 * 60 * 1000;
+let APIFY_REVIEWS_BILLED = 0;   // reviews we actually paid Apify for
+let APIFY_CALLS_SAVED = 0;      // actor runs avoided by the cache
 const _SCRAPE_CACHE = new Map(); // url -> { md, at }
 const _SCRAPE_TTL_MS = 2 * 60 * 60 * 1000; // 2h — a company homepage does not change in an afternoon
 let FC_CREDITS_SPENT = 0;   // rough meter: paid Firecrawl operations this process
@@ -3769,6 +3779,94 @@ const readOfferStrength = (text) => {
   return { checked: true, guarantee, urgency, bonus, genericOnly, gaps, gapCount: gaps.length };
 };
 
+// ══ HORMOZI VALUE EQUATION — MEASURED, NOT ASKED FOR ═════════════════════════
+//   Value = (Dream Outcome x Perceived Likelihood) / (Time Delay x Effort)
+//
+// The equation appeared ZERO times in this codebase, yet most of its inputs were
+// already measured and reported as UNRELATED findings:
+//   sitePages.booking        -> literally a time-delay ladder
+//   htmlSignals.formFieldCount -> literally effort & sacrifice
+//   guarantee + review count -> perceived likelihood
+// Reporting them separately is what produces "a list of four things" instead of the
+// one causal story the pitch rules ask for. Dream Outcome is NOT measurable from a
+// scrape, so it is never scored and never claimed.
+//
+// Same three-state rule as everywhere: measured-and-problematic -> state as fact;
+// measured-and-clean -> do not invent; not measured -> say nothing. Returns FACTS
+// plus a derived shape that is labelled derived. No composite score is ever shown
+// to the owner, because a number he cannot check is a number he can dispute.
+const measureValueEquation = ({ booking, hasTelLink, formFieldCount, hasForm,
+                                guarantee, reviewCount, reviewRating, publishedPrices } = {}) => {
+  const haveBooking = ['online_booking', 'form', 'phone_only', 'none_found'].includes(booking);
+  const haveHtml = typeof formFieldCount === 'number' || typeof hasTelLink === 'boolean';
+  // Without BOTH a booking read and a page-source read we are guessing, and a guess
+  // here becomes a claim about his business.
+  if (!haveBooking || !haveHtml) return { checked: false };
+
+  const friction = [];   // denominator entries — each checkable by the owner
+  const belief = [];     // numerator entries
+
+  // ── TIME DELAY ─ how long between wanting the thing and getting it ────────
+  let delay = 0;
+  if (booking === 'online_booking') {
+    delay = 0;
+    belief.push('a real self-serve booking tool \u2014 the customer gets a slot without waiting for anyone');
+  } else if (booking === 'form') {
+    delay = 2;
+    friction.push('the only way to start is a form that submits and waits for a human to call back');
+  } else if (booking === 'phone_only') {
+    delay = 3;
+    friction.push('the only way to start is a phone call during business hours');
+  } else {
+    delay = 4;
+    friction.push('no booking path of any kind was found on the pages we read');
+  }
+  // Tap-to-call is a DELAY multiplier on mobile, not a standalone technical nit.
+  // Scoring it here is what lets the email tell one story instead of two.
+  if (hasTelLink === false) {
+    delay += 1;
+    friction.push('on a phone the number does not dial \u2014 it has to be copied out by hand first');
+  }
+
+  // ── EFFORT & SACRIFICE ─ what it costs the customer to say yes ────────────
+  let effort = 0;
+  if (typeof formFieldCount === 'number' && hasForm) {
+    if (formFieldCount >= 10) { effort += 3; friction.push(`the form asks for ${formFieldCount} separate fields before anyone will speak to them`); }
+    else if (formFieldCount >= 7) { effort += 2; friction.push(`the form asks for ${formFieldCount} fields`); }
+    else if (formFieldCount >= 4) { effort += 1; friction.push(`the form asks for ${formFieldCount} fields`); }
+  }
+  // Hormozi treats "you must ask us what it costs" as sacrifice, not pricing strategy.
+  if (publishedPrices === 0) {
+    effort += 1;
+    friction.push('no price appears anywhere, so the only way to find out what it costs is to hand over contact details and wait');
+  } else if (publishedPrices > 0) {
+    belief.push(`${publishedPrices} published price point(s) \u2014 a stranger can find out what it costs without asking anyone`);
+  }
+
+  // ── PERCEIVED LIKELIHOOD ─ does a stranger believe it will work FOR HIM ───
+  let likelihood = 0;
+  if (guarantee === true) { likelihood += 2; belief.push('a guarantee or risk reversal is visible on the page'); }
+  else if (guarantee === false) { friction.push('no guarantee or risk reversal anywhere \u2014 the whole risk of being wrong sits with the customer'); }
+  if (typeof reviewCount === 'number' && typeof reviewRating === 'number') {
+    if (reviewCount >= 50 && reviewRating >= 4.5) { likelihood += 3; belief.push(`${reviewCount} reviews at ${reviewRating}\u2605`); }
+    else if (reviewCount >= 20 && reviewRating >= 4.3) { likelihood += 2; belief.push(`${reviewCount} reviews at ${reviewRating}\u2605`); }
+    else if (reviewCount >= 5) { likelihood += 1; belief.push(`${reviewCount} reviews at ${reviewRating}\u2605`); }
+  }
+
+  const denominator = delay + effort;
+  const numerator = likelihood;
+  // THE FINDING IS THE SHAPE, NOT A NUMBER. Reputation already earned, sitting behind
+  // friction that wastes it, is the Hormozi argument and the one an owner cannot close
+  // in ten minutes — he can fix any single item and still have the problem.
+  const earnedButBlocked = numerator >= 2 && denominator >= 3;
+  const shape = earnedButBlocked ? 'earned_but_blocked'
+              : denominator >= 3 ? 'heavy_friction'
+              : (numerator <= 1 && denominator <= 2) ? 'thin_but_clean'
+              : 'balanced';
+  return { checked: true, delay, effort, likelihood, denominator, numerator, shape,
+           earnedButBlocked, friction, belief, frictionCount: friction.length };
+};
+
 // ══ HTML REVENUE SIGNALS — measured, free, zero fabrication risk ═════════════
 // Reads ONLY what is literally present or absent in the raw HTML of their homepage.
 // Every field is a fact the owner can confirm by viewing his own page source. No
@@ -3885,7 +3983,7 @@ const readApifyPlaceMeta = (items) => {
   return { totalReviews: null, rating: null };
 };
 
-const fetchApifyReviews = async ({ placeId, apifyToken, companyName = '', timeoutMs = 90000,
+const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '', timeoutMs = 90000,
                                    maxReviews = APIFY_MAX_REVIEWS }) => {
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
   if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
@@ -3920,6 +4018,44 @@ const fetchApifyReviews = async ({ placeId, apifyToken, companyName = '', timeou
   return { checked: true, reviews, read: reviews.length, totalReviews: meta.totalReviews,
            rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage,
            sampleComplete: meta.totalReviews ? reviews.length >= meta.totalReviews : false };
+};
+
+// ── CACHING WRAPPER ────────────────────────────────────────────────────────
+// Caches the PROMISE, not the resolved value. findDecisionMaker runs its lookups
+// inside a Promise.all, so two consumers can be in flight simultaneously; a
+// result-only cache would let both through and bill the actor twice. Sharing the
+// promise means the second caller awaits the first caller's run.
+const fetchApifyReviews = async (opts) => {
+  const { placeId, maxReviews = APIFY_MAX_REVIEWS, companyName = '' } = opts || {};
+  if (!placeId) return { checked: false, why: 'no placeId for this lead' };
+  const key = `${placeId}::${maxReviews}`;
+  const hit = _APIFY_CACHE.get(key);
+  if (hit) {
+    const ttl = hit.ok ? _APIFY_TTL_OK_MS : _APIFY_TTL_FAIL_MS;
+    if (Date.now() - hit.at < ttl) {
+      APIFY_CALLS_SAVED++;
+      console.log(`\u267b APIFY CACHE HIT (no credit) [${companyName}]: reusing the review pull for this place`);
+      return hit.promise;
+    }
+    _APIFY_CACHE.delete(key);
+  }
+  const promise = _fetchApifyReviewsUncached(opts).then((r) => {
+    // Re-stamp with the real outcome so a failure expires fast and a success does not.
+    const entry = _APIFY_CACHE.get(key);
+    if (entry) { entry.ok = !!r.checked; entry.at = Date.now(); }
+    if (r.checked) APIFY_REVIEWS_BILLED += r.read;
+    return r;
+  }).catch((e) => {
+    _APIFY_CACHE.delete(key);
+    return { checked: false, why: `Apify call threw: ${e.message}` };
+  });
+  _APIFY_CACHE.set(key, { promise, at: Date.now(), ok: true });
+  // Cheap prune so a long-lived process cannot grow this map without bound.
+  if (_APIFY_CACHE.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of _APIFY_CACHE) if (now - v.at > _APIFY_TTL_OK_MS) _APIFY_CACHE.delete(k);
+  }
+  return promise;
 };
 
 // DEEP REVIEW PATTERN MINE — the send-path escalation. Scrapes the full public
@@ -6327,6 +6463,23 @@ const scoreReachability = (c) => {
   const researchHasRun = !!(c.emailResult || c.decisionMaker !== undefined);
   if (researchHasRun && !foundOwner) capped = Math.min(capped, 25);
 
+  // ── THE MAILBOX MUST BELONG TO THE DECISION-MAKER ────────────────────────
+  // ownerEmailMatch was computed on every lead, shown in the UI as a red warning,
+  // and never handed to this scorer. Live result: a sealcoating contractor whose
+  // email was flagged "appears to belong to a DIFFERENT person" scored 100/100
+  // "decision-maker identified and directly reachable" — the score and the warning
+  // on the same screen contradicting each other. Reachability answers exactly one
+  // question: can we put this email in front of the person who feels the problem?
+  // If the mailbox is someone else's, the honest answer is no.
+  if (c.ownerEmailMatch === 'different_person') {
+    capped = Math.min(capped, 45);
+    reasons.push('\u26a0 The published mailbox appears to belong to someone other than the owner \u2014 this does not reach the decision-maker until the address is verified');
+  } else if (c.ownerEmailMatch === 'shared_inbox') {
+    // A gatekeeper reads this. Workable, but not "directly reachable".
+    capped = Math.min(capped, 72);
+    reasons.push('The only address is a shared inbox with a gatekeeper \u2014 reachable, but not directly');
+  }
+
   return {
     score: capped,
     reasons,
@@ -8292,6 +8445,9 @@ const _runResearchInner = async (req, res) => {
   let gbpHealth = null;  // hoisted to function scope so the prompt (outside the Places-lead block) can read it
   let htmlSignals = { checked: false };  // hoisted to function scope so the prompt can read it
   let offerStrength = { checked: false };  // hoisted alongside htmlSignals — the prompt reads it
+  // Hoisted for the same reason: the prompt sits OUTSIDE the block where sitePages
+  // lives, so computing this at prompt level would silently read undefined.
+  let valueEquation = { checked: false };
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -9022,6 +9178,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       console.log(`OFFER STRENGTH [${company}]: guarantee=${offerStrength.guarantee} urgency=${offerStrength.urgency} bonus=${offerStrength.bonus} genericAskOnly=${offerStrength.genericOnly} | ${offerStrength.gapCount} offer gap(s)`);
     }
 
+    // ═══ VALUE EQUATION ═══════════════════════════════════════════════════
+    // Assembled HERE because sitePages is block-scoped to this section. Every
+    // input is already measured elsewhere; this is the synthesis, not new data.
+    valueEquation = measureValueEquation({
+      booking: sitePages && sitePages.booking,
+      hasTelLink: htmlSignals && htmlSignals.checked ? htmlSignals.hasTelLink : undefined,
+      formFieldCount: htmlSignals && htmlSignals.checked ? htmlSignals.formFieldCount : undefined,
+      hasForm: htmlSignals && htmlSignals.hasForm,
+      guarantee: offerStrength.checked ? offerStrength.guarantee : undefined,
+      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
+      reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+      publishedPrices: sitePages && Array.isArray(sitePages.prices) ? sitePages.prices.length : undefined,
+    });
+    if (valueEquation.checked) {
+      console.log(`VALUE EQUATION [${company}]: ${valueEquation.shape} \u2014 delay=${valueEquation.delay} effort=${valueEquation.effort} likelihood=${valueEquation.likelihood} | ${valueEquation.frictionCount} friction point(s)${valueEquation.earnedButBlocked ? ' \u2014 REPUTATION EARNED BUT BLOCKED: the strongest single story available on this lead' : ''}`);
+    } else {
+      console.log(`VALUE EQUATION [${company}]: not measured \u2014 no booking read or no page source, so make NO claim about how easy they are to buy from.`);
+    }
+
     // ═══ REACH INTELLIGENCE ═══════════════════════════════════════════════
     // Timing window — deterministic from discovery signals
     const reachWindow = discoverySignals.preparing_for_exit ? { window: 'NOW — actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately' }
@@ -9547,6 +9722,13 @@ SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact
 ].filter(Boolean).join('\n') || '- Site technicals look clean (HTTPS, mobile viewport, tap-to-call, reasonable form length all present) — do NOT invent a technical problem here.' : 'Homepage HTML not captured for this lead — make NO claims about their SSL, mobile setup, form length, or page tags.'}${htmlSignals && htmlSignals.checked && [htmlSignals.isHttps===false, htmlSignals.hasViewport===false, htmlSignals.hasTelLink===false, htmlSignals.hasForm&&htmlSignals.formFieldCount>=8].some(Boolean) ? '\n→ These are \"get the click / capture the lead\" leaks: cheap to state, impossible to dispute, and directly tied to whether a visitor becomes a customer. Prefer them over anything soft.' : ''}
 
 OFFER STRENGTH (MEASURED from every page we read \u2014 these are facts about their own copy, not opinions, and each is checkable by the owner in ten seconds): ${offerStrength && offerStrength.checked ? (offerStrength.gapCount ? offerStrength.gaps.map(g => '- ' + g).join('\\n') + `\\n\u2192 THESE ARE HORMOZI'S OFFER LAYER AND THEY OUTRANK EVERY TACTIC BELOW THEM. Market and offer sit above leads, conversion and retention in leverage: a business with no guarantee, no urgency and a generic ask is competing on price against everyone in its trade, and no amount of traffic or page-speed fixes that. Score at least one of these as a candidate finding \u2014 they have historically been ignored in favour of smaller technical items, which is exactly the mistake this instruction exists to stop. They are also durable: unlike a missing link, an owner cannot close an offer gap in ten minutes, so it survives the ten-minute test.` : 'Their offer looks unusually complete for a local business \u2014 a guarantee, real urgency and a named ask are all present. Do NOT invent an offer problem.') : 'Offer strength not measured for this lead \u2014 make NO claim about their guarantee, urgency or offer.'}
+\u2550\u2550\u2550 HOW HARD THEY ARE TO BUY FROM (Hormozi's value equation, MEASURED) \u2550\u2550\u2550
+${valueEquation.checked ? `Value = (dream outcome \u00d7 how much a stranger believes it will work) \u00f7 (how long he waits \u00d7 how much effort it costs him). We cannot measure their dream outcome, so make NO claim about it. We CAN measure the other three, and every line below is checkable by the owner on his own site in seconds.
+${valueEquation.belief.length ? `WHAT IS WORKING FOR THEM (do NOT call these problems):\n${valueEquation.belief.map(b => '- ' + b).join('\n')}` : 'Nothing on the believability side was measurable.'}
+${valueEquation.friction.length ? `WHAT IS COSTING THEM (each one measured):\n${valueEquation.friction.map(f => '- ' + f).join('\n')}` : 'No buying friction was measured \u2014 do NOT invent any. Their path to becoming a customer is genuinely clean.'}
+${valueEquation.earnedButBlocked ? `\n\u2605 THIS IS THE STRONGEST STORY AVAILABLE ON THIS LEAD AND IT OUTRANKS ANY SINGLE ITEM ABOVE. They have ALREADY EARNED the hard part \u2014 the reputation, the years, the reviews \u2014 and ${valueEquation.frictionCount} separate measured things stand between a stranger and using it. That is ONE story with ${valueEquation.frictionCount} pieces of evidence, not ${valueEquation.frictionCount} findings.
+HOW TO WRITE IT: give ONE piece of proof he can check in ten seconds, then name the PATTERN without itemising the rest. "You have ${valueEquation.likelihood >= 3 ? 'the reviews and the years' : 'the reputation'} \u2014 and a stranger who wants to hire you has to work for it" is the shape. Do NOT list all ${valueEquation.frictionCount}; that hands him the fix list and he closes it himself for free.
+WHY IT SURVIVES THE TEN-MINUTE TEST: he can fix any ONE of these tonight and still have the problem tomorrow, because the problem is the accumulation, not the item. That is exactly what makes it a conversation rather than a free tip.` : ''}${valueEquation.shape === 'heavy_friction' ? `\n\u26a0 Friction is heavy but the believability side is thin too \u2014 so do NOT write "you have a great reputation being wasted". Say what the path to becoming a customer actually costs, and stop.` : ''}${valueEquation.shape === 'thin_but_clean' ? `\n\u26a0 Their buying path is genuinely clean. Do NOT manufacture friction. The finding is elsewhere.` : ''}` : 'NOT MEASURED for this lead \u2014 we did not read both their booking path and their page source, so make NO claim about how easy or hard they are to buy from, how long a customer waits, or what their form asks for.'}
 
 REVIEW RECENCY (measured from their newest Google review's date): ${gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? (gbpHealth.reviewRecency.veryCold ? `Their most recent Google review is about ${gbpHealth.reviewRecency.newestDays} days old. Buyers read review recency as \"are people still choosing this place?\" — a profile that looks frozen months ago quietly costs trust at the exact moment someone is deciding. This is measured from the live profile and the owner can confirm it. Safe to state as fact.` : (gbpHealth.reviewRecency.stale ? `Newest review is about ${gbpHealth.reviewRecency.newestDays} days old — slightly stale but not alarming; mention only if nothing sharper exists.` : 'Their reviews are recent — do NOT claim their reviews are stale or old.')) : 'Review recency not measured for this lead — make NO claim about how old or fresh their reviews are.'}
 RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(t => `- [${t.type}, ${t.ageDays}d ago, identified via ${t.idBasis}] ${t.headline}`).join('\n') + '\n\u2192 Each line shows HOW we tied it to this company. "via domain" or "via location" = strong evidence. "via distinctive name" = a NAME MATCH ONLY and is NOT confirmed to be them.\n\u2192 You may use a trigger as the cold-open (\"I saw you just...\") ONLY if it was identified via domain or location AND the headline obviously describes THIS business. Company names repeat across the country \u2014 a condo complex, a street address, a school, or a different town sharing the name is NOT them.\n\u2192 If you are not certain a headline is about this exact business, do NOT reference it at all. Opening with someone else\u2019s news proves we did not do our homework and kills the lead instantly.' : 'No recent company-specific news found \u2014 do not invent any; pitch from the site audit.'}
@@ -10243,6 +10425,7 @@ RAW EVIDENCE (what we actually confirmed):
 - LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED \u2014 we ran real Google local searches for this business via the Places API. Results: ' + localVisibility.results.map(r => (r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`) + ((() => { const _riv = (Array.isArray(r.above) && r.above.length) ? r.above : (Array.isArray(r.topRivals) ? r.topRivals : []); if (!_riv.length) return ''; return ` \u2014 businesses actually returned above them for that query, WITH their real Google review counts: ${_riv.map(t => `${t.name} (${t.reviews} reviews${t.rating ? ', ' + t.rating + '\u2605' : ''})`).join(', ')}` + (r.ours && r.ours.reviews != null ? `; this business itself has ${r.ours.reviews} reviews${r.ours.rating ? ' at ' + r.ours.rating + '\u2605' : ''}` : '') + (r.weakerAbove ? `; \u2605 ${r.weakerAbove} of the businesses ranked ABOVE them have FEWER reviews than this business does \u2014 that comparison is MEASURED and must NOT be flagged` : ''); })())).join('; ') + '. \u26a0 THE COMPETITOR NAMES AND REVIEW COUNTS ABOVE ARE MEASURED FACTS returned by the Places API for that exact search \u2014 they are the businesses a customer sees instead of this one. If the audit names those companies or quotes those review counts, that is CORRECT and must NOT be flagged as unverified or as "competitor data stated as fact". \u26a0 BUT ONLY THE NAMES AND THE COUNTS ARE MEASURED. We do NOT measure how old a competitor review is, how recent or active that competitor is, their rating trend, their ad spend, or why they rank higher. Any claim that competitor reviews are recent, newer or fresher, or that a competitor is more active, MUST STILL BE FLAGGED \u2014 that is an embellishment resting on top of a real number, which is harder to spot and just as false.' + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + gbpHealth.photoCount + ' photos, hours ' + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
+- BUYING FRICTION / VALUE EQUATION: ${valueEquation.checked ? 'MEASURED by combining their booking path, their page source, their published prices and their Google review count. Friction found: ' + (valueEquation.friction.length ? valueEquation.friction.join('; ') : 'none') + '. Working in their favour: ' + (valueEquation.belief.length ? valueEquation.belief.join('; ') : 'nothing measurable') + '. \u26a0 EACH OF THESE IS A MEASURED FACT the owner can verify on his own site \u2014 do NOT flag them as unverified or inferential. \u26a0 BUT the audit may NOT claim what happens AFTER a customer hits this friction: not that they leave, not that they call a competitor, not that the lead is lost. We measured the wall, never what the person did next \u2014 flag any such claim.' : 'NOT MEASURED \u2014 any claim about their booking path, wait time, form length or how hard they are to buy from IS unverified and must be flagged.'}
 - SITE TECHNICALS (read from their raw page source): ${htmlSignals && htmlSignals.checked ? 'MEASURED — HTTPS ' + (htmlSignals.isHttps === true ? 'supported (verified by a real request)' : htmlSignals.isHttps === false ? 'NOT supported (verified by a real request that failed on TLS)' : 'NOT CONCLUSIVELY CHECKED — the audit must make NO SSL claim') + ', mobile viewport tag ' + (htmlSignals.hasViewport ? 'present' : 'ABSENT') + ', tap-to-call link ' + (htmlSignals.hasTelLink ? 'present' : 'ABSENT') + ', title tag ' + (htmlSignals.hasTitle ? 'present' : 'ABSENT') + ', meta description ' + (htmlSignals.hasMetaDescription ? 'present' : 'ABSENT') + ', form fields ' + (htmlSignals.hasForm ? htmlSignals.formFieldCount : 'no form') + '. \u26a0 These come from their ACTUAL page source. Claims matching them are MEASURED FACTS \u2014 do not flag them as unverified. But a claim that goes BEYOND them (for example asserting no SSL when it says NOT CONCLUSIVELY CHECKED) MUST be flagged.' : 'NOT MEASURED — the page source was not captured, so any claim about their SSL, mobile setup, tags or form IS unverified and must be flagged.'}
 - Screenshot taken: ${!!screenshotUrl}
 - Facebook ads: ${fbAds.hasAds && fbAds.countReliable !== false ? fbAds.adCount + ' ads verified as theirs (attribution-checked)' : fbAds.hasAds ? 'keyword hits only — NOT attribution-verified, no count may be stated' : fbAds.confirmed ? 'none found attributable to them' : 'not checked'}
@@ -10761,6 +10944,9 @@ Return ONLY valid JSON:
       emailResult,
       email: email.email,
       ownerOnOwnSite: nameOnPage || (decisionMaker && (decisionMaker.sources||[]).some(x => /own_website|website/i.test(x))),
+      // Computed ~35 lines above this call and previously never passed in, which is
+      // how a "DIFFERENT person" warning coexisted with a 100/100 reachability score.
+      ownerEmailMatch,
       phone: req.body.phone || '',
       signals: discoverySignals || {},
       publicPainSignals,
