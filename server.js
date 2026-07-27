@@ -2103,11 +2103,23 @@ const cityState = (location) => {
   return [city, st].filter(Boolean).join(' ');
 };
 
+// Content paths never contain the owner's bio, but their SLUGS are full of words
+// that look like leadership hints. A live run scraped
+// "/blog/how-to-talk-to-your-partner-about-infertility" as a leadership candidate
+// because the slug contains "about" — three wasted Firecrawl credits on one lead.
+const CONTENT_URL_EXCLUDE = /\/(blog|news|press|article|articles|post|posts|category|categories|tag|tags|events?|resources?|guides?|faq|case-stud|testimonial|review)s?(\/|$)/i;
+
 const rankUrlsByIntent = (urls, re, limit = 4) => {
   const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
+  // A hint must be its own path SEGMENT ("/about", "/our-team"), not a fragment
+  // buried inside a long article slug. Segments are split on / - _ so
+  // "/meet-the-team" still matches while "...-about-infertility" no longer does.
+  const hintIsASegment = (path) => path.split('/').filter(Boolean)
+    .some(seg => seg.split(/[-_]/).length <= 4 && re.test(seg));
   return (urls || [])
     .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
-    .filter(u => re.test(pathOf(u)))
+    .filter(u => !CONTENT_URL_EXCLUDE.test(pathOf(u)))
+    .filter(u => re.test(pathOf(u)) && hintIsASegment(pathOf(u)))
     .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
     .sort((a, b) => a.score - b.score)
     .slice(0, limit)
@@ -5500,12 +5512,34 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   // Worst case ~5 checks/company; typical case 1-2. That's 25-50 companies/day.
   if (catchAll === false && verifierKey) {
     const learnedFirst = domainPatternMemory.get(domain);
+    // ── ORDER THE PATTERNS BY VERTICAL, NOT BY GLOBAL AVERAGE ─────────────
+    // Only the first four candidates are ever probed (the verifier gives 100
+    // checks/day and 25 leads/day is the send budget), so ORDER decides whether
+    // a real mailbox is found at all — a correct pattern sitting fifth is
+    // identical to no pattern. The default order is tuned to B2B generally,
+    // which is wrong for the two halves of this ICP:
+    //   · Professional practices (medical, dental, legal, accounting) answer
+    //     from initial+last — esimckes@, jsmith@ — which sat FIFTH and was
+    //     therefore never tried. Dr. Elan Simckes resolved to nothing on a
+    //     live run for exactly this reason.
+    //   · Owner-operated trades are overwhelmingly first-name-only: joe@.
+    // The role-box probe further down already reorders by vertical; the
+    // personal probe never did, which is the more valuable of the two.
+    const _indP = String(industry || '').toLowerCase();
+    const _prefOrder =
+      /chiro|dental|dent|ortho|surg|derma|spa|clinic|vet|fertility|lasik|therapy|medical|health|practice|law|legal|attorney|account|cpa|cfo|advis/.test(_indP)
+        ? ['flast', 'first.last', 'first', 'f.last', 'firstlast']
+        : ['first', 'first.last', 'flast', 'firstlast', 'f.last'];
+    const byPref = (a, b) => {
+      const ia = _prefOrder.indexOf(a.pattern), ib = _prefOrder.indexOf(b.pattern);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    };
     const ordered = learnedFirst
       ? [
           ...candidates.filter(c => c.pattern === learnedFirst),
-          ...candidates.filter(c => c.pattern !== learnedFirst),
+          ...candidates.filter(c => c.pattern !== learnedFirst).sort(byPref),
         ]
-      : candidates;
+      : candidates.slice().sort(byPref);
 
     // Cap attempts — the 4 most common conventions cover the vast majority.
     const toTry = ordered.slice(0, learnedFirst ? 5 : 4);
@@ -5685,10 +5719,20 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // denied every address is evidence about the prospect; a spent Hunter balance
     // or a dead verifier is evidence about us, and must never be reported as the
     // former.
-    const _why = _lookupBlocked
-      ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits')
-      : (VERIFIER_EXHAUSTED || VERIFIER_DEAD) ? 'the email verifier stopped answering'
+    // Attribute the failure to the RIGHT cause. A live run reported "Hunter out of
+    // credits" for a lead where the SMTP probe had actually run and been denied on
+    // every address — that reads as "we could not look" when the truth was "we
+    // looked and there is nothing there". Opposite meanings, opposite next actions:
+    // one says re-run later, the other says stop spending on this lead. Hunter is
+    // only the explanation when the free SMTP path did NOT get to run.
+    const _smtpActuallyRan = (catchAll === false && !!verifierKey && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD);
+    const _why = (VERIFIER_EXHAUSTED || VERIFIER_DEAD) ? 'the email verifier stopped answering'
+      : (_lookupBlocked && !_smtpActuallyRan)
+        ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits')
       : null;
+    if (_lookupBlocked && _smtpActuallyRan) {
+      console.log(`EMAIL [${domain}]: Hunter was unavailable, but the FREE SMTP path ran in full \u2014 every personal pattern and every company mailbox was probed and denied. This is evidence about the prospect, not about our credits.`);
+    }
     if (_why) {
       console.log(`⚠ EMAIL [${domain}] NOT RESOLVED for ${name} — but a paid lookup was unavailable (${_why}). This is NOT proof that no mailbox exists; re-run once credits are restored.`);
     } else {
@@ -10034,6 +10078,26 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
 
         const vd = await safeJson(visionRes);
+        // ── COST METER ───────────────────────────────────────────────────
+        // Anthropic is the largest running cost in this app and until now the
+        // spend was invisible from the logs — the only way to see it was the
+        // billing console the next day. These four numbers make every audit's
+        // cost checkable in place. cache_read at ~0 on repeat runs means the
+        // cached prefix is being invalidated (whitespace drift is the usual
+        // cause) and the saving is silently not happening.
+        if (vd.usage) {
+          const u = vd.usage;
+          const fresh = u.input_tokens || 0;
+          const cRead = u.cache_read_input_tokens || 0;
+          const cWrite = u.cache_creation_input_tokens || 0;
+          // Sonnet: $3/M input, $0.30/M cache read, $3.75/M cache write, $15/M out.
+          const cost = (fresh * 3 + cRead * 0.30 + cWrite * 3.75 + (u.output_tokens || 0) * 15) / 1e6;
+          const wouldHaveBeen = ((fresh + cRead + cWrite) * 3 + (u.output_tokens || 0) * 15) / 1e6;
+          console.log(`\ud83d\udcb0 BRAIN COST [${company}]: $${cost.toFixed(4)} | fresh=${fresh} cacheRead=${cRead} cacheWrite=${cWrite} out=${u.output_tokens || 0}` +
+            (cRead > 0 ? ` | \u267b CACHE HIT \u2014 saved $${(wouldHaveBeen - cost).toFixed(4)} on this call` :
+             cWrite > 0 ? ' | cache WRITTEN (first call — reads are 10% from here)' :
+                          ' | \u26a0 NO CACHE ACTIVITY — the static prefix is not being cached, check for prompt drift'));
+        }
         // Surface actual API errors instead of swallowing them
         if (vd.error) {
           const et = (vd.error.type || '') + ' ' + (vd.error.message || '');
