@@ -3703,6 +3703,34 @@ const fetchGBPHealth = async (placeId, placesKey) => {
   } catch(e) { console.log('GBP health fetch failed:', e.message); return null; }
 };
 
+// ══ REAL HTTPS CHECK — actually try their https:// address ═══════════════════
+// The previous version tested whether OUR stored URL string began with "https",
+// which is meaningless: every lead is stored as http:// in our database. It
+// reported "no SSL" for three consecutive healthy sites and became the LEAD claim
+// on two of them. This version makes an actual request and only reports "no SSL"
+// on hard evidence (TLS failure or refused connection). Anything ambiguous — a
+// timeout, an abort, an unknown socket error — returns checked:false and NO claim
+// is permitted. Error classification proven with 6 isolation tests.
+const checkHttpsSupport = async (website) => {
+  if (!website) return { checked: false, why: 'no website' };
+  let host;
+  try {
+    host = new URL(/^https?:\/\//i.test(website) ? website : 'http://' + website).hostname;
+  } catch { return { checked: false, why: 'unparseable url' }; }
+  if (!host) return { checked: false, why: 'no hostname' };
+  try {
+    const r = await fetchT(`https://${host}/`, { method: 'GET', redirect: 'follow' }, 9000);
+    // Any answer at all over TLS means the certificate handshake succeeded.
+    return { checked: true, supported: !!(r && typeof r.status === 'number') };
+  } catch (e) {
+    const msg = String((e && e.message) || e || '');
+    if (/certificate|SSL|TLS|self.signed|ERR_TLS|CERT_/i.test(msg)) return { checked: true, supported: false, why: msg.slice(0, 70) };
+    if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH/i.test(msg))           return { checked: true, supported: false, why: msg.slice(0, 70) };
+    // Timeout / abort / unknown — NOT evidence of anything. Make no claim.
+    return { checked: false, why: 'https probe inconclusive: ' + msg.slice(0, 60) };
+  }
+};
+
 // ══ HTML REVENUE SIGNALS — measured, free, zero fabrication risk ═════════════
 // Reads ONLY what is literally present or absent in the raw HTML of their homepage.
 // Every field is a fact the owner can confirm by viewing his own page source. No
@@ -3714,10 +3742,33 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const html = String(rawHtml || '');
   const url = String(pageUrl || '');
   if (!html || html.length < 200) return { checked: false };
-  const isHttps = /^https:\/\//i.test(url);
+  // NOTE: HTTPS is deliberately NOT decided here. The URL we are handed is the one
+  // stored in our own database, and those are recorded as http:// regardless of what
+  // the site actually supports — so testing the string tested OUR formatting, not
+  // their SSL. That bug produced "your site has no SSL" as the LEAD claim on live
+  // audits of sites that were perfectly fine. HTTPS is now probed for real by
+  // checkHttpsSupport() and merged in afterwards.
+  void url;
   const hasViewport = /<meta[^>]+name=["']viewport["'][^>]*>/i.test(html);
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? titleMatch[1].replace(/\s+/g,' ').trim() : '';
+  // An error or bot-challenge page has a <title> too, and it is NOT their real one.
+  // A live audit led with "your title tag reads '403 - Forbidden'" — that was a page
+  // OUR scraper was served, not what a patient sees. Anchored so a genuine business
+  // called "Forbidden Planet Comics" is not falsely rejected. Tested 13/13.
+  const titleIsErrorPage = (() => {
+    const t = title.trim();
+    if (!t) return false;
+    if (/^\s*(4\d\d|5\d\d)\b/.test(t)) return true;
+    if (/\berror\s*\d{3}\b/i.test(t)) return true;
+    if (/^(forbidden|not found|access denied|unauthorized|bad gateway|service unavailable|too many requests)[\s.!|\u2014-]*$/i.test(t)) return true;
+    if (/just a moment|attention required|checking your browser|enable javascript|ddos protection/i.test(t)) return true;
+    return false;
+  })();
+  // If we were served an error page, we know nothing about their real tags.
+  if (titleIsErrorPage) {
+    return { checked: false, why: `scrape returned an error/challenge page (title: "${title.slice(0,40)}") — no claim may be made about their site tags, SSL, or mobile setup` };
+  }
   const hasTitle = title.length > 0;
   const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)
                  || html.match(/<meta[^>]+content=["']([^"']*)["'][^>]+name=["']description["']/i);
@@ -3730,7 +3781,7 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const textareas = html.match(/<textarea\b[^>]*>/gi) || [];
   const formFieldCount = visibleInputs.length + selects.length + textareas.length;
   const hasForm = /<form\b[^>]*>/i.test(html) || formFieldCount > 0;
-  return { checked: true, isHttps, hasViewport, hasTitle, title: title.slice(0,120),
+  return { checked: true, isHttps: null, hasViewport, hasTitle, title: title.slice(0,120), titleIsErrorPage,
     hasMetaDescription, metaDescription: metaDescription.slice(0,160),
     hasTelLink, hasForm, formFieldCount };
 }
@@ -7963,7 +8014,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot', 'html'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
       }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
@@ -8022,13 +8073,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // revenue signals need to see — form <input> fields, the viewport meta tag,
     // tel: links, the <title> and meta description. Captured once here so those
     // checks read from one trusted source and never re-fetch.
-    const rawHtml = firecrawlData.data?.html || firecrawlData.html || '';
+    const rawHtml = firecrawlData.data?.rawHtml || firecrawlData.rawHtml || firecrawlData.data?.html || firecrawlData.html || '';
     // Compute the free HTML revenue signals from this page's own source. Guarded
     // to only run on a real page (rawHtml present); a bot-challenge page was
     // already blanked upstream, so this never reads a challenge page.
     htmlSignals = rawHtml ? extractHtmlSignals(rawHtml, website) : { checked: false };
+    // Probe HTTPS for real and merge it in. Free — a plain fetch, no API credit.
     if (htmlSignals.checked) {
-      console.log(`HTML SIGNALS [${company}]: https=${htmlSignals.isHttps} viewport=${htmlSignals.hasViewport} title=${htmlSignals.hasTitle} metaDesc=${htmlSignals.hasMetaDescription} tel=${htmlSignals.hasTelLink} formFields=${htmlSignals.formFieldCount}`);
+      const _https = await checkHttpsSupport(website);
+      htmlSignals.isHttps = _https.checked ? _https.supported : null;   // null = no claim
+      htmlSignals.httpsWhy = _https.why || null;
+    }
+    if (htmlSignals.checked) {
+      console.log(`HTML SIGNALS [${company}]: https=${htmlSignals.isHttps === null ? 'unchecked' : htmlSignals.isHttps} viewport=${htmlSignals.hasViewport} title=${htmlSignals.hasTitle} metaDesc=${htmlSignals.hasMetaDescription} tel=${htmlSignals.hasTelLink} formFields=${htmlSignals.formFieldCount}`);
     }
 
     let screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
@@ -9567,6 +9624,9 @@ RAW EVIDENCE (what we actually confirmed):
 - VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google search)' : 'Not verified'}
 - ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
+- LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED — we ran real Google local searches for this business. Results: ' + localVisibility.results.map(r => r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`).join('; ') + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
+- GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + gbpHealth.photoCount + ' photos, hours ' + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
+- SITE TECHNICALS (read from their raw page source): ${htmlSignals && htmlSignals.checked ? 'MEASURED — HTTPS ' + (htmlSignals.isHttps === true ? 'supported (verified by a real request)' : htmlSignals.isHttps === false ? 'NOT supported (verified by a real request that failed on TLS)' : 'NOT CONCLUSIVELY CHECKED — the audit must make NO SSL claim') + ', mobile viewport tag ' + (htmlSignals.hasViewport ? 'present' : 'ABSENT') + ', tap-to-call link ' + (htmlSignals.hasTelLink ? 'present' : 'ABSENT') + ', title tag ' + (htmlSignals.hasTitle ? 'present' : 'ABSENT') + ', meta description ' + (htmlSignals.hasMetaDescription ? 'present' : 'ABSENT') + ', form fields ' + (htmlSignals.hasForm ? htmlSignals.formFieldCount : 'no form') + '. \u26a0 These come from their ACTUAL page source. Claims matching them are MEASURED FACTS \u2014 do not flag them as unverified. But a claim that goes BEYOND them (for example asserting no SSL when it says NOT CONCLUSIVELY CHECKED) MUST be flagged.' : 'NOT MEASURED — the page source was not captured, so any claim about their SSL, mobile setup, tags or form IS unverified and must be flagged.'}
 - Screenshot taken: ${!!screenshotUrl}
 - Facebook ads: ${fbAds.hasAds && fbAds.countReliable !== false ? fbAds.adCount + ' ads verified as theirs (attribution-checked)' : fbAds.hasAds ? 'keyword hits only — NOT attribution-verified, no count may be stated' : fbAds.confirmed ? 'none found attributable to them' : 'not checked'}
 - Google Ads tag on page: ${builtWith.hasGoogleAdsTag ? 'YES (confirmed in source)' : 'NOT FOUND (may still run ads via tag manager)'}
