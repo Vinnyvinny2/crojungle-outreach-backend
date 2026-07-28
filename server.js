@@ -6123,9 +6123,16 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
         const epEmail = `${firstName}@${domain}`;
         console.log(`\u2713 EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
         return {
-          email: epEmail, tier: 2, score: 88, sendable: true, name,
-          pattern: '{first}',
-          label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain`,
+          // TIER 3, NOT 2. This address was never SMTP-checked \u2014 it is inferred
+          // from the domain carrying the owner's name. That inference is strong
+          // and worth sending to, but it is NOT the same evidence as a mail
+          // server confirming the mailbox exists. Filing it as tier 2 made
+          // donna@krummenplasticsurgery.com score 98/100 with the reason string
+          // "verified personal mailbox" when nothing had verified it \u2014
+          // identical to henry@henrygare.com, which WAS SMTP-confirmed.
+          email: epEmail, tier: 3, score: 78, sendable: true, name,
+          pattern: '{first}', inferredEponymous: true,
+          label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
         };
       }
     }
@@ -6267,8 +6274,11 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       const epEmail = `${nameParts[0]}@${domain}`;
       console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
       return {
-        email: epEmail, tier: 2, score: 88, sendable: true, name, pattern: '{first}',
-        label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain`,
+        // TIER 3 for the same reason as the other eponymous path: inferred from
+        // the domain, never SMTP-confirmed. Strong, sendable, but not proven.
+        email: epEmail, tier: 3, score: 78, sendable: true, name, pattern: '{first}',
+        inferredEponymous: true,
+        label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
       };
     }
   }
@@ -7115,8 +7125,43 @@ const scoreReachability = (c) => {
 
   // ── CORE OUTCOME (sets the base) ──────────────────────────────────────────
   let score;
-  if (foundOwner && deliverable && (emailMatchesOwner || personalMailbox) && !juniorTitle) {
-    score = 92; reasons.push(`${owner} identified with a verified personal mailbox (${local}@\u2026) — we reach the decision-maker directly`);
+  // ── EVIDENCE TIERS MUST NOT COLLAPSE ──────────────────────────────────
+  // `deliverable` is tier 1 OR tier 2, but those are different kinds of proof:
+  // tier 1 means "we read it off their own page", tier 2 means "a mail server
+  // confirmed the mailbox exists". Both are strong. Only one is verified.
+  // Previously they scored identically at 92, and the reason string said
+  // "verified personal mailbox" for both — so an address SCRAPED from a page and
+  // an address SMTP-PROVEN read the same to whoever was deciding whether to send.
+  // `personalMailbox` is only a REGEX ON THE SHAPE of the local part, so an
+  // inferred first-name guess also satisfied this branch.
+  const smtpProven = emailSendable && tier === 2;
+  const scrapedFromSite = emailSendable && tier === 1;
+  if (foundOwner && smtpProven && (emailMatchesOwner || personalMailbox) && !juniorTitle) {
+    score = 95; reasons.push(`${owner} identified and the mailbox (${local}@\u2026) was SMTP-CONFIRMED to exist — the strongest evidence available short of a reply`);
+  } else if (foundOwner && scrapedFromSite && (emailMatchesOwner || personalMailbox) && !juniorTitle) {
+    score = 88; reasons.push(`${owner} identified and a personal mailbox (${local}@\u2026) is published on their own site — they put it there, though we have not pinged the server`);
+  } else if (foundOwner && patternEmail && personalMailbox && !juniorTitle) {
+    // Inferred from the domain carrying their name. Genuinely good, genuinely
+    // not proven, and it must not read as though it were.
+    score = 72; reasons.push(`${owner} identified and ${local}@\u2026 is the likely mailbox on their own eponymous domain \u2014 INFERRED from the domain name, not confirmed by the mail server`);
+  } else if (foundOwner && isRoleInbox && !juniorTitle) {
+    // ── ROLE INBOXES MUST BE JUDGED BEFORE THE GENERIC DELIVERABLE BRANCH ──
+    // This check used to sit BELOW `foundOwner && deliverable`, so any role
+    // inbox that happened to be sendable (which is almost all of them, since
+    // they are published on the site) hit the generic branch at 74 and never
+    // reached the role penalty at all. contactus@tanefflaw.com scored 74 and
+    // info@highimpactcpa.com scored 80 — both OUTSCORING a real personal
+    // mailbox, which is backwards for cold outreach. The 38 branch was
+    // effectively dead code.
+    //
+    // But a shared inbox is not automatically a gatekeeper. At an owner-run
+    // shop the owner reads it himself, and ownerEmailMatch already makes that
+    // call from the evidence, so use it rather than guessing from the address.
+    if (c.ownerEmailMatch === 'owner_reads_shared') {
+      score = 66; reasons.push(`${owner} identified; the only published address is a shared inbox (${local}@\u2026), but at an owner-run business there is no gatekeeper \u2014 he reads it himself. Address him by name in the first line.`);
+    } else {
+      score = 44; reasons.push(`${owner} identified, but the only address is a shared inbox (${local}@\u2026) \u2014 at a business this size a receptionist or office manager reads it first, so the email has to survive being forwarded`);
+    }
   } else if (foundOwner && deliverable && !juniorTitle) {
     score = 74; reasons.push(`${owner} identified and we have a verified email — reaches a real person (not confirmed as their personal box)`);
   } else if (foundOwner && (patternEmail || personalMailbox) && !juniorTitle) {
@@ -7186,6 +7231,28 @@ const scoreReachability = (c) => {
     const e = c.verifiedEmployees;
     if (e > 500)      { score -= 30; reasons.push(`${e} employees — too large, the owner does not read cold email`); }
     else if (e > 200) { score -= 10; reasons.push(`${e} employees — a marketing/exec layer likely sits between us and the owner`); }
+  }
+
+  // ── DOES THIS OWNER ACTUALLY ANSWER STRANGERS? ────────────────────────
+  // The Find-stage predictor scores whether a PERSON'S NAME is in the business
+  // name. That predicts a naming convention, not behaviour. This is the same
+  // question answered by evidence: an owner who personally replies to Google
+  // reviews has demonstrably read and answered unsolicited messages from people
+  // he does not know — which is exactly what a cold email asks him to do.
+  // Taneff replied to 40 of 40 and signs them "Tommy"; Henry Gare replied to 40
+  // of 40. Both are far better bets than a business that never answers anyone,
+  // regardless of whose surname is over the door.
+  if (typeof c.ownerReplyCount === 'number' && typeof c.reviewsRead === 'number' && c.reviewsRead >= 10) {
+    const rate = c.ownerReplyCount / c.reviewsRead;
+    if (rate >= 0.5) {
+      score += 6;
+      reasons.push(`The owner personally answers reviews — ${c.ownerReplyCount} replies across the ${c.reviewsRead} we read. Someone who already writes back to strangers is the most likely kind of person to answer a cold email.`);
+    } else if (rate >= 0.15) {
+      score += 3;
+      reasons.push(`The owner replies to some reviews (${c.ownerReplyCount} of ${c.reviewsRead} read) — they do engage with people they do not know.`);
+    } else if (c.ownerReplyCount === 0) {
+      reasons.push(`Nobody has replied to any of the ${c.reviewsRead} reviews we read — no evidence this owner answers unsolicited messages. Not a blocker, but the email has to work harder.`);
+    }
   }
 
   // ── DO WE HAVE A PAIN TO NAME? (the "how do they know this" hook that earns the reply) ──
@@ -9195,6 +9262,10 @@ const _runResearchInner = async (req, res) => {
   let allowedConsequences = { checked: false, lines: [] };
   let leadMagnet = { checked: false };
   // Which channel reaches this owner. Never a discard — always a route.
+  // Observed owner engagement, hoisted because deepReviewMine is block-scoped
+  // far above where reachability is finally scored.
+  let ownerReplyCount = null;
+  let reviewsRead = null;
   let channelRoute = 'email';
   let channelReason = '';
   const manualCategories = req.body.manualCategories || 0;
@@ -9642,6 +9713,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (effectivePlaceId && apifyToken && apiKey && publicPainSignals.length === 0) {
         try {
           const deep = await deepReviewMine(company, effectivePlaceId, apifyToken, apiKey);
+          // Capture engagement BEFORE the branch chain: whether the owner answers
+          // strangers is useful regardless of whether a pain pattern was found.
+          if (deep && typeof deep.read === 'number' && deep.read > 0) {
+            reviewsRead = deep.read;
+            ownerReplyCount = Array.isArray(deep.ownerReplies) ? deep.ownerReplies.length : 0;
+          }
           if (deep && deep.signals && deep.signals.length > 0) {
             publicPainSignals = deep.signals.map(sg => `${sg.pain} — evidence: "${String(sg.evidence).slice(0, 140)}" (${sg.source})`);
             painSummary = deep.summary || painSummary;
@@ -12020,6 +12097,9 @@ Return ONLY valid JSON:
     }
 
     const reach = scoreReachability({
+      // Observed behaviour: does this owner answer strangers? Measured from how
+      // many of the reviews we actually read carry an owner reply.
+      ownerReplyCount, reviewsRead,
       source: discoverySource,
       manualRoleCount,
       jobTitle: req.body.jobTitle || '',
