@@ -4080,6 +4080,175 @@ const measureValueEquation = ({ booking, hasTelLink, formFieldCount, hasForm,
            earnedButBlocked, friction, belief, frictionCount: friction.length };
 };
 
+// ══ FINDING SIGNAL CLASSIFIER ════════════════════════════════════════════════
+// WHY
+// Every candidate finding carries a `signal` label that the MODEL assigns to
+// itself, and nothing ever checked it against the finding text. Across live runs
+// on one lead, these were all labelled `technical_leak`:
+//   "#1 of 20 in Indianapolis for their primary search"      -> search finding
+//   "30 years of reputation, 54 reviews at 4.9, and #1"       -> positioning
+//   "No booking tool - only a form that waits for a human"    -> conversion
+//   "Phone number is not tappable on mobile"                  -> actually technical
+// Three of four were wrong. `technical_leak` had become the dumping ground for
+// anything that did not obviously fit elsewhere.
+//
+// That breaks the ladder in three places: LADDER CHECK compares the declared lead
+// against a category that is wrong, the Hormozi tiebreak orders the wrong
+// buckets, and the FINDING SCORES log misleads the operator. It also explains the
+// run-to-run instability — the same finding gets a different label each time, so
+// the apparent winner moves even when the underlying analysis has not.
+//
+// This reads the TEXT and says what the finding actually is. Deliberately
+// conservative: it only overrides when the evidence in the text is unambiguous,
+// because a wrong correction is worse than no correction.
+
+const SIGNAL_PATTERNS = [
+  // Ordered by specificity, not by leverage. First confident match wins.
+  ['review_pattern', [
+    /\b\d+\s+of\s+~?\d+\s+reviews?\b/i,
+    /\breviews? (mention|say|describe|note)\b/i,
+    /\brepeat(?:ing|ed)? (pain|pattern|complaint)\b/i,
+    /\b(their own|his own) (customers|reviewers)\b/i,
+  ]],
+  ['search_absence', [
+    /\branks?\s*#?\d+\b/i,
+    // NO \b before '#': '#' is not a word character, so \b can never match when a
+    // space precedes it — and "…#1 of 20" is exactly how the rank is written.
+    // Same failure class as \b before '\u00a9'.
+    /#\d+\s+(of|in)\s+\d+\b/i,
+    /\bprimary search term\b/i,
+    /\bmap ?pack\b/i,
+    /\bnot in the top\s*\d+/i,
+    /\b(local )?search (rank|position|results?)\b/i,
+    /\boutrank(?:ed|ing|s)?\b/i,
+  ]],
+  ['gbp_gap', [
+    /\bgoogle business profile\b/i,
+    /\bGBP\b/,
+    /\bbusiness description\b/i,
+    /\bprofile (photos?|description|gap)\b/i,
+    /\bnewest\s+(google\s+)?review\s+is\b/i,
+    /\bprofile looks abandoned\b/i,
+    /\breview recency\b/i,
+    /\b\d+\s+photos?\b/i,
+  ]],
+  ['dated_site', [
+    /\bcopyright\s*(year)?\s*(reads\s*)?\u00a9?\s*\d{4}/i,
+    /\u00a9\s?\d{4}/,
+    /\b(looks|appears|feels) (dated|old|outdated)\b/i,
+    /\b(design|layout|aesthetic) (predates?|from|of) (19|20)\d\d/i,
+    /\bearly-?2000s\b/i,
+    /\bunchanged since\b/i,
+  ]],
+  ['positioning_offer', [
+    /\bno guarantee\b/i,
+    /\brisk reversal\b/i,
+    /\bno (real )?urgency\b/i,
+    /\bnamed offer\b/i,
+    /\bno (clear |real )?offer\b/i,
+    /\b(generic|interchangeable) (promise|targeting|ask|copy)\b/i,
+    /\bpositioning\b/i,
+    /\bstacked value\b/i,
+    /\bsame promise\b/i,
+  ]],
+  ['technical_leak', [
+    /\btel:\s*link\b/i,
+    /\btap[- ]to[- ]call\b/i,
+    /\btappable\b/i,
+    /\bdoes ?n[o']?t dial\b/i,
+    /\bno HTTPS\b/i,
+    /\bSSL\b/i,
+    /\bviewport\b/i,
+    /\b\d+[- ]field form\b/i,
+    /\bform asks for \d+\b/i,
+    /\bmobile\b.{0,24}\b(broken|blocked|not)\b/i,
+  ]],
+];
+
+// Hormozi leverage order — used ONLY to break a tie when a finding genuinely
+// spans categories (a compound finding). Highest layer wins, because that is the
+// one worth naming.
+const SIGNAL_LEVERAGE = ['review_pattern', 'positioning_offer', 'search_absence', 'gbp_gap', 'dated_site', 'technical_leak'];
+
+const classifyFinding = (text) => {
+  const t = String(text || '');
+  if (t.length < 8) return { signal: null, confident: false, matched: [] };
+  const matched = [];
+  for (const [signal, pats] of SIGNAL_PATTERNS) {
+    const hits = pats.filter(p => p.test(t)).length;
+    if (hits > 0) matched.push({ signal, hits });
+  }
+  if (!matched.length) return { signal: null, confident: false, matched: [] };
+  // Sort by hit count, then by leverage order for a genuine tie.
+  matched.sort((a, b) => (b.hits - a.hits)
+    || (SIGNAL_LEVERAGE.indexOf(a.signal) - SIGNAL_LEVERAGE.indexOf(b.signal)));
+  const top = matched[0];
+  // Confident when the winner is unambiguous: either the only category present,
+  // or it has strictly more evidence than the runner-up.
+  const confident = matched.length === 1 || top.hits > matched[1].hits;
+  return { signal: top.signal, confident, matched: matched.map(m => `${m.signal}(${m.hits})`) };
+};
+
+// ══ ALLOWED CONSEQUENCE LANGUAGE ═════════════════════════════════════════════
+// THE PROBLEM THIS SOLVES
+// The prompt bans post-submission claims NINETEEN times and every single audit
+// tonight produced one anyway: "waits for a human callback", "the ones who can't
+// reach you don't wait", "leads at the top of that queue are comparing him
+// against whoever answers first". Banning harder has not worked across many
+// revisions, and it will not, because the three mandatory elements REQUIRE a
+// behavioural reframe — element (ii), "how his customers actually behave". The
+// model must write a consequence. We forbid the only consequences it can see and
+// supply no replacement, so it invents one about their systems.
+//
+// Mike's framework already names the legal move: "a general truth about how
+// PEOPLE behave, stated about people and never about his systems." Nothing ever
+// computed those. This does — anchored to the specific wall we measured, so the
+// line is both safe AND specific rather than safe and generic.
+//
+// The distinction, which is the whole thing:
+//   BANNED  "your callers give up and phone someone else"   (his systems, his customers)
+//   ALLOWED "people comparing contractors call the one that dials" (people, in general)
+
+const buildAllowedConsequences = ({
+  hasTelLink, booking, formFieldCount, hasForm, guarantee,
+  publishedPrices, reviewCount, rank, trade,
+} = {}) => {
+  const lines = [];
+  const job = trade ? `a ${String(trade).replace(/s$/, '')} job` : 'a job like this';
+
+  // Each line is a general truth about PEOPLE, tied to a wall we actually measured.
+  if (hasTelLink === false) {
+    lines.push('On a phone, a number that is not a link has to be copied out by hand — and most people will not do that for a business they have not hired yet.');
+    lines.push('People who are ready to hire call the number that dials.');
+  }
+  if (booking === 'form') {
+    lines.push('Filling in a form and waiting is a slower path than a call for someone who has already decided they want the work done.');
+  }
+  if (booking === 'phone_only') {
+    lines.push('Anyone who finds a business outside business hours has no way to start, and people looking at three options rarely come back to the one that made them wait.');
+  }
+  if (typeof formFieldCount === 'number' && hasForm && formFieldCount >= 7) {
+    lines.push(`Every field on a form costs some of the people who started it — ${formFieldCount} is a lot to ask of a stranger who is still deciding.`);
+  }
+  if (guarantee === false) {
+    lines.push('When nothing separates two businesses on risk, people fall back on price, because price is the only thing left to compare.');
+  }
+  if (publishedPrices === 0) {
+    lines.push('Most people will not hand over their details just to find out what something costs — they go and find a number somewhere else first.');
+  }
+  if (typeof reviewCount === 'number' && reviewCount >= 20 && rank && rank <= 3) {
+    lines.push('Reputation decides who gets considered. It does not decide who gets reached first, and those are different jobs.');
+  }
+
+  return {
+    checked: lines.length > 0,
+    lines,
+    // Stated explicitly so the model is told what it MAY write, not only what it may not.
+    rule: 'These are general truths about how people behave. They are ALLOWED because they describe people, not this business. Use ONE, in your own words, as the behavioural reframe. What remains banned is any sentence asserting what THEIR customers did, what THEIR system did after a form was submitted, or what a competitor did in response.',
+    unitHint: job,
+  };
+};
+
 // ══ GROWTH CONSTRAINT — THE ALTITUDE LAYER ═══════════════════════════════════
 // WHY THIS EXISTS
 // leadSignal forces the email to be ABOUT one tactic: technical_leak, gbp_gap,
@@ -8839,6 +9008,7 @@ const _runResearchInner = async (req, res) => {
   // lives, so computing this at prompt level would silently read undefined.
   let valueEquation = { checked: false };
   let growthConstraint = { checked: false };
+  let allowedConsequences = { checked: false, lines: [] };
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -9668,6 +9838,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       city: localRank ? localRank.city : '',
       trade: customerTrade || verifiedIndustry || req.body.industry || '',
     });
+    // Supply the SAFE behavioural reframes. The prompt bans post-submission
+    // claims 19 times and every audit produced one anyway, because element (ii)
+    // requires a consequence and we never supplied a legal one.
+    allowedConsequences = buildAllowedConsequences({
+      hasTelLink: htmlSignals && htmlSignals.checked ? htmlSignals.hasTelLink : undefined,
+      booking: sitePages && sitePages.booking,
+      formFieldCount: htmlSignals && htmlSignals.checked ? htmlSignals.formFieldCount : undefined,
+      hasForm: htmlSignals && htmlSignals.hasForm,
+      guarantee: offerStrength.checked ? offerStrength.guarantee : undefined,
+      publishedPrices: sitePages && Array.isArray(sitePages.prices) ? sitePages.prices.length : undefined,
+      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
+      rank: localRank && localRank.found ? localRank.rank : undefined,
+      trade: customerTrade || verifiedIndustry || req.body.industry || '',
+    });
+    if (allowedConsequences.checked) {
+      console.log(`ALLOWED CONSEQUENCES [${company}]: supplied ${allowedConsequences.lines.length} safe behavioural reframe(s) built from measured walls`);
+    }
     if (growthConstraint.checked) {
       console.log(`\ud83c\udfaf GROWTH CONSTRAINT [${company}]: ${growthConstraint.layer} \u2014 ${growthConstraint.condition}`);
     } else {
@@ -10199,6 +10386,14 @@ SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact
 ].filter(Boolean).join('\n') || '- Site technicals look clean (HTTPS, mobile viewport, tap-to-call, reasonable form length all present) — do NOT invent a technical problem here.' : 'Homepage HTML not captured for this lead — make NO claims about their SSL, mobile setup, form length, or page tags.'}${htmlSignals && htmlSignals.checked && [htmlSignals.isHttps===false, htmlSignals.hasViewport===false, htmlSignals.hasTelLink===false, htmlSignals.hasForm&&htmlSignals.formFieldCount>=8].some(Boolean) ? '\n→ These are \"get the click / capture the lead\" leaks: cheap to state, impossible to dispute, and directly tied to whether a visitor becomes a customer. Prefer them over anything soft.' : ''}
 
 OFFER STRENGTH (MEASURED from every page we read \u2014 these are facts about their own copy, not opinions, and each is checkable by the owner in ten seconds): ${offerStrength && offerStrength.checked ? (offerStrength.gapCount ? offerStrength.gaps.map(g => '- ' + g).join('\\n') + `\\n\u2192 THESE ARE HORMOZI'S OFFER LAYER AND THEY OUTRANK EVERY TACTIC BELOW THEM. Market and offer sit above leads, conversion and retention in leverage: a business with no guarantee, no urgency and a generic ask is competing on price against everyone in its trade, and no amount of traffic or page-speed fixes that. Score at least one of these as a candidate finding \u2014 they have historically been ignored in favour of smaller technical items, which is exactly the mistake this instruction exists to stop. They are also durable: unlike a missing link, an owner cannot close an offer gap in ten minutes, so it survives the ten-minute test.` : 'Their offer looks unusually complete for a local business \u2014 a guarantee, real urgency and a named ask are all present. Do NOT invent an offer problem.') : 'Offer strength not measured for this lead \u2014 make NO claim about their guarantee, urgency or offer.'}
+\u2550\u2550\u2550 THE BEHAVIOURAL REFRAME \u2014 USE ONE OF THESE, DO NOT INVENT ONE \u2550\u2550\u2550
+${allowedConsequences.checked ? `The three mandatory elements require you to say how customers behave. That requirement is what has been producing fabrication: every audit so far reached for a consequence about THEIR systems \u2014 "waits for a human callback", "the ones who can't reach you don't wait", "leads are comparing him against whoever answers first" \u2014 and every one of those was invented, because we never see their inbox, their response time or what any prospect did next.
+SO THE LEGAL CONSEQUENCES ARE SUPPLIED HERE, BUILT FROM THE WALLS WE ACTUALLY MEASURED ON THIS LEAD. Pick ONE. Say it in your own words, shorter if you can:
+${allowedConsequences.lines.map(l => '- ' + l).join('\n')}
+${allowedConsequences.rule}
+WHY THESE ARE SAFE AND THE OTHERS ARE NOT: these describe how PEOPLE behave, which is public knowledge and true regardless of this business. The banned versions assert what THIS owner's customers did, what HIS system did after a form was submitted, or how a COMPETITOR responded \u2014 three things we have never observed on any lead. One invented clause discredits every measured fact standing next to it, and every measured fact in this audit is real.
+DO NOT bolt a hard-sounding outcome onto the end of one of these. "...so they call someone else" and "...and that job is gone" put the fabrication back. STOP AT THE WALL and let him draw the conclusion \u2014 he will, in the half-second after reading it, and it lands harder because he concluded it.` : 'No behavioural reframe is available for this lead because no wall was measured. Do NOT invent one. Write only the fact and the cost, and write a shorter email.'}
+
 \u2550\u2550\u2550 THE GROWTH CONSTRAINT \u2014 OPEN HERE, NOT ON A PAGE ELEMENT \u2550\u2550\u2550
 ${growthConstraint.checked ? `THE BINDING LAYER IS: ${growthConstraint.layer}
 WHAT IS TRUE OF THE BUSINESS: ${growthConstraint.condition}
@@ -10763,6 +10958,49 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             let shared = 0; A.forEach(w => { if (B.has(w)) shared++; });
             return shared / Math.min(A.size, B.size) >= 0.7;
           };
+          // ══ SIGNAL LABEL VALIDATION ══════════════════════════════════════
+          // The `signal` on each candidate is assigned by the MODEL and was never
+          // checked against the finding text. On one live lead these were ALL
+          // labelled technical_leak: "#1 of 20 for their primary search",
+          // "30 years of reputation, 54 reviews and #1 in the map pack", "no
+          // booking tool", and the one genuine technical finding. Three of four
+          // were wrong, and technical_leak had become the dumping ground.
+          //
+          // That corrupts three things at once: LADDER CHECK compares the declared
+          // lead against the wrong category, the Hormozi tiebreak orders the wrong
+          // buckets, and FINDING SCORES misleads whoever reads the log. It also
+          // produced the run-to-run instability — the same finding drew a
+          // different label each run, so the apparent winner moved while the
+          // analysis underneath had not.
+          //
+          // Corrections apply ONLY when the text is unambiguous. A wrong
+          // correction would be worse than none, so anything the classifier is
+          // unsure about keeps the model's label untouched.
+          if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
+            const _relabelled = [];
+            for (const _c of parsed.candidateFindings) {
+              if (!_c || !_c.finding || !_c.signal) continue;
+              const _cls = classifyFinding(_c.finding);
+              if (_cls.confident && _cls.signal && _cls.signal !== _c.signal) {
+                _relabelled.push(`"${String(_c.finding).slice(0, 44)}" was ${_c.signal} \u2192 ${_cls.signal}`);
+                _c.declaredSignal = _c.signal;
+                _c.signal = _cls.signal;
+              }
+            }
+            if (_relabelled.length) {
+              console.log(`\u26a0 SIGNAL RELABEL [${company}]: ${_relabelled.length} finding(s) were filed under the wrong category and have been corrected \u2014 ${_relabelled.join(' | ')}. The ladder now compares real categories.`);
+              // The declared lead must move with its finding, or LADDER CHECK
+              // validates against a label that no longer exists on the winner.
+              if (parsed.leadSignal) {
+                const _win = parsed.candidateFindings.find(c => c && c.declaredSignal === parsed.leadSignal);
+                if (_win && _win.signal !== parsed.leadSignal) {
+                  console.log(`\u26a0 SIGNAL RELABEL [${company}]: the declared lead moved with it \u2014 leadSignal ${parsed.leadSignal} \u2192 ${_win.signal}.`);
+                  parsed.leadSignal = _win.signal;
+                }
+              }
+            }
+          }
+
           if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
             const _cands = parsed.candidateFindings;
             const _dupes = [];
@@ -10995,7 +11233,7 @@ WHAT TO FLAG:
 - Claims about what competitors are doing (we have no competitor data).
 - Claims about internal company data (revenue, headcount, margins) unless from a confirmed source.
 - Ad counts not attributed to the company specifically.
-- Absence claims stated as facts ("they have no CRM") — acceptable only as "not detected on-page."\n- REVIEWS OR SOCIAL PROOF called ABSENT — FLAG ALWAYS. Reviews load via third-party widgets AFTER render and a scrape/screenshot routinely misses them; we told an electrician with 221 Google reviews he had none. Never allow "no reviews", "no social proof", "no testimonials".\n- SEARCH-RESULT CLAIMS — FLAG unless the evidence shows a local-rank measurement. "nobody searching sees them", "invisible in search", "not on page 1", "outranked by competitors" are fabrications if no rank check ran. A website scrape reveals nothing about search results.\n- WHAT-GOOGLE-SHOWS from a scrape — FLAG ALWAYS. "Google displays X as your title" cannot come from our scrape; our scraper gets bot-challenged where Googlebot does not. A title of "Just a moment..." is a Cloudflare page WE were served, not what Google indexed.\n- POST-SUBMISSION / BACKEND behaviour — FLAG ALWAYS. "every lead waits for a callback", "leads disappear with no record", "nobody responds after they submit" assert what happens inside their systems, which we never tested. Allowed only as "no instant-response tool is visible on the page."
+\u2705 EXPLICITLY ALLOWED \u2014 DO NOT FLAG. The email framework REQUIRES a value so the finding lands as a revenue decision rather than a task, and flagging it has produced the same false positive run after run:\n  \u2022 THE TYPICAL VALUE OF A JOB IN THEIR TRADE, as a range \u2014 "a driveway job runs $500-$3,000", "a roof replacement is $10-30k", "a cosmetic dental case is several thousand dollars". That is PUBLIC KNOWLEDGE ABOUT AN INDUSTRY, not a claim about this business, and it does NOT need to appear in the scraped evidence. It is correct and it is required.\n  \u2022 Arithmetic on such a range times a unit he counts \u2014 "one of those a month".\n  \u2022 Any number the business PUBLISHED itself (posted prices or salaries, review count, star rating, staff count) and honest arithmetic on those.\n  STILL BANNED AND STILL FLAG: THEIR revenue, THEIR volume, THEIR conversion rate, THEIR ad spend, or any total loss attributed to them ("you are losing $40k a month"). The line: a range true of the TRADE is allowed; a number claiming to describe THIS BUSINESS is not.\n- Absence claims stated as facts ("they have no CRM") — acceptable only as "not detected on-page."\n- REVIEWS OR SOCIAL PROOF called ABSENT — FLAG ALWAYS. Reviews load via third-party widgets AFTER render and a scrape/screenshot routinely misses them; we told an electrician with 221 Google reviews he had none. Never allow "no reviews", "no social proof", "no testimonials".\n- SEARCH-RESULT CLAIMS — FLAG unless the evidence shows a local-rank measurement. "nobody searching sees them", "invisible in search", "not on page 1", "outranked by competitors" are fabrications if no rank check ran. A website scrape reveals nothing about search results.\n- WHAT-GOOGLE-SHOWS from a scrape — FLAG ALWAYS. "Google displays X as your title" cannot come from our scrape; our scraper gets bot-challenged where Googlebot does not. A title of "Just a moment..." is a Cloudflare page WE were served, not what Google indexed.\n- POST-SUBMISSION / BACKEND behaviour — FLAG ALWAYS. "every lead waits for a callback", "leads disappear with no record", "nobody responds after they submit" assert what happens inside their systems, which we never tested. Allowed only as "no instant-response tool is visible on the page."
 - Any specific named person other than what Hunter returned.
 
 YOUR JOB:
