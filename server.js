@@ -6918,6 +6918,96 @@ const scoreSignals = (c) => {
   };
 };
 
+// ══ CHANNEL ROUTER — EMAIL, OR COLD CALL ════════════════════════════════════
+// WHAT THIS IS AND IS NOT
+// This does NOT decide whether a business is worth pursuing. It decides WHICH
+// CHANNEL reaches its owner. A lead that cannot be emailed is not a dead lead \u2014
+// it is a phone lead, and for owner-operated locals the phone is often the better
+// channel anyway. Nothing here is ever discarded; it is routed.
+//
+// WHY IT EXISTS
+// The email is resolved LAST, after the site audit, the sitemap map and the about
+// scrape are already paid for. Fertility Partnership cost 14 Firecrawl credits,
+// produced four measured complaint patterns across 189 reviews, and then had no
+// mailbox. Routing that lead to the call pile at the top costs nothing and loses
+// nothing.
+//
+// THE BAR FOR ROUTING TO PHONE IS DELIBERATELY HIGH
+// A wrongly-routed lead is worse than a wasted audit, so a lead only leaves the
+// email track when EVERY free route to a mailbox has failed AND there is no
+// realistic path to finding an owner later. Anything uncertain stays on email.
+const routeChannel = ({ ownerFound, homepageContent, website, companyName, isPlacesLead, phone, hunterAvailable }) => {
+  const email = (why, routes) => ({ channel: 'email', why, routes: routes || [] });
+
+  // ── NEVER ROUTE AWAY WHEN WE SIMPLY COULD NOT LOOK ────────────────────
+  // No site, no content, or a blocked scrape means UNKNOWN. Unknown is not a
+  // reason to give up on a channel — it is a reason to try it.
+  if (!website) return email('no website read yet \u2014 unknown is not a reason to route away from email');
+  const content = String(homepageContent || '');
+  if (content.length < 300) return email('the homepage returned almost nothing \u2014 our scraper being refused is not evidence about their inbox');
+
+  const routes = [];
+
+  // ROUTE 1 — a named owner. Patterns can be built and SMTP-verified for free.
+  if (ownerFound) routes.push('an owner is identified, so a personal mailbox can be pattern-built and SMTP-verified');
+
+  // ROUTE 2 — an address already on the homepage we have already paid for.
+  // This is the route that saves a lead like High Impact CPA, where no owner was
+  // resolvable at this point but info@ was published on their own page.
+  let domain = '';
+  try { domain = new URL(website.startsWith('http') ? website : 'https://' + website).hostname.replace(/^www\./, '').toLowerCase(); }
+  catch { domain = ''; }
+  if (domain) {
+    const root = domain.split('.').slice(-2).join('.');
+    const found = (content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
+      .map(e => e.toLowerCase())
+      .filter(e => !/@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i.test(e))
+      .filter(e => !/^(noreply|no-reply|donotreply|postmaster|abuse|webmaster|privacy|legal|dmca|unsubscribe|mailer-daemon|bounce|test)@/i.test(e))
+      .filter(e => e.endsWith('@' + domain) || e.endsWith('.' + root) || e.endsWith('@' + root));
+    if (found.length) routes.push(`an address is already published on their homepage (${found[0]})`);
+  }
+
+  // ROUTE 3 — the domain is built from the business or owner name.
+  if (domain && companyName) {
+    const dRoot = domain.split('.')[0].replace(/[^a-z]/g, '');
+    const words = String(companyName).toLowerCase().split(/[^a-z]+/).filter(w => w.length >= 4);
+    if (words.some(w => dRoot.includes(w))) routes.push('the domain is built from the business name, so a first-name mailbox is likely and free to verify');
+  }
+
+  // ROUTE 4 — a CONTACT PAGE EXISTS. We have not scraped it yet, but small
+  // businesses that link one almost always publish an address on it. This is the
+  // "still has potential to find the owner" case: absence of an email on the
+  // HOMEPAGE is not absence of an email on the SITE, and killing here would throw
+  // away leads for a reason that is really just which page we happened to read.
+  if (/\/contact|contact-us|\bcontact\b/i.test(content)) {
+    routes.push('the site links a contact page we have not read yet \u2014 that is where small businesses publish the address');
+  }
+
+  // ROUTE 5 — Hunter can still be asked. While it has credits, an owner we could
+  // not find on-page may still be findable, so email stays live.
+  if (hunterAvailable) routes.push('Hunter still has credits, so a mailbox can still be looked up directly');
+
+  if (routes.length) return email(routes[0], routes);
+
+  // ── NOTHING LEFT FOR EMAIL ────────────────────────────────────────────
+  // Places leads are owner-operated locals and carry a verified phone from the
+  // listing. That is not a downgrade: the man who answers that phone IS the
+  // decision-maker, which is exactly who cold email is trying to reach.
+  if (phone) {
+    return {
+      channel: 'call',
+      why: 'no route to a mailbox from anything we can read for free \u2014 but a verified phone number exists, and on an owner-operated business the person who answers it is the decision-maker',
+      routes: [],
+    };
+  }
+
+  return {
+    channel: 'call',
+    why: 'no owner, no published address, no contact page, no Hunter and no phone on file \u2014 needs manual sourcing before either channel can run',
+    routes: [],
+  };
+};
+
 // ══ TRUNCATED-ADDRESS DETECTOR — the last line of defence ════════════════════
 // A scraped address can be silently mangled ("J**oe@x.com" -> "oe@x.com") and once
 // it is written to contact_cache no extraction fix can repair it: every later run
@@ -9104,6 +9194,9 @@ const _runResearchInner = async (req, res) => {
   let growthConstraint = { checked: false };
   let allowedConsequences = { checked: false, lines: [] };
   let leadMagnet = { checked: false };
+  // Which channel reaches this owner. Never a discard — always a route.
+  let channelRoute = 'email';
+  let channelReason = '';
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -9454,6 +9547,32 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const ownerFound = !!(decisionMaker && decisionMaker.name) || !!verifiedCEO;
     const isPlacesLead = discoverySource === 'google_places' || !!(discoverySignals && discoverySignals.local_owner_operated);
 
+    // ═══ REACHABILITY PRE-GATE ═══════════════════════════════════════════════
+    // Everything below this line is the EXPENSIVE half of research: the multi-page
+    // site audit, the careers scrape, the web pain search. The email that decides
+    // whether any of it was worth buying is not resolved until ~300 lines further
+    // down, so a lead with no reachable owner currently pays for the whole audit
+    // before we discover we cannot send it. Fertility Partnership cost 14 credits
+    // and produced four measured complaint patterns across 189 reviews — and no
+    // mailbox. Unrecoverable, and knowable here for free.
+    //
+    // The gate needs ALL THREE free routes to a mailbox to fail before it kills a
+    // lead, because a false kill costs far more than a wasted audit. It also never
+    // kills when we simply could not look — no site, no content, blocked scrape.
+    const _route = routeChannel({
+      ownerFound, homepageContent: content, website, companyName: company,
+      isPlacesLead, phone: req.body.phone || '',
+      hunterAvailable: !HUNTER_EXHAUSTED && !HUNTER_AUTH_DEAD,
+    });
+    channelRoute = _route.channel;
+    channelReason = _route.why;
+    if (_route.channel === 'call') {
+      console.log(`\ud83d\udcde CHANNEL [${company}]: COLD CALL, not email \u2014 ${_route.why}. The paid site audit is skipped (~3 Firecrawl credits saved); this lead is NOT discarded, it moves to the call pile where the owner is reachable.`);
+    } else {
+      console.log(`\u2709 CHANNEL [${company}]: EMAIL \u2014 ${_route.routes.length} route(s) to a mailbox: ${_route.routes.join(' | ')}`);
+    }
+    const _auditWorthBuying = _route.channel === 'email';
+
     // ═══ PAIN + REVENUE + CAREERS — only if reachable, run in PARALLEL ══════════
     let painSummary = '';
     let careers = null;
@@ -9484,7 +9603,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // The inner `needPain` flag already checks publicPainSignals.length === 0, and
     // cached pain populates that array, so the paid search is still correctly
     // skipped. This clause was pure collateral damage.
-    if (ownerFound || isPlacesLead) {
+    if ((ownerFound || isPlacesLead) && _auditWorthBuying) {
       // BEST pain source for a Places lead: their OWN Google reviews. Try it first —
       // their exact business (no disambiguation), maximally specific, cheaper than a
       // web search. Fall back to web-search pain only if reviews yield nothing.
@@ -11964,6 +12083,14 @@ Return ONLY valid JSON:
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
       outreachChannel: reach.outreachChannel,
+      // The EARLY route, decided before the paid audit. reach.outreachChannel above
+      // is the FINAL verdict after the mailbox lookup actually ran; this one records
+      // what we could tell for free at the top, and whether we therefore skipped the
+      // paid audit. They agree on most leads. When they differ, this is the cheaper
+      // signal and the other is the more accurate one.
+      earlyChannel: channelRoute,
+      earlyChannelReason: channelReason,
+      auditSkippedForChannel: channelRoute === 'call',
       lsa,   // { eligible, badgeFound, evidence, marker, status }
       rateLimited: (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0,
       ownerEmailMatch,
