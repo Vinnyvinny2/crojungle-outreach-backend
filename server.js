@@ -4008,6 +4008,53 @@ const readOfferStrength = (text) => {
   return { checked: true, guarantee, urgency, bonus, genericOnly, gaps, gapCount: gaps.length };
 };
 
+// ══ LEAD MAGNET — HORMOZI'S LEADS LAYER, MEASURED ════════════════════════════
+// The entire premise of $100M Leads is that a stranger will not go straight from
+// "curious" to "talk to a salesperson" — you need something of value they can take
+// without committing. This system searched for it ZERO times. Every audit assessed
+// the offer (what they sell) and the conversion path (how you buy), and nothing
+// ever asked whether there is a way to engage that is not "contact us".
+//
+// For an owner-operated local business this is a real, durable finding: it cannot
+// be closed in ten minutes, no competitor in their trade has one either, and it is
+// exactly the play CROJungle runs on them (the free audit IS the lead magnet).
+//
+// Measured from their own page copy. Three states as always.
+const readLeadMagnet = (text) => {
+  const t = String(text || '').toLowerCase();
+  if (t.length < 200) return { checked: false };
+
+  // Something a stranger can take away without speaking to anyone.
+  const hasFreeAsset = /\b(free (guide|checklist|report|ebook|e-book|template|toolkit|worksheet|calculator|quiz|assessment|inspection report|buyers? guide|planning guide)|download (our|the|your|this|a) (free )?\w+|get (the|our|your) free \w+)\b/.test(t);
+  // A self-serve estimate/pricing tool — value before contact.
+  const hasSelfServeTool = /\b(instant (quote|estimate|price)|price calculator|cost calculator|estimate calculator|get an instant\b|see pricing|pricing calculator)\b/.test(t);
+  // A list they can join that is not a sales conversation.
+  const hasNewsletter = /\b(newsletter|subscribe|join (our|the) (list|mailing)|sign up for (tips|updates|our))\b/.test(t);
+  // Educational depth that earns trust before the ask.
+  const hasEducation = /\b(how to choose|what to look for|buyers? guide|common mistakes|questions to ask|before you hire|guide to)\b/.test(t);
+
+  const assets = [];
+  if (hasFreeAsset) assets.push('a downloadable free asset');
+  if (hasSelfServeTool) assets.push('a self-serve pricing or estimate tool');
+  if (hasNewsletter) assets.push('a list a stranger can join');
+  if (hasEducation) assets.push('educational buyer content');
+
+  const gaps = [];
+  if (!assets.length) {
+    gaps.push('there is nothing on the site a stranger can take without talking to somebody \u2014 no guide, no checklist, no instant estimate, no list to join. The only way to engage is to ask for a quote, which is the same ask every competitor makes and the one most people are not ready for yet');
+  } else if (!hasFreeAsset && !hasSelfServeTool) {
+    gaps.push('the only thing available before a sales conversation is ' + assets.join(' and ') + ' \u2014 there is no asset a stranger can actually take away and no way to see cost without asking');
+  }
+
+  return {
+    checked: true, hasFreeAsset, hasSelfServeTool, hasNewsletter, hasEducation,
+    assets, gaps, gapCount: gaps.length,
+    // Hormozi's own framing: this is the LEADS layer, and it is the layer that
+    // determines how many strangers ever enter the conversation at all.
+    hasAny: assets.length > 0,
+  };
+};
+
 // ══ HORMOZI VALUE EQUATION — MEASURED, NOT ASKED FOR ═════════════════════════
 //   Value = (Dream Outcome x Perceived Likelihood) / (Time Delay x Effort)
 //
@@ -9056,6 +9103,7 @@ const _runResearchInner = async (req, res) => {
   let valueEquation = { checked: false };
   let growthConstraint = { checked: false };
   let allowedConsequences = { checked: false, lines: [] };
+  let leadMagnet = { checked: false };
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -9848,6 +9896,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // a guarantee usually lives on a services or about page.
     offerStrength = readOfferStrength(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+    // Hormozi's LEADS layer: is there anything a stranger can take without
+    // talking to a salesperson? Measured from the same full-site text.
+    leadMagnet = readLeadMagnet(
+      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+    if (leadMagnet.checked) {
+      console.log(`LEAD MAGNET [${company}]: ${leadMagnet.hasAny ? 'found \u2014 ' + leadMagnet.assets.join(', ') : 'NONE \u2014 the only way to engage is to ask for a quote'}${leadMagnet.gapCount ? ` | ${leadMagnet.gapCount} gap(s)` : ''}`);
+    }
     if (offerStrength.checked) {
       console.log(`OFFER STRENGTH [${company}]: guarantee=${offerStrength.guarantee} urgency=${offerStrength.urgency} bonus=${offerStrength.bonus} genericAskOnly=${offerStrength.genericOnly} | ${offerStrength.gapCount} offer gap(s)`);
     }
@@ -10433,6 +10488,7 @@ SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact
 ].filter(Boolean).join('\n') || '- Site technicals look clean (HTTPS, mobile viewport, tap-to-call, reasonable form length all present) — do NOT invent a technical problem here.' : 'Homepage HTML not captured for this lead — make NO claims about their SSL, mobile setup, form length, or page tags.'}${htmlSignals && htmlSignals.checked && [htmlSignals.isHttps===false, htmlSignals.hasViewport===false, htmlSignals.hasTelLink===false, htmlSignals.hasForm&&htmlSignals.formFieldCount>=8].some(Boolean) ? '\n→ These are \"get the click / capture the lead\" leaks: cheap to state, impossible to dispute, and directly tied to whether a visitor becomes a customer. Prefer them over anything soft.' : ''}
 
 OFFER STRENGTH (MEASURED from every page we read \u2014 these are facts about their own copy, not opinions, and each is checkable by the owner in ten seconds): ${offerStrength && offerStrength.checked ? (offerStrength.gapCount ? offerStrength.gaps.map(g => '- ' + g).join('\\n') + `\\n\u2192 THESE ARE HORMOZI'S OFFER LAYER AND THEY OUTRANK EVERY TACTIC BELOW THEM. Market and offer sit above leads, conversion and retention in leverage: a business with no guarantee, no urgency and a generic ask is competing on price against everyone in its trade, and no amount of traffic or page-speed fixes that. Score at least one of these as a candidate finding \u2014 they have historically been ignored in favour of smaller technical items, which is exactly the mistake this instruction exists to stop. They are also durable: unlike a missing link, an owner cannot close an offer gap in ten minutes, so it survives the ten-minute test.` : 'Their offer looks unusually complete for a local business \u2014 a guarantee, real urgency and a named ask are all present. Do NOT invent an offer problem.') : 'Offer strength not measured for this lead \u2014 make NO claim about their guarantee, urgency or offer.'}
+LEAD MAGNET \u2014 HORMOZI'S LEADS LAYER (MEASURED from their own pages): ${leadMagnet.checked ? (leadMagnet.gapCount ? leadMagnet.gaps.map(g => '- ' + g).join('\n') + `\n\u2192 THIS IS THE LEADS LAYER AND IT SITS ABOVE EVERY TACTIC BELOW IT. Per Hormozi a stranger does not go from curious straight to talking to a salesperson \u2014 they need something they can take first. A business whose only ask is "get a quote" is only ever reachable by the small fraction already ready to buy today; everyone still deciding leaves without a trace and without a way to be followed up.\n\u2192 IT SURVIVES BOTH TESTS. He cannot close it in ten minutes, and he cannot delegate it \u2014 deciding what to give away before a sale is an owner's decision about how the business gets customers.\n\u2192 WRITE IT AS WHAT IT COSTS, NOT AS A MISSING FEATURE. \u2717 "you have no lead magnet" (jargon, and a task). \u2713 "the only way to talk to you is to ask for a price \u2014 so the people still deciding never enter your world at all."` : `They DO have something a stranger can take before committing: ${leadMagnet.assets.join(', ')}. Do NOT claim they have no way to engage \u2014 they do.`) : 'Lead magnet not measured for this lead \u2014 make NO claim about whether they offer anything before a sales conversation.'}
 \u2550\u2550\u2550 HOW TO BREAK A TIE IN candidateFindings \u2550\u2550\u2550
 ${growthConstraint.checked ? `The five scores you assign are judgements, and on real leads they land within one or two points of each other at the top. That is not a decision \u2014 the same lead has produced three different winners across three runs while nothing about the business changed.
 SO: IF YOUR TOP TWO CANDIDATES ARE WITHIN 2 POINTS, THE ONE THAT SITS IN THE MEASURED BINDING LAYER WINS. For this lead that layer is ${growthConstraint.layer}.
@@ -11303,6 +11359,7 @@ RAW EVIDENCE (what we actually confirmed):
 - THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + gbpHealth.photoCount + ' photos, hours ' + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
+- LEAD MAGNET (measured from their own page copy): ${leadMagnet.checked ? (leadMagnet.hasAny ? 'They DO offer something before a sales conversation: ' + leadMagnet.assets.join(', ') + '. A claim that they have nothing to engage with would be FALSE \u2014 flag it.' : 'MEASURED \u2014 nothing on their site can be taken without contacting them: no free guide, no checklist, no instant estimate, no list to join. A claim that the only path is to request a quote is CORRECT and must NOT be flagged.') : 'NOT MEASURED \u2014 make no claim about what they offer before a sales conversation.'}
 - GROWTH CONSTRAINT (derived from the measurements above): ${growthConstraint.checked ? 'The binding layer is ' + growthConstraint.layer + '. ' + growthConstraint.condition + ' \u26a0 This is a DERIVED READ built only from measured inputs (rank, review count and rating, offer gaps, buying friction, review-pattern count). The audit is EXPECTED to open at this altitude, so a business-level statement matching this is CORRECT and must NOT be flagged as speculation. \u26a0 What IS still flaggable: any number, competitor behaviour, conversion rate or lost-revenue total that does not appear in the measured evidence above.' : 'NOT MEASURED \u2014 the audit must not diagnose an overall constraint, and any claim about what is "holding the business back" is unsupported.'}
 - BUYING FRICTION / VALUE EQUATION: ${valueEquation.checked ? 'MEASURED by combining their booking path, their page source, their published prices and their Google review count. Friction found: ' + (valueEquation.friction.length ? valueEquation.friction.join('; ') : 'none') + '. Working in their favour: ' + (valueEquation.belief.length ? valueEquation.belief.join('; ') : 'nothing measurable') + '. \u26a0 EACH OF THESE IS A MEASURED FACT the owner can verify on his own site \u2014 do NOT flag them as unverified or inferential. \u26a0 BUT the audit may NOT claim what happens AFTER a customer hits this friction: not that they leave, not that they call a competitor, not that the lead is lost. We measured the wall, never what the person did next \u2014 flag any such claim.' : 'NOT MEASURED \u2014 any claim about their booking path, wait time, form length or how hard they are to buy from IS unverified and must be flagged.'}
 - SITE TECHNICALS (read from their raw page source): ${htmlSignals && htmlSignals.checked ? 'MEASURED — HTTPS ' + (htmlSignals.isHttps === true ? 'supported (verified by a real request)' : htmlSignals.isHttps === false ? 'NOT supported (verified by a real request that failed on TLS)' : 'NOT CONCLUSIVELY CHECKED — the audit must make NO SSL claim') + ', mobile viewport tag ' + (htmlSignals.hasViewport ? 'present' : 'ABSENT') + ', tap-to-call link ' + (htmlSignals.hasTelLink ? 'present' : 'ABSENT') + ', title tag ' + (htmlSignals.hasTitle ? 'present' : 'ABSENT') + ', meta description ' + (htmlSignals.hasMetaDescription ? 'present' : 'ABSENT') + ', form fields ' + (htmlSignals.hasForm ? htmlSignals.formFieldCount : 'no form') + '. \u26a0 These come from their ACTUAL page source. Claims matching them are MEASURED FACTS \u2014 do not flag them as unverified. But a claim that goes BEYOND them (for example asserting no SSL when it says NOT CONCLUSIVELY CHECKED) MUST be flagged.' : 'NOT MEASURED — the page source was not captured, so any claim about their SSL, mobile setup, tags or form IS unverified and must be flagged.'}
@@ -11327,10 +11384,10 @@ AUDIT PRODUCED BY FIRST CALL:
 Real pain: ${parsed.realPain || 'none'}
 Embarrassing finding: ${parsed.embarrassingFinding || 'none'}
 Recommended product (INTERNAL ONLY — this and its price are shown to our own team so they know what to pitch on the call. They are NEVER written in the email; the prompt bans naming what we sell or what it costs, and the generated emails correctly contain no price. So do NOT flag the product or its price for missing an "est." label or for lacking ROI justification — you would be flagging an internal note as if it were a claim made to the prospect. DO still flag a price or a product if it actually appears in the EMAIL COPY itself): ${parsed.recommendedProduct} at ${parsed.recommendedPrice}
-Reason: ${parsed.recommendedReason || 'none'}
-Pitch angle: ${parsed.pitchAngle || 'none'}
-Operations opportunity: ${parsed.operationsOpportunity || 'none'}
-Exit angle: ${parsed.exitValueAngle || 'none'}
+Reason (INTERNAL ONLY — same status as the product above. This is the closer's briefing and it NAMES THE PRODUCT AND PRICE BY DESIGN. Never sent to anyone. Do NOT flag it for naming the product, quoting the price, or reading like a pitch — that is its job): ${parsed.recommendedReason || 'none'}
+\n═══ THE ONE PROSPECT-FACING FIELD ═══\nEverything above is internal scaffolding for our own team; the prospect never reads any of it. A live run spent 2 of its 6 flags objecting that the internal note named our product and price — it is SUPPOSED to, and those flags were wasted. Apply the prospect-facing rules (no product name, no price, no backend claims, business altitude) ONLY to the field below.\nPitch angle (THE PROSPECT READS THIS — judge it strictly): ${parsed.pitchAngle || 'none'}
+Operations opportunity (INTERNAL ONLY): ${parsed.operationsOpportunity || 'none'}
+Exit angle (INTERNAL ONLY): ${parsed.exitValueAngle || 'none'}
 
 WHAT THE CRITIQUE MUST ACCEPT AS VALID (do NOT flag these):
 - Any finding about visual elements, headline text, CTA buttons, design, layout, or above-fold content — these come from Claude's own vision analysis of a real screenshot and are valid even though you cannot see the image.
