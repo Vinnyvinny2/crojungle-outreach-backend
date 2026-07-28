@@ -10902,7 +10902,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // to whoever built the site. A live email spent two of six sentences on
           // "no tel: link, plus a tag that actively switches off automatic
           // dialing." True, and written for a developer. Tested 9/9.
-          _flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bconversion tag\b|\bviewport\b|\bauto-?detection\b|\bpage source\b|\bmarkup\b/i, 'explains the MECHANISM instead of the business impact \u2014 this is developer register, it makes an owner tune out, and it is the sentence he forwards to his web person');
+          _flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bpage actively blocks\b|\bcoded to block\b|\bblocks the tap\b|\bconversion tag\b|\bviewport\b|\bauto-?detection\b|\bpage source\b|\bmarkup\b/i, 'MECHANISM/DEVELOPER REGISTER — includes "the page actively blocks it", "coded to block", tel: link etc. Write what it costs him, never how it works. This is the sentence he forwards to whoever built the site.');
           // 2. Search-surface claims with no local-rank measurement
           if (!_lrChecked) {
             _flag(/\bnobody (searching|who searches).{0,40}\b(sees|finds|is seeing)\b/i, 'search-result claim with NO local-rank measurement');
@@ -11186,7 +11186,37 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               console.log(`\u26a0 CANDIDATE HYGIENE [${company}]: ${_dupes.length} duplicate finding(s) took up scoring slots \u2014 ${_dupes.join(' | ')}. Distinct findings would have competed instead.`);
             }
             if (!_cands.some(c => c && c.signal === 'positioning_offer')) {
-              console.log(`\u26a0 CANDIDATE HYGIENE [${company}]: positioning/offer was never scored, so Hormozi's highest-leverage layer (market and offer) could not compete for the lead. It should be a candidate on every lead whose homepage copy was captured.`);
+              // ── ENFORCE, NOT JUST LOG ──────────────────────────────────────
+              // This check has logged the violation on every run and done nothing
+              // about it. "No exceptions" in the schema means the model was told
+              // to include it and chose not to. The fix is the same as every other
+              // signal in this system: measure it and inject it, don't trust the
+              // model to remember a rule buried in 45,000 tokens.
+              //
+              // We compute the positioning finding from offerStrength, which is
+              // already measured. Score is deliberately conservative — SURPRISE=2
+              // because owners usually know their site is generic, SEVERITY=4
+              // because it gates every lead, WEFIXIT=5 because it is squarely what
+              // we sell, OWNERLEVEL=5 because no owner delegates brand positioning.
+              if (trustedContent && trustedContent.length > 200 && offerStrength.checked) {
+                const _pfinding = offerStrength.gapCount >= 2
+                  ? `No guarantee, no named offer, no urgency anywhere on the site \u2014 the only ask is the same generic \u201ccontact us\u201d every competitor makes`
+                  : offerStrength.gapCount === 1
+                    ? `Offer has ${offerStrength.gapCount} gap (${offerStrength.gaps[0] && offerStrength.gaps[0].slice(0, 60)})`
+                    : `Positioning and offer read from their own homepage copy`;
+                const _pscores = { verifiable: 3, severity: 4, surprise: 2, weFixIt: 5, ownerLevel: 5 };
+                const _ptotal = Object.values(_pscores).reduce((a,b)=>a+b,0);
+                parsed.candidateFindings.push({
+                  finding: _pfinding,
+                  signal: 'positioning_offer',
+                  ..._pscores,
+                  total: _ptotal,
+                  _injected: true,
+                });
+                console.log(`\u2713 CANDIDATE HYGIENE [${company}]: positioning_offer was missing \u2014 injected from measured offerStrength data (total: ${_ptotal}). It now competes as Hormozi requires.`);
+              } else {
+                console.log(`\u26a0 CANDIDATE HYGIENE [${company}]: positioning/offer was never scored, so Hormozi\u2019s highest-leverage layer (market and offer) could not compete for the lead. It should be a candidate on every lead whose homepage copy was captured.`);
+              }
             }
           }
 
