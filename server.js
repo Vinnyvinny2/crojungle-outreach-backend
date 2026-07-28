@@ -3983,6 +3983,94 @@ const measureValueEquation = ({ booking, hasTelLink, formFieldCount, hasForm,
            earnedButBlocked, friction, belief, frictionCount: friction.length };
 };
 
+// ══ GROWTH CONSTRAINT — THE ALTITUDE LAYER ═══════════════════════════════════
+// WHY THIS EXISTS
+// leadSignal forces the email to be ABOUT one tactic: technical_leak, gbp_gap,
+// dated_site, review_pattern. Every option in that enum is a TASK. So the emails
+// come out as "your call button is dead" and "your Facebook link is broken" —
+// true, checkable, and forwardable to a web guy, which is where the conversation
+// dies. The copy rules ask for business altitude; the schema makes it impossible.
+//
+// This computes the layer ABOVE the findings: which part of the revenue chain is
+// actually binding, stated as a condition of the BUSINESS. The tactical finding
+// then becomes PROOF underneath it rather than the subject of the email.
+//
+// Ordered by Hormozi's hierarchy — MARKET > OFFER > LEADS > CONVERSION >
+// THROUGHPUT — because the highest binding layer is the one worth naming. Fixing
+// a lower layer while a higher one is broken compounds nothing: more traffic into
+// a business that cannot answer the phone makes the reviews worse, not the revenue
+// better. Everything below is derived from things we MEASURED.
+
+const measureGrowthConstraint = ({
+  rank, rankScanned, reviewCount, reviewRating, weakerAbove,
+  offerStrength, valueEquation, opsPainCount, bottleneck, city, trade,
+} = {}) => {
+  const ve = valueEquation || {};
+  const os = offerStrength || {};
+  const haveRank = typeof rank === 'number' && rank > 0;
+  const haveRep = typeof reviewCount === 'number' && reviewCount >= 5 && typeof reviewRating === 'number';
+
+  // Nothing measured at either end → say nothing. Same three-state rule.
+  if (!haveRank && !haveRep && !ve.checked) return { checked: false };
+
+  const strongRep = haveRep && reviewRating >= 4.3 && reviewCount >= 20;
+  const visible   = haveRank && rank <= 3;
+  const invisible = haveRank && rank > 10;
+  const frictionHeavy = ve.checked && ve.denominator >= 3;
+
+  let layer, condition, why, product;
+
+  // ── THROUGHPUT — they cannot deliver what they already have ──────────────
+  // Highest priority when true: sending more demand into it actively harms them.
+  if (opsPainCount >= 2 || bottleneck === 'OPERATIONS') {
+    layer = 'THROUGHPUT';
+    condition = `Demand is not the problem — delivery is. Their own customers describe the business struggling to keep up with the work it already has.`;
+    why = `More leads here makes it worse, not better: every extra enquiry lands in the same queue that is already producing complaints. The constraint is capacity and response, so that has to be fixed before demand is worth buying.`;
+    product = 'automation / AI build';
+  }
+  // ── CONVERSION — demand exists and is being wasted on the way in ─────────
+  else if ((strongRep || visible) && frictionHeavy) {
+    const rep = [
+      haveRep ? `${reviewCount} reviews at ${reviewRating}\u2605` : null,
+      visible ? `ranked #${rank}${rankScanned ? ' of ' + rankScanned : ''}${trade && city ? ` for what a customer in ${city} types` : ''}` : null,
+    ].filter(Boolean).join(' and ');
+    layer = 'CONVERSION';
+    condition = `They have already won the hard part — ${rep}. The people who want to hire them are arriving. What is broken is everything between arriving and becoming a customer: ${ve.frictionCount} separate measured obstacles sit in that path.`;
+    why = `This is the cheapest revenue in the business, because it is not new demand — it is demand already paid for and already earned, leaking on the way in. Spending on more traffic before this is fixed pours more into the same gap.`;
+    product = 'automation / response layer';
+  }
+  // ── LEADS — nobody is finding them ───────────────────────────────────────
+  else if (invisible || (haveRank && weakerAbove > 0)) {
+    layer = 'LEADS';
+    condition = weakerAbove > 0
+      ? `Their reputation is stronger than the businesses beating them in search — ${weakerAbove} of the businesses ranked above them have FEWER reviews. Customers are not choosing competitors; they are never seeing this business at all.`
+      : `Customers searching for exactly what they sell, in their own city, do not find them in the results.`;
+    why = `The reputation is already built and it is not being shown to anyone. That is a visibility problem, not a quality problem, and it is the layer that gates everything below it.`;
+    product = 'marketing / search ownership';
+  }
+  // ── OFFER — they are found and reachable, but there is no reason to pick them
+  else if (os.checked && os.gapCount >= 3) {
+    layer = 'OFFER';
+    condition = `Nothing on their site gives a stranger a reason to choose them over the next result. No guarantee, no real urgency, and the only ask is the same one every competitor makes.`;
+    why = `Per Hormozi this is the layer above every tactic: a business with no offer competes on price against everyone in its trade, and no amount of traffic or page fixes changes that. It is also the most durable, because a competitor cannot copy it in an afternoon.`;
+    product = 'positioning / offer build';
+  }
+  // ── MARKET — nothing above is binding; the constraint is who they speak to
+  else {
+    layer = 'MARKET';
+    condition = `The site speaks to everyone, so it persuades no one in particular.`;
+    why = `Market sits at the top of the hierarchy — before offer, before leads, before conversion. Narrowing who this is for raises the value of every other fix underneath it.`;
+    product = 'positioning';
+  }
+
+  return {
+    checked: true, layer, condition, why, product,
+    strongRep, visible, invisible, frictionHeavy,
+    // The tactical finding is EVIDENCE for this, never the subject of the email.
+    role: 'Open at this altitude. Use the winning tactical finding as the one checkable proof underneath it.',
+  };
+};
+
 // ══ HTML REVENUE SIGNALS — measured, free, zero fabrication risk ═════════════
 // Reads ONLY what is literally present or absent in the raw HTML of their homepage.
 // Every field is a fact the owner can confirm by viewing his own page source. No
@@ -8653,6 +8741,7 @@ const _runResearchInner = async (req, res) => {
   // Hoisted for the same reason: the prompt sits OUTSIDE the block where sitePages
   // lives, so computing this at prompt level would silently read undefined.
   let valueEquation = { checked: false };
+  let growthConstraint = { checked: false };
   const manualCategories = req.body.manualCategories || 0;
   const icpProfile = req.body.icpProfile || '';
   const stackCombo = req.body.stackCombo || null;
@@ -9468,6 +9557,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       console.log(`VALUE EQUATION [${company}]: not measured \u2014 no booking read or no page source, so make NO claim about how easy they are to buy from.`);
     }
 
+    // ═══ GROWTH CONSTRAINT ═══════════════════════════════════════════════
+    // The altitude layer. Which part of the revenue chain is actually binding,
+    // stated as a condition of the BUSINESS rather than of a page element.
+    growthConstraint = measureGrowthConstraint({
+      rank: localRank && localRank.found ? localRank.rank : undefined,
+      rankScanned: localRank ? localRank.scanned : undefined,
+      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
+      reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+      weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
+      offerStrength, valueEquation,
+      opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
+      city: localRank ? localRank.city : '',
+      trade: customerTrade || verifiedIndustry || req.body.industry || '',
+    });
+    if (growthConstraint.checked) {
+      console.log(`\ud83c\udfaf GROWTH CONSTRAINT [${company}]: ${growthConstraint.layer} \u2014 ${growthConstraint.condition}`);
+    } else {
+      console.log(`GROWTH CONSTRAINT [${company}]: not measured \u2014 too little evidence to name what is holding this business back. Do NOT diagnose one.`);
+    }
+
     // ═══ REACH INTELLIGENCE ═══════════════════════════════════════════════
     // Timing window — deterministic from discovery signals
     const reachWindow = discoverySignals.preparing_for_exit ? { window: 'NOW — actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately' }
@@ -9993,6 +10102,23 @@ SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact
 ].filter(Boolean).join('\n') || '- Site technicals look clean (HTTPS, mobile viewport, tap-to-call, reasonable form length all present) — do NOT invent a technical problem here.' : 'Homepage HTML not captured for this lead — make NO claims about their SSL, mobile setup, form length, or page tags.'}${htmlSignals && htmlSignals.checked && [htmlSignals.isHttps===false, htmlSignals.hasViewport===false, htmlSignals.hasTelLink===false, htmlSignals.hasForm&&htmlSignals.formFieldCount>=8].some(Boolean) ? '\n→ These are \"get the click / capture the lead\" leaks: cheap to state, impossible to dispute, and directly tied to whether a visitor becomes a customer. Prefer them over anything soft.' : ''}
 
 OFFER STRENGTH (MEASURED from every page we read \u2014 these are facts about their own copy, not opinions, and each is checkable by the owner in ten seconds): ${offerStrength && offerStrength.checked ? (offerStrength.gapCount ? offerStrength.gaps.map(g => '- ' + g).join('\\n') + `\\n\u2192 THESE ARE HORMOZI'S OFFER LAYER AND THEY OUTRANK EVERY TACTIC BELOW THEM. Market and offer sit above leads, conversion and retention in leverage: a business with no guarantee, no urgency and a generic ask is competing on price against everyone in its trade, and no amount of traffic or page-speed fixes that. Score at least one of these as a candidate finding \u2014 they have historically been ignored in favour of smaller technical items, which is exactly the mistake this instruction exists to stop. They are also durable: unlike a missing link, an owner cannot close an offer gap in ten minutes, so it survives the ten-minute test.` : 'Their offer looks unusually complete for a local business \u2014 a guarantee, real urgency and a named ask are all present. Do NOT invent an offer problem.') : 'Offer strength not measured for this lead \u2014 make NO claim about their guarantee, urgency or offer.'}
+\u2550\u2550\u2550 THE GROWTH CONSTRAINT \u2014 OPEN HERE, NOT ON A PAGE ELEMENT \u2550\u2550\u2550
+${growthConstraint.checked ? `THE BINDING LAYER IS: ${growthConstraint.layer}
+WHAT IS TRUE OF THE BUSINESS: ${growthConstraint.condition}
+WHY THIS LAYER AND NOT A LOWER ONE: ${growthConstraint.why}
+
+\u26a0 THIS IS THE ALTITUDE THE EMAIL OPENS AT, AND IT OVERRIDES THE INSTINCT TO OPEN ON THE FINDING.
+Live sends went out with the subject "your call button is dead" and a follow-up titled "your Facebook link is broken". Both were true and both were checkable \u2014 and both are TASKS. An owner forwards a task to his web person and the conversation dies there. He does not forward a statement about where his revenue is leaking, because that is the one thing he cannot delegate.
+THE STRUCTURE, IN THIS ORDER:
+ 1. THE CONDITION \u2014 what is happening to his BUSINESS (the line above, in his words, not ours).
+ 2. THE PROOF \u2014 exactly ONE checkable fact from the winning finding, stated plainly so he can verify it in ten seconds on his phone. This is EVIDENCE THAT WE LOOKED. It is not the subject of the email.
+ 3. THE COST \u2014 in the unit he counts: a job, a case, a patient, an install.
+Same facts, different altitude. \u2717 "Your call button is dead." \u2713 "You are #1 in your market with 30 years of reputation, and the path from finding you to reaching you is broken \u2014 pull up your site on a phone and try to tap the number."
+THE TEST BEFORE YOU FINISH: does your FIRST sentence name something about his revenue, his customers, or his competitive position? If it names a button, a link, a tag, a form, a page or a profile field, you opened at the wrong altitude \u2014 rewrite it. The finding belongs in sentence two.
+\u26a0 THE SUBJECT LINE IS EXEMPT FROM THIS, DELIBERATELY. Mike's subject rule stands untouched: the alarm shape (your + their thing + is + broken/dead/down) in a teammate's voice, and naming the specific broken component there is CORRECT. "your booking form is dead" and "your quote form is dead" are passes, not failures. The subject is the HOOK \u2014 blunt, specific, checkable, and the reason he opens at all.
+THE DIVISION OF LABOUR, which is Mike's own Part 3 pairing: THE SUBJECT NAMES THE BROKEN THING. THE BODY NAMES WHAT IT IS COSTING THE BUSINESS. His model pairing is subject "your implants page isn't ranking" with first line "the patient searching at 8pm books whoever answers first" \u2014 component in the subject, customer behaviour and money in the body. Do not raise the altitude of the subject and do not lower the altitude of the body.
+\u26a0 AND NAME ONLY THIS LAYER. Per Hormozi the layers stack \u2014 market above offer above leads above conversion above throughput \u2014 and the highest BROKEN one is the only one worth his attention. Do not hand him a list spanning several layers; that is a consulting deck, not an email. The recommended product must be the one that fixes THIS layer (${growthConstraint.product}); recommending something that fixes a different layer reads as selling rather than diagnosing.` : 'The growth constraint was NOT measured for this lead \u2014 too little evidence. Do NOT invent a diagnosis of what is holding the business back. Write only about what was actually measured, and keep it short.'}
+
 \u2550\u2550\u2550 HOW HARD THEY ARE TO BUY FROM (Hormozi's value equation, MEASURED) \u2550\u2550\u2550
 ${valueEquation.checked ? `Value = (dream outcome \u00d7 how much a stranger believes it will work) \u00f7 (how long he waits \u00d7 how much effort it costs him). We cannot measure their dream outcome, so make NO claim about it. We CAN measure the other three, and every line below is checkable by the owner on his own site in seconds.
 ${valueEquation.belief.length ? `WHAT IS WORKING FOR THEM (do NOT call these problems):\n${valueEquation.belief.map(b => '- ' + b).join('\n')}` : 'Nothing on the believability side was measurable.'}
@@ -10403,6 +10529,55 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           _flag(/\byour (ideal|real|actual) customer (is|should be)\b/i, 'asserts who his customer is — he knows, we do not');
           _flag(/\b(wrong|bad) (market|customer|audience|niche)\b/i, 'asserts his market is wrong — not something we can see');
 
+          // ══ ALTITUDE CHECK ════════════════════════════════════════════════
+          // MEASURED, not asked for. The prompt has carried a "write at business
+          // altitude" instruction for several versions and live sends still went
+          // out titled "your call button is dead" and "your Facebook link is
+          // broken". Per the pattern that has moved every other signal in this
+          // system, an instruction the model must remember produces little; a
+          // check that reads the actual output produces a flag.
+          //
+          // The rule is narrow on purpose: only the OPENING is judged. Naming a
+          // page element later is correct — that is the proof. Naming one FIRST
+          // means the email is about a task, and a task gets forwarded to a web
+          // person, which is where the conversation dies.
+          try {
+            // EVERY body opening, not just the pitch. Follow-up 1 is read in the
+            // same inbox by the same man and has to stand on its own, so it gets
+            // the same altitude bar. SUBJECTS ARE DELIBERATELY EXCLUDED: Mike's
+            // subject rule names the broken component on purpose and that is the
+            // hook. Only the BODY carries the altitude.
+            const _openings = [
+              ['pitch', (parsed && parsed.pitchAngle)],
+              ['email body', (parsed && parsed.emailBody)],
+              ['variant A', parsed && parsed.variantA && (parsed.variantA.body || parsed.variantA.pitch)],
+              ['variant B', parsed && parsed.variantB && (parsed.variantB.body || parsed.variantB.pitch)],
+              ['follow-up 1', parsed && parsed.followUp1 && parsed.followUp1.body],
+            ].filter(([, v]) => v);
+            for (const [_where, _src] of _openings) {
+            const _openSrc = String(_src || '');
+            // First sentence only. Naming a component LATER is correct — that is
+            // the proof. Naming one FIRST makes the email about a task.
+            // Strip a leading "Joe — " style address so the check reads the claim.
+            const _open = (_openSrc.replace(/^\s*[A-Z][a-zA-Z.'-]{1,20}\s*[\u2014\u2013-]\s*/, '')
+              .split(/(?<=[.!?])\s/)[0] || '').toLowerCase();
+            if (_open.length > 15) {
+              // Includes phone-number wording: "your phone number isn't tappable"
+              // was a live opening and is the clearest example of the failure —
+              // completely true, and a job for whoever built the site.
+              const _componentWords = /\b(button|link|tel:|tap[- ]to[- ]call|tappable|does ?n[o']?t dial|won[o']?t dial|phone number|meta ?tag|title tag|h1|form field|contact form|quote form|footer|header|favicon|alt text|profile (photo|description)|business description|copyright(?: year)?|pixel|schema|sitemap|css|plugin|widget)\b/;
+              const _businessWords = /\b(revenue|customer|customers|homeowner|patient|client|clients|caller|buyer|job|jobs|booking|bookings|reputation|review|reviews|market|competitor|competitors|rank(?:ed|ing)?|money|paying|paid|lead|leads|demand|season|schedule|hire|hiring|choose|chose|chooses|picking|picks|pick|business|years)\b/;
+              const _namesComponent = _componentWords.test(_open);
+              const _namesBusiness = _businessWords.test(_open);
+              if (_namesComponent && !_namesBusiness) {
+                const _m = `OPENED AT THE WRONG ALTITUDE (${_where}): the first sentence is about a page component, not about the business. An owner forwards that to his web person and the conversation ends there. Lead with what is happening to his revenue or his customers${growthConstraint.checked ? ` (the measured constraint is ${growthConstraint.layer})` : ''}, and move the component to sentence two as the proof.`;
+                console.log(`\u26a0 ALTITUDE CHECK [${company}]: ${_m}`);
+                unverifiable.push(_m);
+              }
+            }
+            }
+          } catch (e) { void e; }
+
           // ══ GAVE-AWAY-THE-ENGAGEMENT CHECK ═════════════════════════════════
           // An email that itemises three or more distinct fixable items has
           // handed over the work. A live send listed a contractor's missing
@@ -10675,8 +10850,10 @@ RAW EVIDENCE (what we actually confirmed):
 - ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
 - LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED \u2014 we ran real Google local searches for this business via the Places API. Results: ' + localVisibility.results.map(r => (r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`) + ((() => { const _riv = (Array.isArray(r.above) && r.above.length) ? r.above : (Array.isArray(r.topRivals) ? r.topRivals : []); if (!_riv.length) return ''; return ` \u2014 businesses actually returned above them for that query, WITH their real Google review counts: ${_riv.map(t => `${t.name} (${t.reviews} reviews${t.rating ? ', ' + t.rating + '\u2605' : ''})`).join(', ')}` + (r.ours && r.ours.reviews != null ? `; this business itself has ${r.ours.reviews} reviews${r.ours.rating ? ' at ' + r.ours.rating + '\u2605' : ''}` : '') + (r.weakerAbove ? `; \u2605 ${r.weakerAbove} of the businesses ranked ABOVE them have FEWER reviews than this business does \u2014 that comparison is MEASURED and must NOT be flagged` : ''); })())).join('; ') + '. \u26a0 THE COMPETITOR NAMES AND REVIEW COUNTS ABOVE ARE MEASURED FACTS returned by the Places API for that exact search \u2014 they are the businesses a customer sees instead of this one. If the audit names those companies or quotes those review counts, that is CORRECT and must NOT be flagged as unverified or as "competitor data stated as fact". \u26a0 BUT ONLY THE NAMES AND THE COUNTS ARE MEASURED. We do NOT measure how old a competitor review is, how recent or active that competitor is, their rating trend, their ad spend, or why they rank higher. Any claim that competitor reviews are recent, newer or fresher, or that a competitor is more active, MUST STILL BE FLAGGED \u2014 that is an embellishment resting on top of a real number, which is harder to spot and just as false.' + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
+- THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + gbpHealth.photoCount + ' photos, hours ' + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
+- GROWTH CONSTRAINT (derived from the measurements above): ${growthConstraint.checked ? 'The binding layer is ' + growthConstraint.layer + '. ' + growthConstraint.condition + ' \u26a0 This is a DERIVED READ built only from measured inputs (rank, review count and rating, offer gaps, buying friction, review-pattern count). The audit is EXPECTED to open at this altitude, so a business-level statement matching this is CORRECT and must NOT be flagged as speculation. \u26a0 What IS still flaggable: any number, competitor behaviour, conversion rate or lost-revenue total that does not appear in the measured evidence above.' : 'NOT MEASURED \u2014 the audit must not diagnose an overall constraint, and any claim about what is "holding the business back" is unsupported.'}
 - BUYING FRICTION / VALUE EQUATION: ${valueEquation.checked ? 'MEASURED by combining their booking path, their page source, their published prices and their Google review count. Friction found: ' + (valueEquation.friction.length ? valueEquation.friction.join('; ') : 'none') + '. Working in their favour: ' + (valueEquation.belief.length ? valueEquation.belief.join('; ') : 'nothing measurable') + '. \u26a0 EACH OF THESE IS A MEASURED FACT the owner can verify on his own site \u2014 do NOT flag them as unverified or inferential. \u26a0 BUT the audit may NOT claim what happens AFTER a customer hits this friction: not that they leave, not that they call a competitor, not that the lead is lost. We measured the wall, never what the person did next \u2014 flag any such claim.' : 'NOT MEASURED \u2014 any claim about their booking path, wait time, form length or how hard they are to buy from IS unverified and must be flagged.'}
 - SITE TECHNICALS (read from their raw page source): ${htmlSignals && htmlSignals.checked ? 'MEASURED — HTTPS ' + (htmlSignals.isHttps === true ? 'supported (verified by a real request)' : htmlSignals.isHttps === false ? 'NOT supported (verified by a real request that failed on TLS)' : 'NOT CONCLUSIVELY CHECKED — the audit must make NO SSL claim') + ', mobile viewport tag ' + (htmlSignals.hasViewport ? 'present' : 'ABSENT') + ', tap-to-call link ' + (htmlSignals.hasTelLink ? 'present' : 'ABSENT') + ', title tag ' + (htmlSignals.hasTitle ? 'present' : 'ABSENT') + ', meta description ' + (htmlSignals.hasMetaDescription ? 'present' : 'ABSENT') + ', form fields ' + (htmlSignals.hasForm ? htmlSignals.formFieldCount : 'no form') + '. \u26a0 These come from their ACTUAL page source. Claims matching them are MEASURED FACTS \u2014 do not flag them as unverified. But a claim that goes BEYOND them (for example asserting no SSL when it says NOT CONCLUSIVELY CHECKED) MUST be flagged.' : 'NOT MEASURED — the page source was not captured, so any claim about their SSL, mobile setup, tags or form IS unverified and must be flagged.'}
 - Screenshot taken: ${!!screenshotUrl}
