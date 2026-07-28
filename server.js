@@ -9925,10 +9925,31 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         email.email = '';
       }
     }
+    // ── STALE-TIER CORRECTION ────────────────────────────────────────────
+    // The eponymous shortcut used to file its guesses as tier 2, the same tier as
+    // an SMTP-CONFIRMED mailbox. That was corrected at the point of generation,
+    // but entries already written to contact_cache still carry the old tier \u2014 so
+    // donna@krummenplasticsurgery.com came back from cache as tier 2 and scored
+    // 100/100 with the reason "the mailbox was SMTP-CONFIRMED to exist". Nothing
+    // ever pinged that mail server. Same shape as the "oe@" problem: a fix at the
+    // source does not reach a value already stored.
+    //
+    // We cannot re-verify for free here, so we do the honest thing and DOWNGRADE
+    // the evidence claim rather than inherit one we cannot support. The address
+    // stays and stays sendable; only the confidence attached to it changes.
+    if (emailResult && emailResult.tier === 2) {
+      const _label = String(emailResult.label || '');
+      const _looksEponymous = emailResult.inferredEponymous === true
+        || /named after|eponymous/i.test(_label);
+      if (_looksEponymous) {
+        console.log(`\u26a0 EMAIL [${company}]: cached "${emailResult.email}" was stored as SMTP-verified but its label says it came from the EPONYMOUS shortcut \u2014 that inference was never checked against a mail server. Downgrading to inferred so reachability stops reporting it as confirmed.`);
+        emailResult = { ...emailResult, tier: 3, score: Math.min(emailResult.score || 78, 78), inferredEponymous: true };
+      }
+    }
     if (emailResult) {
       email.email = emailResult.email;
       if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
-      console.log(`EMAIL [${company}]: from cache — ${emailResult.email}`);
+      console.log(`EMAIL [${company}]: from cache — ${emailResult.email}${emailResult.tier === 3 ? ' (inferred, not SMTP-confirmed)' : ''}`);
     } else if (website) {
       try {
         emailResult = await findEmailFireproof({
@@ -11090,6 +11111,32 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // reader owns a dental practice or a gravel business; "the pixel is live"
           // is not a sentence anyone has said to him.
           _flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'marketing jargon banned in the email voice \u2014 rewrite in the owner\u2019s words');
+          // ── INVENTED CREDENTIALS ────────────────────────────────────────
+          // A live audit told a plastic surgeon "Cincinnati Magazine has
+          // recognized twice" with nothing in the evidence supporting it. This is
+          // the most damaging fabrication class available: the owner knows
+          // instantly whether it is true, it reads as flattery rather than
+          // research, and being wrong about an award he did or did not win
+          // discredits every measured fact standing beside it. We do not scrape
+          // press databases, award lists or "best of" rankings \u2014 so unless the
+          // claim came from their own page and passed SOURCE VERIFY, we did not
+          // find it and must not assert it.
+          // Page-aware: a business that displays "Voted Best Car Accident Lawyer"
+          // on its own banner may legitimately be quoted saying so. Only flag a
+          // credential we CANNOT find in the pages we actually read \u2014 otherwise
+          // this becomes a false positive on every prospect with an award badge,
+          // and false positives are what teach an operator to skim past flags.
+          const _pageText = [content, sitePages && sitePages.rawText].filter(Boolean).join(' ').toLowerCase();
+          const _credRe = /\b([A-Z][a-z]+\s+)?(magazine|business journal|times|gazette|tribune|chronicle)\b[^.]{0,40}\b(recognis|recogniz|named|featured|award|honou?r|voted|ranked)|\b(voted|named|awarded|recognis|recogniz)\w*\s+(the\s+)?(best|top|#?1|number one|leading)\b/i;
+          const _credHit = _allProse.match(_credRe);
+          if (_credHit) {
+            // Take the distinctive words of the claim and look for them on the page.
+            const _words = String(_credHit[0]).toLowerCase().match(/[a-z]{4,}/g) || [];
+            const _onPage = _words.length > 0 && _words.filter(w => _pageText.includes(w)).length >= Math.ceil(_words.length * 0.6);
+            if (!_onPage) {
+              unverifiable.push(`INVENTED PRESS OR AWARD \u2014 "${String(_credHit[0]).slice(0, 60)}". We do not read press databases, award lists or "best of" rankings, and this does not appear on any page we scraped. A live audit told a surgeon "Cincinnati Magazine has recognized twice" with nothing behind it. He knows instantly whether it is true, and being wrong about an award discredits every measured fact next to it.`);
+            }
+          }
           // 9. DEVELOPER REGISTER. Distinct from marketing jargon: this is
           // implementation detail. Research on selling to owners is explicit that
           // budget-approvers evaluate through a business-impact lens while
