@@ -58,6 +58,76 @@ app.get('/api/test-adzuna', async (req, res) => {
   } catch(e) { res.json({ error: e.message, working: false }); }
 });
 
+// ══ COPY VERIFIER — GUARDS FOR THE COPY THAT IS ACTUALLY SENT ════════════════
+// THE GAP THIS CLOSES
+// Every guard in this system lived in the RESEARCH path and inspected the audit's
+// pitchAngle. But the email that actually goes to the prospect — variant A, variant
+// B, follow-up 1, follow-up 2 — is generated in the browser and posted through
+// /api/claude, which is a bare passthrough. So the sent copy passed through NO
+// guard at all, while the UI displayed "Approved for Send \u00b7 4 flagged claims"
+// next to it \u2014 flags that belonged to the audit, not to the email. A live run
+// shipped a follow-up opening "your footer still reads \u00a9 2015" with nothing
+// objecting.
+//
+// This runs the same checks against the real copy. Subjects are deliberately
+// exempt from the altitude rule: Mike's subject shape names the broken component
+// on purpose and that is the hook. Only BODIES carry the altitude.
+const COPY_COMPONENT_WORDS = /\b(button|link|tel:|tap[- ]to[- ]call|tappable|does ?n[o']?t dial|won[o']?t dial|phone number|meta ?tag|title tag|h1|form field|contact form|quote form|footer|header|favicon|alt text|profile (photo|description)|business description|copyright(?: year)?|\u00a9 ?\d{4}|pixel|schema|sitemap|css|plugin|widget)\b/i;
+const COPY_BUSINESS_WORDS = /\b(revenue|customer|customers|homeowner|patient|client|clients|caller|buyer|job|jobs|booking|bookings|reputation|review|reviews|market|competitor|competitors|rank(?:ed|ing)?|money|paying|paid|lead|leads|demand|season|schedule|hire|hiring|choose|chose|chooses|picking|picks|pick|business|years)\b/i;
+// Findings an owner closes himself in minutes. True, checkable, and worthless as a
+// reason to reply — naming one as a follow-up ANGLE burns a send on a free tip.
+// NOTE: the copyright-symbol alternative sits OUTSIDE the \b group on purpose.
+// "\u00a9" is not a word character, so a leading \b can never match "reads \u00a9 2015"
+// — which is exactly the string a live follow-up was built on.
+const COPY_TRIVIAL_FINDING = /(?:\b(?:favicon|alt text|broken (?:footer )?link|footer link|social (?:media )?link|copyright(?: year)?|meta description|title tag|spelling|typo|image size|missing photo)\b)|(?:\u00a9\s?\d{4})/i;
+
+const verifyGeneratedCopy = (copy = {}, opts = {}) => {
+  const flags = [];
+  const constraintLayer = opts.constraintLayer || '';
+  const firstSentence = (t) => String(t || '')
+    // strip a leading "Joe — " address so the check reads the claim, not the greeting
+    .replace(/^\s*[A-Z][a-zA-Z.'-]{1,20}\s*[\u2014\u2013-]\s*/, '')
+    .split(/(?<=[.!?])\s/)[0] || '';
+
+  const bodies = [
+    ['variant A', copy.variantA && (copy.variantA.pitch || copy.variantA.body)],
+    ['variant B', copy.variantB && (copy.variantB.pitch || copy.variantB.body)],
+    ['follow-up 1', copy.followUp1 && copy.followUp1.body],
+  ].filter(([, v]) => v);
+
+  for (const [where, body] of bodies) {
+    const open = firstSentence(body);
+    if (open.length > 15 && COPY_COMPONENT_WORDS.test(open) && !COPY_BUSINESS_WORDS.test(open)) {
+      flags.push(`ALTITUDE (${where}): opens on a page component, not on the business. An owner forwards that to whoever built his site and the conversation ends there.${constraintLayer ? ` The measured constraint is ${constraintLayer} \u2014 open there and move the component to sentence two as the proof.` : ''}`);
+    }
+  }
+
+  // Follow-up 1 must carry a NEW angle worth a send. A trivial fix is not one.
+  const fu1 = String((copy.followUp1 && (copy.followUp1.body || '')) + ' ' + (copy.followUp1 && copy.followUp1.subject || ''));
+  if (fu1.trim().length > 20 && COPY_TRIVIAL_FINDING.test(fu1)) {
+    const m = fu1.match(COPY_TRIVIAL_FINDING);
+    flags.push(`TRIVIAL FINDING (follow-up 1): built on "${m[0]}" \u2014 something the owner closes himself in under a minute. It is true and it is checkable, but it is not a revenue problem, so it spends a send on a free tip and makes us look like we found nothing better.`);
+  }
+
+  // The copy-level bans that already exist for the audit, applied to the real email.
+  const allCopy = [
+    copy.variantA && (copy.variantA.pitch || copy.variantA.body), copy.variantA && copy.variantA.subject,
+    copy.variantB && (copy.variantB.pitch || copy.variantB.body), copy.variantB && copy.variantB.subject,
+    copy.followUp1 && copy.followUp1.body, copy.followUp2 && copy.followUp2.body,
+  ].filter(Boolean).join(' \n ');
+  const flag = (re, why) => { const m = allCopy.match(re); if (m) flags.push(`${why} \u2014 "${String(m[0]).slice(0, 60)}"`); };
+
+  flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'BACKEND CLAIM: asserts what happens after a form submit, which we never tested');
+  flag(/\bno auto-?reply\b/i, 'BACKEND CLAIM: we never submit the form, so an auto-reply cannot be ruled out');
+  flag(/\bdisappears? forever\b|\bthat lead is gone\b/i, 'BACKEND CLAIM: asserts an outcome inside their systems');
+  flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'MARKETING JARGON banned in the email voice');
+  flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bviewport\b|\bpage source\b|\bmarkup\b/i, 'DEVELOPER REGISTER: this is the sentence he forwards to his web person');
+  flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'INVENTED LOSS TOTAL about their business');
+  flag(/\bjust (following up|checking in)\b/i, 'BUMP LANGUAGE: a follow-up with no new fact announces itself as an automated sequence');
+
+  return { checked: true, flags, clean: flags.length === 0 };
+};
+
 // ── CLAUDE ────────────────────────────────────────────────
 app.post('/api/claude', async (req, res) => {
   try {
@@ -70,7 +140,34 @@ app.post('/api/claude', async (req, res) => {
     });
     const d = await safeJson(r);
     if (!r.ok) return res.status(r.status).json({ error: d.error?.message || 'Anthropic error' });
-    res.json({ text: d.content[0].text });
+    const _text = d.content[0].text;
+
+    // ── VERIFY THE COPY THAT WILL ACTUALLY BE SENT ────────────────────────
+    // This endpoint is where the browser generates variant A/B and the two
+    // follow-ups. Until now it was a bare passthrough, so the real email was the
+    // ONLY thing in the pipeline that no guard ever read — while the UI showed
+    // "Approved for Send" beside it using flags that belonged to the audit. If
+    // the response parses as the email JSON, run the guards on it here.
+    let _copyFlags = [];
+    try {
+      const _clean = String(_text).replace(/```json|```/g, '').trim();
+      const _fb = _clean.indexOf('{'), _lb = _clean.lastIndexOf('}');
+      if (_fb >= 0 && _lb > _fb) {
+        const _parsed = JSON.parse(_clean.slice(_fb, _lb + 1));
+        if (_parsed && (_parsed.variantA || _parsed.followUp1)) {
+          const _v = verifyGeneratedCopy(_parsed, { constraintLayer: req.body.constraintLayer || '' });
+          _copyFlags = _v.flags;
+          const _who = req.body.company ? ` [${req.body.company}]` : '';
+          if (_copyFlags.length) {
+            console.log(`\u26d4 COPY VERIFY${_who}: ${_copyFlags.length} issue(s) in the EMAIL THAT WILL BE SENT \u2014 ${_copyFlags.join(' | ')}`);
+          } else {
+            console.log(`\u2713 COPY VERIFY${_who}: the generated email and follow-ups passed the altitude, trivial-finding and banned-claim checks.`);
+          }
+        }
+      }
+    } catch (e) { void e; }   // not email JSON, or unparseable — never block the response
+
+    res.json({ text: _text, copyFlags: _copyFlags });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
