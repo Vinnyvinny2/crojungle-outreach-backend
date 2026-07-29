@@ -4185,6 +4185,43 @@ const readAffordability = ({
   };
 };
 
+// ══ BOOKING PATH — MEASURED, NOT ASKED FOR ═══════════════════════════════════
+// booking has been a MODEL OUTPUT: the page text goes to a model and it returns
+// one of four enum values. Two runs on the same practice, twelve minutes apart,
+// reading the identical pages and extracting the identical six prices, returned
+// booking=phone_only and then booking=none_found.
+//
+// That is not a cosmetic wobble. booking drives TIME DELAY in the value
+// equation, the denominator drives the CONVERSION threshold, and the threshold
+// decides which Hormozi layer the whole email is built on. An unstable input at
+// the bottom can change the diagnosis at the top.
+//
+// A real booking tool leaves a signature in the page source. Those are facts.
+// Where a signature exists we use it and the model does not get a vote; where
+// nothing is detectable we return null and the model's read stands, because a
+// guess we can identify as a guess is better than a measurement we invented.
+const measureBookingPath = (html, text) => {
+  const h = String(html || '') + ' ' + String(text || '');
+  if (h.length < 200) return null;
+
+  // Third-party schedulers, medical and trade. Their embed URLs are unambiguous.
+  const SCHEDULERS = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook\.me|savvycal|cal\.com|hubspot\.com\/meetings|chilipiper|book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
+  if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is embedded in the page source' };
+
+  // A real submitting form. <form> plus at least one text-ish input.
+  const hasForm = /<form\b/i.test(h) && /<input\b[^>]*type=["'](text|email|tel)["']/i.test(h);
+  const hasTextarea = /<textarea\b/i.test(h);
+  if (hasForm || hasTextarea) return { booking: 'form', why: 'a submitting form is present in the page source' };
+
+  // No form and no scheduler, but a phone number they clearly want called.
+  const hasTel = /href=["']tel:/i.test(h);
+  const phoneText = /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(h);
+  if (hasTel || phoneText) return { booking: 'phone_only', why: 'no scheduler and no form in the source \u2014 a phone number is the only route offered' };
+
+  // Genuinely nothing detectable. Say so rather than assert absence.
+  return null;
+};
+
 // ══ MARKET — THE TOP OF THE HIERARCHY, AND THE ONLY LAYER NEVER MEASURED ═════
 // Hormozi puts MARKET above offer, above leads, above conversion: who you are for
 // determines the value of every tactic underneath it. This system has scored the
@@ -5324,7 +5361,28 @@ ${corpus}` }]
       booking: parsed.booking || 'none_found',
       hasCapture: parsed.hasCapture === true,
     };
-    console.log(`SITE AUDIT [${companyName}]: booking=${out.booking} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
+    // ── MEASUREMENT OVERRIDES THE MODEL ──────────────────────────────────
+    // The model returned phone_only and then none_found for the same practice
+    // on the same pages twelve minutes apart. booking feeds TIME DELAY in the
+    // value equation, which feeds the CONVERSION threshold, which decides the
+    // layer the email is built on \u2014 so an unstable read here quietly changes
+    // the diagnosis. Where the page source carries hard evidence (a scheduler
+    // embed, a submitting form, a bare phone number) that evidence wins. Where
+    // there is none, the model's read stands and is labelled as such.
+    try {
+      // `corpus` is the concatenated markdown of every page we read, already in
+      // scope here. Markdown from Firecrawl preserves links, so tel: hrefs and
+      // scheduler URLs survive the conversion and remain detectable.
+      const _measured = measureBookingPath(corpus, corpus);
+      if (_measured && _measured.booking !== out.booking) {
+        console.log(`SITE AUDIT [${companyName}]: booking corrected ${out.booking} \u2192 ${_measured.booking} \u2014 ${_measured.why}. The model's read was an opinion; this is in the source.`);
+        out.booking = _measured.booking;
+        out.bookingMeasured = true;
+      } else if (_measured) {
+        out.bookingMeasured = true;
+      }
+    } catch (e) { void e; }
+    console.log(`SITE AUDIT [${companyName}]: booking=${out.booking}${out.bookingMeasured ? ' (measured)' : ' (model read \u2014 no signature in source)'} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
     return out;
   } catch(e) { console.log('auditSitePages failed:', e.message); return null; }
 };
