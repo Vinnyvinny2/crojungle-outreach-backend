@@ -10065,7 +10065,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         try { _siteUrls = await firecrawlMap(firecrawlKey, website); } catch {}
         const lv = await auditLocalVisibility({
           companyName: company, placeId: effectivePlaceId, website,
-          industry: req.body.industry || '', location: req.body.location || '',
+          // ── USE THE TRADE WE ALREADY READ ────────────────────────────
+          // This passed ONLY req.body.industry, which is empty on every lead the
+          // frontend discovered before the industry mapping was fixed \u2014 so every
+          // run logged "LOCAL RANK: skipped \u2014 no industry on this lead", and a
+          // fallback further down re-derived the trade and ran the whole check
+          // again. Two passes, the first structurally guaranteed to fail.
+          //
+          // customerTrade is read off their homepage during domain confirmation,
+          // free, and lands ~25 seconds BEFORE this line. It was sitting in scope
+          // unused. Now the first attempt uses the best trade available, which is
+          // also the one the fallback would eventually have used anyway.
+          industry: customerTrade || verifiedIndustry || req.body.industry || '',
+          location: req.body.location || '',
           placesKey, sitemapUrls: _siteUrls,
         });
         if (lv.checked) {
@@ -11483,6 +11495,17 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // to whoever built the site. A live email spent two of six sentences on
           // "no tel: link, plus a tag that actively switches off automatic
           // dialing." True, and written for a developer. Tested 9/9.
+          // ── SPECIFIC OPERATING HOURS ──────────────────────────────────
+          // A live audit told a surgeon "your phone line closes at 3pm on
+          // Fridays". We never pass opening hours to the model \u2014 the prompt only
+          // ever mentions whether a GBP has hours at all, never what they are \u2014
+          // so that time was invented. It is also the single most checkable thing
+          // in the whole email: he knows his own hours, and being wrong about
+          // them costs every true finding beside it. Their site may well state
+          // hours somewhere in 40,000 characters, but "might be in there" is not
+          // a measurement, and this system does not ship claims on that basis.
+          _flag(/\b(clos(es?|ing|ed)|opens?|available|answer(s|ing)?|line|phone|office|hours?)\b[^.]{0,40}\b(at\s+)?\d{1,2}\s*(:\d{2})?\s*(am|pm)\b|\b(mon|tues?|wed|thur?s?|fri|sat|sun)[a-z]*\s*(day)?s?\b[^.]{0,30}\b\d{1,2}\s*(:\d{2})?\s*(am|pm)\b/i,
+            'SPECIFIC OPERATING HOURS \u2014 we never measured their hours, only whether their Google profile lists any. A time like "closes at 3pm on Fridays" is invented, and it is the most checkable false statement an email can contain');
           _flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bpage actively blocks\b|\bcoded to block\b|\bblocks the tap\b|\bconversion tag\b|\bviewport\b|\bauto-?detection\b|\bpage source\b|\bmarkup\b/i, 'MECHANISM/DEVELOPER REGISTER — includes "the page actively blocks it", "coded to block", tel: link etc. Write what it costs him, never how it works. This is the sentence he forwards to whoever built the site.');
           // 2. Search-surface claims with no local-rank measurement
           if (!_lrChecked) {
