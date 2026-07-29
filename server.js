@@ -3539,7 +3539,37 @@ ${corpus}` }]
     const parsed = parseLLMJSON(text) || {};
 
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
-      console.log(`DM/brain [${companyName}]: no owner-level person named on their site`);
+      // ── MEASURED BACKSTOP BEFORE WE GIVE UP ────────────────────────────
+      // A live run scraped /about-us, handed it to the model, and got back "no
+      // owner-level person named on their site". Eight Firecrawl credits of web
+      // search were then spent, and the owner was found on THAT EXACT URL \u2014 the
+      // page said "As the founder and owner of David Price Construction, LLC,
+      // David is a...". The text was already in memory and already paid for.
+      //
+      // So before concluding absence, read the corpus directly for the sentence
+      // patterns an owner actually writes about himself. This is a measurement
+      // over the same bytes the model just looked at: if it is there, we should
+      // not be buying it a second time, and we should not be reporting absence.
+      // Two shapes, both anchored so the COMPANY name cannot be mistaken for the
+      // PERSON. Shape A: "...owner of <Company>, David is a lifelong builder" \u2014
+      // the person follows the company and is always followed by a verb, which is
+      // what separates "David" from "Construction". Shape B: "Mike Taft, founder
+      // of X" \u2014 name first.
+      // No /i flag on purpose: the NAME capture must stay case-sensitive, or
+      // "construction" and "owner" become candidate names. So the role words
+      // carry their own capitalised variants instead \u2014 "Owner of Smith Roofing,
+      // Bill has been..." starts a sentence and would otherwise be missed.
+      const _ROLE = `[Ff]ounder|[Oo]wner|[Pp]resident|[Pp]rincipal|[Pp]roprietor`;
+      const _OWNER_SENTENCE = new RegExp(
+        `\\\\b(?:${_ROLE})(?:\\\\s+and\\\\s+\\\\w+)?\\\\s+of\\\\s+[^.]{2,80}?,\\\\s*([A-Z][a-z]{1,15})\\\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\\\b`
+        + `|\\\\b([A-Z][a-z]{1,15}\\\\s+[A-Z][a-zA-Z'\\u2019-]{2,20})\\\\s*,?\\\\s+(?:the\\\\s+)?(?:${_ROLE})\\\\b`);
+      const _m = String(corpus || '').match(_OWNER_SENTENCE);
+      const _fallbackName = _m ? (_m[2] || _m[1] || '').trim() : '';
+      if (_fallbackName && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0])) {
+        console.log(`DM/brain [${companyName}]: the model found nobody, but their own page names one \u2014 "${_m[0].trim().slice(0, 70)}". Read directly from the text we already scraped, so no extra credit and no false claim of absence.`);
+        return { name: _fallbackName, title: 'Owner', confidence: 'high', source: 'own_website_brain' };
+      }
+      console.log(`DM/brain [${companyName}]: no owner-level person named on their site (model found none, and no owner sentence in the page text either)`);
       return null;
     }
     // Anti-hallucination: their name must literally be in what we scraped.
@@ -4268,7 +4298,13 @@ const readMarketClarity = (text, { trade, city } = {}) => {
   const genericRe = /\b(all your [a-z]+ needs|whatever your needs|any (size|type) (of )?(job|project|business)|residential and commercial|we do it all|no job too (big|small)|customers of all|everyone|anyone who|your one[- ]stop)\b/i;
   const genericHits = (t.match(new RegExp(genericRe.source, 'gi')) || []);
   if (genericHits.length) {
-    gaps.push(`their copy uses the language of serving everyone \u2014 ${genericHits.slice(0, 2).map(g => '"' + g.trim() + '"').join(' and ')}${genericHits.length > 2 ? ` and ${genericHits.length - 2} more` : ''}`);
+    // DEDUPE. A live audit printed 'their copy uses the language of serving
+    // everyone \u2014 "residential and commercial" and "residential and commercial"
+    // and 3 more', because the same phrase appears on several pages and every
+    // occurrence was counted separately. Repeating a phrase back to an owner
+    // twice in one sentence reads as a broken template, not an audit.
+    const _uniqGeneric = [...new Set(genericHits.map(g => g.trim().toLowerCase()))];
+    gaps.push(`their copy uses the language of serving everyone \u2014 ${_uniqGeneric.slice(0, 2).map(g => '"' + g + '"').join(' and ')}${_uniqGeneric.length > 2 ? ` and ${_uniqGeneric.length - 2} more` : ''}`);
   }
 
   // A HERO THAT DESCRIBES THE COMPANY RATHER THAN THE BUYER.
@@ -10619,7 +10655,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       : { window: 'standard', urgency: 'normal', note: '' };
 
     // Hunter contact verified against homepage
-    const founderName = (email.founderName || '').trim();
+    // The email finder only sets founderName when IT was the thing that found the
+    // person. On McKenna the owner came from the business name, his own site and
+    // a licence record \u2014 three sources, score 137, CORROBORATED \u2014 and this line
+    // still printed "Reach: no name", because the email path had not been the
+    // one to name him. Read the best available name instead of the narrowest.
+    const founderName = (email.founderName
+      || (decisionMaker && decisionMaker.name)
+      || verifiedCEO
+      || '').trim();
     const founderLastName = founderName.split(' ').slice(-1)[0].toLowerCase();
     const nameOnPage = founderLastName.length > 2 && trustedContent.toLowerCase().includes(founderLastName);
 
@@ -12215,7 +12259,28 @@ Return ONLY valid JSON:
               brainAudit._lowConfidence = conf;
               console.log(`\u26d4 LOW-CONFIDENCE AUDIT [${company}]: fact-checker scored ${conf}/10 — ${critique.critiqueNote || 'multiple unsupported claims'}. Review every claim before sending.`);
             }
-            console.log(`FACT CHECK [${company}]: confidence ${conf}/10 | ${(critique.flaggedClaims||[]).length} claim(s) flagged${(critique.flaggedClaims||[]).length ? ': ' + critique.flaggedClaims.join(' | ') : ''}`);
+            // ── DO NOT COUNT CLEARANCES AS FLAGS ─────────────────────────
+            // The critique writes its reasoning into flaggedClaims even when the
+            // conclusion is that a claim is FINE. A live run on a clean audit
+            // printed "3 claim(s) flagged" where all three entries ended in
+            // "so NOT flagged", "VERIFIED as measured" and "NO FLAGGED CLAIMS ON
+            // CORE FINDINGS". The email was clean and the UI showed it in red as
+            // "3 flagged claims".
+            //
+            // That is worse than a cosmetic error: this count is the number an
+            // operator reads to decide whether an email is safe to send, and
+            // inflating it teaches him to ignore it \u2014 which is exactly when a
+            // real flag slips through. Entries that clear a claim are separated
+            // out and reported as what they are.
+            const _rawFlags = (critique.flaggedClaims || []).map(String);
+            const _CLEARED = /\b(NOT flagged|not a flag|no flagged claims|VERIFIED as measured|is ALLOWED|allowed per rules|correct and (must not|should not) be flagged|no unverifiable|nothing to flag)\b/i;
+            const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f));
+            const _cleared = _rawFlags.length - _realFlags.length;
+            console.log(`FACT CHECK [${company}]: confidence ${conf}/10 | ${_realFlags.length} claim(s) flagged${_cleared ? ` (${_cleared} entr${_cleared === 1 ? 'y' : 'ies'} explicitly CLEARED a claim and are not counted)` : ''}${_realFlags.length ? ': ' + _realFlags.join(' | ') : ''}`);
+            // Downstream consumers (the UI badge, the approval panel) must see the
+            // corrected list, not the raw one.
+            critique.flaggedClaims = _realFlags;
+            critique.clearedCount = _cleared;
           } catch(e) {
             console.log('Critique call failed (non-fatal):', e.message);
             // Non-fatal — audit continues without critique
@@ -12620,7 +12685,18 @@ Return ONLY valid JSON:
     // MISS  = we predicted findable and did not (credits spent on a bad bet)
     // SAVE  = we predicted unfindable and indeed found nothing (the guess saved money)
     // UPSET = we predicted unfindable but found them anyway (the predictor is too harsh)
-    const _pred = Number(req.body.reachPredict);
+    // ── MISSING IS NOT ZERO ──────────────────────────────────────────────
+    // Number(null) and Number(undefined) are 0 and NaN respectively, but an
+    // empty string is 0 too \u2014 so a lead that carried NO prediction was graded as
+    // having predicted 0/40, and every such lead printed "UPSET \u2014 predictor too
+    // harsh". Five leads in a row reported that, including a business literally
+    // called "Henry Gare Personal Injury Attorney", which is the predictor's
+    // single strongest pattern and could never score 0. The predictor was not
+    // harsh; it had never run. A log that blames a component that did not
+    // execute sends you looking in the wrong place, which is worse than silence.
+    const _predRaw = req.body.reachPredict;
+    const _pred = (_predRaw === null || _predRaw === undefined || _predRaw === '')
+      ? NaN : Number(_predRaw);
     if (Number.isFinite(_pred)) {
       const predictedFindable = _pred >= 24;             // top of the 0-40 predictor band
       const actuallyReached = reach.score >= 45 && !!(email && email.email);
@@ -12629,7 +12705,7 @@ Return ONLY valid JSON:
         : (actuallyReached ? 'UPSET — predicted hard, reached anyway (predictor too harsh)' : 'SAVE  — predicted hard, indeed not reached');
       console.log(`PREDICT CHECK [${company}]: predicted ${_pred}/40 -> reachability ${reach.score}/100, email ${email && email.email ? 'yes' : 'no'} | ${verdict}`);
     } else {
-      console.log(`PREDICT CHECK [${company}]: no reachPredict sent from the client — cannot grade this lead`);
+      console.log(`PREDICT CHECK [${company}]: no prediction was sent for this lead, so there is nothing to grade. This is a LEGACY LEAD \u2014 it entered the pipeline before the free name-based predictor ran, or through a path that does not carry it. Newly discovered leads do carry it. Not a fault in the predictor.`);
     }
 
     console.log(`Research complete: ${company} | ${flaws.length} flaws | ${recommendedProduct.product} | +${researchBonus} research bonus`);
