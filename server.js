@@ -933,6 +933,14 @@ const searchAdzuna = async (appId, appKey, location) => {
         // This is the single most actionable field in the entire system.
         industry: c.industryLabel || '',
         industryTag: c.industryTag || '',
+        // THE PHONE NUMBER. Google Places returns it on every local lead and it
+        // was being dropped here \u2014 captured, then never included in the returned
+        // company, so no lead in the pipeline has ever carried one. For an
+        // owner-operated business the phone reaches the decision-maker faster and
+        // more reliably than email does, and the channel router already routes
+        // unreachable-by-email leads to a "call pile" that could not be worked
+        // because the number never survived discovery.
+        phone: c.phone || '',
         perfectFit: c.perfectFit,
         // WHICH PRODUCT does this lead need? Drives the whole pitch.
         lanes: [...c.lanes],
@@ -9654,8 +9662,24 @@ const _runResearchInner = async (req, res) => {
   const discoveryReason = req.body.discoveryReason || '';
   // LANE VISIBILITY - the retainer pitch silently falling back to software was a
   // real failure mode with no error attached. Now every research call states its lane.
-  const _lane = req.body.buyingLane;
-  if (!_lane) console.log(`[LANE] ${company}: buyingLane MISSING from request -> defaulting to software. If this company came from a marketing-role posting, the RETAINER pitch just failed silently.`);
+  // ── THE LANE IS ONLY REAL IF A JOB POSTING PRODUCED IT ────────────────────
+  // buyingLane is derived entirely from job-posting signals: 'retainer' means
+  // they posted a MARKETING role, 'software' means they posted manual ops roles.
+  // With the job-posting source dark, no lead has either, and the frontend sends
+  // 'software' as a hard-coded default \u2014 so every lead all night logged
+  // "[LANE] X: software" and the backend's own MISSING warning could never fire,
+  // because a value was always supplied.
+  //
+  // The consequence is a prompt that frames a sealcoater, a surgeon and a
+  // remodeler as businesses hiring manual ops roles. The anti-fabrication rules
+  // have been suppressing it (no email has mentioned hiring), but the audit has
+  // been reasoning from a buying window that does not exist on these leads.
+  // A default that asserts something unmeasured is the exact failure this system
+  // is built to prevent \u2014 so say plainly that there is no job signal instead.
+  const _laneRaw = req.body.buyingLane;
+  const _laneFromJobs = !!(discoverySignals && (discoverySignals.hiring_marketing || discoverySignals.ai_replacement || discoverySignals.ai_replacement_multi));
+  const _lane = (_laneRaw === 'software' && !_laneFromJobs) ? '' : _laneRaw;
+  if (!_lane) console.log(`[LANE] ${company}: no job-posting signal on this lead, so there is NO measured buying window. The pitch must come from the audit alone. (A hard-coded 'software' default was being sent here and framed every local business as one hiring manual ops roles.)`);
   else console.log(`[LANE] ${company}: ${_lane}${_lane === 'retainer' ? '  <- RETAINER (core product)' : _lane === 'both' ? '  <- PERFECT STORM' : ''}`);
 
   const manualRoleCount = req.body.manualRoleCount || 0;
@@ -11225,7 +11249,8 @@ RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 ═══ THE BUYING WINDOW WE ARE INTERCEPTING (this determines the ENTIRE pitch) ═══
-${req.body.buyingLane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
+${(req.body.buyingLane === 'software' && !(req.body.discoverySignals && (req.body.discoverySignals.hiring_marketing || req.body.discoverySignals.ai_replacement || req.body.discoverySignals.ai_replacement_multi))) ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
+: req.body.buyingLane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
 They have allocated budget on BOTH fronts and committed on NEITHER. This is the strongest possible position.
 THE PITCH: they are about to spend ~$125k/year on two hires (one to do repetitive work software handles, one junior marketer). CROJ replaces the first with a build and the second with a senior team — for less, and it compounds.
 Lead with whichever is bleeding more money. Do NOT pitch both products in one email — name the sharper fire, and let the call surface the rest.`
