@@ -12782,6 +12782,23 @@ Return ONLY valid JSON:
       // it was never in the response, so re-running the lead re-derived it and
       // the local-rank check began every run with "skipped \u2014 no industry".
       // Returning it means a lead is only ever researched blind once.
+      // ── THE SCORED FINDINGS, RANKED ──────────────────────────────────
+      // The ladder scores every candidate and picks a winner, and none of that
+      // reached the client \u2014 so the call sheet had to fall back to listing
+      // whatever it could find in a hardcoded order. Sending the scores means
+      // anything downstream can talk about the most important thing first
+      // instead of the most conveniently available thing.
+      candidateFindings: (() => {
+        try {
+          const cf = (parsed && parsed.candidateFindings) || [];
+          return cf
+            .filter(c => c && c.finding)
+            .map(c => ({ finding: String(c.finding).slice(0, 200), signal: c.signal || null, total: Number(c.total) || 0 }))
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 8);
+        } catch (e) { void e; return []; }
+      })(),
+      leadSignal: (parsed && parsed.leadSignal) || null,
       verifiedIndustry: customerTrade || verifiedIndustry || req.body.industry || '',
       earlyChannel: channelRoute,
       earlyChannelReason: channelReason,
