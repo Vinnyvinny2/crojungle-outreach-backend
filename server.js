@@ -4662,7 +4662,19 @@ const measureGrowthConstraint = ({
   // Deliberately ABOVE conversion. Two or more missing offer elements means a
   // stranger has no reason to pick them over the next result, and that is a more
   // valuable thing to tell an owner than the shape of his contact form.
-  else if (os.checked && os.gapCount >= 2) {
+  // THRESHOLD RAISED FROM 2 TO 3 AFTER A LIVE DISAGREEMENT. A plastic surgeon
+  // with only two offer gaps (no guarantee, no urgency \u2014 he DOES have a bonus and
+  // a specific ask) was routed to OFFER, while the same run measured him invisible
+  // for 2 of the 4 searches he publishes dedicated pages for, with 5 weaker
+  // practices ranking above him. The ladder picked the visibility finding as
+  // strongest and the constraint then flagged its own winner as wrong.
+  //
+  // Two missing offer elements out of four is the ordinary state of a small
+  // business. Being absent from searches you built pages for is a measured
+  // crisis. Requiring 3+ means OFFER fires when the offer is genuinely bare \u2014
+  // which is what Hormozi's ranking assumes \u2014 and steps aside when a lower layer
+  // has harder evidence behind it.
+  else if (os.checked && os.gapCount >= 3) {
     const rep = [
       haveRep ? `${reviewCount} reviews at ${reviewRating}\u2605` : null,
       visible ? `ranked #${rank}${rankScanned ? ' of ' + rankScanned : ''}` : null,
@@ -9477,7 +9489,17 @@ const serviceKeywordsFromSitemap = (urls) => {
     const m = path.match(/\/(?:services?|solutions?)\/([a-z0-9-]{4,60})\/?$/);
     if (!m) continue;
     const slug = m[1];
+    // ── JUNK AND PLACEHOLDER SLUGS ─────────────────────────────────────
+    // A live run searched Google for "test service in Cincinnati" on a plastic
+    // surgery practice, because their sitemap contained a leftover /test-service
+    // page. It burned a Places call and returned a list of drug-testing labs as
+    // that surgeon's competitors \u2014 nonsense that then sits in the evidence the
+    // audit reasons from. Template builders leave these behind constantly:
+    // test, demo, sample, untitled, new-page, copy-of-x, page-2, lorem.
     if (/^(index|home|all|overview|list)$/.test(slug)) continue;
+    if (/(^|-)(test|testing|demo|sample|example|untitled|placeholder|lorem|ipsum|draft|temp|tmp|staging|dev|new-?page|copy-?of|page-?\d+|item-?\d+|post-?\d+)(-|$)/.test(slug)) continue;
+    // A slug that is mostly digits or a hash is a CMS artefact, not a service.
+    if (/^[0-9-]+$/.test(slug) || /^[a-f0-9]{8,}$/.test(slug)) continue;
     const phrase = slug.replace(/-/g, ' ').trim();
     // Two words minimum: a single word like "waterproofing" is too broad to give a
     // meaningful local rank, and too generic to prove anything to the owner.
@@ -11695,7 +11717,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 const _winnerLayer = SIGNAL_LAYER[_cf[0] && _cf[0].signal];
                 if (_inLayer.length && _winnerLayer !== growthConstraint.layer) {
                   const _should = _inLayer[0];
-                  console.log(`\u26a0 LADDER TIEBREAK [${company}]: top two are ${_gap} point(s) apart \u2014 inside scoring noise \u2014 and the winner sits in the ${_winnerLayer} layer while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) is in the binding layer and should have taken the tie. A 1-point difference in five subjective scores is not a reason to lead on a layer that is not the constraint.`);
+                  console.log(`\u26a0 LADDER TIEBREAK [${company}]: top two are ${_gap} point(s) apart \u2014 inside scoring noise \u2014 and the winner sits in the ${_winnerLayer} layer while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) is in the binding layer and should have taken the tie. A difference this small in five subjective scores is not a reason to lead on a layer that is not the constraint.`);
                 } else if (_winnerLayer === growthConstraint.layer) {
                   console.log(`\u2713 LADDER TIEBREAK [${company}]: top two within ${_gap} point(s), and the winner is in the measured binding layer (${growthConstraint.layer}). Correct tie resolution.`);
                 }
