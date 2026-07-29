@@ -4021,6 +4021,11 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       hasDescription: !!d.editorialSummary,
       status: d.businessStatus || null,
       mapsUri: d.googleMapsUri || null,
+      // The phone has been requested in the field mask all along and thrown away
+      // on every single lead. It is the number Google shows on their listing \u2014
+      // the most authoritative one that exists, and free with a call we already
+      // make.
+      phone: d.nationalPhoneNumber || d.internationalPhoneNumber || '',
       reviewRecency,          // {checked, newestDays, stale, veryCold} — never claim if unchecked
       primaryCategory,        // their listing's primary category, or null
       gaps,           // only real, observed gaps — safe to state as fact
@@ -7343,6 +7348,90 @@ const scoreSignals = (c) => {
   };
 };
 
+// ══ PHONE NUMBER — FOUND PROPERLY ════════════════════════════════════════════
+// This should be the easiest field in the system and it was the worst: almost no
+// lead carried a number, so the call sheet printed "NO NUMBER ON FILE" and the
+// whole phone channel was unusable. Three sources, all of which we already pay
+// for or already have:
+//
+//   1. GOOGLE BUSINESS PROFILE \u2014 authoritative. It is the number Google shows on
+//      their listing, the one a customer would actually dial. Already in the
+//      field mask of a call research makes on every Places lead.
+//   2. A tel: LINK IN THEIR PAGE SOURCE \u2014 they made it clickable on purpose.
+//   3. A VISIBLE NUMBER IN THE PAGE TEXT \u2014 the fallback, and the only one that
+//      needs real validation, because page text is full of things shaped like
+//      phone numbers that are not phone numbers.
+//
+// Everything is normalised to +1XXXXXXXXXX so it is dialable from anywhere and
+// comparable across sources.
+const findPhoneNumber = ({ gbpPhone, pageHtml, pageText, companyName } = {}) => {
+  const DIGITS = (x) => String(x || '').replace(/[^0-9]/g, '');
+
+  // A valid NANP number: 10 digits, area code and exchange cannot start with 0
+  // or 1, and 555-01xx is the reserved fictional range that shows up in
+  // templates and stock copy.
+  const validNANP = (raw) => {
+    let dd = DIGITS(raw);
+    if (dd.length === 11 && dd[0] === '1') dd = dd.slice(1);
+    if (dd.length !== 10) return null;
+    if (/^[01]/.test(dd) || /^[01]/.test(dd.slice(3))) return null;
+    if (/^\d{3}555 ?01\d\d$/.test(dd)) return null;
+    if (/^(\d)\1{9}$/.test(dd)) return null;          // 0000000000, 1111111111
+    if (dd === '1234567890' || dd === '0123456789') return null;
+    return '+1' + dd;
+  };
+
+  const fmt = (e164) => {
+    const dd = DIGITS(e164).replace(/^1/, '');
+    return dd.length === 10 ? `(${dd.slice(0,3)}) ${dd.slice(3,6)}-${dd.slice(6)}` : e164;
+  };
+
+  // ── 1. GOOGLE BUSINESS PROFILE ─────────────────────────────────────────
+  const fromGBP = validNANP(gbpPhone);
+  if (fromGBP) return { phone: fromGBP, display: fmt(fromGBP), source: 'google_business_profile',
+    why: 'the number on their Google listing \u2014 the one a customer would dial' };
+
+  const html = String(pageHtml || '');
+  const text = String(pageText || '');
+
+  // ── 2. tel: LINK ───────────────────────────────────────────────────────
+  // Ordered by appearance: the first tel: on a page is nearly always the main
+  // line in the header, not a department buried in the footer.
+  const telMatches = [...html.matchAll(/href=["']tel:([^"']+)["']/gi)].map(m => m[1]);
+  for (const t of telMatches) {
+    const v = validNANP(t);
+    if (v) return { phone: v, display: fmt(v), source: 'tel_link',
+      why: 'a click-to-call link in their own page source' };
+  }
+
+  // ── 3. VISIBLE TEXT ────────────────────────────────────────────────────
+  // Real validation matters here. Page text is full of ten-digit strings that
+  // are not phone numbers: licence numbers, addresses, years, tracking IDs.
+  const combined = (text + ' ' + html.replace(/<[^>]+>/g, ' ')).slice(0, 120000);
+  const candidates = [...combined.matchAll(/(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b/g)].map(m => m[0]);
+  const counts = new Map();
+  for (const c of candidates) {
+    // Reject anything sitting immediately after a fax/licence/ein label \u2014 those
+    // are real numbers we must not dial or attribute to the owner.
+    const at = combined.indexOf(c);
+    const before = combined.slice(Math.max(0, at - 40), at).toLowerCase();
+    if (/\b(fax|licen[cs]e|lic#|lic\.|ein|tax id|reg(istration)?#|permit)\b/.test(before)) continue;
+    const v = validNANP(c);
+    if (!v) continue;
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  if (counts.size) {
+    // The number repeated most often across the site is the main line \u2014 header,
+    // footer and contact page all carry it, a department extension appears once.
+    const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    return { phone: best[0], display: fmt(best[0]), source: 'page_text',
+      why: `appears ${best[1]} time(s) in their own site copy`, occurrences: best[1] };
+  }
+
+  return { phone: '', display: '', source: 'none',
+    why: 'no number on their Google listing, no tel: link, and nothing phone-shaped in their site copy' };
+};
+
 // ══ CHANNEL ROUTER — EMAIL, OR COLD CALL ════════════════════════════════════
 // WHAT THIS IS AND IS NOT
 // This does NOT decide whether a business is worth pursuing. It decides WHICH
@@ -9703,6 +9792,7 @@ const _runResearchInner = async (req, res) => {
   let allowedConsequences = { checked: false, lines: [] };
   let leadMagnet = { checked: false };
   let marketClarity = { checked: false };
+  let phoneResult = { phone: '', display: '', source: 'none' };
   // Can they actually fund the engagement? Internal only — never reaches copy.
   let affordability = { checked: false, band: 'unknown' };
   let recentReviewCount = null;
@@ -10576,6 +10666,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     leadMagnet = readLeadMagnet(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
     // MARKET — the top of Hormozi's hierarchy, measured from their own copy.
+    // ── PHONE ────────────────────────────────────────────────────────────
+    // Google's own listing first, then a tel: link, then their site copy.
+    phoneResult = findPhoneNumber({
+      gbpPhone: (gbpHealth && gbpHealth.phone) || req.body.phone || '',
+      pageHtml: content,
+      pageText: [content, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
+      companyName: company,
+    });
+    console.log(`PHONE [${company}]: ${phoneResult.phone ? phoneResult.display + ' \u2014 ' + phoneResult.why : 'NOT FOUND \u2014 ' + phoneResult.why}`);
+
     marketClarity = readMarketClarity(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
       { trade: customerTrade || verifiedIndustry || '', city: req.body.location || '' });
@@ -12799,6 +12899,9 @@ Return ONLY valid JSON:
         } catch (e) { void e; return []; }
       })(),
       leadSignal: (parsed && parsed.leadSignal) || null,
+      phone: phoneResult.phone || req.body.phone || '',
+      phoneDisplay: phoneResult.display || '',
+      phoneSource: phoneResult.source || 'none',
       verifiedIndustry: customerTrade || verifiedIndustry || req.body.industry || '',
       earlyChannel: channelRoute,
       earlyChannelReason: channelReason,
