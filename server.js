@@ -13057,7 +13057,12 @@ Return ONLY valid JSON:
       // instead of the most conveniently available thing.
       candidateFindings: (() => {
         try {
-          const cf = (parsed && parsed.candidateFindings) || [];
+          // `parsed` is the local name inside the audit function, not here \u2014 in
+          // this scope the audit result is `brainAudit`. Referencing `parsed`
+          // threw "parsed is not defined" AFTER the entire audit had completed,
+          // so every lead ran the full 90 seconds and then 500'd at the last
+          // step, losing all the work.
+          const cf = (brainAudit && brainAudit.candidateFindings) || [];
           return cf
             .filter(c => c && c.finding)
             .map(c => ({ finding: String(c.finding).slice(0, 200), signal: c.signal || null, total: Number(c.total) || 0 }))
@@ -13065,7 +13070,7 @@ Return ONLY valid JSON:
             .slice(0, 8);
         } catch (e) { void e; return []; }
       })(),
-      leadSignal: (parsed && parsed.leadSignal) || null,
+      leadSignal: (brainAudit && brainAudit.leadSignal) || null,
       phone: phoneResult.phone || req.body.phone || '',
       phoneDisplay: phoneResult.display || '',
       phoneSource: phoneResult.source || 'none',
