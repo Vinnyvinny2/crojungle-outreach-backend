@@ -3238,6 +3238,24 @@ const TITLE_AUTHORITY = [
   // floor rather than at owner level, because a larger contractor can employ a
   // qualifying agent who holds the licence without owning the company.
   { rank: 80,  re: /\b(licen[sc]e ?holder|licen[sc]ee|qualifier|qualifying (agent|party|individual)|responsible managing|agent of record|broker of record|registered (agent )?principal)\b/i },
+  // A PROFESSIONAL CREDENTIAL AT A PRACTICE IS THE SAME CASE AS A LICENCE HOLDER
+  // AT A TRADE BUSINESS, and it was missed when that one was fixed directly above.
+  // "M.D." scored 30 (unknown title) and fell below the buying floor, so a live
+  // run on a plastic surgery practice named after its surgeon, on an eponymous
+  // domain, logged: 'Peter McKenna \u2014 "M.D." (authority 30) is below the buying
+  // floor. HELD BACK.' He owns it. The system found him and then discarded him.
+  //
+  // Worse, it was INCONSISTENT: another surgeon passed only because her title
+  // string happened to read "M.D., Owner" rather than "M.D." \u2014 same business
+  // shape, opposite outcome, decided by a word that happened to be present.
+  // Doctors, dentists, chiropractors, vets, CPAs and attorneys are a large part
+  // of this ICP, so the gate was silently discarding a whole class of buyer.
+  //
+  // Ranked 80, matching the licence holder and for the same reason: at a small
+  // practice the credentialed person almost always owns it, but a hospital or a
+  // large group employs many, so this sits above the floor rather than at owner
+  // level and lets corroboration decide the rest.
+  { rank: 80,  re: /\b(m\.?d\.?|d\.?d\.?s\.?|d\.?m\.?d\.?|d\.?o\.?|d\.?c\.?|d\.?v\.?m\.?|o\.?d\.?|c\.?p\.?a\.?|esq\.?|dds|dmd|dvm|physician|surgeon|dentist|chiropractor|veterinarian|optometrist|attorney|lawyer|counsel|accountant)\b/i },
   { rank: 75,  re: /\b(coo|chief operating|gm|general manager)\b/i },
   { rank: 70,  re: /\b(cfo|chief financial)\b/i },
   { rank: 65,  re: /\b(cmo|chief marketing)\b/i },
@@ -9544,6 +9562,7 @@ const _runResearchInner = async (req, res) => {
   let growthConstraint = { checked: false };
   let allowedConsequences = { checked: false, lines: [] };
   let leadMagnet = { checked: false };
+  let marketClarity = { checked: false };
   // Can they actually fund the engagement? Internal only — never reaches copy.
   let affordability = { checked: false, band: 'unknown' };
   let recentReviewCount = null;
@@ -10404,6 +10423,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // talking to a salesperson? Measured from the same full-site text.
     leadMagnet = readLeadMagnet(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+    // MARKET — the top of Hormozi's hierarchy, measured from their own copy.
+    marketClarity = readMarketClarity(
+      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
+      { trade: customerTrade || verifiedIndustry || '', city: req.body.location || '' });
+    if (marketClarity.checked) {
+      console.log(`MARKET CLARITY [${company}]: ${marketClarity.band.toUpperCase()} \u2014 ${marketClarity.verdict}${marketClarity.gaps.length ? ' | ' + marketClarity.gaps.join(' | ') : ''}`);
+    }
     if (leadMagnet.checked) {
       console.log(`LEAD MAGNET [${company}]: ${leadMagnet.hasAny ? 'found \u2014 ' + leadMagnet.assets.join(', ') : 'NONE \u2014 the only way to engage is to ask for a quote'}${leadMagnet.gapCount ? ` | ${leadMagnet.gapCount} gap(s)` : ''}`);
     }
