@@ -4310,13 +4310,41 @@ const measureBookingPath = (html, text) => {
   if (h.length < 200) return null;
 
   // Third-party schedulers, medical and trade. Their embed URLs are unambiguous.
-  // BUTTON TEXT COUNTS. A "BOOK NOW" button linking to a page or opening a modal
-  // is a booking path whatever it points at, and reading only embed URLs missed
-  // a med spa with BOOK NOW in the header, BOOK APPOINTMENT in the hero and
-  // SCHEDULE A CONSULTATION above the footer.
-  if (/>\s*(book\s*(now|online|appointment|a\s*consultation)?|schedule\s*(a\s*)?(consultation|appointment|visit|now)|request\s*(an?\s*)?appointment|make\s*an?\s*appointment)\s*</i.test(h)) {
+  // ── THIS RECEIVES MARKDOWN, NOT HTML ────────────────────────────────────
+  // The caller passes Firecrawl's markdown (p.md), so every HTML pattern below
+  // \u2014 <form>, href="tel:", >BOOK NOW< \u2014 could never match. Everything fell
+  // through to phone_only, and the override then OVERRODE a correct model read:
+  //   SITE AUDIT: booking corrected online_booking -> phone_only
+  // on a site with BOOK NOW in the header and BOOK APPOINTMENT in the hero.
+  // A measurement that cannot see its own input is worse than no measurement,
+  // because it outranks the thing that was right.
+  //
+  // In markdown a button is a link: [BOOK NOW](https://...). Match that, and
+  // bare heading text, as well as the HTML forms.
+  const BOOK_WORDS = /\b(book\s*(now|online|appointment|a\s*consultation|your\s*\w+)?|schedule\s*(a\s*)?(consultation|appointment|visit|now)|request\s*(an?\s*)?(appointment|consultation)|make\s*an?\s*appointment|reserve\s*(your|a)\s*\w+)\b/i;
+  // Markdown link whose LABEL is a booking action.
+  const mdLinks = [...h.matchAll(/\[([^\]]{2,60})\]\(([^)]+)\)/g)];
+  if (mdLinks.some(m => BOOK_WORDS.test(m[1]))) {
+    return { booking: 'online_booking', why: 'a book/schedule link is offered on the page itself' };
+  }
+  // HTML button or anchor text, for callers that do pass raw HTML.
+  if (/>\s*[^<]{0,40}(book|schedule|appointment)[^<]{0,40}\s*</i.test(h) && BOOK_WORDS.test(h)) {
     return { booking: 'online_booking', why: 'a book/schedule action is offered on the page itself' };
   }
+  // ── FORM AND PHONE, IN MARKDOWN ────────────────────────────────────────
+  // Firecrawl renders a form's fields as plain lines and a phone as a tel:
+  // markdown link, so both need matching in that shape as well as in HTML.
+  // Two field labels AND a submit word: one alone appears in ordinary copy
+  // ("send us your name"), and a false form reading is as bad as a false absence.
+  const _fieldHits = (h.match(/^\s*(first name|last name|your name|full name|email address|phone number|e-?mail|phone|name|message)\s*\*?\s*$/gim) || []).length
+    + (h.match(/\b(first name|last name|email address|phone number)\b/gi) || []).length;
+  if (_fieldHits >= 2 && /\b(message|submit|send|comments?)\b/i.test(h)) {
+    return { booking: 'form', why: 'an enquiry form is present on the page' };
+  }
+  if (mdLinks.some(m => /^tel:/i.test(m[2]))) {
+    return { booking: 'phone_only', why: 'a phone link is the only route offered' };
+  }
+
   const SCHEDULERS = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook\.me|savvycal|cal\.com|hubspot\.com\/meetings|chilipiper|book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
   if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is embedded in the page source' };
 
@@ -12018,7 +12046,20 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // Every pattern below is taken verbatim from a live email. Tested 15/15
           // with zero false positives against legitimate measured claims.
           _flag(/\bno (auto[- ]?reply|autoresponder|automatic (reply|response))\b/i, 'claims there is NO auto-reply \u2014 we never submitted the form, so this is unknowable');
-          _flag(/\bnothing (answers|responds|comes back|fires back)\b/i, 'claims nothing responds after submission \u2014 backend we never tested');
+          // WIDENED. This caught "nothing responds" and missed "nobody answers
+          // outside business hours" \u2014 the identical unmeasured claim in different
+          // words, which then shipped in a live email and was only caught
+          // downstream by the fact-checker as an advisory flag rather than blocked.
+          //
+          // We never submit their form, never ring their phone and never sit
+          // outside their hours. Every one of these asserts what happens to a
+          // person AFTER they hit the friction we measured. The friction is real;
+          // what follows it is invention, and it is the class of claim an owner
+          // disproves instantly by saying "my service actually calls them back".
+          _flag(/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'claims nothing responds after submission \u2014 backend we never tested');
+          _flag(/\b(nobody|no one|no-one|nothing|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back|is there|is listening)\b/i, 'claims nobody answers \u2014 we never rang them and never sat outside their hours');
+          _flag(/\b(after|outside|past)\s+(hours|business hours|\d{1,2}\s*(am|pm))[^.]{0,40}\b(nobody|no one|nothing|goes unanswered|unanswered|dead|silence)\b/i, 'claims what happens outside their opening hours \u2014 never measured');
+          _flag(/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'asserts the fate of a submission we never made');
           _flag(/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'states what the prospect already did \u2014 invented');
           _flag(/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'claims a competitor responded first \u2014 no such data exists');
           _flag(/\bby (the time|morning|monday)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'invented timeline of a deal being lost');
