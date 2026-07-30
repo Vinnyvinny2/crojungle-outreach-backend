@@ -5413,7 +5413,14 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     const about = picked.find(p => p.key === 'about');
     const booking = picked.find(p => p.key === 'booking');
     const rest = picked.filter(p => p.key !== 'about' && p.key !== 'booking');
-    const top = [about, booking, ...rest].filter(Boolean).slice(0, 4);
+    // Six, not four. At 0.5 credits per batched page this is +1 credit a lead
+    // against a ~10-14 credit audit \u2014 about 0.3 of a cent \u2014 and the pages it buys
+    // are the ones that carry signal: pricing, services, the owner's story, the
+    // booking path. NOT the whole sitemap: a 500-URL site would be 250 credits
+    // and the markdown would not fit in any context window, so the audit would
+    // get worse from noise, not better. Six intent-ranked pages is close to the
+    // point where more pages stop adding evidence.
+    const top = [about, booking, ...rest].filter(Boolean).slice(0, 6);
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     // BATCH: these URLs are all known up front and all on the same site, which is
