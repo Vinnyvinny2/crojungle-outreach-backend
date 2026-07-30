@@ -81,6 +81,44 @@ const COPY_BUSINESS_WORDS = /\b(revenue|customer|customers|homeowner|patient|cli
 // — which is exactly the string a live follow-up was built on.
 const COPY_TRIVIAL_FINDING = /(?:\b(?:favicon|alt text|broken (?:footer )?link|footer link|social (?:media )?link|copyright(?: year)?|meta description|title tag|spelling|typo|image size|missing photo)\b)|(?:\u00a9\s?\d{4})/i;
 
+// ══ ONE FABRICATION LIST, TWO CALL SITES ═════════════════════════════════════
+// WHY THIS EXISTS AS A SHARED CONSTANT
+// There were TWO fabrication batteries in this file. CLAIM VERIFY ran twenty-odd
+// patterns against the AUDIT prose. verifyGeneratedCopy ran EIGHT against the
+// actual email. Every time a new fabrication was caught, the pattern was added to
+// the audit list and not the email list, so the two drifted - and the weaker one
+// was guarding the text that actually reaches a human.
+//
+// Parke Gordon, 2026-07-30, shipped showing "Approved for Send - checks passed":
+//   "By Friday morning they've already signed with whoever called them back first"
+// That single sentence trips THREE patterns that existed in the audit list at the
+// time. None of them ran on the email. The guards were not missing; they were
+// pointed at the wrong text.
+//
+// So the list lives here once and both sites read it. Adding a pattern now
+// protects the email by construction rather than by somebody remembering.
+const BACKEND_CLAIM_PATTERNS = [
+  [/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'BACKEND CLAIM: asserts what happens after a form submit, which we never tested'],
+  [/\bno auto-?reply\b|\bno (confirmed )?(autoresponder|automatic (reply|response))\b/i, 'BACKEND CLAIM: we never submit the form, so an auto-reply cannot be ruled out'],
+  [/\bdisappears? forever\b|\bthat lead is gone\b/i, 'BACKEND CLAIM: asserts an outcome inside their systems'],
+  [/\bno one (ever )?(sees|responds|answers)\b.{0,30}\bsubmit/i, 'BACKEND CLAIM: what happens after a form submit'],
+  [/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'BACKEND CLAIM: nothing responds after submission - never tested'],
+  [/\b(nobody|no one|no-one|nothing|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back|is there|is listening)\b/i, 'BACKEND CLAIM: nobody answers - we never rang them'],
+  [/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'BACKEND CLAIM: asserts the fate of a submission we never made'],
+  [/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'PROSPECT CLAIM: states what the prospect already did - invented'],
+  [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'COMPETITOR CLAIM: claims a competitor responded first - no such data exists'],
+  [/\bby (the time|morning|monday|friday|tomorrow)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'INVENTED TIMELINE of a deal being lost'],
+  [/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'INVENTED COMPETITOR COUNT'],
+  [/\b(is|are|'?s|'?re) (gone|lost)\b/i, 'OUTCOME CLAIM: states the visitor is gone or lost - never observed'],
+  [/\bnever (hear from|hears from|see|sees) them again\b/i, 'OUTCOME CLAIM: states they never return - unknowable'],
+  // ── NEW, FROM THE 2026-07-30 EMAILS THAT SHIPPED GREEN ──────────────────
+  [/\b(is|are)?\s?n'?t (hearing|going to hear) (back |from )/i, 'BACKEND CLAIM: asserts they will not hear back - response behaviour we never tested'],
+  [/\bno instant (reply|response)\b/i, 'BACKEND CLAIM: "no instant reply" - we never submitted, so this is unknowable'],
+  [/\bgone before (morning|the next|tomorrow)\b/i, 'OUTCOME CLAIM: asserts the submission is lost overnight'],
+  [/\bdoes ?n'?t finish it\b|\bnever finishes? (it|the form)\b/i, 'BEHAVIOUR CLAIM: asserts what their visitors did with the form'],
+  [/\bmore than most (mortgage|loan|bank) applications?\b/i, 'INVENTED COMPARISON: we never measured what other applications ask for'],
+];
+
 const verifyGeneratedCopy = (copy = {}, opts = {}) => {
   const flags = [];
   const constraintLayer = opts.constraintLayer || '';
@@ -117,9 +155,8 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
   ].filter(Boolean).join(' \n ');
   const flag = (re, why) => { const m = allCopy.match(re); if (m) flags.push(`${why} \u2014 "${String(m[0]).slice(0, 60)}"`); };
 
-  flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'BACKEND CLAIM: asserts what happens after a form submit, which we never tested');
-  flag(/\bno auto-?reply\b/i, 'BACKEND CLAIM: we never submit the form, so an auto-reply cannot be ruled out');
-  flag(/\bdisappears? forever\b|\bthat lead is gone\b/i, 'BACKEND CLAIM: asserts an outcome inside their systems');
+  // The FULL shared battery, not the subset this function used to carry.
+  for (const [_re, _why] of BACKEND_CLAIM_PATTERNS) flag(_re, _why);
   flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'MARKETING JARGON banned in the email voice');
   flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bviewport\b|\bpage source\b|\bmarkup\b/i, 'DEVELOPER REGISTER: this is the sentence he forwards to his web person');
   flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'INVENTED LOSS TOTAL about their business');
@@ -2021,7 +2058,7 @@ Return ONLY valid JSON, no markdown:
   "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
   "overallConversionRating": "strong/moderate/weak",
   "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions. (c) IF THE SITE IS VISIBLY OLD, THAT IS ITS OWN CANDIDATE \u2014 use signal \u2018dated_site\u2019. A copyright year years out of date, a layout from another decade, or a design a buyer would hesitate to hand a card to is not a technical leak and it is not positioning: it is a CREDIBILITY problem, and for a high-ticket local trade it is often the first thing a customer reacts to and the whole reason a rebuild is worth buying. It was invisible to this list before, so a contractor whose site had not changed since 2015 had no way for that to become the lead. Score it like anything else: VERIFIABLE is high (he can look at it), SURPRISE is usually LOW (he knows it is old), so it wins only when it is genuinely severe. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
-  "leadSignal": "The winner from candidateFindings above \u2014 the ONE finding your pitch will be built on. Answer with EXACTLY ONE of: \"review_pattern\", \"search_absence\", \"gbp_gap\", \"conversion_leak\", \"technical_leak\", \"dated_site\", \"positioning_offer\". \u26a0 conversion_leak IS NEW AND IT IS THE ONE MOST OFTEN FILED WRONG. It covers the path from INTERESTED to CUSTOMER: no booking tool, a form that captures and then waits, no visible instant-response layer, an over-long form, no way to start outside business hours. Those are NOT technical_leak. technical_leak is page MECHANICS \u2014 no HTTPS, no mobile viewport, no tap-to-call link. Ask which question the finding answers: \"can this page function?\" is technical_leak; \"can a person who already wants to hire them actually do it?\" is conversion_leak. On live runs every conversion finding was filed as technical_leak, which put the highest-leverage layer on this kind of lead into the lowest-ranked bucket. This is a DECISION you are making now, before writing, not a description of something already written. The pitch that follows must be built on this finding. Answer with EXACTLY ONE of these strings and nothing else: \"review_pattern\" (a pain repeating across their own Google reviews), \"search_absence\" (a measured search-rank absence), \"gbp_gap\" (a measured Google Business Profile gap), \"technical_leak\" (a measured site/technical leak \u2014 no HTTPS, no mobile viewport, no tap-to-call, an over-long form, slow mobile), \"positioning_offer\" (their market positioning, generic promise, or missing offer/guarantee). Be honest \u2014 name what the FIRST sentence of the pitch is actually about, not what you wish it led with. This is checked against what we measured.",
+  "leadSignal": "The winner from candidateFindings above \u2014 the ONE finding your pitch will be built on. Answer with EXACTLY ONE of: \"review_pattern\", \"search_absence\", \"gbp_gap\", \"conversion_leak\", \"technical_leak\", \"dated_site\", \"positioning_offer\". \u26a0 conversion_leak IS NEW AND IT IS THE ONE MOST OFTEN FILED WRONG. It covers the path from INTERESTED to CUSTOMER: no booking tool, a form that captures and then waits, no visible instant-response layer, an over-long form, no way to start outside business hours. Those are NOT technical_leak. technical_leak is page MECHANICS \u2014 no HTTPS, no mobile viewport, no tap-to-call link. Ask which question the finding answers: \"can this page function?\" is technical_leak; \"can a person who already wants to hire them actually do it?\" is conversion_leak. On live runs every conversion finding was filed as technical_leak, which put the highest-leverage layer on this kind of lead into the lowest-ranked bucket. This is a DECISION you are making now, before writing, not a description of something already written. The pitch that follows must be built on this finding. Answer with EXACTLY ONE of these strings and nothing else: \"review_pattern\" (a pain repeating across their own Google reviews), \"search_absence\" (a measured search-rank absence), \"gbp_gap\" (a measured Google Business Profile gap), \"technical_leak\" (a measured site/technical leak \u2014 no HTTPS, no mobile viewport, no tap-to-call link, slow mobile. NOT forms \u2014 an over-long form is conversion_leak, as stated above), \"positioning_offer\" (their market positioning, generic promise, or missing offer/guarantee). Be honest \u2014 name what the FIRST sentence of the pitch is actually about, not what you wish it led with. This is checked against what we measured.",
   "leadSignalReason": "ONLY fill this in if you deliberately did NOT lead with the highest-ranked signal available. Explain in one sentence why \u2014 for example the recurring review pain is about pricing or workmanship, which we do not fix, so leading with it would make us sound like a complaint tracker. Leave as null if you led with the highest-ranked signal.",
   "positioningRead": "An OBSERVATION about their market positioning and offer, drawn ONLY from their homepage copy printed above — never a score, never a dollar figure. Object {targetsSpecificCustomer: true/false, hasRealOffer: true/false, hasGuarantee: true/false (is any guarantee, warranty or risk reversal visible on the pages we read?), offerIsNamed: true/false (is the offer a named thing a buyer can hold in their head, or just 'Contact Us'?), repeatedGenericPromise: 'the exact interchangeable phrase that appears across multiple pages, or null if the pages genuinely differentiate', observation: 'one plain sentence quoting or closely paraphrasing what their site actually says about who it is for and what it offers, and why that is or is not differentiated'}. If the homepage copy was not captured, return null. Example: {targetsSpecificCustomer:false, hasRealOffer:false, observation:'The homepage leads with \"quality you can trust\" and a \"Contact Us\" button — the same promise and the same ask as every competitor, so nothing tells a buyer why to pick them.'} This must be TRUE to their page and checkable by the owner; do not invent copy they did not write.",
   "operationsOpportunity": "if hiring signal present: what manual work could be automated and rough labor cost, else null",
@@ -3206,7 +3243,7 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
     targets = rankUrlsByIntent(urls, /(contact|about|team|our-?story|get-?in-?touch|reach-?us|staff|people)/i, 4);
     // FREE GATE: if the map came back healthy and contains nothing contact-shaped,
     // the site has no such page. Guessing would buy 404s to learn what we know.
-    if (!targets.length && urls.length > 3) return out;
+    if (!targets.length && Array.isArray(urls) && urls.length >= 1) return out;
   } catch { /* map unavailable — fall through to guesses */ }
 
   if (!targets.length) targets = ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team'].map(p => base + p);
@@ -4662,6 +4699,14 @@ const SIGNAL_PATTERNS = [
     /\bno way to (book|start|schedule)\b/i,
     /\bbooking (path|mechanism)\b/i,
     /\bno automated (reply|follow[- ]up)\b/i,
+    // Forms belong HERE, not in technical_leak. An over-long form is not a
+    // page mechanic - the page works fine. It is a wall between someone who
+    // already wants to hire them and hiring them, which is this layer by
+    // definition. On 2026-07-30 the classifier relabelled a 16-field form
+    // (Broderick) and an 11-field form (Parke Gordon) OUT of conversion_leak,
+    // and Parke Gordon's measured binding constraint WAS conversion.
+    /\b\d+[- ]field form\b/i,
+    /\bform asks for \d+\b/i,
   ]],
   ['technical_leak', [
     /\btel:\s*link\b/i,
@@ -4671,8 +4716,6 @@ const SIGNAL_PATTERNS = [
     /\bno HTTPS\b/i,
     /\bSSL\b/i,
     /\bviewport\b/i,
-    /\b\d+[- ]field form\b/i,
-    /\bform asks for \d+\b/i,
     /\bmobile\b.{0,24}\b(broken|blocked|not)\b/i,
   ]],
 ];
@@ -5585,7 +5628,7 @@ const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
     // contains no careers-shaped URL at all, the site almost certainly has no
     // careers page — and guessing /careers, /jobs, /employment means paying for
     // up to three 404s, which Firecrawl still bills as successful fetches.
-    if (!paths.length && urls.length > 3) {
+    if (!paths.length && Array.isArray(urls) && urls.length >= 1) {
       console.log(`CAREERS [${companyName}]: sitemap has ${urls.length} URLs and none look like a careers page — skipping (saves up to 3 credits on guessed 404s)`);
       return null;
     }
@@ -6317,7 +6360,36 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // Managing Partner. Anything below that is a NO-SEND by default — the lead is
   // held back for a manual look rather than wasted on someone with no authority.
   const AUTHORITY_FLOOR = 75; // COO/GM and above. VP=50, Director=35, Manager=20.
-  const hasAuthority = best.authority >= AUTHORITY_FLOOR;
+
+  // ══ UNKNOWN TITLE AT AN EPONYMOUS BUSINESS IS NOT A JUNIOR TITLE ═══════════
+  // authorityScore() returns 30 for a bare name, which is correct as a default:
+  // we must not promote a stranger. But it makes "no title scraped" identical to
+  // "confirmed Office Manager", and those are opposite situations.
+  //
+  // Parke Gordon Law, twice on 2026-07-30: Mat Parke, found on their OWN site,
+  // surname in the firm name, in the domain, holding a T2 SMTP-VERIFIED mailbox
+  // at mat@parkegordon.com - HELD BACK at authority 30 for title "null". The
+  // pipeline then addressed the email to him regardless, so the gate produced no
+  // safety and one contradiction: reachability said "no buyer", the owner panel
+  // said "Mat Parke", and OWNER/EMAIL MATCH said "reaching the right person".
+  //
+  // Surname-in-business-name is MEASURED, and confirmation on their own site is
+  // MEASURED. Two measured facts beat an absent title string. This promotes ONLY
+  // when the title is genuinely unknown - a scraped junior title still fails,
+  // because a known "Office Manager" named Parke is not the owner.
+  let _authority = best.authority;
+  let _eponymousOwner = false;
+  if (!best.title && best.name) {
+    const _surname = String(best.name).trim().split(/\s+/).pop().toLowerCase();
+    const _co = String(companyName || '').toLowerCase();
+    const _onOwnSite = (best.sources || []).some(sc => /own_website|business_name|google_review_replies/.test(String(sc)));
+    if (_surname.length >= 3 && new RegExp(`\\b${_surname.replace(/[^a-z]/g, '')}\\b`).test(_co) && _onOwnSite) {
+      _eponymousOwner = true;
+      _authority = 80;
+      console.log(`DM [${companyName}]: EPONYMOUS AUTHORITY \u2014 no title was scraped for ${best.name}, but their surname is in the business name and they are confirmed on the business's own sources. An unknown title at a business named after the person is owner-level, not junior. Authority ${best.authority} \u2192 80.`);
+    }
+  }
+  const hasAuthority = _authority >= AUTHORITY_FLOOR;
 
   // EVIDENCE FLOOR: authority alone isn't enough. If the ONLY source is Hunter —
   // whose LinkedIn-biased index is exactly what surfaces the wrong people — then
@@ -6330,7 +6402,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   best.canBuy = hasAuthority && hasRealEvidence;
   if (!best.canBuy) {
     const why = !hasAuthority
-      ? `"${best.title}" (authority ${best.authority}) is below the buying floor`
+      ? `"${best.title || 'no title found'}" (authority ${_authority}) is below the buying floor`
       : 'Hunter is the ONLY source — no independent confirmation this is the real owner';
     console.log(`DM [${companyName}]: ⚠ ${best.name} — ${why}. HELD BACK.`);
     best.blockWhy = why;
@@ -6346,7 +6418,8 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     sources: best.sources,
     corroborated: best.corroborated,
     evidence: best.evidence || '',
-    authority: best.authority,
+    authority: _authority,
+    eponymousOwner: _eponymousOwner,
     canBuy: best.canBuy,
     blockReason: best.canBuy ? null : (best.blockWhy || `"${best.title || 'unknown title'}" cannot authorize a purchase`),
     // The ranker returns only the winner now, so there is no runner-up list to
@@ -10592,6 +10665,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // run showed no review lines at all and there was no way to tell whether it
       // had run and found nothing or never run.
       let reviewPainFound = false;
+      // Set only when the DEEP read FAILED (not when it read cleanly).
+      // Broderick 2026-07-30: Apify timed out, we printed "NOT MEASURED - no
+      // claim permitted", and the 5-review API fallback then printed "none at
+      // 4 stars or below - this business has no repeated complaint". Three
+      // lines, the last two contradicting the first, and the softest of them
+      // is an ABSENCE claim drawn from 5 of 72 reviews.
+      let deepReviewNotMeasured = false;
       if (!effectivePlaceId) {
         console.log(`REVIEW MINE [${company}]: SKIPPED — no Google placeId on this lead, so their reviews cannot be located. Non-Places leads have no review mine.`);
       } else if (!firecrawlKey && !placesKey) {
@@ -10619,6 +10699,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           } else {
             // NOT MEASURED. Distinct from clean, and it must never be described as
             // "no complaints" — reading zero reviews tells us nothing about them.
+            deepReviewNotMeasured = true;
             console.log(`\u26d4 REVIEW MINE [${company}]: NOT MEASURED — ${deep && deep.why ? deep.why : 'review lookup returned nothing'}. No claim about their reviews is permitted on this lead.`);
           }
         } catch(e) { console.log(`REVIEW MINE [${company}]: deep scrape errored (${e.message}) — falling back to the review API.`); }
@@ -10632,7 +10713,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             reviewPainFound = true;
             console.log(`\u2713 REVIEW MINE [${company}]: API fallback found ${gr.signals.length} pattern(s) from the 5 reviews Google exposes — ${gr.signals.map(sg => sg.pain).join(' | ')}`);
           } else {
-            console.log(`REVIEW MINE [${company}]: API fallback found no repeated pattern either. No review hook for this lead — the pitch will lead on the site audit instead.`);
+            if (deepReviewNotMeasured) {
+              console.log(`\u26d4 REVIEW MINE [${company}]: STILL NOT MEASURED. The deep read failed and the fallback only sees the 5 reviews Google exposes - a sample, not the profile. No review hook, and NO absence claim about their reviews is permitted on this lead.`);
+            } else {
+              console.log(`REVIEW MINE [${company}]: API fallback found no repeated pattern either. No review hook for this lead — the pitch will lead on the site audit instead.`);
+            }
           }
         } catch(e) { console.log(`REVIEW MINE [${company}]: API fallback errored: ${e.message}`); }
       }
@@ -12076,6 +12161,73 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           _flag(/\bnever (hear from|hears from|see|sees) them again\b/i, 'states they never return \u2014 unknowable');
           _flag(/\b(has|have) nowhere to go\b/i, 'states the outcome of a visit we did not track');
           _flag(/\bis simply lost\b/i, 'states the visitor is lost \u2014 unobserved outcome');
+
+          // ══ POST-CONTACT CLAIM DETECTOR — ALLOWLIST, NOT BLACKLIST ═══════════
+          // Everything above this line is an ENUMERATION: twenty-odd regexes, one
+          // per phrasing we have already been burned by. Every round a new email
+          // finds a wording nobody listed and a twenty-first regex gets added.
+          // Parke Gordon, 2026-07-30: "the person who finds you at 9pm on a
+          // Thursday and fills out your form isn't hearing from anyone until
+          // Friday morning" passed ALL of them. The fact-checker caught it; CLAIM
+          // VERIFY reported the copy clean. Two guards, opposite verdicts, and the
+          // one the operator reads first was the one that was wrong.
+          //
+          // The enumeration cannot be completed, because the set of English
+          // sentences meaning "nothing happens after they contact you" is
+          // unbounded. So this inverts the test:
+          //
+          //   1. DETECT THE CATEGORY structurally — a sentence that puts a
+          //      customer in contact with them AND says something about what
+          //      follows. That shape is finite and describable.
+          //   2. REQUIRE MEMBERSHIP in the measured allow-list. ALLOWED
+          //      CONSEQUENCES is built in code from walls we actually measured.
+          //      If the sentence is not one of those, it was invented.
+          //
+          // Same principle as everything else that worked here: measure the legal
+          // set, then check against it. Do not try to list the illegal one.
+          try {
+            const _norm = (t) => new Set(String(t || '').toLowerCase()
+              .replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+              .filter(w => w.length > 3 && !/^(they|them|their|that|this|with|from|your|have|been|will|what|when|after|into)$/.test(w)));
+            const _overlap = (a, b) => {
+              if (!a.size || !b.size) return 0;
+              let sh = 0; a.forEach(w => { if (b.has(w)) sh++; });
+              return sh / Math.min(a.size, b.size);
+            };
+            const _allowed = (allowedConsequences && allowedConsequences.checked && Array.isArray(allowedConsequences.lines))
+              ? allowedConsequences.lines.map(_norm) : [];
+
+            // A person putting themselves in contact with the business.
+            const _CONTACT = /\b(form|submits?|submitted|submission|fills? (it |that |the form )?out|filled (it |that |the form )?out|enquir|inquir|reach(es|ed)? out|messages? (you|them|him)|leaves? (their|his|her) (name|number|details|info)|calls? (you|them|in)|rings?|books?|requests? a (quote|call|consult))\b/i;
+            // A claim about what does or does not follow that contact.
+            const _AFTER = /\b(until|till|next (morning|day|business day)|hours? later|(the )?following (morning|day)|before (anyone|someone|you|they)|waits?|waiting|hears?( back| from)?|responds?|replies|reply|gets? back|answers?|sits? (there|untouched)|no ?one|nobody|nothing|never)\b/i;
+
+            const _sentences = String(_allProse || '')
+              .split(/(?<=[.!?])\s+|\n+/)
+              .map(x => x.trim())
+              .filter(x => x.length > 25);
+
+            // A sentence describing what the PAGE contains is an observation, not a
+            // claim about what follows contact, even when it uses the same words.
+            // "The contact form asks for 11 fields before anyone speaks to a
+            // person" is measured from their own page source and must not flag -
+            // an early version of this detector did flag it, which would have
+            // trained the operator to ignore the guard.
+            const _PAGE_FACT = /\b(asks? for|\d+[- ]field|fields?\b|on the page|in the page source|visible on|no (chat|widget|booking tool|instant[- ]response)|only lists?|the only (way|option|ask)|we (were |got )?served|title tag|top \d+ results?)\b/i;
+
+            for (const _sent of _sentences) {
+              if (!_CONTACT.test(_sent) || !_AFTER.test(_sent)) continue;
+              if (_PAGE_FACT.test(_sent)) continue;
+              const _w = _norm(_sent);
+              const _best = _allowed.reduce((m, a) => Math.max(m, _overlap(a, _w)), 0);
+              if (_best < 0.5) {
+                _claimRisks.push(`POST-CONTACT CLAIM not in the measured allow-list \u2014 this sentence says what happens after a customer contacts them, which we have never observed \u2014 "${_sent.slice(0, 90)}"`);
+              }
+            }
+            if (_allowed.length === 0 && _sentences.some(x => _CONTACT.test(x) && _AFTER.test(x))) {
+              _claimRisks.push('POST-CONTACT CLAIM with NO allow-list available \u2014 allowed consequences were not measured on this lead, so no claim about what follows a customer contact is permissible at all.');
+            }
+          } catch (e) { void e; }
           _flag(/\b(are ?n'?t|is ?n'?t|do ?n'?t|does ?n'?t|never) com(e|ing) back\b/i, 'states they do not return \u2014 unknowable');
           _flag(/\bdisappears?\b/i, 'states the visitor disappears \u2014 unobserved');
           // Tap-to-call: only claimable when the page ALSO disables iOS auto-linking.
@@ -12416,10 +12568,27 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               // The declared lead must move with its finding, or LADDER CHECK
               // validates against a label that no longer exists on the winner.
               if (parsed.leadSignal) {
-                const _win = parsed.candidateFindings.find(c => c && c.declaredSignal === parsed.leadSignal);
+                // == DRAG THE LEAD ONLY IF THE LEAD ITSELF MOVED ==
+                // This used to `.find()` the FIRST candidate carrying the declared
+                // signal. Parke Gordon (2026-07-30) had THREE conversion_leak
+                // candidates - 23 (phone-only intake), 22 (11-field form), 21 (no
+                // booking tool). The 22 was relabelled, `.find()` returned it, and
+                // leadSignal was dragged to technical_leak even though the email was
+                // built on the 23, which never moved. The declared lead then pointed
+                // at a finding the copy does not discuss.
+                //
+                // The email is built on the WINNER, so only the highest-scoring
+                // carrier of the declared signal can drag it. If that one kept its
+                // label, the lead did not move, whatever happened further down.
+                const _carriers = parsed.candidateFindings
+                  .filter(c => c && (c.declaredSignal || c.signal) === parsed.leadSignal)
+                  .sort((a, b) => (Number(b.total) || 0) - (Number(a.total) || 0));
+                const _win = _carriers[0];
                 if (_win && _win.signal !== parsed.leadSignal) {
-                  console.log(`\u26a0 SIGNAL RELABEL [${company}]: the declared lead moved with it \u2014 leadSignal ${parsed.leadSignal} \u2192 ${_win.signal}.`);
+                  console.log(`\u26a0 SIGNAL RELABEL [${company}]: the declared lead moved with it \u2014 leadSignal ${parsed.leadSignal} \u2192 ${_win.signal} (the top-scored carrier, ${_win.total}).`);
                   parsed.leadSignal = _win.signal;
+                } else if (_carriers.length > 1) {
+                  console.log(`\u2713 SIGNAL RELABEL [${company}]: a lower-scored ${parsed.leadSignal} candidate was relabelled, but the finding the email is actually built on (${_win ? _win.total : '?'}) kept its label. leadSignal unchanged.`);
                 }
               }
             }
