@@ -12318,6 +12318,20 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // The growth constraint is computed in CODE from measured inputs, so it
           // is the one non-arbitrary tiebreaker available. This does not overrule
           // a clear winner; it only speaks when the scores genuinely cannot decide.
+          // == THIS MUST ENFORCE, NOT NARRATE ==
+          // Live run, Dr. Raja Mohan: this check fired CORRECTLY - search_absence
+          // (LEADS) beat positioning_offer (OFFER) by ONE point while OFFER was the
+          // measured binding constraint - and the pipeline shipped the email anyway,
+          // because the warning was a console.log and nothing else. Worse, LADDER
+          // CHECK printed "Correct" three lines later, because it only asks whether
+          // the declared lead matched the top SCORE. Two guards, same run, opposite
+          // verdicts, and the operator sees a green tick.
+          //
+          // We deliberately do NOT rewrite parsed.leadSignal here. The email body was
+          // already written on the losing finding; relabelling it would only make the
+          // label lie about the copy. The honest action is to raise it as a claim risk
+          // so it reaches the review checklist, and to stop LADDER CHECK certifying it.
+          let _tiebreakOverruled = false;
           try {
             const _cf = Array.isArray(parsed.candidateFindings) ? parsed.candidateFindings.slice() : [];
             if (_cf.length >= 2 && growthConstraint.checked) {
@@ -12328,7 +12342,9 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 const _winnerLayer = SIGNAL_LAYER[_cf[0] && _cf[0].signal];
                 if (_inLayer.length && _winnerLayer !== growthConstraint.layer) {
                   const _should = _inLayer[0];
-                  console.log(`\u26a0 LADDER TIEBREAK [${company}]: top two are ${_gap} point(s) apart \u2014 inside scoring noise \u2014 and the winner sits in the ${_winnerLayer} layer while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) is in the binding layer and should have taken the tie. A difference this small in five subjective scores is not a reason to lead on a layer that is not the constraint.`);
+                  _tiebreakOverruled = true;
+                  _claimRisks.push(`LADDER: the email leads on the ${_winnerLayer} layer, which won by ${_gap} point(s) - inside scoring noise - while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) sits in the binding layer and should have taken the tie.`);
+                  console.log(`\u26d4 LADDER TIEBREAK [${company}]: top two are ${_gap} point(s) apart \u2014 inside scoring noise \u2014 and the winner sits in the ${_winnerLayer} layer while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) is in the binding layer and should have taken the tie. A difference this small in five subjective scores is not a reason to lead on a layer that is not the constraint.`);
                 } else if (_winnerLayer === growthConstraint.layer) {
                   console.log(`\u2713 LADDER TIEBREAK [${company}]: top two within ${_gap} point(s), and the winner is in the measured binding layer (${growthConstraint.layer}). Correct tie resolution.`);
                 }
@@ -12460,13 +12476,29 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // Log the model's own scoring so the selection is auditable in the logs.
           // If a bad email ships, this shows WHY that finding was chosen.
           if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
-            const _ranked = parsed.candidateFindings
+            // ── DO NOT SLICE THIS LIST ────────────────────────────────────────
+            // This log used to `.slice(0, 4)`. Four live leads were then read as
+            // "every audit only generates four candidates" — which was an artefact
+            // of the LOG, not of the audit. The schema asks for 3 to 6. Truncating
+            // the one diagnostic built to answer "is candidate generation thin?"
+            // made that question unanswerable. Print all of them, and print the
+            // count so the spread is visible at a glance.
+            const _sortedC = parsed.candidateFindings
               .slice()
-              .sort((a, b) => (Number(b && b.total) || 0) - (Number(a && a.total) || 0))
-              .slice(0, 4)
-              .map(c => `${c && c.signal ? c.signal : '?'}=${Number(c && c.total) || 0} (${String((c && c.finding) || '').slice(0, 50)})`)
+              .sort((a, b) => (Number(b && b.total) || 0) - (Number(a && a.total) || 0));
+            const _ranked = _sortedC
+              .map(c => `${c && c.signal ? c.signal : '?'}=${Number(c && c.total) || 0}${c && c._injected ? '*' : ''} (${String((c && c.finding) || '').slice(0, 50)})`)
               .join(' | ');
-            console.log(`FINDING SCORES [${company}]: ${_ranked}`);
+            const _hi = Number(_sortedC[0] && _sortedC[0].total) || 0;
+            const _lo = Number(_sortedC[_sortedC.length - 1] && _sortedC[_sortedC.length - 1].total) || 0;
+            const _gapTop = _sortedC.length > 1 ? _hi - (Number(_sortedC[1].total) || 0) : 0;
+            console.log(`FINDING SCORES [${company}]: ${_sortedC.length} candidate(s) | top-two gap ${_gapTop} | spread ${_lo}-${_hi} :: ${_ranked}`);
+            // A top-two gap of 0 or 1 across five subjective 1-5 scores is noise,
+            // not a decision. Say so where it is read, rather than leaving the
+            // operator to compute it from the numbers every time.
+            if (_sortedC.length > 1 && _gapTop <= 1) {
+              console.log(`\u26a0 LADDER RESOLUTION [${company}]: the lead finding was decided by ${_gapTop} point(s) out of 25, summed from five subjective 1-5 scores. That is inside noise - this winner is not reproducible run to run.`);
+            }
           }
 
           // ══ LADDER VERDICT v3 — judge against the SCORES, not category order ══
@@ -12486,7 +12518,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const _declBest = _scored.filter(c => c.signal === _declared)
               .sort((a, b) => Number(b.total) - Number(a.total))[0];
             const _gap = Number(_best.total) - Number(_declBest ? _declBest.total : 0);
-            if (_declared === _best.signal) {
+            if (_declared === _best.signal && _tiebreakOverruled) {
+              // The lead DID match the top score - and the top score was decided by
+              // noise on a layer that is not the measured constraint. Matching a
+              // coin flip is not correctness, so do not print a tick over a warning
+              // that fired moments earlier on the same lead.
+              console.log(`\u26a0 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared}, its own highest-scored finding (${_best.total}) - but see LADDER TIEBREAK above: that top score was inside noise and sits outside the measured binding layer. Matching the top score is not the same as being right here.`);
+            } else if (_declared === _best.signal) {
               console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared}, its own highest-scored finding (${_best.total}). Correct.`);
             } else if (_gap <= 2) {
               console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared} (${_declBest ? _declBest.total : '?'}) over ${_LABEL[_best.signal] || _best.signal} (${_best.total}) \u2014 within scoring noise, no concern.`);
@@ -12732,7 +12770,18 @@ Return ONLY valid JSON:
               // critique block entirely instead of degrading to "no critique".
               critique = parseLLMJSON(repaired) || {};
             }
-            const conf = Number.isFinite(Number(critique.confidenceScore)) ? Number(critique.confidenceScore) : 7;
+            // == 7/10 WAS A DEFAULT, NOT A SCORE ==
+            // Live run, Dr. Raja Mohan: the critique JSON logged UNRECOVERABLE twice
+            // and never repaired, so `critique` was {}. confidenceScore fell through
+            // to this literal 7 and flaggedClaims fell through to [], and the line
+            // printed "confidence 7/10 | 0 claim(s) flagged" - i.e. a TOTAL FAILURE
+            // of the last fabrication guard rendered identically to a clean pass.
+            // It also explains why 7/10 appeared on run after run: it was the same
+            // constant every time, not the model converging on a grade.
+            // A guard that did not run must say it did not run.
+            const _confParsed = Number(critique.confidenceScore);
+            const _factCheckRan = Number.isFinite(_confParsed);
+            const conf = _factCheckRan ? _confParsed : 7;
             brainAudit.critique = {
               verifiedClaims: critique.verifiedClaims || [],
               flaggedClaims: critique.flaggedClaims || [],
@@ -12787,7 +12836,14 @@ Return ONLY valid JSON:
             const _CLEARED = /\b(NOT flagged|not a flag|no flagged claims|VERIFIED as measured|is ALLOWED|allowed per rules|correct and (must not|should not) be flagged|no unverifiable|nothing to flag)\b/i;
             const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f));
             const _cleared = _rawFlags.length - _realFlags.length;
-            console.log(`FACT CHECK [${company}]: confidence ${conf}/10 | ${_realFlags.length} claim(s) flagged${_cleared ? ` (${_cleared} entr${_cleared === 1 ? 'y' : 'ies'} explicitly CLEARED a claim and are not counted)` : ''}${_realFlags.length ? ': ' + _realFlags.join(' | ') : ''}`);
+            if (!_factCheckRan) {
+              const _fcMsg = 'FACT CHECK DID NOT RUN - the critique response could not be parsed, so NO claim in this copy has been fact-checked. Absence of flags here is absence of checking, not evidence the copy is clean.';
+              brainAudit._claimRisks = (brainAudit._claimRisks || []).concat(_fcMsg);
+              brainAudit.factCheck.didNotRun = true;
+              console.log(`\u26d4 FACT CHECK [${company}]: ${_fcMsg}`);
+            } else {
+              console.log(`FACT CHECK [${company}]: confidence ${conf}/10 | ${_realFlags.length} claim(s) flagged${_cleared ? ` (${_cleared} entr${_cleared === 1 ? 'y' : 'ies'} explicitly CLEARED a claim and are not counted)` : ''}${_realFlags.length ? ': ' + _realFlags.join(' | ') : ''}`);
+            }
             // Downstream consumers (the UI badge, the approval panel) must see the
             // corrected list, not the raw one.
             critique.flaggedClaims = _realFlags;
