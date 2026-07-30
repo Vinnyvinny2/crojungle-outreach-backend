@@ -10208,14 +10208,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        // ── THE WHOLE PAGE, NOT THE FIRST SCREEN ─────────────────────────
-        // 'screenshot' captures the VIEWPORT only, so every visual read was of the
-        // hero and nothing else. On a med spa that meant the audit never saw the
-        // BOOK NOW band, the services grid, the testimonials or the contact form
-        // sitting further down \u2014 and then reported there was no way to book.
-        // 'screenshot@fullPage' renders the entire page top to bottom. Same call,
-        // same cost, everything the vision read was already supposed to cover.
-        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+        // ── VIEWPORT, NOT FULL PAGE \u2014 AND HERE IS WHY ──────────────────
+        // 'screenshot@fullPage' was tried and REVERTED. It works, but a long
+        // marketing homepage renders past 8000px, and Claude's vision API rejects
+        // any image with a dimension over that limit:
+        //   BRAIN ERROR: image dimensions exceed max allowed size: 8000 pixels
+        //   VISION: CTA=undefined headline=undefined blankHero=undefined
+        //   Brain JSON truncated \u2014 partial extraction used
+        // The vision read died, the audit came back with a null pitch angle, and
+        // the whole lead degraded. A viewport screenshot that works beats a full
+        // page that kills the audit.
+        //
+        // If full-page is wanted later it needs downscaling before it reaches the
+        // vision call \u2014 capture tall, resize to under 8000px, then send.
+        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
       }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
