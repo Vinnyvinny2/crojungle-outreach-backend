@@ -81,6 +81,62 @@ const COPY_BUSINESS_WORDS = /\b(revenue|customer|customers|homeowner|patient|cli
 // — which is exactly the string a live follow-up was built on.
 const COPY_TRIVIAL_FINDING = /(?:\b(?:favicon|alt text|broken (?:footer )?link|footer link|social (?:media )?link|copyright(?: year)?|meta description|title tag|spelling|typo|image size|missing photo)\b)|(?:\u00a9\s?\d{4})/i;
 
+// ══ POST-CONTACT CLAIM DETECTOR — SHARED, SELF-CONTAINED ═════════════════════
+// WHY IT IS NOT AN ENUMERATION
+// BACKEND_CLAIM_PATTERNS above is a list of phrasings we have already been burned
+// by, and it can never be finished: the set of English sentences meaning "nothing
+// happens after they contact you" is unbounded. Parke Gordon shipped
+// "isn't hearing from anyone until Friday morning" straight through twenty of them.
+//
+// WHY IT DOES NOT NEED THE ALLOW-LIST
+// The first design checked each candidate sentence against ALLOWED CONSEQUENCES.
+// That list is built server-side during research and never reaches the browser,
+// so wiring it to the email would mean plumbing it out, through the client, and
+// back - four new legs, four new places to silently drop it.
+//
+// The prompt already states the real rule, and it needs no data:
+//   "a general truth about how PEOPLE behave, stated about people and never about
+//    his systems: 'people comparing three contractors call the one that dials' is
+//    fine; 'your callers give up and phone someone else' is not."
+//
+// So the test is OWNERSHIP, not vocabulary. A sentence about what follows contact
+// is legal when it describes people in general and illegal the moment it is
+// attached to THIS business - by a possessive, by their name, or by a specific
+// clock time that implies we watched it happen.
+const detectPostContactClaims = (prose) => {
+  const out = [];
+  // Someone putting themselves in contact with the business.
+  const CONTACT = /\b(form|submits?|submitted|submission|fills? (it |that |the form )?out|filled (it |that |the form )?out|enquir|inquir|reach(es|ed)? out|messages? (you|them|him)|leaves? (their|his|her) (name|number|details|info)|call(s|ed|ing)? (you|them|him|her|back|in)\b|contacted|rings?|books?|requests? a (quote|call|consult))\b/i;
+  // A claim about what does or does not follow that contact.
+  const AFTER = /\b(until|till|next (morning|day|business day)|hours? later|(the )?following (morning|day)|before (anyone|someone|you|they)|waits?|waiting|hears?( back| from)?|responds?|replies|reply|gets? back|answers?|sits? (there|untouched)|no ?one|nobody|nothing|never|gone before|before (morning|the next|tomorrow)|already (signed|hired|booked|chosen|heard))\b/i;
+  // Describing what the PAGE contains is an observation, not a claim about what
+  // follows. "The contact form asks for 11 fields before anyone speaks to a
+  // person" is read off their own source and must never flag - an early build
+  // did flag it, and a guard that cries wolf is a guard nobody reads.
+  const PAGE_FACT = /\b(asks? for|\d+[- ]field|fields?\b|on the page|in the page source|visible on|no (chat|widget|booking tool|instant[- ]response)|only lists?|the only (way|option|ask)|we (were |got )?served|title tag|top \d+ results?)\b/i;
+  // What makes it a claim about THEM rather than about people.
+  // Ownership is usually a possessive, but a DEFINITE ARTICLE pointing at their
+  // contact channel does the same work: "the form submissions ... are gone before
+  // morning" names no owner and is unmistakably about theirs. PAGE_FACT already
+  // exempts sentences that merely describe what the form contains, so this only
+  // reaches sentences about AFTERMATH.
+  const OWNED = /\b(your|yours|his|her|their|they'?ve|he'?s|she'?s)\b|\b(the|those|these) (contact )?(form|submissions?|enquir\w*|inquir\w*|messages?|leads?)\b/i;
+  const CLOCKED = /\b(\d{1,2}\s?(am|pm)|9pm|5pm|saturday|sunday|monday|tuesday|wednesday|thursday|friday|overnight|by morning)\b/i;
+
+  const sentences = String(prose || '')
+    .split(/(?<=[.!?])\s+|\n+/).map(x => x.trim()).filter(x => x.length > 25);
+
+  for (const sent of sentences) {
+    if (!CONTACT.test(sent) || !AFTER.test(sent)) continue;
+    if (PAGE_FACT.test(sent)) continue;
+    const owned = OWNED.test(sent);
+    const clocked = CLOCKED.test(sent);
+    if (!owned && !clocked) continue;   // a general truth about people - legal
+    out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people; illegal attached to them${clocked && !owned ? ' (a specific time implies we watched it)' : ''} \u2014 "${sent.slice(0, 95)}"`);
+  }
+  return out;
+};
+
 // ══ ONE FABRICATION LIST, TWO CALL SITES ═════════════════════════════════════
 // WHY THIS EXISTS AS A SHARED CONSTANT
 // There were TWO fabrication batteries in this file. CLAIM VERIFY ran twenty-odd
@@ -157,6 +213,8 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
 
   // The FULL shared battery, not the subset this function used to carry.
   for (const [_re, _why] of BACKEND_CLAIM_PATTERNS) flag(_re, _why);
+  // And the structural detector, which catches the wordings no list contains.
+  for (const _f of detectPostContactClaims(allCopy)) flags.push(_f);
   flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'MARKETING JARGON banned in the email voice');
   flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bviewport\b|\bpage source\b|\bmarkup\b/i, 'DEVELOPER REGISTER: this is the sentence he forwards to his web person');
   flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'INVENTED LOSS TOTAL about their business');
@@ -3323,6 +3381,11 @@ const TITLE_AUTHORITY = [
 ];
 
 const authorityScore = (title) => {
+  // A title of "null"/"unknown"/"n/a" is an ABSENT title, not a title that
+  // failed to match. Both should score the bare-name default rather than
+  // falling through the ladder and landing on the same number by accident.
+  const _t = String(title == null ? '' : title).trim();
+  if (/^(null|undefined|unknown|n\/a|na|\?|-|none)$/i.test(_t)) return 30;
   if (!title) return 30; // unknown title — assume mid, don't punish a bare name
   for (const t of TITLE_AUTHORITY) if (t.re.test(title)) return t.rank;
   return 30;
@@ -6377,9 +6440,20 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // MEASURED. Two measured facts beat an absent title string. This promotes ONLY
   // when the title is genuinely unknown - a scraped junior title still fails,
   // because a known "Office Manager" named Parke is not the owner.
-  let _authority = best.authority;
+  //
+  // TITLE-ABSENCE IS NOT ALWAYS FALSY. The audit JSON routinely returns the
+  // STRING "null" (and "unknown", "n/a", "?") where a title was not found, so
+  // `!best.title` silently fails to fire on exactly the leads this exists for.
+  // A live log printed `Mat Parke - "null" (authority 30)` and the string is
+  // indistinguishable from JS null in a template literal, which is how it hid.
+  const _NO_TITLE = (t) => {
+    const v = String(t == null ? '' : t).trim().toLowerCase();
+    return v === '' || v === 'null' || v === 'undefined' || v === 'unknown'
+        || v === 'n/a' || v === 'na' || v === '?' || v === '-' || v === 'none';
+  };
+  let _authority = _NO_TITLE(best.title) ? 30 : best.authority;
   let _eponymousOwner = false;
-  if (!best.title && best.name) {
+  if (_NO_TITLE(best.title) && best.name) {
     const _surname = String(best.name).trim().split(/\s+/).pop().toLowerCase();
     const _co = String(companyName || '').toLowerCase();
     const _onOwnSite = (best.sources || []).some(sc => /own_website|business_name|google_review_replies/.test(String(sc)));
@@ -7972,6 +8046,27 @@ const scoreReachability = (c) => {
   // let a held-back contact (authority 35) score 92 as "decision-maker reachable".
   const ownerLevelTitle = /\b(owner|founder|president|ceo|coo|principal|managing (partner|director)|proprietor)\b/i.test((dm && dm.title) || '');
 
+  // ══ EFFECTIVE AUTHORITY \u2014 ONE NUMBER, DECIDED ONCE ═══════════════════════
+  // Authority was being derived in THREE places from the raw title string: the
+  // decision-maker gate, the Hunter-only rescue below, and the authority cap
+  // further down. The gate learned to promote an eponymous owner (no title
+  // scraped, surname in the business name, confirmed on their own sources) and
+  // the other two did not.
+  //
+  // Parke Gordon, live, is the exact failure: Mat Parke was promoted to 80, so
+  // canBuy became true, so foundOwner became true, so he correctly reached the
+  // 95 branch \u2014 "the mailbox was SMTP-CONFIRMED to exist". Then the cap below
+  // re-derived authority from his EMPTY title, got 30, and slammed the score to
+  // 34. Better evidence produced a WORSE score, and the panel printed two
+  // reasons from branches that cannot both be true.
+  //
+  // findDecisionMaker already returns the number it decided on. Read THAT.
+  // authorityScore(title) is now only a fallback for leads persisted before the
+  // field existed \u2014 never a second opinion.
+  const effectiveAuthority = (dm && Number.isFinite(Number(dm.authority)))
+    ? Number(dm.authority)
+    : authorityScore((dm && dm.title) || '');
+
   // ── CORE OUTCOME (sets the base) ──────────────────────────────────────────
   let score;
   // ── EVIDENCE TIERS MUST NOT COLLAPSE ──────────────────────────────────
@@ -8058,7 +8153,7 @@ const scoreReachability = (c) => {
   // someone who does not work there. Blocking these was discarding the single most
   // deliverable contacts in the pipeline.
   if (dmHeldBack && deliverable && emailMatchesOwner && !juniorTitle
-      && authorityScore((dm && dm.title) || '') >= 75) {
+      && effectiveAuthority >= 75) {
     score = Math.max(score, 74);
     reasons.push(`${owner} came from one source only, but their own company mail server confirms a live mailbox in their name (${local}@\u2026) — that is independent confirmation this person is really there. Verify the title before pitching hard.`);
   }
@@ -8133,10 +8228,11 @@ const scoreReachability = (c) => {
   // source of truth \u2014 the same one the decision-maker gate uses, so the two
   // cannot drift apart again.
   if (foundOwner) {
-    const _auth = authorityScore((dm && dm.title) || '');
+    const _auth = effectiveAuthority;
     if (_auth < 40) {
       capped = Math.min(capped, 34);
       reasons.push(`Contact title "${(dm && dm.title) || 'unknown'}" sits below buying authority${emailMatchesOwner ? ' \u2014 we can reach them, they just cannot authorise this spend' : ''}. Find the owner or founder before sending.`);
+      console.log(`REACH CAP: authority ${_auth} < 40 \u2014 capped to 34. Title: "${(dm && dm.title) || '(none)'}"${dm && dm.eponymousOwner ? ' [EPONYMOUS PROMOTION WAS APPLIED \u2014 if this line prints, the promotion is not reaching the cap]' : ''}`);
     } else if (_auth < 75 && !ownerLevelTitle) {
       capped = Math.min(capped, 58);
       reasons.push(`Contact title "${(dm && dm.title) || 'unknown'}" can influence this but likely cannot sign it \u2014 expect a forward, not a decision.`);
@@ -12077,15 +12173,29 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // audit can't display or pitch a headline/CTA that isn't really there.
           const unverifiedQuotes = [];
           if (parsed.heroHeadline && quoteChecks.heroHeadline === false) {
-            unverifiedQuotes.push(`headline "${parsed.heroHeadline}" not found in page source`);
+            unverifiedQuotes.push(`headline "${parsed.heroHeadline}" not matched in scraped text`);
             parsed.heroHeadline = null; // suppress unverified quote
           }
           if (parsed.ctaText && quoteChecks.ctaText === false) {
-            unverifiedQuotes.push(`CTA "${parsed.ctaText}" not found in page source`);
+            unverifiedQuotes.push(`CTA "${parsed.ctaText}" not matched in scraped text`);
             parsed.ctaText = null;
           }
           if (unverifiedQuotes.length) {
-            console.log('SOURCE VERIFY: suppressed unverified quotes:', unverifiedQuotes.join('; '));
+            // ── SUPPRESSION IS NOT AN ABSENCE FINDING ────────────────────────
+            // Parke Gordon: we suppressed CTA "Call Now: (855) 322-7274" as "not
+            // found in page source". It is sixty pixels tall in their hero - the
+            // text lives in an IMAGE, so a markdown scrape can never contain it,
+            // and the vision read on the same lead returned CTA=true.
+            //
+            // Suppressing the quote is right: we cannot put words in his mouth we
+            // did not read. But the log said "not found", which is a sentence
+            // about HIS SITE, when the true statement is about OUR SCRAPE. That
+            // is the exact reversal this system exists to prevent, and the same
+            // shape as the electrician who was told he had "no social proof"
+            // because a review widget had not finished loading.
+            parsed._quoteUnverifiedNotAbsent = true;
+            _claimRisks.push('QUOTE UNVERIFIED, NOT ABSENT \u2014 a headline or CTA could not be matched in the page text, which usually means it is rendered inside an image. Quote it we cannot; claim it is MISSING we must not. Make no absence claim about their headline or call-to-action on this lead.');
+            console.log(`SOURCE VERIFY: could not match ${unverifiedQuotes.length} quote(s) IN THE TEXT WE SCRAPED \u2014 ${unverifiedQuotes.join('; ')}. This is a limit of our read, NOT evidence the element is missing: hero text is frequently an image. Quote suppressed; no absence claim permitted.`);
           } else {
             console.log('SOURCE VERIFY: all quotes matched page source');
           }
@@ -12162,72 +12272,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           _flag(/\b(has|have) nowhere to go\b/i, 'states the outcome of a visit we did not track');
           _flag(/\bis simply lost\b/i, 'states the visitor is lost \u2014 unobserved outcome');
 
-          // ══ POST-CONTACT CLAIM DETECTOR — ALLOWLIST, NOT BLACKLIST ═══════════
-          // Everything above this line is an ENUMERATION: twenty-odd regexes, one
-          // per phrasing we have already been burned by. Every round a new email
-          // finds a wording nobody listed and a twenty-first regex gets added.
-          // Parke Gordon, 2026-07-30: "the person who finds you at 9pm on a
-          // Thursday and fills out your form isn't hearing from anyone until
-          // Friday morning" passed ALL of them. The fact-checker caught it; CLAIM
-          // VERIFY reported the copy clean. Two guards, opposite verdicts, and the
-          // one the operator reads first was the one that was wrong.
-          //
-          // The enumeration cannot be completed, because the set of English
-          // sentences meaning "nothing happens after they contact you" is
-          // unbounded. So this inverts the test:
-          //
-          //   1. DETECT THE CATEGORY structurally — a sentence that puts a
-          //      customer in contact with them AND says something about what
-          //      follows. That shape is finite and describable.
-          //   2. REQUIRE MEMBERSHIP in the measured allow-list. ALLOWED
-          //      CONSEQUENCES is built in code from walls we actually measured.
-          //      If the sentence is not one of those, it was invented.
-          //
-          // Same principle as everything else that worked here: measure the legal
-          // set, then check against it. Do not try to list the illegal one.
-          try {
-            const _norm = (t) => new Set(String(t || '').toLowerCase()
-              .replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-              .filter(w => w.length > 3 && !/^(they|them|their|that|this|with|from|your|have|been|will|what|when|after|into)$/.test(w)));
-            const _overlap = (a, b) => {
-              if (!a.size || !b.size) return 0;
-              let sh = 0; a.forEach(w => { if (b.has(w)) sh++; });
-              return sh / Math.min(a.size, b.size);
-            };
-            const _allowed = (allowedConsequences && allowedConsequences.checked && Array.isArray(allowedConsequences.lines))
-              ? allowedConsequences.lines.map(_norm) : [];
-
-            // A person putting themselves in contact with the business.
-            const _CONTACT = /\b(form|submits?|submitted|submission|fills? (it |that |the form )?out|filled (it |that |the form )?out|enquir|inquir|reach(es|ed)? out|messages? (you|them|him)|leaves? (their|his|her) (name|number|details|info)|calls? (you|them|in)|rings?|books?|requests? a (quote|call|consult))\b/i;
-            // A claim about what does or does not follow that contact.
-            const _AFTER = /\b(until|till|next (morning|day|business day)|hours? later|(the )?following (morning|day)|before (anyone|someone|you|they)|waits?|waiting|hears?( back| from)?|responds?|replies|reply|gets? back|answers?|sits? (there|untouched)|no ?one|nobody|nothing|never)\b/i;
-
-            const _sentences = String(_allProse || '')
-              .split(/(?<=[.!?])\s+|\n+/)
-              .map(x => x.trim())
-              .filter(x => x.length > 25);
-
-            // A sentence describing what the PAGE contains is an observation, not a
-            // claim about what follows contact, even when it uses the same words.
-            // "The contact form asks for 11 fields before anyone speaks to a
-            // person" is measured from their own page source and must not flag -
-            // an early version of this detector did flag it, which would have
-            // trained the operator to ignore the guard.
-            const _PAGE_FACT = /\b(asks? for|\d+[- ]field|fields?\b|on the page|in the page source|visible on|no (chat|widget|booking tool|instant[- ]response)|only lists?|the only (way|option|ask)|we (were |got )?served|title tag|top \d+ results?)\b/i;
-
-            for (const _sent of _sentences) {
-              if (!_CONTACT.test(_sent) || !_AFTER.test(_sent)) continue;
-              if (_PAGE_FACT.test(_sent)) continue;
-              const _w = _norm(_sent);
-              const _best = _allowed.reduce((m, a) => Math.max(m, _overlap(a, _w)), 0);
-              if (_best < 0.5) {
-                _claimRisks.push(`POST-CONTACT CLAIM not in the measured allow-list \u2014 this sentence says what happens after a customer contacts them, which we have never observed \u2014 "${_sent.slice(0, 90)}"`);
-              }
-            }
-            if (_allowed.length === 0 && _sentences.some(x => _CONTACT.test(x) && _AFTER.test(x))) {
-              _claimRisks.push('POST-CONTACT CLAIM with NO allow-list available \u2014 allowed consequences were not measured on this lead, so no claim about what follows a customer contact is permissible at all.');
-            }
-          } catch (e) { void e; }
+          // ── SAME DETECTOR AS THE EMAIL GUARD ─────────────────────────────
+          // This used to be a second, allow-list-based implementation living only
+          // here. Two implementations of one rule is how the fabrication lists
+          // drifted in the first place. One function, both call sites.
+          for (const _f of detectPostContactClaims(_allProse)) _claimRisks.push(_f);
           _flag(/\b(are ?n'?t|is ?n'?t|do ?n'?t|does ?n'?t|never) com(e|ing) back\b/i, 'states they do not return \u2014 unknowable');
           _flag(/\bdisappears?\b/i, 'states the visitor disappears \u2014 unobserved');
           // Tap-to-call: only claimable when the page ALSO disables iOS auto-linking.
