@@ -3394,11 +3394,62 @@ const sameName = (a, b) => {
   return firstEq(A[0], B[0]) && A[A.length - 1] === B[B.length - 1];
 };
 
+// Does this mailbox belong to this person? A false YES is the worst answer this
+// function can give: it sends an email addressed to the owner by name into a
+// department inbox, and it tells the reachability scorer we reached the
+// decision-maker when we did not.
+//
+// This was a naive `local.includes(token)` substring test, which produced exactly
+// that. Live traps found in testing:
+//   billing@   "matched" William Smith  \u2014 nickname "bill" sits inside "billing"
+//   marketing@ "matched" Mark Ettinger  \u2014 "mark" sits inside "marketing"
+// Both would have addressed a stranger's inbox as though it were the owner's.
+//
+// Real mailbox conventions are boundaried, so the match must be too:
+//   first · last · first.last · f.last · flast · firstl
+// A token has to BE a segment, be the whole local part, or sit beside a single
+// initial. It is never merely contained in a longer word.
 const localMatchesName = (local, tokens) => {
   if (!local || !tokens || !tokens.length) return false;
+  const l = String(local).toLowerCase();
+  // Dot, underscore and hyphen are the only separators used in mailbox names.
+  const segments = l.split(/[._\-]+/).filter(Boolean);
+
+  // A ROLE INBOX IS NEVER A PERSON'S MAILBOX, whatever it happens to resemble.
+  // Checked first and unconditionally: "team@" satisfies the initial rule for an
+  // owner called Tea, and "jobs@" for one called Job. Both are department
+  // addresses, and no name coincidence should make us address one by name.
+  if (/^(info|contact|contactus|hello|hi|team|sales|support|help|admin|office|billing|accounts|accounting|marketing|careers|jobs|hr|recruiting|service|services|scheduling|dispatch|booking|bookings|reception|frontdesk|enquiries|inquiries|general|mail|email|webmaster|noreply|no-reply|donotreply|orders|shop|store|press|media|legal|privacy|abuse|postmaster|warranty|claims|estimates|quotes)$/.test(l)) return false;
+
+  const hits = (t) => {
+    if (!t || t.length < 3) return false;
+    // firstname@ / lastname@ / first.last@ \u2014 the token is its own segment.
+    if (segments.includes(t)) return true;
+    // The whole local part is the token.
+    if (l === t) return true;
+    // flast / firstl / lastf \u2014 the token plus exactly one initial, nothing more.
+    // This is what keeps hgare and dprice matching while billing does not.
+    if (l.length === t.length + 1 && (l.slice(1) === t || l.slice(0, -1) === t)) return true;
+    return false;
+  };
+
+  // firstlast@ with no separator at all \u2014 henrygare@, davidprice@. Common, and
+  // invisible to the segment test because the caller strips underscores and
+  // hyphens before we ever see them. Requires BOTH name parts to be present and
+  // to account for the whole local, so it cannot fire on a longer word.
+  const nameParts = tokens.filter(t => t.length >= 3);
+  if (nameParts.length >= 2) {
+    for (let i = 0; i < nameParts.length; i++) {
+      for (let j = 0; j < nameParts.length; j++) {
+        if (i === j) continue;
+        if (l === nameParts[i] + nameParts[j]) return true;
+      }
+    }
+  }
+
   for (const t of tokens) {
-    if (t.length >= 3 && local.includes(t)) return true;
-    for (const f of (NICKNAMES[t] || [])) { if (f.length >= 3 && local.includes(f)) return true; }
+    if (hits(t)) return true;
+    for (const f of (NICKNAMES[t] || [])) if (hits(f)) return true;
   }
   return false;
 };
@@ -7828,7 +7879,19 @@ const scoreReachability = (c) => {
       reasons.push(`No mailbox exists on this domain \u2014 but ${owner} is confirmed and the business publishes ${c.phone}. This is a CALL lead, not a dead one: the audit stands, it just goes to Mike by phone instead of by email.`);
     }
   } else if (deliverable && personalMailbox) {
-    if (tier === 1) { score = 52; reasons.push(`Personal mailbox published on their own site (${local}@\u2026) — a real person reads this; confirm they're the owner/decision-maker before pitching hard`); }
+    if (tier === 1) {
+      // A FREE-MAIL ADDRESS IS NOT A PERSONAL MAILBOX. This described
+      // careelectricllc@gmail.com as "personal mailbox published on their own
+      // site" \u2014 it is the company's shared gmail, not on their domain and not
+      // personal. Overstating what we know about an address is exactly the kind
+      // of small false claim that reads as careless to the one person who knows
+      // his own inbox.
+      const freeMail = /@(gmail|yahoo|hotmail|outlook|aol|icloud|protonmail|live|msn)\./i.test(String(addr || ''));
+      score = 52;
+      reasons.push(freeMail
+        ? `The address published on their site is a free-mail account (${local}@\u2026) rather than a mailbox on their own domain \u2014 at a business this size that usually means the owner reads it himself, but we have not confirmed whose it is`
+        : `A mailbox published on their own site (${local}@\u2026) \u2014 a real person reads this; confirm they are the owner before pitching hard`);
+    }
     else { score = 30; reasons.push(`A verified personal mailbox exists (${local}@\u2026) but we could not confirm whose — identify the owner first`); }
   } else {
     score = 12;
@@ -7857,11 +7920,6 @@ const scoreReachability = (c) => {
     else if (patternEmail || personalMailbox) { score = Math.min(Math.max(score, 52), 58); }
     reasons.push(`Reaching ${dm && dm.name} (${(dm && dm.title) || 'senior'}) — a senior operator, not the confirmed owner. They likely feel the pain and can forward or influence the buy; verify authority before pitching hard.`);
   }
-  if (foundOwner && trueJunior && !emailMatchesOwner) {
-    score = Math.min(score, 38);
-    reasons.push(`Contact title "${dm && dm.title}" is a junior role below buying authority — find the owner/founder`);
-  }
-
   // ── BUSINESS-TYPE reachability confidence (who actually runs this place?) ──
   if (sig.local_owner_operated && sig.consolidation_risk) {
     reasons.push('Practice in a PE/DSO-consolidating field — confirm a real owner exists (a group-owned location has no reachable owner)');
@@ -7909,9 +7967,67 @@ const scoreReachability = (c) => {
   }
 
   let capped = Math.max(0, Math.min(100, Math.round(score)));
-  // After Research has actually run, no owner found = a poor send, full stop.
+  // ── AUTHORITY CAPS LAST, AFTER EVERY ADDITION ────────────────────────────
+  // Placed here deliberately. An earlier version of this ran mid-function and was
+  // then undone by the additive signals below it \u2014 the cap set 38, and +6 for
+  // owner-operated and +6 for review replies pushed an Office Manager back to 50,
+  // over the sendable floor. Two other bugs lived in the same check: it used a
+  // regex that listed clerk and intern but not manager, so "Office Manager" was
+  // never junior at all; and `!emailMatchesOwner` meant that FINDING the junior
+  // person's real mailbox disabled the cap entirely. Together those scored an
+  // Office Manager 100/100 "directly reachable".
+  //
+  // Reaching the wrong person perfectly is still reaching the wrong person.
+  // Deliverability and authority are independent, and a good answer to one must
+  // never suppress a bad answer to the other. The authority ladder is the single
+  // source of truth \u2014 the same one the decision-maker gate uses, so the two
+  // cannot drift apart again.
+  if (foundOwner) {
+    const _auth = authorityScore((dm && dm.title) || '');
+    if (_auth < 40) {
+      capped = Math.min(capped, 34);
+      reasons.push(`Contact title "${(dm && dm.title) || 'unknown'}" sits below buying authority${emailMatchesOwner ? ' \u2014 we can reach them, they just cannot authorise this spend' : ''}. Find the owner or founder before sending.`);
+    } else if (_auth < 75 && !ownerLevelTitle) {
+      capped = Math.min(capped, 58);
+      reasons.push(`Contact title "${(dm && dm.title) || 'unknown'}" can influence this but likely cannot sign it \u2014 expect a forward, not a decision.`);
+    }
+  }
+
+  // ── UNNAMED IS NOT UNREACHABLE ───────────────────────────────────────────
+  // This was a flat cap of 25 whenever research finished without a name, which
+  // ignored everything measured underneath it. A live lead scored 25/100 "Poor \u2014
+  // decision-maker not confirmed reachable" and was BLOCKED from sending, with
+  // these three reasons printed directly above the score:
+  //   \u00b7 an address published on their own site
+  //   \u00b7 local owner-operated \u2014 the owner runs the shop and reads his own email
+  //   \u00b7 the owner personally answered 34 of the 40 reviews we read
+  // Every reason positive, the verdict Poor. Both cannot be true.
+  //
+  // The cap conflated two different problems. "We cannot reach them" is a
+  // DELIVERY problem and should block. "We do not know their name" is a
+  // PERSONALISATION problem \u2014 the email still lands, it just opens with the
+  // business instead of the person. At an owner-run shop whose owner provably
+  // answers strangers, that is a good send with a weaker first line.
   const researchHasRun = !!(c.emailResult || c.decisionMaker !== undefined);
-  if (researchHasRun && !foundOwner) capped = Math.min(capped, 25);
+  if (researchHasRun && !foundOwner) {
+    const landsSomewhere = !!(deliverable || patternEmail || personalMailbox || addr);
+    const answersStrangers = (typeof c.ownerReplyCount === 'number' && typeof c.reviewsRead === 'number'
+      && c.reviewsRead >= 10 && (c.ownerReplyCount / c.reviewsRead) >= 0.15);
+    const ownerRun = !!(sig && sig.local_owner_operated);
+
+    if (landsSomewhere && ownerRun && answersStrangers) {
+      capped = Math.min(Math.max(capped, 58), 64);
+      reasons.push('No owner name confirmed, so the email cannot open with it \u2014 but this is an owner-run business whose owner demonstrably answers strangers, and the address reaches him. Address the business, not a guessed name.');
+    } else if (landsSomewhere && (ownerRun || answersStrangers)) {
+      capped = Math.min(Math.max(capped, 46), 52);
+      reasons.push('No owner name confirmed. The address reaches the business and there is some evidence a decision-maker reads it \u2014 workable, but the opening will be weaker than a named one.');
+    } else if (landsSomewhere) {
+      capped = Math.min(capped, 38);
+      reasons.push('No owner name, and nothing indicates who reads this mailbox \u2014 confirm the person before spending a send on it.');
+    } else {
+      capped = Math.min(capped, 25);
+    }
+  }
 
   // ── THE MAILBOX MUST BELONG TO THE DECISION-MAKER ────────────────────────
   // ownerEmailMatch was computed on every lead, shown in the UI as a red warning,
@@ -13071,6 +13187,28 @@ Return ONLY valid JSON:
         } catch (e) { void e; return []; }
       })(),
       leadSignal: (brainAudit && brainAudit.leadSignal) || null,
+      // ── THE AUDIT'S OWN MEASUREMENTS, RETURNED ───────────────────────
+      // These are computed on every lead, shown in the Research tab, and were
+      // never sent to the client as structured fields \u2014 so the call sheet, which
+      // needs to LIST what we found, had almost nothing to list. Same
+      // computed-but-not-passed shape as the rest.
+      offerStrength: offerStrength || null,
+      sitePages: sitePages ? {
+        booking: sitePages.booking || null,
+        bookingMeasured: !!sitePages.bookingMeasured,
+        hasCapture: !!sitePages.hasCapture,
+        prices: (sitePages.prices || []).slice(0, 8),
+        pagesRead: sitePages.pagesRead || [],
+      } : null,
+      htmlSignals: htmlSignals || null,
+      gbpHealth: gbpHealth || null,
+      socialPresence: socialPresence || null,
+      marketClarity: marketClarity || null,
+      leadMagnet: leadMagnet || null,
+      valueEquation: valueEquation || null,
+      realSpeed: realSpeed || null,
+      reviewCount: (gbpHealth && gbpHealth.reviewCount) || null,
+      rating: (gbpHealth && gbpHealth.rating) || null,
       phone: phoneResult.phone || req.body.phone || '',
       phoneDisplay: phoneResult.display || '',
       phoneSource: phoneResult.source || 'none',
