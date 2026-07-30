@@ -5336,7 +5336,16 @@ const painFromGoogleReviews = async (companyName, placeId, placesKey, apiKey, fc
   // that REPEAT and to quote verbatim, so widening the pool cannot invent a pain.
   const pool = all.filter(r => r.rating === null || r.rating <= 4);
   if (pool.length === 0) {
-    console.log(`REVIEW MINE [${companyName}]: ${totalCount} review(s) pulled, none at 4 stars or below — nothing to mine. Not a failure; this business has no repeated complaint.`);
+    // ── SAMPLE SIZE DECIDES WHAT THIS LINE IS ALLOWED TO SAY ─────────────
+    // This is the API fallback, which only ever sees the 5 reviews Google
+    // exposes. Saying "this business has no repeated complaint" off 5 of 168 is
+    // an ABSENCE CLAIM from a 3% sample - and on Parke Gordon it printed
+    // directly between two lines reading "NOT MEASURED - no claim permitted".
+    // Three consecutive lines, the middle one contradicting both neighbours.
+    // A count is a fact; "no complaint" is a conclusion the count cannot carry.
+    console.log(totalCount >= 25
+      ? `REVIEW MINE [${companyName}]: ${totalCount} review(s) pulled, none at 4 stars or below — nothing to mine. Not a failure; across a sample this size there is no repeated complaint to find.`
+      : `REVIEW MINE [${companyName}]: only ${totalCount} review(s) were available to this fallback and none are at 4 stars or below. That is too small a sample to conclude anything — NOT evidence they have no complaints. No claim about their reviews is permitted from this.`);
     return { signals: [], summary: '' };
   }
   const corpus = pool.map((r, i) => `Review ${i + 1}${r.rating ? ` (${r.rating} stars)` : ''}: ${r.text}`).join('\n\n');
@@ -12165,6 +12174,9 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const sourceStripped = sourceText.replace(/[^a-z0-9 ]/g, '');
             return sourceText.includes(norm) || sourceStripped.includes(stripped);
           };
+          // Holds a risk raised before _claimRisks exists (see the deferred push
+          // in SOURCE VERIFY below). `let` at this depth, not const-after-use.
+          let _deferredQuoteRisk = null;
           const quoteChecks = {
             heroHeadline: verifyQuote(parsed.heroHeadline),
             ctaText: verifyQuote(parsed.ctaText),
@@ -12194,7 +12206,9 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // shape as the electrician who was told he had "no social proof"
             // because a review widget had not finished loading.
             parsed._quoteUnverifiedNotAbsent = true;
-            _claimRisks.push('QUOTE UNVERIFIED, NOT ABSENT \u2014 a headline or CTA could not be matched in the page text, which usually means it is rendered inside an image. Quote it we cannot; claim it is MISSING we must not. Make no absence claim about their headline or call-to-action on this lead.');
+            // DEFERRED ON PURPOSE: _claimRisks is declared further down, so a push
+            // here is a TDZ crash. Stash it and add it once the array exists.
+            _deferredQuoteRisk = 'QUOTE UNVERIFIED, NOT ABSENT \u2014 a headline or CTA could not be matched in the page text, which usually means it is rendered inside an image. Quote it we cannot; claim it is MISSING we must not. Make no absence claim about their headline or call-to-action on this lead.';
             console.log(`SOURCE VERIFY: could not match ${unverifiedQuotes.length} quote(s) IN THE TEXT WE SCRAPED \u2014 ${unverifiedQuotes.join('; ')}. This is a limit of our read, NOT evidence the element is missing: hero text is frequently an image. Quote suppressed; no absence claim permitted.`);
           } else {
             console.log('SOURCE VERIFY: all quotes matched page source');
@@ -12227,6 +12241,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             .filter(Boolean).join(' \n ');
           const _lrChecked = !!(localVisibility && localVisibility.checked);
           const _claimRisks = [];
+          if (_deferredQuoteRisk) _claimRisks.push(_deferredQuoteRisk);
           const _flag = (re, why) => { const m = _allProse.match(re); if (m) _claimRisks.push(`${why} — "${m[0].slice(0,60)}"`); };
           // 1. Backend / post-submit behaviour we never observed
           _flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission backend behaviour');
