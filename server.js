@@ -13192,6 +13192,16 @@ Return ONLY valid JSON:
       // never sent to the client as structured fields \u2014 so the call sheet, which
       // needs to LIST what we found, had almost nothing to list. Same
       // computed-but-not-passed shape as the rest.
+      // NEVER RETURNED. The frontend reads localVisibility in three places and it
+      // was only ever populated from the persisted blob, which is why rank data
+      // survived on old leads while every other measurement was blank.
+      //
+      // Returned AS-IS. A first attempt remapped it into a "cleaner" shape and
+      // quietly renamed scanned -> rankScanned while dropping ranked, bestRank
+      // and invisibleCount \u2014 fields the Research tab and the write-up both read.
+      // The mapping then overwrote good persisted data with a worse object. When
+      // the consumer already knows the shape, do not invent a second one.
+      localVisibility: localVisibility || null,
       offerStrength: offerStrength || null,
       sitePages: sitePages ? {
         booking: sitePages.booking || null,
