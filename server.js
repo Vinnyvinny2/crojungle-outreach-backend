@@ -3166,7 +3166,18 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       // If we CONFIRMED this homepage belongs to the target company, any personal
       // address published on it is theirs — no domain-shape guessing needed. That
       // confirmation is stronger evidence than any string heuristic.
-      if (siteConfirmed) return personal;
+      // ── A CONFIRMED SITE MAKES ANY ADDRESS ON IT THEIRS ──────────────
+      // This required `personal`, so a ROLE inbox on a different domain was
+      // thrown away even when we had already PROVEN the page belongs to the
+      // target company. A med spa publishing info@skintolife.com on its own
+      // contact page was scored "No defensible address found" \u2014 40/100, blocked
+      // from sending \u2014 while the address sat in plain text on the page.
+      //
+      // At an owner-run business a published role inbox is usually read by the
+      // owner, which the reachability scorer already models. Rejecting it loses
+      // the lead entirely; accepting it loses nothing, because the scorer grades
+      // a shared inbox lower than a personal one anyway.
+      if (siteConfirmed) return personal || !JUNK_LOCAL.test(e);
       return personal && (relatedDomain(edom) || FREE_PROVIDER.test(e));
     });
     if (off.length) console.log(`EMAIL scrape [${domain}]: no same-domain address; using personal off-domain email ${off[0]} from homepage`);
@@ -4299,6 +4310,13 @@ const measureBookingPath = (html, text) => {
   if (h.length < 200) return null;
 
   // Third-party schedulers, medical and trade. Their embed URLs are unambiguous.
+  // BUTTON TEXT COUNTS. A "BOOK NOW" button linking to a page or opening a modal
+  // is a booking path whatever it points at, and reading only embed URLs missed
+  // a med spa with BOOK NOW in the header, BOOK APPOINTMENT in the hero and
+  // SCHEDULE A CONSULTATION above the footer.
+  if (/>\s*(book\s*(now|online|appointment|a\s*consultation)?|schedule\s*(a\s*)?(consultation|appointment|visit|now)|request\s*(an?\s*)?appointment|make\s*an?\s*appointment)\s*</i.test(h)) {
+    return { booking: 'online_booking', why: 'a book/schedule action is offered on the page itself' };
+  }
   const SCHEDULERS = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook\.me|savvycal|cal\.com|hubspot\.com\/meetings|chilipiper|book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
   if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is embedded in the page source' };
 
@@ -5369,9 +5387,24 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     // PAGE_INTENT order alone, so a site with pricing + services + booking pages
     // could push the story page out — losing the one detail that makes a cold
     // email sound like a person read the site.
+    // ── THE CONTACT PAGE IS NEVER OPTIONAL ───────────────────────────────
+    // The booking intent (book|schedule|appointment|consult|contact) sat LAST in
+    // PAGE_INTENT and the slice took three, so on any site with pricing, about
+    // and services pages it was cut every time. That is the one page holding the
+    // email address, the enquiry form, the hours and the booking path.
+    //
+    // A live audit on a med spa consequently claimed "no way to book outside a
+    // phone call" and "no defensible address found" \u2014 on a site with BOOK NOW in
+    // the header, BOOK APPOINTMENT in the hero, a nine-field enquiry form and
+    // info@ printed on the contact page. Two false absence claims, both instantly
+    // disprovable by the owner, both caused by not reading one page.
+    //
+    // About and booking are now BOTH guaranteed, and the budget is four pages.
+    // One extra scrape at 0.5 credits is nothing against a fabricated claim.
     const about = picked.find(p => p.key === 'about');
-    const rest = picked.filter(p => p.key !== 'about');
-    const top = about ? [about, ...rest].slice(0, 3) : picked.slice(0, 3);
+    const booking = picked.find(p => p.key === 'booking');
+    const rest = picked.filter(p => p.key !== 'about' && p.key !== 'booking');
+    const top = [about, booking, ...rest].filter(Boolean).slice(0, 4);
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     // BATCH: these URLs are all known up front and all on the same site, which is
@@ -10159,7 +10192,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+        // ── THE WHOLE PAGE, NOT THE FIRST SCREEN ─────────────────────────
+        // 'screenshot' captures the VIEWPORT only, so every visual read was of the
+        // hero and nothing else. On a med spa that meant the audit never saw the
+        // BOOK NOW band, the services grid, the testimonials or the contact form
+        // sitting further down \u2014 and then reported there was no way to book.
+        // 'screenshot@fullPage' renders the entire page top to bottom. Same call,
+        // same cost, everything the vision read was already supposed to cover.
+        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
       }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
