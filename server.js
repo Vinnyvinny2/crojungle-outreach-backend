@@ -168,20 +168,31 @@ const detectPostContactClaims = (prose) => {
 // candidates, the chain can never be the lead. Joined, it is one finding carrying
 // its own proof: here is what is happening to you, and here is precisely why.
 const CAUSAL_DOMAINS = [
-  { name: 'organic search',
-    mechanism: /\btitle tag\b|\bmeta (description|title)\b|\bpage title\b|\bnoindex\b|\bcanonical\b|\bwrong (state|city|location)\b|\breads ['"]?[A-Z][a-z]+ [A-Z]/i,
-    outcome:   /\bnot in the top \d+\b|\bnot in top \d+\b|\bdoes ?n'?t appear\b|\bisn'?t in the (first|top)\b|\binvisible\b|\bno organic\b/i },
-  { name: 'map pack',
+  // ── NO 'organic search' DOMAIN, AND THE REASON MATTERS ──────────────────
+  // The first version paired a title tag with a rank finding. But our rank comes
+  // from ONE PLACES TEXT SEARCH - the local/map surface - and a title tag drives
+  // ORGANIC results, not the local pack, which ranks on proximity, prominence and
+  // profile completeness. So "you are #19 BECAUSE your title tag says New Jersey"
+  // is a causal claim about a surface we never measured, asserted with the
+  // confidence of something we did. That is the exact failure this system exists
+  // to prevent, and I would have shipped it inside a feature built to improve
+  // accuracy. We do not measure organic rank at all, so no title tag can ever be
+  // linked to a rank number we hold.
+  //
+  // CERTAINTY IS PART OF THE PAIR. 'direct' means the mechanism literally
+  // produces the outcome. 'contributing' means it is a documented input among
+  // several - true, worth naming, and NOT something we measured as the cause. The
+  // two get different language, because "because" is a claim and "with" is not.
+  { name: 'map pack', certainty: 'contributing',
     mechanism: /\bno business description\b|\bonly \d+ photos?\b|\bno photos?\b|\bprofile (gap|incomplete)\b/i,
-    outcome:   /\bmap[- ]pack\b|\branked? #\d+\b|\b#\d+ of \d+\b|\blocal (visibility|results)\b/i },
-  // NO 'intake path' DOMAIN. An 11-field form and a phone-only booking path are
-  // two independent walls, not cause and effect - the form does not CAUSE the
-  // missing response layer. Merging them tested as a false pair on Parke Gordon.
-  // Accumulated friction in one layer is already handled correctly by the value
-  // equation's earned_but_blocked shape, which counts them without collapsing
-  // them. Only add a domain here when the mechanism genuinely PRODUCES the
-  // outcome and one fix resolves both.
+    outcome:   /\bmap[- ]pack\b|\branked? #\d+\b|\b#\d+ of \d+\b|\bnot in the top \d+\b|\bnot in top \d+\b|\blocal (visibility|results)\b/i },
+  // NO 'intake path' DOMAIN either. An 11-field form and a phone-only booking
+  // path are two independent walls, not cause and effect - the form does not
+  // CAUSE the missing response layer. Tested as a false pair on Parke Gordon.
+  // Accumulated friction in one layer is already handled by the value equation's
+  // earned_but_blocked shape, which counts them without collapsing them.
 ];
+
 
 const findCausalPairs = (cands) => {
   const pairs = [];
@@ -194,7 +205,7 @@ const findCausalPairs = (cands) => {
     });
     for (const mi of mech) for (const oi of outc) {
       if (mi === oi) continue;
-      pairs.push({ domain: dom.name, mechanismIdx: mi, outcomeIdx: oi });
+      pairs.push({ domain: dom.name, certainty: dom.certainty, mechanismIdx: mi, outcomeIdx: oi });
     }
   }
   return pairs;
@@ -12791,12 +12802,18 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 if (!_mech || !_out || _absorbed.has(_pr.mechanismIdx) || _absorbed.has(_pr.outcomeIdx)) continue;
                 _absorbed.add(_pr.mechanismIdx);
                 _out.causalEvidence = String(_mech.finding || '').slice(0, 160);
-                _out.finding = `${_out.finding} \u2014 because ${String(_mech.finding || '').replace(/^[A-Z]/, c => c.toLowerCase())}`;
+                // 'because' asserts cause. 'with' states co-occurrence and lets the
+                // owner draw the conclusion himself - which the copy rules say
+                // lands harder anyway, because a conclusion he reached is his.
+                const _join = _pr.certainty === 'direct' ? 'because' : 'with';
+                _out.finding = `${_out.finding} \u2014 ${_join} ${String(_mech.finding || '').replace(/^[A-Z]/, c => c.toLowerCase())}`;
                 // One story with two pieces of evidence is MORE verifiable than
                 // either alone: he can check the rank and the tag. Nothing else
                 // moves - severity and leverage are unchanged by the merge.
-                _out.verifiable = Math.min(5, (Number(_out.verifiable) || 3) + 1);
-                _out.total = (Number(_out.total) || 0) + 1;
+                if (_pr.certainty === 'direct') {
+                  _out.verifiable = Math.min(5, (Number(_out.verifiable) || 3) + 1);
+                  _out.total = (Number(_out.total) || 0) + 1;
+                }
                 console.log(`\u2713 CAUSAL MERGE [${company}]: two candidates were one ${_pr.domain} story \u2014 "${String(_mech.finding).slice(0, 44)}" is WHY "${String(_out.finding).slice(0, 44)}". Merged into one candidate carrying both; the freed slot goes to a distinct finding instead of manufacturing a tie at the top.`);
               }
               if (_absorbed.size) {
@@ -13057,10 +13074,11 @@ YOUR JOB:
 
 Return ONLY valid JSON:
 {
-  "verifiedClaims": ["list of claims directly supported by evidence"],
-  "flaggedClaims": ["list of claims that overstate or aren't supported — be specific"],
-  "correctedPitchAngle": "rewritten pitch using only confirmed evidence, 35 words max",
   "confidenceScore": 0-10,
+  "flaggedClaims": ["list of claims that overstate or aren't supported — be specific"],
+  "critiqueNote": "one sentence summary of the biggest accuracy risk in this audit",
+  "verifiedClaims": ["UP TO 4 claims directly supported by evidence — a short list, not an inventory"],
+  "correctedPitchAngle": "rewritten pitch using only confirmed evidence, 35 words max",
   "critiqueNote": "one sentence summary of biggest accuracy risk in this audit",
   "icpBlocker": "Flag this company OUTSIDE our ICP (one short phrase; otherwise empty string) ONLY on POSITIVE evidence — NEVER on missing or unknown data. Block only if the evidence clearly shows: (a) verified headcount over ~200 OR revenue clearly over ~$20M; (b) it is a holding company, PE/portfolio rollup, or a franchise SYSTEM (not a single local franchisee); (c) it is an enterprise, government body, publicly-traded giant, hospital/health system, or a staffing/recruiting firm; (d) a dedicated in-house marketing department or CMO clearly already exists. CRITICAL: DO NOT block for unverified or unknown headcount — most of our BEST leads are local owner-operated businesses we deliberately do not size, so 'size unknown' is EXPECTED and is NOT a disqualifier. DO NOT block on reachability — that is scored separately by the system. When in doubt, leave this EMPTY.",
   "estimatedEmployees": "your best estimate of employee count as a number if you can infer it from the evidence, otherwise null"
@@ -13071,7 +13089,18 @@ Return ONLY valid JSON:
               headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
               body: JSON.stringify({
                 model: 'claude-haiku-4-5-20251001',
-                max_tokens: 800,
+                // ── 800 WAS TRUNCATING THE ONLY FIELDS THAT MATTER ──────────
+                // Broderick, live: the response died mid-`verifiedClaims` while
+                // listing things that were FINE, so the JSON never closed, the
+                // parse failed, and the whole fact-check reported DID NOT RUN.
+                // The budget was being spent enumerating what was correct before
+                // it ever reached what was wrong.
+                //
+                // Two fixes together: raise the ceiling, and put confidenceScore
+                // and flaggedClaims FIRST in the schema so a truncation loses the
+                // inventory rather than the verdict. Same reasoning as
+                // candidateFindings being emitted first in the audit schema.
+                max_tokens: 1600,
                 messages: [{ role: 'user', content: critiquePrompt }]
               }),
             }, 25000);
