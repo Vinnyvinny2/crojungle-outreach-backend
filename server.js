@@ -5352,7 +5352,16 @@ const PAGE_INTENT = [
   // how long he has been at it, what he is proud of. Nothing else on the internet
   // personalises an email like a detail he wrote about himself — it proves a human
   // actually read his site rather than scraping it. Read second, right after pricing.
-  { key: 'about',    re: /(about|our-story|my-story|who-we-are|meet-the|history|founder|owner|team|company)/i },
+  // WIDENED after a live miss. This required the literal "meet-the", so a plastic
+  // surgery site whose About button pointed at /meet-dr-burns never had that page
+  // read \u2014 and that page carried thirty years of history, his training, his
+  // awards and a first-person account of why he started. The single richest
+  // personalisation source on the whole site, sitting in the sitemap, skipped
+  // because of two characters in a regex.
+  //
+  // Owner-page URLs in the wild: /meet-dr-burns · /meet-jay · /dr-smith
+  // /our-doctor · /our-dentist · /provider · /bio · /staff · /leadership
+  { key: 'about',    re: /(about|our-story|my-story|who-we-are|meet[-_]|history|founder|owner|team|company|staff|leadership|bio|profile|provider|our-(doctor|dentist|attorney|surgeon|physician)|dr[-_.][a-z]|[-_](md|dds|dmd|dvm|cpa|esq)\b)/i },
   { key: 'services', re: /(services|what-we-do|solutions|offerings|specialt|practice-areas|treatments)/i },
   { key: 'booking',  re: /(book|schedule|appointment|consult|estimate|quote|request|get-started|contact)/i },
 ];
