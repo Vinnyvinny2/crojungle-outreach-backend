@@ -123,18 +123,81 @@ const detectPostContactClaims = (prose) => {
   const OWNED = /\b(your|yours|his|her|their|they'?ve|he'?s|she'?s)\b|\b(the|those|these) (contact )?(form|submissions?|enquir\w*|inquir\w*|messages?|leads?)\b/i;
   const CLOCKED = /\b(\d{1,2}\s?(am|pm)|9pm|5pm|saturday|sunday|monday|tuesday|wednesday|thursday|friday|overnight|by morning)\b/i;
 
+  // ── OUR SOLUTION IS NOT A CLAIM ABOUT THEIR BACKEND ──────────────────────
+  // Live false positive: "The AI Brain is exactly the automated intake and
+  // response infrastructure that closes this gap - it answers the moment someone
+  // submits, qualifies the case, and keeps working the lead warm until a human
+  // can take it." CONTACT matched "submits", AFTER matched "answers", and the
+  // definite-article ownership rule matched "the lead" - so a description of OUR
+  // PRODUCT was flagged as an unobserved assertion about THEIR systems.
+  //
+  // A guard that fires on correct output is worse than one that misses: it
+  // teaches the operator that the red text is noise. The subject of the sentence
+  // is what decides. When the sentence is about something WE would build or do,
+  // "it answers the moment someone submits" is a product spec, not a claim.
+  const SOLUTION = /\b(AI Brain|Website Rebuild|CRO Retainer|Revenue Growth|Custom AI Software|the build|what we (would|d) build|we would|CROJungle)\b/i;
+
   const sentences = String(prose || '')
     .split(/(?<=[.!?])\s+|\n+/).map(x => x.trim()).filter(x => x.length > 25);
 
   for (const sent of sentences) {
     if (!CONTACT.test(sent) || !AFTER.test(sent)) continue;
     if (PAGE_FACT.test(sent)) continue;
+    if (SOLUTION.test(sent)) continue;   // describing our product, not their backend
     const owned = OWNED.test(sent);
     const clocked = CLOCKED.test(sent);
     if (!owned && !clocked) continue;   // a general truth about people - legal
     out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people; illegal attached to them${clocked && !owned ? ' (a specific time implies we watched it)' : ''} \u2014 "${sent.slice(0, 95)}"`);
   }
   return out;
+};
+
+// ══ CAUSAL PAIRS — TWO FINDINGS, ONE STORY ═══════════════════════════════════
+// Broderick's top two candidates, live: search_absence=24 "not in the top 20 for
+// personal injury lawyer Jacksonville" and technical_leak=23 "title tag reads
+// New Jersey Personal Injury Lawyers". Those are not two findings. The tag is WHY
+// the page is invisible - one fix resolves both - and they tied at the top,
+// consuming two of six slots and manufacturing a coin flip.
+//
+// _sameFinding compares WORDS, so it cannot see this: the two share almost no
+// vocabulary. What links them is CAUSE, and cause is domain knowledge.
+//
+// Merging is not just hygiene. The email prompt asks for exactly this shape:
+// "two or three findings that form a SINGLE CAUSAL CHAIN compound, and that chain
+// is the most persuasive thing this system can produce." Split across two
+// candidates, the chain can never be the lead. Joined, it is one finding carrying
+// its own proof: here is what is happening to you, and here is precisely why.
+const CAUSAL_DOMAINS = [
+  { name: 'organic search',
+    mechanism: /\btitle tag\b|\bmeta (description|title)\b|\bpage title\b|\bnoindex\b|\bcanonical\b|\bwrong (state|city|location)\b|\breads ['"]?[A-Z][a-z]+ [A-Z]/i,
+    outcome:   /\bnot in the top \d+\b|\bnot in top \d+\b|\bdoes ?n'?t appear\b|\bisn'?t in the (first|top)\b|\binvisible\b|\bno organic\b/i },
+  { name: 'map pack',
+    mechanism: /\bno business description\b|\bonly \d+ photos?\b|\bno photos?\b|\bprofile (gap|incomplete)\b/i,
+    outcome:   /\bmap[- ]pack\b|\branked? #\d+\b|\b#\d+ of \d+\b|\blocal (visibility|results)\b/i },
+  // NO 'intake path' DOMAIN. An 11-field form and a phone-only booking path are
+  // two independent walls, not cause and effect - the form does not CAUSE the
+  // missing response layer. Merging them tested as a false pair on Parke Gordon.
+  // Accumulated friction in one layer is already handled correctly by the value
+  // equation's earned_but_blocked shape, which counts them without collapsing
+  // them. Only add a domain here when the mechanism genuinely PRODUCES the
+  // outcome and one fix resolves both.
+];
+
+const findCausalPairs = (cands) => {
+  const pairs = [];
+  for (const dom of CAUSAL_DOMAINS) {
+    const mech = [], outc = [];
+    cands.forEach((c, i) => {
+      const t = String((c && c.finding) || '');
+      if (dom.mechanism.test(t)) mech.push(i);
+      if (dom.outcome.test(t)) outc.push(i);
+    });
+    for (const mi of mech) for (const oi of outc) {
+      if (mi === oi) continue;
+      pairs.push({ domain: dom.name, mechanismIdx: mi, outcomeIdx: oi });
+    }
+  }
+  return pairs;
 };
 
 // ══ ONE FABRICATION LIST, TWO CALL SITES ═════════════════════════════════════
@@ -11925,7 +11988,11 @@ The strongest proof point here is Sean, a plumbing company ($140k on $4k in one 
 They have already identified the problem and allocated the budget (~$55k/yr per role). They have started a hiring process but have NOT yet committed.
 THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $40k-$100k+ custom build.
 The strongest proof point is the seasonal business (relief + profit) for an owner-operator, or Kraft Heinz if they are larger and more technical.`
-: `🔎 AUDIT-DRIVEN WINDOW — there is NO confirmed hiring signal for this lead${req.body.discoverySource === 'google_places' ? ' (it is a local owner-operated business found via Google Places)' : ''}.
+: `🔎 AUDIT-DRIVEN WINDOW — there is NO confirmed hiring signal for this lead${req.body.discoverySource === 'google_places' ? ' (it is a local owner-operated business found via Google Places)' : `The five scores you assign are judgements, and on real leads they land within one or two points of each other at the top. That is not a decision \u2014 the same lead has produced different winners across runs while nothing about the business changed.
+THE BINDING CONSTRAINT WAS NOT MEASURED ON THIS LEAD, so the usual tiebreak is unavailable. Two rules replace it, in order.
+FIRST, LEVERAGE. If your top two are within 2 points, the one on the HIGHER Hormozi layer wins: market and offer outrank leads, leads outrank conversion, conversion outranks throughput and page mechanics. Order: positioning_offer \u00b7 review_pattern \u00b7 search_absence \u00b7 gbp_gap \u00b7 conversion_leak \u00b7 dated_site \u00b7 technical_leak. An owner cannot delegate who his business is for; he can delegate a form.
+SECOND, UNDENIABILITY. If they are still level after that, the higher VERIFIABLE score wins \u2014 the one he can confirm on his phone in ten seconds. A finding he checks and confirms buys credibility for every other sentence in the email.
+NEITHER RULE OVERRULES A CLEAR WINNER. Three or more points ahead wins on its own merit, whatever layer it sits on. These only decide ties, which is exactly where the arbitrariness was.`}.
 CRITICAL: Do NOT default to a software/AI build. This lead did not post ops roles, so there is NO evidence they are drowning in manual labor. Pitch ONLY what the SITE AND AD AUDIT actually reveal. For a local owner-operated business the answer is almost always one of two things:
   1) WEBSITE REBUILD ($50k+) — if the site is dated, has no clear CTA, weak positioning, or looks like it predates 2021. Note: a standalone landing page is NOT one of our products and must never be recommended or priced as the offering. Describing dedicated conversion pages as part of a full rebuild is fine — just never present one as the product itself.
   2) END-TO-END MARKETING / ADS RETAINER — if they are running ads, have a thin/under-managed online presence, or are clearly under-marketed for their size.
@@ -12708,6 +12775,36 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
 
           // Log the model's own scoring so the selection is auditable in the logs.
           // If a bad email ships, this shows WHY that finding was chosen.
+          // ══ MERGE CAUSAL PAIRS BEFORE ANYTHING RANKS THEM ══════════════════
+          // The OUTCOME carries the merged candidate, not the mechanism: the
+          // outcome is the business-level fact ("you are not in the top 20") and
+          // the mechanism is its proof ("because the tag says New Jersey"). That
+          // is the CONDITION-then-PROOF order the email is required to open in,
+          // so merging this way hands Generate the right shape for free.
+          try {
+            const _cf2 = Array.isArray(parsed.candidateFindings) ? parsed.candidateFindings : [];
+            if (_cf2.length > 1) {
+              const _pairs = findCausalPairs(_cf2);
+              const _absorbed = new Set();
+              for (const _pr of _pairs) {
+                const _mech = _cf2[_pr.mechanismIdx], _out = _cf2[_pr.outcomeIdx];
+                if (!_mech || !_out || _absorbed.has(_pr.mechanismIdx) || _absorbed.has(_pr.outcomeIdx)) continue;
+                _absorbed.add(_pr.mechanismIdx);
+                _out.causalEvidence = String(_mech.finding || '').slice(0, 160);
+                _out.finding = `${_out.finding} \u2014 because ${String(_mech.finding || '').replace(/^[A-Z]/, c => c.toLowerCase())}`;
+                // One story with two pieces of evidence is MORE verifiable than
+                // either alone: he can check the rank and the tag. Nothing else
+                // moves - severity and leverage are unchanged by the merge.
+                _out.verifiable = Math.min(5, (Number(_out.verifiable) || 3) + 1);
+                _out.total = (Number(_out.total) || 0) + 1;
+                console.log(`\u2713 CAUSAL MERGE [${company}]: two candidates were one ${_pr.domain} story \u2014 "${String(_mech.finding).slice(0, 44)}" is WHY "${String(_out.finding).slice(0, 44)}". Merged into one candidate carrying both; the freed slot goes to a distinct finding instead of manufacturing a tie at the top.`);
+              }
+              if (_absorbed.size) {
+                parsed.candidateFindings = _cf2.filter((_c, _i) => !_absorbed.has(_i));
+              }
+            }
+          } catch (e) { void e; }
+
           if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
             // ── DO NOT SLICE THIS LIST ────────────────────────────────────────
             // This log used to `.slice(0, 4)`. Four live leads were then read as
@@ -13193,6 +13290,23 @@ Return ONLY valid JSON:
         crm: builtWith.hasCRM === true ? 'CRM detected' : (builtWith.confirmed === true && !builtWith.blocked) ? 'No CRM detected on-page (scan can miss server-side tools)' : 'CRM: not readable \u2014 our fetch of their site was refused, so nothing is known either way',
         emailMarketing: builtWith.hasEmailMarketing ? 'Email marketing tool active' : builtWith.confirmed ? 'No email tool detected on-page (unverified)' : 'Email marketing: could not verify',
         trackingPixel: builtWith.hasPixel === true ? 'Analytics/pixel present' : (builtWith.confirmed === true && !builtWith.blocked) ? 'No pixel detected on-page (scan can miss it)' : 'Tracking: not readable \u2014 our fetch of their site was refused, so nothing is known either way',
+        // ── CONVERSION PIXEL IS A DIFFERENT MEASUREMENT FROM ANALYTICS ─────
+        // hasMetaPixel and hasGoogleAdsTag are computed from the page source and
+        // were never returned, so the Research tab's "Conversion pixel" row was
+        // pointed at `trackingPixel` - the SAME field as "Tracking / analytics".
+        // Two rows, one measurement, two different proof strings each claiming to
+        // have checked something the other did. The audit was inflating its own
+        // surface with a value it had already reported.
+        //
+        // The measurement exists; only the wire was missing. Note the asymmetry
+        // that matters for copy: a tag PROVES they were buying traffic at some
+        // point, but its absence proves nothing (server-side tagging is common),
+        // and a tag NEVER proves spend is flowing today.
+        conversionPixel: (builtWith.hasMetaPixel === true || builtWith.hasGoogleAdsTag === true)
+          ? `Conversion tag present \u2014 ${[builtWith.hasMetaPixel && 'Meta pixel', builtWith.hasGoogleAdsTag && 'Google Ads tag'].filter(Boolean).join(' + ')} (proves a tag exists, NOT that ads run today)`
+          : (builtWith.confirmed === true && !builtWith.blocked)
+            ? 'No Meta pixel or Google Ads tag in page source (server-side tagging would not appear here)'
+            : 'Conversion tags: not readable \u2014 our fetch of their site was refused, so nothing is known either way',
         chat: builtWith.hasChat ? 'Live chat present' : builtWith.confirmed ? 'No live chat detected (unverified)' : 'Chat: could not verify',
         emailCapture: builtWith.confirmed ? (builtWith.hasEmailCapture ? 'Email capture present' : 'No email-capture form detected on the pages we scanned') : '',
         booking: builtWith.confirmed ? (builtWith.hasBooking ? 'Booking/scheduler tool present' : 'No online booking tool detected on the page') : '',
