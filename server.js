@@ -196,6 +196,80 @@ const openingConditionFor = (signal, ctx = {}) => {
   }
 };
 
+// ══ SURPRISE IS A BASE RATE, AND THAT IS WHY TWO FINDINGS ALWAYS WIN ═════════
+// Across eight consecutive live audits, FIVE emails led on a phone-or-booking
+// finding — and in FOUR of those the measured binding layer was something else
+// entirely (OFFER, LEADS, THROUGHPUT). "There is no way to book after hours" and
+// "your number does not dial" kept taking the lead on businesses whose actual
+// constraint was elsewhere.
+//
+// That is not the ladder ranking badly. The ladder ranks what it is given, and it
+// is given these two on EVERY lead, because they are true of almost every
+// owner-operated local business. A condition shared by ninety percent of the
+// market cannot explain why THIS business is behind — and Hormozi's binding
+// constraint is by definition the thing holding this one back relative to what
+// it could be. If every plumber in the city takes bookings by phone, taking
+// bookings by phone is not why this plumber is losing.
+//
+// The schema already has the right dimension for this and we were asking the
+// model to guess it: "SURPRISE (does he already know? 5 = he has never checked
+// and would be startled; 1 = he knows already)". A near-universal condition is
+// one he knows by definition — he has run his business this way for twenty
+// years. Nobody is startled to learn their phone is answered during office hours.
+//
+// So surprise is computed from base rate, and the two findings that dominated
+// fall to 1-2 while genuinely unusual ones hold 4-5. Third dimension of five now
+// measured rather than judged; weFixIt and ownerLevel remain judgements because
+// they genuinely vary and we have nothing to measure them against.
+const SURPRISE_RULES = [
+  // ── ORDER MATTERS: FIRST MATCH WINS, SO SPECIFIC BEFORE GENERAL ─────────
+  // "No scheduler, no form and no phone number visible anywhere" scored 1
+  // because it hit the phone-only rule before reaching the rare-case rule.
+  // Having NO contact route at all is the opposite of ordinary; it was being
+  // filed as the most ordinary thing there is. Rare cases are tested first.
+  // ── 4-5: genuinely unusual. He almost certainly has not checked. ──────────
+  [5, /\btitle tag\b[^.]{0,60}\b(new jersey|different state|wrong (state|city|location))\b|\breads ['\u2018"][A-Z][a-z]+ [A-Z]/i,
+      'a page telling Google the wrong geography is rare and he has never looked'],
+  [5, /\bnewest (google )?review is (about )?\d{3,} days\b|\b\d{3,} days old\b/i,
+      'a profile frozen for over a year is unusual and invisible from the inside'],
+  [5, /\bno HTTPS\b|\bnot secure\b/i, 'rare in this decade and he has almost certainly not seen it'],
+  [5, /\bno scheduler, no form and no phone\b|\bno direct route to contact\b/i,
+      'having NO contact route at all is genuinely rare'],
+  [4, /\bfewer reviews\b|\bfewer five[- ]star\b|\bstronger reputation than\b/i,
+      'the comparison against who outranks him is something he has never run'],
+  [4, /\breview (pattern|s? mention)\b[^.]{0,60}\b(repeat|\d+ of)\b|\brepeating pattern\b/i,
+      'a verified repeated complaint in his own reviews is the "how do they know this" hit'],
+  [4, /\bnot tappable\b|\bdoes ?n[o\u2019']?t dial\b|\bplain text\b/i,
+      'moderately common but he has almost certainly never tried it on a phone'],
+  // ── 1: he already knows. Universal in owner-operated local business. ──────
+  [1, /\bphone[- ]only\b|\bno online booking\b|\bno (booking|scheduling) (tool|system|option)\b|\bno scheduler\b|\bonly way to (book|hire|engage|start)\b/i,
+      'nearly every owner-operated local business books by phone — he has run it this way for years'],
+  [1, /\bafter[- ]hours\b|\bno (automated |instant )?(response|reply|acknowledg\w*) (layer|tool)?\b|\bno auto[- ]?reply\b|\boutside business hours\b/i,
+      'no small business has after-hours automation — this is the default, not a defect he overlooked'],
+  [1, /\bno CRM\b|\bno lead magnet\b|\bnothing to download\b/i,
+      'the overwhelming majority of local businesses have neither — telling him is not news'],
+  [2, /\bno guarantee\b|\bno (named |real |clear )?offer\b|\bno urgency\b|\brisk reversal\b/i,
+      'common across the market, though he may not have framed it as a choice'],
+  [2, /\bgeneric\b|\btargets? (everyone|anyone)\b|\bundifferentiated\b|\binterchangeable\b/i,
+      'most local copy reads this way; he half knows it already'],
+  [2, /\bno business description\b/i, 'extremely common and low-stakes on its own'],
+];
+
+const computeSurprise = (findingText) => {
+  const t = String(findingText || '');
+  // A form is only interesting when it is UNUSUALLY long. Every business has a
+  // contact form; a sixteen-field one is a different fact from a five-field one.
+  const m = t.match(/(\d+)[- ]field|asks (?:for )?(\d+)\s*(?:separate )?fields?/i);
+  if (m) {
+    const n = Number(m[1] || m[2]) || 0;
+    if (n >= 12) return { score: 5, why: `${n} fields is far outside the norm — he has never counted them` };
+    if (n >= 8)  return { score: 3, why: `${n} fields is on the long side but not remarkable` };
+    return { score: 1, why: `${n} fields is an ordinary contact form` };
+  }
+  for (const [score, re, why] of SURPRISE_RULES) if (re.test(t)) return { score, why };
+  return { score: 3, why: 'no base rate known for this finding', unmatched: true };
+};
+
 // ══ SEVERITY IS THE LAYER, NOT AN OPINION ════════════════════════════════════
 // Computing VERIFIABLE separated the top of the ladder for the first time. The
 // same argument applies to a second dimension and I missed it: the schema defines
@@ -258,10 +332,23 @@ const computeSeverity = (signal) => {
 // has to work.
 const VERIFIABILITY_RULES = [
   // 5 — one action on his own phone, and the answer is unambiguous.
+  // ── NO \b BEFORE '#'. IT CAN NEVER MATCH. ─────────────────────────────
+  // `\b#\d+ of \d+\b` looks right and is dead code: \b asserts a boundary
+  // between a word and a non-word character, and '#' is non-word — so at the
+  // start of a string, or after a space, there is nothing for it to sit against.
+  // "#1 of 17 for 'electrician in Upper Arlington'" therefore matched NOTHING
+  // and fell to the default of 2, which the drift warning caught on a live run.
+  // "Ranked #19 of 20" only ever passed because a DIFFERENT alternative
+  // (\branked? #\d+) happened to cover it, which hid the dead branch entirely.
+  //
+  // The finding classifier already carries this exact note further down the file.
+  // I made the same mistake again in a new section, so the warning is repeated
+  // here: a comment about a trap has to sit where the trap is.
+  //
   // A 5 only because the copy is required to state a BAND, not a digit. His own
   // search is personalised, so the exact position is not reproducible for him -
   // "near the bottom of that list" is, and that is what he will be checking.
-  [5, /\b#\d+ of \d+\b|\branked? #\d+\b|\bnot in the top \d+\b|\bnot in top \d+\b|\bmap[- ]pack\b|\b(?:near |at )?the bottom of the first \w+\b|\bbottom of (?:the )?(?:that |their )?list\b|\bnot on the first (?:screen|page)\b|\bfirst page but not\b|\blocal (?:search )?results?\b/i, 'he types the search himself and sees roughly where he lands (band, not exact position)'],
+  [5, /#\d+\s+(?:of|in|for)\s+\w|\branked? #\d+\b|\bnot in the top \d+\b|\bnot in top \d+\b|\bmap[- ]pack\b|\b(?:near |at )?the bottom of the first \w+\b|\bbottom of (?:the )?(?:that |their )?list\b|\bnot on the first (?:screen|page)\b|\bfirst page but not\b|\blocal (?:search )?results?\b/i, 'he types the search himself and sees roughly where he lands (band, not exact position)'],
   [5, /\bonly \d+ photos?\b|\bno photos?\b|\bno business description\b|\bGoogle Business Profile\b/i, 'he opens his own Google listing'],
   [5, /\b\d+[- ]field\b|\bform asks (for )?\d+\b|\basks \d+ (separate )?fields?\b/i, 'he opens his own form and counts'],
   [5, /\bno HTTPS\b|\bnot secure\b|\bSSL\b/i, 'he loads his own site and sees the browser warning'],
@@ -350,7 +437,7 @@ const CAUSAL_DOMAINS = [
   // two get different language, because "because" is a claim and "with" is not.
   { name: 'map pack', certainty: 'contributing',
     mechanism: /\bno business description\b|\bonly \d+ photos?\b|\bno photos?\b|\bprofile (gap|incomplete)\b/i,
-    outcome:   /\bmap[- ]pack\b|\branked? #\d+\b|\b#\d+ of \d+\b|\bnot in the top \d+\b|\bnot in top \d+\b|\blocal (visibility|results|search)\b|\b(?:near |at )?the bottom of the first \w+\b|\bbottom of (?:the )?(?:that |their )?list\b|\bnot on the first (?:screen|page)\b/i },
+    outcome:   /\bmap[- ]pack\b|\branked? #\d+\b|#\d+\s+(?:of|in|for)\s+\w|\bnot in the top \d+\b|\bnot in top \d+\b|\blocal (visibility|results|search)\b|\b(?:near |at )?the bottom of the first \w+\b|\bbottom of (?:the )?(?:that |their )?list\b|\bnot on the first (?:screen|page)\b/i },
   // NO 'intake path' DOMAIN either. An 11-field form and a phone-only booking
   // path are two independent walls, not cause and effect - the form does not
   // CAUSE the missing response layer. Tested as a false pair on Parke Gordon.
@@ -2472,6 +2559,9 @@ Return ONLY valid JSON, no markdown:
   "designQuality": "professional/dated/poor",
   "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
   "overallConversionRating": "strong/moderate/weak",
+  "situationRead": "\u2605 THE MOST IMPORTANT FIELD YOU WRITE. Three to five sentences, INTERNAL \u2014 for a colleague who has never heard of this business and has six minutes before a call. Do NOT restate a finding. Every other field names ONE thing; this one names what all the signals ADD UP TO, which is usually not any of them individually and is sometimes the OPPOSITE of them. WORKED EXAMPLE \u2014 an oral surgeon: #1 of 17 in his town, 317 reviews at 4.9, newest 17 days old, replies to 38 of 40 himself, no guarantee on the site. A finding-level read says 'no named offer'. The SITUATION read is: he has already won his market, and that is the problem. Nothing here is broken. There is nothing left to take in a town that size, and the growth question is not how to get found but what the next chapter looks like when you are already the answer. That read is built from five signals at once and it CONTRADICTS the offer finding. SECOND EXAMPLE \u2014 a builder: founded 2009, HGTV, 434 pages, five social channels, 4.8 stars, and 19 reviews in sixteen years. Finding-level: no guarantee. SITUATION: sixteen years in and there is no machine for turning a finished house into the next one \u2014 activity rather than accumulation, and he can feel the gap between his effort and his result. HOW TO BUILD IT: put the numbers next to each other and ask what shape they make. Long tenure with thin proof means nothing compounds. Top rank in a small market means saturation, not marketing. Strong reviews with a cold profile means the machine stopped. High effort with low return means he is trying and does not know why it is not working. Name the shape in plain English and say what it implies about what he needs \u2014 marketing or software, growth or exit. BANNED as the headline: 'no guarantee', 'no named offer', 'generic positioning'. Those are page observations. If the offer genuinely IS the constraint, say why that matters for THIS business rather than restating the absence.",
+  "signalReads": "Array of {signal, says}, one per MEASURED signal you were given. 'signal' is a short label (Local search rank, Reputation, Booking path, Google profile, Positioning, Site technicals). 'says' is ONE sentence of INTERPRETATION for a colleague \u2014 what the fact MEANS for the business, never the fact itself, because the reader already has the fact. WRONG: 'Ranks #15 for plastic surgeon'. RIGHT: '#15 of 20 in Dallas and 10 of the 14 above him have fewer reviews \u2014 the position is not being earned on reputation.' WRONG: '1 profile gap'. RIGHT: 'His Google profile has no description \u2014 the one thing on this list he could fix himself this afternoon.' WRONG: 'Form only, 17 fields'. RIGHT: 'Seventeen fields is the only way in, and the people filling it in have just been in a car accident.' Where a signal is a STRENGTH say so plainly \u2014 a briefing that lists only problems misleads the reader about what kind of business this is.",
+  \u2605 ORDER MATTERS AND IT IS DELIBERATE: you write situationRead and signalReads BEFORE candidateFindings. Reason about the whole business first, then choose the findings that EVIDENCE that read. Doing it the other way round \u2014 findings first, synthesis after \u2014 makes the synthesis a summary of choices already made, and it collapses back into a restatement of one finding. Decide what is going on here, then prove it.
   "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions. (c) IF THE SITE IS VISIBLY OLD, THAT IS ITS OWN CANDIDATE \u2014 use signal \u2018dated_site\u2019. A copyright year years out of date, a layout from another decade, or a design a buyer would hesitate to hand a card to is not a technical leak and it is not positioning: it is a CREDIBILITY problem, and for a high-ticket local trade it is often the first thing a customer reacts to and the whole reason a rebuild is worth buying. It was invisible to this list before, so a contractor whose site had not changed since 2015 had no way for that to become the lead. Score it like anything else: VERIFIABLE is high (he can look at it), SURPRISE is usually LOW (he knows it is old), so it wins only when it is genuinely severe. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
   "leadSignal": "The winner from candidateFindings above \u2014 the ONE finding your pitch will be built on. Answer with EXACTLY ONE of: \"review_pattern\", \"search_absence\", \"gbp_gap\", \"conversion_leak\", \"technical_leak\", \"dated_site\", \"positioning_offer\". \u26a0 conversion_leak IS NEW AND IT IS THE ONE MOST OFTEN FILED WRONG. It covers the path from INTERESTED to CUSTOMER: no booking tool, a form that captures and then waits, no visible instant-response layer, an over-long form, no way to start outside business hours. Those are NOT technical_leak. technical_leak is page MECHANICS \u2014 no HTTPS, no mobile viewport, no tap-to-call link. Ask which question the finding answers: \"can this page function?\" is technical_leak; \"can a person who already wants to hire them actually do it?\" is conversion_leak. On live runs every conversion finding was filed as technical_leak, which put the highest-leverage layer on this kind of lead into the lowest-ranked bucket. This is a DECISION you are making now, before writing, not a description of something already written. The pitch that follows must be built on this finding. Answer with EXACTLY ONE of these strings and nothing else: \"review_pattern\" (a pain repeating across their own Google reviews), \"search_absence\" (a measured search-rank absence), \"gbp_gap\" (a measured Google Business Profile gap), \"technical_leak\" (a measured site/technical leak \u2014 no HTTPS, no mobile viewport, no tap-to-call link, slow mobile. NOT forms \u2014 an over-long form is conversion_leak, as stated above), \"positioning_offer\" (their market positioning, generic promise, or missing offer/guarantee). Be honest \u2014 name what the FIRST sentence of the pitch is actually about, not what you wish it led with. This is checked against what we measured.",
   "leadSignalReason": "ONLY fill this in if you deliberately did NOT lead with the highest-ranked signal available. Explain in one sentence why \u2014 for example the recurring review pain is about pricing or workmanship, which we do not fix, so leading with it would make us sound like a complaint tracker. Leave as null if you led with the highest-ranked signal.",
@@ -4849,13 +4939,53 @@ const measureBookingPath = (html, text) => {
   const hasTextarea = /<textarea\b/i.test(h);
   if (hasForm || hasTextarea) return { booking: 'form', why: 'a submitting form is present in the page source' };
 
-  // No form and no scheduler, but a phone number they clearly want called.
-  const hasTel = /href=["']tel:/i.test(h);
-  const phoneText = /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(h);
-  if (hasTel || phoneText) return { booking: 'phone_only', why: 'no scheduler and no form in the source \u2014 a phone number is the only route offered' };
+  // ══ 'PHONE_ONLY' REQUIRES A PHONE A CUSTOMER CAN ACTUALLY SEE ═════════════
+  // This used to accept ANY ten-digit-shaped string anywhere in the blob, and
+  // the blob is HTML plus markdown — so a number inside a <script>, a JSON-LD
+  // block, a meta tag, a fax line, a licence number or a date range all counted
+  // as "a phone number is the only route offered".
+  //
+  // Live, DRCH | Dean Russell Custom Homes: HTML SIGNALS reported tel=false and
+  // formFields=0. The page offers a GET A QUOTE button and nothing else. The
+  // regex still matched something ten digits long, the audit declared
+  // phone_only, and the email told the owner to "pull up your site on a phone
+  // right now and try to tap the number — it doesn't dial."
+  //
+  // There is no number on that page to tap. We invented a component, then
+  // invented its failure. That is worse than a false absence: a false absence
+  // insults a business doing something right, but this describes an element that
+  // does not exist, and he will look for it.
+  //
+  // Two separate facts, and they get separate names:
+  //   tel: link present  -> a dial route exists (tappable)
+  //   number in VISIBLE COPY only -> a number is shown but will not dial
+  //     (this is the real, valuable Arlington Electric finding and it stays)
+  //   number only in markup -> NOT a phone route. Not visible, not a claim.
+  const hasTel = /href=["']tel:/i.test(h) || /\]\(tel:/i.test(h);
 
-  // Genuinely nothing detectable. Say so rather than assert absence.
-  return null;
+  // Strip everything a customer never sees before looking for a number, so a
+  // phone in schema markup or a script can no longer masquerade as a call route.
+  const visible = String(text || '')
+    || String(html || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ');
+  const PHONE_RE = /\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/;
+  // Exclude the shapes that look like phones and are not: fax lines, licence
+  // and registration numbers, and anything explicitly labelled as such.
+  const phoneVisible = PHONE_RE.test(
+    visible.replace(/\b(fax|licen[cs]e|lic\.?|reg(istration)?|ein|tax\s*id|permit|policy)\b[^\n]{0,40}/gi, ' ')
+  );
+
+  if (hasTel) return { booking: 'phone_only', why: 'a tappable phone link is the only route offered' };
+  if (phoneVisible) return { booking: 'phone_only', why: 'a phone number is printed on the page and is the only route offered \u2014 it is NOT a tappable link' };
+
+  // No scheduler, no form, no visible phone. That is a real and quite serious
+  // finding on its own, and it is NOT 'phone_only'. Naming it correctly is the
+  // difference between "your number will not dial" (false, and checkable) and
+  // "there is no way to contact you from this page without filling something in"
+  // (true, measured, and a stronger thing to say).
+  return { booking: 'none_found', why: 'no scheduler, no form and no phone number visible anywhere on the page \u2014 there is no direct route to contact them from here' };
 };
 
 // ══ MARKET — THE TOP OF THE HIERARCHY, AND THE ONLY LAYER NEVER MEASURED ═════
@@ -5297,6 +5427,407 @@ const buildAllowedConsequences = ({
 // a business that cannot answer the phone makes the reviews worse, not the revenue
 // better. Everything below is derived from things we MEASURED.
 
+// ══ BUSINESS HISTORY — THE ONLY EVIDENCE AN OWNER CANNOT DISMISS ═════════════
+// WHY THIS EXISTS
+// Every other measurement in this system inspects an ARTEFACT: a page, a Google
+// profile, a search result. That is why every finding lands at artefact altitude
+// — "no guarantee on the homepage", "the phone number is not tappable". True,
+// checkable, and small.
+//
+// Glenn Layton Homes is the case that exposed it. Founded 2009. HGTV. Five social
+// channels. 434 pages. 4.8 stars. And NINETEEN REVIEWS IN SIXTEEN YEARS. For a
+// custom home builder, where a single job is six or seven figures, that is about
+// one review a year — and they have certainly built far more homes than that.
+//
+// That is the diagnosis. A business sixteen years old whose completed work does
+// not accumulate into anything: no proof compounding, no referral engine, nothing
+// that makes year sixteen easier than year two. The audit had the number and
+// filed it under AFFORDABILITY as a caution about whether they could pay us.
+//
+// WHAT MAKES THESE FINDINGS DIFFERENT
+// They are ratios over the business's own record, so there is no baseline to
+// argue with and no page to forward to a web developer. "Your site has no
+// guarantee" invites "so what". "Sixteen years, nineteen reviews" does not.
+//
+// THE CLAIM DISCIPLINE THAT MATTERS MOST HERE
+// A review count is NOT a job count. We must never write "you have only done 19
+// jobs" — that is false and he knows it is false, and it would destroy the email.
+// The true and much stronger statement is that his work is not TURNING INTO
+// public proof. Every string below is written to that line and must stay there.
+const measureBusinessHistory = ({ foundedYear, reviewCount, reviewRating, reviewRecencyDays, rank, weakerAbove, trade } = {}) => {
+  const nowYear = new Date().getFullYear();
+  const tenure = (Number.isFinite(foundedYear) && foundedYear > 1900 && foundedYear <= nowYear)
+    ? nowYear - foundedYear : null;
+  const reviews = Number.isFinite(reviewCount) ? reviewCount : null;
+  const findings = [];
+
+  // ── 1. PROOF ACCUMULATION ────────────────────────────────────────────────
+  // Reviews per year of trading. Needs both numbers measured; says nothing
+  // otherwise, because half of this ratio is not a ratio.
+  let perYear = null;
+  if (tenure && tenure >= 3 && reviews !== null) {
+    perYear = reviews / tenure;
+    if (perYear < 3) {
+      findings.push({
+        kind: 'proof_accumulation',
+        layer: 'LEADS',
+        finding: `${tenure} years in business and ${reviews} public reviews \u2014 about ${perYear < 1 ? 'one review every ' + Math.round(1 / perYear) + ' years' : perYear.toFixed(1) + ' a year'}. The work is being done; it is not turning into proof anyone can find.`,
+        why: `A business this old should have a body of public evidence working for it. At this rate every new customer starts from almost nothing, which means ${tenure} years of completed jobs are doing no selling.`,
+        evidence: `${reviews} reviews measured on their Google profile; founded ${foundedYear} per their own site.`,
+      });
+    } else if (perYear >= 12) {
+      // The opposite case, and it is the strongest CREDIT available on a lead:
+      // this business has a machine. Naming it earns the right to say the rest.
+      findings.push({
+        kind: 'proof_engine',
+        layer: null,
+        credit: true,
+        finding: `${reviews} reviews over ${tenure} years \u2014 roughly ${Math.round(perYear)} a year. Something in this business reliably turns finished work into public proof.`,
+        why: 'Do not tell this owner he has a reputation problem. He has solved the hardest part, and the email must open by saying so.',
+        evidence: `${reviews} reviews measured; founded ${foundedYear}.`,
+      });
+    }
+  }
+
+  // ── 2. HAS THE ENGINE STALLED ────────────────────────────────────────────
+  // Self-referential, so it needs no industry baseline: compare the gap since
+  // their newest review against the gap their OWN history predicts. A builder
+  // averaging one review a year is fine at 91 days. A practice averaging thirty
+  // a year that has been silent 420 days has stopped doing something it used
+  // to do — and that is a change, which is far more interesting than a level.
+  if (perYear && perYear > 0 && Number.isFinite(reviewRecencyDays)) {
+    const expectedGap = 365 / perYear;
+    if (reviewRecencyDays > expectedGap * 3 && reviewRecencyDays > 120) {
+      findings.push({
+        kind: 'proof_stalled',
+        layer: 'THROUGHPUT',
+        finding: `Their newest review is ${reviewRecencyDays} days old, against a lifetime pace of roughly one every ${Math.round(expectedGap)} days. Whatever was producing reviews has stopped.`,
+        why: 'This is a change in their own behaviour, not a level. Something that used to work is no longer running, and the owner may not have noticed.',
+        evidence: `${reviews} reviews over ${tenure} years; newest ${reviewRecencyDays} days old.`,
+      });
+    }
+  }
+
+  // ── 3. REPUTATION EARNED, POSITION NOT ───────────────────────────────────
+  // Already measured elsewhere, but stated here at business altitude rather
+  // than as a rank number.
+  if (Number.isFinite(rank) && rank > 3 && Number.isFinite(weakerAbove) && weakerAbove > 0) {
+    const above = Math.max(1, rank - 1);
+    findings.push({
+      kind: 'reputation_not_converting',
+      layer: 'LEADS',
+      finding: `${weakerAbove} of the ${above} businesses ranking above them have FEWER reviews. The reputation is better than the position.`,
+      why: 'Whatever decides who gets found here, it is not the quality of the work — so more work will not fix it.',
+      evidence: `Rank #${rank} measured; review counts compared across the businesses above.`,
+    });
+  }
+
+  return {
+    checked: tenure !== null || reviews !== null,
+    tenure, foundedYear: foundedYear || null, reviewsPerYear: perYear,
+    findings,
+    // Stated explicitly so the prompt can never imply otherwise.
+    caveat: 'A review count is not a job count. Never say how many jobs they have done \u2014 say how much of their work is visible.',
+  };
+};
+
+// ══ HISTORY — WHAT THE BUSINESS'S OWN RECORD SAYS ════════════════════════════
+// WHY THIS EXISTS
+// Every measurement in this file until now inspects a SNAPSHOT: what the page
+// contains today, what the profile shows today, where they rank today. That is
+// why every finding lands at page altitude no matter which Hormozi layer it is
+// filed under — inspect a homepage, get a homepage-level observation.
+//
+// Glenn Layton Homes made it unmissable. Founded 2009. Sixteen years. HGTV.
+// 434 pages. Five social channels. 4.8 stars. And NINETEEN reviews — roughly one
+// a year, for a builder whose average job runs six or seven figures. They have
+// certainly completed far more houses than that.
+//
+// The audit said: "no guarantee, no named offer, no urgency." True, trivial, and
+// forgettable. The actual finding is that a business sixteen years old has no
+// machine for turning a finished house into the next one — nothing captures the
+// proof, nothing compounds. Activity instead of accumulation.
+//
+// The system HELD both numbers and never put them together. Tenure was logged by
+// the STORY signal and dropped; `yearsInBusiness` is read by the affordability
+// check and was never set anywhere in the file, so that branch had never fired.
+// The review count sat in a different object. Neither is a finding alone; the
+// RATIO is the whole diagnosis.
+//
+// So: ratios over time, computed from what we already pull. An owner cannot wave
+// these away as web-designer detail, because they are about his own sixteen
+// years rather than his hero section.
+
+// Tenure, from the strongest evidence available. Explicit founding statements
+// beat copyright years, because a copyright line only proves the site was
+// touched — not when the business began.
+// ══ THE SITUATION READ — ITS OWN CALL, ONE JOB ═══════════════════════════════
+// WHY THIS IS SEPARATE FROM THE AUDIT CALL
+// The audit call asks for roughly twenty fields against a 15,000-token prompt:
+// a vision read, a decision maker, six or more scored findings, an email, two
+// follow-ups, a product recommendation. Synthesis was field seventeen of twenty,
+// and it came out looking like every other field — a short restatement of a
+// finding, because that is what the surrounding twenty fields are.
+//
+// The hand-written example that set the bar was produced with ONE question in
+// mind: here are the measured facts, what shape do they make? No email to write,
+// no schema to satisfy, no findings to score. That is the difference, and it is
+// an architecture difference rather than a prompt difference.
+//
+// So: a small focused call. Every measured fact, one job, a closed set of shapes
+// to choose from, and a complete worked example of the exact output wanted.
+// Roughly 1,200 input tokens and 350 output — about a cent a lead on Sonnet,
+// against $0.09 for the audit it improves.
+
+// A CLOSED SET. Free text lets the model describe a finding and call it a shape;
+// an enum forces an actual decision about what kind of business this is. Each
+// one implies a different conversation, which is the point — the shape is what
+// routes the lead, not just what describes it.
+const SITUATION_SHAPES = [
+  ['SATURATED',            'They have won their market and there is little left to take in it. Growth has to come from somewhere new — a wider area, a different service, or a different kind of customer.'],
+  ['NOT_COMPOUNDING',      'Years of real work and almost nothing accumulating from it. No machine turns a finished job into the next one, so every year starts from roughly the same standing start.'],
+  ['STALLED',              'It used to work and it stopped. The evidence of the machine running is there, and it is old.'],
+  ['TRYING_HARD_LOW_RETURN','Visible, expensive effort in several directions and very little coming back. He knows something is wrong and does not know which part.'],
+  ['EARNED_BUT_BLOCKED',   'The reputation is genuinely earned and something in the path from interested to customer is losing people who already decided.'],
+  ['CAPPED_BY_OWNER',      'The business cannot grow past the owner\'s own hours. More demand would hurt rather than help until that changes.'],
+  ['GROWING_BUT_LEAKING',  'Demand is arriving and some of it is being dropped on the floor.'],
+  ['TOO_EARLY',            'Genuinely early. Not enough business yet for most of this to matter.'],
+  ['NOTHING_WRONG',        'We measured carefully and found a business doing the job well. Say so plainly rather than manufacturing a problem.'],
+];
+
+const buildSituationRead = async (facts, apiKey, company) => {
+  if (!apiKey) return null;
+
+  const shapeList = SITUATION_SHAPES.map(([k, d]) => `${k} \u2014 ${d}`).join('\n');
+
+  // The gold standard, in full, exactly as it should come back. Describing the
+  // wanted output has failed repeatedly in this file; showing it works. Two
+  // examples because one teaches the topic and two teach the SHAPE of the task.
+  const goldExamples = `
+EXAMPLE 1 \u2014 an oral surgeon in Anderson, South Carolina.
+FACTS GIVEN: ranked #1 of 17 for "oral surgeon in Anderson" \u00b7 317 reviews at 4.9 \u00b7 newest review 17 days old \u00b7 owner replies to 38 of the 40 reviews we read \u00b7 no guarantee or named offer on the site \u00b7 booking is a form \u00b7 homepage speaks to everyone \u00b7 2 of 317 reviews mention rude phone staff.
+CORRECT OUTPUT:
+{
+  "shape": "SATURATED",
+  "background": "A single-surgeon oral and maxillofacial practice in Anderson, South Carolina, trading under Dr Ty Sumner\'s own name. Wisdom teeth, implants, extractions, general anaesthesia \u2014 the everyday surgical work a dentist refers out. He is personally the practice: one name on the door, and he answers the reviews himself.",
+  "headline": "He has already won his market. That is the problem.",
+  "read": "#1 of 17 oral surgeons in Anderson, 317 reviews at 4.9, newest one 17 days old, and he answers 38 of every 40 himself. Nothing here is broken. Anderson is a small city and there is very little left to take in it \u2014 the next patient searching there was already going to find him. So the growth question is not how to get found. It is what the next chapter looks like when you are already the answer, and that is a different conversation from the one every other agency is having with him.",
+  "rows": [
+    {"label":"Reputation machine","says":"Working, and he runs it personally. 317 reviews, one every four or five days, and he replies to nearly all of them. Almost no owner does this."},
+    {"label":"Position","says":"#1 of 17. Not \u2018could rank better\u2019 \u2014 first. There is no visibility gap to sell him."},
+    {"label":"Market size","says":"Anderson SC. A small city. Being first here has a ceiling, and he is near it."},
+    {"label":"The one crack","says":"2 of 317 patients wrote about rude phone staff. Tiny \u2014 and it is the only negative pattern in three hundred reviews. He is personally excellent and the front desk is the gap between him and perfect."},
+    {"label":"How you reach him","says":"A form is the only route. No scheduler. For a surgeon at capacity that may be deliberate."},
+    {"label":"Positioning","says":"Homepage speaks to everyone. When you are the only real choice locally that costs nothing \u2014 outside Anderson it costs everything."}
+  ],
+  "whatHeNeeds": "Not visibility \u2014 he has it. The two honest openings are reach beyond Anderson, where he is not yet the default, and the front desk, where 317 reviews of excellent surgery are being let down by two about the phone.",
+  "askOnTheCall": "Is he trying to grow, or is he full? A surgeon at capacity does not want more demand, and that answer changes everything."
+}
+WHY IT IS RIGHT: the shape is built from FIVE facts at once and it contradicts the offer finding. A finding-level read would have said "no named offer", which is true, trivial, and would have wasted the call.
+
+EXAMPLE 2 \u2014 a custom home builder in Jacksonville.
+FACTS GIVEN: founded 2009 \u00b7 appeared on HGTV \u00b7 434 pages on the site \u00b7 five social channels linked \u00b7 19 reviews at 4.8 \u00b7 newest 91 days old \u00b7 ranked #8 of 20 \u00b7 3 of the 7 above have fewer reviews \u00b7 no guarantee \u00b7 form booking.
+CORRECT OUTPUT:
+{
+  "shape": "NOT_COMPOUNDING",
+  "background": "A custom home builder in Jacksonville, founded in 2009 by Glenn Layton and John Harris \u2014 their first project was Paradise Key South Beach. Sixteen years on they build across Jacksonville and Sarasota and have appeared on HGTV. Small and owner-run: one named principal, no corporate parent, jobs in the six and seven figures.",
+  "headline": "Sixteen years of building, and almost none of it is visible.",
+  "read": "Founded in 2009. HGTV. 434 pages. Five social channels. And nineteen reviews \u2014 roughly one a year, for a builder whose jobs run six or seven figures. He has certainly completed far more houses than that. The effort is real and none of it accumulates: nothing turns a finished house into proof, and nothing turns proof into the next house. That is why three of the seven builders ranking above him have fewer reviews than he does.",
+  "rows": [
+    {"label":"Track record","says":"Sixteen years, HGTV, 434 pages, five social channels. The effort is real and it is not small."},
+    {"label":"What it produced","says":"Nineteen reviews \u2014 about one a year, for jobs that run six or seven figures. He has completed far more houses than that."},
+    {"label":"Position","says":"#8 of 20, and three of the seven above him have fewer reviews. He is losing to businesses with less proof than he has."},
+    {"label":"Reputation freshness","says":"Newest review is 91 days old. The profile reads as quiet to anyone checking."},
+    {"label":"How you reach him","says":"A seven-field form. Nothing to take away without asking."}
+  ],
+  "whatHeNeeds": "A way to capture what he already delivers. Not more traffic \u2014 he is doing the hard part and throwing away the receipt.",
+  "askOnTheCall": "How do new clients find him today? If the honest answer is word of mouth and referrals, that is the whole diagnosis in his own words."
+}
+WHY IT IS RIGHT: it puts two numbers next to each other that he has never put together himself, and the conclusion is about his business rather than his website.`;
+
+  const sys = `You are a business strategist, not an auditor. You are looking at one local business and answering one question: what is actually going on here?
+
+A colleague who has never heard of this business will read your answer before a call. They need to understand the business in six minutes.
+
+${goldExamples}
+
+\u2550\u2550\u2550 HOW TO THINK \u2550\u2550\u2550
+Put the numbers next to each other and ask what SHAPE they make. The shape is usually not any single fact and is sometimes the opposite of one. A business can have a real problem in every individual measurement and still be fundamentally healthy, and it can measure clean everywhere and still be stuck.
+
+YOU MAY AND SHOULD USE WHAT YOU KNOW ABOUT THE WORLD:
+\u2022 Market size. Anderson SC is small; Dallas is not. First place in a small town has a ceiling.
+\u2022 Industry economics. A custom home is a six-figure job; a teeth cleaning is not. Twenty jobs a year means something different in each.
+\u2022 What normal looks like. Most local businesses book by phone and have no guarantee. Almost none have sixteen years and nineteen reviews. Knowing which is unusual is the entire job.
+\u2022 The obvious inference. A builder trading sixteen years has completed far more than nineteen jobs. Say so. Hedging that is not caution, it is refusing to think.
+
+\u2550\u2550\u2550 WHAT YOU MAY NOT DO \u2550\u2550\u2550
+Every NUMBER and every FACT about this specific business must come from the list you are given. Do not invent a figure, a competitor, a customer behaviour, or anything about what happens after someone contacts them. Reasoning is permitted; inventing is not. Attach your reasoning to the fact in the same sentence so the reader can see where measurement ends and judgement begins.
+
+\u2550\u2550\u2550 PICK ONE SHAPE \u2550\u2550\u2550
+${shapeList}
+
+\u2550\u2550\u2550 OUTPUT \u2550\u2550\u2550
+JSON only, no prose around it, exactly these keys:
+{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeNeeds":"one or two sentences \u2014 what would actually help, and what would NOT","askOnTheCall":"one question whose answer would confirm or kill this read"}
+
+\u2550\u2550\u2550 ABOUT \"rows\" \u2014 READ THIS TWICE \u2550\u2550\u2550
+Five to seven rows. YOU choose the labels for THIS business; they are not a fixed list and they are not the names of our measurements.
+\u2022 Group things that belong together. \"317 reviews, one every four days, he replies to 38 of 40\" is ONE row about his reputation machine, not three rows.
+\u2022 Include rows that are not measurements at all when they matter. \"Market size \u2014 Anderson SC, a small city, being first here has a ceiling\" is one of the most important rows in that example and nothing in our data says it. You know it.
+\u2022 Name a row for what it IS to the business: \"The one crack\", \"What it produced\", \"How you reach him\", \"Track record\". Not \"Local search rank\" or \"Google Business Profile\" \u2014 those are our scanner\u2019s names for things, and the reader does not care what our scanner calls them.
+\u2022 Say STRENGTHS plainly. A briefing of only problems misrepresents the business.\n\u2022 LENGTH. Each row is ONE OR TWO FULL SENTENCES. \u2018Ranks #15\u2019 is a fragment and it is exactly what the old version of this tool produced. \u2018#15 of 20 in Dallas, and ten of the fourteen above him have fewer reviews than he does \u2014 the position is not being earned on reputation\u2019 is a row. Under twelve words is not finished.\n\u2022 The reader has six minutes and then walks into a call. Thin rows waste the only chance to brief them.
+\u2022 Every number in a row must come from the facts given. The GROUPING and the MEANING are yours.
+
+THE TEST: if every sentence you write could be replaced by a row in a table, you have failed. The reader already has the table.`;
+
+  try {
+    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        // 900 -> 1400. `background` is new and rows are now full sentences; the
+        // old ceiling truncates the JSON, and a truncated response loses the
+        // entire briefing rather than its tail.
+        max_tokens: 1400,
+        system: sys,
+        messages: [{ role: 'user', content: `THE MEASURED FACTS:\n${facts}\n\nWhat is going on here?` }],
+      }),
+    }, 45000);
+    const d = await r.json();
+    if (!d || !d.content) return null;
+    const txt = (d.content || []).map(c => c.text || '').join('');
+    const parsed = parseLLMJSON(txt);
+    if (!parsed || !parsed.read) return null;
+
+    // ── THE FAILURE MODE, CAUGHT RATHER THAN HOPED AGAINST ──────────────────
+    // The way this goes wrong is not fabrication — it is retreating into a
+    // restatement of one finding. That is invisible unless checked, so check it.
+    const flat = String(parsed.read).toLowerCase();
+    const restated = /^(no guarantee|no named offer|generic positioning|nothing on the site)/.test(flat)
+      || (flat.length < 180)
+      || !/\d/.test(flat);
+    // The table is now the bulk of the briefing, so check it too. The failure
+    // mode is reverting to our scanner's own vocabulary — eleven mechanical rows
+    // named after the thing that measured them, which is what the old tab did.
+    const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    const SCANNER_NAMES = /^(local search rank|google business profile|site technicals|cta above fold|review recency|social proof|tracking|crm|conversion pixel|google lsa|market & offer)/i;
+    const scannerNamed = rows.filter(r => r && SCANNER_NAMES.test(String(r.label || ''))).length;
+    if (!rows.length) {
+      console.log(`\u26a0 SITUATION READ [${company}]: no rows returned \u2014 the briefing will fall back to the mechanical signal list, which is the format this was built to replace.`);
+    } else if (scannerNamed >= 2) {
+      console.log(`\u26a0 SITUATION READ [${company}]: ${scannerNamed} of ${rows.length} rows use our scanner's own names rather than business groupings. That is the old table wearing new prose.`);
+    }
+    const thinRows = rows.filter(r => r && String(r.says || '').split(/\s+/).length < 12).length;
+    if (thinRows >= 2) console.log(`\u26a0 SITUATION READ [${company}]: ${thinRows} of ${rows.length} rows are under twelve words \u2014 fragments rather than readings, which is the shape the old mechanical table produced.`);
+    if (!parsed.background || String(parsed.background).split(/\s+/).length < 25) console.log(`\u26a0 SITUATION READ [${company}]: no usable background paragraph \u2014 the briefing will open on a diagnosis without first saying what the business is.`);
+    if (restated) {
+      console.log(`\u26a0 SITUATION READ [${company}]: came back thin \u2014 ${flat.length < 180 ? 'too short to be a synthesis' : !/\d/.test(flat) ? 'contains no measured numbers, so it is assertion rather than reasoning' : 'opens by restating a page-level finding'}. Using it, but this is the failure mode to watch: a read that could be replaced by a table row.`);
+    }
+    console.log(`\u2726 SITUATION READ [${company}]: ${parsed.shape} \u2014 "${String(parsed.headline || '').slice(0, 80)}"`);
+    return parsed;
+  } catch (e) {
+    console.log(`SITUATION READ [${company}]: call failed \u2014 ${e && e.message}. The audit continues without it.`);
+    return null;
+  }
+};
+
+const measureTenure = (pageText, story) => {
+  const now = new Date().getFullYear();
+  const text = `${String(story || '')} ${String(pageText || '')}`;
+  const sane = (y) => y >= 1900 && y <= now;
+
+  // "since 1998", "established 2009", "founded in 2009", "serving X since 1985"
+  // The company name usually sits between the verb and the year — "founded
+  // Glenn Layton Homes in 2009", "established Acme Roofing back in 1998". An
+  // earlier version required them adjacent and missed the exact case this was
+  // built for. Allow words between, but stop at sentence boundaries so a year
+  // from the NEXT sentence can never be captured.
+  const explicit = text.match(/\b(?:since|est\.?|established|founded|opened|started|began)\b[^.!?\n]{0,60}?\b(19\d{2}|20[0-2]\d)\b/i);
+  if (explicit && sane(Number(explicit[1]))) {
+    const y = Number(explicit[1]);
+    return { checked: true, years: now - y, foundedYear: y, basis: 'explicit',
+      why: `their own site says the business began in ${y}` };
+  }
+  // "over 25 years", "30+ years of experience", "three decades"
+  const stated = text.match(/\b(?:over|more than|nearly|almost)?\s*(\d{1,2})\+?\s*years?\s+(?:of\s+)?(?:experience|in business|serving|building|practice)/i);
+  if (stated) {
+    const y = Number(stated[1]);
+    if (y >= 2 && y <= 100) return { checked: true, years: y, foundedYear: now - y, basis: 'stated',
+      why: `their own copy claims ${y} years in business` };
+  }
+  // Copyright range: "© 2009-2026" implies the earlier bound.
+  const range = text.match(/(?:\u00a9|&copy;|copyright)\s*(19\d{2}|20[0-2]\d)\s*[-\u2013]\s*(20[0-2]\d)/i);
+  if (range && sane(Number(range[1]))) {
+    const y = Number(range[1]);
+    return { checked: true, years: now - y, foundedYear: y, basis: 'copyright_range',
+      why: `their copyright line runs from ${y}, so the site has existed at least that long` };
+  }
+  // Not knowable. Say so — never guess a founding year.
+  return { checked: false, why: 'no founding year or tenure claim appears anywhere we read' };
+};
+
+// The ratios. Each returns a FINDING SENTENCE an owner would recognise as being
+// about his business, not his website — or nothing at all when the inputs are
+// too thin to support a claim.
+const measureHistory = ({ tenure, reviewCount, reviewRating, reviewRecencyDays, trade, headcount }) => {
+  const out = { checked: false, findings: [], facts: [] };
+  const years = tenure && tenure.checked ? tenure.years : null;
+  const n = Number(reviewCount);
+  const haveReviews = Number.isFinite(n) && n >= 0;
+
+  if (years) out.facts.push(`${years} years in business (${tenure.why})`);
+  if (haveReviews) out.facts.push(`${n} public reviews${Number.isFinite(Number(reviewRating)) ? ` at ${reviewRating}\u2605` : ''}`);
+
+  // ── PROOF PER YEAR ────────────────────────────────────────────────────────
+  // The one that matters most. A long-established business with almost no public
+  // record of its work is not a marketing problem — it is a business that never
+  // built the habit of capturing what it delivers.
+  if (years && years >= 5 && haveReviews) {
+    const perYear = n / years;
+    out.checked = true;
+    out.reviewsPerYear = Math.round(perYear * 10) / 10;
+    if (perYear < 2.5) {
+      out.findings.push({
+        layer: 'LEADS',
+        source: 'history',
+        finding: `${n} public reviews across ${years} years \u2014 about ${out.reviewsPerYear} a year. Whatever they have delivered in that time, almost none of it is visible to the next customer.`,
+        why: `They have certainly completed far more work than ${n} jobs. Nothing in the business turns a finished job into proof, and nothing turns proof into the next job. That is a compounding problem, not a website problem: every year of good work starts the next year from roughly the same standing start.`,
+      });
+    } else if (perYear >= 12) {
+      out.findings.push({
+        layer: 'THROUGHPUT', source: 'history',
+        finding: `${out.reviewsPerYear} reviews a year across ${years} years \u2014 a steady, working machine for turning delivery into proof.`,
+        why: 'This is a strength, not a gap. Lead somewhere else and credit this.',
+      });
+    }
+  }
+
+  // ── HAS IT STALLED ────────────────────────────────────────────────────────
+  // Tenure plus a cold profile is a different story from tenure plus a thin one:
+  // it says the machine used to run and stopped.
+  if (years && years >= 5 && Number.isFinite(Number(reviewRecencyDays)) && Number(reviewRecencyDays) > 180 && haveReviews && n >= 10) {
+    out.checked = true;
+    out.findings.push({
+      layer: 'LEADS', source: 'history',
+      finding: `${years} years of trading and ${n} reviews, and the newest is about ${Math.round(reviewRecencyDays)} days old.`,
+      why: 'Buyers read a cold profile as a business winding down. Whatever was collecting reviews has stopped, and the reputation they spent years earning is quietly ageing in public.',
+    });
+  }
+
+  // ── SCALE AGAINST AGE ─────────────────────────────────────────────────────
+  if (years && years >= 10 && Number.isFinite(Number(headcount)) && Number(headcount) > 0 && Number(headcount) <= 4) {
+    out.checked = true;
+    out.findings.push({
+      layer: 'THROUGHPUT', source: 'history',
+      finding: `${years} years in and still ${headcount} ${Number(headcount) === 1 ? 'person' : 'people'}.`,
+      why: 'A business that has not added capacity in a decade is either deliberately small or capped by the owner\u2019s own hours. Which one it is decides whether more demand would help them or hurt them, and it is worth asking on the call rather than assuming.',
+    });
+  }
+
+  return out;
+};
+
 const measureGrowthConstraint = ({
   marketClarity = { checked: false },
   rank, rankScanned, reviewCount, reviewRating, weakerAbove,
@@ -5500,6 +6031,39 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const html = String(rawHtml || '');
   const url = String(pageUrl || '');
   if (!html || html.length < 200) return { checked: false };
+  // ══ NEVER MEASURE AN ERROR PAGE AND CALL THE RESULT AN ABSENCE ═══════════
+  // Linda Vista Concrete, live: the fetch returned "Connection Reset" — 24
+  // characters of content. This function still ran, found no <meta viewport>,
+  // no <title>, no tel: link and no form, and reported every one of them as a
+  // measured FALSE. The audit then wrote "no mobile viewport configuration, no
+  // title tag, no booking path" and recommended a $50,000 Website Rebuild for a
+  // site nobody had ever read.
+  //
+  // The run even logged "SITE UNREACHABLE — auditing from signals only, NOT
+  // claiming their site is broken" — but that check happens ~700 lines LATER
+  // than this function, so by the time it fired the false absences were already
+  // recorded and on their way into the prompt.
+  //
+  // Absence of a tag in a page we could not load is not evidence about their
+  // website. It is evidence about our fetch. The only honest output here is
+  // "not checked", and every downstream row then reads as unknown rather than
+  // as a fault we invented.
+  const _looksLikeError = /connection reset|can'?t be reached|took too long|refused to connect|err_[a-z_]+|dns_probe|502 bad gateway|503 service|504 gateway|temporarily unavailable|account suspended|domain (is )?(for sale|parked)|just a moment|checking your browser|attention required/i
+    .test(html.slice(0, 1500));
+  // A real page has structure. An error or challenge page is a stub: almost no
+  // markup and almost no text, whatever its byte count.
+  const _textOnly = html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const _tagCount = (html.match(/<[a-z][^>]*>/gi) || []).length;
+  if (_looksLikeError || _textOnly.length < 200 || _tagCount < 15) {
+    return {
+      checked: false,
+      why: _looksLikeError
+        ? 'the page returned a connection or challenge state, so nothing on it can be measured'
+        : `the page carried almost no content (${_textOnly.length} chars of text, ${_tagCount} tags) — too little to measure, and NOT evidence anything is missing`,
+    };
+  }
   // NOTE: HTTPS is deliberately NOT decided here. The URL we are handed is the one
   // stored in our own database, and those are recorded as http:// regardless of what
   // the site actually supports — so testing the string tested OUR formatting, not
@@ -11754,6 +12318,88 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       console.log(`VALUE EQUATION [${company}]: not measured \u2014 no booking read or no page source, so make NO claim about how easy they are to buy from.`);
     }
 
+    // ═══ HISTORY — THE ONLY MEASUREMENT WITH A TIME AXIS ══════════════════
+    // Everything else in this pipeline inspects a snapshot. This one compares
+    // the business against its own record, which is where the findings an owner
+    // cannot dismiss actually live.
+    let history = { checked: false };
+    try {
+      const _tenure = measureTenure(
+        [content, sitePages && sitePages.aboutText].filter(Boolean).join(' ').slice(0, 20000),
+        sitePages && sitePages.ownerStory
+      );
+      history = measureHistory({
+        tenure: _tenure,
+        reviewCount: localRank && localRank.ours ? localRank.ours.reviews : (gbpHealth && gbpHealth.reviewCount),
+        reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+        reviewRecencyDays: gbpHealth && gbpHealth.reviewRecencyDays,
+        trade: customerTrade || verifiedIndustry || req.body.industry || '',
+        headcount: verifiedEmployees,
+      });
+      history.tenure = _tenure;
+      if (history.checked && history.findings.length) {
+        console.log(`\u23f3 HISTORY [${company}]: ${history.facts.join(' \u00b7 ')} \u2014 ${history.findings.length} finding(s) about the business's own record, not its website`);
+        for (const f of history.findings) console.log(`   \u00b7 [${f.layer}] ${f.finding}`);
+      } else if (_tenure.checked) {
+        console.log(`\u23f3 HISTORY [${company}]: ${history.facts.join(' \u00b7 ')} \u2014 nothing outside the normal range, so no history finding is claimed`);
+      } else {
+        console.log(`HISTORY [${company}]: tenure unknown \u2014 ${_tenure.why}. No claim about their track record is permitted.`);
+      }
+    } catch (e) { console.log('HISTORY: measurement failed —', e && e.message); }
+
+    // ═══ THE SITUATION READ ══════════════════════════════════════════════
+    // Runs on its own, with one job, AFTER everything measurable is measured.
+    // Every fact below is something we actually established; the call adds
+    // reasoning across them, not new facts.
+    let situationRead = null;
+    try {
+      const F = [];
+      const push = (x) => { if (x) F.push('\u2022 ' + x); };
+      push(`${company} \u2014 ${customerTrade || verifiedIndustry || req.body.industry || 'trade unknown'}${localRank && localRank.city ? ', ' + localRank.city : ''}`);
+      if (history && history.tenure && history.tenure.checked) push(`In business ${history.tenure.years} years (${history.tenure.why})`);
+      if (localRank && localRank.checked && localRank.found) {
+        push(`Ranked #${localRank.rank} of ${localRank.scanned} for "${localRank.query}"`);
+        if (localRank.weakerAbove > 0) push(`${localRank.weakerAbove} of the ${Math.max(1, localRank.rank - 1)} businesses ranked above them have FEWER reviews`);
+        if (localRank.topRivals && localRank.topRivals.length) push(`Ranking above them: ${localRank.topRivals.slice(0,3).map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}`);
+      } else if (localRank && localRank.checked) push(`NOT in the top ${localRank.scanned} for their primary trade`);
+      if (localRank && localRank.ours) push(`${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}\u2605`);
+      if (gbpHealth && gbpHealth.checked) {
+        if (Number.isFinite(gbpHealth.reviewRecencyDays)) push(`Newest review is about ${gbpHealth.reviewRecencyDays} days old`);
+        if (Number.isFinite(gbpHealth.photoCount)) push(`${gbpHealth.photoCount} photos on the Google profile`);
+        if (gbpHealth.gaps && gbpHealth.gaps.length) push(`Google profile gaps: ${gbpHealth.gaps.join('; ')}`);
+      }
+      if (Number.isFinite(ownerReplyCount) && Number.isFinite(reviewsRead) && reviewsRead > 0) push(`The owner replies to ${ownerReplyCount} of the ${reviewsRead} reviews we read`);
+      if (publicPainSignals && publicPainSignals.length) push(`Repeating complaint in their own reviews: ${publicPainSignals.join('; ')}`);
+      if (sitePages && sitePages.booking) push(`Booking path: ${sitePages.booking}${htmlSignals && htmlSignals.checked && htmlSignals.formFieldCount ? ` (${htmlSignals.formFieldCount}-field form)` : ''}`);
+      if (sitePages && sitePages.services && sitePages.services.length) push(`What they sell: ${sitePages.services.slice(0,6).join(', ')}`);
+      if (sitePages && sitePages.ownerStory) push(`The owner's own story: ${String(sitePages.ownerStory).slice(0,260)}`);
+      if (offerStrength && offerStrength.checked) push(`Offer: guarantee=${!!offerStrength.hasGuarantee}, urgency=${!!offerStrength.hasUrgency}, only ask is generic=${!!offerStrength.genericAskOnly}`);
+      if (marketClarity && marketClarity.checked) push(`Positioning read: ${marketClarity.verdict}${marketClarity.reasons && marketClarity.reasons.length ? ' \u2014 ' + marketClarity.reasons.join('; ') : ''}`);
+      if (socialPresence && socialPresence.count) push(`Social channels linked: ${socialPresence.platforms.join(', ')}`);
+      if (Number.isFinite(verifiedEmployees) && verifiedEmployees > 0) push(`${verifiedEmployees} employees`);
+      if (htmlSignals && htmlSignals.checked) push(`Site: https=${htmlSignals.https}, mobile viewport=${htmlSignals.viewport}, title tag=${htmlSignals.title}`);
+      if (leadMagnet && leadMagnet.checked) push(`Lead magnet: ${leadMagnet.found ? leadMagnet.what : 'none \u2014 the only way to engage is to ask'}`);
+      // ── EVERYTHING ELSE WE ALREADY HOLD ───────────────────────────────────
+      // These were all computed and none reached the synthesis. A read can only
+      // be as rich as the facts handed to it, and the briefing was thin partly
+      // because half of what we measure never arrived here.
+      if (sitePages && Array.isArray(sitePages.prices) && sitePages.prices.length) push(`Their own published prices: ${sitePages.prices.map(x => `${x.amount} (${x.what})`).join('; ')}`);
+      if (sitePages && sitePages.pagesRead && sitePages.pagesRead.length) push(`Pages we read beyond the homepage: ${sitePages.pagesRead.join(', ')}`);
+      // Only variables proven to exist in THIS scope. Four earlier candidates
+      // (visionRead, heroHeadline, reviewQuotes, hasAdsTag) are defined later or
+      // elsewhere; referencing them would have thrown a ReferenceError that the
+      // surrounding try/catch swallows, killing the entire synthesis silently.
+      // That is the same failure class as every other one this week.
+      if (valueEquation && valueEquation.checked) push(`How hard they are to buy from: ${valueEquation.shape}${Number.isFinite(valueEquation.delay) ? ` (delay ${valueEquation.delay}/5, effort ${valueEquation.effort}/5, confidence ${valueEquation.likelihood}/5)` : ''}${valueEquation.frictions && valueEquation.frictions.length ? ' \u2014 friction: ' + valueEquation.frictions.join('; ') : ''}`);
+      if (affordability && affordability.verdict) push(`Can they pay: ${affordability.verdict}${affordability.concerns && affordability.concerns.length ? ' | concern: ' + affordability.concerns.join('; ') : ''}`);
+
+      if (F.length >= 6) {
+        situationRead = await buildSituationRead(F.join('\n'), apiKey, company);
+      } else {
+        console.log(`SITUATION READ [${company}]: only ${F.length} measured facts available \u2014 too thin to synthesise. Skipping rather than guessing.`);
+      }
+    } catch (e) { console.log('SITUATION READ: failed —', e && e.message); }
+
     // ═══ GROWTH CONSTRAINT ═══════════════════════════════════════════════
     // The altitude layer. Which part of the revenue chain is actually binding,
     // stated as a condition of the BUSINESS rather than of a page element.
@@ -12343,6 +12989,35 @@ ${allowedConsequences.rule}
 WHY THESE ARE SAFE AND THE OTHERS ARE NOT: these describe how PEOPLE behave, which is public knowledge and true regardless of this business. The banned versions assert what THIS owner's customers did, what HIS system did after a form was submitted, or how a COMPETITOR responded \u2014 three things we have never observed on any lead. One invented clause discredits every measured fact standing next to it, and every measured fact in this audit is real.
 DO NOT bolt a hard-sounding outcome onto the end of one of these. "...so they call someone else" and "...and that job is gone" put the fabrication back. STOP AT THE WALL and let him draw the conclusion \u2014 he will, in the half-second after reading it, and it lands harder because he concluded it.` : 'No behavioural reframe is available for this lead because no wall was measured. Do NOT invent one. Write only the fact and the cost, and write a shorter email.'}
 
+
+\u2550\u2550\u2550 WHAT YOU ARE ALLOWED TO THINK \u2014 READ THIS BEFORE THE BANS \u2550\u2550\u2550
+This prompt contains several hundred prohibitions. Every one is about a CLAIM OF FACT concerning this specific business, and every one still stands. But taken together they have been read as \u201csay nothing that is not a measurement\u201d, and that produces a list of readings rather than a diagnosis. Two different things are being confused, and the difference is the whole job.
+
+A CLAIM OF FACT about this business must be measured. \u201cHe ranks #1 of 17.\u201d \u201cThere are 317 reviews.\u201d \u201cThe form has 17 fields.\u201d If we did not measure it, it does not get said. That rule is absolute and nothing below relaxes it.
+
+REASONING about what those measured facts MEAN is not a claim of fact, and it is required. You are a strategist looking at a business, not a scanner printing rows. You are expected to bring what you know about the world to bear on what we measured:
+\u2022 MARKET SIZE. Anderson SC is a small city; Dallas is not. Being first in a town of thirty thousand has a ceiling that being seventh in a metro does not. You know this. Use it.
+\u2022 INDUSTRY ECONOMICS. A custom home is a six or seven figure job. A tooth extraction is not. Twenty jobs a year means something completely different in each. You know this. Use it.
+\u2022 WHAT NORMAL LOOKS LIKE. Most local businesses take bookings by phone. Most have no guarantee. Almost none have sixteen years and nineteen reviews. Knowing which is unusual is the difference between a finding and a triviality.
+\u2022 ARITHMETIC ON MEASURED NUMBERS. Nineteen reviews across sixteen years is roughly one a year. That division is not a new claim; it is the same measured facts stated so a human can see them.
+\u2022 THE OBVIOUS INFERENCE. A builder trading sixteen years has completed far more than nineteen jobs. Say so. Hedging that into \u201cthey may have completed more work\u201d is not caution, it is refusing to think.
+
+HOW TO KEEP BOTH: attach the reasoning to the fact in the same breath, so the reader can see exactly where measurement ends and judgement begins. \u201c#1 of 17 in Anderson \u2014 and Anderson is a small city, so first place there has a ceiling.\u201d The number is measured; the ceiling is a judgement; both are visible. That sentence is honest AND useful, which is the standard.
+
+WHAT IS STILL FORBIDDEN, unchanged: inventing a number, asserting what a customer did after contacting them, claiming an absence we did not verify, putting words in his mouth, naming a cause we did not measure. Reasoning is not a licence to fabricate \u2014 it is permission to say what the measurements ADD UP TO.
+
+\u26a0 A DIAGNOSIS THAT ONLY RESTATES MEASUREMENTS HAS FAILED. If every sentence you write could be replaced by a table row, you have not done the work.
+
+${history && history.checked && history.findings.length ? `
+\u2550\u2550\u2550 THEIR OWN TRACK RECORD \u2014 THE ONLY EVIDENCE HERE WITH A TIME AXIS \u2550\u2550\u2550
+${history.facts.join(' \u00b7 ')}
+${history.findings.map(f => `\u2022 [${f.layer}] ${f.finding}\n  WHY THIS MATTERS: ${f.why}`).join('\n')}
+
+\u26a0 READ THIS BEFORE YOU SCORE ANYTHING ELSE.
+Every other measurement you have been given is a SNAPSHOT \u2014 what their page contains today, where they rank today. This section is the only one that compares the business against its own history, and it is therefore the only place a finding can appear that is about the BUSINESS rather than about the website.
+A finding built from these numbers outranks a page observation on every dimension that matters. He cannot forward it to whoever built his site, because it is not about his site. He cannot dismiss it as detail, because it is a summary of everything he has done. And he has almost certainly never put these two numbers next to each other himself.
+If a history finding is present, it is a leading candidate. Score it as such, and do NOT translate it back into a page-level statement \u2014 \u201cnineteen reviews across seventeen years\u201d is the finding; \u201cno guarantee on the homepage\u201d is not the same thing said differently, it is a smaller and worse finding.
+` : ''}
 \u2550\u2550\u2550 THE GROWTH CONSTRAINT \u2014 OPEN HERE, NOT ON A PAGE ELEMENT \u2550\u2550\u2550
 ${growthConstraint.checked ? `THE BINDING LAYER IS: ${growthConstraint.layer}
 WHAT IS TRUE OF THE BUSINESS: ${growthConstraint.condition}
@@ -12576,7 +13251,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // 3000 is well above what a complete audit actually needs (~1,500-2,000
             // tokens). Sonnet output is the dominant Anthropic cost in this app, and
             // a 6000 ceiling let verbose runs cost double for no extra quality.
-            max_tokens: 3000,
+            // 3000 -> 4200. situationRead is 3-5 sentences of synthesis and
+            // signalReads is one interpreted line per measured signal — together
+            // roughly 400-600 extra output tokens. The audit was cut from 6000 to
+            // 3000 when the output was findings-only; that ceiling now truncates
+            // the two fields the briefing is built from, and a truncated JSON
+            // loses the whole audit rather than the tail.
+            max_tokens: 4200,
             messages: [{ role: 'user', content: msgContent }]
           }),
         }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
@@ -12797,6 +13478,39 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // here. Two implementations of one rule is how the fabrication lists
           // drifted in the first place. One function, both call sites.
           for (const _f of detectPostContactClaims(_allProse)) _claimRisks.push(_f);
+
+          // ── DO NOT SEND HIM LOOKING FOR SOMETHING THAT IS NOT THERE ──────
+          // DRCH | Dean Russell Custom Homes, live: the site has a GET A QUOTE
+          // button, tel=false and formFields=0. There is no phone number on the
+          // page. The email said "pull up your site on a phone right now and try
+          // to tap the number — it doesn't dial."
+          //
+          // The number in that sentence came from their GOOGLE LISTING, which we
+          // record the source of and then lost track of. So the copy took a fact
+          // about Google and asserted it about his website.
+          //
+          // This is worse than a false absence. A false absence insults a
+          // business doing something right; this describes a component that does
+          // not exist and then invites him to go and find it. He opens the page,
+          // sees no number, and every other measured fact in the email dies.
+          //
+          // The check is arithmetic, not a word list: we KNOW whether a phone
+          // route was measured on the page, and we KNOW where the number came
+          // from. If the site has no phone, the copy cannot talk about tapping
+          // one — in any phrasing, including ones nobody has thought of yet.
+          try {
+            const _siteHasTel = !!(htmlSignals && htmlSignals.checked && htmlSignals.tel);
+            const _phoneFromSite = !!(phoneResult && phoneResult.source && phoneResult.source !== 'google_business_profile');
+            const _bookingRead = (siteAudit && siteAudit.booking) || '';
+            const _noPhoneOnSite = !_siteHasTel && !_phoneFromSite;
+            const _TAP = /\btap (the|your|that) (number|phone)\b|\btry to (tap|dial|call)\b|\bit does ?n'?t dial\b|\bwon'?t dial\b|\bthe number (on|does)\b|\bplain text\b|\bnot tappable\b|\bcopy (it|the number) by hand\b/i;
+            if (_noPhoneOnSite && _TAP.test(_allProse)) {
+              _claimRisks.push(`NO PHONE ON THAT PAGE \u2014 the copy talks about tapping or dialling a number on their site, and we measured NONE there (tel link: ${_siteHasTel ? 'yes' : 'no'}, booking read: ${_bookingRead || 'unknown'}${phoneResult && phoneResult.source === 'google_business_profile' ? ', and the number we hold came from their GOOGLE LISTING, not their website' : ''}). He will open the page, find nothing to tap, and stop believing the rest of the email.`);
+            }
+            if (_bookingRead === 'none_found' && /\bphone[- ]only\b|\bonly way (to|is to) call\b|\bhope someone picks up\b/i.test(_allProse)) {
+              _claimRisks.push('CALLED IT PHONE-ONLY WHEN NOTHING IS OFFERED \u2014 the measured read is none_found: no scheduler, no form and no visible phone. "Phone-only" describes a route that exists. Here there is no direct route at all, which is a stronger and TRUE thing to say.');
+            }
+          } catch (e) { void e; }
 
           // ── CHECK QUANTIFIERS AGAINST THE NUMBER WE MEASURED ────────────
           // Live, 31 Jul: the audit wrote "most of the firms ranked above him
@@ -13213,6 +13927,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const _cfv = Array.isArray(parsed.candidateFindings) ? parsed.candidateFindings : [];
             const _moved = [];
             const _unmatched = [];
+            const _unmatchedSurprise = [];
             for (const _c of _cfv) {
               if (!_c || !_c.finding) continue;
               const _v = computeVerifiability(_c.finding);
@@ -13222,6 +13937,15 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               if (Number(_c.severity) !== _sev) {
                 _c._severityWas = Number(_c.severity);
                 _c.severity = _sev;
+              }
+              // Surprise is a base rate, and it is the dimension that was letting
+              // two near-universal findings take the lead on every second lead.
+              const _sur = computeSurprise(_c.finding);
+              if (_sur.unmatched) _unmatchedSurprise.push(`"${String(_c.finding).slice(0, 44)}"`);
+              if (Number(_c.surprise) !== _sur.score) {
+                _c._surpriseWas = Number(_c.surprise);
+                _c._surpriseWhy = _sur.why;
+                _c.surprise = _sur.score;
               }
               const _was = Number(_c.verifiable);
               if (!Number.isFinite(_was) || _was === _v.score) { _c.verifiable = _v.score; continue; }
@@ -13234,6 +13958,9 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               const _sum = _parts.reduce((a,k) => a + (Number(_c[k]) || 0), 0);
               if (_sum > 0) _c.total = _sum;
               _moved.push(`"${String(_c.finding).slice(0,38)}" ${_was}\u2192${_v.score} (${_v.why})`);
+            }
+            if (_unmatchedSurprise.length) {
+              console.log(`\u26a0 SURPRISE [${company}]: ${_unmatchedSurprise.length} finding(s) have no known base rate and defaulted to 3 \u2014 ${_unmatchedSurprise.join(' | ')}. If one of those is something almost every business like this has, it is being over-rated and will crowd out a real finding.`);
             }
             if (_unmatched.length) {
               console.log(`\u26a0 VERIFIABILITY [${company}]: ${_unmatched.length} finding(s) matched NO rule and defaulted to 2 \u2014 ${_unmatched.join(' | ')}. If any of those is something he could actually check in ten seconds, the rule list has drifted behind the copy vocabulary and a real finding is being demoted silently.`);
@@ -14247,6 +14974,9 @@ Return ONLY valid JSON:
       // real client results is actually relevant — a plumbing return proves
       // nothing to a plastic surgeon, and a mismatched proof point is worse than
       // none because it shows we were not paying attention.
+      // The synthesis. Returned as its own top-level field so the briefing can
+      // prefer it over the templated growthConstraint.condition sentence.
+      situationRead: situationRead || null,
       growthConstraint: growthConstraint.checked ? {
         layer: growthConstraint.layer,
         condition: growthConstraint.condition,
@@ -14543,7 +15273,25 @@ app.get('/api/research-job/:id', (req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log(`CROJungle v6 — port ${PORT}`));
+// ══ SAY WHICH BUILD IS ACTUALLY RUNNING ══════════════════════════════════════
+// Two full cycles were spent diagnosing why the situation read "was not firing".
+// It was not firing because the deployed server.js did not contain it — the boot
+// line said "CROJungle v6" for every build ever made, so a stale deploy and a
+// broken feature produced identical logs and there was no way to tell them apart.
+//
+// The list below is derived from the running code rather than hardcoded. If a
+// feature reports MISSING, that build does not have it, and no amount of
+// debugging the feature will help.
+app.listen(PORT, () => {
+  const has = (ok) => (ok ? '\u2713' : '\u2717 MISSING');
+  console.log(`CROJungle v6 — port ${PORT}`);
+  console.log('BUILD: '
+    + 'situationRead ' + has(typeof buildSituationRead === 'function')
+    + ' | history ' + has(typeof measureHistory === 'function')
+    + ' | tenure ' + has(typeof measureTenure === 'function')
+    + ' | surprise ' + has(typeof computeSurprise === 'function')
+    + ' | severity ' + has(typeof computeSeverity === 'function'));
+});
 
 // ── DIAGNOSTICS — tests all sources at once ───────────────
 // ═══════════════════════════════════════════════════════════════════════════
