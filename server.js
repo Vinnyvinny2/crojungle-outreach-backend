@@ -433,7 +433,13 @@ app.post('/api/claude', async (req, res) => {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 6000, system, messages: [{ role: 'user', content: user }] }),
+      // 6000 -> 4000. This is a CEILING, but models expand to fill available
+      // space, and the same reasoning already applied to the audit call (where
+      // 6000 was cut to 3000 because "verbose runs cost double for no extra
+      // quality"). Sonnet output is $15/M - the most expensive token in the app -
+      // and a complete generate (two variants plus follow-ups) lands well under
+      // 4000. If a run ever truncates, this is the first number to raise.
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, system, messages: [{ role: 'user', content: user }] }),
     });
     const d = await safeJson(r);
     if (!r.ok) return res.status(r.status).json({ error: d.error?.message || 'Anthropic error' });
@@ -2288,6 +2294,64 @@ const _MAP_TTL_MS = 10 * 60 * 1000;
 // A 1h TTL is used deliberately over the 5m default: leads are researched in
 // bursts with long gaps, and a 5-minute window would expire between sessions and
 // charge the write premium every time instead of the 10% read price.
+// ══ DO NOT PAY TWICE FOR THE SAME AUDIT ══════════════════════════════════════
+// The Anthropic console for 30 Jul shows 901,204 tokens in one day - 555,626 of
+// them Sonnet - and the curve over the preceding week is close to vertical. The
+// per-call meter says why: roughly $0.078 per audit, of which 56% is `fresh`
+// input, i.e. the per-lead evidence paid at full $3/M every single time.
+//
+// Brandon J. Broderick was audited FIVE times tonight. Firecrawl served the page
+// from cache each time (identical 73,978 chars), so four of those five Sonnet
+// calls re-derived an identical answer from identical input and we paid full
+// price for all of them. At 550 leads/month that pattern is the difference
+// between a manageable bill and an unaffordable one.
+//
+// WHY NOT JUST ADD A SECOND CACHE BREAKPOINT ON THE EVIDENCE:
+// I costed it and it is wrong here. Cache WRITE is $3.75/M against $3/M for
+// ordinary input, so caching a block that is used once costs 25% MORE. In
+// production the common case is one audit per lead - that change would raise the
+// bill for most leads to lower it for a few. Skipping the call entirely saves
+// 100%, not 60%, and only ever on genuinely repeated work.
+//
+// THE KEY INCLUDES THE PROMPT ITSELF, WHICH MATTERS MORE THAN IT LOOKS.
+// A cache keyed only on evidence would serve a stale audit after I change the
+// instructions - so a re-run intended to TEST a prompt fix would silently return
+// the pre-fix answer, and I would have spent the session debugging a result that
+// was never regenerated. Hashing BRAIN_STATIC with the evidence means: same
+// evidence AND same instructions -> same answer, reuse it; either one changes ->
+// pay for a fresh audit. Correct by construction rather than by remembering.
+//
+// In-memory on purpose: a Render deploy clears it, and a deploy is exactly when
+// a fresh audit is wanted.
+const crypto = require('crypto');
+const AUDIT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const _auditCache = new Map();   // hash -> { at, payload }
+
+const auditCacheKey = (evidenceText, hasScreenshot) =>
+  crypto.createHash('sha256')
+    .update(String(BRAIN_STATIC || ''))
+    .update('\u0000')
+    .update(String(evidenceText || ''))
+    .update(hasScreenshot ? '|shot' : '|noshot')
+    .digest('hex');
+
+const readAuditCache = (key) => {
+  const hit = _auditCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > AUDIT_CACHE_TTL_MS) { _auditCache.delete(key); return null; }
+  return hit.payload;
+};
+
+const writeAuditCache = (key, payload) => {
+  if (!key || !payload) return;
+  // Bounded so a long-running instance cannot grow without limit.
+  if (_auditCache.size > 400) {
+    const oldest = [..._auditCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) _auditCache.delete(oldest[0]);
+  }
+  _auditCache.set(key, { at: Date.now(), payload });
+};
+
 const BRAIN_STATIC = `
 
 CROJungle offerings (full-service — can combine):
@@ -12342,7 +12406,19 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
 
         // 45s timeout — vision calls with screenshots regularly take 25-40s.
         // The old 20s timeout was killing valid calls mid-flight.
-        const visionRes = await fetchT('https://api.anthropic.com/v1/messages', {
+        // ── SKIP THE CALL IF NOTHING THAT FEEDS IT HAS CHANGED ──────────────
+        // Key = hash(BRAIN_STATIC + this lead's evidence + whether a screenshot
+        // was attached). Same instructions and same evidence cannot produce a
+        // different audit worth $0.08, and re-running an unchanged lead is the
+        // single largest avoidable line on the Anthropic bill.
+        const _evidenceText = (msgContent.find(c => c && c.type === 'text') || {}).text || '';
+        const _hasShot = msgContent.some(c => c && c.type === 'image');
+        const _auditKey = auditCacheKey(_evidenceText, _hasShot);
+        const _cachedAudit = readAuditCache(_auditKey);
+        if (_cachedAudit) {
+          console.log(`\u267b BRAIN CACHE HIT [${company}]: identical evidence AND identical prompt as a run within the last 24h \u2014 reusing that audit and skipping the Sonnet call. Saved ~$0.08. Any change to the evidence or to the instructions produces a fresh audit automatically, so this can never serve a stale answer after a prompt edit.`);
+        }
+        const visionRes = _cachedAudit ? null : await fetchT('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
@@ -12359,7 +12435,8 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           }),
         }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
 
-        const vd = await safeJson(visionRes);
+        const vd = _cachedAudit ? _cachedAudit : await safeJson(visionRes);
+        if (!_cachedAudit && vd && !vd.error) writeAuditCache(_auditKey, vd);
         // ── COST METER ───────────────────────────────────────────────────
         // Anthropic is the largest running cost in this app and until now the
         // spend was invisible from the logs — the only way to see it was the
@@ -12367,7 +12444,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         // cost checkable in place. cache_read at ~0 on repeat runs means the
         // cached prefix is being invalidated (whitespace drift is the usual
         // cause) and the saving is silently not happening.
-        if (vd.usage) {
+        if (vd.usage && !_cachedAudit) {
           const u = vd.usage;
           const fresh = u.input_tokens || 0;
           const cRead = u.cache_read_input_tokens || 0;
