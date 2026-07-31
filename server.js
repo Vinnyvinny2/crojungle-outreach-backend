@@ -276,6 +276,18 @@ const VERIFIABILITY_RULES = [
   [3, /\bno guarantee\b|\bno (named |real )?offer\b|\bno urgency\b|\brisk reversal\b/i, 'he reads his own copy, but "no offer" is a judgement'],
   [3, /\bgeneric\b|\btargets? (everyone|anyone)\b|\bpositioning\b|\bundifferentiated\b|\binterchangeable\b/i, 'he reads his own copy, but "generic" is a judgement'],
   [3, /\bcopyright (says )?\d{4}\b|\bdated\b|\bout of date\b/i, 'he can see the year, but "dated" is a judgement'],
+  // ── ADDED BECAUSE THE DEFAULT-WARNING FIRED, WHICH IS THE POINT OF IT ───
+  // Live: "2 finding(s) matched NO rule and defaulted to 2 — 'Homepage says
+  // dedicated, results-driven legal...' | 'No lead magnet — the only way to
+  // engage is to...'". Both are things he CAN check on his own site in seconds:
+  // he can read his own homepage promise, and he can see there is nothing to
+  // download or claim without asking for a quote. Scoring them 2 demoted real
+  // findings for the crime of being phrased in words the rule list had not met.
+  //
+  // This is the warning doing its job on its first live run — it turned an
+  // invisible demotion into a line in the log. The gap it exposed is closed here.
+  [3, /\bno lead magnet\b|\bnothing to (download|claim)\b|\bonly way to engage\b|\bask for a quote\b|\bthe only (path|route) to contact\b/i, 'he can see there is nothing on his site to take without asking'],
+  [3, /\bhomepage (says|reads|promises|leads with)\b|\bhero (headline|copy)\b|\bsame promise\b|\bevery competitor\b/i, 'he can read his own homepage, though "generic" remains a judgement'],
   // 2 — needs our interpretation before it means anything.
   [2, /\bno CRM\b|\bno pixel\b|\bserver[- ]side\b|\bpage source\b/i, 'requires reading page source, which he will not do'],
 ];
@@ -12357,7 +12369,7 @@ ${(() => {
 \u2605 THE FIRST SENTENCE STARTS HERE \u2014 THIS EXACT ALTITUDE, YOUR OWN WORDS:
    "${_open}"
 \u2192 Rewrite it in your voice, addressed to him, using the measured numbers. Do NOT copy it verbatim and do NOT quote it.
-\u2192 The page element, the tag, the field count, the position \u2014 those go in sentence TWO, as the proof of sentence one.
+\u2192 The page element, the tag, the field count, the position \u2014 those go in sentence TWO, as the proof of sentence one.\n\u2192 \u26a0 FOLLOW-UP 1 OPENS AT THIS SAME ALTITUDE, AND IT IS WHERE THIS RULE KEEPS FAILING. The live ALTITUDE CHECK has now fired on follow-up 1 specifically, after the main pitch passed \u2014 because by then the business-level condition feels \u2018used up\u2019 and the next concrete detail gets reached for instead. It is not used up. He did not reply, which means he never accepted it. Follow-up 1 must restate the SAME condition from a different angle \u2014 a different customer, a different hour, a different consequence \u2014 and only then bring its new detail as proof. A follow-up that opens on a component is a task list arriving twice.\n\u2192 \u26a0 AND WRITE IT FROM HIS SIDE, NOT THE CUSTOMER\u2019S. Our own fact-checker flagged this on a live pitch: \u2018Right now, someone in Jacksonville searching\u2026\u2019 frames the problem from the SEARCHER\u2019S point of view, not the owner\u2019s. The searcher is a device for making the point; the email is about HIM. The sharper version of the same fact is the gap between what he has built and what it is reaching: \u2018you have 72 five-star reviews and they are not reaching the people who need them\u2019 puts the reputation he earned on one side and the silence on the other, which is a sentence only he can feel. Start from what he owns, then show where it stops.
 \u2192 This is supplied because the instruction alone has not worked: three consecutive live audits opened on the component anyway, and each time the ALTITUDE CHECK fired after the email was already written. The sentence above is what that check is looking for.` : '';
 })()}
 
