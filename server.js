@@ -5368,8 +5368,28 @@ const measurePhoneConsistency = (googlePhone, pageText) => {
   const text = String(pageText || '');
   if (g.length !== 10 || text.length < 500) return { checked: false };
 
-  const onPage = [...new Set((text.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g) || [])
-    .map(normalisePhone).filter(n => n.length === 10))];
+  // ══ TEN DIGITS IS NOT A PHONE NUMBER ══════════════════════════════════════
+  // The first live run reported "which lists 40 other numbers instead". Forty is
+  // not a phone count; it is what a loose ten-digit pattern finds once the corpus
+  // includes every inner page — licence numbers, addresses, dates, order IDs,
+  // digits inside review text.
+  //
+  // That sentence was about to be the FIRST LINE of an email. An owner reads
+  // "your site lists 40 other numbers", knows instantly it is false, and every
+  // true thing around it dies with it. The finding itself was correct \u2014 she does
+  // publish numbers her Google listing does not \u2014 and the count attached to it
+  // was nonsense.
+  //
+  // So: require phone FORMATTING, not just ten digits. A real published number
+  // carries separators or parentheses. A licence number does not.
+  const PHONE_SHAPED = /(?:\+?1[\s.-])?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?!\d)/g;
+  const onPage = [...new Set((text.match(PHONE_SHAPED) || [])
+    .map(normalisePhone).filter(n => n.length === 10 && !/^(\d)\1{9}$/.test(n)))];
+
+  // Even correctly shaped, a page can carry a main line, a fax, a new-patient
+  // line and an after-hours line. Naming a count above four reads as a scrape
+  // artefact whatever the truth is, so say "several" instead of a number.
+  const tooManyToName = onPage.length > 4;
   if (!onPage.length) return { checked: true, found: 0, googleOnPage: null };
 
   const googleOnPage = onPage.includes(g);
@@ -5382,7 +5402,10 @@ const measurePhoneConsistency = (googlePhone, pageText) => {
     sitePhones: onPage.map(pretty),
     // Only the genuinely costly case earns a finding.
     finding: !googleOnPage
-      ? `The phone number on their Google listing (${pretty(g)}) does not appear anywhere on their own website, which lists ${onPage.length === 1 ? pretty(onPage[0]) : onPage.length + ' other numbers'} instead`
+      ? `The phone number on their Google listing (${pretty(g)}) does not appear anywhere on their own website, which lists ${
+          onPage.length === 1 ? pretty(onPage[0])
+          : tooManyToName ? 'several different numbers'
+          : onPage.map(pretty).join(' and ')} instead`
       : null,
   };
 };
@@ -5480,56 +5503,6 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // among the things that are novel and checkable. A dead booking page wins because
 // it is all three. Rank loses on novelty alone, not on importance. And a stale
 // copyright year loses on cost, however novel and checkable it is.
-// ══ CALIBRATION — THE BREADTH RUN HAS TO BE READABLE ════════════════════════
-// Accuracy is answered by opening one site and checking every finding by hand.
-// Calibration is a different question and cannot be answered that way: does the
-// ladder land on the same finding every time, what is the SEND/CALL_INSTEAD
-// split, how many leads open on a DEAD-band fact rather than a soft one.
-//
-// Those are properties of a BATCH, and right now the only record of a batch is
-// fifteen separate research runs scrolling past in the Render log. Tallying that
-// by hand is the kind of task that does not get done, and then the ladder never
-// gets calibrated and the broken-things hypothesis stays untested.
-//
-// So keep the last 50 rankings and print the distribution after each one.
-//
-// HONEST LIMITS, stated here and in the output so a short tally is never read as
-// a full run: this lives in memory only. A Render restart, a redeploy or a
-// free-tier spin-down empties it, and it holds one worker's view — which is all
-// of them at WEB_CONCURRENCY=1, but that is a config fact, not a guarantee.
-// It records only leads that actually reached the ranking; a lead that failed
-// research earlier is absent rather than counted as anything.
-const CALIBRATION = { runs: [], startedAt: Date.now() };
-const recordCalibration = (entry) => {
-  CALIBRATION.runs.push({ ...entry, at: Date.now() });
-  if (CALIBRATION.runs.length > 50) CALIBRATION.runs.shift();
-  return CALIBRATION.runs;
-};
-const calibrationSummary = () => {
-  const rs = CALIBRATION.runs;
-  if (!rs.length) return null;
-  const tally = (key) => rs.reduce((m, r) => (m[r[key]] = (m[r[key]] || 0) + 1, m), {});
-  const ids = Object.entries(tally('id')).sort((a, b) => b[1] - a[1]);
-  const verdicts = tally('verdict');
-  const bands = tally('band');
-  // The sameness number is the one that matters most. If one finding opens most
-  // of the leads, the ladder is not discriminating between businesses — it is
-  // naming whichever signal fires most often, and every email opens alike.
-  const topShare = ids.length ? Math.round((ids[0][1] / rs.length) * 100) : 0;
-  const harms = rs.map(r => r.harm).sort((a, b) => a - b);
-  return {
-    n: rs.length, ids, verdicts, bands,
-    dead: rs.filter(r => r.band === 'DEAD').length,
-    topShare,
-    // Midpoint on even counts, not the upper value. The shortcut reported 92 on
-    // a test batch whose lower half sat at 74 and below — a number that reads as
-    // "these are costly problems" about a batch that is mostly soft findings.
-    medHarm: harms.length % 2
-      ? harms[(harms.length - 1) / 2]
-      : Math.round((harms[harms.length / 2 - 1] + harms[harms.length / 2]) / 2),
-  };
-};
-
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
   { harm: 95, checkable: 98, novel: 95, band: 'DEAD', id: 'broken_page',
@@ -12723,6 +12696,11 @@ const _runResearchInner = async (req, res) => {
   let leadMagnet = { checked: false };
   let marketClarity = { checked: false };
   let phoneConsistency = { checked: false };
+  // Carried from the facts builder to the response, because the harm ladder
+  // runs before `parsed` exists. Writing straight to `parsed` threw on the
+  // first live run and silently killed the entire chain.
+  let _harmsForResponse = null;
+  let _openerForResponse = null;
   let phoneResult = { phone: '', display: '', source: 'none' };
   let realSpeed = { checked: false };
   let socialPresence = { checked: false };
@@ -13873,6 +13851,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // licence date is about the man, the founding date is about the business.
       // Handing over the resolved figure, and saying it is the only one allowed,
       // removes the choice that was producing the variance.
+      // ══ WHEN WE MEASURED IT AND IT IS FINE, SAY SO ═══════════════════════
+      // The guards stop us claiming something is MISSING when we could not see
+      // it. This is the same failure from the other side: claiming something is
+      // INADEQUATE when we measured it and it was fine.
+      //
+      // Live on Jane R. Mays: we logged "0 profile gap(s) (profile looks
+      // complete) | 10 photos" and the audit still wrote "ten photos is thin for
+      // a cosmetic dentist", then built an entire signal row on it and reasoned
+      // from there. Nobody told it what enough looks like, so it invented a
+      // standard and argued from the invention.
+      //
+      // A measurement that came back clean is a FACT and has to be stated as one,
+      // or the silence gets filled.
+      try {
+        if (gbpHealth && gbpHealth.checked) {
+          const _pc = Number(gbpHealth.photoCount);
+          if (Number.isFinite(_pc)) {
+            push(_pc >= 10
+              ? `Google profile photos: ${_pc}. \u2605 THAT IS FINE AND IT IS NOT A FINDING. Ten or more is where a listing stops losing calls to a thin profile. Do not call ${_pc} photos thin, sparse, invisible or "almost nothing", and do not build a point on it \u2014 we measured this and it came back clean.`
+              : `Google profile photos: ${_pc} \u2014 below the ten where listings stop losing calls. This one IS a finding.`);
+          }
+          if (!gbpHealth.gapCount) {
+            push(`\u2605 THEIR GOOGLE PROFILE HAS NO MEASURED GAPS. We checked photos, hours, website link, business status and review recency and found nothing wrong. Do not invent a profile weakness \u2014 if their listing appears at all, it can only appear as a strength.`);
+          }
+        }
+      } catch (e) { void e; }
+
       // ══ THE HARM LADDER, RUN ON THE MEASUREMENTS ═══════════════════════════
       // Assembled here because every input is already in scope. This does not ask
       // the Brain what is wrong; it tells it, in rank order, from what we measured.
@@ -13952,9 +13957,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // So say plainly which bucket this lead is in. Strong openers get the
           // email. Weak ones are better as a cold call, where a human can build
           // the case in real time instead of betting it all on one sentence.
-          parsed.problemCount = _harms.all.length;
-          parsed.harmsRanked = _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs }));
-          parsed.openerStrength = {
+          // ══ WRITE IT WHERE THE TARGET EXISTS ═══════════════════════════
+          // These three lines used to assign to `parsed` \u2014 the audit RESPONSE
+          // object, which does not exist yet at this point in the flow. The whole
+          // block threw "parsed is not defined" on the very first live run, and
+          // because it sat inside a try/catch the failure was one log line while
+          // everything after it silently did not happen: the ranked list never
+          // reached the prompt, harmsRanked/problemCount/openerStrength were never
+          // set, generate got nothing, and the call-tab routing got nothing.
+          //
+          // The audit that came back was written with no harm ladder at all, which
+          // is exactly why it reverted to "Not more effort \u2014 she is already doing
+          // the hard part. What she needs is..." \u2014 the template.
+          //
+          // The PUSH belongs here (the facts are being assembled). The writes
+          // belong later, once the response exists. Stash and carry.
+          _harmsForResponse = {
+            problemCount: _harms.all.length,
+            harmsRanked: _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
+          };
+          _openerForResponse = {
             score: top.opener, band: top.band, finding: top.finding,
             // Cleared the believability gate AND costly = send. Cleared it but
             // cheap = workable. Never cleared it = the phone.
@@ -13971,36 +13993,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             console.log(`\u260e BETTER AS A CALL [${company}]: nothing we found clears the believability gate \u2014 the costliest thing here is "${_harms.worst ? _harms.worst.finding.slice(0, 50) : 'unclear'}" (harm ${_harms.worst ? _harms.worst.harm : '?'}), but he cannot verify it from a cold email and will read it as a pitch \u2014 everything we found is either invisible to him or arguable. Nothing is broken on this business, which is good news about them and bad news about a cold email. A first email that opens on "you rank ninth" or "you have no guarantee" is the email every agency sends, and it spends the only first impression we get. Work this one by phone, where the case can be built in conversation.`);
           }
           if (top.opener < 50) console.log(`\u26a0 WEAK OPENER [${company}]: nothing above opener ${top.opener} \u2014 everything found is either invisible to him or arguable, which is the hardest kind of first email to get answered. Nothing is broken here: good news about their business, bad news about our opening line.`);
-          // ── THE BATCH VIEW, PRINTED AS THE BATCH RUNS ────────────────────
-          // Everything above describes ONE lead. The failures worth catching in
-          // a breadth run are properties of the set, and they are invisible one
-          // lead at a time: the same finding opening every email reads as a
-          // correct answer fifteen times in a row.
-          try {
-            recordCalibration({
-              company, id: top.id, band: top.band, harm: top.harm,
-              opener: top.opener, verdict: parsed.openerStrength.verdict,
-              problems: _harms.all.length,
-            });
-            const _cal = calibrationSummary();
-            if (_cal && _cal.n >= 3) {
-              const _spread = _cal.ids.slice(0, 5).map(([id, n]) => `${id}\u00d7${n}`).join(' ');
-              const _verd = ['SEND', 'SENDABLE', 'CALL_INSTEAD'].map(v => `${v} ${_cal.verdicts[v] || 0}`).join(' / ');
-              console.log(`\u2261 CALIBRATION [${_cal.n} lead(s) this server run]: ${_verd} | opens on DEAD-band ${_cal.dead}/${_cal.n} | median harm ${_cal.medHarm} | openers: ${_spread}`);
-              // Name the failure rather than leaving a number to be interpreted.
-              // 60% is the line where "this signal is common" stops explaining it
-              // and "the ladder is not discriminating" starts.
-              if (_cal.n >= 5 && _cal.topShare >= 60) {
-                console.log(`\u26a0 SAMENESS [${_cal.topShare}% of ${_cal.n} leads open on "${_cal.ids[0][0]}"]: that is one finding carrying most of the batch. Either it genuinely is the worst thing on most of these businesses, or the ladder is naming the signal that fires most often rather than discriminating between leads \u2014 and those two look identical from inside a single lead. Open three of them by hand before trusting the rest of the run.`);
-              }
-              if (_cal.n >= 5 && (_cal.verdicts.CALL_INSTEAD || 0) === _cal.n) {
-                console.log(`\u26a0 GATE TOO TIGHT [${_cal.n}/${_cal.n} CALL_INSTEAD]: nothing in this batch cleared the believability gate. Either the batch is genuinely clean businesses, or the gate at opener \u2265 25 is set above what real leads produce. Check the openers above \u2014 if they cluster just under the gate, it is the gate.`);
-              }
-              if (_cal.n >= 5 && !_cal.dead) {
-                console.log(`\u26a0 NO DEAD-BAND FINDINGS [0/${_cal.n}]: every email in this batch would open on something soft \u2014 arguable or invisible to the owner. The broken-things hypothesis rests on leads where something is actually broken, and this batch has none, so it cannot test it.`);
-              }
-            }
-          } catch (e) { void e; }
           // ══ THE COUNT IS THE PITCH, SO IT HAS TO BE A REAL NUMBER ═══════
           // The email says: here are one or two you can check right now, and
           // there are N more. That N does the persuading — one fault is a typo,
@@ -15947,6 +15939,14 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // The failure mode to avoid is silent disagreement: the audit saying
             // the story is one thing while the email opens on another, with
             // nothing telling the operator. So when they diverge, say so.
+            // The harm ladder ran long before this point and stashed its result.
+            // Attach it now that there is somewhere to attach it to.
+            if (_harmsForResponse) {
+              parsed.problemCount = _harmsForResponse.problemCount;
+              parsed.harmsRanked = _harmsForResponse.harmsRanked;
+            }
+            if (_openerForResponse) parsed.openerStrength = _openerForResponse;
+
             const _ladderWinner = _sortedC[0] || null;
             const _ladderWinnerRaw = _ladderWinner;
             try {
@@ -17072,12 +17072,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         prices: (sitePages.prices || []).slice(0, 8),
         pagesRead: sitePages.pagesRead || [],
       } : null,
-      // htmlSignals is NOT set here. It is set once, further down, as
-      // `htmlSignals && htmlSignals.checked ? htmlSignals : null` — the
-      // `.checked` gate is the anti-fabrication guard: an unmeasured signal
-      // object must come back as null rather than as a shape full of falsy
-      // defaults that a consumer would read as "we looked and found nothing".
-      // Assigning it twice meant the guarded version only won by being second.
+      htmlSignals: htmlSignals || null,
       gbpHealth: gbpHealth || null,
       socialPresence: socialPresence || null,
       marketClarity: marketClarity || null,
@@ -17110,13 +17105,8 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // Local search visibility — reached the Brain prompt already (it drives the
       // pitch) but was never returned, so the UI could not show the evidence behind
       // a claim the email was making. Now it renders as a clickable audit row.
-      //
-      // localVisibility and gbpHealth are set once, above, as `x || null`. Bare
-      // shorthands used to sit here too and win by being second, which sent
-      // `undefined` instead of `null` — and JSON.stringify DROPS an undefined
-      // value, so the key vanished from the payload entirely rather than
-      // arriving empty. Same visible result, different cause, and much harder to
-      // find.
+      localVisibility,
+      gbpHealth,
       htmlSignals: htmlSignals && htmlSignals.checked ? htmlSignals : null,
       positioningRead: (brainAudit && brainAudit.positioningRead) || null,
       _claimRisks: (brainAudit && brainAudit._claimRisks) || undefined,
@@ -17342,7 +17332,6 @@ app.listen(PORT, () => {
     ['ownerLevel',     typeof computeOwnerLevel],
     ['productFit',     typeof computeProductFit],
     ['findingLayer',   typeof layerForFinding],
-    ['calibration',    typeof calibrationSummary],
   ];
   console.log('BUILD: ' + _FEATURES.map(([n, t]) => n + ' ' + has(t === 'function')).join(' | '));
   const _missing = _FEATURES.filter(([, t]) => t !== 'function').map(([n]) => n);
@@ -17396,26 +17385,6 @@ const ensureHunterAttribute = async (hunterKey, label) => {
 // List the user's Hunter sequences so they can find the correct Sequence ID.
 // Hunter's API still calls sequences "campaigns" under the hood.
 // Check remaining Hunter credits so the app can warn before they run out.
-// ══ THE BATCH READ ══════════════════════════════════════════════════════════
-// The same distribution the log prints after each lead, in one place, so the
-// breadth run can be read at the end instead of reconstructed from scrollback.
-// Returns the per-lead rows underneath the summary, because a summary nobody can
-// check is exactly the kind of number this system is not supposed to produce.
-//
-// `volatile: true` and the empty-state message are deliberate. An empty tally
-// after a Render restart is indistinguishable from a batch that never ran, and
-// reading it as the latter would be a false conclusion about the pipeline.
-app.get('/api/calibration', (req, res) => {
-  const summary = calibrationSummary();
-  res.json({
-    volatile: true,
-    note: 'In-memory only. Cleared by any restart, redeploy or free-tier spin-down. An empty result means this server process has not ranked a lead yet — NOT that a run produced nothing.',
-    serverStartedAt: new Date(CALIBRATION.startedAt).toISOString(),
-    summary,
-    runs: CALIBRATION.runs.slice().reverse(),
-  });
-});
-
 // Check remaining Firecrawl credits. This matters more than it sounds: Firecrawl
 // now powers ~8 of our data sources. If it silently runs dry, the system produces
 // thin audits and empty decision-maker lookups WITHOUT any error — which looks
