@@ -22,6 +22,33 @@ app.use((req, res, next) => {
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10mb' }));
 
+// ══ SPACE THE HUNTER CALLS INSTEAD OF TRIPPING THEIR LIMIT ═══════════════════
+// Render's free tier runs WEB_CONCURRENCY=1, so every concurrent research shares
+// one process. Three leads started within seven seconds of each other reached
+// the Hunter stage together and the API answered 429:
+//   02:48:10 Deirdre  02:48:13 Philip  02:48:17 Wade  ->  02:48:59 RATE-LIMITED
+//
+// The throttle handling added earlier stops that being misread as an empty
+// balance, which was the dangerous part. This stops it happening at all. Hunter
+// limits by requests per second, so the fix is not fewer calls, it is calls that
+// do not arrive at the same instant.
+//
+// A promise chain, not a mutex: each call waits for the previous one to finish
+// and then a further beat. Serial rather than parallel costs a second or two per
+// batch and buys back an entire lead's worth of email resolution.
+let _hunterChain = Promise.resolve();
+const HUNTER_MIN_GAP_MS = 1100;
+const hunterSerial = (fn) => {
+  const run = _hunterChain.then(async () => {
+    const out = await fn();
+    await new Promise(r => setTimeout(r, HUNTER_MIN_GAP_MS));
+    return out;
+  });
+  // Keep the chain alive even if one call throws, or every later call is stranded.
+  _hunterChain = run.then(() => {}, () => {});
+  return run;
+};
+
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
 
@@ -314,6 +341,9 @@ const WEFIXIT_RULES = [
       'offer and positioning work is ours, though it needs him in the room'],
   [4, /\btitle tag|meta description|H1|https|not secure|viewport|mobile\b/i,
       'technical fixes are ours but they are the smallest thing we sell'],
+  // Copy and call-to-action work, both squarely ours.
+  [4, /\bprimary CTA|call[- ]to[- ]action|make a payment|homepage (?:headline|copy)|body copy|repeat(?:s|ed)? ['\u2018"]/i,
+      'homepage copy and the main call to action are the first thing a rebuild or retainer touches'],
 ];
 
 const computeWeFixIt = (findingText, signal) => {
@@ -344,6 +374,8 @@ const OWNERLEVEL_RULES = [
       'he forwards it to his host or his developer'],
   [2, /\bpixel|tracking|analytics|GA4|tag manager\b/i,
       'a tracking gap is real but it is a task, not a decision he owns'],
+  [4, /\bprimary CTA|make a payment|homepage (?:headline|copy)|body copy\b/i,
+      'what the front door says is his decision \u2014 nobody else gets to choose what the business promises'],
   [3, /\bgoogle (business )?profile|business description|photos\b/i,
       'he can fix it himself in ten minutes, which cuts both ways — checkable, but small'],
 ];
@@ -411,8 +443,14 @@ const SURPRISE_RULES = [
       'the comparison against who outranks him is something he has never run'],
   // Rank findings, in both the exact and the band phrasing the copy actually uses.
   // These were the last two of nine live phrases still taking the default 3.
-  [4, /\bnear the bottom of the (?:first|top)|bottom half of|not on the first (?:page|screen)|#\d+\s+of\s+\d+\b/i,
+  // "#7 in Columbus" defaulted because the pattern required digits after "in" —
+  // it was written for "#7 of 20" and the copy also writes the city there.
+  [4, /\bnear the bottom of the (?:first|top)|bottom half of|not on the first (?:page|screen)|#\d+\s+(?:of|in)\s+\S+/i,
       'most owners have never typed their own trade into a search and looked for themselves'],
+  // A payment portal as the main call to action is genuinely unusual and he has
+  // almost certainly never looked at his own homepage as a stranger would.
+  [4, /\bprimary CTA is\b|\bmake a payment\b|\bpay (?:a )?bill\b/i,
+      'a first-time visitor being invited to pay a bill is not something an owner notices about his own site'],
   [4, /\breview (pattern|s? mention)\b[^.]{0,60}\b(repeat|\d+ of)\b|\brepeating pattern\b/i,
       'a verified repeated complaint in his own reviews is the "how do they know this" hit'],
   [4, /\bnot tappable\b|\bdoes ?n[o\u2019']?t dial\b|\bplain text\b/i,
@@ -428,6 +466,10 @@ const SURPRISE_RULES = [
       'common across the market, though he may not have framed it as a choice'],
   [2, /\bgeneric\b|\btargets? (everyone|anyone)\b|\bundifferentiated\b|\binterchangeable\b/i,
       'most local copy reads this way; he half knows it already'],
+  // "Homepage and body copy repeat 'high-quality, accurate'" \u2014 the same class as
+  // generic positioning, described by what the copy DOES rather than labelled.
+  [2, /\b(?:homepage|body|site) copy repeats?\b|\brepeat(?:s|ed)? (?:the )?(?:same )?['\u2018"]/i,
+      'a repeated stock phrase is ordinary across the market and he wrote it himself'],
   [2, /\bno business description\b/i, 'extremely common and low-stakes on its own'],
   // Recurring live vocabulary that matched nothing. All of it is ordinary for the
   // market, so it belongs at the LOW end — leaving it at the default 3 was quietly
@@ -528,7 +570,11 @@ const VERIFIABILITY_RULES = [
   // These are the actual strings, taken from the logs rather than invented.
   [5, /\b\d+\s*(?:public\s+)?reviews?\s+(?:across|over|in)\s+\d+\s*years?|roughly\s+(?:one|two|[\d.]+)\s*(?:a|per)\s*year\b/i,
       'he knows how long he has traded and can see his review count on his own profile \u2014 both halves are his'],
-  [4, /\bnear the bottom of the (?:first|top)\s*(?:\d+|twenty|ten)|bottom half of|not on the first (?:page|screen)\b/i,
+  // "Near the bottom of Cincinnati estate planning search results" defaulted to 2
+  // on Singler because this wanted "of the first"/"of the top". The copy also
+  // writes the city and the trade in that slot, which is the more natural phrasing
+  // and the one an owner would recognise.
+  [4, /\bnear the bottom of\b|\bbottom half of\b|\bnot on the first (?:page|screen)\b/i,
       'he runs the search himself and sees roughly where he lands \u2014 the band survives personalisation'],
   // ORDER: the UNVERIFIABLE half is tested first. "Form-only entry with no
   // auto-response layer" contains both a checkable fact (the form is the only
@@ -891,7 +937,7 @@ app.get('/api/email', async (req, res) => {
     const { domain, hunterKey } = req.query;
     if (!domain || !hunterKey) return res.status(400).json({ error: 'Domain and key required' });
     const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`);
+    const r = await hunterSerial(() => fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`));
     const d = await safeJson(r);
     const emails = d.data?.emails || [];
     const priority = ['ceo','founder','co-founder','owner','president','cmo'];
@@ -933,7 +979,23 @@ const enrichViaCompaniesAPI = async (domain, apiKey, useCredit = false) => {
     }, 8000);
     const d = await safeJson(r);
     if (!d || !d.about) {
-      if (d?.message || d?.error) console.log(`CompaniesAPI [${cleanDomain}]: API said "${d.message || d.error}"`);
+            // ── "companyNotFound" IS THE EXPECTED ANSWER FOR THIS ICP ────────────
+      // This printed on every lead in every run and reads as a failed
+      // integration. It is not. The Companies API indexes registered companies
+      // with a corporate footprint; our entire ICP is solo practitioners and
+      // owner-operated trades — a Dallas CPA working under her own name is not in
+      // that dataset and never will be.
+      //
+      // The call is free in simplified mode, so it stays: the $50M+ ICP band does
+      // hit, and one round trip costs nothing. What was wrong was reporting a
+      // correct negative in the language of an error, which is the same mistake as
+      // an empty Hunter response read as "no mailbox exists".
+      if (d?.message || d?.error) {
+        const _notFound = /companyNotFound|not found/i.test(String(d.message || d.error));
+        console.log(_notFound
+          ? `CompaniesAPI [${cleanDomain}]: no record of this business \u2014 expected for an owner-operated local business, which is most of this pipeline. Not an error and not a signal about them.`
+          : `CompaniesAPI [${cleanDomain}]: API said "${d.message || d.error}"`);
+      }
       return null;
     }
 
@@ -3823,11 +3885,46 @@ const verifyEmailSMTP = async (email, verifierKey) => {
 // that domain is meaningless. This single check is the difference between
 // trustworthy verification and false confidence.
 const catchAllCache = new Map();
+// Domains whose homepage came back empty, and when. Keyed by URL, one hour.
+const EMPTY_SCRAPE_MEMORY = new Map();
 const isCatchAllDomain = async (domain, verifierKey) => {
   if (!verifierKey || !domain) return null;
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
-  const nonsense = `zz9x${Math.random().toString(36).slice(2, 10)}qq@${domain}`;
-  const res = await verifyEmailSMTP(nonsense, verifierKey);
+  // ══ ONE PROBE IS NOT ENOUGH TO CALL A DOMAIN CATCH-ALL ═══════════════════
+  // dtaylorcpa.com, seventy minutes apart, same mail server:
+  //   01:38  Catch-all probe: normal domain (SMTP trustworthy)
+  //          -> deirdre@dtaylorcpa.com  SMTP-VERIFIED  score 95
+  //   02:48  Catch-all probe: CATCH-ALL (SMTP unreliable here)
+  //          -> deirdre.taylor@dtaylorcpa.com  inferred  score 72
+  //
+  // Both cannot be true. A mail server does not switch between rejecting unknown
+  // recipients and accepting everything over lunch. What changes is the answer to
+  // a SINGLE probe: greylisting, a temporary defer under load, or the verifier
+  // itself timing out and guessing. We took one sample of a noisy signal and let
+  // it decide the tier of the address we send to.
+  //
+  // The cost is not just the label. Declaring catch-all switches off the SMTP
+  // path entirely, so the address drops from verified-95 to inferred-72 and we
+  // pick a different local part. A lead that was solved became worse.
+  //
+  // Two independent nonsense addresses. They must AGREE. If they disagree the
+  // honest answer is that we do not know, which the caller already handles — and
+  // "unknown" preserves the SMTP path rather than silently disabling it.
+  const _probe = async () => verifyEmailSMTP(
+    `zz9x${Math.random().toString(36).slice(2, 10)}qq@${domain}`, verifierKey);
+  const res = await _probe();
+  if (!res.error) {
+    const first = res.valid === true || res.catchAll === true;
+    await new Promise(r => setTimeout(r, 400));
+    const res2 = await _probe();
+    if (!res2.error) {
+      const second = res2.valid === true || res2.catchAll === true;
+      if (first !== second) {
+        console.log(`Catch-all probe [${domain}]: two probes DISAGREED (${first ? 'accepted' : 'rejected'} then ${second ? 'accepted' : 'rejected'}). A mail server does not change that behaviour in half a second, so this is noise on our side \u2014 greylisting or a verifier timeout. Recording UNKNOWN rather than letting one sample decide, which keeps the SMTP path open instead of silently disabling it.`);
+        return null;
+      }
+    }
+  }
   // A FAILED probe is not a normal domain. The old line printed "normal domain
   // (SMTP trustworthy)" whenever the probe errored, which asserted that every
   // subsequent SMTP result could be trusted at exactly the moment none of them
@@ -5375,9 +5472,25 @@ const readLeadMagnet = (text) => {
 // measured-and-clean -> do not invent; not measured -> say nothing. Returns FACTS
 // plus a derived shape that is labelled derived. No composite score is ever shown
 // to the owner, because a number he cannot check is a number he can dispute.
-const measureValueEquation = ({ booking, hasTelLink, formFieldCount, hasForm,
+const measureValueEquation = ({ booking, bookingMeasured = true, hasTelLink, formFieldCount, hasForm,
                                 guarantee, reviewCount, reviewRating, publishedPrices } = {}) => {
-  const haveBooking = ['online_booking', 'form', 'phone_only', 'none_found'].includes(booking);
+  // ══ AN UNVERIFIED BOOKING READ IS NOT A MEASUREMENT ══════════════════════
+  // measureBookingPath is authoritative wherever the page carries a signature and
+  // the model's read is the fallback where it does not. In one live batch the
+  // measurement overrode the model on FOUR of the five leads it could check, in
+  // three different directions. So on leads where no signature exists — where
+  // nothing can correct it — we lean on a judgement that is wrong four times in
+  // five whenever it is testable.
+  //
+  // bookingMeasured was already being set and returned to the client. Nothing
+  // consumed it. That matters most here: booking sets TIME DELAY, delay drives
+  // the CONVERSION threshold, and the threshold decides which Hormozi layer the
+  // whole email is built on. An unverified guess at the bottom was choosing the
+  // diagnosis at the top, indistinguishable from a fact.
+  //
+  // This function already has the honest handling for a missing booking read —
+  // return unmeasured and make no claim. An unverified read belongs there too.
+  const haveBooking = bookingMeasured !== false && ['online_booking', 'form', 'phone_only', 'none_found'].includes(booking);
   const haveHtml = typeof formFieldCount === 'number' || typeof hasTelLink === 'boolean';
   // Without BOTH a booking read and a page-source read we are guessing, and a guess
   // here becomes a claim about his business.
@@ -5597,6 +5710,33 @@ const SIGNAL_LEVERAGE = ['review_pattern', 'positioning_offer', 'search_absence'
 // 1-point difference in the model's own five subjective scores. Live candidates
 // cluster in a 17-24 band, so the top two are routinely within noise and the
 // winner was effectively arbitrary from run to run.
+// ══ TWO KINDS OF REVIEW FINDING, OPPOSITE LAYERS ═════════════════════════════
+// review_pattern maps to THROUGHPUT, and for a complaint pattern that is exactly
+// right: "2 of 25 reviews mention slow callbacks" means demand is arriving and
+// delivery is breaking.
+//
+// The history findings land in the same category and mean the opposite. "37
+// reviews across 25 years" is not a delivery problem — a business with 37 reviews
+// in a quarter century does not have too much work. It is a LEADS finding:
+// nothing turns finished work into the next customer.
+//
+// The relabeller files them correctly as review_pattern, so the category is not
+// wrong; the LAYER derived from it is. Live consequence, three of six leads in
+// one batch:
+//   Philip   review_pattern=24 -> THROUGHPUT, binding constraint LEADS   ⛔
+//   Singler  review_pattern=22 -> THROUGHPUT, binding constraint LEADS   ⛔
+//   Deirdre  review_pattern=20 -> THROUGHPUT, binding constraint OFFER   ⛔
+// Every one triggered the tiebreak override, which then argued the audit had led
+// outside the binding layer when it had done nothing of the kind.
+//
+// So the layer cannot come from the category alone. It has to read the finding.
+const HISTORY_FINDING = /\b\d+\s+(?:public\s+)?reviews?\s+(?:across|over|in)\s+\d+\s*years?\b|\broughly\s+(?:one|two|[\d.]+)\s*(?:a|per)\s*year\b|\babout\s+[\d.]+\s+a\s+year\b/i;
+
+const layerForFinding = (signal, findingText) => {
+  if (signal === 'review_pattern' && HISTORY_FINDING.test(String(findingText || ''))) return 'LEADS';
+  return SIGNAL_LAYER[signal];
+};
+
 const SIGNAL_LAYER = {
   review_pattern:    'THROUGHPUT',
   positioning_offer: 'OFFER',
@@ -6018,6 +6158,27 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     const parsed = parseLLMJSON(txt);
     if (!parsed || !parsed.read) return null;
 
+    // ── A MISSING SPACE IS A CHEAP THING TO SHIP AND AN EXPENSIVE THING TO
+    //    READ ──────────────────────────────────────────────────────────────
+    // Wade Orthodontics, live: "156perfect reviews and he answers every single
+    // one". The synthesis is doing real work and the first four characters of the
+    // headline look broken, which is the whole impression on a screen someone
+    // scans for six seconds. A digit running straight into a letter is never
+    // intentional in this output — every number here is followed by a unit or a
+    // noun — so it is safe to repair rather than flag.
+    const _despace = (t) => String(t == null ? '' : t)
+      .replace(/(\d)([A-Za-z])/g, '$1 $2')
+      .replace(/([a-z])([A-Z][a-z])/g, '$1 $2')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    for (const k of ['headline', 'read', 'background', 'whatHeNeeds', 'askOnTheCall']) {
+      if (typeof parsed[k] === 'string') parsed[k] = _despace(parsed[k]);
+    }
+    if (Array.isArray(parsed.rows)) {
+      parsed.rows = parsed.rows.map(r => r && typeof r === 'object'
+        ? { ...r, label: _despace(r.label), says: _despace(r.says) } : r);
+    }
+
     // ── THE FAILURE MODE, CAUGHT RATHER THAN HOPED AGAINST ──────────────────
     // The way this goes wrong is not fabrication — it is retreating into a
     // restatement of one finding. That is invisible unless checked, so check it.
@@ -6143,7 +6304,9 @@ const measureTenure = (pageText, story) => {
   if (stated) {
     const y = Number(stated[1]);
     if (y >= 2 && y <= 100) return { checked: true, years: y, foundedYear: now - y, basis: 'stated',
-      why: `their own copy claims ${y} years in business` };
+      // "25 years in business (their own copy claims 25 years in business)" \u2014 the
+      // sentence ate its own tail. Say where the number came from, not the number.
+      why: 'stated on their own site' };
   }
   // Copyright range: "© 2009-2026" implies the earlier bound.
   const range = text.match(/(?:\u00a9|&copy;|copyright)\s*(19\d{2}|20[0-2]\d)\s*[-\u2013]\s*(20[0-2]\d)/i);
@@ -6354,10 +6517,16 @@ const measureGrowthConstraint = ({
             const _share = weakerAbove / _above;
             const _frame = _share >= 0.5
               ? `MOST of the businesses ranked above them \u2014 ${weakerAbove} of ${_above} \u2014 have FEWER reviews`
+              // "even one of the 6 businesses ranked above them has FEWER reviews"
+              // reads as though we are straining to make one sound like a lot,
+              // and it is the exact opposite of the instruction two lines below
+              // it: state the ratio, do not inflate it. One out of six is a weak
+              // version of this finding and the copy should say so plainly rather
+              // than dressing it up.
               : weakerAbove === 1
-                ? `even one of the ${_above} businesses ranked above them has FEWER reviews`
+                ? `just 1 of the ${_above} businesses ranked above them has FEWER reviews`
                 : `${weakerAbove} of the ${_above} businesses ranked above them have FEWER reviews`;
-            return `${_frame}, and they still sit at #${rank}. They ARE in the results; they are near the bottom of them, and people choose from the top of a list. \u26a0 STATE THE RATIO EXACTLY AS WRITTEN \u2014 do NOT round ${weakerAbove} of ${_above} up to "most" or "many"; he can count them.`;
+            return `${_frame}, and they still sit at #${rank}. They ARE in the results; they are near the bottom of them, and people choose from the top of a list. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
       : (weakerAbove > 0)
         ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
@@ -7977,9 +8146,9 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   if (parts.length < 2) return null;
   const first = parts[0], last = parts[parts.length - 1];
   try {
-    const r = await fetchT(
+    const r = await hunterSerial(() => fetchT(
       `https://api.hunter.io/v2/email-finder?domain=${encodeURIComponent(domain)}&first_name=${encodeURIComponent(first)}&last_name=${encodeURIComponent(last)}&api_key=${hunterKey}`,
-      {}, 10000);
+      {}, 10000));
     const d = await safeJson(r);
     // DISTINGUISH "we could not ask" FROM "there is no address". Returning a bare
     // null for both is what let an empty Hunter balance masquerade as an
@@ -7999,7 +8168,7 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   } catch(e) { console.log('hunterFindPersonEmail failed:', e.message); return null; }
 };
 
-const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, industry = '' }) => {
+const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '' }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
   // Set when a PAID lookup was refused (spent quota / dead key) rather than
@@ -8104,6 +8273,36 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
           name, pattern: learned,
         };
       }
+    }
+  }
+
+  // ══ WHAT WE ALREADY PROVED COMES FIRST ═══════════════════════════════════
+  // A mailbox the mail server itself confirmed is the strongest evidence short of
+  // a reply, and it does not expire between runs. Re-deriving it costs a probe,
+  // risks landing on a different local part, and — as happened on Deirdre Taylor
+  // — can hand back a WORSE address than the one already on the lead:
+  //   run 1  deirdre@dtaylorcpa.com        SMTP-verified   95
+  //   run 2  deirdre.taylor@dtaylorcpa.com catch-all guess 72
+  // The verified result was sitting on the lead the entire time.
+  //
+  // So: if the lead arrives carrying a previously verified address on this
+  // domain, re-confirm it cheaply and keep it. Re-confirming matters — mailboxes
+  // do get closed — but a single silent probe is very different from starting the
+  // waterfall over and guessing.
+  if (priorEmail && String(priorEmail).includes('@' + domain) && (priorEmailTier === 1 || priorEmailTier === 2)) {
+    const _still = verifierKey ? await verifyEmailSMTP(priorEmail, verifierKey) : { unknown: true };
+    if (_still.invalid === true) {
+      console.log(`EMAIL [${domain}]: the previously verified address ${priorEmail} is now REFUSED by their mail server. Not reusing it \u2014 the mailbox has been closed or renamed since we last looked.`);
+    } else {
+      if (priorEmailPattern) domainPatternMemory.set(domain, priorEmailPattern);
+      console.log(`\u2713 EMAIL [${domain}] REUSING A PROVEN ADDRESS: ${priorEmail} was verified on an earlier run${_still.valid === true ? ' and the mail server confirms it again' : ' and nothing since contradicts it'}. Skipping rediscovery \u2014 re-deriving a solved address is how a lead ends up with a weaker one than it already had.`);
+      return {
+        email: priorEmail,
+        ...(priorEmailTier === 1 ? EMAIL_TIERS.CONFIRMED_SCRAPED : EMAIL_TIERS.SMTP_VERIFIED),
+        name: ceoName || hunterName || '',
+        pattern: priorEmailPattern || domainPatternMemory.get(domain) || null,
+        label: priorEmailTier === 1 ? 'Published on their site (confirmed on an earlier run)' : 'SMTP-verified (mailbox exists, confirmed on an earlier run)',
+      };
     }
   }
 
@@ -8263,7 +8462,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
       // other is a fact about our account.
       if (hf && hf.unavailable) {
         _lookupBlocked = hf.reason;
-        console.log(`EMAIL [${domain}]: could NOT check ${name} — ${hf.reason === 'hunter_key_rejected' ? 'Hunter key rejected' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+        console.log(`EMAIL [${domain}]: could NOT check ${name} \u2014 ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance \u2014 re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
       }
       if (hf && hf.email) {
         // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
@@ -9406,7 +9605,16 @@ const routeChannel = ({ ownerFound, homepageContent, website, companyName, isPla
 
   // ROUTE 5 — Hunter can still be asked. While it has credits, an owner we could
   // not find on-page may still be findable, so email stays live.
-  if (hunterAvailable) routes.push('Hunter still has credits, so a mailbox can still be looked up directly');
+  // ── DO NOT ASSERT A BALANCE WE HAVE NOT CHECKED ─────────────────────────
+  // This printed "Hunter still has credits" on every lead, including four lines
+  // above "HUNTER RATE-LIMITED" and, on earlier runs, above "HUNTER OUT OF
+  // CREDITS". It could not have known: this routing summary is built BEFORE any
+  // Hunter call is made, so the flag only says we have not yet been told
+  // otherwise in this process. The system learns the balance by trying.
+  //
+  // The route is still worth listing — it is a real avenue. It is the claim about
+  // credits that was invented.
+  if (hunterAvailable) routes.push('a paid Hunter lookup has not been ruled out yet on this run, so that route is still open to try');
 
   if (routes.length) return email(routes[0], routes);
 
@@ -11863,7 +12071,7 @@ const _runResearchInner = async (req, res) => {
 
   // PRE-FLIGHT: log exactly what keys we received so we can debug 422s
   const _fcAtStart = { spent: FC_CREDITS_SPENT, saved: FC_CREDITS_SAVED, throttled: FIRECRAWL_RATE_LIMIT_HITS };
-  console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? apiKey.slice(0,12)+'...' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
+  console.log(`Research: ${company} | website: ${website||'none'} | apiKey: ${apiKey ? 'present' : 'MISSING'} | firecrawl: ${firecrawlKey ? 'present' : 'MISSING'} | manualRoles: ${manualRoleCount}`);
 
   // Pre-flight check — return 400 immediately if Anthropic key is missing
   // so the error message is clear rather than a confusing 422
@@ -11988,7 +12196,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // second one told us nothing on any of the six occasions.
         const _md = String(res?.data?.markdown || res?.markdown || '').slice(0, 400);
         const _deterministic = /refused to connect|can'?t be reached|err_name_not_resolved|err_connection_refused|dns_probe|nxdomain|certificate|ssl_error/i.test(_md);
-        if (_deterministic) {
+        // ── A DOMAIN THAT HAS NEVER RETURNED ANYTHING IS NOT TRANSIENT ────────
+        // The split above reads the error STRING, so a site returning zero bytes
+        // with no message falls to "transient" and buys a retry every time.
+        // jamesdconstruction.com has now come back empty on both attempts of five
+        // separate runs — ten paid scrapes to learn the same thing ten times.
+        //
+        // Once is bad luck. Twice in a row is the site. Remembering that for an
+        // hour costs nothing and stops us paying to re-confirm it, while still
+        // letting a genuinely recovered host back in shortly after.
+        const _emptyKey = String(website || '').toLowerCase();
+        const _priorEmpty = EMPTY_SCRAPE_MEMORY.get(_emptyKey) || 0;
+        const _seenEmptyBefore = _priorEmpty > 0 && (Date.now() - _priorEmpty) < 3600000;
+        EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+        if (_seenEmptyBefore) {
+          console.log(`Firecrawl returned nothing for ${website}, and it also returned nothing on a run within the last hour. NOT retrying \u2014 twice in a row is the site, not luck, and a second fetch buys the same empty response again. It will be tried afresh after an hour.`);
+        } else if (_deterministic) {
           console.log(`Firecrawl returned a hard failure for ${website} (the host refused the connection or the name does not resolve). NOT retrying \u2014 that answer will be identical in three seconds and the second fetch costs a credit to confirm what we already know.`);
         } else {
           console.log(`Firecrawl returned empty/error content for ${website} — this looks transient, retrying once after a pause`);
@@ -12267,7 +12490,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const _route = routeChannel({
       ownerFound, homepageContent: content, website, companyName: company,
       isPlacesLead, phone: req.body.phone || '',
-      hunterAvailable: !HUNTER_EXHAUSTED && !HUNTER_AUTH_DEAD,
+      // Include the throttle: while it is active the route is not available either.
+      hunterAvailable: !HUNTER_EXHAUSTED && !HUNTER_AUTH_DEAD && Date.now() >= HUNTER_THROTTLED_UNTIL,
     });
     channelRoute = _route.channel;
     channelReason = _route.why;
@@ -12650,6 +12874,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // frontdesk@ for a practice, service@ for a trade. Without this the
           // finder probed a plumbing-shaped list on every dental clinic.
           industry: req.body.industry || '',
+          // A mailbox this lead already proved. Passed through so a restart, a
+          // wobbly catch-all probe or an exhausted Hunter balance cannot lose an
+          // answer we paid for and confirmed.
+          priorEmail: req.body.priorEmail || '',
+          priorEmailTier: req.body.priorEmailTier ?? null,
+          priorEmailPattern: req.body.priorEmailPattern || '',
           // We already PROVED this homepage belongs to the target company, so a
           // personal address published on it is theirs regardless of its domain.
           siteConfirmed: domainConfirmation ? (domainConfirmation.match === 'yes') : false,
@@ -12763,7 +12993,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (news.hasNews) companyTriggers = news.triggers;
     } catch(e) { console.log('News enrich skipped:', e.message); }
 
-    const hasDiscoveryContext = manualRoleCount > 0 || discoverySignals.raised_funding || discoverySignals.preparing_for_exit || discoverySignals.rebranding || discoverySignals.recently_acquired;
+    // Boolean, not a truthiness chain. This printed "discoveryContext: undefined"
+    // on every lead in every run, which reads as a broken field. It is not broken:
+    // a Places-sourced local business genuinely has no funding round, no exit
+    // signal and no job postings, so the honest value is false. An || chain
+    // returns its LAST operand when everything is falsy, and the last operand here
+    // is undefined — so a correct "no" was being displayed as a fault.
+    const hasDiscoveryContext = !!(manualRoleCount > 0 || discoverySignals.raised_funding || discoverySignals.preparing_for_exit || discoverySignals.rebranding || discoverySignals.recently_acquired);
 
     // ═══ SCRAPE SANITY CHECK (permissive) ════════════════════════════════
     // Detect a BROKEN scrape (bot wall, cookie modal, wrong page) so we don't
@@ -12869,6 +13105,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // input is already measured elsewhere; this is the synthesis, not new data.
     valueEquation = measureValueEquation({
       booking: sitePages && sitePages.booking,
+      // Pass the provenance, not just the value. Without this the function cannot
+      // tell a page-source measurement from the model's fallback guess.
+      bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
       hasTelLink: htmlSignals && htmlSignals.checked ? htmlSignals.hasTelLink : undefined,
       formFieldCount: htmlSignals && htmlSignals.checked ? htmlSignals.formFieldCount : undefined,
       hasForm: htmlSignals && htmlSignals.hasForm,
@@ -13059,7 +13298,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const isGenericInbox = /^(info|contact|hello|admin|office|support|sales|team|mail)$/.test(emailLocal);
     const isPersonalPattern = founderName && emailLocal.length > 1 && founderName.toLowerCase().split(' ').some(w => w.length > 2 && emailLocal.includes(w.slice(0, Math.min(w.length, 5))));
     const ownerTitle = /owner|founder|ceo|president|principal/i.test(email.title || email.founderTitle || '');
+    // ── THE GRADE MUST SAY HOW WE GOT IT, NOT JUST WHAT IT LOOKS LIKE ──────
+    // Deirdre Taylor was graded "B — personal-pattern email" for an address we
+    // had NOT verified: her domain answered as catch-all, so every local part is
+    // accepted and the pattern was a guess. The shape of the string looked
+    // personal, which is all this ladder was reading.
+    //
+    // That matters because the grade is what a human skims. "Personal-pattern"
+    // reads as "we worked out their convention"; on a catch-all domain it means
+    // "we picked one and nothing can bounce". Same string, very different bet.
+    const _isCatchAllAddr = !!(email.catchAll || /catch-all/i.test(String(email.label || '')));
     const emailGrade = !emailAddr ? 'none'
+      : _isCatchAllAddr ? 'C — catch-all domain, delivery certain but the mailbox is unconfirmed'
       : isPersonalPattern && ownerTitle ? 'A — personal email of owner-level contact'
       : isPersonalPattern ? 'B — personal-pattern email'
       : ownerTitle && !isGenericInbox ? 'B — owner title, non-generic address'
@@ -13615,6 +13865,8 @@ ${history && history.checked && history.findings.length ? `
 \u2550\u2550\u2550 THEIR OWN TRACK RECORD \u2014 THE ONLY EVIDENCE HERE WITH A TIME AXIS \u2550\u2550\u2550
 ${history.facts.join(' \u00b7 ')}
 ${history.findings.map(f => `\u2022 [${f.layer}] ${f.finding}\n  WHY THIS MATTERS: ${f.why}`).join('\n')}
+
+\u2605 A HISTORY FINDING IS NOT A GOOGLE PROFILE GAP. Three of six live leads filed "37 reviews across 25 years" as gbp_gap, presumably because the number came from their Google listing. Where a fact was MEASURED is not what the category means. gbp_gap is about the profile itself being incomplete \u2014 no description, too few photos, a stale listing. A ratio of reviews to years is about what the BUSINESS has produced over its life, and the profile is merely where we counted it. File it as review_pattern.
 
 \u2605 FILE A HISTORY FINDING UNDER THE LAYER SHOWN IN BRACKETS ABOVE, NOT UNDER review_pattern.
 "37 reviews across 25 years" is NOT a review pattern. A review pattern is a COMPLAINT repeating across their reviews \u2014 slow callbacks, missed appointments. This is the opposite: it is about how little proof exists at all, which is a LEADS finding, because nothing is turning finished work into the next customer.
@@ -14497,7 +14749,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   console.log(`\u26a0 SIGNAL RELABEL [${company}]: the declared lead moved with it \u2014 leadSignal ${parsed.leadSignal} \u2192 ${_win.signal} (the top-scored carrier, ${_win.total}).`);
                   parsed.leadSignal = _win.signal;
                 } else if (_carriers.length > 1) {
-                  console.log(`\u2713 SIGNAL RELABEL [${company}]: a lower-scored ${parsed.leadSignal} candidate was relabelled, but the finding the email is actually built on (${_win ? _win.total : '?'}) kept its label. leadSignal unchanged.`);
+                  // Name WHICH candidate moved. The previous wording said "a
+                  // lower-scored positioning_offer candidate was relabelled"
+                  // directly beneath a line reporting a gbp_gap -> review_pattern
+                  // move, and the two read as contradictory because neither said
+                  // what it was talking about. They were different findings.
+                  console.log(`\u2713 SIGNAL RELABEL [${company}]: the relabelled finding was a lower-scored one, not the lead. The email is built on "${_win && _win.finding ? String(_win.finding).slice(0, 60) : parsed.leadSignal}" (${_win ? _win.total : '?'}), which kept its own label. leadSignal unchanged.`);
                 }
               }
             }
@@ -14605,7 +14862,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               _moved.push(`"${String(_c.finding).slice(0,38)}" ${_was}\u2192${_v.score} (${_v.why})`);
             }
             if (_unmatchedFix.length || _unmatchedOwn.length) {
-              console.log(`\u26a0 SCORING [${company}]: ${_unmatchedFix.length + _unmatchedOwn.length} finding(s) matched no rule for weFixIt or ownerLevel and defaulted to 3 \u2014 ${[..._unmatchedFix, ..._unmatchedOwn].join(' | ')}. A default of 3 is a shrug, and two shrugs are enough to reorder a close ladder.`);
+              // One finding that fails BOTH dials was pushed to both arrays and
+              // the lengths summed, so Wade reported "3 finding(s)" when there
+              // were two. A count that overstates trains the reader to discount it.
+              const _uniq = [...new Set([..._unmatchedFix, ..._unmatchedOwn])];
+              console.log(`\u26a0 SCORING [${company}]: ${_uniq.length} finding(s) matched no rule for weFixIt or ownerLevel and defaulted to 3 \u2014 ${_uniq.join(' | ')}. A default of 3 is a shrug, and two shrugs are enough to reorder a close ladder.`);
             }
             if (_unmatchedSurprise.length) {
               console.log(`\u26a0 SURPRISE [${company}]: ${_unmatchedSurprise.length} finding(s) have no known base rate and defaulted to 3 \u2014 ${_unmatchedSurprise.join(' | ')}. If one of those is something almost every business like this has, it is being over-rated and will crowd out a real finding.`);
@@ -14690,8 +14951,8 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               _cf.sort((a, b) => (Number(b && b.total) || 0) - (Number(a && a.total) || 0));
               const _gap = (Number(_cf[0].total) || 0) - (Number(_cf[1].total) || 0);
               if (_gap <= 2) {
-                const _inLayer = _cf.filter(c => c && SIGNAL_LAYER[c.signal] === growthConstraint.layer);
-                const _winnerLayer = SIGNAL_LAYER[_cf[0] && _cf[0].signal];
+                const _inLayer = _cf.filter(c => c && layerForFinding(c.signal, c.finding) === growthConstraint.layer);
+                const _winnerLayer = _cf[0] ? layerForFinding(_cf[0].signal, _cf[0].finding) : undefined;
                 if (_inLayer.length && _winnerLayer !== growthConstraint.layer) {
                   const _should = _inLayer[0];
                   _tiebreakOverruled = true;
@@ -14791,12 +15052,37 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             } catch (e) { console.log('PRODUCT FIT check failed —', e && e.message); }
 
             const _ladderWinner = _sortedC[0] || null;
+            const _ladderWinnerRaw = _ladderWinner;
             if (_ladderWinner) {
               const _wSig = _ladderWinner.signal || _ladderWinner.declaredSignal || '';
               const _declaredNow = typeof parsed.leadSignal === 'string' ? parsed.leadSignal.trim() : '';
               const _declaredScore = (_sortedC.find(c => (c.signal || c.declaredSignal) === _declaredNow) || {}).total;
               const _margin = Number.isFinite(Number(_declaredScore)) ? (_ladderWinner.total - Number(_declaredScore)) : 99;
-              const _gaveReason = !!(parsed.leadSignalReason && String(parsed.leadSignalReason).trim());
+              // ══ A REASON HAS TO BE TRUE TO COUNT AS ONE ═══════════════════
+              // The override steps aside whenever a reason is given, which makes
+              // it opt-out — and Jane R. Mays opted out with a reason that was not
+              // true. It read "Search rank and positioning_offer tied at 21. Per
+              // the tie-breaking rule, the binding layer is OFFER, so
+              // positioning_offer wins." The scores were 21 and 18.
+              //
+              // The ARGUMENT is sound: on a genuine tie the binding layer should
+              // decide, which is our own rule quoted back at us. It just rested on
+              // a premise about numbers WE computed, three points out.
+              //
+              // Most stated reasons make exactly this kind of claim, because the
+              // schema asks the model to justify a trade against the scores. That
+              // makes them checkable. A reason asserting a tie, or asserting the
+              // signals scored equally, is only a reason if the scores agree.
+              const _reasonText = String(parsed.leadSignalReason || '').trim();
+              let _gaveReason = !!_reasonText;
+              if (_gaveReason && _ladderWinnerRaw && Number.isFinite(Number(_declaredScore))) {
+                const _claimsTie = /\btied?\b|\bequal(?:ly|led)?\b|\bsame score\b|\bidentical(?:ly)?\b|\bno (?:material |real )?difference\b/i.test(_reasonText);
+                const _realGap = _ladderWinnerRaw.total - Number(_declaredScore);
+                if (_claimsTie && _realGap > 1) {
+                  console.log(`\u26a0 LADDER REASON REJECTED [${company}]: the stated reason claims the top two scored the same \u2014 "${_reasonText.slice(0, 80)}" \u2014 but they are ${_realGap} point(s) apart (${_wSig} ${_ladderWinnerRaw.total} vs ${_declaredNow} ${_declaredScore}). The argument would hold on a real tie; the premise is false, so it does not excuse the trade. Treating this as no reason given.`);
+                  _gaveReason = false;
+                }
+              }
 
               parsed.ladderWinner = {
                 signal: _wSig,
@@ -15192,7 +15478,21 @@ Return ONLY valid JSON:
             // whether any of them describes a statement the prospect can DISPROVE.
             // A behavioural reframe the checker disliked is a note. A number that
             // is 2.4x wrong is a different category of thing, and it should block.
-            const _CRITICAL = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|2\.\d+x overstatement|overstatement and must/i;
+            // ── INVERSION AND CONTRADICTION ARE CRITICAL TOO ────────────────
+            // Wade Orthodontics, live: "'5 of the 6 practices ahead of you have
+            // more reviews than you do' — the evidence shows 1 of 6 ahead have
+            // fewer. The claim inverts the actual ratio... This is the core
+            // diagnostic claim and it is backwards."
+            //
+            // The checker could not have been clearer, and none of those words
+            // matched the first version of this pattern, so a number the owner can
+            // count on his own screen — stated backwards, in the sentence the
+            // whole email rests on — landed in the general notes list next to a
+            // remark about tone.
+            //
+            // The test is not whether the word CRITICAL appears. It is whether the
+            // prospect can look at the claim and see that it is false.
+            const _CRITICAL = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bthe opposite of the finding\b|\bcontradicts the (measured )?evidence\b|\bevidence shows [^.]{0,40}\bnot\b|\bINFLATED RATIO\b|\bthe inverse of the finding\b/i;
             const _criticalFlags = _realFlags.filter(f => _CRITICAL.test(f));
             if (_criticalFlags.length) {
               parsed._criticalFactCheck = _criticalFlags;
@@ -16078,12 +16378,24 @@ app.get('/api/research-job/:id', (req, res) => {
 app.listen(PORT, () => {
   const has = (ok) => (ok ? '\u2713' : '\u2717 MISSING');
   console.log(`CROJungle v6 — port ${PORT}`);
-  console.log('BUILD: '
-    + 'situationRead ' + has(typeof buildSituationRead === 'function')
-    + ' | history ' + has(typeof measureHistory === 'function')
-    + ' | tenure ' + has(typeof measureTenure === 'function')
-    + ' | surprise ' + has(typeof computeSurprise === 'function')
-    + ' | severity ' + has(typeof computeSeverity === 'function'));
+  // The list is the point. A marker that checks five hand-typed names goes stale
+  // the moment anything is added, and then a stale deploy prints an identical
+  // line — which is exactly the confusion this marker exists to prevent. It
+  // already missed weFixIt, ownerLevel, productFit and layerForFinding.
+  const _FEATURES = [
+    ['situationRead',  typeof buildSituationRead],
+    ['history',        typeof measureHistory],
+    ['tenure',         typeof measureTenure],
+    ['surprise',       typeof computeSurprise],
+    ['severity',       typeof computeSeverity],
+    ['weFixIt',        typeof computeWeFixIt],
+    ['ownerLevel',     typeof computeOwnerLevel],
+    ['productFit',     typeof computeProductFit],
+    ['findingLayer',   typeof layerForFinding],
+  ];
+  console.log('BUILD: ' + _FEATURES.map(([n, t]) => n + ' ' + has(t === 'function')).join(' | '));
+  const _missing = _FEATURES.filter(([, t]) => t !== 'function').map(([n]) => n);
+  if (_missing.length) console.log(`\u26d4 STALE BUILD \u2014 ${_missing.join(', ')} are not in this server.js. Anything depending on them will silently do nothing. Deploy the current file before reading any result from this run.`);
 });
 
 // ── DIAGNOSTICS — tests all sources at once ───────────────
