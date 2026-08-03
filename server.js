@@ -315,6 +315,14 @@ const computeProductFit = (layer, leadSignal) => {
 
 const WEFIXIT_RULES = [
   // ── 1: real problems we do not sell a fix for. Must never lead. ──────────
+  // ── NOT SHOWING A PRICE IS NOT THE SAME AS CHARGING THE WRONG ONE ───────
+  // "No pricing visible anywhere" scored 1 here — the rule below reads any
+  // mention of "pricing" as the thing we refuse to touch. But what that rule
+  // exists for is their prices being WRONG: too high, disputed, undercut. A page
+  // that simply does not publish a figure is a conversion decision, and putting
+  // a starting price in front of a hesitant buyer is standard work for us.
+  [5, /\bno pricing (?:visible|shown|published|anywhere)|no published pricing|does not publish (?:any )?pric|pricing is not (?:visible|shown|published)\b/i,
+      'whether a price appears before someone has to ask is a conversion decision, and it is ours'],
   [1, /\bprice|pricing|too expensive|cost too much|overcharg|cheap|refund|billing dispute\b/i,
       'pricing is not something we fix, and leading on it insults the business'],
   [1, /\bworkmanship|quality of (the )?work|shoddy|poor(ly)? (built|installed|done)|had to redo|came back to fix\b/i,
@@ -328,11 +336,19 @@ const WEFIXIT_RULES = [
       'an automated response and follow-up layer is the AI Brain, precisely our product'],
   [5, /\bno (booking|scheduling) (tool|system)|no scheduler|phone[- ]only|only way to (book|start|hire)\b/i,
       'booking and capture is core to what we build'],
+  // Live defaults: "Form-only booking with no online scheduling", "No pricing
+  // visible anywhere". Both are conversion-path work and squarely ours.
+  [5, /\bform[- ]only booking|no online scheduling|no pricing visible|no published pricing\b/i,
+      'the path from interested to booked is the core of a conversion engagement'],
   [5, /\b\d+[- ]field|form asks|contact form\b/i, 'form friction is a conversion fix we do directly'],
   [5, /\bno lead magnet|nothing to (take|download)|no email capture|no CRM\b/i,
       'capture and nurture is the centre of the offer'],
-  [5, /\brank|ranking|#\d+ of \d+|map pack|search results|not in the top\b/i,
+  [5, /\brank|ranking|#\d+ of \d+|map pack|search results|not in the top|near the bottom of\b/i,
       'local visibility is squarely what the marketing retainer does'],
+  // "29 reviews at 5 stars across 25 years" \u2014 the star rating sits between the
+  // count and "across", which the history rule below could not see past.
+  [5, /\b\d+\s+reviews?\b[^.]{0,30}\bacross\s+\d+\s*years?\b/i,
+      'building the machine that turns delivered work into proof is exactly the engagement'],
   [5, /\bgoogle (business )?profile|business description|photos on (their|the) google\b/i,
       'profile work is fast, cheap and entirely ours'],
   [5, /\breviews? (across|per|a year)|public reviews|nothing.{0,20}visible to the next customer|does not compound|no machine\b/i,
@@ -342,8 +358,8 @@ const WEFIXIT_RULES = [
   [4, /\btitle tag|meta description|H1|https|not secure|viewport|mobile\b/i,
       'technical fixes are ours but they are the smallest thing we sell'],
   // Copy and call-to-action work, both squarely ours.
-  [4, /\bprimary CTA|call[- ]to[- ]action|make a payment|homepage (?:headline|copy)|body copy|repeat(?:s|ed)? ['\u2018"]/i,
-      'homepage copy and the main call to action are the first thing a rebuild or retainer touches'],
+  [4, /\bprimary CTA|call[- ]to[- ]action|make a payment|homepage (?:headline|copy)|hero headline|body copy|dated site|dated (?:looking )?(?:site|website)|repeat(?:s|ed)? ['\u2018"]/i,
+      'homepage copy, the main call to action and how the site looks are the first things a rebuild or retainer touches'],
 ];
 
 const computeWeFixIt = (findingText, signal) => {
@@ -358,14 +374,18 @@ const OWNERLEVEL_RULES = [
   // ── 5: he cannot delegate this. It is about his money or his market. ─────
   [5, /\breviews? (across|per|a year)|years? (in business|of (practice|experience))|nothing.{0,25}compound|does not compound|track record\b/i,
       'a statement about what his whole career has produced is not something he forwards to anyone'],
-  [5, /\brank|#\d+ of \d+|map pack|competitors? (above|ahead)|fewer reviews than\b/i,
+  [5, /\brank|#\d+ of \d+|map pack|competitors? (above|ahead)|fewer reviews than|near the bottom of\b/i,
       'where he sits against named competitors is his problem and nobody else\u2019s'],
+  [5, /\b\d+\s+reviews?\b[^.]{0,30}\bacross\s+\d+\s*years?\b/i,
+      'a statement about what his whole career has produced is not something he forwards to anyone'],
   [5, /\bcustomers? (are|who) (leaving|choosing|comparing)|losing (work|customers|patients|clients)|revenue\b/i,
       'money leaving the business is the owner\u2019s question by definition'],
   [4, /\bno guarantee|no named offer|positioning|who this is for|risk reversal\b/i,
       'the offer is his to set — a marketing hire cannot invent it for him'],
-  [4, /\bno (booking|scheduling)|phone[- ]only|only way to (book|hire|start)|no lead magnet\b/i,
+  [4, /\bno (booking|scheduling)|phone[- ]only|only way to (book|hire|start)|no lead magnet|form[- ]only booking|no online scheduling\b/i,
       'how customers reach him is an operating decision, not a page tweak'],
+  [4, /\bno pricing visible|no published pricing|dated site design\b/i,
+      'whether to publish prices, and what the business looks like from outside, are the owner\u2019s calls'],
   // ── 1-2: he forwards it and the conversation dies. ───────────────────────
   [2, /\b\d+[- ]field|form asks\b/i, 'a form length is something he hands to whoever built the site'],
   [1, /\btitle tag|meta description|\bH1\b|viewport|alt text|schema markup|canonical|robots\.txt\b/i,
@@ -374,8 +394,8 @@ const OWNERLEVEL_RULES = [
       'he forwards it to his host or his developer'],
   [2, /\bpixel|tracking|analytics|GA4|tag manager\b/i,
       'a tracking gap is real but it is a task, not a decision he owns'],
-  [4, /\bprimary CTA|make a payment|homepage (?:headline|copy)|body copy\b/i,
-      'what the front door says is his decision \u2014 nobody else gets to choose what the business promises'],
+  [4, /\bprimary CTA|make a payment|homepage (?:headline|copy)|hero headline|body copy|dated site|dated (?:looking )?(?:site|website)\b/i,
+      'what the front door says, and what it looks like, is his decision \u2014 nobody else chooses what the business promises'],
   [3, /\bgoogle (business )?profile|business description|photos\b/i,
       'he can fix it himself in ten minutes, which cuts both ways — checkable, but small'],
 ];
@@ -466,6 +486,10 @@ const SURPRISE_RULES = [
       'common across the market, though he may not have framed it as a choice'],
   [2, /\bgeneric\b|\btargets? (everyone|anyone)\b|\bundifferentiated\b|\binterchangeable\b/i,
       'most local copy reads this way; he half knows it already'],
+  [1, /\bdated site design|dated (?:looking )?(?:site|website)|looks dated\b/i,
+      'nearly every owner-run site looks dated to us and normal to them \u2014 this is the market, not a finding'],
+  [2, /\bno pricing visible|no published pricing|does not publish (?:any )?pric/i,
+      'most local service businesses publish no prices; he chose that deliberately'],
   // "Homepage and body copy repeat 'high-quality, accurate'" \u2014 the same class as
   // generic positioning, described by what the copy DOES rather than labelled.
   [2, /\b(?:homepage|body|site) copy repeats?\b|\brepeat(?:s|ed)? (?:the )?(?:same )?['\u2018"]/i,
@@ -474,8 +498,10 @@ const SURPRISE_RULES = [
   // Recurring live vocabulary that matched nothing. All of it is ordinary for the
   // market, so it belongs at the LOW end — leaving it at the default 3 was quietly
   // over-rating it against genuinely unusual findings.
-  [1, /\bauto[- ]?response layer|submits to a wait|form[- ]only entry|waits for a human|no visible instant\b/i,
+  [1, /\bauto[- ]?response layer|submits to a wait|form[- ]only entry|form[- ]only booking|no online scheduling|waits for a human|no visible instant\b/i,
       'no small business has an auto-responder on its contact form \u2014 this is the default state'],
+  [2, /\bhero headline|headline is a service description|headline (?:reads|says|is) ['\u2018"]/i,
+      'he wrote the headline himself, so reading it back is not news \u2014 what it COSTS him might be'],
   [2, /\bonly path to booking|only route in|only way to (start|book|engage)\b/i,
       'a single booking route is the norm for owner-run businesses'],
   [2, /\bhomepage headline is|headline (reads|says)\b/i,
@@ -758,6 +784,60 @@ const BACKEND_CLAIM_PATTERNS = [
   [/\bmore than most (mortgage|loan|bank) applications?\b/i, 'INVENTED COMPARISON: we never measured what other applications ask for'],
 ];
 
+// ══ THE UNSENDABLE TEST, APPLIED TO THE BODY ════════════════════════════════
+// Mike's framework already carries this rule for subject lines: every subject
+// must be unsendable to anyone else, because a line that would fit another
+// company in another industry is a template, and a template is what an automated
+// sequence looks like.
+//
+// The same test is the entire answer to "isn't 'we found something wrong' just
+// spam?" \u2014 and it is, as a category. "I noticed some issues with your website"
+// is one of the most-sent sentences in cold email. What makes those spam is not
+// the topic, it is that the claim CANNOT BE CHECKED. He has been told he has
+// problems a hundred times by people who never looked, so the claim itself
+// carries no information.
+//
+// Ours is the same category and a different object: "your appointment page
+// returns a server error" could only have been written about one business, and he
+// can confirm or destroy it in five seconds before deciding whether to believe
+// anything else we say. That is the separation, and it is testable.
+//
+// So test it. A sentence that would fit any business is the failure mode, and it
+// has a signature: vague plural nouns, hedging verbs, and no proper noun, number,
+// path or quoted string anywhere in it.
+const GENERIC_CLAIM = [
+  [/\b(?:some|a few|several|a number of|multiple)\s+(?:issues|problems|things|gaps|areas|opportunities)\b/i,
+    'names a quantity of nothing \u2014 "a few issues" is sendable to every business alive'],
+  [/\byour (?:marketing|website|online presence|digital presence|web presence|seo|funnel)\s+(?:could|might|may|isn'?t|is not)\b/i,
+    'a judgement about a whole category, which he cannot check and has heard before'],
+  [/\b(?:i|we)\s+(?:noticed|found|spotted|came across)\s+(?:some|a few|several|a couple)\b/i,
+    'the classic audit-spam opener \u2014 vague quantity, no object'],
+  [/\bthere(?:'s| is| are)\s+(?:room|opportunit(?:y|ies)|potential)\s+(?:for|to)\b/i,
+    'upside framing with nothing specific attached'],
+  [/\b(?:losing|missing out on)\s+(?:customers|leads|business|revenue|money)\b(?![^.]{0,60}\d)/i,
+    'asserts a loss with no measured thing behind it'],
+];
+
+// A sentence is SPECIFIC if it contains something only true of this business: a
+// number, a URL path, a quoted string from their page, or their own trade term.
+const looksSpecific = (line) => /\d/.test(line) || /\//.test(line) || /["\u201c\u2018']/.test(line);
+
+const checkUnsendable = (text, company) => {
+  const flags = [];
+  const body = String(text || '');
+  if (!body.trim()) return flags;
+  for (const [re, why] of GENERIC_CLAIM) {
+    const m = body.match(re);
+    if (!m) continue;
+    // Find the sentence it sits in \u2014 a vague phrase inside an otherwise specific
+    // sentence is fine, it is a whole sentence carrying nothing that fails.
+    const sentence = (body.split(/(?<=[.!?])\s+/).find(x => re.test(x)) || m[0]);
+    if (looksSpecific(sentence)) continue;
+    flags.push(`UNSENDABLE TEST FAILED \u2014 "${sentence.trim().slice(0, 90)}" ${why}. This sentence could be sent to any business in the country, which is the definition of a template. Replace it with the measured thing it was standing in for, or cut it.`);
+  }
+  return flags;
+};
+
 const verifyGeneratedCopy = (copy = {}, opts = {}) => {
   const flags = [];
   const constraintLayer = opts.constraintLayer || '';
@@ -902,6 +982,17 @@ app.post('/api/claude', async (req, res) => {
         if (_parsed && (_parsed.variantA || _parsed.followUp1)) {
           const _v = verifyGeneratedCopy(_parsed, { constraintLayer: req.body.constraintLayer || '' });
           _copyFlags = _v.flags;
+          // Mike's unsendable test, applied to the body. A sentence that would
+          // fit any business is a template, and a template is what an automated
+          // sequence looks like \u2014 which is exactly why "we found something wrong"
+          // reads as spam when it is vague and as research when it is specific.
+          try {
+            const _all = [
+              _parsed.variantA && _parsed.variantA.pitch, _parsed.variantB && _parsed.variantB.pitch,
+              _parsed.followUp1 && _parsed.followUp1.body, _parsed.followUp2 && _parsed.followUp2.body,
+            ].filter(Boolean).join(' ');
+            _copyFlags = _copyFlags.concat(checkUnsendable(_all, req.body.company || ''));
+          } catch (e) { void e; }
           const _who = req.body.company ? ` [${req.body.company}]` : '';
           if (_copyFlags.length) {
             console.log(`\u26d4 COPY VERIFY${_who}: ${_copyFlags.length} issue(s) in the EMAIL THAT WILL BE SENT \u2014 ${_copyFlags.join(' | ')}`);
@@ -2886,7 +2977,15 @@ The one test: could someone reading only these fields figure out what company se
 ★ ENFORCED RULE: "AI Brain", "Website Rebuild", "Custom AI Software Build", "CRO Retainer", "Revenue Growth", "End-to-End Marketing", "Exit Advisory", and "CROJungle" are BANNED from pitchAngle, emailBody, subject, followUp1, and followUp2. If you write them you have handed the owner a brochure, not a diagnosis, and that kills the reply.
 ★ PRICES ARE ALSO BANNED. $40k, $70k, $50k, "$10k-$35k" — none of these appear in anything the owner reads.
 THE CORRECT SHAPE: diagnose the PROBLEM the product fixes. Never name the product. The closer names it on the call after the owner has agreed the problem is real.
-"pitchAngle": "The one line that earns a reply. \u26a0 WRITE THE MOMENT, NOT THE MECHANISM \u2014 this is the difference between an email that lands and one that gets deleted. Describing how a system works forces the owner to decode it; describing a moment he has already lived makes him feel it instantly. BAD (mechanism): \u2018no instant response system, meaning every lead waits for a human callback\u2019. GOOD (moment, and every word of it OBSERVABLE): \u2018Pull up your site on a phone right now and try to tap the number. It doesn\u2019t dial.\u2019 \u26a0 THE MOMENT MUST BE BUILT ONLY FROM THINGS WE MEASURED, AND IT MUST STOP AT THE VISIBLE WALL. An older version of this instruction used \u2018Someone fills out your quote form at 9pm on a Sunday. Nobody sees it until Monday. By then they have three quotes from somebody else\u2019 as the model answer \u2014 and every clause after the first is invented. We never see his inbox, his response time, or what his prospect did next. Following that example is what produced \u2018there\u2019s no auto-reply\u2019, \u2018they\u2019ve already signed with whoever called back first\u2019 and \u2018every visitor who doesn\u2019t call is gone\u2019 in live sends. SO: describe the WALL the customer hits, in present tense, using only what we measured \u2014 the number that doesn\u2019t dial, the form that asks for ten fields, the booking page that only lists a phone number, the profile whose newest review is 251 days old. Then STOP. Do NOT narrate what happens after they hit it. Never \u2018so they leave\u2019, \u2018so they book elsewhere\u2019, \u2018and you never hear from them\u2019, \u2018that lead is gone\u2019. The owner draws that conclusion himself in the half-second after he reads it, and it lands harder because HE concluded it \u2014 a conclusion he reached is his, one you asserted is yours to defend. The one exception is a general truth about how PEOPLE behave, stated about people and never about his systems: \u2018people comparing three contractors call the one that dials\u2019 is fine; \u2018your callers give up and phone someone else\u2019 is not. Name a real person doing a real thing at a real time, put a clock on it, then say what it cost him. If any sentence describes a SYSTEM rather than a PERSON, rewrite it. ⚠ THEN APPLY THE DELEGATION TEST, which is the harder bar: could he FORWARD this to a staff member and consider it handled? If yes, it fails — an owner delegates tasks but never delegates revenue, and a tactical to-do list gets pushed down the chain where the conversation dies. ‘There is no online booking tool’ is a website task for his office manager. ‘The patient searching at 8pm books with whoever lets her, and in this trade that is a five-figure case decided by who answers first’ is a decision only he can make. Same finding, different altitude. \u26a0 IT MUST ALSO DESCRIBE THE SAME PROBLEM THE RECOMMENDED PRODUCT FIXES. If you write about slow response times, the product must be the automation/AI build \u2014 not ad management. If you write about traffic they cannot catch, the product must be the capture/rebuild. A pitch that diagnoses one problem while the recommendation sells a different service reads as confused and salesy, and the owner cannot tell what he is being offered. Diagnose the problem the recommended product would fix — but do NOT name that product, price it, or describe the fix in the email. The coherence is for OUR benefit, so the reply converts on the call; the owner only needs to recognise the problem. WRITTEN FOR A BUSINESS OWNER, NOT A MARKETER \u2014 he owns a roofing company or a CPA practice, has never heard of an H1 tag, and files anything with agency vocabulary next to every other agency email. BANNED WORDS: pixel, retargeting, H1, meta, schema, SEO, above the fold, funnel, CRM, conversion rate, CTA, landing page, attribution, impressions, nurture, optimization, UX. \u26a0 THE EVIDENCE ABOVE IS WRITTEN IN OUR WORDS, NOT HIS \u2014 TRANSLATE, DO NOT ECHO. You are handed measurements labelled 'tracking pixel', 'above the fold', 'CRM', 'attribution' because those are the accurate names for what we scanned, and you need them to reason. They are not the words for the email, and repeating them back is the most common way jargon reaches a send. Translate every one: 'no tracking pixel' -> 'you are paying for clicks with no way to count what came back'. 'no CRM' -> 'nothing is keeping track of who got in touch'. 'above the fold' -> 'the first thing anyone sees'. 'no attribution' -> 'no way to tell which of the three is actually working'. 'CTA' -> 'the button that asks them to do something'. 'title tag' -> 'the line Google shows as the link'. If a word appears in the evidence AND in the banned list that is not a contradiction \u2014 it means we measured it and he must never read it. \u26a0 THIS BAN COVERS EVERY FIELD YOU WRITE, NOT JUST THIS ONE. \u2018funnel\u2019 was caught on three consecutive live leads \u2014 obeyed here, then written into recommendedReason, which is displayed to the operator and feeds the write-up the prospect receives. A word that is wrong in the email is wrong in every sentence attached to the lead. Say the thing itself: not \u2018ads running into a funnel that is not being found\u2019 but \u2018he is paying for clicks to a page that customers cannot find on their own\u2019. Say it as he would: not \u2018no retargeting layer\u2019 but \u2018when someone leaves your site there is no way to get back in front of them\u2019; not \u2018no lead capture\u2019 but \u2018if they do not call right then, you never hear from them again\u2019. FRAME IT AS LOSS, NOT UPSIDE \u2014 owners act on money already leaking, not on improvements available. TWO KINDS OF NUMBER ARE ALLOWED AND THE DISTINCTION MATTERS. (a) NUMBERS HE PUBLISHED — his posted prices, posted salaries, visible ad count, review count, staff count — plus honest arithmetic on those. These are the strongest because he wrote them. (b) THE TYPICAL VALUE OF A JOB IN HIS TRADE — ‘a foundation repair runs five figures’, ‘a roof replacement is $10-30k’, ‘a cosmetic dental case is several thousand dollars’. That is public knowledge about an INDUSTRY, not a claim about his books, and it is what turns a website observation into something an owner can act on. WITHOUT IT the email describes a feature and gets delegated to staff; with it, the same finding becomes a revenue decision only he can make. STILL ABSOLUTELY BANNED: his revenue, his volume, his conversion rate, his ad spend, or any total loss figure. Never ‘you are losing $40k a month’ — we cannot know it, he can check it, and one invented number destroys every true thing in the email. NEVER invent a loss figure and NEVER state his revenue back to him \u2014 our revenue number is a third-party estimate, it is frequently wrong, and quoting it reads as surveillance rather than research. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (0c) THE LAPTOP TEST — WRITE EXPOSURE, NOT A CONDITION. A man who realises he left his laptop outside does not think ‘my equipment handling is suboptimal’; he thinks it might get broken, it might get stolen, I need it — three thoughts about RIGHT NOW, all about loss, and he moves immediately. A CONDITION can be handled Tuesday: ‘your implants page isn’t ranking’. EXPOSURE cannot: ‘tonight, the people searching for implants in your city are booking someone else’. Same fact; the second is happening while he reads it and happens again every hour he does nothing. Write in the PRESENT CONTINUOUS — not what is wrong with his setup, but what is happening to his business right now because of it. AND NEVER AS A HYPOTHETICAL: ‘someone searches at 8pm on a Tuesday’ is a worked example he reads as an invented story and can costlessly disagree with. ‘The ones finding you after 5 are booking elsewhere’ is a claim about his actual business that he can only disprove by going to look. Make him want to look. (0d) DELIVER THE WORK, DO NOT OFFER IT. Nobody sends content — that is the whole reason this works, and it evaporates the moment the email reads as a proposal to do something later. The audit is not something he might receive if he replies; it already exists and part of it is in front of him. Every finding must be CHECKABLE in ten seconds without answering us — ‘your marketing could be stronger’ must be taken on trust, ‘your implants page is not in the top 20 for that search in your own city’ can be confirmed on his phone before he decides. Give him something to check. (0a0) THESE RULES GOVERN EMAIL 1 AND FOLLOW-UP 1 EQUALLY. Follow-up 1 is scanned in the same inbox, in the same threat-detection mode, by the same man — and because he did not act on the first one, it has to stand entirely on its own. It needs its own threat subject, its own unexpected fact, its own behavioural reframe and its own cost, in present tense. A bump is not a follow-up; ‘just following up in case you missed it’ carries no fact, no threat and no reason to read, and it announces itself as an automated sequence. FOLLOW-UP 2 IS THE ONE EXEMPTION: a third alarm from a stranger who has been ignored twice reads as pressure, and pressure makes a busy owner delete. That email works because it is the first one asking for nothing — soft subject, no new pain, no guilt, a genuine exit, and the write-up left sitting there unclaimed and still his. (0a2) THREE FAILURES SEEN IN LIVE OUTPUT — CHECK FOR EACH BEFORE FINISHING. (i) THE LOSS ARRIVED WITHOUT A NUMBER in four of four emails: the problem was named, the behaviour was named, then ‘that adds up fast’. That is a gesture at a loss, not a loss, and an owner cannot act on a gesture. A value is ALWAYS available — his posted prices if he has them, otherwise what a job in his trade is worth — and the arithmetic must be one he can do in his head: ONE of those, once a month. (ii) THE OPENING SENTENCE WAS A HYPOTHETICAL — ‘Someone fills out your quote form at 9pm Sunday’, ‘Someone in San Antonio searches right now’. An invented person in an invented moment, sitting in the preview slot he reads before deciding whether to open. Write the same thing as a statement about his business as it stands: ‘Quote requests that arrive after 5 sit until the next morning.’ Shorter, harder, and either true of his site or not. (iii) THE SUBJECT WAS GENERIC AND REPEATED ACROSS LEADS — ‘I caught a problem’ went out identically to a sign shop and a med spa. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Every subject must name the specific thing and be unsendable to anyone else. (0-FAB00) YOU MAY DESCRIBE WHAT IS ON THE PAGE. YOU MAY NOT DESCRIBE WHAT HAPPENS AFTER A FORM IS SUBMITTED, OR WHAT THEIR BACKEND DOES. We never submit forms and we never see their CRM, autoresponder, or internal process. So ‘there is no chat widget or visible instant-response tool on the page’ is ALLOWED — we can see the absence of that technology in the page. But ‘every lead who fills out the form has to wait for a human callback’ and ‘anyone who doesn’t submit disappears forever with no record’ are BANNED: they assert what happens after submission and inside their systems, which we did not observe. They may run an autoresponder, a CRM with lead-capture, or an instant-quote engine we cannot see. \u26a0 \u2018THERE IS NO AUTO-REPLY\u2019 IS THE SAME FABRICATION AND IT KEEPS APPEARING. We never submit the form, so we never find out whether an autoresponder fires. A live email said \u2018there\u2019s no auto-reply, no chat, nothing that responds before you do\u2019 \u2014 the chat part was observable, the auto-reply part was invented. Also banned in every wording: \u2018nothing answers them back\u2019, \u2018they\u2019ve already signed with whoever called them back first\u2019, \u2018by morning they\u2019ve heard from two other companies\u2019. Those describe his lead handling, his competitors\u2019 response times and his prospect\u2019s decisions \u2014 three things we have never seen. \u26a0 AN ADS TAG IS NOT AD SPEND. Finding a Google Ads conversion tag in their page source proves the TAG is there. It does NOT prove ads are running today, that budget is flowing, or that any specific click was paid for \u2014 tags routinely outlive the campaigns that installed them by months or years. BANNED: \u2018your Google Ads are running\u2019, \u2018you paid for that click\u2019, \u2018your ad budget\u2019. ALLOWED: \u2018there\u2019s a Google Ads conversion tag on your site, so at some point you were buying traffic\u2019. Write the OBSERVABLE version, not the inferred outcome: ‘I don’t see an instant-response tool on the page — no chat, no visible auto-quote’ rather than ‘every lead waits for a callback’. ‘The estimate button goes to a form’ rather than ‘anyone who doesn’t submit is lost forever’. The behavioural point about SPEED (customers who wait go elsewhere) is fine as a general statement about people — it just cannot be attached to a specific claim that THEIR system fails to respond, because we never tested their system. (0-SCOPE) WHAT WE AUDITED IS HIS DIGITAL FRONT DOOR, NOT HIS BUSINESS. We read his website, his Google listing, up to 40 of his reviews, and where he ranks for what he sells. That is a real audit of a real surface and it is enough to earn a reply. It is NOT an audit of his business, and the difference is everything: we have never seen his revenue, his traffic, his conversion rate, his ad spend, his close rate, his margins, his capacity, his repeat business, or anything that happens after a customer contacts him. SO NEVER SAY, IN ANY WORDING: ‘I audited your business’, ‘a complete audit’, ‘a full audit’, ‘your whole funnel’, ‘everything we found’, or any phrase implying total coverage. An owner who knows his numbers hears ‘I audited your business’ from a stranger who has never seen a single number, and correctly concludes we are guessing — at which point every TRUE finding in the email gets discounted with the false one. Overclaiming scope does not make the audit sound bigger; it makes the accurate parts sound invented. SAY WHAT WE ACTUALLY DID, which is more impressive than a vague claim anyway: ‘I went through your site and your Google listing’, ‘I searched what your customers search’, ‘I read your reviews’. Specific beats sweeping. (0-FAB0) "NOT IN THE SCRAPE" IS NOT "NOT ON THEIR SITE". This is the most dangerous mistake the system can make, because it turns a limitation of our scraper into a confident accusation about their business, and the owner can see with his own eyes that it is false. A scrape reads what a page renders quickly. It MISSES anything loaded a few seconds later by JavaScript or a third-party widget: customer reviews (Google/Yelp/Trustindex/Elfsight embeds), chat bubbles, booking tools, dynamically inserted CTAs, cookie-gated content. A live audit told an electrician with 221 Google reviews and 28 Yelp reviews displayed prominently on his homepage that he had ‘no social proof’ — because the review widget had not finished loading when the screenshot was taken. That is not a finding; it is us failing to see something and blaming him for it. THE RULE: you may only state that something is MISSING if it is the kind of thing we would reliably capture when present. Reviews, testimonials and star ratings are NOT in that category — they are almost always widget-loaded — so NEVER write that a business lacks reviews, lacks social proof, or does not show testimonials based on the scrape or screenshot. If social-proof is uncertain, assume it is THERE. What you CAN say about proof is only the positive, checkable version drawn from measured data — e.g. their Google review COUNT from the Places API, which we did measure. Never the absence. (0-FAB) NEVER CLAIM WHAT GOOGLE SHOWS FROM WHAT WE SCRAPED. These are different things and conflating them produces the most damaging kind of error: a confident, checkable, false statement about his business. What we have is the response OUR request received. What his customers see is what GOOGLE indexed. Our scraper runs from a datacentre IP and gets challenged, rate-limited and served interstitials on sites that load perfectly for a human, while Googlebot is usually allowlisted. A live run told a med spa owner that ‘every organic searcher sees “Just a moment...” as the clickable headline instead of your business name’ — an assertion about Google’s index built entirely from a Cloudflare challenge page our own bot was handed. It may be flatly untrue, and it is the single most checkable claim in the email. ALLOWED: ‘when we requested your San Antonio page we were served a bot-check instead of your site’ — that is what happened, stated as what happened. BANNED: any claim about what appears in search results, what Google has indexed, what a searcher sees, or what your title tag shows in results, unless it comes from the local-rank check, which actually queries the search surface. Site scrapes describe the site; they do not describe the search results. (0a0a) THE BODY HAS THE SAME VOICE TEST AS THE SUBJECT AND KEEPS FAILING IT. The subject now reads like a colleague; the body still reads like copywriting, and the gap between them is what makes an otherwise strong email land as marketing. FROM A LIVE SEND: ‘People comparing electricians in Phoenix make that call in about sixty seconds, and the first thing that stops them is proof someone else already trusted you.’ Two balanced clauses, a rhythm, a small reveal at the end. Well built, and no colleague has ever written a sentence like that. A COLLEAGUE WOULD WRITE: ‘People pick in about a minute, and they look for reviews first. Yours are on Google. They aren’t on your site.’ Same facts, same argument, none of the construction. SO: short sentences; split anything joined for rhythm; lead with the point instead of building to it; use contractions always (‘isn’t’, ‘doesn’t’ — the expanded form is the clearest tell of written-rather-than-sent text); and never describe our process — ‘I mapped where the reviews disappear’ is about OUR work, while ‘your reviews are on Google, your site doesn’t show them’ is about his. READ IT ALOUD: if it sounds like something you would SAY standing in his shop it is right; if it sounds like something you would PUBLISH, rewrite it. (0a0a2) IF NO FIRST NAME IS CONFIRMED, WRITE NO DASH. A live send opened with ‘— 220 five-star reviews and a homeowner...’ because the name was empty and the dash remained. That dangling dash is the first character of the email and of the preview text, and it reads as a broken mail-merge. With no name, open directly on the fact. Never ‘Hi there’, never a company name in place of a person. (0a0b) THE SUBJECT HAS ONE TEST: COULD SOMEONE WHO WORKS AT HIS COMPANY HAVE SENT IT? The line that got opened in the wild was ‘your traffic is broken’, and the reason given was that it seriously looked like it came from someone on the team. Not clever, not compelling — INTERNAL. A colleague reporting a problem writes short, plain and slightly blunt, because they are not performing; they just want you to look at the thing. That register slips past the part of an owner’s brain that filters sales email. PASSES: ‘your traffic is broken’, ‘we have to fix this’, ‘I caught a problem’, ‘your quote form is dead’, ‘the form isn’t working’. FAILS: ‘I caught your review gap’ (no employee says ‘gap’ — consultant), ‘I mapped your quote path’ (an agency deliverable), ‘your quote form goes quiet’ (copywriter), ‘585 reviews. Not showing up.’ (ad headline), and ‘nobody sees your reviews’ (about a fault, still nothing a colleague would type). Colleagues say broken, down, dead, not working, stuck, problem, nothing, nobody — not because a rule requires it but because that is how people talk when something is wrong. They never say gap, goes quiet, aren’t showing, opportunity, potential, optimize, leverage, unlock. Under 30 characters, lowercase, no numbers, no question marks, no two-part rhythm, nothing naming us or our services. (0a1) THE SUBJECT MUST READ AS A THREAT, NEVER AS AN OBSERVATION AND NEVER AS AN OPPORTUNITY. The standard is simple: if he received an email saying ‘your website is down’ he would clear his schedule before his first meeting. That is the bar. He opens his inbox in threat-detection mode, checking whether anything has gone wrong — he is NOT shopping for opportunities, so do not hand him one. An opportunity is optional and keeps until Thursday; a threat does not. TWO SHAPES WORK, both 18-25 characters: (1) THE ALARM in a teammate’s voice — ‘your traffic is broken’, ‘your booking form is dead’ — the shape being your + their thing + is + broken/dead/down; (2) ALREADY DONE — ‘I caught a problem’, ‘found something on your site’ — somebody already looked at his business and found something, which is a threat and a gift at once and costs him nothing to check. FAILS: numbers, two clauses split for rhythm, questions, curiosity, cleverness, and anything naming us or our services. ‘585 reviews. Not showing up for implants.’ is copywriting and he recognises copywriting as something being sold. THE TEST: read the subject alone as if it arrived from someone on his own team at 8am. If he thinks ‘I need to look at this before my nine o’clock’ it works. If he thinks ‘huh, interesting’ it has failed — interesting is not a threat. (0b) THE DECISION TO OPEN HAPPENS BEFORE ANY OF THIS IS READ. He sees the subject (~35 characters) and about 40 characters of the FIRST LINE, side by side in his inbox — roughly 75 characters total — and decides from that alone. So the first sentence of the pitch is NOT an opening; it is the second half of the hook, and it will be read by someone who has not opened anything. NEVER begin with praise, a rating, a credential or a setup — a compliment is the most ignorable sentence in email, and a setup pays off two sentences after the decision was already made. The subject should carry the unexpected fact and the first line should carry the behavioural reframe or the loss, so that together they complete a thought in 75 characters. Example of the pairing: subject ‘your implants page isn’t ranking’, first line ‘the patient searching at 8pm books whoever answers first’. He has learned something he did not know and been told what it costs, before opening anything. (0a-TIER) HOW MANY ELEMENTS YOU OWE DEPENDS ON WHAT WE ACTUALLY MEASURED. This rule comes FIRST and it overrides the three-element rule below. Demanding a loss with a number from a finding that cannot support one is what makes an audit invent the number \u2014 it is the single largest source of fabrication in live sends. So grade your lead finding before you write: \u2022 MEASURED-HARD \u2014 a count, a position, a date, a field count, a price they published: a repeating pain across their reviews with a count, a search rank we ran, a Google profile gap with a number (251 days since the newest review, zero photos), a technical fact from their page source (no tap-to-call, a ten-field form, no HTTPS). WRITE ALL THREE ELEMENTS. The loss number comes from the typical value of a job in their trade, which is public knowledge, times a unit he counts \u2014 never from his revenue or his volume. \u2022 OBSERVED-SOFT \u2014 true of their page but carrying no number: a generic promise repeated across pages, no named offer, no guarantee, a vague hero headline. WRITE TWO ELEMENTS AND NO DOLLAR FIGURE. State what their pages say, add one sentence about how buyers behave in general, and stop. A soft finding with an invented price tag is worth less than a soft finding stated plainly, because the invented part is the part he can disprove. \u2022 NOTHING MEASURED \u2014 do not manufacture a third element to fill the shape. A SHORTER email is the correct output. Three honest sentences outperform six with one invented clause, because a single checkable falsehood discredits every true thing around it. \u26a0 NEVER upgrade a soft finding by attaching a hard-sounding consequence to it. That is not writing \u2014 it is fabrication with better rhythm. (0a) THE PITCH MUST CARRY ALL THREE, NEVER TWO. An owner stops scrolling and RECALCULATES only when three things arrive together: (i) AN UNEXPECTED FACT about his own business that he could not have told you himself; (ii) HOW HIS CUSTOMERS ACTUALLY BEHAVE — the plain truth about people that reframes that fact as worse than he assumed, which is the part most often missing and the part that does the actual work; (iii) THE LOSS, in the unit he counts, framed as money already leaving rather than money he could gain. He is not moved by the fact alone — he is moved by what it MEANS. He believes his reviews protect him; the reframe is that the business who answers first wins the job, not the one with the best reviews, which turns his reputation from an asset that protects him into an asset that never gets to participate. That is the moment he stops. Two out of three gets read and forgotten. (0) HE IS SCANNING IN THREAT-DETECTION MODE, NOT SHOPPING. An owner opens his inbox to check whether anything has gone wrong, not to find an opportunity — he is not looking for you and he is not looking for a better way to do anything. What stops a person mid-scroll is the UNEXPECTED thing that costs them something IF IGNORED. Not a benefit, not an offer, not a better option: a problem on their side they did not know about. This is why loss framing outperforms upside framing here by a wide margin — an upside is something he can get around to later, and a leak is something he has to look at now. Write every line as if you are a colleague who noticed something, not a vendor who wants something. If a sentence would be at home in an ad, in a deck, or on a landing page, it is wrong no matter how well written it is. (1) ONE STORY, NOT ONE FACT — and the difference decides whether the depth of the audit reaches him. A LIST of unrelated observations dilutes: each one weakens the last and none of them lands. But two or three findings that form a SINGLE CAUSAL CHAIN compound, and that chain is the most persuasive thing this system can produce, because it is something no competitor and no employee has ever assembled for him. DILUTED (banned): ‘your site is dated, you have no booking tool, your reviews mention slow callbacks, and you are not ranking’ — four facts, no argument. COMPOUNDED (this is the target): ‘you are the official dentist of the Tennessee Titans, that credential is buried in body copy, and the patient who searches at 8pm cannot book — so the strongest trust signal in your market is doing nothing after 5pm.’ Three findings, one argument, and only an owner can act on it. THE TEST: can you draw ONE line of cause and effect through everything you named? If yes, use them all. If any fact needs its own sentence to justify itself, it belongs in the write-up he is being offered — not in this email. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) CALIBRATE TO THIS SPECIFIC READER — there is no one right vocabulary because there is no one kind of owner. Before choosing words, read what we already know about him: the register of HIS OWN WEBSITE (printed above — if it talks about growth and return he is fluent; if it talks about treating people like family, business-school words will land like a foreign accent); his TITLE and credentials (MD, DDS, CPA, Esq., Managing Partner = trained on a P&L; ‘Owner’ on a trade business = learned money by living it — both understand money completely, they just use different words); his SIZE; whether he PUBLISHES prices or salaries; and the MOMENT he is in (selling, just funded, or exit-prep makes valuation language the sharpest thing you can say, because every dollar of profit is a multiple of his sale price and he knows it). THE TEST THAT REPLACES ANY WORD LIST: would THIS man, based on what we just read about him, use this word himself? If you cannot picture him saying it, say the same thing the way he would. ‘ROI’ is understood by nearly everyone and is fine almost anywhere. ‘EBITDA/multiple/unit economics’ is right for a seller, a funded founder or a financially sophisticated practice, and reads as performed seniority to a two-van contractor. ‘CAC/LTV/attribution’ is marketing-operator vocabulary — our reader is the buyer, not the practitioner, so it is almost never right. NAME THE LOSS IN THE UNIT HE COUNTS: roofs, patients, cases, matters signed, installs, retainers. One of those lost is a number he feels instantly. WHEN THE EVIDENCE IS THIN, DEFAULT TO PLAIN — a job, a customer, a dollar are universal, and nobody was ever put off by an email being too clear. Sophistication is earned by having read him correctly; it is never the default. (6) Lead with the diagnosis and the money, then OFFER THE WRITE-UP — never ask for his time. A stranger's calendar is a cost to him; something already built is free to accept. Gong's analysis of 28M cold emails found that shifting into pitch mode — describing the service, claiming results, or requesting the meeting — cuts reply rates by up to 57%, and 58% of all replies come from email 1, so this is where that cost is highest. The call happens on the REPLY. PHRASE IT AS SOMETHING THAT ALREADY EXISTS, not something you would go and make — 'Want me to send it over?' can be heard as 'shall I build you something?', which turns finished work back into a proposal and undoes the only thing separating this email from every other one he got today. STRONGEST: 'The write-up is yours whenever you want it.' / 'Say the word and it's in your inbox.' ACCEPTABLE: 'Want the breakdown?' BANNED: any request for minutes, a call, a demo or a proposal, and any mention of what we sell, what it costs, or what we achieved for another client. (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work that runs itself overnight — and you are still the one fixing it when it breaks. I wrote up where it is going. Want me to send it over?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. I put together what is automatable. Should I send it?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot hold anyone — that combination is exactly the fire that never gets put out. Want the breakdown?'"
+"pitchAngle": "The one line that earns a reply. \u26a0 WRITE THE MOMENT, NOT THE MECHANISM \u2014 this is the difference between an email that lands and one that gets deleted. Describing how a system works forces the owner to decode it; describing a moment he has already lived makes him feel it instantly. BAD (mechanism): \u2018no instant response system, meaning every lead waits for a human callback\u2019. GOOD (moment, and every word of it OBSERVABLE): \u2018Pull up your site on a phone right now and try to tap the number. It doesn\u2019t dial.\u2019 \u26a0 THE MOMENT MUST BE BUILT ONLY FROM THINGS WE MEASURED, AND IT MUST STOP AT THE VISIBLE WALL. An older version of this instruction used \u2018Someone fills out your quote form at 9pm on a Sunday. Nobody sees it until Monday. By then they have three quotes from somebody else\u2019 as the model answer \u2014 and every clause after the first is invented. We never see his inbox, his response time, or what his prospect did next. Following that example is what produced \u2018there\u2019s no auto-reply\u2019, \u2018they\u2019ve already signed with whoever called back first\u2019 and \u2018every visitor who doesn\u2019t call is gone\u2019 in live sends. SO: describe the WALL the customer hits, in present tense, using only what we measured \u2014 the number that doesn\u2019t dial, the form that asks for ten fields, the booking page that only lists a phone number, the profile whose newest review is 251 days old. Then STOP. Do NOT narrate what happens after they hit it. Never \u2018so they leave\u2019, \u2018so they book elsewhere\u2019, \u2018and you never hear from them\u2019, \u2018that lead is gone\u2019. The owner draws that conclusion himself in the half-second after he reads it, and it lands harder because HE concluded it \u2014 a conclusion he reached is his, one you asserted is yours to defend. The one exception is a general truth about how PEOPLE behave, stated about people and never about his systems: \u2018people comparing three contractors call the one that dials\u2019 is fine; \u2018your callers give up and phone someone else\u2019 is not. Name a real person doing a real thing at a real time, put a clock on it, then say what it cost him. If any sentence describes a SYSTEM rather than a PERSON, rewrite it. ⚠ THEN APPLY THE DELEGATION TEST, which is the harder bar: could he FORWARD this to a staff member and consider it handled? If yes, it fails — an owner delegates tasks but never delegates revenue, and a tactical to-do list gets pushed down the chain where the conversation dies. ‘There is no online booking tool’ is a website task for his office manager. ‘The patient searching at 8pm books with whoever lets her, and in this trade that is a five-figure case decided by who answers first’ is a decision only he can make. Same finding, different altitude. \u26a0 IT MUST ALSO DESCRIBE THE SAME PROBLEM THE RECOMMENDED PRODUCT FIXES. If you write about slow response times, the product must be the automation/AI build \u2014 not ad management. If you write about traffic they cannot catch, the product must be the capture/rebuild. A pitch that diagnoses one problem while the recommendation sells a different service reads as confused and salesy, and the owner cannot tell what he is being offered. Diagnose the problem the recommended product would fix — but do NOT name that product, price it, or describe the fix in the email. The coherence is for OUR benefit, so the reply converts on the call; the owner only needs to recognise the problem. WRITTEN FOR A BUSINESS OWNER, NOT A MARKETER \u2014 he owns a roofing company or a CPA practice, has never heard of an H1 tag, and files anything with agency vocabulary next to every other agency email. BANNED WORDS: pixel, retargeting, H1, meta, schema, SEO, above the fold, funnel, CRM, conversion rate, CTA, landing page, attribution, impressions, nurture, optimization, UX. \u26a0 THE EVIDENCE ABOVE IS WRITTEN IN OUR WORDS, NOT HIS \u2014 TRANSLATE, DO NOT ECHO. You are handed measurements labelled 'tracking pixel', 'above the fold', 'CRM', 'attribution' because those are the accurate names for what we scanned, and you need them to reason. They are not the words for the email, and repeating them back is the most common way jargon reaches a send. Translate every one: 'no tracking pixel' -> 'you are paying for clicks with no way to count what came back'. 'no CRM' -> 'nothing is keeping track of who got in touch'. 'above the fold' -> 'the first thing anyone sees'. 'no attribution' -> 'no way to tell which of the three is actually working'. 'CTA' -> 'the button that asks them to do something'. 'title tag' -> 'the line Google shows as the link'. If a word appears in the evidence AND in the banned list that is not a contradiction \u2014 it means we measured it and he must never read it. \u26a0 THIS BAN COVERS EVERY FIELD YOU WRITE, NOT JUST THIS ONE. \u2018funnel\u2019 was caught on three consecutive live leads \u2014 obeyed here, then written into recommendedReason, which is displayed to the operator and feeds the write-up the prospect receives. A word that is wrong in the email is wrong in every sentence attached to the lead. Say the thing itself: not \u2018ads running into a funnel that is not being found\u2019 but \u2018he is paying for clicks to a page that customers cannot find on their own\u2019. Say it as he would: not \u2018no retargeting layer\u2019 but \u2018when someone leaves your site there is no way to get back in front of them\u2019; not \u2018no lead capture\u2019 but \u2018if they do not call right then, you never hear from them again\u2019. FRAME IT AS LOSS, NOT UPSIDE \u2014 owners act on money already leaking, not on improvements available. TWO KINDS OF NUMBER ARE ALLOWED AND THE DISTINCTION MATTERS. (a) NUMBERS HE PUBLISHED — his posted prices, posted salaries, visible ad count, review count, staff count — plus honest arithmetic on those. These are the strongest because he wrote them. (b) THE TYPICAL VALUE OF A JOB IN HIS TRADE — ‘a foundation repair runs five figures’, ‘a roof replacement is $10-30k’, ‘a cosmetic dental case is several thousand dollars’. That is public knowledge about an INDUSTRY, not a claim about his books, and it is what turns a website observation into something an owner can act on. WITHOUT IT the email describes a feature and gets delegated to staff; with it, the same finding becomes a revenue decision only he can make. STILL ABSOLUTELY BANNED: his revenue, his volume, his conversion rate, his ad spend, or any total loss figure. Never ‘you are losing $40k a month’ — we cannot know it, he can check it, and one invented number destroys every true thing in the email. NEVER invent a loss figure and NEVER state his revenue back to him \u2014 our revenue number is a third-party estimate, it is frequently wrong, and quoting it reads as surveillance rather than research. STRICT RULES: (0) IF the prompt above shows a MANDATORY OPENING (a pain repeating across their own Google reviews with a count), you MUST open with that pattern and its number — it outranks every other opener including news triggers. The ONE permitted pairing is: that review pattern + the money finding it connects to. (0c) THE LAPTOP TEST — WRITE EXPOSURE, NOT A CONDITION. A man who realises he left his laptop outside does not think ‘my equipment handling is suboptimal’; he thinks it might get broken, it might get stolen, I need it — three thoughts about RIGHT NOW, all about loss, and he moves immediately. A CONDITION can be handled Tuesday: ‘your implants page isn’t ranking’. EXPOSURE cannot: ‘tonight, the people searching for implants in your city are booking someone else’. Same fact; the second is happening while he reads it and happens again every hour he does nothing. Write in the PRESENT CONTINUOUS — not what is wrong with his setup, but what is happening to his business right now because of it. AND NEVER AS A HYPOTHETICAL: ‘someone searches at 8pm on a Tuesday’ is a worked example he reads as an invented story and can costlessly disagree with. ‘The ones finding you after 5 are booking elsewhere’ is a claim about his actual business that he can only disprove by going to look. Make him want to look. (0d) DELIVER THE WORK, DO NOT OFFER IT. Nobody sends content — that is the whole reason this works, and it evaporates the moment the email reads as a proposal to do something later. The audit is not something he might receive if he replies; it already exists and part of it is in front of him. Every finding must be CHECKABLE in ten seconds without answering us — ‘your marketing could be stronger’ must be taken on trust, ‘your implants page is not in the top 20 for that search in your own city’ can be confirmed on his phone before he decides. Give him something to check. (0a0) THESE RULES GOVERN EMAIL 1 AND FOLLOW-UP 1 EQUALLY. Follow-up 1 is scanned in the same inbox, in the same threat-detection mode, by the same man — and because he did not act on the first one, it has to stand entirely on its own. It needs its own threat subject, its own unexpected fact, its own behavioural reframe and its own cost, in present tense. A bump is not a follow-up; ‘just following up in case you missed it’ carries no fact, no threat and no reason to read, and it announces itself as an automated sequence. FOLLOW-UP 2 IS THE ONE EXEMPTION: a third alarm from a stranger who has been ignored twice reads as pressure, and pressure makes a busy owner delete. That email works because it is the first one asking for nothing — soft subject, no new pain, no guilt, a genuine exit, and the write-up left sitting there unclaimed and still his. (0a2) THREE FAILURES SEEN IN LIVE OUTPUT — CHECK FOR EACH BEFORE FINISHING. (i) THE LOSS ARRIVED WITHOUT A NUMBER in four of four emails: the problem was named, the behaviour was named, then ‘that adds up fast’. That is a gesture at a loss, not a loss, and an owner cannot act on a gesture. A value is ALWAYS available — his posted prices if he has them, otherwise what a job in his trade is worth — and the arithmetic must be one he can do in his head: ONE of those, once a month. (ii) THE OPENING SENTENCE WAS A HYPOTHETICAL — ‘Someone fills out your quote form at 9pm Sunday’, ‘Someone in San Antonio searches right now’. An invented person in an invented moment, sitting in the preview slot he reads before deciding whether to open. Write the same thing as a statement about his business as it stands: ‘Quote requests that arrive after 5 sit until the next morning.’ Shorter, harder, and either true of his site or not. (iii) THE SUBJECT WAS GENERIC AND REPEATED ACROSS LEADS — ‘I caught a problem’ went out identically to a sign shop and a med spa. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Every subject must name the specific thing and be unsendable to anyone else. (0-FAB00) YOU MAY DESCRIBE WHAT IS ON THE PAGE. YOU MAY NOT DESCRIBE WHAT HAPPENS AFTER A FORM IS SUBMITTED, OR WHAT THEIR BACKEND DOES. We never submit forms and we never see their CRM, autoresponder, or internal process. So ‘there is no chat widget or visible instant-response tool on the page’ is ALLOWED — we can see the absence of that technology in the page. But ‘every lead who fills out the form has to wait for a human callback’ and ‘anyone who doesn’t submit disappears forever with no record’ are BANNED: they assert what happens after submission and inside their systems, which we did not observe. They may run an autoresponder, a CRM with lead-capture, or an instant-quote engine we cannot see. \u26a0 \u2018THERE IS NO AUTO-REPLY\u2019 IS THE SAME FABRICATION AND IT KEEPS APPEARING. We never submit the form, so we never find out whether an autoresponder fires. A live email said \u2018there\u2019s no auto-reply, no chat, nothing that responds before you do\u2019 \u2014 the chat part was observable, the auto-reply part was invented. Also banned in every wording: \u2018nothing answers them back\u2019, \u2018they\u2019ve already signed with whoever called them back first\u2019, \u2018by morning they\u2019ve heard from two other companies\u2019. Those describe his lead handling, his competitors\u2019 response times and his prospect\u2019s decisions \u2014 three things we have never seen. \u26a0 AN ADS TAG IS NOT AD SPEND. Finding a Google Ads conversion tag in their page source proves the TAG is there. It does NOT prove ads are running today, that budget is flowing, or that any specific click was paid for \u2014 tags routinely outlive the campaigns that installed them by months or years. BANNED: \u2018your Google Ads are running\u2019, \u2018you paid for that click\u2019, \u2018your ad budget\u2019. ALLOWED: \u2018there\u2019s a Google Ads conversion tag on your site, so at some point you were buying traffic\u2019. Write the OBSERVABLE version, not the inferred outcome: ‘I don’t see an instant-response tool on the page — no chat, no visible auto-quote’ rather than ‘every lead waits for a callback’. ‘The estimate button goes to a form’ rather than ‘anyone who doesn’t submit is lost forever’. The behavioural point about SPEED (customers who wait go elsewhere) is fine as a general statement about people — it just cannot be attached to a specific claim that THEIR system fails to respond, because we never tested their system. (0-SCOPE) WHAT WE AUDITED IS HIS DIGITAL FRONT DOOR, NOT HIS BUSINESS. We read his website, his Google listing, up to 40 of his reviews, and where he ranks for what he sells. That is a real audit of a real surface and it is enough to earn a reply. It is NOT an audit of his business, and the difference is everything: we have never seen his revenue, his traffic, his conversion rate, his ad spend, his close rate, his margins, his capacity, his repeat business, or anything that happens after a customer contacts him. SO NEVER SAY, IN ANY WORDING: ‘I audited your business’, ‘a complete audit’, ‘a full audit’, ‘your whole funnel’, ‘everything we found’, or any phrase implying total coverage. An owner who knows his numbers hears ‘I audited your business’ from a stranger who has never seen a single number, and correctly concludes we are guessing — at which point every TRUE finding in the email gets discounted with the false one. Overclaiming scope does not make the audit sound bigger; it makes the accurate parts sound invented. SAY WHAT WE ACTUALLY DID, which is more impressive than a vague claim anyway: ‘I went through your site and your Google listing’, ‘I searched what your customers search’, ‘I read your reviews’. Specific beats sweeping. (0-FAB0) "NOT IN THE SCRAPE" IS NOT "NOT ON THEIR SITE". This is the most dangerous mistake the system can make, because it turns a limitation of our scraper into a confident accusation about their business, and the owner can see with his own eyes that it is false. A scrape reads what a page renders quickly. It MISSES anything loaded a few seconds later by JavaScript or a third-party widget: customer reviews (Google/Yelp/Trustindex/Elfsight embeds), chat bubbles, booking tools, dynamically inserted CTAs, cookie-gated content. A live audit told an electrician with 221 Google reviews and 28 Yelp reviews displayed prominently on his homepage that he had ‘no social proof’ — because the review widget had not finished loading when the screenshot was taken. That is not a finding; it is us failing to see something and blaming him for it. THE RULE: you may only state that something is MISSING if it is the kind of thing we would reliably capture when present. Reviews, testimonials and star ratings are NOT in that category — they are almost always widget-loaded — so NEVER write that a business lacks reviews, lacks social proof, or does not show testimonials based on the scrape or screenshot. If social-proof is uncertain, assume it is THERE. What you CAN say about proof is only the positive, checkable version drawn from measured data — e.g. their Google review COUNT from the Places API, which we did measure. Never the absence. (0-FAB) NEVER CLAIM WHAT GOOGLE SHOWS FROM WHAT WE SCRAPED. These are different things and conflating them produces the most damaging kind of error: a confident, checkable, false statement about his business. What we have is the response OUR request received. What his customers see is what GOOGLE indexed. Our scraper runs from a datacentre IP and gets challenged, rate-limited and served interstitials on sites that load perfectly for a human, while Googlebot is usually allowlisted. A live run told a med spa owner that ‘every organic searcher sees “Just a moment...” as the clickable headline instead of your business name’ — an assertion about Google’s index built entirely from a Cloudflare challenge page our own bot was handed. It may be flatly untrue, and it is the single most checkable claim in the email. ALLOWED: ‘when we requested your San Antonio page we were served a bot-check instead of your site’ — that is what happened, stated as what happened. BANNED: any claim about what appears in search results, what Google has indexed, what a searcher sees, or what your title tag shows in results, unless it comes from the local-rank check, which actually queries the search surface. Site scrapes describe the site; they do not describe the search results. (0a0a) THE BODY HAS THE SAME VOICE TEST AS THE SUBJECT AND KEEPS FAILING IT. The subject now reads like a colleague; the body still reads like copywriting, and the gap between them is what makes an otherwise strong email land as marketing. FROM A LIVE SEND: ‘People comparing electricians in Phoenix make that call in about sixty seconds, and the first thing that stops them is proof someone else already trusted you.’ Two balanced clauses, a rhythm, a small reveal at the end. Well built, and no colleague has ever written a sentence like that. A COLLEAGUE WOULD WRITE: ‘People pick in about a minute, and they look for reviews first. Yours are on Google. They aren’t on your site.’ Same facts, same argument, none of the construction. SO: short sentences; split anything joined for rhythm; lead with the point instead of building to it; use contractions always (‘isn’t’, ‘doesn’t’ — the expanded form is the clearest tell of written-rather-than-sent text); and never describe our process — ‘I mapped where the reviews disappear’ is about OUR work, while ‘your reviews are on Google, your site doesn’t show them’ is about his. READ IT ALOUD: if it sounds like something you would SAY standing in his shop it is right; if it sounds like something you would PUBLISH, rewrite it. (0a0a2) IF NO FIRST NAME IS CONFIRMED, WRITE NO DASH. A live send opened with ‘— 220 five-star reviews and a homeowner...’ because the name was empty and the dash remained. That dangling dash is the first character of the email and of the preview text, and it reads as a broken mail-merge. With no name, open directly on the fact. Never ‘Hi there’, never a company name in place of a person. (0a0b) THE SUBJECT HAS ONE TEST: COULD SOMEONE WHO WORKS AT HIS COMPANY HAVE SENT IT? The line that got opened in the wild was ‘your traffic is broken’, and the reason given was that it seriously looked like it came from someone on the team. Not clever, not compelling — INTERNAL. A colleague reporting a problem writes short, plain and slightly blunt, because they are not performing; they just want you to look at the thing. That register slips past the part of an owner’s brain that filters sales email. PASSES: ‘your traffic is broken’, ‘we have to fix this’, ‘I caught a problem’, ‘your quote form is dead’, ‘the form isn’t working’. FAILS: ‘I caught your review gap’ (no employee says ‘gap’ — consultant), ‘I mapped your quote path’ (an agency deliverable), ‘your quote form goes quiet’ (copywriter), ‘585 reviews. Not showing up.’ (ad headline), and ‘nobody sees your reviews’ (about a fault, still nothing a colleague would type). Colleagues say broken, down, dead, not working, stuck, problem, nothing, nobody — not because a rule requires it but because that is how people talk when something is wrong. They never say gap, goes quiet, aren’t showing, opportunity, potential, optimize, leverage, unlock. Under 30 characters, lowercase, no numbers, no question marks, no two-part rhythm, nothing naming us or our services. (0a1) THE SUBJECT MUST READ AS A THREAT, NEVER AS AN OBSERVATION AND NEVER AS AN OPPORTUNITY. The standard is simple: if he received an email saying ‘your website is down’ he would clear his schedule before his first meeting. That is the bar. He opens his inbox in threat-detection mode, checking whether anything has gone wrong — he is NOT shopping for opportunities, so do not hand him one. An opportunity is optional and keeps until Thursday; a threat does not. TWO SHAPES WORK, both 18-25 characters: (1) THE ALARM in a teammate’s voice — ‘your traffic is broken’, ‘your booking form is dead’ — the shape being your + their thing + is + broken/dead/down; (2) ALREADY DONE — ‘I caught a problem’, ‘found something on your site’ — somebody already looked at his business and found something, which is a threat and a gift at once and costs him nothing to check. FAILS: numbers, two clauses split for rhythm, questions, curiosity, cleverness, and anything naming us or our services. ‘585 reviews. Not showing up for implants.’ is copywriting and he recognises copywriting as something being sold. THE TEST: read the subject alone as if it arrived from someone on his own team at 8am. If he thinks ‘I need to look at this before my nine o’clock’ it works. If he thinks ‘huh, interesting’ it has failed — interesting is not a threat. (0b) THE DECISION TO OPEN HAPPENS BEFORE ANY OF THIS IS READ. He sees the subject (~35 characters) and about 40 characters of the FIRST LINE, side by side in his inbox — roughly 75 characters total — and decides from that alone. So the first sentence of the pitch is NOT an opening; it is the second half of the hook, and it will be read by someone who has not opened anything. NEVER begin with praise, a rating, a credential or a setup — a compliment is the most ignorable sentence in email, and a setup pays off two sentences after the decision was already made. The subject should carry the unexpected fact and the first line should carry the behavioural reframe or the loss, so that together they complete a thought in 75 characters. Example of the pairing: subject ‘your implants page isn’t ranking’, first line ‘the patient searching at 8pm books whoever answers first’. He has learned something he did not know and been told what it costs, before opening anything. (0a-TIER) HOW MANY ELEMENTS YOU OWE DEPENDS ON WHAT WE ACTUALLY MEASURED. This rule comes FIRST and it overrides the three-element rule below. Demanding a loss with a number from a finding that cannot support one is what makes an audit invent the number \u2014 it is the single largest source of fabrication in live sends. So grade your lead finding before you write: \u2022 MEASURED-HARD \u2014 a count, a position, a date, a field count, a price they published: a repeating pain across their reviews with a count, a search rank we ran, a Google profile gap with a number (251 days since the newest review, zero photos), a technical fact from their page source (no tap-to-call, a ten-field form, no HTTPS). WRITE ALL THREE ELEMENTS. The loss number comes from the typical value of a job in their trade, which is public knowledge, times a unit he counts \u2014 never from his revenue or his volume. \u2022 OBSERVED-SOFT \u2014 true of their page but carrying no number: a generic promise repeated across pages, no named offer, no guarantee, a vague hero headline. WRITE TWO ELEMENTS AND NO DOLLAR FIGURE. State what their pages say, add one sentence about how buyers behave in general, and stop. A soft finding with an invented price tag is worth less than a soft finding stated plainly, because the invented part is the part he can disprove. \u2022 NOTHING MEASURED \u2014 do not manufacture a third element to fill the shape. A SHORTER email is the correct output. Three honest sentences outperform six with one invented clause, because a single checkable falsehood discredits every true thing around it. \u26a0 NEVER upgrade a soft finding by attaching a hard-sounding consequence to it. That is not writing \u2014 it is fabrication with better rhythm. (0a) THE PITCH MUST CARRY ALL THREE, NEVER TWO. An owner stops scrolling and RECALCULATES only when three things arrive together: (i) AN UNEXPECTED FACT about his own business that he could not have told you himself; (ii) HOW HIS CUSTOMERS ACTUALLY BEHAVE — the plain truth about people that reframes that fact as worse than he assumed, which is the part most often missing and the part that does the actual work; (iii) THE LOSS, in the unit he counts, framed as money already leaving rather than money he could gain. He is not moved by the fact alone — he is moved by what it MEANS. He believes his reviews protect him; the reframe is that the business who answers first wins the job, not the one with the best reviews, which turns his reputation from an asset that protects him into an asset that never gets to participate. That is the moment he stops. Two out of three gets read and forgotten. (0) HE IS SCANNING IN THREAT-DETECTION MODE, NOT SHOPPING. An owner opens his inbox to check whether anything has gone wrong, not to find an opportunity — he is not looking for you and he is not looking for a better way to do anything. What stops a person mid-scroll is the UNEXPECTED thing that costs them something IF IGNORED. Not a benefit, not an offer, not a better option: a problem on their side they did not know about. This is why loss framing outperforms upside framing here by a wide margin — an upside is something he can get around to later, and a leak is something he has to look at now. Write every line as if you are a colleague who noticed something, not a vendor who wants something. If a sentence would be at home in an ad, in a deck, or on a landing page, it is wrong no matter how well written it is. (1) ONE STORY, NOT ONE FACT — and the difference decides whether the depth of the audit reaches him. A LIST of unrelated observations dilutes: each one weakens the last and none of them lands. But two or three findings that form a SINGLE CAUSAL CHAIN compound, and that chain is the most persuasive thing this system can produce, because it is something no competitor and no employee has ever assembled for him. DILUTED (banned): ‘your site is dated, you have no booking tool, your reviews mention slow callbacks, and you are not ranking’ — four facts, no argument. COMPOUNDED (this is the target): ‘you are the official dentist of the Tennessee Titans, that credential is buried in body copy, and the patient who searches at 8pm cannot book — so the strongest trust signal in your market is doing nothing after 5pm.’ Three findings, one argument, and only an owner can act on it. THE TEST: can you draw ONE line of cause and effect through everything you named? If yes, use them all. If any fact needs its own sentence to justify itself, it belongs in the write-up he is being offered — not in this email. (2) 45 words max. (3) No hedging ('appears to', 'looks like') — unconfirmed does not go in the pitch. (4) NAME THE FIRE THEY ARE STUCK PUTTING OUT. Mike's core insight: owners are trapped performing at a high level while constantly firefighting in areas they already delegated. The pitch should make them feel seen, not sold to. (5) CALIBRATE TO THIS SPECIFIC READER — there is no one right vocabulary because there is no one kind of owner. Before choosing words, read what we already know about him: the register of HIS OWN WEBSITE (printed above — if it talks about growth and return he is fluent; if it talks about treating people like family, business-school words will land like a foreign accent); his TITLE and credentials (MD, DDS, CPA, Esq., Managing Partner = trained on a P&L; ‘Owner’ on a trade business = learned money by living it — both understand money completely, they just use different words); his SIZE; whether he PUBLISHES prices or salaries; and the MOMENT he is in (selling, just funded, or exit-prep makes valuation language the sharpest thing you can say, because every dollar of profit is a multiple of his sale price and he knows it). THE TEST THAT REPLACES ANY WORD LIST: would THIS man, based on what we just read about him, use this word himself? If you cannot picture him saying it, say the same thing the way he would. ‘ROI’ is understood by nearly everyone and is fine almost anywhere. ‘EBITDA/multiple/unit economics’ is right for a seller, a funded founder or a financially sophisticated practice, and reads as performed seniority to a two-van contractor. ‘CAC/LTV/attribution’ is marketing-operator vocabulary — our reader is the buyer, not the practitioner, so it is almost never right. NAME THE LOSS IN THE UNIT HE COUNTS: roofs, patients, cases, matters signed, installs, retainers. One of those lost is a number he feels instantly. WHEN THE EVIDENCE IS THIN, DEFAULT TO PLAIN — a job, a customer, a dollar are universal, and nobody was ever put off by an email being too clear. Sophistication is earned by having read him correctly; it is never the default. (6) THE ASK MUST MATCH WHAT YOU JUST TOLD HIM. There is no single right CTA, and using one ending for every email is what makes it read as a template. Grade the finding you led with, then pick.
+
+\u2022 SOMETHING IS BROKEN OR CONTRADICTS ITSELF \u2014 a page that errors, a booking path that is dead, a number on his Google listing that appears nowhere on his site \u2014 ASK WHO IS ACCOUNTABLE, THEN ASK FOR THE CALL. "Want me to send you a write-up?" after "your appointment page returns a server error" is a mismatch no human would make. Nobody who has just been told their booking page is down wants a DOCUMENT; the reaction is who was supposed to be watching that. So ask exactly that: "Who's handling the site for you at the moment?" A question about accountability is not a pitch \u2014 it is about him, it gets answered, and it puts a third party in the frame instead of accusing him. The urgency was established by the finding itself, so fifteen minutes is a reasonable next step rather than a stranger asking for time. STRONGEST: "Who's looking after the site for you? Happy to jump on a quick call and walk you through the other four \u2014 fifteen minutes."
+
+\u2022 NOTHING IS BROKEN AND THE FINDING IS A GAP \u2014 no named offer, a thin profile, a weak position \u2014 OFFER THE WRITE-UP AND NEVER ASK FOR TIME. There is no urgency here to justify a calendar request, and asking for one turns a soft email into a cold pitch. Gong's analysis of 28M cold emails found that shifting into pitch mode cuts reply rates by up to 57%, and that cost is highest in email 1. Phrase it as something that ALREADY EXISTS rather than something you would go and build, because "shall I put something together?" turns finished work back into a proposal. STRONGEST: "The write-up is yours whenever you want it." ACCEPTABLE: "Want the breakdown?"
+
+\u26a0 IN BOTH CASES: never name what we sell, what it costs, or what we did for another client. And never itemise what is left \u2014 say how MANY and stop. The count is the reason to talk; the contents are the conversation.
+
+(7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work that runs itself overnight — and you are still the one fixing it when it breaks. I wrote up where it is going. Want me to send it over?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. I put together what is automatable. Should I send it?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot hold anyone — that combination is exactly the fire that never gets put out. Want the breakdown?'"
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + a broken path to booking (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
@@ -4993,12 +5092,38 @@ const fetchGBPHealth = async (placeId, placesKey) => {
     const primaryCategory = (d.primaryTypeDisplayName && d.primaryTypeDisplayName.text) || null;
 
     const gaps = [];
+
+    // Things we looked at that are NOT gaps \u2014 kept so the reasoning is visible
+
+    // without becoming something we say to the owner.
+
+    const gbpNotes = [];
     // Only add a recency gap when we actually measured it AND it is genuinely stale.
     if (reviewRecency.checked && reviewRecency.veryCold) gaps.push(`their newest Google review is about ${reviewRecency.newestDays} days old (buyers read recency as \"are people still going here?\")`);
     if (!d.regularOpeningHours) gaps.push('no business hours listed on their Google profile');
     if (photoCount < 10) gaps.push(`only ${photoCount} photo${photoCount===1?'':'s'} on their Google profile (listings with 10+ get materially more calls)`);
     if (!d.websiteUri) gaps.push('no website link on their Google profile');
-    if (!d.editorialSummary) gaps.push('no business description on their Google profile');
+    // ══ editorialSummary IS NOT THEIR DESCRIPTION ═══════════════════════════
+    // This pushed "no business description on their Google profile" onto every
+    // lead in every batch — six of six, every run — and it is measuring the wrong
+    // thing entirely.
+    //
+    // editorialSummary is the blurb GOOGLE writes. It is generated for a subset of
+    // listings at Google's discretion and the owner cannot author it, cannot
+    // request it, and has no button for it. The description an owner CAN edit is a
+    // different field and the Places API does not return it at all.
+    //
+    // So the line told an owner he was missing something that (a) is not his, (b)
+    // most of his competitors also lack, and (c) he could not add if he wanted to.
+    // Then it counted toward "N profile gaps" and fed the score. A finding the
+    // prospect cannot act on is worse than no finding: he tries to check it, finds
+    // no such setting, and stops believing the rest of the email.
+    //
+    // The photo count below is real — that IS owner-editable and it does move
+    // engagement — so the GBP signal keeps its teeth without this.
+    if (!d.editorialSummary) {
+      gbpNotes.push('Google has not generated an editorial summary for this listing. That is Google\u2019s own blurb, not the owner\u2019s, and most local listings do not have one \u2014 NOT a gap, and nothing to raise with them.');
+    }
     if (d.businessStatus && d.businessStatus !== 'OPERATIONAL') gaps.push(`Google shows their status as ${d.businessStatus}`);
     return {
       checked: true,
@@ -5215,6 +5340,444 @@ const readAffordability = ({
     // as surveillance, and our estimate is frequently wrong.
     internalOnly: true,
   };
+};
+
+// ══ NUMBERS THAT DISAGREE WITH EACH OTHER ════════════════════════════════════
+// Jane R. Mays publishes three different phone numbers across her own property:
+//   (513) 273-0228   her Google listing
+//   513-689-3808     her contact page, "our office number is..."
+//   (513) 321-1102   her homepage footer
+// A patient who finds her on Google and a patient who reads her contact page are
+// dialling different lines. We already hold both halves of that comparison and
+// nothing was comparing them.
+//
+// This is a tier-3 door opener and it is nearly free: no API, no credit, just a
+// comparison of things already in memory. It is also the kind of fact an owner
+// genuinely does not know, because nobody looks themselves up as a stranger.
+//
+// Deliberately conservative. Tracking numbers, a separate fax, a dedicated new-
+// patient line and a second office are all legitimate reasons to publish more
+// than one number, and accusing a business of a mistake it did not make is worse
+// than saying nothing. So: only flag when the GOOGLE number \u2014 the one a searcher
+// actually dials \u2014 appears NOWHERE on the site. That is the case that costs him
+// calls, and it cannot be explained away as a tracking line.
+const normalisePhone = (v) => String(v || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+
+const measurePhoneConsistency = (googlePhone, pageText) => {
+  const g = normalisePhone(googlePhone);
+  const text = String(pageText || '');
+  if (g.length !== 10 || text.length < 500) return { checked: false };
+
+  const onPage = [...new Set((text.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g) || [])
+    .map(normalisePhone).filter(n => n.length === 10))];
+  if (!onPage.length) return { checked: true, found: 0, googleOnPage: null };
+
+  const googleOnPage = onPage.includes(g);
+  const pretty = (n) => `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}`;
+  return {
+    checked: true,
+    found: onPage.length,
+    googleOnPage,
+    googlePhone: pretty(g),
+    sitePhones: onPage.map(pretty),
+    // Only the genuinely costly case earns a finding.
+    finding: !googleOnPage
+      ? `The phone number on their Google listing (${pretty(g)}) does not appear anywhere on their own website, which lists ${onPage.length === 1 ? pretty(onPage[0]) : onPage.length + ' other numbers'} instead`
+      : null,
+  };
+};
+
+// ══ THE HARM LADDER — BUILT FROM WHAT WE MEASURE, NOT FROM WHAT WE WROTE ═════
+// The first version of this classified the Brain's PROSE with regexes: if the
+// text said "broken" it scored high. That inherits the Brain's vocabulary, so a
+// dead booking page only counts as one if the Brain happened to use the word.
+// It also cannot find anything the Brain forgot to mention.
+//
+// This works the other way round. Every entry below is checked DIRECTLY against a
+// measurement we already hold, produces its own sentence, and carries its own
+// rank. The Brain does not get a vote on what is broken; it gets told.
+//
+// The ranking is not severity to the business. It is: how likely is this to get a
+// reply from a stranger who owes us nothing? An owner replies to one thing — a
+// specific fact about his business that he can verify in ten seconds, did not
+// know, and cannot argue with. Ranked by that, and only that.
+//
+//   90+  DEAD          it does not work at all. Nothing to debate, and it is
+//                      costing him customers today.
+//   70+  CONTRADICTS   his own property disagrees with itself. Checkable in
+//                      seconds, mildly embarrassing, and never deliberate.
+//   50+  BLOCKS        a real obstacle between an interested stranger and a
+//                      booking. Visible, though he may defend it.
+//   30+  INVISIBLE     true and costly, but he has to take our word for it.
+//   10+  OPINION       defensible, arguable, and reads as a pitch.
+//
+// Everything an owner can check himself outranks everything he cannot, even when
+// the thing he cannot check matters more to his revenue. That is not a claim
+// about business; it is a claim about cold email.
+// ══ A DEAD FINDING MUST SURVIVE A SECOND LOOK ════════════════════════════════
+// This is the highest-stakes claim the system makes and it currently rests on a
+// single fetch from a datacentre IP. That is not enough, because the failure
+// modes on OUR side look identical to a genuinely broken page:
+//   a bot wall, a WAF challenge, a rate limit, a cold serverless start, a JS-only
+//   shell that renders fine in a browser, or a thirty-second blip.
+//
+// This exact class of mistake has already happened five times in this codebase:
+// our TLS handshake failed and we nearly called Wade's site insecure; a 429 was
+// recorded as a PageSpeed score; a Hunter throttle was recorded as an empty
+// balance; the catch-all probe gave two opposite answers on one domain inside an
+// hour. Every one was our failure written down as a fact about them.
+//
+// The difference here is that this one goes in the email. Telling an owner his
+// booking page is dead when it works is worse than sending nothing at all: he
+// was reachable, he read it, and the single thing we said was false. He will not
+// open the next one, and in a city the size of Cincinnati he mentions it.
+//
+// So: re-fetch, after a pause, and require the SAME failure twice. One-off
+// weirdness disappears; a genuinely dead page fails identically every time.
+// Roughly one extra credit on the small number of leads where this fires, which
+// is the cheapest insurance in the pipeline.
+const confirmBrokenPage = async (broken, fcKey) => {
+  if (!broken || !broken.url || !fcKey) return { confirmed: false, why: 'no way to re-check' };
+  await new Promise(r => setTimeout(r, 4000));
+  try {
+    const again = await firecrawlScrape(fcKey, broken.url, 25000);
+    const md = String((again && (again.data?.markdown || again.markdown)) || '');
+    if (!md.trim().length) {
+      return { confirmed: true, why: 'returned nothing on the re-check either' };
+    }
+    const second = detectBrokenPage(broken.url, md);
+    if (second) return { confirmed: true, why: `failed the same way twice (${second.why})` };
+    return { confirmed: false, why: 'loaded normally on the second look, so the first read was a blip on our side, not a fault on theirs' };
+  } catch (e) {
+    // A thrown fetch is OUR problem, not evidence about them. Never confirm on it.
+    return { confirmed: false, why: `the re-check itself failed (${(e && e.message) || 'unknown'}), which tells us nothing about their page` };
+  }
+};
+
+// ══ THREE THINGS, NOT TWO ═══════════════════════════════════════════════════
+// I had this axis wrong twice and the correction matters, because the wrong axis
+// picks the wrong sentence.
+//
+// v1 scored one number and called it harm while ranking by reply-likelihood.
+// v2 split harm from "opener" and gated on opener, which I justified as
+// checkability. But rank scores low on that gate, and rank is NOT unverifiable —
+// an owner can google his own trade and see roughly where he lands. So why is it
+// a weak opener?
+//
+// Because he ALREADY KNOWS. He has been told he ranks badly by a hundred people
+// who never looked at anything. The fact is true, checkable and costly, and it
+// still fails, because it carries no information he did not have.
+//
+// So the axis is not verifiability. It is three things, and an opener needs all:
+//   NOVEL      he could not have told you this himself
+//   CHECKABLE  he can confirm it without taking our word
+//   COSTLY     it is taking money off him right now
+//
+// Which is Mike's Part 4 exactly — an unexpected fact, the reframe, and the loss.
+// I rebuilt his rule under a different name and got the middle term wrong.
+//
+// THE PRACTICAL ANSWER TO "SHOULD WE LEAD WITH THE MOST HARMFUL THING?": YES —
+// among the things that are novel and checkable. A dead booking page wins because
+// it is all three. Rank loses on novelty alone, not on importance. And a stale
+// copyright year loses on cost, however novel and checkable it is.
+const HARM_LADDER = [
+  // ── DEAD ────────────────────────────────────────────────────────────────
+  { harm: 95, checkable: 98, novel: 95, band: 'DEAD', id: 'broken_page',
+    // Only a CONFIRMED failure counts. An unconfirmed one never reaches here.
+    test: (m) => (m.brokenPages || []).some(b => b && b.confirmed === true),
+    say: (m) => { const b = (m.brokenPages || []).find(x => x && x.confirmed === true);
+      return `Their ${b.key || 'linked'} page returns ${b.why} — ${b.url} does not load at all`; },
+    costs: 'every visitor who clicks it leaves, and he has no way of knowing they did' },
+
+  { harm: 97, checkable: 95, novel: 90, band: 'DEAD', id: 'site_empty',
+    test: (m) => m.scrapeTrustworthy === false && (m.pageChars || 0) < 200,
+    say: () => 'Their website returned nothing at all when we loaded it, twice',
+    costs: 'anyone who finds them online finds a blank page' },
+
+  { harm: 96, checkable: 92, novel: 92, band: 'DEAD', id: 'listing_closed',
+    test: (m) => m.businessStatus && m.businessStatus !== 'OPERATIONAL',
+    say: (m) => `Google is showing their business status as ${m.businessStatus}`,
+    costs: 'Google is telling searchers they are shut' },
+
+  { harm: 88, checkable: 90, novel: 85, band: 'DEAD', id: 'no_website_on_profile',
+    test: (m) => m.hasPlace === true && m.websiteOnProfile === false,
+    say: () => 'Their Google listing has no website link on it',
+    costs: 'every searcher who finds the listing has nowhere to go but the phone' },
+
+  // ── ABANDONED ───────────────────────────────────────────────────────────
+  // Free: all three read text we already scraped. Nothing extra is fetched.
+  // These matter because they say the same thing to a visitor that a dark shop
+  // window says on a high street — is anyone still there? \u2014 and the owner never
+  // sees it, because he does not read his own footer.
+  { harm: 40, checkable: 74, novel: 88, band: 'ABANDONED', id: 'stale_copyright',
+    test: (m) => m.copyrightYear && (new Date().getFullYear() - m.copyrightYear) >= 3,
+    say: (m) => `The copyright line at the bottom of their site still reads ${m.copyrightYear}`,
+    costs: 'a visitor checking whether the business is still going reads that as a site nobody maintains' },
+
+  { harm: 38, checkable: 70, novel: 90, band: 'ABANDONED', id: 'placeholder_text',
+    test: (m) => m.placeholderFound === true,
+    say: (m) => `Placeholder text is still live on their site \u2014 "${m.placeholderSample}"`,
+    costs: 'it is the clearest possible signal that nobody has looked at the page in a long time' },
+
+  { harm: 34, checkable: 62, novel: 80, band: 'ABANDONED', id: 'dead_blog',
+    test: (m) => m.newestPostYear && (new Date().getFullYear() - m.newestPostYear) >= 3,
+    say: (m) => `Their news or blog section has nothing newer than ${m.newestPostYear}`,
+    costs: 'an empty-looking site suggests a business winding down, whatever the truth is' },
+
+
+  { harm: 78, checkable: 96, novel: 70, band: 'DEAD', id: 'no_https',
+    test: (m) => m.isHttps === false,
+    say: () => 'Their site is not on HTTPS, so browsers show a "Not secure" warning beside the address',
+    costs: 'a warning in the address bar before a stranger has read a word, on a site asking for a name and a phone number' },
+
+
+  // ── CONTRADICTS ─────────────────────────────────────────────────────────
+  { harm: 72, checkable: 82, novel: 92, band: 'CONTRADICTS', id: 'phone_mismatch',
+    test: (m) => m.phoneMismatch === true,
+    say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
+    costs: 'the number a searcher dials and the number on his site are different lines' },
+
+  // REMOVED: title_wrong_place. It read m.titleMentionsWrongCity, m.titleCity and
+  // m.realCity \u2014 three fields nothing has ever supplied, so it could never fire.
+  // The finding is real and worth building (a title tag naming the wrong town is a
+  // strong CONTRADICTS item) but it needs the business's city compared against the
+  // title, and that comparison does not exist yet. An entry that cannot trigger is
+  // worse than a missing one: it looks like coverage.
+
+  { harm: 66, checkable: 72, novel: 86, band: 'CONTRADICTS', id: 'tap_to_call_broken',
+    test: (m) => m.tapToCallGenuinelyBroken === true,
+    say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
+    costs: 'most of his traffic is mobile, and tapping is how a mobile visitor calls' },
+
+  // ── BLOCKS ──────────────────────────────────────────────────────────────
+  { harm: 74, checkable: 64, novel: 55, band: 'BLOCKS', id: 'no_after_hours',
+    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true,
+    say: () => 'The only way to reach them is a phone call during office hours',
+    costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
+
+  { harm: 52, checkable: 58, novel: 50, band: 'BLOCKS', id: 'long_form',
+    test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
+    say: (m) => `Their enquiry form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
+    costs: 'each extra field costs completions, and this is the only way in' },
+
+  { harm: 58, checkable: 54, novel: 45, band: 'BLOCKS', id: 'form_only_no_booking',
+    test: (m) => m.booking === 'form' && m.bookingMeasured === true,
+    say: () => 'There is no way to book a time — the only option is a form and a wait',
+    costs: 'someone ready to commit has to stop and hope for a reply' },
+
+  { harm: 46, checkable: 50, novel: 70, band: 'BLOCKS', id: 'stale_reviews',
+    test: (m) => (m.reviewRecency || 0) > 365,
+    say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
+    costs: 'a buyer comparing options reads that as a business that may not still be running' },
+
+  { harm: 62, checkable: 58, novel: 30, band: 'BLOCKS', id: 'dated_credibility',
+    // Deliberately low on NOVEL. He has looked at his own site; he knows what it
+    // looks like. This is real harm and a poor opener, which is exactly the case
+    // the three-factor model exists to handle.
+    test: (m) => m.datedSite === true,
+    say: () => 'The site reads as several years old next to what their competitors are running',
+    costs: 'a first-time visitor decides whether a business is still any good in a few seconds, mostly on how the site looks' },
+
+  // ── INVISIBLE ───────────────────────────────────────────────────────────
+  { harm: 92, checkable: 42, novel: 18, band: 'INVISIBLE', id: 'outranked_by_weaker',
+    test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
+    say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
+    costs: 'the reputation is real and it is not reaching the people searching right now' },
+
+  { harm: 48, checkable: 38, novel: 40, band: 'INVISIBLE', id: 'thin_profile',
+    test: (m) => (m.photoCount || 0) < 5,
+    say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
+    costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
+
+  { harm: 64, checkable: 34, novel: 75, band: 'INVISIBLE', id: 'not_compounding',
+    test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
+    say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
+    costs: 'the work is being done and almost none of it becomes proof for the next customer' },
+
+  // ── OPINION ─────────────────────────────────────────────────────────────
+  { harm: 56, checkable: 22, novel: 20, band: 'OPINION', id: 'no_offer',
+    test: (m) => m.guarantee === false && m.namedOffer === false,
+    say: () => 'There is no guarantee and no named offer anywhere on the site',
+    costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
+
+  { harm: 50, checkable: 18, novel: 25, band: 'OPINION', id: 'no_lead_magnet',
+    test: (m) => m.leadMagnet === false,
+    say: () => 'There is nothing to take away short of asking for a quote',
+    costs: 'everyone not ready to commit today leaves with nothing' },
+
+  { harm: 44, checkable: 14, novel: 15, band: 'OPINION', id: 'undifferentiated',
+    test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
+    say: () => 'The copy does not name who the business is for',
+    costs: 'a stranger has to work out for himself whether it applies to him' },
+];
+
+// Runs against measurements, not prose. Returns everything true, worst first.
+// Three cheap reads over text we already scraped. No fetch, no credit.
+const measureAbandonment = (text) => {
+  const t = String(text || '');
+  if (t.length < 400) return {};
+  const now = new Date().getFullYear();
+
+  // Copyright: take the LATEST year mentioned in a copyright context. A range
+  // like "2019-2024" is current; a bare "2019" is not.
+  const years = [...t.matchAll(/(?:\u00a9|&copy;|copyright)[^\n]{0,40}?((?:19|20)\d{2})(?:\s*[-\u2013]\s*((?:19|20)\d{2}))?/gi)]
+    .flatMap(m => [Number(m[1]), Number(m[2])].filter(Boolean));
+  const copyrightYear = years.length ? Math.max(...years) : null;
+
+  // Placeholder left in production. Deliberately narrow — these strings never
+  // appear intentionally.
+  const ph = t.match(/\blorem ipsum\b|\byour (?:text|content|headline) here\b|\bplaceholder text\b|\binsert (?:text|image) here\b|\bcoming soon\b(?![^.]{0,40}\b(?:openings?|season|location)\b)/i);
+
+  // A dated post list. Only counts if several dates cluster in the same old year.
+  const postYears = [...t.matchAll(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+((?:19|20)\d{2})/gi)].map(m => Number(m[1]));
+  const newestPostYear = postYears.length >= 3 ? Math.max(...postYears) : null;
+
+  return {
+    copyrightYear: copyrightYear && copyrightYear <= now ? copyrightYear : null,
+    placeholderFound: !!ph,
+    placeholderSample: ph ? ph[0].slice(0, 40) : null,
+    newestPostYear,
+  };
+};
+
+const rankHarms = (m = {}) => {
+  const hits = [];
+  for (const h of HARM_LADDER) {
+    let on = false;
+    try { on = !!h.test(m); } catch (e) { on = false; }
+    if (!on) continue;
+    let sentence = '';
+    try { sentence = h.say(m); } catch (e) { continue; }
+    if (!sentence) continue;
+    // An opener needs all three. Multiply rather than average, so that a zero on
+    // any one of them cannot be rescued by the other two — which is the whole
+    // point: a costly fact he already knows is not an opener, and neither is a
+    // novel fact that costs him nothing.
+    // ══ HORMOZI'S CONSTRAINT LOGIC, APPLIED TO HARM ═════════════════════
+    // His frameworks are mostly unit economics \u2014 LTV, CAC, the value equation \u2014
+    // and none of that is visible from outside. Pretending otherwise is how a
+    // system like this starts inventing numbers.
+    //
+    // But the CONSTRAINT logic is about ranking and it is measurable. The point
+    // of MARKET \u2192 OFFER \u2192 LEADS \u2192 CONVERSION \u2192 THROUGHPUT is not that earlier
+    // layers matter more. It is that a break downstream makes everything upstream
+    // worthless: ranking #1 with a dead booking page is worse than ranking #18
+    // with a working one, because real people are being sent into a wall.
+    //
+    // So the harm of a CONVERSION break scales with how much traffic reaches it,
+    // and we already measure traffic \u2014 badly, but usably \u2014 as local rank. A
+    // broken page on a business at #3 is bleeding daily; the same break at #18 is
+    // bad and almost nobody is hitting it. Scoring both at 95 was the ranking
+    // inaccuracy in the ladder.
+    //
+    // Only CONVERSION-side harms scale this way. A visibility problem does not
+    // get worse because you are visible \u2014 that is a contradiction.
+    const CONVERSION_SIDE = new Set(['broken_page', 'dead_link', 'ads_to_broken', 'no_https',
+      'phone_mismatch', 'tap_to_call_broken', 'no_after_hours', 'long_form',
+      'form_only_no_booking', 'no_website_on_profile']);
+    let harmAdj = h.harm;
+    if (CONVERSION_SIDE.has(h.id) && Number.isFinite(Number(m.rank)) && m.rankFound) {
+      // Top of the list = full weight. Bottom of twenty = about two thirds.
+      const traffic = Math.max(0.65, 1.15 - (Number(m.rank) / 20) * 0.5);
+      harmAdj = Math.min(99, Math.round(h.harm * traffic));
+    }
+    const openerScore = Math.round((harmAdj / 100) * (h.checkable / 100) * (h.novel / 100) * 100);
+    hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, checkable: h.checkable, novel: h.novel,
+      opener: openerScore, finding: sentence, costs: h.costs });
+  }
+  // ══ CHECKABILITY IS A GATE, NOT A RANKING ═══════════════════════════════
+  // Ordering by opener alone was wrong, and wrong in a way that shows up
+  // immediately: a stale copyright line scores opener 74 against harm 40, while
+  // "the only way to reach you is a phone call during office hours" scores
+  // opener 64 against harm 74. Pure opener ordering leads the email with the
+  // copyright year. He reads it, agrees, shrugs, deletes.
+  //
+  // An owner has to clear two gates before he replies, and they are different:
+  //   BELIEVE IT  \u2014 or he stops reading. That is checkability.
+  //   CARE ABOUT IT \u2014 or he believes it and does nothing. That is harm.
+  //
+  // High harm he cannot verify dies at the first gate: "you are losing 40% of
+  // your leads" invites the question "says who?". Something checkable but
+  // trivial dies at the second. Only the intersection produces a reply.
+  //
+  // So checkability decides who is ELIGIBLE to open the email, and harm decides
+  // which of the eligible ones actually does. Among things he can check himself,
+  // lead with the one costing him most.
+  // The gate is now on the COMBINED score, because a thing can fail for three
+  // different reasons and all three disqualify it as a first line.
+  const OPENER_GATE = 25;
+  const byHarm = [...hits].sort((a, b) => b.harm - a.harm);
+  const byOpener = [...hits].sort((a, b) => b.opener - a.opener);
+  // Among things that clear all three bars, lead with the costliest. This is the
+  // answer to "shouldn't we lead with the most harmful thing?" \u2014 yes, and this
+  // is the qualifier that makes it work.
+  const eligible = hits.filter(h => h.opener >= OPENER_GATE).sort((a, b) => b.harm - a.harm);
+  // Nothing clears the gate: fall back to the most checkable thing we have, and
+  // the caller is warned separately that this lead is weak for email.
+  const lead = eligible[0] || byOpener[0] || null;
+  return { all: hits, byHarm, byOpener, eligible,
+    lead,                           // what the EMAIL opens with
+    leadIsGated: !!eligible.length, // did it clear the believability gate
+    worst: byHarm[0] || null };     // what is actually costing them most
+};
+
+
+
+// ══ A BROKEN PAGE IS THE BEST FINDING THIS SYSTEM CAN PRODUCE ════════════════
+// Jane R. Mays, live. The blue REQUEST APPOINTMENT button in her header — the
+// primary conversion path of a dental practice — returns:
+//     Server Error in '/' Application.
+//     Runtime Error
+//     An exception occurred while processing your request.
+//
+// We read that page, found no form on it, and reported "booking=online_booking
+// (measured)" and "a seven-field form". We audited a page that does not work and
+// described it as working.
+//
+// Nothing checked. extractHtmlSignals has an error-page guard, but it only ever
+// sees the HOMEPAGE. Every other page — about, booking, pricing, services — is
+// fetched later by the site audit and its content goes straight into the corpus,
+// crash text and all. So a stack trace becomes "page content" and a dead booking
+// path becomes an online booking tool.
+//
+// This is worth more than any other finding available. It is measured, it is
+// undeniable, it costs the owner money every single day, and he almost certainly
+// does not know: nobody clicks their own booking button. It also converts the
+// whole pitch from "your form is long" — a matter of opinion — to "the button in
+// your header goes to a crash page", which ends the argument.
+const PAGE_IS_BROKEN = [
+  // ASP.NET / IIS
+  [/Server Error in ['\u2018"]?\/[^'\u2019"]*['\u2019"]? Application/i, 'an ASP.NET server error page'],
+  [/\bRuntime Error\b[\s\S]{0,200}\bexception occurred\b/i, 'an unhandled runtime exception'],
+  [/\bYellow Screen of Death\b|\bSystem\.(?:Web|Null|Argument)\w*Exception\b/i, 'a .NET exception page'],
+  // PHP / WordPress
+  [/\bFatal error\s*:\s*Uncaught\b|\bParse error\s*:\s*syntax error\b/i, 'a fatal PHP error'],
+  [/\bError establishing a database connection\b/i, 'a database connection failure'],
+  [/\bThere has been a critical error on this website\b/i, 'a WordPress critical error'],
+  // Server / gateway
+  [/\b50[023]\s+(?:Internal Server Error|Bad Gateway|Service Unavailable)\b/i, 'a server error'],
+  [/\bThe request has been terminated\b/i, 'a terminated request'],
+  // Missing
+  [/\b404\b[\s\S]{0,80}\b(?:not found|page (?:cannot be|could not be) found)\b/i, 'a 404'],
+];
+
+// Deliberately NOT included: the word "error" on its own, "error" inside a form
+// validation message, or a 404 mentioned in blog copy. A page that TALKS about
+// errors is not a broken page, and a false positive here would put a serious
+// accusation in front of an owner whose site is fine.
+const detectBrokenPage = (url, content) => {
+  const text = String(content || '');
+  if (text.length < 40) return null;
+  // A real page with a crash notice in it is still a real page. Require the
+  // failure to dominate: crash pages are short and carry almost nothing else.
+  const looksLikeAPage = text.length > 4000;
+  for (const [re, why] of PAGE_IS_BROKEN) {
+    if (re.test(text)) {
+      if (looksLikeAPage && !/Server Error in|Runtime Error|critical error on this website/i.test(text.slice(0, 2000))) continue;
+      return { url, why, evidence: (text.match(re) || [''])[0].slice(0, 120) };
+    }
+  }
+  return null;
 };
 
 // ══ BOOKING PATH — MEASURED, NOT ASKED FOR ═══════════════════════════════════
@@ -6670,15 +7233,46 @@ function extractHtmlSignals(rawHtml, pageUrl) {
     /<meta[^>]+name=["']format-detection["'][^>]*content=["'][^"']*telephone\s*=\s*no/i.test(html) ||
     /<meta[^>]+content=["'][^"']*telephone\s*=\s*no[^"']*["'][^>]*name=["']format-detection["']/i.test(html);
   const tapToCallGenuinelyBroken = !hasTelLink && blocksPhoneAutoDetect;
-  const inputs = html.match(/<input\b[^>]*>/gi) || [];
-  const visibleInputs = inputs.filter(t => !/type=["'](hidden|submit|button|image|reset)["']/i.test(t));
-  const selects = html.match(/<select\b[^>]*>/gi) || [];
-  const textareas = html.match(/<textarea\b[^>]*>/gi) || [];
-  const formFieldCount = visibleInputs.length + selects.length + textareas.length;
-  const hasForm = /<form\b[^>]*>/i.test(html) || formFieldCount > 0;
+  // ══ COUNT ONE FORM, NOT THE WHOLE DOCUMENT ═════════════════════════════
+  // This summed every input, select and textarea anywhere on the page, and the
+  // total was then written into the email as "a seven-field form". It is not a
+  // form. It is a header search box plus a footer newsletter plus a chat widget
+  // plus the actual contact fields, added together.
+  //
+  // Checked against the real pages:
+  //   Jane R. Mays   Name, Phone, Email, Message                 = 4, we said 7
+  //   Singler Law    First, Last, Phone, Email, What can we help = 5, we said 7
+  //
+  // Both are numbers the owner can count on his own screen in ten seconds, and
+  // both were wrong in the direction that flatters our pitch. That is the single
+  // most disprovable kind of claim this system can make.
+  //
+  // A form is a <form> element. Count the fields inside the BIGGEST one — the
+  // real enquiry form is always the largest on a small-business page — and
+  // ignore everything outside it.
+  const FIELD_RE = /<(?:input\b[^>]*|select\b[^>]*|textarea\b[^>]*)>/gi;
+  const IGNORED_FIELD = /type=["'](hidden|submit|button|image|reset|checkbox|radio)["']/i;
+  // Search boxes, newsletter signups and consent boxes are not part of the ask.
+  const NOT_A_QUESTION = /\b(name|id|placeholder|aria-label)=["'][^"']*(search|newsletter|subscribe|coupon|promo|zip[- ]?code[- ]?lookup|captcha|honeypot)[^"']*["']/i;
+
+  const countFieldsIn = (chunk) => (chunk.match(FIELD_RE) || [])
+    .filter(t => !IGNORED_FIELD.test(t) && !NOT_A_QUESTION.test(t)).length;
+
+  const formBlocks = html.match(/<form\b[\s\S]*?<\/form>/gi) || [];
+  const perForm = formBlocks.map(countFieldsIn);
+  const biggestForm = perForm.length ? Math.max(...perForm) : 0;
+
+  // No <form> element at all: some builders post via JS with bare inputs. Fall
+  // back to the page-wide count, but say so — it is a weaker measurement and
+  // must not be quoted as "an N-field form".
+  const pageWide = countFieldsIn(html);
+  const formFieldCount = biggestForm > 0 ? biggestForm : pageWide;
+  const formFieldCountIsSingleForm = biggestForm > 0;
+  const hasForm = formBlocks.length > 0 || formFieldCount > 0;
   return { checked: true, isHttps: null, hasViewport, hasTitle, title: title.slice(0,120), titleIsErrorPage,
     hasMetaDescription, metaDescription: metaDescription.slice(0,160),
-    hasTelLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount };
+    hasTelLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount,
+    formFieldCountIsSingleForm, formCount: formBlocks.length };
 }
 
 // ══ APIFY GOOGLE REVIEWS ══════════════════════════════════════════════════════
@@ -7166,7 +7760,33 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
         return { ...p, md: md || '' };
       } catch { return { ...p, md: '' }; }
     }));
-    const usable = scraped.filter(p => p.md && p.md.length > 200);
+    // ── CHECK EVERY PAGE WE READ, NOT JUST THE HOMEPAGE ──────────────────
+    // extractHtmlSignals guards the homepage against error pages. Nothing
+    // guarded these. Jane R. Mays's REQUEST AN APPOINTMENT page returns an
+    // ASP.NET crash and its stack trace went into the corpus as ordinary content,
+    // after which the audit reported a working online booking tool.
+    const brokenPages = [];
+    for (const p of scraped) {
+      const b = p && p.md ? detectBrokenPage(p.url, p.md) : null;
+      if (b) {
+        // ── NEVER ACCUSE ON ONE FETCH ──────────────────────────────────────
+        // This is the claim that leads the email. It has to survive being
+        // looked at twice, because a bot wall and a dead page are the same
+        // bytes to us and only one of them is true about their business.
+        const conf = await confirmBrokenPage(b, fcKey);
+        if (!conf.confirmed) {
+          console.log(`\u2139 NOT BROKEN AFTER ALL [${companyName}]: ${p.url} looked like ${b.why} on the first read, but ${conf.why}. Dropping it. A page we cannot fail twice is not something we are willing to put in front of an owner \u2014 being wrong about this once costs more than every finding it would have won us.`);
+          continue;
+        }
+        console.log(`\u26d4 BROKEN PAGE CONFIRMED [${companyName}]: ${p.url} \u2014 ${conf.why}.`);
+        brokenPages.push({ ...b, key: p.key, confirmed: true, confirmedWhy: conf.why });
+        console.log(`\u26d4 BROKEN PAGE [${companyName}]: ${p.url} returns ${b.why}. This is their ${p.key} page and it is DEAD \u2014 anyone clicking through from the site lands on a crash. Measured, not inferred, and almost certainly unknown to the owner: nobody clicks their own ${p.key} link.`);
+      }
+    }
+    // A crash page is not page content. Keeping it in the corpus is how a dead
+    // booking path got audited as a working one.
+    const brokenUrls = new Set(brokenPages.map(b => b.url));
+    const usable = scraped.filter(p => p.md && p.md.length > 200 && !brokenUrls.has(p.url));
     if (!usable.length) return null;
 
     const corpus = usable.map(p => `--- ${p.key.toUpperCase()} PAGE (${p.url}) ---\n${p.md.slice(0, 7000)}`).join('\n\n');
@@ -7260,6 +7880,17 @@ ${corpus}` }]
       }
     } catch (e) { void e; }
     console.log(`SITE AUDIT [${companyName}]: booking=${out.booking}${out.bookingMeasured ? ' (measured)' : ' (model read \u2014 no signature in source)'} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
+    // A dead page is a measured fact about their business and belongs with the
+    // other measured facts, not only in a log line nobody reads at send time.
+    if (brokenPages.length) out.brokenPages = brokenPages;
+    // ── THE CORPUS HAS TO COME BACK OUT ──────────────────────────────────
+    // Two checks read sitePages.corpus and it was never set, so both were
+    // silently operating on the homepage alone: the phone-mismatch check and the
+    // abandonment reads. Jane R. Mays's three different phone numbers live on her
+    // CONTACT page \u2014 the check built specifically to catch that was looking at
+    // undefined the entire time and finding nothing, which is indistinguishable
+    // from finding nothing because there is nothing.
+    out.corpus = corpus;
     return out;
   } catch(e) { console.log('auditSitePages failed:', e.message); return null; }
 };
@@ -12041,6 +12672,7 @@ const _runResearchInner = async (req, res) => {
   let allowedConsequences = { checked: false, lines: [] };
   let leadMagnet = { checked: false };
   let marketClarity = { checked: false };
+  let phoneConsistency = { checked: false };
   let phoneResult = { phone: '', display: '', source: 'none' };
   let realSpeed = { checked: false };
   let socialPresence = { checked: false };
@@ -13044,6 +13676,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       pageText: [content, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
       companyName: company,
     });
+    try {
+      phoneConsistency = measurePhoneConsistency(phoneResult && phoneResult.phone,
+        String(content || '') + ' ' + String((sitePages && sitePages.corpus) || ''));
+      if (phoneConsistency.checked && phoneConsistency.finding) {
+        console.log(`\u26a0 PHONE MISMATCH [${company}]: ${phoneConsistency.finding}. Anyone who finds them on Google dials a number their own site never mentions \u2014 measured, checkable in ten seconds, and almost certainly unknown to the owner.`);
+      } else if (phoneConsistency.checked && phoneConsistency.found > 1) {
+        console.log(`PHONE [${company}]: ${phoneConsistency.found} numbers on the site and the Google one is among them \u2014 a second line is normal (new clients, existing, fax). No finding.`);
+      }
+    } catch (e) { void e; }
     console.log(`PHONE [${company}]: ${phoneResult.phone ? phoneResult.display + ' \u2014 ' + phoneResult.why : 'NOT FOUND \u2014 ' + phoneResult.why}`);
 
     // ── HOW IT PERFORMS FOR REAL PEOPLE ──────────────────────────────────
@@ -13182,8 +13823,154 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // licence date is about the man, the founding date is about the business.
       // Handing over the resolved figure, and saying it is the only one allowed,
       // removes the choice that was producing the variance.
+      // ══ THE HARM LADDER, RUN ON THE MEASUREMENTS ═══════════════════════════
+      // Assembled here because every input is already in scope. This does not ask
+      // the Brain what is wrong; it tells it, in rank order, from what we measured.
+      try {
+        const _harms = rankHarms({
+          brokenPages: (sitePages && sitePages.brokenPages) || [],
+          scrapeTrustworthy: scrapeTrustworthy,
+          pageChars: String(content || '').length,
+          businessStatus: gbpHealth && gbpHealth.businessStatus,
+          hasPlace: !!effectivePlaceId,
+          websiteOnProfile: true,
+          phoneMismatch: !!(phoneConsistency && phoneConsistency.finding),
+          googlePhone: phoneConsistency && phoneConsistency.googlePhone,
+          tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
+          booking: sitePages && sitePages.booking,
+          bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          formFieldCount: htmlSignals && htmlSignals.formFieldCount,
+          formFieldCountIsSingleForm: !!(htmlSignals && htmlSignals.formFieldCountIsSingleForm),
+          reviewRecency: gbpHealth && gbpHealth.reviewRecencyDays,
+          photoCount: gbpHealth && gbpHealth.photoCount,
+          rankFound: !!(localRank && localRank.found),
+          rank: localRank && localRank.rank,
+          weakerAbove: localRank && localRank.weakerAbove,
+          rankQuery: localRank && localRank.query,
+          tenureYears: history && history.tenure && history.tenure.checked ? history.tenure.years : null,
+          reviewCount: localRank && localRank.ours ? localRank.ours.reviews : null,
+          reviewsPerYear: history && history.reviewsPerYear,
+          guarantee: offerStrength && offerStrength.checked ? offerStrength.guarantee : null,
+          namedOffer: offerStrength && offerStrength.checked ? !offerStrength.genericOnly : null,
+          leadMagnet: leadMagnet && leadMagnet.checked ? !!leadMagnet.found : null,
+          marketClarity: marketClarity && marketClarity.band,
+          // Free reads over text already scraped — no fetch, no credit.
+          ...measureAbandonment(String(content || '') + ' ' + String((sitePages && sitePages.corpus) || '')),
+          // HTTPS: only when our own probe is trustworthy. The guard elsewhere
+          // sets this to null when we scraped over TLS but the probe failed from
+          // our IP \u2014 that is about us, and null must never read as false here.
+          isHttps: htmlSignals && htmlSignals.checked ? htmlSignals.isHttps : null,
+          // Credibility. Only from a measured marker, never from an impression.
+          // ══ MEASURED, NOT IMPRESSION ═══════════════════════════════════
+          // "The site looks dated" is the most common thing an operator notices
+          // and the hardest to say honestly \u2014 it is an aesthetic judgement, and
+          // an aesthetic judgement in a cold email is arguable, which is why it
+          // sits low on NOVEL and never opens an email.
+          //
+          // But there are hard markers underneath the impression, and we already
+          // hold all of them. Two or more together is not an opinion any more.
+          datedSite: (() => {
+            let marks = 0;
+            const _ab = measureAbandonment(String(content || ''));
+            if (_ab.copyrightYear && (new Date().getFullYear() - _ab.copyrightYear) >= 3) marks++;
+            if (htmlSignals && htmlSignals.checked && htmlSignals.hasViewport === false) marks++;   // no mobile viewport
+            if (htmlSignals && htmlSignals.checked && htmlSignals.isHttps === false) marks++;        // still on http
+            if (/<table[^>]*(?:width|border|cellpadding)=/i.test(String(rawHtml || ''))) marks++;    // table layout
+            if (/<font\b|<center\b|\bbgcolor=/i.test(String(rawHtml || ''))) marks++;                // pre-CSS tags
+            return marks >= 2;
+          })(),
+        });
+        if (_harms.all && _harms.all.length) {
+          const top = _harms.lead;
+          console.log(`\u2709 EMAIL OPENS ON [${company}]: ${top.band} opener=${top.opener} \u2014 ${top.finding}.`);
+          if (_harms.worst && _harms.worst.id !== top.id) {
+            console.log(`\u25b6 BUT THE COSTLIEST THING IS [${company}]: harm=${_harms.worst.harm} \u2014 ${_harms.worst.finding}. ${_harms.worst.costs}. That is what he should be buying; it is just a weak first line because he cannot check it as easily.`);
+          }
+          if (_harms.all.length > 1) console.log(`   also: ${_harms.byHarm.slice(0, 5).map(h => `harm${h.harm} ${h.finding.slice(0, 40)}`).join(' | ')}`);
+          // ══ NOT EVERY LEAD DESERVES AN EMAIL ═══════════════════════════
+          // Of the six control leads, two had a confirmed DEAD finding. The other
+          // four open on BLOCKS or INVISIBLE — which is exactly the generic email
+          // this whole redesign exists to escape.
+          //
+          // The instinct is to send anyway because the lead cost money to
+          // research. That is the sunk cost talking. A weak email is not free: it
+          // spends the one first impression this owner will ever give us, it
+          // trains him to ignore the domain, and at scale it is what moves a
+          // sending domain from inbox to spam. The 550-a-month target is a
+          // ceiling, not a quota.
+          //
+          // So say plainly which bucket this lead is in. Strong openers get the
+          // email. Weak ones are better as a cold call, where a human can build
+          // the case in real time instead of betting it all on one sentence.
+          parsed.problemCount = _harms.all.length;
+          parsed.harmsRanked = _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs }));
+          parsed.openerStrength = {
+            score: top.opener, band: top.band, finding: top.finding,
+            // Cleared the believability gate AND costly = send. Cleared it but
+            // cheap = workable. Never cleared it = the phone.
+            harm: top.harm,
+            verdict: !_harms.leadIsGated ? 'CALL_INSTEAD'
+                   : top.harm >= 70 ? 'SEND'
+                   : 'SENDABLE',
+          };
+          if (_harms.leadIsGated && top.harm >= 70) {
+            console.log(`\u2705 STRONG OPENER [${company}]: ${top.band} \u2014 harm ${top.harm}, and he can verify it himself. Believable AND costly, which is the only combination that gets a reply. This is the email.`);
+          } else if (_harms.leadIsGated) {
+            console.log(`\u25cb WORKABLE OPENER [${company}]: ${top.band} \u2014 he can check it, but at harm ${top.harm} it may not be enough for him to act on. Worth sending; do not expect it to carry itself.`);
+          } else {
+            console.log(`\u260e BETTER AS A CALL [${company}]: nothing we found clears the believability gate \u2014 the costliest thing here is "${_harms.worst ? _harms.worst.finding.slice(0, 50) : 'unclear'}" (harm ${_harms.worst ? _harms.worst.harm : '?'}), but he cannot verify it from a cold email and will read it as a pitch \u2014 everything we found is either invisible to him or arguable. Nothing is broken on this business, which is good news about them and bad news about a cold email. A first email that opens on "you rank ninth" or "you have no guarantee" is the email every agency sends, and it spends the only first impression we get. Work this one by phone, where the case can be built in conversation.`);
+          }
+          if (top.opener < 50) console.log(`\u26a0 WEAK OPENER [${company}]: nothing above opener ${top.opener} \u2014 everything found is either invisible to him or arguable, which is the hardest kind of first email to get answered. Nothing is broken here: good news about their business, bad news about our opening line.`);
+          // ══ THE COUNT IS THE PITCH, SO IT HAS TO BE A REAL NUMBER ═══════
+          // The email says: here are one or two you can check right now, and
+          // there are N more. That N does the persuading — one fault is a typo,
+          // eleven is a pattern and a reason to talk to somebody.
+          //
+          // Which means N can never be rounded up, softened, or guessed. If we
+          // claim eleven and he asks on the call, Mike needs eleven real ones in
+          // front of him. So the number here is exactly what we measured and
+          // could show him, and nothing else.
+          push(`\u2605 THE COUNT: we measured ${_harms.all.length} distinct problem(s) on this business. That exact number may be used in the email \u2014 never round it up, never say "dozens", and never imply more than ${_harms.all.length}. Every one of them is listed below and Mike will have this list on the call.`);
+          push(`\u2605 WHAT WE DETECTED AUTOMATICALLY \u2014 this is the FLOOR, not the ceiling:`);
+          _harms.byOpener.slice(0, 6).forEach((h, n) => push(`   ${n + 1}. [${h.band}] ${h.finding}. What it costs them: ${h.costs}.`));
+          if (_harms.worst && _harms.lead && _harms.worst.id !== _harms.lead.id) {
+            push(`\u26a0 NOTE THE SPLIT: the costliest thing on this lead is "${_harms.worst.finding}" (harm ${_harms.worst.harm}), but the strongest OPENER is "${_harms.lead.finding}" (opener ${_harms.lead.opener}). Open on the second, because he can check it and cannot argue with it. Save the first for the call \u2014 it is what he should actually be buying.`);
+          }
+          // ── NOW GO LOOKING FOR WHAT THE LIST CANNOT KNOW ABOUT ──────────────
+          // The catalogue above is deterministic: it never misses what it knows
+          // and it can never grow past what was typed into it. You are reading
+          // the actual pages and you can see things nobody anticipated.
+          //
+          // Hunt for anything BROKEN, WRONG or ABANDONED that a stranger would
+          // hit. The list above is the KIND of thing to look for, not the limit.
+          // Real examples of what belongs here and is not in the catalogue:
+          // a copyright line stuck three years ago; a blog whose newest post is
+          // from 2021; placeholder text left in production; a menu item that goes
+          // nowhere; a chat widget sitting offline; two prices for the same
+          // service on different pages; hours on the site that contradict Google;
+          // a form that says it succeeded before anything was typed; a location
+          // page for an office that closed.
+          //
+          // Two rules. It must be something you SAW in the page text we gave you,
+          // quoted or described precisely enough that he can find it himself in
+          // ten seconds. And if you did not see it, say nothing \u2014 an invented
+          // fault is far worse than a missed one, because he checks and we lose.
+          push(`\u2605 NOW LOOK BEYOND THAT LIST. The detections above are mechanical and cannot see everything. Read the page text and find anything BROKEN, WRONG or ABANDONED that a visitor would run into: a stale copyright year, a blog dead since 2021, placeholder text still in production, a link to nowhere, two different prices for the same service, hours that disagree with their Google listing, an offline chat widget. If you find one, it belongs at the top with the DEAD items. \u26a0 Only if you actually SAW it in the text provided \u2014 quote it. Never invent a fault: he checks, and a wrong accusation ends the conversation permanently.`);
+        }
+      } catch (e) { console.log('harm ladder failed \u2014', e && e.message); }
+
+      // ══ A DEAD PAGE OUTRANKS EVERY OTHER FINDING ══════════════════════════
+      // Nothing else we measure is this strong. A long form is a matter of
+      // opinion; a booking page that returns a stack trace is not arguable, it
+      // costs him money every day, and he does not know — nobody clicks their own
+      // booking button. If this is present it is the email.
+      if (sitePages && Array.isArray(sitePages.brokenPages) && sitePages.brokenPages.length) {
+        for (const b of sitePages.brokenPages) {
+          push(`\u26d4 THEIR ${String(b.key || 'linked').toUpperCase()} PAGE IS BROKEN: ${b.url} returns ${b.why}. We loaded it and got a crash, not a page. \u2605 THIS IS THE FINDING. Lead on it. Do not describe that page as though it works, do not count fields on it, and do not soften it into "hard to use" \u2014 it does not load at all. Say which page and what happens, and stop there: he can check it in five seconds and that is the entire point.`);
+        }
+      }
       if (history && history.tenure && history.tenure.checked) {
-        push(`In business ${history.tenure.years} years \u2014 ${history.tenure.why}. \u2605 USE THIS NUMBER AND NO OTHER. Their site may also mention when the owner qualified, was licensed or started their career; that is about the person, not the business, and using it produces a different answer every time you look.`);
+        push(`In business ${history.tenure.years} years \u2014 ${history.tenure.why}. \u2605 USE THIS NUMBER AND NO OTHER, AND DO NOT RECOMPUTE IT. Philip J. Gauer measured 25 years (opened 2001) and the read said "Twenty-four years" \u2014 it subtracted 2001 from the wrong year rather than using the figure handed to it. Their site may also mention when the owner qualified, was licensed or started their career; that is about the person, not the business. Do not derive a tenure from any founding year, copyright range or licence date you see: the number above is already the resolved answer and any arithmetic you do will disagree with the audit and the call sheet.`);
       }
       if (localRank && localRank.checked && localRank.found) {
         // ⚠ THE POSITION MOVES BETWEEN RUNS. Wade Orthodontics, two runs eleven
@@ -15051,8 +15838,46 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               }
             } catch (e) { console.log('PRODUCT FIT check failed —', e && e.message); }
 
+            // ══ THE EMAIL LEADS ON THE BEST DOOR-OPENER, NOT THE TOP SCORE ══
+            // The audit ladder above stays exactly as it is — it is the right
+            // ranking for the call sheet, where Mike needs severity and
+            // fixability. This is a different question with a different answer:
+            // of everything we found, which single fact is most likely to make an
+            // owner reply to a cold email from a stranger?
+            //
+            // A tier-4 finding beats a tier-1 finding by 20 scoring points in
+            // practice, because "your booking page is down" and "you rank ninth"
+            // are not the same kind of sentence. One he can check and cannot
+            // argue with. The other he has to believe us about.
+            //
+            // Only promote on a REAL tier gap (2+). Inside that, the audit score
+            // is the better judge, and we should not reorder the email over a
+            // technicality.
+            // ══ WHICH LADDER OWNS WHICH DECISION ═══════════════════════════
+            // Two ranking systems now run on every lead and they answer different
+            // questions, which is fine \u2014 as long as each one owns something and
+            // neither quietly overrides the other.
+            //
+            //   HARM LADDER   measured, deterministic, 20 catalogued issues.
+            //                 Owns: what the EMAIL leads on, and the count.
+            //   FINDING LADDER  the model's candidates scored on five dimensions.
+            //                 Owns: what the AUDIT and the CALL SHEET present, and
+            //                 the Hormozi layer reasoning Mike uses on the phone.
+            //
+            // The failure mode to avoid is silent disagreement: the audit saying
+            // the story is one thing while the email opens on another, with
+            // nothing telling the operator. So when they diverge, say so.
             const _ladderWinner = _sortedC[0] || null;
             const _ladderWinnerRaw = _ladderWinner;
+            try {
+              if (_ladderWinner && parsed.openerStrength && parsed.openerStrength.finding) {
+                const a = String(_ladderWinner.finding || '').slice(0, 40).toLowerCase();
+                const b = String(parsed.openerStrength.finding || '').slice(0, 40).toLowerCase();
+                if (a && b && a.slice(0, 20) !== b.slice(0, 20)) {
+                  console.log(`\u2696 TWO LADDERS [${company}]: the audit's story leads on "${String(_ladderWinner.finding).slice(0, 46)}" while the email will open on "${String(parsed.openerStrength.finding).slice(0, 46)}". Both are intentional \u2014 the audit ranks by what matters to the business, the email by what he can verify. Mike should expect the call to start on the second and move to the first.`);
+                }
+              }
+            } catch (e) { void e; }
             if (_ladderWinner) {
               const _wSig = _ladderWinner.signal || _ladderWinner.declaredSignal || '';
               const _declaredNow = typeof parsed.leadSignal === 'string' ? parsed.leadSignal.trim() : '';
@@ -15077,6 +15902,20 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               let _gaveReason = !!_reasonText;
               if (_gaveReason && _ladderWinnerRaw && Number.isFinite(Number(_declaredScore))) {
                 const _claimsTie = /\btied?\b|\bequal(?:ly|led)?\b|\bsame score\b|\bidentical(?:ly)?\b|\bno (?:material |real )?difference\b/i.test(_reasonText);
+                // ── A REASON THAT CITES A SCORE WE NEVER PRODUCED ─────────
+                // Jane R. Mays: "The search rank and positioning offer finding
+                // tied at 21." The scores were 19 and 18. The gap really was 1,
+                // so the tie claim itself was fair and the check above let it
+                // pass — but 21 appears nowhere in this lead's scoring. A reason
+                // that quotes an invented figure is not reasoning about our
+                // measurements, and the numbers are right there to check against.
+                const _citedScores = (_reasonText.match(/\b\d{1,2}\b/g) || []).map(Number).filter(n => n >= 5 && n <= 25);
+                const _realScores = new Set(_sortedC.map(c => Number(c && c.total)).filter(Number.isFinite));
+                const _invented = _citedScores.filter(n => !_realScores.has(n));
+                if (_invented.length) {
+                  console.log(`\u26a0 LADDER REASON [${company}]: the stated reason cites score(s) ${_invented.join(', ')}, which no candidate on this lead actually scored (real scores: ${[..._realScores].sort((a, b) => b - a).join(', ')}). The trade may still be right, but the justification is not describing our measurements \u2014 treat it as unexplained.`);
+                  _gaveReason = false;
+                }
                 const _realGap = _ladderWinnerRaw.total - Number(_declaredScore);
                 if (_claimsTie && _realGap > 1) {
                   console.log(`\u26a0 LADDER REASON REJECTED [${company}]: the stated reason claims the top two scored the same \u2014 "${_reasonText.slice(0, 80)}" \u2014 but they are ${_realGap} point(s) apart (${_wSig} ${_ladderWinnerRaw.total} vs ${_declaredNow} ${_declaredScore}). The argument would hold on a real tie; the premise is false, so it does not excuse the trade. Treating this as no reason given.`);
@@ -15137,9 +15976,24 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             } else if (_reason.length > 15) {
               console.log(`\u2139 LADDER CHECK [${company}]: led with ${_LABEL[_declared] || _declared} (${_declBest ? _declBest.total : '?'}) over the higher-scored ${_LABEL[_best.signal] || _best.signal} (${_best.total}) \u2014 stated reason: ${_reason}`);
             } else {
-              const _msg = `LADDER: the email leads with ${_LABEL[_declared] || _declared} (scored ${_declBest ? _declBest.total : '?'}), but its own scoring ranked ${_LABEL[_best.signal] || _best.signal} materially higher (${_best.total}) and gave no reason for the trade. That gap is the signature of leading with whatever was easiest to write.`;
+              // ══ READ THE CURRENT LEAD, NOT A SNAPSHOT TAKEN 470 LINES AGO ══
+              // _declared is captured near the top of this function; the override
+              // runs much later and rewrites parsed.leadSignal. So on Deirdre the
+              // log printed, two lines apart:
+              //   ⚖ LADDER OVERRIDE: ...the email will be built on search_absence
+              //   ⛔ LADDER CHECK:    the email leads with the positioning/offer read
+              // The override had already fixed exactly the problem the check then
+              // reported, and the ⛔ text was rendered into DO NOT SAY on screen —
+              // telling the operator not to trust a decision the system had already
+              // corrected. A stale read is how a fix looks like a failure.
+              const _leadNowFinal = typeof parsed.leadSignal === 'string' ? parsed.leadSignal.trim() : _declared;
+              if (_leadNowFinal === _best.signal) {
+                console.log(`\u2713 LADDER CHECK [${company}]: the override already moved this email onto ${_LABEL[_best.signal] || _best.signal} (${_best.total}), its own highest-scored finding. Nothing left to flag.`);
+              } else {
+              const _msg = `LADDER: the email leads with ${_LABEL[_leadNowFinal] || _leadNowFinal} (scored ${_declBest ? _declBest.total : '?'}), but its own scoring ranked ${_LABEL[_best.signal] || _best.signal} materially higher (${_best.total}) and gave no reason for the trade. That gap is the signature of leading with whatever was easiest to write.`;
               _claimRisks.push(_msg);
               console.log(`\u26d4 LADDER CHECK [${company}]: ${_msg}`);
+              }
             }
           } else if (_declared === _topKey) {
             console.log(`\u2713 LADDER CHECK [${company}]: led with ${_LABEL[_topKey]} \u2014 the strongest signal available (no scores returned, judged on category order).`);
@@ -15462,7 +16316,13 @@ Return ONLY valid JSON:
             // real flag slips through. Entries that clear a claim are separated
             // out and reported as what they are.
             const _rawFlags = (critique.flaggedClaims || []).map(String);
-            const _CLEARED = /\b(NOT flagged|not a flag|no flagged claims|VERIFIED as measured|is ALLOWED|allowed per rules|correct and (must not|should not) be flagged|no unverifiable|nothing to flag)\b/i;
+            // Jane R. Mays returned TWO entries that both began "No claim flagged:" and both
+// were counted as flags, then rendered into DO NOT SAY on screen. The checker was
+// doing exactly the right thing — explicitly clearing the two behavioural
+// reframes the alignment rule now permits — and the count turned its approval
+// into a warning. "No claim flagged" is the checker's own natural phrasing for
+// approval and it was the one form this pattern did not recognise.
+const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims|VERIFIED as measured|is ALLOWED|allowed per rules|correct and (must not|should not) be flagged|no unverifiable|nothing to flag|this is (a )?(valid|general truth|general behaviou?ral))\b/i;
             const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f));
             // ══ A CRITICAL FLAG IS NOT AN ANNOTATION ═══════════════════════════
             // Wade Orthodontics shipped with this, twice:
