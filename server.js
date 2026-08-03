@@ -5383,8 +5383,32 @@ const measurePhoneConsistency = (googlePhone, pageText) => {
   // So: require phone FORMATTING, not just ten digits. A real published number
   // carries separators or parentheses. A licence number does not.
   const PHONE_SHAPED = /(?:\+?1[\s.-])?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?!\d)/g;
+  // ══ PHONE-SHAPED IS NOT THE SAME AS A PHONE NUMBER ═══════════════════════
+  // Requiring separators was not enough. The second live run produced:
+  //   (513) 321-1102  real \u2014 her footer
+  //   (474) 309-6808  474 is not an assigned area code
+  //   (695) 115-8212  695 unassigned, and 115 is not a valid exchange
+  //   (201) 878-8483  valid shape, New Jersey, certainly not a Cincinnati dentist
+  //
+  // Three of four were noise, and all four were about to appear in the first line
+  // of her email. The North American numbering plan has hard rules and checking
+  // them is free:
+  //   area code  \u2014 first digit 2-9, and never N11 (211, 311, 411, 911...)
+  //   exchange   \u2014 first digit 2-9
+  // That removes 474, 695 and 115 outright.
+  //
+  // The 201 case survives those rules and is still wrong, which is why the local
+  // check below matters: a number in a different area code from the one Google
+  // lists is far more likely to be a scrape artefact than a second office line,
+  // and we would rather say nothing than name someone else's number to an owner.
+  const validNANP = (n) => /^[2-9]\d{2}[2-9]\d{6}$/.test(n) && !/^\d(\d)\1{1}/.test(n.slice(0, 3));
+  const sameAreaCode = (n) => n.slice(0, 3) === g.slice(0, 3);
   const onPage = [...new Set((text.match(PHONE_SHAPED) || [])
-    .map(normalisePhone).filter(n => n.length === 10 && !/^(\d)\1{9}$/.test(n)))];
+    .map(normalisePhone)
+    .filter(n => n.length === 10 && validNANP(n) && !/^(\d)\1{9}$/.test(n)))];
+  // Only numbers in their own area code count as "theirs". Anything else is
+  // either a supplier, a quoted number in review text, or scrape noise.
+  const local = onPage.filter(sameAreaCode);
 
   // Even correctly shaped, a page can carry a main line, a fax, a new-patient
   // line and an after-hours line. Naming a count above four reads as a scrape
@@ -5393,6 +5417,9 @@ const measurePhoneConsistency = (googlePhone, pageText) => {
   if (!onPage.length) return { checked: true, found: 0, googleOnPage: null };
 
   const googleOnPage = onPage.includes(g);
+  // Nothing in their own area code means we found no number we can attribute to
+  // them at all \u2014 which is a limit of our read, not a finding about them.
+  if (!local.length) return { checked: true, found: onPage.length, googleOnPage, inconclusive: true };
   const pretty = (n) => `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}`;
   return {
     checked: true,
@@ -5403,9 +5430,9 @@ const measurePhoneConsistency = (googlePhone, pageText) => {
     // Only the genuinely costly case earns a finding.
     finding: !googleOnPage
       ? `The phone number on their Google listing (${pretty(g)}) does not appear anywhere on their own website, which lists ${
-          onPage.length === 1 ? pretty(onPage[0])
-          : tooManyToName ? 'several different numbers'
-          : onPage.map(pretty).join(' and ')} instead`
+          local.length === 1 ? pretty(local[0])
+          : local.length > 4 ? 'several different numbers'
+          : local.map(pretty).join(' and ')} instead`
       : null,
   };
 };
@@ -7112,7 +7139,7 @@ const measureGrowthConstraint = ({
               : weakerAbove === 1
                 ? `just 1 of the ${_above} businesses ranked above them has FEWER reviews`
                 : `${weakerAbove} of the ${_above} businesses ranked above them have FEWER reviews`;
-            return `${_frame}, and they still sit at #${rank}. They ARE in the results; they are near the bottom of them, and people choose from the top of a list. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
+            return `${_frame}, and they still sit at #${rank}. ${rank <= (_above + 1) / 2 ? 'They ARE in the results, in the middle of them' : 'They ARE in the results; they are near the bottom of them'}, and people choose from the top of a list. \u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} of ${scanned || 20}, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
       : (weakerAbove > 0)
         ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
