@@ -5678,6 +5678,11 @@ Five to seven rows. YOU choose the labels for THIS business; they are not a fixe
 \u2022 Say STRENGTHS plainly. A briefing of only problems misrepresents the business.\n\u2022 LENGTH. Each row is ONE OR TWO FULL SENTENCES. \u2018Ranks #15\u2019 is a fragment and it is exactly what the old version of this tool produced. \u2018#15 of 20 in Dallas, and ten of the fourteen above him have fewer reviews than he does \u2014 the position is not being earned on reputation\u2019 is a row. Under twelve words is not finished.\n\u2022 The reader has six minutes and then walks into a call. Thin rows waste the only chance to brief them.
 \u2022 Every number in a row must come from the facts given. The GROUPING and the MEANING are yours.
 
+\u2550\u2550\u2550 TWO THINGS THAT HAVE GONE WRONG BEFORE \u2550\u2550\u2550
+1. THE EXAMPLES ABOVE ARE OTHER COMPANIES. Anderson SC, Jacksonville, the oral surgeon, the home builder \u2014 none of them exist in this lead. They are there to show you the SHAPE of the answer. A live read said \"Columbus is not Anderson, SC\", which named a business the reader has never heard of and has nothing to do with. Never mention, compare to, or reference anything from the examples. Write only about the business in front of you.
+
+2. USE OUR REVIEW COUNT, NOT THEIRS. Their own website often displays a review badge counting every platform \u2014 Google, Facebook, Yelp, an aggregator. The number in the facts below is what Google shows, which is the number that matters for local search and the only one we measured. A live read used \"380 five-star reviews\" from a homepage badge when the measured figure was 156: a 2.4x overstatement, and the most checkable false statement an email can contain. If a number does not appear in the facts you were given, it does not go in your answer.
+
 THE TEST: if every sentence you write could be replaced by a row in a table, you have failed. The reader already has the table.`;
 
   try {
@@ -5710,6 +5715,22 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     // The table is now the bulk of the briefing, so check it too. The failure
     // mode is reverting to our scanner's own vocabulary — eleven mechanical rows
     // named after the thing that measured them, which is what the old tab did.
+    // ── CATCH THE EXAMPLE LEAK MECHANICALLY ─────────────────────────────────
+    // Instruction alone has failed on every other guard in this file; measure it.
+    const _all = JSON.stringify(parsed).toLowerCase();
+    const _leaked = ['anderson', 'jacksonville', 'ty sumner', 'glenn layton', 'paradise key', 'hgtv']
+      .filter(t => _all.includes(t) && !String(facts).toLowerCase().includes(t));
+    if (_leaked.length) {
+      console.log(`\u26a0 SITUATION READ [${company}]: the output mentions ${_leaked.join(', ')} \u2014 these come from the worked examples in the prompt, NOT from this lead. The read is contaminated and should not be trusted as written.`);
+    }
+    // Every number in the read must exist in the facts. A homepage review badge
+    // counting several platforms is the classic way a wrong figure gets in.
+    const _factNums = new Set((String(facts).match(/\d[\d,.]*/g) || []).map(x => x.replace(/[,.]$/, '')));
+    const _readNums = (String(parsed.read || '').match(/\b\d{2,}\b/g) || []);
+    const _unsourced = _readNums.filter(n => !_factNums.has(n) && Number(n) > 20);
+    if (_unsourced.length) {
+      console.log(`\u26a0 SITUATION READ [${company}]: ${_unsourced.join(', ')} appear(s) in the read but not in the measured facts. Check before this reaches any email \u2014 an unsourced number is the most checkable false statement we can send.`);
+    }
     const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
     const SCANNER_NAMES = /^(local search rank|google business profile|site technicals|cta above fold|review recency|social proof|tracking|crm|conversion pixel|google lsa|market & offer)/i;
     const scannerNamed = rows.filter(r => r && SCANNER_NAMES.test(String(r.label || ''))).length;
@@ -5743,14 +5764,46 @@ const measureTenure = (pageText, story) => {
   // earlier version required them adjacent and missed the exact case this was
   // built for. Allow words between, but stop at sentence boundaries so a year
   // from the NEXT sentence can never be captured.
-  const explicit = text.match(/\b(?:since|est\.?|established|founded|opened|started|began)\b[^.!?\n]{0,60}?\b(19\d{2}|20[0-2]\d)\b/i);
+  // ── THE BUSINESS'S BIRTHDAY, NOT THE OWNER'S CAREER ─────────────────────
+  // Philip Gauer, live: "licensed to practice law in Ohio since 1991 ... opened
+  // his own practice in 2001". This matched 1991 and reported 35 years, and the
+  // briefing then carried "29 reviews across 35 years" as a finding — built on a
+  // number about the man rather than the firm. The synthesis quietly corrected it
+  // to 24 years on its own, which is the measurement losing to the model.
+  //
+  // A professional's licence, qualification or graduation date is not when the
+  // business started. Look for a business-founding phrase FIRST and only fall
+  // back to the generic pattern when none exists.
+  const BIZ_FOUNDING = /\b(?:opened|founded|started|launched|established)\b[^.!?\n]{0,50}?\b(?:own |his |her |their |the )?(?:practice|firm|business|company|shop|office|doors)\b[^.!?\n]{0,30}?\b(19\d{2}|20[0-2]\d)\b/i;
+  const CAREER_ONLY = /\b(?:licen[sc]ed|admitted|certified|graduated|qualified|board[- ]certified|practicing|practising)\b/i;
+  const bizFound = text.match(BIZ_FOUNDING);
+  if (bizFound && sane(Number(bizFound[1]))) {
+    const y = Number(bizFound[1]);
+    return { checked: true, years: now - y, foundedYear: y, basis: 'business_founded',
+      why: `their own site says the business opened in ${y}` };
+  }
+  let explicit = text.match(/\b(?:since|est\.?|established|founded|opened|started|began)\b[^.!?\n]{0,60}?\b(19\d{2}|20[0-2]\d)\b/i);
+  // If the only year we can see is attached to a licence or qualification, it is
+  // about the person, not the company. Better to report tenure unknown than to
+  // publish a confident wrong number.
+  if (explicit && CAREER_ONLY.test(text.slice(Math.max(0, explicit.index - 60), explicit.index + 40))) explicit = null;
   if (explicit && sane(Number(explicit[1]))) {
     const y = Number(explicit[1]);
     return { checked: true, years: now - y, foundedYear: y, basis: 'explicit',
       why: `their own site says the business began in ${y}` };
   }
   // "over 25 years", "30+ years of experience", "three decades"
-  const stated = text.match(/\b(?:over|more than|nearly|almost)?\s*(\d{1,2})\+?\s*years?\s+(?:of\s+)?(?:experience|in business|serving|building|practice)/i);
+  // Deirdre Taylor, live: "has been managing the CPA firm for over 25 years in
+  // Dallas". This required the words "experience|in business|serving|building|
+  // practice" directly after "years", so "years in Dallas" matched nothing and
+  // tenure came back unknown — while the synthesis read the same sentence and
+  // correctly said twenty-five years. The list of nouns that can follow "years"
+  // is unbounded; what actually identifies a tenure claim is the phrase BEFORE
+  // it, so anchor there instead.
+  const stated = text.match(/\b(?:for |over |more than |nearly |almost )?(?:the (?:past|last) )?(\d{1,2})\+?\s*years?\b(?!\s*(?:old|ago|of age))/i)
+    && /\b(?:experience|in business|serving|building|practice|practicing|practising|managing|running|operating|helping|providing|been)\b/i.test(text)
+    ? text.match(/\b(?:for |over |more than |nearly |almost )?(?:the (?:past|last) )?(\d{1,2})\+?\s*years?\b(?!\s*(?:old|ago|of age))/i)
+    : null;
   if (stated) {
     const y = Number(stated[1]);
     if (y >= 2 && y <= 100) return { checked: true, years: y, foundedYear: now - y, basis: 'stated',
@@ -7760,6 +7813,23 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // invalid. Treating "won't say" the same as "does not exist" was blocking real
     // reachable owners — the most expensive false negative in the whole pipeline.
     let anyDefiniteInvalid = false, anyUnknown = false;
+    // ══ WHICH ADDRESS WAS DENIED, NOT WHETHER ANY WAS ════════════════════════
+    // anyDefiniteInvalid is a single flag across eight different mailboxes, and it
+    // gates the eponymous rule below. That is too coarse: a denial of
+    // philip.gauer@philipgauerlaw.com says nothing whatever about philip@ — they
+    // are different mailboxes on the same server. One rejection anywhere in the
+    // list therefore blocked the eponymous inference for every address, including
+    // ones the server never actually refused.
+    //
+    // Live cost, this run: Philip J. Gauer at philipgauerlaw.com and Andrew Wade
+    // at wadeorthodontics.com. Both eponymous domains, both owner-run, both
+    // BLOCKED, and reachability fell to 4/10 across the batch. Glenn Layton and
+    // Jon Chester passed the same rule only because their verifier calls timed out
+    // — they were saved by an outage rather than by the logic.
+    //
+    // Recording the specific addresses that were definitively refused lets the
+    // eponymous rule ask the only question that matters: was THIS mailbox denied?
+    const deniedAddresses = new Set();
     for (const c of toTry) {
       const res = await verifyEmailSMTP(c.email, verifierKey);
       if (res.valid === true) {
@@ -7767,7 +7837,8 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
         console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED (mailbox exists): ${c.email} — pattern ${c.pattern}`);
         return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
       }
-      if (res.invalid === true) anyDefiniteInvalid = true; else anyUnknown = true;
+      if (res.invalid === true) { anyDefiniteInvalid = true; deniedAddresses.add(String(c.email).toLowerCase()); }
+      else anyUnknown = true;
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
     }
 
@@ -7845,13 +7916,21 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // — a first-name mailbox on their own eponymous domain is not a guess. The business
     // IS the person. Blocking these on an unhelpful SMTP probe was throwing away the
     // most reachable owners in the entire pipeline.
-    if (!anyDefiniteInvalid && name) {
+    if (name) {
       const nameParts = String(name).toLowerCase().split(/\s+/).filter(w => w.length > 2);
       const domRoot = domain.split('.')[0].toLowerCase();
       const eponymous = nameParts.some(w => domRoot.includes(w));
-      if (eponymous) {
-        const firstName = nameParts[0];
-        const epEmail = `${firstName}@${domain}`;
+      const firstName = nameParts[0];
+      const epEmail = `${firstName}@${domain}`;
+      // The gate is now this ONE address, not the whole batch. If the server
+      // explicitly refused this mailbox we honour that and fall through; if it
+      // refused some other pattern, that is not evidence about this one.
+      const epDenied = deniedAddresses.has(epEmail.toLowerCase());
+      if (eponymous && epDenied) {
+        console.log(`EMAIL [${domain}]: the business is named after ${name}, but the mail server explicitly refused ${epEmail}. Not inferring it.`);
+      }
+      if (eponymous && !epDenied) {
+        if (anyDefiniteInvalid) console.log(`EMAIL [${domain}]: other patterns were refused, but ${epEmail} itself was never denied — the eponymous inference still holds.`);
         console.log(`\u2713 EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
         return {
           // TIER 3, NOT 2. This address was never SMTP-checked \u2014 it is inferred
