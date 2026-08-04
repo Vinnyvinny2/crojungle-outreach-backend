@@ -691,6 +691,67 @@ const VERIFIABILITY_RULES = [
   [2, /\bno CRM\b|\bno pixel\b|\bserver[- ]side\b|\bpage source\b/i, 'requires reading page source, which he will not do'],
 ];
 
+// ══ SCORE FROM THE MEASUREMENT, NOT FROM THE WORDING ═════════════════════════
+// The five dimensions below regex-match the MODEL'S PROSE, and that is a design
+// flaw the Haiku switch exposed in one run:
+//
+//   Sonnet: "Not in the top 20 for replacement windows contractor"
+//           verifiability 5\u21924  \u2192  search_absence 23  \u2190 led the email
+//   Haiku:  "Not ranking for their own service in their own city"
+//           verifiability 5\u21922  \u2192  search_absence 20
+//           positioning_offer 21              \u2190 led instead
+//
+// Same finding. Different words. A business invisible in search got an email
+// about its positioning copy.
+//
+// This is the harm-ladder-v1 mistake again: classifying prose instead of
+// consulting the measurement. We ALREADY know, deterministically, whether this
+// lead is absent from search \u2014 localRank told us. So when a finding is about
+// something we measured, take the score from the measurement and let the regex
+// rules handle only the findings we have no measurement for.
+//
+// This makes the ranking stable across models AND across reruns, which is what
+// "reproducible" was supposed to mean.
+const MEASURED_SIGNAL_SCORES = {
+  //                     verifiability, surprise, weFixIt, ownerLevel
+  absent_from_search:  { v: 4, s: 4, w: 5, o: 5 },
+  outranked_by_weaker: { v: 4, s: 2, w: 5, o: 5 },
+  broken_page:         { v: 5, s: 5, w: 5, o: 4 },
+  phone_mismatch:      { v: 5, s: 5, w: 5, o: 4 },
+  thin_profile:        { v: 5, s: 3, w: 5, o: 3 },
+  stale_reviews:       { v: 5, s: 4, w: 4, o: 4 },
+  not_compounding:     { v: 3, s: 4, w: 4, o: 5 },
+  no_after_hours:      { v: 4, s: 2, w: 5, o: 4 },
+  form_only_no_booking:{ v: 4, s: 2, w: 5, o: 4 },
+  long_form:           { v: 5, s: 2, w: 5, o: 3 },
+};
+
+// Map a finding to a measured signal by what the LEAD actually is, not by what
+// the sentence says. Only fires when the measurement exists.
+const measuredScoreFor = (findingText, m = {}) => {
+  const t = String(findingText || '').toLowerCase();
+  // Deliberately broad. This does not decide WHETHER they are absent \u2014 localRank
+  // already did that. It only asks "is this sentence about being found?", so a
+  // wider net costs nothing and a narrow one silently mis-scores the most
+  // important finding we produce.
+  const searchy = /\brank|ranking|top 20|search|results|found online|find (?:them|him|you)|findable|visible|visibility|invisible|appear|show(?:s|ing)? up|listed\b/.test(t);
+  if (searchy && m.rankChecked && m.rankFound === false) return { id: 'absent_from_search', ...MEASURED_SIGNAL_SCORES.absent_from_search };
+  if (searchy && m.rankFound === true && (m.weakerAbove || 0) > 0) return { id: 'outranked_by_weaker', ...MEASURED_SIGNAL_SCORES.outranked_by_weaker };
+  if (/broken|error|does not load|crash|dead (?:page|link)/.test(t) && (m.brokenPages || []).some(b => b && b.confirmed)) {
+    return { id: 'broken_page', ...MEASURED_SIGNAL_SCORES.broken_page };
+  }
+  if (/phone|number/.test(t) && m.phoneMismatch === true) return { id: 'phone_mismatch', ...MEASURED_SIGNAL_SCORES.phone_mismatch };
+  if (/photo/.test(t) && Number.isFinite(Number(m.photoCount)) && Number(m.photoCount) < 5) {
+    return { id: 'thin_profile', ...MEASURED_SIGNAL_SCORES.thin_profile };
+  }
+  if (/review/.test(t) && Number(m.reviewRecency) > 365) return { id: 'stale_reviews', ...MEASURED_SIGNAL_SCORES.stale_reviews };
+  if (/book|schedul|form|quote|path in|way to reach/.test(t)) {
+    if (m.booking === 'phone_only' && m.bookingMeasured) return { id: 'no_after_hours', ...MEASURED_SIGNAL_SCORES.no_after_hours };
+    if (m.booking === 'form' && m.bookingMeasured) return { id: 'form_only_no_booking', ...MEASURED_SIGNAL_SCORES.form_only_no_booking };
+  }
+  return null;
+};
+
 const computeVerifiability = (findingText) => {
   const t = String(findingText || '');
   for (const [score, re, why] of VERIFIABILITY_RULES) if (re.test(t)) return { score, why };
@@ -14868,6 +14929,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // Every fact below is something we actually established; the call adds
     // reasoning across them, not new facts.
     let situationRead = null;
+    // ══ THE MEASURED FACTS, OUTSIDE THE TRY ══════════════════════════════
+    // `F` is built inside the try below and is block-scoped to it. The
+    // fact-checker runs ~2,400 lines later and needs the same list \u2014 reading
+    // F there threw "F is not defined" and the ENTIRE fact-check silently
+    // did not run on a live lead, which is worse than a wrong flag: the UI
+    // showed no fact-check issues and that looked like a clean audit.
+    let measuredFacts = [];
+    // The exact inputs the harm ladder measured. The finding scorers read these
+    // so ranking depends on what is TRUE about the lead, not on which words
+    // the model happened to choose on that run.
+    let _harmInputs = {};
     try {
       const F = [];
       const push = (x) => { if (x) F.push('\u2022 ' + x); };
@@ -14914,7 +14986,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Assembled here because every input is already in scope. This does not ask
       // the Brain what is wrong; it tells it, in rank order, from what we measured.
       try {
-        const _harms = rankHarms({
+        // Named, so the finding scorers downstream consult the SAME measurements
+        // instead of re-deriving them from whatever words the model chose.
+        _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           scrapeTrustworthy: scrapeTrustworthy,
           siteConfirmedDown: _siteDownVerdict.down === true,
@@ -14971,7 +15045,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             if (/<font\b|<center\b|\bbgcolor=/i.test(String(rawHtml || ''))) marks++;                // pre-CSS tags
             return marks >= 2;
           })(),
-        });
+        };
+        const _harms = rankHarms(_harmInputs);
         if (_harms.all && _harms.all.length) {
           const top = _harms.lead;
           console.log(`\u2709 EMAIL OPENS ON [${company}]: ${top.band} opener=${top.opener} \u2014 ${top.finding}.`);
@@ -15137,6 +15212,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (affordability && affordability.verdict) push(`Can they pay: ${affordability.verdict}${affordability.concerns && affordability.concerns.length ? ' | concern: ' + affordability.concerns.join('; ') : ''}`);
 
       if (F.length >= 6) {
+        measuredFacts = F.slice();
         situationRead = await buildSituationRead(F.join('\n'), apiKey, company);
       } else {
         console.log(`SITUATION READ [${company}]: only ${F.length} measured facts available \u2014 too thin to synthesise. Skipping rather than guessing.`);
@@ -16078,8 +16154,14 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           const cRead = u.cache_read_input_tokens || 0;
           const cWrite = u.cache_creation_input_tokens || 0;
           // Sonnet: $3/M input, $0.30/M cache read, $3.75/M cache write, $15/M out.
-          const cost = (fresh * 3 + cRead * 0.30 + cWrite * 3.75 + (u.output_tokens || 0) * 15) / 1e6;
-          const wouldHaveBeen = ((fresh + cRead + cWrite) * 3 + (u.output_tokens || 0) * 15) / 1e6;
+          // ══ PRICE THE MODEL WE ACTUALLY CALLED ═══════════════════════════
+          // These rates were hardcoded to Sonnet. The moment the audit moved to
+          // Haiku this line reported $0.1151 for a call the meter costed at
+          // $0.0384 \u2014 a threefold overstatement on the number used to judge
+          // whether the switch was worth it.
+          const _p = ANTHROPIC_PRICES[BRAIN_MODEL] || ANTHROPIC_PRICES['claude-sonnet-4-6'];
+          const cost = fresh * _p.in + cRead * _p.cacheRead + cWrite * _p.cacheWrite + (u.output_tokens || 0) * _p.out;
+          const wouldHaveBeen = (fresh + cRead + cWrite) * _p.in + (u.output_tokens || 0) * _p.out;
           console.log(`\ud83d\udcb0 BRAIN COST [${company}]: $${cost.toFixed(4)} | fresh=${fresh} cacheRead=${cRead} cacheWrite=${cWrite} out=${u.output_tokens || 0}` +
             (cRead > 0 ? ` | \u267b CACHE HIT \u2014 saved $${(wouldHaveBeen - cost).toFixed(4)} on this call` :
              cWrite > 0 ? ' | cache WRITTEN (first call — reads are 10% from here)' :
@@ -16771,7 +16853,22 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const _unmatchedFix = [], _unmatchedOwn = [];
             for (const _c of _cfv) {
               if (!_c || !_c.finding) continue;
-              const _v = computeVerifiability(_c.finding);
+              // ══ MEASUREMENT BEATS WORDING ═══════════════════════════════
+              // If this finding is about something we MEASURED, take the scores
+              // from the measurement. The regex rules below match the model's
+              // prose, and prose changes: Sonnet wrote "Not in the top 20" and
+              // scored verifiability 4; Haiku wrote "Not ranking for their own
+              // service in their own city" and scored 2 for the identical fact,
+              // which handed the email to a positioning finding on a business
+              // that is invisible in search.
+              //
+              // We already know from localRank whether they are absent. Asking a
+              // regex to rediscover that from a sentence is the harm-ladder-v1
+              // mistake in a different place.
+              const _measured = measuredScoreFor(_c.finding, _harmInputs || {});
+              const _v = _measured
+                ? { score: _measured.v, unmatched: false, why: `scored from the MEASUREMENT (${_measured.id}), not from how the sentence was phrased` }
+                : computeVerifiability(_c.finding);
               if (_v.unmatched) _unmatched.push(`"${String(_c.finding).slice(0, 46)}"`);
               // Severity travels with the signal type, so correct it in the same pass.
               const _sev = computeSeverity(_c.signal || _c.declaredSignal);
@@ -17319,7 +17416,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
 
 \u2605 THE MEASURED FACTS. These are CONFIRMED. Do NOT flag anything that matches
 them, and DO flag any figure in the copy that CONTRADICTS them:
-${(Array.isArray(F) && F.length) ? F.slice(0, 60).join('\n') : '(none supplied \u2014 in that case say so rather than assuming a figure is unverified)'}
+${(Array.isArray(measuredFacts) && measuredFacts.length) ? measuredFacts.slice(0, 60).join('\n') : '(none supplied \u2014 in that case say so rather than assuming a figure is unverified)'}
 
 \u26a0 HOW TO REPORT. Return ONLY real problems. Do NOT return an entry that
 concludes "this is correct", "no violation here" or "no flag warranted" \u2014 if it
