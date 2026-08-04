@@ -3530,6 +3530,27 @@ const FC_LEDGER = new AsyncLocalStorage();
 // Same principle as the error message that hid the error: a measurement that
 // covers a fifth of the thing is worse than none, because it invites confident
 // decisions about the wrong number.
+// ══ THE ONLY LEVER LEFT THAT REACHES 5 CENTS ═════════════════════════════════
+// Measured on a live HEGG run: the audit call is $0.0831 of a $0.1106 lead, and
+// $0.0422 of that is OUTPUT \u2014 the findings, the signal rows, the briefing. That
+// output is the product, so it cannot be cut without cutting quality.
+//
+// Every honest path, costed:
+//   remove dead output fields      \u2212$0.0036   \u2192 $0.1070
+//   cache the fresh input          \u2212$0.0332   \u2192 $0.0738   (a real refactor)
+//   run the audit on Haiku         \u2212$0.0554   \u2192 $0.0553
+//
+// No arithmetic reaches 5 cents while this call runs on Sonnet. Haiku 4.5 is
+// genuinely capable and this is the highest-judgement task in the system, so the
+// honest move is not to decide it silently \u2014 it is to make it a switch, run one
+// lead on both, and read the two audits side by side.
+//
+//   BRAIN_MODEL=claude-haiku-4-5-20251001   in Render env vars
+//
+// Default stays Sonnet. Changing it is a quality decision and it should be made
+// by looking at output, not at a spreadsheet.
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-sonnet-4-6';
+
 const ANTHROPIC_PRICES = {
   'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
   'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 1.25 / 1e6 },
@@ -15966,7 +15987,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
+            model: BRAIN_MODEL,
             // Static prefix, cached. Watch usage.cache_read_input_tokens in the
             // response to confirm hits — a persistent zero means the prefix is
             // being invalidated (whitespace drift is the usual culprit).
@@ -15998,7 +16019,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         // which is why the total said $0.0424 while the audit alone cost $0.0879.
         // A total that omits the largest item is the same failure as the error
         // message that hid the error.
-        try { meterAnthropic(_CURRENT_LEAD, 'brainAudit', 'claude-sonnet-4-6', vd && vd.usage); } catch (e) { void e; }
+        try { meterAnthropic(_CURRENT_LEAD, 'brainAudit', BRAIN_MODEL, vd && vd.usage); } catch (e) { void e; }
         if (vd.usage && !_cachedAudit) {
           const u = vd.usage;
           const fresh = u.input_tokens || 0;
@@ -16058,9 +16079,10 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               parsed = {
                 heroHeadline: extract('heroHeadline'),
                 ctaText: extract('ctaText'),
-                headlineQuality: extract('headlineQuality') || 'generic',
-                designQuality: extract('designQuality') || 'unknown',
-                overallConversionRating: extract('overallConversionRating') || 'unknown',
+                // headlineQuality, designQuality and overallConversionRating are no
+                // longer requested \u2014 every downstream use reads visualAnalysis.*, and
+                // the audit was being asked to judge DESIGN without an image. Trying
+                // to salvage them here would only resurrect fields nothing reads.
                 realPain: extract('realPain'),
                 embarrassingFinding: extract('embarrassingFinding'),
                 recommendedProduct: extract('recommendedProduct'),
