@@ -1097,19 +1097,30 @@ const checkFabrications = (text, measured = {}) => {
     return total || null;
   };
   const NUMWORD = '(?:ten|eleven|twelve|thir|four|fif|six|seven|eigh|nine)(?:teen|ty)?(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?|twenty(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?';
-  const tenureClaim = t.match(new RegExp(
-    // "30-year reputation" is hyphenated and has no "years" word after it, so the
-    // original pattern missed it against a measured 33 \u2014 live, in a sent-ready
-    // email. Adjectival forms are how copy actually writes tenure.
-    `\\b(\\d{1,3})[-\\s]?year[-\\s](?:old |long )?(?:reputation|history|business|practice|track record|company|firm)\\b` +
-    `|\\b(\\d{1,3})\\+?\\s*years?\\s+(?:of\\s+)?(?:history|in business|in practice|practicing|of practice|of experience|serving|in market|in [A-Z][a-z]+)\\b` +
-    `|\\b(?:over|nearly|almost)\\s+(\\d{1,3})\\s*years?\\b` +
-    `|\\b(${NUMWORD})\\s+years?\\b` +
-    `|\\b(?:three|four|five|six)\\s+decades\\b`, 'i'));
+  // ══ MATCH BROADLY, EXCLUDE NARROWLY ═══════════════════════════════════════
+  // The old pattern listed the nouns that could follow "N years": history, in
+  // business, in practice, of experience... Copy then wrote "31 years of honest
+  // installs" and walked straight through, one year off a measured 32.
+  //
+  // Enumerating what to catch loses to a writer inventing a new noun every run.
+  // Enumerating what to EXCLUDE does not, because the exceptions are a short,
+  // stable list: warranties, guarantees, financing terms and ages of things that
+  // are not the business.
+  const NOT_TENURE = /\b(?:warrant\w*|guarantee\w*|financ\w*|loan|mortgage|lease|term|labou?r)\b/i;
+  const tenureClaim = (() => {
+    const re = new RegExp(`\\b(\\d{1,3}|${NUMWORD})[-\\s]?years?\\b[^.]{0,40}`, 'gi');
+    let mm;
+    while ((mm = re.exec(t))) {
+      if (NOT_TENURE.test(mm[0])) continue;          // "100-year labor warranty"
+      if (/\bago\b|\bold\b(?!er)/i.test(mm[0]) && !/business|practice|trading|installs?|serving/i.test(mm[0])) continue;
+      return mm;
+    }
+    return null;
+  })();
   if (tenureClaim && !measured.tenureYears) {
     flags.push(`INVENTED TENURE \u2014 "${tenureClaim[0]}". We measured NO founding year or tenure claim on this lead, so this number came from nowhere. It is the easiest possible thing for an owner to disprove: he knows when he started. Remove it entirely.`);
   } else if (tenureClaim && measured.tenureYears) {
-    const said = Number(tenureClaim[1] || tenureClaim[2] || tenureClaim[3]) || wordToNum(tenureClaim[4]);
+    const said = Number(tenureClaim[1]) || wordToNum(tenureClaim[1]);
     // ══ NO TOLERANCE. HE KNOWS THE NUMBER. ═══════════════════════════════════
     // This allowed a difference of 1, so "40 years in market" passed against a
     // measured 41 on a live lead, and "30-year reputation" nearly passed against
@@ -1152,15 +1163,36 @@ const checkFabrications = (text, measured = {}) => {
   // Both are arithmetic about a business we have never seen inside. The typical
   // VALUE of a job in their trade is permitted and is what makes the loss real;
   // a RATE is his books, and we do not have them.
+  // ══ ADJECTIVES DO NOT MAKE IT NOT A RATE ══════════════════════════════════
+  // The old pattern needed the noun immediately after the number, so it caught
+  // "one job a month" and missed "one LOST job a month" \u2014 live, in a
+  // sent-ready email. Allow a few words in between; a rate is a rate however it
+  // is dressed.
   const rateClaim =
-    // "one a month", "two a week", "3 a year" \u2014 with or without a noun
-    t.match(/\b(?:one|two|three|four|five|a|\d+)\s+(?:(?:family|families|client|patient|customer|case|job|matter|caller?|lead|enquir\w+|inquir\w+|project|install|sale)s?\s+)?(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
-    // "every week that ... goes elsewhere", "each month you lose"
-    || t.match(/\b(?:every|each)\s+(?:day|week|month|year)\b[^.]{0,60}\b(?:goes|go|lose|losing|lost|miss|missing|walks?|leaves?|never reaches?)\b/i)
-    // "a job a week", "a customer every month"
-    || t.match(/\ba\s+(?:job|customer|client|patient|case|project|sale|install)\s+(?:a|per|every)\s+(?:day|week|month|year)\b/i);
+    t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:\w+\s+){0,3}?(?:famil\w+|client|patient|customer|case|job|matter|call|caller|lead|enquir\w+|inquir\w+|project|install|sale|appointment|booking|quote|estimate)s?\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
+    || t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
+    || t.match(/\b(?:every|each)\s+(?:day|week|month|year)\b[^.]{0,60}\b(?:goes|go|lose|losing|lost|miss|missing|walks?|leaves?|never reaches?)\b/i);
   if (rateClaim) {
     flags.push(`INVENTED FREQUENCY \u2014 "${rateClaim[0]}". The typical VALUE of a job in their trade is permitted; a RATE is not. We have none of his volume numbers, so "${rateClaim[0]}" is arithmetic about a business we have never seen inside. State the value of one and let him do the multiplication \u2014 he will, and the number he reaches is one he believes.`);
+  }
+
+  // ══ WHAT A NAMED COMPETITOR DID, WHICH WE NEVER SAW ═══════════════════════
+  // Live, in a sent-ready email: "By then they've already got a price from Peak
+  // Windows."
+  //
+  // We read Peak's NAME, POSITION and REVIEW COUNT from the map pack. We have
+  // never contacted them, never timed their response, never seen their pricing.
+  // Asserting that a specific named company did a specific thing is the most
+  // checkable fabrication we can produce \u2014 the prospect may well know them, and
+  // one phone call disproves it.
+  //
+  // Naming a competitor is fine and often strong. Attributing an ACTION to them
+  // is not.
+  const COMPETITOR_ACTION = /\b(?:got|get|receive[ds]?|hear[ds]?|book(?:s|ed)?|call(?:s|ed)?|reply|replied|respond(?:s|ed)?|answer(?:s|ed)?|quot(?:e|ed|ing)|sent)\b[^.]{0,40}\bfrom\s+([A-Z][A-Za-z&.'-]+(?:\s+[A-Z][A-Za-z&.'-]+){0,3})\b|\b([A-Z][A-Za-z&.'-]+(?:\s+[A-Z][A-Za-z&.'-]+){0,3})\s+(?:already\s+)?(?:respond(?:s|ed)|replie[ds]|answer(?:s|ed)|call(?:s|ed) (?:them |him |her )?back|books?|gets? back|beat you)\b/;
+  const compAction = t.match(COMPETITOR_ACTION);
+  if (compAction) {
+    const who = (compAction[1] || compAction[2] || 'that competitor').trim();
+    flags.push(`INVENTED COMPETITOR ACTION \u2014 "${compAction[0].trim().slice(0, 70)}". We read ${who}'s name, position and review count from the map pack and nothing else. We have never contacted them, timed their response, or seen their pricing. Attributing an ACTION to a named company is the most checkable fabrication we can make \u2014 the prospect may know them personally and one call disproves it. Naming a competitor is fine; saying what they DID is not.`);
   }
 
   // ══ NEVER DESCRIBE OUR OWN WORK ═══════════════════════════════════════════
@@ -1175,8 +1207,12 @@ const checkFabrications = (text, measured = {}) => {
   //
   // "I went through YOUR SITE" is fine and stays: the object is his property,
   // which is what makes it a statement about him rather than about us.
-  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built)\b[^.]{0,60}/i);
-  if (processClaim && !/\b(?:your|their|his|her)\s+(?:site|website|listing|profile|page|reviews|copy|form)\b/i.test(processClaim[0])) {
+  // "I went through" was cut from this list so that "I went through YOUR SITE"
+  // would stay legal \u2014 and then "I went through your entire quote path" walked
+  // through, because a quote path is not on the property list. The verb belongs
+  // back; the exception below is what keeps the legal form legal.
+  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built|went through|walked through|traced|documented|reviewed)\b[^.]{0,70}/i);
+  if (processClaim && !/\b(?:your|their|his|her)\s+(?:site|website|listing|profile|homepage|page|reviews|copy)\b/i.test(processClaim[0])) {
     flags.push(`DESCRIBES OUR PROCESS \u2014 "${processClaim[0].trim().slice(0, 60)}". Mike's rule: never describe our work. He does not care what we did, he cares what is true about his business, and every word about our method is a word not spent on his problem. State what is wrong; that we found it is implied.`);
   }
 
