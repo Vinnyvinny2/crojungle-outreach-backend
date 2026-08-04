@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3001;
 // Set the headers manually on EVERY response and answer OPTIONS preflight
 // immediately, before any other middleware or route can interfere or crash.
 // A dropped/crashed request loses its CORS headers and shows up in the browser
-// as a "No Access-Control-Allow-Origin" error even when origin:'*' is set.
+// as a "No Access-Control-Allow-Origin" error even when origin:'*' is set. 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
