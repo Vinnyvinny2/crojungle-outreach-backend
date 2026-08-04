@@ -728,6 +728,33 @@ const MEASURED_SIGNAL_SCORES = {
 
 // Map a finding to a measured signal by what the LEAD actually is, not by what
 // the sentence says. Only fires when the measurement exists.
+// ══ SOME FINDINGS CANNOT BE LED ON, HOWEVER TRUE THEY MIGHT BE ═══════════════
+// Mid-American Gunite Pools, live. The winning candidate was "No automated
+// response layer \u2014 quote form submissions go unanswered", the ladder called it
+// "the measured conversion leak (23)", and both emails opened on it:
+//
+//   "quote requests that arrive after 5 sit until the next morning with
+//    nothing sent back"
+//   "someone fills out your form at 9pm Saturday and gets nothing back
+//    until Monday"
+//
+// We have never submitted their form. We do not know whether an auto-reply
+// fires, whether it routes to a phone, or whether Michael answers at 9pm
+// himself. What we ACTUALLY measured was one line: booking=form, capture=false.
+//
+// The copy guards flag those sentences individually, which is right but too
+// late \u2014 by then the model has been ASKED to write an email about something it
+// cannot describe truthfully, so it invents a plausible story and the guards
+// play catch-up with the wording.
+//
+// The fix belongs at the candidate gate. A finding whose subject is what
+// happens AFTER a customer makes contact is unobservable from outside, so it
+// can be true and still must not lead. It stays in the audit and on the call
+// sheet \u2014 Mike can ask about it directly, which is the honest way to find out.
+const UNOBSERVABLE_FINDING = /\b(?:no |without |lacks? |missing )?(?:automated |auto[- ]?)?(?:response layer|auto[- ]?repl\w*|acknowledgement|acknowledgment|confirmation (?:email|message)|follow[- ]?up (?:system|sequence|email))\b|\bgoes? unanswered\b|\bnothing (?:is )?sent back\b|\bafter (?:they|someone|a customer|a homeowner) (?:submit|fill|hit send)\w*\b|\bwhat happens (?:after|once) (?:they|someone|a customer)\b|\bsits? until (?:the )?(?:next )?(?:morning|monday|business day)\b/i;
+
+const findingIsUnobservable = (findingText) => UNOBSERVABLE_FINDING.test(String(findingText || ''));
+
 const measuredScoreFor = (findingText, m = {}) => {
   const t = String(findingText || '').toLowerCase();
   // ══ BROAD ENOUGH TO CATCH REPHRASING, NARROW ENOUGH TO BE ABOUT SEARCH ═══
@@ -7649,6 +7676,27 @@ async function _situationReadAttempt(facts, apiKey, company, correction) {
   // wanted output has failed repeatedly in this file; showing it works. Two
   // examples because one teaches the topic and two teach the SHAPE of the task.
   const goldExamples = `
+\u26d4 READ THIS BEFORE THE EXAMPLES. They exist to show you the DEPTH of reasoning
+wanted \u2014 how far past the page a real read goes. They are NOT sentence patterns,
+and copying their construction is the single most common failure in this system.
+
+EXAMPLE 2's headline is "Sixteen years of building, and almost none of it is
+visible." Across six real businesses in four industries, this prompt then
+produced:
+   "Forty-one years of real work, and almost none of it is visible..."
+   "Twenty-four years of real work, and almost none of it shows"
+   "Twenty-five years of real work, and almost none of it is searchable"
+   "Thirty years of probate work and almost none of it is visible..."
+
+That is one essay with the nouns swapped, and it made every audit sound like the
+last one. A read that could have been written from a template is not a read.
+
+\u26d4 BANNED HEADLINE SHAPE: "[N] years of [something], and [something negative]".
+Whatever is actually true of THIS business, say it in the shape that fact wants.
+If the honest headline is "They are winning the search and losing at the door",
+write that. If it is "The number on their Google listing reaches a line their own
+site never mentions", write that. Length, rhythm and construction should differ
+lead to lead, because businesses differ.
 EXAMPLE 1 \u2014 an oral surgeon in Anderson, South Carolina.
 FACTS GIVEN: ranked #1 of 17 for "oral surgeon in Anderson" \u00b7 317 reviews at 4.9 \u00b7 newest review 17 days old \u00b7 owner replies to 38 of the 40 reviews we read \u00b7 no guarantee or named offer on the site \u00b7 booking is a form \u00b7 homepage speaks to everyone \u00b7 2 of 317 reviews mention rude phone staff.
 CORRECT OUTPUT:
@@ -7805,6 +7853,30 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     const _all = JSON.stringify(parsed).toLowerCase();
     const _leaked = ['anderson', 'jacksonville', 'ty sumner', 'glenn layton', 'paradise key', 'hgtv']
       .filter(t => _all.includes(t) && !String(facts).toLowerCase().includes(t));
+
+    // ══ THE SHAPE LEAKS, NOT JUST THE WORDS ═══════════════════════════════════
+    // The check below catches VOCABULARY from the worked examples \u2014 "HGTV",
+    // "Glenn Layton". What actually leaks is the SENTENCE.
+    //
+    // The gold headline in this prompt is:
+    //   "Sixteen years of building, and almost none of it is visible."
+    //
+    // What the system produced, across six businesses in four industries:
+    //   "Forty-one years of real work, and almost none of it is visible..."
+    //   "Twenty-four years of real work, and almost none of it shows"
+    //   "Twenty-five years of real work, and almost none of it is searchable"
+    //   "Thirty years of probate work and almost none of it is visible..."
+    //
+    // One essay with the nouns swapped. It reads as insight and it is a
+    // template, and it is why every audit sounded like the last one.
+    try {
+      const _hl = String((parsed && parsed.headline) || '');
+      const GOLD_SHAPE = /^\s*[\w-]+\s+years?\s+(?:of|in)\b[^,.]{0,45}[,.]?\s*(?:and|but)\b/i;
+      if (GOLD_SHAPE.test(_hl)) {
+        console.log(`\u26a0 SHAPE LEAK [${company}]: the headline is "${_hl.slice(0, 70)}" \u2014 the worked example's own sentence ("Sixteen years of building, and almost none of it is visible") with this lead's nouns swapped in. Six businesses across four industries have produced that same construction. Say what is going on HERE, in whatever shape that takes.`);
+      }
+    } catch (e) { void e; }
+
     if (_leaked.length) {
       console.log(`\u26a0 SITUATION READ [${company}]: the output mentions ${_leaked.join(', ')} \u2014 these come from the worked examples in the prompt, NOT from this lead. The read is contaminated and should not be trusted as written.`);
     }
@@ -17070,10 +17142,28 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               // We already know from localRank whether they are absent. Asking a
               // regex to rediscover that from a sentence is the harm-ladder-v1
               // mistake in a different place.
-              const _measured = measuredScoreFor(_c.finding, _harmInputs || {});
-              const _v = _measured
-                ? { score: _measured.v, unmatched: false, why: `scored from the MEASUREMENT (${_measured.id}), not from how the sentence was phrased` }
-                : computeVerifiability(_c.finding);
+              // ══ CANNOT BE OBSERVED, SO CANNOT LEAD ══════════════════════
+              // Verifiability is what the ladder ranks on, and a finding about
+              // post-submission behaviour scores high on the WORDS while being
+              // impossible for us to have seen. Mid-American's email opened on
+              // exactly that and had to invent a Saturday night to do it.
+              //
+              // 1 is the floor, not zero: the finding is still real and still
+              // belongs in the audit and on the call sheet. Mike can simply ASK
+              // what happens to a 9pm enquiry, which is the honest way to learn
+              // it. It just cannot be the sentence a stranger opens with.
+              if (findingIsUnobservable(_c.finding)) {
+                _c._unobservable = true;
+                console.log(`\u26a0 CANNOT LEAD [${company}]: "${String(_c.finding).slice(0, 56)}" is about what happens AFTER a customer makes contact. We never submitted their form, so we cannot know whether an auto-reply fires, whether it routes to a phone, or whether the owner answers himself. Verifiability forced to 1 \u2014 it stays in the audit and on the call sheet, where Mike can ask directly.`);
+              }
+              const _measured = _c._unobservable
+                ? { score: 1, unmatched: false, why: 'post-contact behaviour \u2014 we have never observed it and no honest email can be built on it' }
+                : measuredScoreFor(_c.finding, _harmInputs || {});
+              const _v = _c._unobservable
+                ? _measured
+                : _measured
+                  ? { score: _measured.v, unmatched: false, why: `scored from the MEASUREMENT (${_measured.id}), not from how the sentence was phrased` }
+                  : computeVerifiability(_c.finding);
               if (_v.unmatched) _unmatched.push(`"${String(_c.finding).slice(0, 46)}"`);
               // Severity travels with the signal type, so correct it in the same pass.
               const _sev = computeSeverity(_c.signal || _c.declaredSignal);
