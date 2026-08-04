@@ -6441,7 +6441,11 @@ const HARM_LADDER = [
     say: () => 'Their website returned nothing when we loaded it \u2014 twice through our scraper, and again directly over https from a different server',
     costs: 'anyone who finds them online finds a blank page' },
 
-  { harm: 96, checkable: 92, novel: 92, delegable: 70, weFix: 60, band: 'DEAD', id: 'listing_closed',
+  // weFix was 60, scored as "we cannot fix his Google listing". Wrong frame:
+  // weFix asks whether it is OUR KIND OF WORK, and a Google Business Profile is
+  // inside every product we sell. Google telling searchers he is CLOSED is the
+  // most expensive item on this list and it was ranking fifth because of it.
+  { harm: 96, checkable: 92, novel: 92, delegable: 70, weFix: 90, band: 'DEAD', id: 'listing_closed',
     test: (m) => m.businessStatus && m.businessStatus !== 'OPERATIONAL',
     say: (m) => `Google is showing their business status as ${m.businessStatus}`,
     costs: 'Google is telling searchers they are shut' },
@@ -6526,7 +6530,12 @@ const HARM_LADDER = [
     costs: 'a first-time visitor decides whether a business is still any good in a few seconds, mostly on how the site looks' },
 
   // ── INVISIBLE ───────────────────────────────────────────────────────────
-  { harm: 96, checkable: 88, novel: 55, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
+  // novel was 55, on the assumption he half-knows his rank. But being ABSENT is
+  // not ranking badly. Owners search their own NAME and find themselves instantly
+  // \u2014 which is precisely why they do not know they are missing from the TRADE
+  // search. outranked_by_weaker keeps novel 18 because he genuinely does half-know
+  // that others are above him; absence is a different fact and it is news.
+  { harm: 96, checkable: 88, novel: 80, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
     // HEGG Windows, live: "NOT IN TOP 20 for replacement windows and doors
     // contractor in Dublin" \u2014 a 33-year business that does not appear at all \u2014
     // and the ladder scored it as NOTHING, because the only search entry it had
