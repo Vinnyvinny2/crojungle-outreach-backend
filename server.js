@@ -4747,6 +4747,10 @@ const applyPattern = (pattern, fullName, domain) => {
 // verified negative.
 let VERIFIER_EXHAUSTED = false;
 let VERIFIER_DEAD = false;
+// One place to tune, and the error message quotes it so a future reader knows
+// what the cap actually was when the failure happened.
+const VERIFIER_TIMEOUT_MS = Number(process.env.VERIFIER_TIMEOUT_MS || 30000);
+
 const verifyEmailSMTP = async (email, verifierKey) => {
   if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
   if (VERIFIER_EXHAUSTED || VERIFIER_DEAD) return { valid: null, catchAll: null, unknown: true, error: true };
@@ -4769,7 +4773,7 @@ const verifyEmailSMTP = async (email, verifierKey) => {
     // 30 seconds costs us nothing when the answer comes back fast, and buys
     // the entire send path on the leads where it does not.
     const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
-    const r = await fetchT(url, {}, 30000);   // was 12000 \u2014 see note above
+    const r = await fetchT(url, {}, VERIFIER_TIMEOUT_MS);
     const d = await safeJson(r);
     const status = String(d?.Status || d?.status || '').toLowerCase();
     const blob = JSON.stringify(d || {}).toLowerCase();
@@ -4793,7 +4797,26 @@ const verifyEmailSMTP = async (email, verifierKey) => {
       raw: status,
     };
   } catch(e) {
-    console.log('SMTP verify failed:', e.message);
+    // ══ "TIMEOUT" IS ALL WE HAVE EVER LEARNED, AND IT IS NOT ENOUGH ═════════
+    // Every lead for a week logged "SMTP verify failed: timeout", every one went
+    // to T4, and every one was BLOCKED from sending. Raising the cap 12s \u2192 30s
+    // changed nothing, which means the assumption behind that fix was wrong.
+    //
+    // This catch prints e.message and nothing else, so a DNS failure, a refused
+    // connection, a blocked outbound port and a genuine slow handshake all read
+    // as the same word. We have been reading one word and assuming it meant what
+    // it says \u2014 the same mistake as the Anthropic error that hid the real error.
+    //
+    // Print what we can actually distinguish. The next run will say which of
+    // these it is instead of leaving it to be guessed at again.
+    const _m = String((e && (e.name === 'AbortError' ? 'aborted after the timeout' : (e.code || e.message))) || 'unknown');
+    const _why =
+      /abort|timeout/i.test(_m) ? `the request ran past ${VERIFIER_TIMEOUT_MS / 1000}s with no answer. If this persists at 30s the verifier is not slow, it is unreachable \u2014 check whether Render can reach client.myemailverifier.com at all`
+      : /ENOTFOUND|EAI_AGAIN/i.test(_m) ? 'DNS could not resolve the verifier host from this server'
+      : /ECONNREFUSED|ECONNRESET|EPIPE/i.test(_m) ? 'the verifier host refused or dropped the connection'
+      : /CERT|TLS|SSL/i.test(_m) ? 'the TLS handshake with the verifier failed'
+      : `an unexpected error: ${_m}`;
+    console.log(`\u26a0 SMTP VERIFY FAILED [${String(email).split('@')[1] || '?'}]: ${_why}. Until this succeeds every address stays T4 and NOTHING can be sent, so this one line is the whole send path.`);
     return { valid: null, catchAll: null, unknown: true, error: true };
   }
 };
