@@ -1397,6 +1397,9 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
 // Watch the FINDING SCORES line across a few leads. If the candidate findings
 // stop being specific, that is the signal to revert \u2014 not a spreadsheet.
 const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
+// The synthesis call. Separate switch, separate default \u2014 the audit's quality is
+// held up by deterministic scoring underneath it; this call's is not.
+const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-4-6';
 
 const ANTHROPIC_PRICES = {
   'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
@@ -1562,9 +1565,16 @@ const anthropicFetch = async (url, opts, timeoutMs, label) => {
 const reportLeadSpend = (company) => {
   const rec = _leadSpend.get(String(company || 'unknown'));
   if (!rec || !rec.calls.length) return;
-  const top = [...rec.calls].sort((a, b) => b.cost - a.cost).slice(0, 5)
-    .map(c => `${c.label} $${c.cost.toFixed(4)} (${c.model.includes('sonnet') ? 'S' : 'H'} in:${c.fresh} cache:${c.cRead} out:${c.out})`);
-  console.log(`\ud83d\udcb0 ANTHROPIC TOTAL [${company}]: $${rec.total.toFixed(4)} across ${rec.calls.length} call(s). Most expensive: ${top.join(' | ')}`);
+  // ══ LIST EVERY CALL, NOT THE TOP FIVE ═════════════════════════════════════
+  // Live: the balance moved $0.10 on an audit this meter costed at $0.0700, and
+  // the log showed nine Anthropic calls firing against seven counted. A top-five
+  // summary cannot tell you WHICH two are missing, so the gap stayed a guess.
+  //
+  // Printing all of them makes the next run diagnostic instead of suggestive:
+  // any call visible in the log but absent from this line is the leak.
+  const all = [...rec.calls].sort((a, b) => b.cost - a.cost)
+    .map(c => `${c.label} $${c.cost.toFixed(4)} (${c.model.includes('sonnet') ? 'S' : 'H'} in:${c.fresh} cR:${c.cRead} cW:${c.cWrite} out:${c.out})`);
+  console.log(`\ud83d\udcb0 ANTHROPIC TOTAL [${company}]: $${rec.total.toFixed(4)} across ${rec.calls.length} call(s) \u2014 ${all.join(' | ')}`);
   _leadSpend.delete(String(company || 'unknown'));
 };
 
@@ -7725,7 +7735,22 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        // ══ THE SYNTHESIS MODEL, NOW A SWITCH TOO ═══════════════════════════
+        // Kept on Sonnet when the audit moved to Haiku, on the argument that this
+        // call is the judgement and the audit is extraction. That argument still
+        // holds \u2014 but at 840 output tokens it is $0.016 a lead, and 76% of that
+        // is output priced at $15/M.
+        //
+        // Unlike the audit, this call has NO deterministic scaffolding behind it:
+        // no computed dimensions, no harm ladder, no product fit. The shape, the
+        // headline and the rows are the model's own reasoning, and its output is
+        // what a human reads first in the audit view. So this is the one place a
+        // model change would actually show.
+        //
+        // Default stays Sonnet for that reason. If you want the last cent:
+        //   SITUATION_MODEL=claude-haiku-4-5-20251001
+        // and compare two situation reads side by side before keeping it.
+        model: SITUATION_MODEL,
         // 900 -> 1400. `background` is new and rows are now full sentences; the
         // old ceiling truncates the JSON, and a truncated response loses the
         // entire briefing rather than its tail.
@@ -13545,7 +13570,13 @@ const checkLocalRankStable = async (args) => {
   if (!a || !a.checked || !a.found) return a;
   await new Promise(r => setTimeout(r, 1200));
   let b = null;
-  try { b = await checkLocalRank(args); } catch (e) { void e; }
+  // ══ ANCHOR THE SECOND SAMPLE ON THE FIRST ════════════════════════════════
+  // The first search now returns their coordinates. Feeding those back means the
+  // second search asks about the same 30km circle instead of re-guessing which
+  // Dublin we meant \u2014 so a disagreement between samples is real rank movement,
+  // not two different questions.
+  const anchored = (a.bizLat && a.bizLng) ? { ...args, bizLat: a.bizLat, bizLng: a.bizLng } : args;
+  try { b = await checkLocalRank(anchored); } catch (e) { void e; }
   if (!b || !b.checked || !b.found) {
     return { ...a, rankStable: null,
       rankNote: 'only one usable sample \u2014 the position is approximate and the digit must not appear in the email' };
@@ -13566,7 +13597,7 @@ const checkLocalRankStable = async (args) => {
   };
 };
 
-const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey }) => {
+const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
   // ══ REFUSE TO SEARCH A SECTOR LABEL ═══════════════════════════════════════
@@ -13605,8 +13636,32 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
-                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.rating,places.userRatingCount' },
-      body: JSON.stringify({ textQuery: query, includePureServiceAreaBusinesses: true }),
+                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.rating,places.userRatingCount,places.location' },
+      // ══ THE RANK WAS UNSTABLE BECAUSE THE QUERY WAS AMBIGUOUS ═══════════════
+      // HEGG Windows: "not in the top 20" on one run, "#7 of 20" on the next.
+      // Same business, same query, minutes apart. That is not Google being
+      // volatile \u2014 it is us asking a question that has more than one answer.
+      //
+      // textQuery was "replacement windows and doors contractor in Dublin" and
+      // nothing else. With no location bias Places geocodes "Dublin" itself, and
+      // Dublin is Ohio, California, Georgia and Ireland. A business absent from
+      // one city's list is mid-table in another.
+      //
+      // No pageSize either, so the API returned however many it liked: some runs
+      // logged "of 20", others "of 6". #7 of 20 and #7 of 6 are different
+      // findings and we were treating them as one.
+      //
+      // A 30km circle centred on the business makes the question have a single
+      // answer, and pinning pageSize keeps the denominator constant. Coordinates
+      // come from the caller when we already resolved their Place.
+      body: JSON.stringify({
+        textQuery: query,
+        includePureServiceAreaBusinesses: true,
+        pageSize: 20,
+        ...(Number.isFinite(Number(bizLat)) && Number.isFinite(Number(bizLng)) ? {
+          locationBias: { circle: { center: { latitude: Number(bizLat), longitude: Number(bizLng) }, radius: 30000 } },
+        } : {}),
+      }),
     }, 12000);
     const d = await r.json();
     if (d.error) return { checked: false, why: `Places error: ${d.error.message || d.error.status}` };
@@ -13638,8 +13693,13 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     // The line that does the work: businesses ranking ABOVE them on a WEAKER
     // reputation. If this is non-zero, reviews are not the reason they are losing.
     const weakerAbove = above.filter(a => a.reviews < ours.reviews).length;
+    // Hand back their coordinates so a SECOND sample can anchor on the same
+    // point. Without this the two samples answer slightly different questions
+    // and "they disagree" tells us nothing about their actual rank.
+    const _loc = places[idx] && places[idx].location;
     return { checked: true, found: true, rank: idx + 1, scanned: places.length,
-             query, city, phrase, ours, above: above.slice(0, 3), weakerAbove };
+             query, city, phrase, ours, above: above.slice(0, 3), weakerAbove,
+             bizLat: _loc ? _loc.latitude : null, bizLng: _loc ? _loc.longitude : null };
   } catch (e) {
     return { checked: false, why: `local rank check failed: ${e.message}` };
   }
