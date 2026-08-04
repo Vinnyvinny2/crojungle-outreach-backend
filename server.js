@@ -7066,6 +7066,15 @@ Write it again, fixing exactly that. Everything else about the task is unchanged
 // A function DECLARATION, deliberately: the retry wrapper above calls this, and a
 // `const` arrow would be in the temporal dead zone at that point — a
 // ReferenceError on every lead. Caught by the TDZ scan before it ever deployed.
+// ══ CACHE THE PARTS THAT NEVER CHANGE ════════════════════════════════════════
+// This call sends ~2,950 tokens of Sonnet prompt per lead: the shape list, two
+// full worked examples, and the rules. All of it is identical on every lead and
+// all of it was billed fresh at $3.00/M, because the only cache breakpoint in
+// the whole file was on the audit's system prompt.
+//
+// Cached input is $0.30/M \u2014 ten times cheaper. And this call RETRIES on a failed
+// check, so a lead that fails once pays for the whole prompt twice; Craig Swapp
+// and Comfort-Air both did exactly that.
 async function _situationReadAttempt(facts, apiKey, company, correction) {
 
   const shapeList = SITUATION_SHAPES.map(([k, d]) => `${k} \u2014 ${d}`).join('\n');
@@ -7165,7 +7174,11 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         // old ceiling truncates the JSON, and a truncated response loses the
         // entire briefing rather than its tail.
         max_tokens: 1400,
-        system: sys,
+        // `sys` is the shape list, both worked examples and the rules \u2014 identical
+        // on every lead, ~2,950 Sonnet tokens, billed fresh every time until now.
+        // Cached input is $0.30/M against $3.00/M. This call also retries on a
+        // failed check, so the saving lands twice on the leads that need it.
+        system: [{ type: 'text', text: sys, cache_control: { type: 'ephemeral', ttl: '1h' } }],
         messages: [{ role: 'user', content: `THE MEASURED FACTS:\n${facts}\n\nWhat is going on here?${correction || ''}` }],
       }),
     }, 45000);
