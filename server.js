@@ -3417,6 +3417,55 @@ const FC_LEDGER = new AsyncLocalStorage();
 // while several third-party guides claim screenshot/action scrapes bill at 5. Rather
 // than bake in a guess, this is a dial: measure one lead with and one without, then
 // set FC_SCREENSHOT_CREDITS to whatever the dashboard actually moved by.
+// ══ WHAT A LEAD ACTUALLY COSTS ═══════════════════════════════════════════════
+// The log has always printed "BRAIN COST: $0.0989" and that is ONE of twenty-one
+// Anthropic calls per lead. The other twenty were invisible, so the meter said
+// ten cents while the bill said roughly thirty — and there was no way to tell
+// which call was expensive, or whether an optimisation helped.
+//
+// Same principle as the error message that hid the error: a measurement that
+// covers a fifth of the thing is worse than none, because it invites confident
+// decisions about the wrong number.
+const ANTHROPIC_PRICES = {
+  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
+  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 1.25 / 1e6 },
+};
+// The company name is not in scope at most call sites \u2014 a typeof guard there
+// referenced identifiers that do not exist and the scope scanner caught it
+// immediately. One module-level reference, set when a lead starts, is correct
+// and cannot go undefined.
+let _CURRENT_LEAD = 'lead';
+const setCurrentLead = (name) => { _CURRENT_LEAD = String(name || 'lead'); };
+
+const _leadSpend = new Map();   // company -> { calls: [], total }
+
+const meterAnthropic = (company, label, model, usage) => {
+  try {
+    if (!usage) return 0;
+    const p = ANTHROPIC_PRICES[model] || ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
+    const fresh = usage.input_tokens || 0;
+    const cRead = usage.cache_read_input_tokens || 0;
+    const cWrite = usage.cache_creation_input_tokens || 0;
+    const out = usage.output_tokens || 0;
+    const cost = fresh * p.in + cRead * p.cacheRead + cWrite * p.cacheWrite + out * p.out;
+    const key = String(company || 'unknown');
+    if (!_leadSpend.has(key)) _leadSpend.set(key, { calls: [], total: 0 });
+    const rec = _leadSpend.get(key);
+    rec.calls.push({ label, model, fresh, cRead, cWrite, out, cost });
+    rec.total += cost;
+    return cost;
+  } catch (e) { return 0; }
+};
+
+const reportLeadSpend = (company) => {
+  const rec = _leadSpend.get(String(company || 'unknown'));
+  if (!rec || !rec.calls.length) return;
+  const top = [...rec.calls].sort((a, b) => b.cost - a.cost).slice(0, 5)
+    .map(c => `${c.label} $${c.cost.toFixed(4)} (${c.model.includes('sonnet') ? 'S' : 'H'} in:${c.fresh} cache:${c.cRead} out:${c.out})`);
+  console.log(`\ud83d\udcb0 ANTHROPIC TOTAL [${company}]: $${rec.total.toFixed(4)} across ${rec.calls.length} call(s). Most expensive: ${top.join(' | ')}`);
+  _leadSpend.delete(String(company || 'unknown'));
+};
+
 const FC_SCREENSHOT_CREDITS = Number(process.env.FC_SCREENSHOT_CREDITS || 1);
 
 const fcCreditCost = (kind) => {
@@ -4959,6 +5008,8 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = d.content?.[0]?.text || '';
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -5253,6 +5304,7 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
     }, 12000);
     const d = await r.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'fetchGoogleReviews', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     return (d.reviews || [])
       .map(rv => ({ rating: rv.rating || 0, text: (rv.text?.text || rv.originalText?.text || '').trim().slice(0, 600) }))
       .filter(rv => rv.text);
@@ -7118,6 +7170,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
       }),
     }, 45000);
     const d = await r.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-sonnet-4-6', d && d.usage); } catch (e) { void e; }
     if (!d || !d.content) return null;
     const txt = (d.content || []).map(c => c.text || '').join('');
     const parsed = parseLLMJSON(txt);
@@ -7832,6 +7885,7 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
       }),
     }, 25000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'deepReviewMine', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -7958,6 +8012,7 @@ ${corpus}` }]
       }),
     }, 25000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -8037,6 +8092,7 @@ ${replyBlocks}` }]
       }),
     }, 18000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerInReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8217,6 +8273,7 @@ ${corpus}` }]
       }),
     }, 22000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8362,6 +8419,7 @@ ${md.slice(0, 14000)}` }]
       }),
     }, 20000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8455,6 +8513,8 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -8580,6 +8640,7 @@ ${corpus}` }]
       }),
     }, 20000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'evaluate', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8656,6 +8717,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       }),
     }, 18000);
     const d = await res.json();
+    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerViaReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8830,6 +8892,8 @@ ${content}` }]
     }, 20000);
 
     const d = await res.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerViaBusinessName', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -9835,6 +9899,8 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'findFounderVenting', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -9951,6 +10017,8 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'); let lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -13180,6 +13248,7 @@ const _runResearchInner = async (req, res) => {
   // entirely by a nonsense query. Search always prefers this.
   let customerTrade = '';
   console.log(`Research: ${company} | ${website||'no website'}`);
+  setCurrentLead(company);
 
   try {
     // ═══════════════════════════════════════════════════════════════════════
@@ -17636,6 +17705,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // falls out of the log instead of being estimated from the dashboard total.
     const _led = FC_LEDGER.getStore();
     if (_led) {
+      reportLeadSpend(company);
       console.log(`FIRECRAWL SPEND [${company}]: ${_led.spent} credits across ${_led.ops} paid operations | ${_led.saved} served free from our cache`);
     } else {
       console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} credits (no per-request ledger — figure may include concurrent leads)`);
@@ -18590,6 +18660,8 @@ Return ONLY valid JSON, no markdown:
     }, 30000);
 
     const data = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-sonnet-4-6', data && data.usage); } catch (e) { void e; }
     const text = data.content?.[0]?.text || '';
     let clean = text.replace(/```json|```/g, '').trim();
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
