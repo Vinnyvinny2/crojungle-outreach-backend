@@ -5784,12 +5784,27 @@ const rankHarms = (m = {}) => {
   // The gate is now on the COMBINED score, because a thing can fail for three
   // different reasons and all three disqualify it as a first line.
   const OPENER_GATE = 25;
+  // ══ A SECOND FLOOR, ON HARM ═══════════════════════════════════════════
+  // Bruce Favret opened on "the copyright line still reads 2023" \u2014 opener 26,
+  // harm 40 \u2014 while the same lead carried a harm-92 ranking problem, a harm-64
+  // history finding, and a listing whose newest review is four years old.
+  //
+  // The combined score let it through because copyright is extremely checkable
+  // and extremely novel, and those two nearly cancelled out its low harm. But a
+  // cold email to a thirty-year probate attorney that opens on his copyright
+  // year is precisely the technically-true trivia this ladder was built to stop.
+  // He agrees, forwards it to whoever built the site, and never replies.
+  //
+  // Checkability earns a finding the right to be CONSIDERED. It cannot promote
+  // something that costs him almost nothing. So: a floor on harm as well, and
+  // anything below it is supporting material for the call, never the first line.
+  const HARM_FLOOR = 45;
   const byHarm = [...hits].sort((a, b) => b.harm - a.harm);
   const byOpener = [...hits].sort((a, b) => b.opener - a.opener);
   // Among things that clear all three bars, lead with the costliest. This is the
   // answer to "shouldn't we lead with the most harmful thing?" \u2014 yes, and this
   // is the qualifier that makes it work.
-  const eligible = hits.filter(h => h.opener >= OPENER_GATE).sort((a, b) => b.harm - a.harm);
+  const eligible = hits.filter(h => h.opener >= OPENER_GATE && h.harm >= HARM_FLOOR).sort((a, b) => b.harm - a.harm);
   // Nothing clears the gate: fall back to the most checkable thing we have, and
   // the caller is warned separately that this lead is weak for email.
   const lead = eligible[0] || byOpener[0] || null;
@@ -14047,9 +14062,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           } else if (_harms.leadIsGated) {
             console.log(`\u25cb WORKABLE OPENER [${company}]: ${top.band} \u2014 he can check it, but at harm ${top.harm} it may not be enough for him to act on. Worth sending; do not expect it to carry itself.`);
           } else {
-            console.log(`\u260e BETTER AS A CALL [${company}]: nothing we found clears the believability gate \u2014 the costliest thing here is "${_harms.worst ? _harms.worst.finding.slice(0, 50) : 'unclear'}" (harm ${_harms.worst ? _harms.worst.harm : '?'}), but he cannot verify it from a cold email and will read it as a pitch \u2014 everything we found is either invisible to him or arguable. Nothing is broken on this business, which is good news about them and bad news about a cold email. A first email that opens on "you rank ninth" or "you have no guarantee" is the email every agency sends, and it spends the only first impression we get. Work this one by phone, where the case can be built in conversation.`);
+            console.log(`\u260e BETTER AS A CALL [${company}]: nothing we found clears the believability gate \u2014 the costliest thing here is "${_harms.worst ? _harms.worst.finding.slice(0, 50) : 'unclear'}" (harm ${_harms.worst ? _harms.worst.harm : '?'}), but he cannot verify it from a cold email and will read it as a pitch \u2014 everything we found is either invisible to him or arguable. ${_harms.all.length} problem(s) were still measured here \u2014 they are just the kind he has to take on trust or can argue with, which is bad news about the email and not a verdict on the business. A first email that opens on "you rank ninth" or "you have no guarantee" is the email every agency sends, and it spends the only first impression we get. Work this one by phone, where the case can be built in conversation.`);
           }
-          if (top.opener < 50) console.log(`\u26a0 WEAK OPENER [${company}]: nothing above opener ${top.opener} \u2014 everything found is either invisible to him or arguable, which is the hardest kind of first email to get answered. Nothing is broken here: good news about their business, bad news about our opening line.`);
+          if (top.opener < 50) console.log(`\u26a0 WEAK OPENER [${company}]: nothing above opener ${top.opener} \u2014 everything found is either invisible to him or arguable, which is the hardest kind of first email to get answered. That is a statement about our opening line, NOT about their business \u2014 ${_harms.all.length} problem(s) were still measured and a caller should have all of them in front of them.`);
           // ══ THE COUNT IS THE PITCH, SO IT HAS TO BE A REAL NUMBER ═══════
           // The email says: here are one or two you can check right now, and
           // there are N more. That N does the persuading — one fault is a typo,
@@ -15967,7 +15982,25 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 const _ok = _fit.allowed.some(a => _prod.toLowerCase().includes(a.toLowerCase()));
                 if (!_ok) {
                   console.log(`\u26d4 PRODUCT MISMATCH [${company}]: the email leads on ${_leadNow || 'an unstated finding'} \u2014 ${_fit.why} \u2014 but the recommendation is "${_prod}". That sells a fix for a different problem than the one the email describes, and the owner cannot tell what he is being offered. Expected one of: ${_fit.allowed.join(', ')}.`);
+                  // ══ FLAGGING IT DID NOT STOP IT ═══════════════════════════
+                  // Bruce Favret, live: the email leads on a review pattern
+                  // (demand arriving, delivery failing) and the recommendation
+                  // came back "Website Rebuild". The mismatch was detected,
+                  // logged with a \u26d4, and then the very next line said "Using
+                  // Brain audit recommendation: Website Rebuild".
+                  //
+                  // A guard that reports and does not act is the same failure as
+                  // the ladder check that warned for weeks while the wrong finding
+                  // shipped. The correct product for this diagnosis is knowable —
+                  // it is the first entry in the allowed list for the family the
+                  // finding sits in — so use it and say so.
                   parsed._productMismatch = { got: _prod, expected: _fit.allowed, family: _fit.family };
+                  const _corrected = _fit.allowed[0];
+                  if (_corrected) {
+                    console.log(`\u2696 PRODUCT CORRECTED [${company}]: "${_prod}" \u2192 "${_corrected}". The email argues a ${_fit.family} problem, so the recommendation has to fix a ${_fit.family} problem. Selling a rebuild to a business whose delivery is failing gives him a nicer website and the same complaints.`);
+                    parsed.recommendedProduct = _corrected;
+                    parsed._productWas = _prod;
+                  }
                 } else if (_fit.disagreed) {
                   console.log(`\u00b7 PRODUCT [${company}]: the lead finding (${_leadNow}) points at ${_fit.family} while the measured binding layer is ${growthConstraint.layer} (${_fit.layerFamily}). Followed the finding, because that is what the email argues. Product "${_prod}" fits it.`);
                 }
