@@ -15349,7 +15349,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const _words = String(_credHit[0]).toLowerCase().match(/[a-z]{4,}/g) || [];
             const _onPage = _words.length > 0 && _words.filter(w => _pageText.includes(w)).length >= Math.ceil(_words.length * 0.6);
             if (!_onPage) {
-              unverifiable.push(`INVENTED PRESS OR AWARD \u2014 "${String(_credHit[0]).slice(0, 60)}". We do not read press databases, award lists or "best of" rankings, and this does not appear on any page we scraped. A live audit told a surgeon "Cincinnati Magazine has recognized twice" with nothing behind it. He knows instantly whether it is true, and being wrong about an award discredits every measured fact next to it.`);
+              _claimRisks.push(`INVENTED PRESS OR AWARD \u2014 "${String(_credHit[0]).slice(0, 60)}". We do not read press databases, award lists or "best of" rankings, and this does not appear on any page we scraped. A live audit told a surgeon "Cincinnati Magazine has recognized twice" with nothing behind it. He knows instantly whether it is true, and being wrong about an award discredits every measured fact next to it.`);
             }
           }
           // 9. DEVELOPER REGISTER. Distinct from marketing jargon: this is
@@ -15421,13 +15421,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             if (_pm) {
               const _msg = `NAMES OUR PRODUCT IN PROSPECT-FACING COPY \u2014 "${_pm[0]}". Mike's rule is absolute: the email never names what we sell. It turns a colleague who found a problem into a vendor with something to move, and that is the switch that kills the reply. Diagnose the problem the product fixes; do not name the product.`;
               console.log(`\u26a0 PRODUCT NAME [${company}]: ${_msg}`);
-              unverifiable.push(_msg);
+              _claimRisks.push(_msg);
             }
             const _pp = _facing.match(_PRICE_TAGS);
             if (_pp) {
               const _msg2 = `QUOTES OUR PRICE IN PROSPECT-FACING COPY \u2014 "${_pp[0]}". Price belongs on the call, never in email 1. It converts a free audit into a sales pitch before he has agreed to anything.`;
               console.log(`\u26a0 PRODUCT PRICE [${company}]: ${_msg2}`);
-              unverifiable.push(_msg2);
+              _claimRisks.push(_msg2);
             }
           } catch (e) { void e; }
 
@@ -15474,7 +15474,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               if (_namesComponent && !_namesBusiness) {
                 const _m = `OPENED AT THE WRONG ALTITUDE (${_where}): the first sentence is about a page component, not about the business. An owner forwards that to his web person and the conversation ends there. Lead with what is happening to his revenue or his customers${growthConstraint.checked ? ` (the measured constraint is ${growthConstraint.layer})` : ''}, and move the component to sentence two as the proof.`;
                 console.log(`\u26a0 ALTITUDE CHECK [${company}]: ${_m}`);
-                unverifiable.push(_m);
+                _claimRisks.push(_m);
               }
             }
             }
@@ -16503,7 +16503,19 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             console.log(`\u26d4 FACT CHECK [${company}]: ${_fcMsg}`);
           }
         } catch(e) {
-          if (!brainError) brainError = `Claude responded but JSON parse failed: ${e.message} — response started with: "${vText.slice(0,120)}"`;
+          // ══ A CRASH IN OUR CODE IS NOT A PARSE FAILURE ═══════════════════════
+          // "unverifiable is not defined" was reported as "Claude responded but
+          // JSON parse failed", which points the operator at the model's response
+          // when the response was perfectly valid. A ReferenceError in one of our
+          // own guards threw inside this try, and 179 seconds of work was
+          // discarded with a message blaming the wrong thing.
+          //
+          // The two cases need different words because they need different
+          // actions: bad JSON means retry or check the prompt; a ReferenceError
+          // means a bug in this file and no amount of retrying helps.
+          if (!brainError) brainError = (e instanceof ReferenceError || e instanceof TypeError)
+            ? `A BUG IN OUR OWN CODE threw while processing a valid response: ${e.message}. This is not the model's fault and retrying will not help \u2014 the response parsed fine and one of our post-processing guards crashed on it.`
+            : `Claude responded but JSON parse failed: ${e.message} — response started with: "${vText.slice(0,120)}"`;
           console.log('Brain parse error:', e.message, vText.slice(0,200));
         }
       } catch(e) {
