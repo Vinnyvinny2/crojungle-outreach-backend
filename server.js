@@ -3235,7 +3235,21 @@ Return ONLY valid JSON, no markdown:
   "designQuality": "professional/dated/poor",
   "decisionMaker": "Look through ALL the page content (homepage, about, team, footer, any 'meet the founder' or leadership text) and identify the owner/founder/CEO/president BY NAME if their name appears ANYWHERE. Return an object {name, title, confidence} where confidence is 'high' (name explicitly tied to a leadership title like 'John Smith, CEO' or 'founded by Jane Doe'), 'medium' (name present and clearly the principal but title less explicit), or 'low' (a name appears but role is ambiguous). Return null ONLY if genuinely no personal name appears anywhere. Do NOT guess or invent — only extract names actually present in the content. Do NOT return generic words like 'Team', 'Leadership', 'Owner' as the name.",
   "overallConversionRating": "strong/moderate/weak",
-  "situationRead": "\u2605 THE MOST IMPORTANT FIELD YOU WRITE. Three to five sentences, INTERNAL \u2014 for a colleague who has never heard of this business and has six minutes before a call. Do NOT restate a finding. Every other field names ONE thing; this one names what all the signals ADD UP TO, which is usually not any of them individually and is sometimes the OPPOSITE of them. WORKED EXAMPLE \u2014 an oral surgeon: #1 of 17 in his town, 317 reviews at 4.9, newest 17 days old, replies to 38 of 40 himself, no guarantee on the site. A finding-level read says 'no named offer'. The SITUATION read is: he has already won his market, and that is the problem. Nothing here is broken. There is nothing left to take in a town that size, and the growth question is not how to get found but what the next chapter looks like when you are already the answer. That read is built from five signals at once and it CONTRADICTS the offer finding. SECOND EXAMPLE \u2014 a builder: founded 2009, HGTV, 434 pages, five social channels, 4.8 stars, and 19 reviews in sixteen years. Finding-level: no guarantee. SITUATION: sixteen years in and there is no machine for turning a finished house into the next one \u2014 activity rather than accumulation, and he can feel the gap between his effort and his result. HOW TO BUILD IT: put the numbers next to each other and ask what shape they make. Long tenure with thin proof means nothing compounds. Top rank in a small market means saturation, not marketing. Strong reviews with a cold profile means the machine stopped. High effort with low return means he is trying and does not know why it is not working. Name the shape in plain English and say what it implies about what he needs \u2014 marketing or software, growth or exit. BANNED as the headline: 'no guarantee', 'no named offer', 'generic positioning'. Those are page observations. If the offer genuinely IS the constraint, say why that matters for THIS business rather than restating the absence.",
+  // ══ SHORTENED, NOT REMOVED ═══════════════════════════════════════════════
+  // Nothing reads parsed.situationRead. The value the UI shows comes from the
+  // SEPARATE Sonnet synthesis call, which overwrites it \u2014 so as OUTPUT this
+  // field is ~250 wasted tokens on every lead.
+  //
+  // But it is not decoration. The line below explains why it is written FIRST:
+  // reasoning about the whole business before choosing findings is what stops
+  // the findings collapsing into a restatement of one page observation.
+  // Deleting it saves $0.004 and costs the thing the audit is for.
+  //
+  // So: keep the discipline, drop the length. One sentence forces the same
+  // "decide what is going on here before you list anything" step at a fifth of
+  // the tokens.
+  "situationRead": "ONE sentence, internal, written BEFORE anything else. Not a finding \u2014 what all the signals ADD UP TO. This is a thinking step: decide what is going on with this business before choosing which findings evidence it. A separate call writes the full briefing, so do not elaborate. BANNED as the answer: no guarantee, no named offer, generic positioning \u2014 those are page observations, not a read of the business.",
+
   "signalReads": "Array of {signal, says}, one per MEASURED signal you were given. 'signal' is a short label (Local search rank, Reputation, Booking path, Google profile, Positioning, Site technicals). 'says' is ONE sentence of INTERPRETATION for a colleague \u2014 what the fact MEANS for the business, never the fact itself, because the reader already has the fact. WRONG: 'Ranks #15 for plastic surgeon'. RIGHT: '#15 of 20 in Dallas and 10 of the 14 above him have fewer reviews \u2014 the position is not being earned on reputation.' WRONG: '1 profile gap'. RIGHT: 'His Google profile has no description \u2014 the one thing on this list he could fix himself this afternoon.' WRONG: 'Form only, 17 fields'. RIGHT: 'Seventeen fields is the only way in, and the people filling it in have just been in a car accident.' Where a signal is a STRENGTH say so plainly \u2014 a briefing that lists only problems misleads the reader about what kind of business this is.",
   \u2605 ORDER MATTERS AND IT IS DELIBERATE: you write situationRead and signalReads BEFORE candidateFindings. Reason about the whole business first, then choose the findings that EVIDENCE that read. Doing it the other way round \u2014 findings first, synthesis after \u2014 makes the synthesis a summary of choices already made, and it collapses back into a restatement of one finding. Decide what is going on here, then prove it.
   "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions. (c) IF THE SITE IS VISIBLY OLD, THAT IS ITS OWN CANDIDATE \u2014 use signal \u2018dated_site\u2019. A copyright year years out of date, a layout from another decade, or a design a buyer would hesitate to hand a card to is not a technical leak and it is not positioning: it is a CREDIBILITY problem, and for a high-ticket local trade it is often the first thing a customer reacts to and the whole reason a rebuild is worth buying. It was invisible to this list before, so a contractor whose site had not changed since 2015 had no way for that to become the lead. Score it like anything else: VERIFIABLE is high (he can look at it), SURPRISE is usually LOW (he knows it is old), so it wins only when it is genuinely severe. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
@@ -3549,7 +3563,37 @@ const FC_LEDGER = new AsyncLocalStorage();
 //
 // Default stays Sonnet. Changing it is a quality decision and it should be made
 // by looking at output, not at a spreadsheet.
-const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-sonnet-4-6';
+// ══ SPLIT THE MODELS BY TASK, NOT WHOLESALE ══════════════════════════════════
+// The obvious cost lever was "run everything on Haiku", and the obvious
+// objection was "the audit is the highest-judgement task in the system". Both
+// are wrong, and looking at what this call actually DOES settles it.
+//
+// The five dimensions that RANK the findings \u2014 verifiability, surprise,
+// severity, weFixIt, ownerLevel \u2014 are computed IN CODE from the finding text.
+// The log proves it overrides the model on every lead:
+//   \u2713 VERIFIABILITY: 3 candidate(s) re-scored from what we ACTUALLY measured
+//     rather than the model's estimate
+// The harm ladder, the product fit, the layer mapping and the ladder winner are
+// all deterministic too.
+//
+// So the audit call contributes three things: EXTRACT what is on the page,
+// WRITE candidate findings in plain English, WRITE one row per measured signal.
+// That is extraction and phrasing. The JUDGEMENT \u2014 what it all adds up to \u2014
+// happens in the separate situation-read call, and that stays on Sonnet.
+//
+// Measured on a live HEGG run:
+//   audit on Sonnet  $0.0824      total $0.1094
+//   audit on Haiku   $0.0275      total $0.0573   \u2014 a 48% reduction
+//
+// The risk is real but small and it is in the right place: phrasing may be
+// slightly flatter, and the synthesis that carries the audit is untouched. If
+// the rows read worse, one env var puts it back:
+//
+//   BRAIN_MODEL=claude-sonnet-4-6
+//
+// Watch the FINDING SCORES line across a few leads. If the candidate findings
+// stop being specific, that is the signal to revert \u2014 not a spreadsheet.
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
 
 const ANTHROPIC_PRICES = {
   'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
@@ -5100,6 +5144,8 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerViaBrain', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = d.content?.[0]?.text || '';
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -5365,6 +5411,8 @@ ABOUT THE EMAIL — this matters a lot:
     }, 30000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'visionAuditPage', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5437,6 +5485,8 @@ Return ONLY JSON:
     }, 20000);
 
     const d = await r.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'confirmDomainMatch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5523,6 +5573,8 @@ ${corpus}` }]
     }, 25000);
 
     const d = await r2.json();
+
+    try { meterAnthropic(_CURRENT_LEAD, 'findSizeViaSearch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -17247,7 +17299,37 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             console.log(`Fact-check skipped (explicitly disabled) on ${company}`);
           } else
           try {
+            // ══ THE CHECKER WAS BLIND TO OUR OWN MEASUREMENTS ═══════════════════════════
+            // It received the company, the page text and the rank \u2014 and nothing else.
+            // So on HEGG it produced six flags, three of which said "should NOT have
+            // been flagged", and one that was wrong twice over:
+            //
+            //   we measured  \u23f3 HISTORY: 33 years \u2014 their own site says 1993
+            //   it wrote     "no founding date was in the scraped evidence"
+            //   it invented  "31 years (from 2024/2025)" and flagged that too
+            //
+            // A checker that cannot see the measurements is not checking facts. It
+            // produces FALSE ALARMS on true things (an operator strips a real,
+            // checkable, persuasive fact) and MISSES WRONG NUMBERS entirely, because
+            // it does not know the right one \u2014 which is exactly how "Thirty years"
+            // against a measured 33 sailed past it in a live email.
+            //
+            // Handing it the measured facts fixes both directions at once.
             const critiquePrompt = `You are a quality-control auditor reviewing a marketing audit before it goes to a founder.
+
+\u2605 THE MEASURED FACTS. These are CONFIRMED. Do NOT flag anything that matches
+them, and DO flag any figure in the copy that CONTRADICTS them:
+${(Array.isArray(F) && F.length) ? F.slice(0, 60).join('\n') : '(none supplied \u2014 in that case say so rather than assuming a figure is unverified)'}
+
+\u26a0 HOW TO REPORT. Return ONLY real problems. Do NOT return an entry that
+concludes "this is correct", "no violation here" or "no flag warranted" \u2014 if it
+is fine, it is not a flag, and listing it teaches the reader to skim past the
+ones that matter. Six entries where three cancel themselves out is worse than
+two entries that are both real.
+
+\u26a0 DO NOT DO YOUR OWN ARITHMETIC ON DATES. If the facts above give a tenure,
+that figure is the truth; computing a different one from a copyright year and
+then flagging your own result is not a check.
 
 RAW EVIDENCE (what we actually confirmed):
 - Company: ${company}
@@ -17365,6 +17447,16 @@ Return ONLY valid JSON:
             }, 25000);
 
             const cd = await critiqueRes.json();
+
+            // The fact-check reads `cd`, so the auto-metering pass missed it. It
+
+            // produced ~600 words of flags on a live lead and appeared nowhere in
+
+            // the total \u2014 the same under-reporting as the audit call before it was
+
+            // added. A total that omits calls is not a total.
+
+            try { meterAnthropic(_CURRENT_LEAD, 'factCheck', 'claude-haiku-4-5-20251001', cd && cd.usage); } catch (e) { void e; }
             const cText = cd.content?.[0]?.text || '';
             let cClean = cText.replace(/```json|```/g, '').trim();
             // Extract just the JSON object if there's trailing text
