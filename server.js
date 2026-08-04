@@ -838,6 +838,78 @@ const checkUnsendable = (text, company) => {
   return flags;
 };
 
+// ══ FOUR FABRICATIONS THAT REACHED A FINISHED EMAIL ══════════════════════════
+// Read from live output, not imagined. Every one of these was in copy the system
+// considered ready to send, and every one is something the recipient can
+// disprove or knows to be false:
+//
+//   "a practice with 65 years of history"          tenure was NEVER measured on
+//                                                  that lead; HISTORY logged
+//                                                  nothing. Invented, and he
+//                                                  knows his own founding year.
+//   "Google's ranking treats a repeated complaint  a claim about how Google's
+//    pattern differently than a one-off"           algorithm works. Nobody knows
+//                                                  that. It was the most
+//                                                  confident line in the email.
+//   "the practices ahead have higher ratings       we read their review COUNT
+//    because that pattern isn't in theirs"         from the map pack. We have
+//                                                  never read one word of a
+//                                                  competitor's review text.
+//   "one family a month going elsewhere"           a frequency nothing measured.
+//                                                  "several thousand dollars" is
+//                                                  permitted trade knowledge;
+//                                                  "one a month" is arithmetic
+//                                                  about his business.
+//
+// These are checked against WHAT WE MEASURED, not against a wordlist, because a
+// tenure claim is only a fabrication when we have no tenure.
+const checkFabrications = (text, measured = {}) => {
+  const flags = [];
+  const t = String(text || '');
+  if (!t.trim()) return flags;
+
+  // 1 ── TENURE WE NEVER MEASURED ────────────────────────────────────────────
+  // Only a fabrication when history came back unmeasured. When we DO have a
+  // figure, a different guard already forces that exact number.
+  const tenureClaim = t.match(/\b(\d{1,3})\+?\s*years?\s+(?:of\s+)?(?:history|in business|in practice|practicing|of practice|of experience|serving)\b|\b(?:over|nearly|almost)\s+(\d{1,3})\s*years?\b|\b(?:three|four|five|six)\s+decades\b/i);
+  if (tenureClaim && !measured.tenureYears) {
+    flags.push(`INVENTED TENURE \u2014 "${tenureClaim[0]}". We measured NO founding year or tenure claim on this lead, so this number came from nowhere. It is the easiest possible thing for an owner to disprove: he knows when he started. Remove it entirely.`);
+  } else if (tenureClaim && measured.tenureYears) {
+    const said = Number(tenureClaim[1] || tenureClaim[2]);
+    if (Number.isFinite(said) && Math.abs(said - Number(measured.tenureYears)) > 1) {
+      flags.push(`WRONG TENURE \u2014 the copy says "${tenureClaim[0]}" but we measured ${measured.tenureYears} years. Use the measured figure or say nothing.`);
+    }
+  }
+
+  // 2 ── HOW A PLATFORM'S ALGORITHM WORKS ────────────────────────────────────
+  // We measure a POSITION. We have never had, and cannot have, any insight into
+  // why an algorithm produced it. Asserting a mechanism sounds authoritative and
+  // is the fastest way to be caught by anyone who works in the field.
+  const algoClaim = t.match(/\b(?:Google|the algorithm|their algorithm)\b[^.]{0,60}\b(?:treats|weights?|ranks? (?:you|them|sites)|penalis|penaliz|rewards?|favou?rs?|prioriti[sz]|considers?|looks at|factors? in)\b|\bbecause of (?:how )?(?:Google|the algorithm)\b|\bGoogle (?:sees|reads|knows|decided)\b/i);
+  if (algoClaim) {
+    flags.push(`INVENTED ALGORITHM MECHANICS \u2014 "${algoClaim[0].slice(0, 70)}". We measure WHERE a business ranks. We have no access to why, and nobody outside Google does. Stating a mechanism is the most confident-sounding sentence available and the easiest to be wrong about. Say the position and stop.`);
+  }
+
+  // 3 ── ANYTHING ABOUT A COMPETITOR BEYOND THEIR REVIEW COUNT ───────────────
+  // The map pack gives us a name, a position and a review count. It does not
+  // give us their copy, their offer, their booking path, or one word of their
+  // review text \u2014 so any claim about WHY they rank above is invention.
+  const compClaim = t.match(/\b(?:the (?:practices?|firms?|businesses|competitors?)|those (?:practices?|firms?|businesses)|they)\s+(?:ahead|above)[^.]{0,80}\b(?:because|since|as they|due to)\b|\b(?:ahead|above) (?:of )?you[^.]{0,60}\b(?:pattern|reviews? (?:say|mention|describe)|copy|offer|site)\b/i);
+  if (compClaim) {
+    flags.push(`INVENTED COMPETITOR DETAIL \u2014 "${compClaim[0].slice(0, 70)}". We read a competitor's NAME, POSITION and REVIEW COUNT from the map pack. We have never read their copy, their offer, or a single word of their review text, so any statement about WHY they rank above is made up. Compare on the numbers we actually hold, or not at all.`);
+  }
+
+  // 4 ── A FREQUENCY WE NEVER COUNTED ────────────────────────────────────────
+  // Industry-typical VALUE is allowed and is what makes the loss real. A RATE is
+  // arithmetic about his business, and we have none of his numbers.
+  const rateClaim = t.match(/\b(?:one|two|three|a|\d+)\s+(?:family|client|patient|customer|case|job|matter|caller?|lead)s?\s+(?:a|per|every)\s+(?:day|week|month|year)\b/i);
+  if (rateClaim) {
+    flags.push(`INVENTED FREQUENCY \u2014 "${rateClaim[0]}". The typical VALUE of a job in their trade is permitted; a RATE is not. We have none of his volume numbers, so "${rateClaim[0]}" is arithmetic about a business we have never seen inside. State the value of one and let him do the multiplication \u2014 he will, and the number he reaches is one he believes.`);
+  }
+
+  return flags;
+};
+
 const verifyGeneratedCopy = (copy = {}, opts = {}) => {
   const flags = [];
   const constraintLayer = opts.constraintLayer || '';
@@ -992,6 +1064,25 @@ app.post('/api/claude', async (req, res) => {
               _parsed.followUp1 && _parsed.followUp1.body, _parsed.followUp2 && _parsed.followUp2.body,
             ].filter(Boolean).join(' ');
             _copyFlags = _copyFlags.concat(checkUnsendable(_all, req.body.company || ''));
+            // Fabrication checks need to know what we MEASURED, because a tenure
+            // claim is only invented when we have no tenure. The client sends
+            // what the audit established.
+            _copyFlags = _copyFlags.concat(checkFabrications(_all, {
+              tenureYears: Number(req.body.tenureYears) || null,
+            }));
+            // The unsendable test belongs on SUBJECTS too. Mike's framework is
+            // explicit that "I caught a problem" went out identically to a sign
+            // shop and a med spa, and a subject that would fit another company is
+            // a template. It came back in live output anyway.
+            const _subs = [
+              _parsed.variantA && _parsed.variantA.subject, _parsed.variantB && _parsed.variantB.subject,
+              _parsed.followUp1 && _parsed.followUp1.subject, _parsed.followUp2 && _parsed.followUp2.subject,
+            ].filter(Boolean);
+            for (const sub of _subs) {
+              if (/^\s*(?:i caught a problem|we have to fix this|quick question|following up|checking in|a quick note)\s*$/i.test(String(sub).trim())) {
+                _copyFlags.push(`GENERIC SUBJECT \u2014 "${sub}". Mike's framework names this exact failure: it went out identically to a sign shop and a med spa. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Name the thing that is wrong on THEIR property.`);
+              }
+            }
           } catch (e) { void e; }
           const _who = req.body.company ? ` [${req.body.company}]` : '';
           if (_copyFlags.length) {
@@ -5581,26 +5672,26 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // copyright year loses on cost, however novel and checkable it is.
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
-  { harm: 95, checkable: 98, novel: 95, delegable: 95, band: 'DEAD', id: 'broken_page',
+  { harm: 95, checkable: 98, novel: 95, delegable: 95, weFix: 95, band: 'DEAD', id: 'broken_page',
     // Only a CONFIRMED failure counts. An unconfirmed one never reaches here.
     test: (m) => (m.brokenPages || []).some(b => b && b.confirmed === true),
     say: (m) => { const b = (m.brokenPages || []).find(x => x && x.confirmed === true);
       return `Their ${b.key || 'linked'} page returns ${b.why} — ${b.url} does not load at all`; },
     costs: 'every visitor who clicks it leaves, and he has no way of knowing they did' },
 
-  { harm: 97, checkable: 95, novel: 90, delegable: 80, band: 'DEAD', id: 'site_empty',
+  { harm: 97, checkable: 95, novel: 90, delegable: 80, weFix: 95, band: 'DEAD', id: 'site_empty',
     // Only when a SECOND, independent fetch also failed. Firecrawl returning
     // nothing is our problem until proven otherwise.
     test: (m) => m.siteConfirmedDown === true,
     say: () => 'Their website returned nothing when we loaded it \u2014 twice through our scraper, and again directly over https from a different server',
     costs: 'anyone who finds them online finds a blank page' },
 
-  { harm: 96, checkable: 92, novel: 92, delegable: 70, band: 'DEAD', id: 'listing_closed',
+  { harm: 96, checkable: 92, novel: 92, delegable: 70, weFix: 60, band: 'DEAD', id: 'listing_closed',
     test: (m) => m.businessStatus && m.businessStatus !== 'OPERATIONAL',
     say: (m) => `Google is showing their business status as ${m.businessStatus}`,
     costs: 'Google is telling searchers they are shut' },
 
-  { harm: 88, checkable: 90, novel: 85, delegable: 90, band: 'DEAD', id: 'no_website_on_profile',
+  { harm: 88, checkable: 90, novel: 85, delegable: 90, weFix: 95, band: 'DEAD', id: 'no_website_on_profile',
     test: (m) => m.hasPlace === true && m.websiteOnProfile === false,
     say: () => 'Their Google listing has no website link on it',
     costs: 'every searcher who finds the listing has nowhere to go but the phone' },
@@ -5610,30 +5701,30 @@ const HARM_LADDER = [
   // These matter because they say the same thing to a visitor that a dark shop
   // window says on a high street — is anyone still there? \u2014 and the owner never
   // sees it, because he does not read his own footer.
-  { harm: 40, checkable: 74, novel: 88, delegable: 95, band: 'ABANDONED', id: 'stale_copyright',
+  { harm: 40, checkable: 74, novel: 88, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'stale_copyright',
     test: (m) => m.copyrightYear && (new Date().getFullYear() - m.copyrightYear) >= 3,
     say: (m) => `The copyright line at the bottom of their site still reads ${m.copyrightYear}`,
     costs: 'a visitor checking whether the business is still going reads that as a site nobody maintains' },
 
-  { harm: 38, checkable: 70, novel: 90, delegable: 95, band: 'ABANDONED', id: 'placeholder_text',
+  { harm: 38, checkable: 70, novel: 90, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'placeholder_text',
     test: (m) => m.placeholderFound === true,
     say: (m) => `Placeholder text is still live on their site \u2014 "${m.placeholderSample}"`,
     costs: 'it is the clearest possible signal that nobody has looked at the page in a long time' },
 
-  { harm: 34, checkable: 62, novel: 80, delegable: 85, band: 'ABANDONED', id: 'dead_blog',
+  { harm: 34, checkable: 62, novel: 80, delegable: 85, weFix: 90, band: 'ABANDONED', id: 'dead_blog',
     test: (m) => m.newestPostYear && (new Date().getFullYear() - m.newestPostYear) >= 3,
     say: (m) => `Their news or blog section has nothing newer than ${m.newestPostYear}`,
     costs: 'an empty-looking site suggests a business winding down, whatever the truth is' },
 
 
-  { harm: 78, checkable: 96, novel: 70, delegable: 90, band: 'DEAD', id: 'no_https',
+  { harm: 78, checkable: 96, novel: 70, delegable: 90, weFix: 90, band: 'DEAD', id: 'no_https',
     test: (m) => m.isHttps === false,
     say: () => 'Their site is not on HTTPS, so browsers show a "Not secure" warning beside the address',
     costs: 'a warning in the address bar before a stranger has read a word, on a site asking for a name and a phone number' },
 
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
-  { harm: 72, checkable: 82, novel: 92, delegable: 92, band: 'CONTRADICTS', id: 'phone_mismatch',
+  { harm: 72, checkable: 82, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
     test: (m) => m.phoneMismatch === true,
     say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
     costs: 'the number a searcher dials and the number on his site are different lines' },
@@ -5645,33 +5736,33 @@ const HARM_LADDER = [
   // title, and that comparison does not exist yet. An entry that cannot trigger is
   // worse than a missing one: it looks like coverage.
 
-  { harm: 66, checkable: 72, novel: 86, delegable: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
+  { harm: 66, checkable: 72, novel: 86, delegable: 95, weFix: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
     test: (m) => m.tapToCallGenuinelyBroken === true,
     say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
     costs: 'most of his traffic is mobile, and tapping is how a mobile visitor calls' },
 
   // ── BLOCKS ──────────────────────────────────────────────────────────────
-  { harm: 74, checkable: 64, novel: 55, delegable: 45, band: 'BLOCKS', id: 'no_after_hours',
+  { harm: 74, checkable: 64, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
     test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true,
     say: () => 'The only way to reach them is a phone call during office hours',
     costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
 
-  { harm: 52, checkable: 58, novel: 50, delegable: 70, band: 'BLOCKS', id: 'long_form',
+  { harm: 52, checkable: 58, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
     test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
     say: (m) => `Their enquiry form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
     costs: 'each extra field costs completions, and this is the only way in' },
 
-  { harm: 58, checkable: 54, novel: 45, delegable: 40, band: 'BLOCKS', id: 'form_only_no_booking',
+  { harm: 58, checkable: 54, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
     test: (m) => m.booking === 'form' && m.bookingMeasured === true,
     say: () => 'There is no way to book a time — the only option is a form and a wait',
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
-  { harm: 46, checkable: 50, novel: 70, delegable: 30, band: 'BLOCKS', id: 'stale_reviews',
+  { harm: 46, checkable: 50, novel: 70, delegable: 30, weFix: 85, band: 'BLOCKS', id: 'stale_reviews',
     test: (m) => (m.reviewRecency || 0) > 365,
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
     costs: 'a buyer comparing options reads that as a business that may not still be running' },
 
-  { harm: 62, checkable: 58, novel: 30, delegable: 25, band: 'BLOCKS', id: 'dated_credibility',
+  { harm: 62, checkable: 58, novel: 30, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
     // Deliberately low on NOVEL. He has looked at his own site; he knows what it
     // looks like. This is real harm and a poor opener, which is exactly the case
     // the three-factor model exists to handle.
@@ -5680,33 +5771,33 @@ const HARM_LADDER = [
     costs: 'a first-time visitor decides whether a business is still any good in a few seconds, mostly on how the site looks' },
 
   // ── INVISIBLE ───────────────────────────────────────────────────────────
-  { harm: 92, checkable: 42, novel: 18, delegable: 10, band: 'INVISIBLE', id: 'outranked_by_weaker',
+  { harm: 92, checkable: 42, novel: 18, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
     test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
     say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
-  { harm: 48, checkable: 38, novel: 40, delegable: 75, band: 'INVISIBLE', id: 'thin_profile',
+  { harm: 48, checkable: 38, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
     test: (m) => (m.photoCount || 0) < 5,
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
-  { harm: 64, checkable: 34, novel: 75, delegable: 15, band: 'INVISIBLE', id: 'not_compounding',
+  { harm: 64, checkable: 34, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
     say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
     costs: 'the work is being done and almost none of it becomes proof for the next customer' },
 
   // ── OPINION ─────────────────────────────────────────────────────────────
-  { harm: 56, checkable: 22, novel: 20, delegable: 20, band: 'OPINION', id: 'no_offer',
+  { harm: 56, checkable: 22, novel: 20, delegable: 20, weFix: 85, band: 'OPINION', id: 'no_offer',
     test: (m) => m.guarantee === false && m.namedOffer === false,
     say: () => 'There is no guarantee and no named offer anywhere on the site',
     costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
 
-  { harm: 50, checkable: 18, novel: 25, delegable: 30, band: 'OPINION', id: 'no_lead_magnet',
+  { harm: 50, checkable: 18, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
     test: (m) => m.leadMagnet === false,
     say: () => 'There is nothing to take away short of asking for a quote',
     costs: 'everyone not ready to commit today leaves with nothing' },
 
-  { harm: 44, checkable: 14, novel: 15, delegable: 15, band: 'OPINION', id: 'undifferentiated',
+  { harm: 44, checkable: 14, novel: 15, delegable: 15, weFix: 80, band: 'OPINION', id: 'undifferentiated',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
     say: () => 'The copy does not name who the business is for',
     costs: 'a stranger has to work out for himself whether it applies to him' },
@@ -5754,6 +5845,25 @@ const rankHarms = (m = {}) => {
     // any one of them cannot be rescued by the other two — which is the whole
     // point: a costly fact he already knows is not an opener, and neither is a
     // novel fact that costs him nothing.
+    // ══ IF WE CANNOT FIX IT, WE MUST NOT LEAD ON IT ═════════════════════
+    // The Gesek email opened a cold approach to a maxillofacial surgeon with
+    // "ten of your 286 reviews describe a patient who expected one anesthesia
+    // experience and got another." That reads harsh because it IS harsh, and
+    // because it is none of our business: we cannot fix his anesthesia protocol,
+    // his chair-side manner, or his staffing.
+    //
+    // The old finding ladder already knew this \u2014 weFixIt scores pricing,
+    // workmanship and staff attitude at 1, "which we do not fix and must not
+    // lead with". I dropped that dimension building the harm ladder, exactly as
+    // I dropped delegation, and the result reached a finished email.
+    //
+    // Clinical and behavioural complaints are still REAL and still belong in the
+    // audit and on the call sheet \u2014 Mike may need to know a practice has a
+    // chair-side problem before he sells them anything. They just cannot be the
+    // sentence a stranger opens with.
+    const NOT_OURS = /\banesthesi|sedation|numbing|bedside|chair[- ]side|rude|hostile|aggressive|unprofessional|staff (?:were|was|is)\b|workmanship|shoddy|had to redo|overcharg|too expensive|price was|refund|billing dispute|malpractice|misdiagn/i;
+    const weFixThis = NOT_OURS.test(String(sentence || '')) ? 5 : (h.weFix || 80);
+
     // ══ HORMOZI'S CONSTRAINT LOGIC, APPLIED TO HARM ═════════════════════
     // His frameworks are mostly unit economics \u2014 LTV, CAC, the value equation \u2014
     // and none of that is visible from outside. Pretending otherwise is how a
@@ -5782,7 +5892,10 @@ const rankHarms = (m = {}) => {
       const traffic = Math.max(0.65, 1.15 - (Number(m.rank) / 20) * 0.5);
       harmAdj = Math.min(99, Math.round(h.harm * traffic));
     }
-    const openerScore = Math.round((harmAdj / 100) * (h.checkable / 100) * (h.novel / 100) * 100);
+    // Fixability multiplies in. A finding we cannot fix scores near zero as an
+    // opener however costly, checkable and novel it is \u2014 because opening on it
+    // is either an insult or an offer we cannot honour.
+    const openerScore = Math.round((harmAdj / 100) * (h.checkable / 100) * (h.novel / 100) * (weFixThis / 100) * 100);
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -5810,8 +5923,9 @@ const rankHarms = (m = {}) => {
     // So we do not lower the score. We mark it, and the email is required to
     // carry both. That is Vin's own CTA doing exactly this job.
     const forwardable = (h.delegable || 0) >= 70;
+
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, checkable: h.checkable, novel: h.novel,
-      delegable: h.delegable || 0, forwardable,
+      delegable: h.delegable || 0, forwardable, weFix: weFixThis,
       opener: openerScore, finding: sentence, costs: h.costs });
   }
   // ══ CHECKABILITY IS A GATE, NOT A RANKING ═══════════════════════════════
@@ -5834,7 +5948,22 @@ const rankHarms = (m = {}) => {
   // lead with the one costing him most.
   // The gate is now on the COMBINED score, because a thing can fail for three
   // different reasons and all three disqualify it as a first line.
-  const OPENER_GATE = 25;
+  // ══ RECALIBRATED WHEN FIXABILITY BECAME THE FOURTH FACTOR ═══════════════
+  // Four multiplied factors compress the scale, so a gate tuned for three cuts
+  // off in the wrong place. The scores are not comparable across versions and
+  // pretending otherwise is how a threshold silently starts rejecting good
+  // findings.
+  //
+  // Where the real cliff sits, computed across the whole catalogue:
+  //   84 broken page        52 phone mismatch     23 phone-only hours
+  //   79 site empty         49 listing closed     15 not compounding
+  //   64 no website link    39 tap-to-call dead    6 outranked by weaker
+  //
+  // 20 keeps everything an owner can actually check and act on \u2014 down to a
+  // stale copyright at 25 and phone-only intake at 23 \u2014 and still excludes the
+  // whole OPINION band, which tops out at 2. The HARM_FLOOR below is what stops
+  // trivia winning; this only decides what is eligible to be considered.
+  const OPENER_GATE = 20;
   // ══ A SECOND FLOOR, ON HARM ═══════════════════════════════════════════
   // Bruce Favret opened on "the copyright line still reads 2023" \u2014 opener 26,
   // harm 40 \u2014 while the same lead carried a harm-92 ranking problem, a harm-64
@@ -17530,6 +17659,63 @@ app.listen(PORT, () => {
     ['findingLayer',   typeof layerForFinding],
   ];
   console.log('BUILD: ' + _FEATURES.map(([n, t]) => n + ' ' + has(t === 'function')).join(' | '));
+
+  // ══ RUN THE PURE FUNCTIONS BEFORE ANY LEAD DOES ═══════════════════════════
+  // Every fault in the last six runs was found by a live lead, minutes into a
+  // research job, after credits had already been spent:
+  //   "parsed is not defined"        killed the whole harm chain
+  //   "unverifiable is not defined"  blocked an audit with a 422 and blamed
+  //                                  the model for a bug in our own code
+  //   "Cannot access weFixThis"      a TDZ error INSIDE a function, which the
+  //                                  static scanner cannot see because it only
+  //                                  checks module scope
+  //
+  // Static checks cannot catch those. Executing the code can. These functions
+  // are pure — same input, same output, no network, no cost — so there is no
+  // reason not to run each of them once at boot with representative data and
+  // fail loudly here instead of silently mid-audit.
+  //
+  // A boot that prints SELF-TEST FAILED is a deploy that should be rolled back
+  // before a single lead is researched.
+  try {
+    const _t = [];
+    const _try = (name, fn) => { try { const v = fn(); if (v === undefined) throw new Error('returned undefined'); }
+      catch (e) { _t.push(`${name}: ${(e && e.message) || e}`); } };
+
+    _try('rankHarms/empty', () => rankHarms({}));
+    _try('rankHarms/full', () => rankHarms({
+      brokenPages: [{ key: 'booking', why: 'a server error', url: 'https://x/y', confirmed: true }],
+      phoneMismatch: true, googlePhone: '(513) 555-0100', booking: 'phone_only', bookingMeasured: true,
+      formFieldCount: 12, formFieldCountIsSingleForm: true, photoCount: 2, reviewRecency: 400,
+      rankFound: true, rank: 9, weakerAbove: 3, rankQuery: 'x in y', tenureYears: 25, reviewCount: 29,
+      reviewsPerYear: 1.2, copyrightYear: 2019, placeholderFound: true, placeholderSample: 'lorem ipsum',
+      newestPostYear: 2021, guarantee: false, namedOffer: false, leadMagnet: false,
+      marketClarity: 'UNDIFFERENTIATED', hasPlace: true, websiteOnProfile: true, isHttps: false,
+      datedSite: true, siteConfirmedDown: false, scrapeTrustworthy: true, pageChars: 5000,
+    }));
+    _try('rankHarms/clinical', () => rankHarms({ rankFound: true, rank: 19, weakerAbove: 12, rankQuery: 'q', photoCount: 4 }));
+    _try('computeVerifiability', () => computeVerifiability('Ranks #9 of 20 for cpa in Dallas'));
+    _try('computeSurprise', () => computeSurprise('37 reviews across 25 years'));
+    _try('computeSeverity', () => computeSeverity('search_absence'));
+    _try('computeWeFixIt', () => computeWeFixIt('No guarantee anywhere', 'positioning_offer'));
+    _try('computeOwnerLevel', () => computeOwnerLevel('Ranks #12 of 20', 'search_absence'));
+    _try('computeProductFit', () => computeProductFit('LEADS', 'search_absence'));
+    _try('layerForFinding', () => layerForFinding('review_pattern', '37 reviews across 25 years'));
+    _try('measureAbandonment', () => measureAbandonment('x '.repeat(400) + ' \u00a9 2019 Acme'));
+    _try('measurePhoneConsistency', () => measurePhoneConsistency('(513) 555-0100', 'x '.repeat(400) + ' call (513) 555-0199'));
+    _try('detectBrokenPage', () => detectBrokenPage('https://x/y', 'Server Error in \'/\' Application. Runtime Error. An exception occurred while processing your request.') || null);
+    _try('checkFabrications', () => checkFabrications('a practice with 65 years of history', {}));
+    _try('checkUnsendable', () => checkUnsendable('I noticed a few issues with your website', 'X'));
+    _try('verifyGeneratedCopy', () => verifyGeneratedCopy({ variantA: { subject: 'your booking page is dead', pitch: 'Test pitch about a measured thing.' } }, {}));
+
+    if (_t.length) {
+      console.log(`\u26d4 SELF-TEST FAILED \u2014 ${_t.length} of the pure functions threw when run with representative data. DO NOT RESEARCH LEADS ON THIS BUILD; every one of these would fail mid-audit after credits were spent. ${_t.join(' | ')}`);
+    } else {
+      console.log(`\u2713 SELF-TEST: all 16 pure functions executed cleanly at boot. The last six live faults were runtime errors inside these \u2014 they would have been caught here.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SELF-TEST COULD NOT RUN \u2014 ${(e && e.message) || e}. That is itself a fault: the harness references something that does not exist.`);
+  }
   const _missing = _FEATURES.filter(([, t]) => t !== 'function').map(([n]) => n);
   if (_missing.length) console.log(`\u26d4 STALE BUILD \u2014 ${_missing.join(', ')} are not in this server.js. Anything depending on them will silently do nothing. Deploy the current file before reading any result from this run.`);
 });
