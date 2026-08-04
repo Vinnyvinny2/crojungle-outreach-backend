@@ -314,6 +314,9 @@ const computeProductFit = (layer, leadSignal) => {
 // than by which way the model leaned that minute.
 
 const WEFIXIT_RULES = [
+  // ── VOCABULARY THE LIVE RUNS KEPT MISSING ──────────────────────────────────
+  [5, /\bno social profile|no social profiles|social profiles? linked\b/i, 'linking their own accounts is ordinary web work and squarely inside what a rebuild or retainer covers'],
+  [4, /\bno response layer|no auto-?resp|no confirmation (?:page|message|email)|only path in\b/i, 'an automated response to a form submission is exactly what the AI Brain product is'],
   // ── 1: real problems we do not sell a fix for. Must never lead. ──────────
   // ── NOT SHOWING A PRICE IS NOT THE SAME AS CHARGING THE WRONG ONE ───────
   // "No pricing visible anywhere" scored 1 here — the rule below reads any
@@ -343,7 +346,7 @@ const WEFIXIT_RULES = [
   [5, /\b\d+[- ]field|form asks|contact form\b/i, 'form friction is a conversion fix we do directly'],
   [5, /\bno lead magnet|nothing to (take|download)|no email capture|no CRM\b/i,
       'capture and nurture is the centre of the offer'],
-  [5, /\brank|ranking|#\d+ of \d+|map pack|search results|not in the top|near the bottom of\b/i,
+  [5, /\brank|ranking|#\d+ of \d+|map pack|search results|not in (?:the )?top|do(?:es)? not appear|absent from (?:the )?(?:search|results)|near the bottom of\b/i,
       'local visibility is squarely what the marketing retainer does'],
   // "29 reviews at 5 stars across 25 years" \u2014 the star rating sits between the
   // count and "across", which the history rule below could not see past.
@@ -371,6 +374,13 @@ const computeWeFixIt = (findingText, signal) => {
 // The delegation test. The question is not how serious the finding is; it is who
 // reads the sentence and what they do next.
 const OWNERLEVEL_RULES = [
+  // ── VOCABULARY THE LIVE RUNS KEPT MISSING ──────────────────────────────────
+  // OWNERLEVEL had NO rule for absence from search, which is the most
+  // owner-level finding there is: nobody below the owner can decide to fix
+  // being invisible, and nobody below the owner feels it.
+  [5, /\bnot in (?:the )?top 20|do(?:es)? not appear|absent from (?:the )?(?:search|results)|invisible (?:in|for) search|no(?:t)? (?:ranking|listed) (?:anywhere|at all)\b/i, 'being absent from the results for your own trade is a revenue fact, not a task \u2014 no employee can be asked to fix it and no employee feels it'],
+  [3, /\bno social profile|no social profiles|social profiles? linked\b/i, 'a marketing person handles this, so it lands one level below the owner'],
+  [4, /\bno response layer|no auto-?resp|only path in|no confirmation (?:page|message|email)\b/i, 'what happens to an enquiry after it arrives is an operations decision the owner owns'],
   // ── 5: he cannot delegate this. It is about his money or his market. ─────
   [5, /\breviews? (across|per|a year)|years? (in business|of (practice|experience))|nothing.{0,25}compound|does not compound|track record\b/i,
       'a statement about what his whole career has produced is not something he forwards to anyone'],
@@ -432,6 +442,19 @@ const computeOwnerLevel = (findingText, signal) => {
 // measured rather than judged; weFixIt and ownerLevel remain judgements because
 // they genuinely vary and we have nothing to measure them against.
 const SURPRISE_RULES = [
+  // "Not in top 20" defaulted to 3 here on a live lead. It is the most
+  // important thing we can find about a business and it had no base rate at
+  // all, so it scored the same as a shrug. An owner half-suspects a poor rank;
+  // being absent ENTIRELY from his own trade term is usually genuine news,
+  // because nobody searches for their own business the way a stranger does.
+  [4, /\bnot in (?:the )?top|do(?:es)? not appear|absent from (?:the )?(?:search|results)|invisible (?:in|for) search\b/i, 'he half-knows his rank is not great; being absent from the list entirely is usually news, because owners search their own NAME and find themselves instantly'],
+  // ── VOCABULARY THE LIVE RUNS KEPT MISSING ──────────────────────────────────
+  // Every one of these produced "no known base rate, defaulted to 3" on real
+  // leads. A default of 3 is a shrug, and the log itself notes that two shrugs
+  // are enough to reorder a close ladder \u2014 so an unscored finding does not sit
+  // still, it quietly displaces a real one.
+  [5, /\bno social profile|no social profiles|social profiles? linked|no social (?:presence|accounts?)\b/i, 'a business with a Google profile and no social links anywhere is unusual enough that he will not have noticed it himself'],
+  [2, /\bno response layer|no auto-?resp|no confirmation (?:page|message|email)|no acknowledgement\b/i, 'almost every quote form on a contractor site works this way, so it is not news to him'],
   // ── ORDER MATTERS: FIRST MATCH WINS, SO SPECIFIC BEFORE GENERAL ─────────
   // "No scheduler, no form and no phone number visible anywhere" scored 1
   // because it hit the phone-only rule before reaching the rare-case rule.
@@ -584,6 +607,12 @@ const computeSeverity = (signal) => {
 // view-source or read a SERP), which is a real difference in how hard the email
 // has to work.
 const VERIFIABILITY_RULES = [
+  // "Quote form is the only path in \u2014 no response layer" defaulted to 2 here,
+  // which demoted it silently. He CAN check the first half in ten seconds by
+  // opening his own contact page; he cannot check the second half at all,
+  // because what happens after a submission is his backend and we never tested
+  // it. A 3 is the honest score: half of it is visible, half is inference.
+  [3, /\bonly path in|only way (?:in|to reach)|no response layer|no auto-?resp|no confirmation (?:page|message|email)\b/i, 'he can open his own contact page and see the form, but what happens after a submission is his backend and we never observed it'],
   // ══ THE VOCABULARY THE RULES KEPT MISSING ══════════════════════════════
   // Every live batch produced this warning, on nearly every lead:
   //   \u26a0 VERIFIABILITY: N finding(s) matched NO rule and defaulted to 2 \u2014
@@ -969,11 +998,39 @@ const checkFabrications = (text, measured = {}) => {
   // 1 ── TENURE WE NEVER MEASURED ────────────────────────────────────────────
   // Only a fabrication when history came back unmeasured. When we DO have a
   // figure, a different guard already forces that exact number.
-  const tenureClaim = t.match(/\b(\d{1,3})\+?\s*years?\s+(?:of\s+)?(?:history|in business|in practice|practicing|of practice|of experience|serving)\b|\b(?:over|nearly|almost)\s+(\d{1,3})\s*years?\b|\b(?:three|four|five|six)\s+decades\b/i);
+  // ══ NUMBERS ARE ALSO WRITTEN AS WORDS ═════════════════════════════════════
+  // HEGG Windows, live: we measured 33 years and the email opened "Thirty years
+  // in Dublin". The guard looked for \\d{1,3} and never saw it, because good copy
+  // spells small numbers out \u2014 which means the guard was blind to exactly the
+  // form the model prefers.
+  //
+  // He knows his own founding year. Being three years wrong in the FIRST LINE
+  // is the cheapest possible way to lose him, and it discredits the search
+  // finding standing next to it.
+  const WORD_NUMS = { ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+    sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40,
+    fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+  const wordToNum = (w) => {
+    const parts = String(w || '').toLowerCase().trim().split(/[\s-]+/);
+    let total = 0;
+    for (const p of parts) {
+      if (WORD_NUMS[p] != null) total += WORD_NUMS[p];
+      else if (['one','two','three','four','five','six','seven','eight','nine'].includes(p)) {
+        total += ['zero','one','two','three','four','five','six','seven','eight','nine'].indexOf(p);
+      }
+    }
+    return total || null;
+  };
+  const NUMWORD = '(?:ten|eleven|twelve|thir|four|fif|six|seven|eigh|nine)(?:teen|ty)?(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?|twenty(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?';
+  const tenureClaim = t.match(new RegExp(
+    `\\b(\\d{1,3})\\+?\\s*years?\\s+(?:of\\s+)?(?:history|in business|in practice|practicing|of practice|of experience|serving|in [A-Z][a-z]+)\\b` +
+    `|\\b(?:over|nearly|almost)\\s+(\\d{1,3})\\s*years?\\b` +
+    `|\\b(${NUMWORD})\\s+years?\\b` +
+    `|\\b(?:three|four|five|six)\\s+decades\\b`, 'i'));
   if (tenureClaim && !measured.tenureYears) {
     flags.push(`INVENTED TENURE \u2014 "${tenureClaim[0]}". We measured NO founding year or tenure claim on this lead, so this number came from nowhere. It is the easiest possible thing for an owner to disprove: he knows when he started. Remove it entirely.`);
   } else if (tenureClaim && measured.tenureYears) {
-    const said = Number(tenureClaim[1] || tenureClaim[2]);
+    const said = Number(tenureClaim[1] || tenureClaim[2]) || wordToNum(tenureClaim[3]);
     if (Number.isFinite(said) && Math.abs(said - Number(measured.tenureYears)) > 1) {
       flags.push(`WRONG TENURE \u2014 the copy says "${tenureClaim[0]}" but we measured ${measured.tenureYears} years. Use the measured figure or say nothing.`);
     }
@@ -1000,9 +1057,42 @@ const checkFabrications = (text, measured = {}) => {
   // 4 ── A FREQUENCY WE NEVER COUNTED ────────────────────────────────────────
   // Industry-typical VALUE is allowed and is what makes the loss real. A RATE is
   // arithmetic about his business, and we have none of his numbers.
-  const rateClaim = t.match(/\b(?:one|two|three|a|\d+)\s+(?:family|client|patient|customer|case|job|matter|caller?|lead)s?\s+(?:a|per|every)\s+(?:day|week|month|year)\b/i);
+  // ══ A RATE DOES NOT NEED A NOUN ═══════════════════════════════════════════
+  // The old pattern required a noun between the number and the period, so it
+  // caught "one FAMILY a month" and missed both of these, live, in the same
+  // pair of emails:
+  //   "One a month going to a competitor"       \u2014 no noun after the number
+  //   "Every week that search goes to someone"  \u2014 no number at all
+  //
+  // Both are arithmetic about a business we have never seen inside. The typical
+  // VALUE of a job in their trade is permitted and is what makes the loss real;
+  // a RATE is his books, and we do not have them.
+  const rateClaim =
+    // "one a month", "two a week", "3 a year" \u2014 with or without a noun
+    t.match(/\b(?:one|two|three|four|five|a|\d+)\s+(?:(?:family|families|client|patient|customer|case|job|matter|caller?|lead|enquir\w+|inquir\w+|project|install|sale)s?\s+)?(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
+    // "every week that ... goes elsewhere", "each month you lose"
+    || t.match(/\b(?:every|each)\s+(?:day|week|month|year)\b[^.]{0,60}\b(?:goes|go|lose|losing|lost|miss|missing|walks?|leaves?|never reaches?)\b/i)
+    // "a job a week", "a customer every month"
+    || t.match(/\ba\s+(?:job|customer|client|patient|case|project|sale|install)\s+(?:a|per|every)\s+(?:day|week|month|year)\b/i);
   if (rateClaim) {
     flags.push(`INVENTED FREQUENCY \u2014 "${rateClaim[0]}". The typical VALUE of a job in their trade is permitted; a RATE is not. We have none of his volume numbers, so "${rateClaim[0]}" is arithmetic about a business we have never seen inside. State the value of one and let him do the multiplication \u2014 he will, and the number he reaches is one he believes.`);
+  }
+
+  // ══ NEVER DESCRIBE OUR OWN WORK ═══════════════════════════════════════════
+  // Mike Part 8: "Never describe our process. 'I mapped where the reviews
+  // disappear' is about OUR work; 'your reviews are on Google, your site does
+  // not show them' is about his."
+  //
+  // Live, alongside the search finding: "I mapped exactly where it breaks."
+  // That sentence spends his attention on us. He does not care what we did \u2014 he
+  // cares what is true about his business, and every word about our method is a
+  // word not spent on his problem.
+  //
+  // "I went through YOUR SITE" is fine and stays: the object is his property,
+  // which is what makes it a statement about him rather than about us.
+  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built)\b[^.]{0,60}/i);
+  if (processClaim && !/\b(?:your|their|his|her)\s+(?:site|website|listing|profile|page|reviews|copy|form)\b/i.test(processClaim[0])) {
+    flags.push(`DESCRIBES OUR PROCESS \u2014 "${processClaim[0].trim().slice(0, 60)}". Mike's rule: never describe our work. He does not care what we did, he cares what is true about his business, and every word about our method is a word not spent on his problem. State what is wrong; that we found it is implied.`);
   }
 
   return flags;
@@ -1196,8 +1286,22 @@ app.post('/api/claude', async (req, res) => {
               _parsed.followUp1 && _parsed.followUp1.subject, _parsed.followUp2 && _parsed.followUp2.subject,
             ].filter(Boolean);
             for (const sub of _subs) {
-              if (/^\s*(?:i caught a problem|we have to fix this|quick question|following up|checking in|a quick note)\s*$/i.test(String(sub).trim())) {
-                _copyFlags.push(`GENERIC SUBJECT \u2014 "${sub}". Mike's framework names this exact failure: it went out identically to a sign shop and a med spa. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Name the thing that is wrong on THEIR property.`);
+              // ══ A LIST CANNOT COVER A SHAPE ═════════════════════════════
+              // This was an exact-match list. "I caught a dead end" walked
+              // straight past it, live \u2014 one word different from the banned
+              // "I caught a problem" and identically sendable to any business
+              // in the country.
+              //
+              // Mike's actual test is not a wordlist: "every subject must be
+              // unsendable to anyone else". A subject fails when it names
+              // nothing that belongs to THEM \u2014 no trade, no place, no page, no
+              // number. Test that instead.
+              const _sub = String(sub).trim();
+              const _namesSomething = /\d|\b(?:your|their)\s+\w+|booking|form|quote|listing|profile|reviews?|page|site|phone|number|search|rank|windows?|doors?|dental|dentist|surgeon|attorney|lawyer|plumb|electric|roof|hvac|excavat|crawlspace|foundation/i.test(_sub);
+              const _isVagueShape = /^(?:i|we)\s+(?:caught|found|spotted|noticed)\s+(?:a|an|some|something)\b/i.test(_sub)
+                || /^\s*(?:quick question|following up|checking in|a quick note|touching base|circling back)\s*$/i.test(_sub);
+              if (_isVagueShape && !_namesSomething) {
+                _copyFlags.push(`GENERIC SUBJECT \u2014 "${sub}". It names nothing that belongs to them: no trade, no place, no page, no number. Mike's framework records this exact failure \u2014 "I caught a problem" went out identically to a sign shop and a med spa \u2014 and "${sub}" is the same sentence with a different noun. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Name the thing that is wrong on THEIR property.`);
               }
             }
           } catch (e) { void e; }
@@ -6078,6 +6182,25 @@ const HARM_LADDER = [
     costs: 'a first-time visitor decides whether a business is still any good in a few seconds, mostly on how the site looks' },
 
   // ── INVISIBLE ───────────────────────────────────────────────────────────
+  { harm: 96, checkable: 88, novel: 55, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
+    // HEGG Windows, live: "NOT IN TOP 20 for replacement windows and doors
+    // contractor in Dublin" \u2014 a 33-year business that does not appear at all \u2014
+    // and the ladder scored it as NOTHING, because the only search entry it had
+    // required rankFound === true. Ranking #12 was scorable; being absent was
+    // not, which is exactly backwards.
+    //
+    // The email then opened on "no way to book a time" (harm 58) and routed him
+    // to the phone as a weak lead, while the single most expensive fact about
+    // his business sat unused in the same log.
+    //
+    // Higher checkability than a rank position, too: "search this and you are
+    // not on the page" is binary. He either appears or he does not, and no
+    // amount of personalisation changes an absence.
+    test: (m) => m.rankChecked === true && m.rankFound === false,
+    say: (m) => `They do not appear anywhere in the first twenty results for "${m.rankQuery || 'their main trade term'}"`,
+    costs: 'every person searching for exactly what they sell is choosing from a list they are not on' },
+
+
   { harm: 92, checkable: 42, novel: 18, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
     test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
     say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
@@ -14736,6 +14859,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           reviewRecency: gbpHealth && gbpHealth.reviewRecencyDays,
           photoCount: gbpHealth && gbpHealth.photoCount,
           rankFound: !!(localRank && localRank.found),
+          // Distinguish "we looked and they were absent" from "we never looked".
+          // Without this the absence entry could fire on a lead where the rank
+          // check was skipped, which would be a fabricated finding.
+          rankChecked: !!(localRank && localRank.checked),
           rank: localRank && localRank.rank,
           weakerAbove: localRank && localRank.weakerAbove,
           rankQuery: localRank && localRank.query,
