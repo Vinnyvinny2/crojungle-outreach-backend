@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3001;
 // Set the headers manually on EVERY response and answer OPTIONS preflight
 // immediately, before any other middleware or route can interfere or crash.
 // A dropped/crashed request loses its CORS headers and shows up in the browser
-// as a "No Access-Control-Allow-Origin" error even when origin:'*' is set. 
+// as a "No Access-Control-Allow-Origin" error even when origin:'*' is set.
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -6427,14 +6427,14 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // copyright year loses on cost, however novel and checkable it is.
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
-  { harm: 95, checkable: 98, novel: 95, delegable: 95, weFix: 95, band: 'DEAD', id: 'broken_page',
+  { harm: 95, specific: 98, novel: 95, delegable: 95, weFix: 95, band: 'DEAD', id: 'broken_page',
     // Only a CONFIRMED failure counts. An unconfirmed one never reaches here.
     test: (m) => (m.brokenPages || []).some(b => b && b.confirmed === true),
     say: (m) => { const b = (m.brokenPages || []).find(x => x && x.confirmed === true);
       return `Their ${b.key || 'linked'} page returns ${b.why} — ${b.url} does not load at all`; },
     costs: 'every visitor who clicks it leaves, and he has no way of knowing they did' },
 
-  { harm: 97, checkable: 95, novel: 90, delegable: 80, weFix: 95, band: 'DEAD', id: 'site_empty',
+  { harm: 97, specific: 95, novel: 90, delegable: 80, weFix: 95, band: 'DEAD', id: 'site_empty',
     // Only when a SECOND, independent fetch also failed. Firecrawl returning
     // nothing is our problem until proven otherwise.
     test: (m) => m.siteConfirmedDown === true,
@@ -6445,12 +6445,12 @@ const HARM_LADDER = [
   // weFix asks whether it is OUR KIND OF WORK, and a Google Business Profile is
   // inside every product we sell. Google telling searchers he is CLOSED is the
   // most expensive item on this list and it was ranking fifth because of it.
-  { harm: 96, checkable: 92, novel: 92, delegable: 70, weFix: 90, band: 'DEAD', id: 'listing_closed',
+  { harm: 96, specific: 95, novel: 92, delegable: 70, weFix: 90, band: 'DEAD', id: 'listing_closed',
     test: (m) => m.businessStatus && m.businessStatus !== 'OPERATIONAL',
     say: (m) => `Google is showing their business status as ${m.businessStatus}`,
     costs: 'Google is telling searchers they are shut' },
 
-  { harm: 88, checkable: 90, novel: 85, delegable: 90, weFix: 95, band: 'DEAD', id: 'no_website_on_profile',
+  { harm: 88, specific: 92, novel: 85, delegable: 90, weFix: 95, band: 'DEAD', id: 'no_website_on_profile',
     test: (m) => m.hasPlace === true && m.websiteOnProfile === false,
     say: () => 'Their Google listing has no website link on it',
     costs: 'every searcher who finds the listing has nowhere to go but the phone' },
@@ -6460,30 +6460,30 @@ const HARM_LADDER = [
   // These matter because they say the same thing to a visitor that a dark shop
   // window says on a high street — is anyone still there? \u2014 and the owner never
   // sees it, because he does not read his own footer.
-  { harm: 40, checkable: 74, novel: 88, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'stale_copyright',
+  { harm: 40, specific: 88, novel: 88, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'stale_copyright',
     test: (m) => m.copyrightYear && (new Date().getFullYear() - m.copyrightYear) >= 3,
     say: (m) => `The copyright line at the bottom of their site still reads ${m.copyrightYear}`,
     costs: 'a visitor checking whether the business is still going reads that as a site nobody maintains' },
 
-  { harm: 38, checkable: 70, novel: 90, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'placeholder_text',
+  { harm: 38, specific: 90, novel: 90, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'placeholder_text',
     test: (m) => m.placeholderFound === true,
     say: (m) => `Placeholder text is still live on their site \u2014 "${m.placeholderSample}"`,
     costs: 'it is the clearest possible signal that nobody has looked at the page in a long time' },
 
-  { harm: 34, checkable: 62, novel: 80, delegable: 85, weFix: 90, band: 'ABANDONED', id: 'dead_blog',
+  { harm: 34, specific: 85, novel: 80, delegable: 85, weFix: 90, band: 'ABANDONED', id: 'dead_blog',
     test: (m) => m.newestPostYear && (new Date().getFullYear() - m.newestPostYear) >= 3,
     say: (m) => `Their news or blog section has nothing newer than ${m.newestPostYear}`,
     costs: 'an empty-looking site suggests a business winding down, whatever the truth is' },
 
 
-  { harm: 78, checkable: 96, novel: 70, delegable: 90, weFix: 90, band: 'DEAD', id: 'no_https',
+  { harm: 78, specific: 70, novel: 70, delegable: 90, weFix: 90, band: 'DEAD', id: 'no_https',
     test: (m) => m.isHttps === false,
     say: () => 'Their site is not on HTTPS, so browsers show a "Not secure" warning beside the address',
     costs: 'a warning in the address bar before a stranger has read a word, on a site asking for a name and a phone number' },
 
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
-  { harm: 72, checkable: 82, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
+  { harm: 72, specific: 98, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
     test: (m) => m.phoneMismatch === true,
     say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
     costs: 'the number a searcher dials and the number on his site are different lines' },
@@ -6495,33 +6495,33 @@ const HARM_LADDER = [
   // title, and that comparison does not exist yet. An entry that cannot trigger is
   // worse than a missing one: it looks like coverage.
 
-  { harm: 66, checkable: 72, novel: 86, delegable: 95, weFix: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
+  { harm: 66, specific: 92, novel: 86, delegable: 95, weFix: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
     test: (m) => m.tapToCallGenuinelyBroken === true,
     say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
     costs: 'most of his traffic is mobile, and tapping is how a mobile visitor calls' },
 
   // ── BLOCKS ──────────────────────────────────────────────────────────────
-  { harm: 74, checkable: 64, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
+  { harm: 74, specific: 80, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
     test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true,
     say: () => 'The only way to reach them is a phone call during office hours',
     costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
 
-  { harm: 52, checkable: 58, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
+  { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
     test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
     say: (m) => `Their enquiry form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
     costs: 'each extra field costs completions, and this is the only way in' },
 
-  { harm: 58, checkable: 54, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
+  { harm: 58, specific: 80, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
     test: (m) => m.booking === 'form' && m.bookingMeasured === true,
     say: () => 'There is no way to book a time — the only option is a form and a wait',
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
-  { harm: 46, checkable: 50, novel: 70, delegable: 30, weFix: 85, band: 'BLOCKS', id: 'stale_reviews',
+  { harm: 46, specific: 88, novel: 70, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'stale_reviews',
     test: (m) => (m.reviewRecency || 0) > 365,
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
     costs: 'a buyer comparing options reads that as a business that may not still be running' },
 
-  { harm: 62, checkable: 58, novel: 30, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
+  { harm: 62, specific: 25, novel: 30, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
     // Deliberately low on NOVEL. He has looked at his own site; he knows what it
     // looks like. This is real harm and a poor opener, which is exactly the case
     // the three-factor model exists to handle.
@@ -6535,7 +6535,7 @@ const HARM_LADDER = [
   // \u2014 which is precisely why they do not know they are missing from the TRADE
   // search. outranked_by_weaker keeps novel 18 because he genuinely does half-know
   // that others are above him; absence is a different fact and it is news.
-  { harm: 96, checkable: 88, novel: 80, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
+  { harm: 96, specific: 90, novel: 80, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
     // HEGG Windows, live: "NOT IN TOP 20 for replacement windows and doors
     // contractor in Dublin" \u2014 a 33-year business that does not appear at all \u2014
     // and the ladder scored it as NOTHING, because the only search entry it had
@@ -6554,33 +6554,33 @@ const HARM_LADDER = [
     costs: 'every person searching for exactly what they sell is choosing from a list they are not on' },
 
 
-  { harm: 92, checkable: 42, novel: 18, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
+  { harm: 92, specific: 92, novel: 18, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
     test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
     say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
-  { harm: 48, checkable: 38, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
+  { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
     test: (m) => (m.photoCount || 0) < 5,
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
-  { harm: 64, checkable: 34, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
+  { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
     say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
     costs: 'the work is being done and almost none of it becomes proof for the next customer' },
 
   // ── OPINION ─────────────────────────────────────────────────────────────
-  { harm: 56, checkable: 22, novel: 20, delegable: 20, weFix: 85, band: 'OPINION', id: 'no_offer',
+  { harm: 56, specific: 45, novel: 20, delegable: 20, weFix: 95, band: 'OPINION', id: 'no_offer',
     test: (m) => m.guarantee === false && m.namedOffer === false,
     say: () => 'There is no guarantee and no named offer anywhere on the site',
     costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
 
-  { harm: 50, checkable: 18, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
+  { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
     test: (m) => m.leadMagnet === false,
     say: () => 'There is nothing to take away short of asking for a quote',
     costs: 'everyone not ready to commit today leaves with nothing' },
 
-  { harm: 44, checkable: 14, novel: 15, delegable: 15, weFix: 80, band: 'OPINION', id: 'undifferentiated',
+  { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
     say: () => 'The copy does not name who the business is for',
     costs: 'a stranger has to work out for himself whether it applies to him' },
@@ -6644,6 +6644,21 @@ const rankHarms = (m = {}) => {
     // audit and on the call sheet \u2014 Mike may need to know a practice has a
     // chair-side problem before he sells them anything. They just cannot be the
     // sentence a stranger opens with.
+    // ══ WE CAN FIX ALMOST ANYTHING, SO THIS SHOULD BARELY MOVE ══════════
+    // weFix was damping real findings on the assumption some were outside what
+    // we do \u2014 stale reviews 85, no named offer 85, undifferentiated copy 80. All
+    // three are squarely inside what CROJungle builds: review systems, offer and
+    // positioning work, websites, ads, AI, custom software, exit advisory.
+    //
+    // The factor still earns its place, but for ONE job only: stopping us leading
+    // on things that are genuinely not ours to fix \u2014 a surgeon's anesthesia
+    // protocol, a contractor's workmanship, a billing dispute, staff attitude.
+    // Those score 5 below and drop out entirely, which is what stopped an email
+    // opening on a surgeon's clinical reviews.
+    //
+    // Everything else sits at 90-95 and the factor is effectively flat, which is
+    // correct: the ranking should be decided by what is HURTING them, not by a
+    // guess about our own capability.
     const NOT_OURS = /\banesthesi|sedation|numbing|bedside|chair[- ]side|rude|hostile|aggressive|unprofessional|staff (?:were|was|is)\b|workmanship|shoddy|had to redo|overcharg|too expensive|price was|refund|billing dispute|malpractice|misdiagn/i;
     const weFixThis = NOT_OURS.test(String(sentence || '')) ? 5 : (h.weFix || 80);
 
@@ -6678,7 +6693,26 @@ const rankHarms = (m = {}) => {
     // Fixability multiplies in. A finding we cannot fix scores near zero as an
     // opener however costly, checkable and novel it is \u2014 because opening on it
     // is either an insult or an offer we cannot honour.
-    const openerScore = Math.round((harmAdj / 100) * (h.checkable / 100) * (h.novel / 100) * (weFixThis / 100) * 100);
+    // ══ THE RIGHT QUESTION IS PROVENANCE, NOT VERIFIABILITY ═══════════════
+    // This used to score "can he check it in ten seconds", which is a proxy for
+    // the real question \u2014 does he believe us. But there are TWO ways to earn
+    // belief and we were only scoring one:
+    //
+    //   he can verify it                            \u2190 what we scored
+    //   only someone who LOOKED could have written it \u2190 what we did not
+    //
+    // Where they disagree, the second is the better email every time:
+    //   "Your site looks dated"          easy to check, and anyone could say it
+    //                                    without opening the page. Scored 58.
+    //   "253 reviews across 41 years \u2014   he would have to count, but nobody
+    //    about 1.5 a year"               writes that without doing arithmetic on
+    //                                    HIS numbers. Scored 34.
+    //
+    // This is Mike's own unsendable test \u2014 "every subject must be unsendable to
+    // anyone else" \u2014 which lived in the copy guards and never reached the
+    // ranking. A finding that could be sent to any business in the country is a
+    // template, whether or not he can verify it.
+    const openerScore = Math.round((harmAdj / 100) * (h.specific / 100) * (h.novel / 100) * (weFixThis / 100) * 100);
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -6707,7 +6741,7 @@ const rankHarms = (m = {}) => {
     // carry both. That is Vin's own CTA doing exactly this job.
     const forwardable = (h.delegable || 0) >= 70;
 
-    hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, checkable: h.checkable, novel: h.novel,
+    hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
       opener: openerScore, finding: sentence, costs: h.costs });
   }
