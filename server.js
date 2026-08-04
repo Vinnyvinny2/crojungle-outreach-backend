@@ -5532,24 +5532,24 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // copyright year loses on cost, however novel and checkable it is.
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
-  { harm: 95, checkable: 98, novel: 95, band: 'DEAD', id: 'broken_page',
+  { harm: 95, checkable: 98, novel: 95, delegable: 95, band: 'DEAD', id: 'broken_page',
     // Only a CONFIRMED failure counts. An unconfirmed one never reaches here.
     test: (m) => (m.brokenPages || []).some(b => b && b.confirmed === true),
     say: (m) => { const b = (m.brokenPages || []).find(x => x && x.confirmed === true);
       return `Their ${b.key || 'linked'} page returns ${b.why} — ${b.url} does not load at all`; },
     costs: 'every visitor who clicks it leaves, and he has no way of knowing they did' },
 
-  { harm: 97, checkable: 95, novel: 90, band: 'DEAD', id: 'site_empty',
+  { harm: 97, checkable: 95, novel: 90, delegable: 80, band: 'DEAD', id: 'site_empty',
     test: (m) => m.scrapeTrustworthy === false && (m.pageChars || 0) < 200,
     say: () => 'Their website returned nothing at all when we loaded it, twice',
     costs: 'anyone who finds them online finds a blank page' },
 
-  { harm: 96, checkable: 92, novel: 92, band: 'DEAD', id: 'listing_closed',
+  { harm: 96, checkable: 92, novel: 92, delegable: 70, band: 'DEAD', id: 'listing_closed',
     test: (m) => m.businessStatus && m.businessStatus !== 'OPERATIONAL',
     say: (m) => `Google is showing their business status as ${m.businessStatus}`,
     costs: 'Google is telling searchers they are shut' },
 
-  { harm: 88, checkable: 90, novel: 85, band: 'DEAD', id: 'no_website_on_profile',
+  { harm: 88, checkable: 90, novel: 85, delegable: 90, band: 'DEAD', id: 'no_website_on_profile',
     test: (m) => m.hasPlace === true && m.websiteOnProfile === false,
     say: () => 'Their Google listing has no website link on it',
     costs: 'every searcher who finds the listing has nowhere to go but the phone' },
@@ -5559,30 +5559,30 @@ const HARM_LADDER = [
   // These matter because they say the same thing to a visitor that a dark shop
   // window says on a high street — is anyone still there? \u2014 and the owner never
   // sees it, because he does not read his own footer.
-  { harm: 40, checkable: 74, novel: 88, band: 'ABANDONED', id: 'stale_copyright',
+  { harm: 40, checkable: 74, novel: 88, delegable: 95, band: 'ABANDONED', id: 'stale_copyright',
     test: (m) => m.copyrightYear && (new Date().getFullYear() - m.copyrightYear) >= 3,
     say: (m) => `The copyright line at the bottom of their site still reads ${m.copyrightYear}`,
     costs: 'a visitor checking whether the business is still going reads that as a site nobody maintains' },
 
-  { harm: 38, checkable: 70, novel: 90, band: 'ABANDONED', id: 'placeholder_text',
+  { harm: 38, checkable: 70, novel: 90, delegable: 95, band: 'ABANDONED', id: 'placeholder_text',
     test: (m) => m.placeholderFound === true,
     say: (m) => `Placeholder text is still live on their site \u2014 "${m.placeholderSample}"`,
     costs: 'it is the clearest possible signal that nobody has looked at the page in a long time' },
 
-  { harm: 34, checkable: 62, novel: 80, band: 'ABANDONED', id: 'dead_blog',
+  { harm: 34, checkable: 62, novel: 80, delegable: 85, band: 'ABANDONED', id: 'dead_blog',
     test: (m) => m.newestPostYear && (new Date().getFullYear() - m.newestPostYear) >= 3,
     say: (m) => `Their news or blog section has nothing newer than ${m.newestPostYear}`,
     costs: 'an empty-looking site suggests a business winding down, whatever the truth is' },
 
 
-  { harm: 78, checkable: 96, novel: 70, band: 'DEAD', id: 'no_https',
+  { harm: 78, checkable: 96, novel: 70, delegable: 90, band: 'DEAD', id: 'no_https',
     test: (m) => m.isHttps === false,
     say: () => 'Their site is not on HTTPS, so browsers show a "Not secure" warning beside the address',
     costs: 'a warning in the address bar before a stranger has read a word, on a site asking for a name and a phone number' },
 
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
-  { harm: 72, checkable: 82, novel: 92, band: 'CONTRADICTS', id: 'phone_mismatch',
+  { harm: 72, checkable: 82, novel: 92, delegable: 92, band: 'CONTRADICTS', id: 'phone_mismatch',
     test: (m) => m.phoneMismatch === true,
     say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
     costs: 'the number a searcher dials and the number on his site are different lines' },
@@ -5594,33 +5594,33 @@ const HARM_LADDER = [
   // title, and that comparison does not exist yet. An entry that cannot trigger is
   // worse than a missing one: it looks like coverage.
 
-  { harm: 66, checkable: 72, novel: 86, band: 'CONTRADICTS', id: 'tap_to_call_broken',
+  { harm: 66, checkable: 72, novel: 86, delegable: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
     test: (m) => m.tapToCallGenuinelyBroken === true,
     say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
     costs: 'most of his traffic is mobile, and tapping is how a mobile visitor calls' },
 
   // ── BLOCKS ──────────────────────────────────────────────────────────────
-  { harm: 74, checkable: 64, novel: 55, band: 'BLOCKS', id: 'no_after_hours',
+  { harm: 74, checkable: 64, novel: 55, delegable: 45, band: 'BLOCKS', id: 'no_after_hours',
     test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true,
     say: () => 'The only way to reach them is a phone call during office hours',
     costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
 
-  { harm: 52, checkable: 58, novel: 50, band: 'BLOCKS', id: 'long_form',
+  { harm: 52, checkable: 58, novel: 50, delegable: 70, band: 'BLOCKS', id: 'long_form',
     test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
     say: (m) => `Their enquiry form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
     costs: 'each extra field costs completions, and this is the only way in' },
 
-  { harm: 58, checkable: 54, novel: 45, band: 'BLOCKS', id: 'form_only_no_booking',
+  { harm: 58, checkable: 54, novel: 45, delegable: 40, band: 'BLOCKS', id: 'form_only_no_booking',
     test: (m) => m.booking === 'form' && m.bookingMeasured === true,
     say: () => 'There is no way to book a time — the only option is a form and a wait',
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
-  { harm: 46, checkable: 50, novel: 70, band: 'BLOCKS', id: 'stale_reviews',
+  { harm: 46, checkable: 50, novel: 70, delegable: 30, band: 'BLOCKS', id: 'stale_reviews',
     test: (m) => (m.reviewRecency || 0) > 365,
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
     costs: 'a buyer comparing options reads that as a business that may not still be running' },
 
-  { harm: 62, checkable: 58, novel: 30, band: 'BLOCKS', id: 'dated_credibility',
+  { harm: 62, checkable: 58, novel: 30, delegable: 25, band: 'BLOCKS', id: 'dated_credibility',
     // Deliberately low on NOVEL. He has looked at his own site; he knows what it
     // looks like. This is real harm and a poor opener, which is exactly the case
     // the three-factor model exists to handle.
@@ -5629,33 +5629,33 @@ const HARM_LADDER = [
     costs: 'a first-time visitor decides whether a business is still any good in a few seconds, mostly on how the site looks' },
 
   // ── INVISIBLE ───────────────────────────────────────────────────────────
-  { harm: 92, checkable: 42, novel: 18, band: 'INVISIBLE', id: 'outranked_by_weaker',
+  { harm: 92, checkable: 42, novel: 18, delegable: 10, band: 'INVISIBLE', id: 'outranked_by_weaker',
     test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
     say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
-  { harm: 48, checkable: 38, novel: 40, band: 'INVISIBLE', id: 'thin_profile',
+  { harm: 48, checkable: 38, novel: 40, delegable: 75, band: 'INVISIBLE', id: 'thin_profile',
     test: (m) => (m.photoCount || 0) < 5,
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
-  { harm: 64, checkable: 34, novel: 75, band: 'INVISIBLE', id: 'not_compounding',
+  { harm: 64, checkable: 34, novel: 75, delegable: 15, band: 'INVISIBLE', id: 'not_compounding',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
     say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
     costs: 'the work is being done and almost none of it becomes proof for the next customer' },
 
   // ── OPINION ─────────────────────────────────────────────────────────────
-  { harm: 56, checkable: 22, novel: 20, band: 'OPINION', id: 'no_offer',
+  { harm: 56, checkable: 22, novel: 20, delegable: 20, band: 'OPINION', id: 'no_offer',
     test: (m) => m.guarantee === false && m.namedOffer === false,
     say: () => 'There is no guarantee and no named offer anywhere on the site',
     costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
 
-  { harm: 50, checkable: 18, novel: 25, band: 'OPINION', id: 'no_lead_magnet',
+  { harm: 50, checkable: 18, novel: 25, delegable: 30, band: 'OPINION', id: 'no_lead_magnet',
     test: (m) => m.leadMagnet === false,
     say: () => 'There is nothing to take away short of asking for a quote',
     costs: 'everyone not ready to commit today leaves with nothing' },
 
-  { harm: 44, checkable: 14, novel: 15, band: 'OPINION', id: 'undifferentiated',
+  { harm: 44, checkable: 14, novel: 15, delegable: 15, band: 'OPINION', id: 'undifferentiated',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
     say: () => 'The copy does not name who the business is for',
     costs: 'a stranger has to work out for himself whether it applies to him' },
@@ -5732,7 +5732,35 @@ const rankHarms = (m = {}) => {
       harmAdj = Math.min(99, Math.round(h.harm * traffic));
     }
     const openerScore = Math.round((harmAdj / 100) * (h.checkable / 100) * (h.novel / 100) * 100);
+
+    // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
+    // Mike's Part 12 rule 1: could he forward this and consider it handled? An
+    // owner delegates TASKS but never delegates REVENUE. The old finding ladder
+    // tested this as ownerLevel and I left it out of the harm ladder.
+    //
+    // The correlation is nasty: the MOST checkable findings are usually the MOST
+    // delegable, because a small concrete fault is exactly what an owner hands to
+    // someone else. "Your Google number is not on your site" is our strongest
+    // opener on Jane and also five minutes of work for whoever runs her site. He
+    // forwards it, it gets fixed, he never replies, and we paid to improve a
+    // stranger's website.
+    //
+    // The wrong fix is to demote delegable findings \u2014 that throws away the broken
+    // page, which is the best door we have. The right fix is that a delegable
+    // finding must never travel ALONE. Two things convert it:
+    //
+    //   THE COUNT   one fault is a task; seven is a pattern, and a pattern is a
+    //               management problem the owner cannot hand to the person who
+    //               allowed it.
+    //   THE QUESTION  "who's handling this for you at the moment?" is not about
+    //               the fault. It is about whether anyone is minding the shop,
+    //               and that is not a question he can forward.
+    //
+    // So we do not lower the score. We mark it, and the email is required to
+    // carry both. That is Vin's own CTA doing exactly this job.
+    const forwardable = (h.delegable || 0) >= 70;
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, checkable: h.checkable, novel: h.novel,
+      delegable: h.delegable || 0, forwardable,
       opener: openerScore, finding: sentence, costs: h.costs });
   }
   // ══ CHECKABILITY IS A GATE, NOT A RANKING ═══════════════════════════════
@@ -7139,7 +7167,8 @@ const measureGrowthConstraint = ({
               : weakerAbove === 1
                 ? `just 1 of the ${_above} businesses ranked above them has FEWER reviews`
                 : `${weakerAbove} of the ${_above} businesses ranked above them have FEWER reviews`;
-            return `${_frame}, and they still sit at #${rank}. ${rank <= (_above + 1) / 2 ? 'They ARE in the results, in the middle of them' : 'They ARE in the results; they are near the bottom of them'}, and people choose from the top of a list. \u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} of ${scanned || 20}, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
+            return `${_frame}, and they still sit at #${rank}. ${rank <= (_above + 1) / 2 ? 'They ARE in the results, in the middle of them' : 'They ARE in the results; they are near the bottom of them'}, and people choose from the top of a list. \u26a0 OUR NUMBER AND HIS SCREEN DO NOT MATCH. We read the Places API, which returns organic results only. What he sees has SPONSORED listings above them, so his count is always one or two higher than ours \u2014 verified live: we measured a Cincinnati dentist at #9 and counting on the actual page put her at #10, because of one ad. NEVER put the raw digit in an email as something he can count. Say the band \u2014 "in the middle of the first twenty", "not in the top few" \u2014 which survives the ads being there. The digit stays here for the call sheet.
+\u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} of ${scanned || 20}, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
       : (weakerAbove > 0)
         ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
@@ -13965,6 +13994,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (_harms.all && _harms.all.length) {
           const top = _harms.lead;
           console.log(`\u2709 EMAIL OPENS ON [${company}]: ${top.band} opener=${top.opener} \u2014 ${top.finding}.`);
+          if (top.forwardable) console.log(`\u26a0 FORWARDABLE [${company}]: he can hand this to whoever runs his site and consider it handled. The email MUST carry the count (${_harms.all.length}) and the accountability question, or the likely outcome is that it gets fixed and we never hear back.`);
           if (_harms.worst && _harms.worst.id !== top.id) {
             console.log(`\u25b6 BUT THE COSTLIEST THING IS [${company}]: harm=${_harms.worst.harm} \u2014 ${_harms.worst.finding}. ${_harms.worst.costs}. That is what he should be buying; it is just a weak first line because he cannot check it as easily.`);
           }
@@ -14029,6 +14059,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // claim eleven and he asks on the call, Mike needs eleven real ones in
           // front of him. So the number here is exactly what we measured and
           // could show him, and nothing else.
+          if (top.forwardable) {
+            push(`\u26a0 THIS OPENER IS FORWARDABLE, AND THAT IS THE RISK. "${String(top.finding).slice(0, 70)}" is something he can hand to whoever runs his site and consider handled in five minutes. If the email names only this, the most likely outcome is that it gets fixed and we never hear back \u2014 we would have improved a stranger's website for free.
+\u2605 SO IT MUST NOT TRAVEL ALONE. Two things convert a task into a conversation, and this email needs BOTH:
+   1. THE COUNT. One fault is a task. ${_harms.all.length} is a pattern, and a pattern is a management question he cannot forward to the person who let it happen. Say how many. Do not list them.
+   2. THE ACCOUNTABILITY QUESTION. "Who's handling the site for you at the moment?" is not about the fault at all \u2014 it is about whether anyone is minding the shop. That question cannot be delegated, because he is the only person who can answer it.
+\u26d4 DO NOT write an email that names this finding and stops. That is a free tip.`);
+          }
           push(`\u2605 THE COUNT: we measured ${_harms.all.length} distinct problem(s) on this business. That exact number may be used in the email \u2014 never round it up, never say "dozens", and never imply more than ${_harms.all.length}. Every one of them is listed below and Mike will have this list on the call.`);
           push(`\u2605 WHAT WE DETECTED AUTOMATICALLY \u2014 this is the FLOOR, not the ceiling:`);
           _harms.byOpener.slice(0, 6).forEach((h, n) => push(`   ${n + 1}. [${h.band}] ${h.finding}. What it costs them: ${h.costs}.`));
