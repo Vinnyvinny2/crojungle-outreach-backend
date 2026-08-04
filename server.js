@@ -3439,6 +3439,79 @@ const setCurrentLead = (name) => { _CURRENT_LEAD = String(name || 'lead'); };
 
 const _leadSpend = new Map();   // company -> { calls: [], total }
 
+// ══ THEIR MAILBOX IS NOT ALWAYS ON THEIR WEBSITE'S DOMAIN ════════════════════
+// Hawk Crawlspace publishes info@hawkva.com in the footer of every page. Their
+// website is hawkcrawlspaceandfoundationrepair.com. The address is on a page we
+// paid to scrape, on every page we scraped, and we threw it away because the
+// domains do not match \u2014 then reported "0 route(s) to a mailbox" and scored the
+// lead 24/100 reachability.
+//
+// The same-domain rule exists for a good reason: without it we harvest the web
+// designer's address, a supplier, a stock-photo licence, a chamber-of-commerce
+// contact. Those are on their pages too and none of them reach the owner.
+//
+// So the rule stays, and this is a narrow exception for the case where an
+// off-domain address is provably THEIRS. A business with a long SEO domain for
+// the site and a short one for mail is common, and the two domains almost always
+// share a word \u2014 hawkva.com and hawkcrawlspaceandfoundationrepair.com share
+// "hawk", which is also the first word of the business name.
+//
+// Three conditions, all required:
+//   1. the local part is a business inbox (info@, office@, contact@, hello@ and
+//      the like) or the owner's name \u2014 not a personal-looking stranger
+//   2. the email's domain shares a distinctive word with either the site domain
+//      or the company name, and that word is at least four characters
+//   3. the address appears on more than one page, or in a footer position
+//      \u2014 a one-off mention is far more likely to be someone else's
+const looksLikeTheirOffDomainMailbox = (email, siteDomain, companyName, occurrences) => {
+  const e = String(email || '').toLowerCase();
+  const at = e.indexOf('@');
+  if (at < 1) return null;
+  const local = e.slice(0, at);
+  const emailDomain = e.slice(at + 1);
+  const siteRoot = String(siteDomain || '').toLowerCase().replace(/^www\./, '');
+  if (!emailDomain || emailDomain === siteRoot) return null;
+
+  // 1. a business inbox, or a name we already believe is the owner
+  const BUSINESS_INBOX = /^(info|office|contact|hello|admin|sales|service|scheduling|estimates?|inquiries|enquiries|team|mail)$/;
+  const ownerWords = String(companyName || '').toLowerCase().match(/[a-z]{4,}/g) || [];
+  const isBusinessInbox = BUSINESS_INBOX.test(local);
+  if (!isBusinessInbox && !ownerWords.some(w => local.includes(w))) return null;
+
+  // 2. THE BRAND TOKEN, NOT ANY SHARED WORD.
+  // A first version matched any shared word of four or more characters, and it
+  // accepted sales@andersenwindows.com for HEGG Windows & Doors \u2014 because both
+  // contain "windows". That is a supplier, and a trade noun is exactly the word
+  // a supplier shares with its customers.
+  //
+  // The brand is the FIRST distinctive word of the business name: "hawk" from
+  // Hawk Crawlspace, "hegg" from HEGG Windows. A mail domain that belongs to the
+  // same business almost always carries it \u2014 hawkva, heggwin \u2014 and a supplier's
+  // never does. Fall back to the site domain's leading token when the company
+  // name is unhelpful.
+  const TRADE_OR_GENERIC = new Set(['company','group','services','service','solutions','online','info','home',
+    'best','local','pros','team','windows','doors','roofing','plumbing','electric','dental','legal','construction',
+    'contracting','remodeling','repair','foundation','landscaping','heating','cooling','cleaning']);
+  // Taking only the FIRST word was too narrow: for "Bruce Favret Law" it picked
+  // "bruce" and rejected favretlaw.com, which is plainly their own domain with a
+  // hyphen dropped. So consider EVERY distinctive token from the business name
+  // and the site domain \u2014 the trade-word list above is what stops a supplier
+  // matching on "windows" or "roofing".
+  const STOP = new Set(['the','and','for','llc','inc','ltd','corp']);
+  const tokensOf = (text) => (String(text || '').toLowerCase().match(/[a-z]{4,}/g) || [])
+    .filter(w => !TRADE_OR_GENERIC.has(w) && !STOP.has(w));
+  const brands = [...new Set([...tokensOf(companyName), ...tokensOf(siteRoot.split('.')[0])])];
+  if (!brands.length) return null;
+  const emailHost = emailDomain.split('.')[0];
+  const shared = brands.find(b => emailHost.includes(b) || b.includes(emailHost));
+  if (!shared) return null;
+
+  // 3. not a one-off
+  if ((occurrences || 0) < 2) return null;
+
+  return { email: e, why: `${e} is on a different domain from their website, but it is a business inbox, "${shared}" is shared with ${siteRoot.includes(shared) ? 'their site domain' : 'their business name'}, and it appears ${occurrences} times across the pages we read \u2014 a long domain for the site and a short one for mail is common and this is theirs` };
+};
+
 const meterAnthropic = (company, label, model, usage) => {
   try {
     if (!usage) return 0;
@@ -3715,6 +3788,17 @@ const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 // if ANYTHING goes wrong (submit fails, poll times out, partial results) the caller
 // falls back to individual scrapes and the audit is unaffected. A cheaper scrape is
 // never worth a lost audit.
+// ══ FULL-PAGE RENDERS OF THE INNER PAGES ═════════════════════════════════════
+// URL -> full-page screenshot, captured in the same request that fetched the
+// text. Kept out of the markdown cache deliberately: that cache is keyed for
+// text reuse and images would blow its size budget.
+const _PAGE_SHOTS = new Map();
+const rememberPageShot = (url, shot) => {
+  if (!url || !shot) return;
+  if (_PAGE_SHOTS.size > 400) _PAGE_SHOTS.clear();
+  _PAGE_SHOTS.set(String(url), shot);
+};
+
 const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
   const out = new Map();
   if (!fcKey || !Array.isArray(urls) || urls.length === 0) return out;
@@ -3807,10 +3891,21 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
       const md = item?.markdown || '';
       if (!u || !md) continue;
       out.set(u, md);
+      // ══ WE ASKED FOR THE IMAGE. TAKE IT. ═══════════════════════════════════
+      // 'screenshot@fullPage' has been in the formats above for two rounds and
+      // nothing ever read it back \u2014 the map carried markdown only, so every
+      // inner-page render was paid for and dropped on this line.
+      //
+      // That matters beyond the money: a booking page that returns a stack trace
+      // reads as ordinary text in markdown. The picture is what makes it obvious.
+      const shot = item?.['screenshot@fullPage'] || item?.screenshot || null;
+      if (shot) _PAGE_SHOTS.set(String(u), shot);
       if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
       _SCRAPE_CACHE.set(String(u), { md, at: Date.now() });
       fcNote(true, 'batch-scrape (0.5cr)', u);
     }
+    const _shotCount = [...out.keys()].filter(u => _PAGE_SHOTS.has(String(u))).length;
+    if (_shotCount) console.log(`BATCH: captured ${_shotCount} full-page screenshot(s) alongside the text \u2014 same request, same credit.`);
     const saved = (out.size - (urls.length - need.length)) * 0.5;
     console.log(`BATCH: ${out.size - (urls.length - need.length)} pages at 0.5 credits each \u2014 ~${saved} credits saved vs individual scrapes`);
     return out;
@@ -3848,7 +3943,18 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge, blockAds: true, removeBase64Images: true }),
+        // ══ MUST MATCH THE BATCH, INCLUDING THE IMAGE ══════════════════════
+        // This is the fallback the site audit uses whenever the batch times out,
+        // and your logs show that happening regularly ("BATCH: job ... did not
+        // finish in time", "BATCH: error \u2014 timeout"). It requested markdown only,
+        // so on exactly the leads where the batch struggled, the inner pages came
+        // back as text with no render at all.
+        //
+        // waitFor also rises 1500 \u2192 4000 to match: review widgets and embeds
+        // populate 2-4s after load, and a shot taken at 1.5s shows an empty slot
+        // where the proof is. That mistake already told an electrician he had no
+        // social proof on a page carrying 221 Google reviews.
+        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true }),
       }, timeout);
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
@@ -3867,6 +3973,9 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       return '';
     }
     const _md = d.data?.markdown || d.markdown || '';
+    // Keep the render. Requesting a format and never reading it back is how the
+    // inner-page screenshots were paid for and discarded for two rounds.
+    rememberPageShot(_ck, d.data?.['screenshot@fullPage'] || d['screenshot@fullPage'] || d.data?.screenshot || null);
     fcNote(true, 'scrape', _ck);
     if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
     _SCRAPE_CACHE.set(_ck, { md: _md, at: Date.now() });
@@ -4754,10 +4863,21 @@ const looksLikeRealName = (n) => {
 // This helper is the single correct implementation. Match the PATH only, prefer
 // shallower paths, then shorter ones. Every caller uses it so the bug cannot
 // come back in one place while being fixed in another.
+// ══ WHAT THIS FUNCTION READ, SO THE GATE BELOW CAN SEE IT ═══════════════════
+// Hawk Crawlspace: this function mapped 89 URLs, found /about and /our-team,
+// batch-scraped both, and then the ladder stopped because the HOMEPAGE was
+// empty. The about page has the whole team on it and the footer carries
+// info@hawkva.com. We had it and threw it away six seconds later.
+//
+// The gate downstream asks "did their website return nothing" and only ever
+// looked at the homepage. This records what this function actually read so the
+// gate can ask the real question.
+let _lastLeadershipTextLen = 0;
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
   if (!website || !apiKey || !fcKey) return null;
   try {
     const pages = [];
+    _lastLeadershipTextLen = 0;
     if (homepageContent && homepageContent.length > 200) {
       pages.push('--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000));
     }
@@ -4800,7 +4920,13 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
       if (md && md.length > 200) pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
     }
 
-    const corpus = pages.join('\n').slice(0, 22000);
+    const corpus = pages.join(
+'\n').slice(0, 22000);
+    // Record what we actually read. The gate below asks "did their website return
+    // nothing" and only ever looked at the homepage \u2014 so Hawk Crawlspace, whose
+    // about page carries the whole team and whose footer carries info@hawkva.com,
+    // was declared dead six seconds after we successfully scraped both pages.
+    _lastLeadershipTextLen = corpus.trim().length;
     if (corpus.trim().length < 300) {
       console.log(`DM/brain [${companyName}]: no readable content (homepage empty AND no leadership pages mapped)`);
       return null;
@@ -8214,7 +8340,22 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     // and the markdown would not fit in any context window, so the audit would
     // get worse from noise, not better. Six intent-ranked pages is close to the
     // point where more pages stop adding evidence.
-    const top = [about, booking, ...rest].filter(Boolean).slice(0, 6);
+    // ══ MORE PAGES, SAME PROMPT ═══════════════════════════════════════════════
+    // Six \u2192 ten. At 0.5 credits per batched page that is +2 credits on a ~10-14
+    // credit audit, and it buys four more pages of BOTH text and full-page
+    // render \u2014 the renders are the point, because a human scrolling a booking
+    // page sees a crash instantly where markdown reads as ordinary text.
+    //
+    // Still not the whole sitemap, and the reason has not changed: HEGG mapped
+    // 330 URLs and Hawk 89. Scraping all of HEGG would be 165 credits and the
+    // markdown would not fit in any context window, so the audit would get worse
+    // from noise rather than better.
+    //
+    // The per-page text budget drops 7000 \u2192 4200 chars so the CORPUS stays the
+    // same size. That matters: the audit prompt already carries ~13-16k fresh
+    // tokens and is the single largest line on the Anthropic bill. Ten pages of
+    // evidence for the same token cost is the trade; more tokens is not.
+    const top = [about, booking, ...rest].filter(Boolean).slice(0, 10);
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     // BATCH: these URLs are all known up front and all on the same site, which is
@@ -8261,7 +8402,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     const usable = scraped.filter(p => p.md && p.md.length > 200 && !brokenUrls.has(p.url));
     if (!usable.length) return null;
 
-    const corpus = usable.map(p => `--- ${p.key.toUpperCase()} PAGE (${p.url}) ---\n${p.md.slice(0, 7000)}`).join('\n\n');
+    const corpus = usable.map(p => `--- ${p.key.toUpperCase()} PAGE (${p.url}) ---\n${p.md.slice(0, 4200)}`).join('\n\n');
     const res = await fetchT('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
@@ -8364,6 +8505,18 @@ ${corpus}` }]
     // undefined the entire time and finding nothing, which is indistinguishable
     // from finding nothing because there is nothing.
     out.corpus = corpus;
+    // ══ THE RENDERS, ATTACHED TO THE PAGES THEY CAME FROM ══════════════════
+    // Captured in the same request that fetched the text, for the same credit.
+    // Without this the audit view shows one image \u2014 the homepage \u2014 and every
+    // other page we read is invisible to a human. That is how Jane R. Mays's
+    // crashed booking page stayed unnoticed: nothing rendered it, so the crash
+    // arrived as ordinary-looking text.
+    out.pageShots = usable
+      .map(p => ({ key: p.key, url: p.url, shot: _PAGE_SHOTS.get(String(p.url)) || null }))
+      .filter(x => x.shot);
+    if (out.pageShots.length) {
+      console.log(`\ud83d\uddbc PAGE RENDERS [${companyName}]: ${out.pageShots.length} full-page screenshot(s) kept \u2014 ${out.pageShots.map(x => x.key).join(', ')}. Same requests, no extra credit. A crashed or empty page is obvious in a picture and invisible in markdown.`);
+    }
     return out;
   } catch(e) { console.log('auditSitePages failed:', e.message); return null; }
 };
@@ -9096,7 +9249,24 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // send them. With no page there is no audit, so an owner name has nothing to
   // attach to. Everything free still ran above: their Google profile, reviews,
   // phone and business name are all measured and saved.
-  const _siteIsDead = !String(homepageContent || '').trim().length;
+  // ══ THE HOMEPAGE IS NOT THE SITE ══════════════════════════════════════════
+  // This asked "is the homepage empty" and called that a dead site. Hawk
+  // Crawlspace, live: we mapped 89 URLs, found /about and /our-team, batch-
+  // scraped both successfully, and then stopped the ladder six seconds later
+  // because the homepage was empty. His about page lists the whole team. His
+  // footer carries info@hawkva.com. We had all of it and never looked, so the
+  // run ended with "0 route(s) to a mailbox" on a business that publishes its
+  // address on every page.
+  //
+  // The question the gate is trying to ask is "can we produce an audit" \u2014 and we
+  // can, from any readable page. Ask that instead.
+  const _readableSiteText = Math.max(String(homepageContent || '').trim().length, _lastLeadershipTextLen || 0);
+  const _siteIsDead = _readableSiteText < 300;
+  if (_siteIsDead && _lastLeadershipTextLen > 0) {
+    console.log(`DM [${companyName}]: the homepage was empty AND their leadership pages came back with only ${_lastLeadershipTextLen} characters, so there is genuinely nothing to audit.`);
+  } else if (!String(homepageContent || '').trim().length && _lastLeadershipTextLen >= 300) {
+    console.log(`\u267b DM [${companyName}]: the homepage returned nothing, but their own pages gave us ${_lastLeadershipTextLen} characters. Continuing the owner lookup \u2014 the old gate read the homepage alone and stopped here, which is how a business with its whole team on an about page came back with no owner and no mailbox.`);
+  }
   if (_siteIsDead && !settled()) {
     console.log(`DM [${companyName}]: their website returned nothing, so no audit can be produced for this lead. Stopping before the paid owner lookups \u2014 that ladder costs ~15 Firecrawl credits and an owner name is worth nothing without an audit to put in front of him. Everything free was still measured. Fix or replace the website URL and re-run.`);
     console.log(`DM [${companyName}]: ${stagesRun} of 3 lookup stages purchased`);
@@ -10700,6 +10870,23 @@ const routeChannel = ({ ownerFound, homepageContent, website, companyName, isPla
       .filter(e => !/^(noreply|no-reply|donotreply|postmaster|abuse|webmaster|privacy|legal|dmca|unsubscribe|mailer-daemon|bounce|test)@/i.test(e))
       .filter(e => e.endsWith('@' + domain) || e.endsWith('.' + root) || e.endsWith('@' + root));
     if (found.length) routes.push(`an address is already published on their homepage (${found[0]})`);
+    else {
+      // ── THEIR MAILBOX MAY BE ON A DIFFERENT DOMAIN ──────────────────────
+      // Hawk Crawlspace publishes info@hawkva.com in the footer of every page
+      // while their site is hawkcrawlspaceandfoundationrepair.com. We scraped it,
+      // rejected it on the domain test, reported "0 routes to a mailbox" and
+      // scored the lead 24/100. A long SEO domain for the site and a short one
+      // for mail is a normal setup and the address was theirs.
+      const _all = (content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).map(e => e.toLowerCase());
+      const _counts = _all.reduce((m, e) => (m[e] = (m[e] || 0) + 1, m), {});
+      for (const [cand, n] of Object.entries(_counts)) {
+        const hit = looksLikeTheirOffDomainMailbox(cand, domain, companyName, n);
+        if (hit) {
+          routes.push(`an address is published on their pages on a related domain (${hit.email}) \u2014 ${hit.why}`);
+          break;
+        }
+      }
+    }
   }
 
   // ROUTE 3 — the domain is built from the business or owner name.
@@ -13551,6 +13738,40 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     if (fullPageUrl) {
       console.log(`\u1f5bc FULL PAGE [${company}]: captured top to bottom alongside the viewport image. The viewport one goes to the vision call (the 8000px limit applies there); this one is for the audit view, where the content below the fold is what stops us claiming something is missing when it is simply further down.`);
     }
+    // ══ IF WE GOT NOTHING, PROVE IT IS THEM BEFORE SAYING SO ═══════════════
+    // Firecrawl returning empty means our fetch failed. It does NOT mean the
+    // site is down, and the difference is the most consequential one in this
+    // system: "your website returns nothing" is the strongest claim we make and
+    // an owner disproves it by opening a tab.
+    //
+    // Dr. Richard Joseph's audit told a surgeon exactly that about a site that
+    // loads fine, on a URL we were handed as plain http.
+    let _siteDownVerdict = { down: null, why: 'not checked' };
+    if (String(content || '').trim().length < 200) {
+      _siteDownVerdict = await verifySiteReallyDown(website);
+      if (_siteDownVerdict.down === false) {
+        console.log(`\u2139 SITE IS NOT DOWN [${company}]: Firecrawl came back empty, but ${_siteDownVerdict.why}. No dead-site claim is permitted on this lead.`);
+        // Use what we fetched. Strip tags to something the audit can read \u2014 it is
+        // coarser than Firecrawl's markdown, but a coarse read of the real page
+        // beats blocking a lead whose site we are holding in memory.
+        if (_siteDownVerdict.html) {
+          const _salvaged = String(_siteDownVerdict.html)
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+            .replace(/\s+/g, ' ').trim();
+          if (_salvaged.length > 400) {
+            content = _salvaged.slice(0, 60000);
+            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.`);
+          }
+        }
+      } else if (_siteDownVerdict.down === true) {
+        console.log(`\u26d4 SITE IS GENUINELY DOWN [${company}]: ${_siteDownVerdict.why}. Two independent methods failed, so this is about their site.`);
+      }
+    }
+
+
     const fbAds = fbAdsRes.value || {};
     const enrichment = enrichRes.value || null;
     const builtWith = builtWithRes.value || {};
@@ -14266,39 +14487,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (_inner.length > 400) {
         content = _inner.slice(0, 60000);
         console.log(`\u267b INNER PAGES [${company}]: the homepage scrape came back empty, but the site audit read ${_inner.length} characters from their other pages. Auditing from those instead of blocking the lead \u2014 everything upstream was already paid for. \u26a0 The audit is thinner: nothing about their HOMEPAGE specifically (hero headline, the first thing a visitor sees, above-the-fold CTA) was measured, so no claim may be made about it.`);
-      }
-    }
-
-    // ══ IF WE GOT NOTHING, PROVE IT IS THEM BEFORE SAYING SO ═══════════════
-    // Firecrawl returning empty means our fetch failed. It does NOT mean the
-    // site is down, and the difference is the most consequential one in this
-    // system: "your website returns nothing" is the strongest claim we make and
-    // an owner disproves it by opening a tab.
-    //
-    // Dr. Richard Joseph's audit told a surgeon exactly that about a site that
-    // loads fine, on a URL we were handed as plain http.
-    let _siteDownVerdict = { down: null, why: 'not checked' };
-    if (String(content || '').trim().length < 200) {
-      _siteDownVerdict = await verifySiteReallyDown(website);
-      if (_siteDownVerdict.down === false) {
-        console.log(`\u2139 SITE IS NOT DOWN [${company}]: Firecrawl came back empty, but ${_siteDownVerdict.why}. No dead-site claim is permitted on this lead.`);
-        // Use what we fetched. Strip tags to something the audit can read \u2014 it is
-        // coarser than Firecrawl's markdown, but a coarse read of the real page
-        // beats blocking a lead whose site we are holding in memory.
-        if (_siteDownVerdict.html) {
-          const _salvaged = String(_siteDownVerdict.html)
-            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-            .replace(/\s+/g, ' ').trim();
-          if (_salvaged.length > 400) {
-            content = _salvaged.slice(0, 60000);
-            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.`);
-          }
-        }
-      } else if (_siteDownVerdict.down === true) {
-        console.log(`\u26d4 SITE IS GENUINELY DOWN [${company}]: ${_siteDownVerdict.why}. Two independent methods failed, so this is about their site.`);
       }
     }
 
@@ -17842,6 +18030,10 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       screenshotUrl,
       // The scrollable render, so the audit view can show what is below the fold.
       fullPageUrl,
+      // Full-page renders of every INNER page we read, so a human can scroll the
+      // booking page and the services page \u2014 not just the homepage. These are the
+      // pages where a crash or an empty form actually lives.
+      pageShots: (sitePages && sitePages.pageShots) || [],
       companyTriggers,
       verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
       emailResult, decisionMaker,
