@@ -15679,6 +15679,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         // cost checkable in place. cache_read at ~0 on repeat runs means the
         // cached prefix is being invalidated (whitespace drift is the usual
         // cause) and the saving is silently not happening.
+        // The audit reads `vd`, not `d`, so the auto-metering pass missed it \u2014
+        // which is why the total said $0.0424 while the audit alone cost $0.0879.
+        // A total that omits the largest item is the same failure as the error
+        // message that hid the error.
+        try { meterAnthropic(_CURRENT_LEAD, 'brainAudit', 'claude-sonnet-4-6', vd && vd.usage); } catch (e) { void e; }
         if (vd.usage && !_cachedAudit) {
           const u = vd.usage;
           const fresh = u.input_tokens || 0;
