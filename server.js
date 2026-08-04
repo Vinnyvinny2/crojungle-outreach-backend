@@ -929,6 +929,38 @@ const verifyFiguresTrace = (text, measured = {}) => {
 //
 // These are checked against WHAT WE MEASURED, not against a wordlist, because a
 // tenure claim is only a fabrication when we have no tenure.
+// ══ A PRONOUN DEFEATS EVERY KEYWORD GUARD ════════════════════════════════════
+// The reviews-absent guard works \u2014 it caught "no social proof" on a live lead.
+// It missed this, from an email to a Dallas surgeon:
+//
+//   "With 170 five-star reviews, you have more proof than most of them.
+//    None of it is on that page."
+//
+// The second sentence carries no noun at all. Its subject is "it", pointing back
+// to the reviews in the sentence before, and every guard we have looks for the
+// WORD. His reviews are displayed at the bottom of his homepage.
+//
+// So this checks the SHAPE instead: an absence assertion about page content,
+// arriving within a sentence or two of a proof noun. It does not need to know
+// what "it" refers to \u2014 only that something is being called missing from a page
+// whose lower half we never rendered.
+const checkAbsenceByShape = (text) => {
+  const flags = [];
+  const t = String(text || '');
+  if (!t.trim()) return flags;
+  const sentences = t.split(/(?<=[.!?])\s+/);
+  const PROOF = /\b(review|reviews|rating|ratings|star|stars|testimonial|proof|social proof|feedback)\b/i;
+  const ABSENT = /\b(none of (it|them|that)|not (on|anywhere on) (that|the|your) (page|site|homepage)|nowhere on (that|the|your) (page|site)|(isn'?t|is not|aren'?t|are not) (on|anywhere on) (that|the|your) (page|site)|no(ne)? of (it|that) (shows|appears|is there))\b/i;
+  for (let i = 0; i < sentences.length; i++) {
+    if (!ABSENT.test(sentences[i])) continue;
+    // Look back two sentences for what the absence is about.
+    const context = sentences.slice(Math.max(0, i - 2), i + 1).join(' ');
+    if (!PROOF.test(context)) continue;
+    flags.push(`ABSENCE CLAIM ABOUT PROOF, STATED WITH A PRONOUN \u2014 "${sentences[i].trim().slice(0, 80)}". This says their reviews or testimonials are not on the page, and it says it without naming them, which is how it slipped past every keyword guard. We render the VIEWPORT of a homepage; review widgets load late and sit low, and a live email told a surgeon with 170 reviews that none of them were on his page when they are displayed at the bottom of it. We cannot see the bottom, so we cannot say it is empty. Cut the sentence.`);
+  }
+  return flags;
+};
+
 const checkFabrications = (text, measured = {}) => {
   const flags = [];
   const t = String(text || '');
@@ -1154,6 +1186,7 @@ app.post('/api/claude', async (req, res) => {
             // this catches anything that cannot be traced, including classes we
             // have not seen yet.
             _copyFlags = _copyFlags.concat(verifyFiguresTrace(_all, _measured));
+            _copyFlags = _copyFlags.concat(checkAbsenceByShape(_all));
             // The unsendable test belongs on SUBJECTS too. Mike's framework is
             // explicit that "I caught a problem" went out identically to a sign
             // shop and a med spa, and a subject that would fit another company is
@@ -3665,7 +3698,10 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         urls: need,
-        formats: ['markdown'],
+        // A format on a scrape we already pay 0.5 credits for, not a second
+        // request \u2014 Firecrawl bills per page, not per format. This is how a
+        // crashed booking page becomes visible instead of being read as text.
+        formats: ['markdown', 'screenshot@fullPage'],
         // MUST MATCH firecrawlScrape EXACTLY. Both write into the same URL-keyed
         // cache, so if batch stripped nav/header/footer and the single scrape did
         // not, a cached page would mean something different depending on which
@@ -13203,7 +13239,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         //
         // If full-page is wanted later it needs downscaling before it reaches the
         // vision call \u2014 capture tall, resize to under 8000px, then send.
-        body: JSON.stringify({ url: website, formats: ['markdown', 'screenshot', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+        body: JSON.stringify({ url: website, // ══ BOTH IMAGES: ONE FOR VISION, ONE FOR THE HUMAN ═════════════════════════
+      // 'screenshot' is the viewport \u2014 roughly the top 1000px \u2014 and it is the ONLY
+      // one that may go to the vision call. The comment this replaces records why:
+      // a tall marketing homepage renders past 8000px, Claude's vision API rejects
+      // any image over that, the read dies, the pitch angle comes back null and
+      // the whole lead degrades. A plastic surgery homepage is exactly that tall.
+      //
+      // But the viewport-only capture is how an email told a Dallas surgeon "you
+      // have 170 five-star reviews. None of it is on that page" when his reviews
+      // sit at the BOTTOM of his homepage. Nothing rendered the bottom, so nothing
+      // could contradict the claim.
+      //
+      // So take both in the same request, for the same credit: the viewport image
+      // goes to vision where the size limit applies, and the full-page render goes
+      // to the audit view, where a human can scroll it and no API rejects it for
+      // being tall.
+      formats: ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
       }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
@@ -13353,6 +13405,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     }
 
     let screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
+    // ══ TWO IMAGES, TWO PURPOSES ══════════════════════════════════════════════
+    // screenshotUrl  \u2014 the viewport. This is the ONLY one that may reach the
+    //                  vision call, because a tall page renders past 8000px and
+    //                  Claude's vision API rejects it, killing the whole audit.
+    // fullPageUrl    \u2014 top to bottom. Nothing rejects it for being tall, so it
+    //                  goes to the audit view where a human can scroll it.
+    //
+    // This exists because a live email told a Dallas surgeon "you have 170
+    // five-star reviews. None of it is on that page" \u2014 his reviews are displayed
+    // at the BOTTOM of his homepage, below everything the viewport captured. A
+    // false absence is the worst claim we make: he scrolls, sees the thing we
+    // said was missing, and every true statement in the email dies with it.
+    let fullPageUrl = firecrawlData.data?.['screenshot@fullPage'] || firecrawlData['screenshot@fullPage']
+      || firecrawlData.data?.screenshotFullPage || null;
 
     // ══ BOT-CHECK DETECTION — WE MAY NOT HAVE THEIR SITE AT ALL ═══════════════
     // Cloudflare and similar services serve an interstitial challenge based on the
@@ -13376,6 +13442,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       console.log(`\u26d4 BOT CHECK [${company}]: the scrape returned a challenge/interstitial page, not their site. This is about OUR request being challenged \u2014 it is NOT evidence about what Google sees, what their title tag is, or how their site behaves for a human. Discarding the page; no findings will be produced from it.`);
       content = '';
       screenshotUrl = null;
+      fullPageUrl = null;
+    }
+    if (fullPageUrl) {
+      console.log(`\u1f5bc FULL PAGE [${company}]: captured top to bottom alongside the viewport image. The viewport one goes to the vision call (the 8000px limit applies there); this one is for the audit view, where the content below the fold is what stops us claiming something is missing when it is simply further down.`);
     }
     const fbAds = fbAdsRes.value || {};
     const enrichment = enrichRes.value || null;
@@ -17568,6 +17638,8 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       buckets, flaws, topPain, positioningScore, recommendedProduct, researchBonus, brainAudit,
       visualAnalysis,
       screenshotUrl,
+      // The scrollable render, so the audit view can show what is below the fold.
+      fullPageUrl,
       companyTriggers,
       verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
       emailResult, decisionMaker,
