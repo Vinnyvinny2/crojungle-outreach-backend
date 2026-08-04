@@ -1533,6 +1533,32 @@ const meterAnthropic = (company, label, model, usage) => {
   } catch (e) { return 0; }
 };
 
+// ══ ONE DOOR, SO NOTHING CAN SLIP PAST ═══════════════════════════════════════
+// Metering was added call-site by call-site and it was wrong every time: first 4
+// of 21, then 15, then 20 \u2014 and the live HEGG log still showed nine calls firing
+// and six counted, because the auto-pass only recognised one way of reading a
+// response.
+//
+// Hand-patching 21 sites is what produced that. This wrapper is the structural
+// fix: every request to the Anthropic endpoint goes through it, usage is read
+// from a CLONE (so the caller still gets an unread body), and a call cannot be
+// added later without being counted.
+//
+// If a future call bypasses this, the boot check below says so by name.
+const anthropicFetch = async (url, opts, timeoutMs, label) => {
+  const r = await fetchT(url, opts, timeoutMs);
+  try {
+    // Clone first: a Response body can only be read once, and the caller still
+    // needs it. Reading the original here would break every existing call site.
+    const copy = r.clone();
+    const j = await copy.json();
+    let model = 'claude-haiku-4-5-20251001';
+    try { model = JSON.parse(opts && opts.body ? opts.body : '{}').model || model; } catch (e) { void e; }
+    meterAnthropic(_CURRENT_LEAD(), label || 'anthropic', model, j && j.usage);
+  } catch (e) { void e; }
+  return r;
+};
+
 const reportLeadSpend = (company) => {
   const rec = _leadSpend.get(String(company || 'unknown'));
   if (!rec || !rec.calls.length) return;
@@ -1560,7 +1586,7 @@ app.post('/api/claude', async (req, res) => {
     const { system, user, apiKey } = req.body;
     if (!apiKey) return res.status(400).json({ error: 'API key required' });
     setCurrentLead(String(req.body.company || 'generate'));
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       // 6000 -> 4000. This is a CEILING, but models expand to fill available
@@ -1581,12 +1607,12 @@ app.post('/api/claude', async (req, res) => {
           : system,
         messages: [{ role: 'user', content: user }],
       }),
-    });
+    }, 120000, 'generateEmail');
     const d = await safeJson(r);
     // The generate call was in no total. On Sonnet with a ~12,000-token prompt
     // and 1,800 tokens out it is roughly $0.063 an email \u2014 comparable to the
     // entire research run and completely invisible until now.
-    try { meterAnthropic(_CURRENT_LEAD(), 'generateEmail', 'claude-sonnet-4-6', d && d.usage); } catch (e) { void e; }
+    // Metered by anthropicFetch above \u2014 a second call here would double-count.
     if (d && d.usage) {
       // Named uniquely: `_pp` already exists elsewhere in this file, and a
       // multi-declarator const with a colliding name is exactly what confused the
@@ -5320,7 +5346,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
       return null;
     }
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5363,8 +5389,6 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerViaBrain', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = d.content?.[0]?.text || '';
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -5499,7 +5523,7 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
       `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`
     ).join('\n\n').slice(0, 20000);
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5524,8 +5548,6 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = d.content?.[0]?.text || '';
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -5592,7 +5614,7 @@ ${corpus}` }]
 const visionAuditPage = async (screenshotBase64, companyName, apiKey) => {
   if (!screenshotBase64 || !apiKey) return null;
   try {
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5630,8 +5652,6 @@ ABOUT THE EMAIL — this matters a lot:
     }, 30000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'visionAuditPage', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5675,7 +5695,7 @@ const confirmDomainMatch = async (companyName, homepageContent, knownFacts, apiK
     if (knownFacts.signal) facts.push(`Why we're looking at them: ${knownFacts.signal}`);
     if (knownFacts.employees) facts.push(`Approx size: ${knownFacts.employees} employees`);
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5704,8 +5724,6 @@ Return ONLY JSON:
     }, 20000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'confirmDomainMatch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5767,7 +5785,7 @@ const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location =
 
     const corpus = results.map(r => `--- ${r.title}\nURL: ${r.url}\n${r.description}`).join('\n\n').slice(0, 12000);
 
-    const r2 = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r2 = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5792,8 +5810,6 @@ ${corpus}` }]
     }, 25000);
 
     const d = await r2.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'findSizeViaSearch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5826,7 +5842,6 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
     }, 12000);
     const d = await r.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'fetchGoogleReviews', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     return (d.reviews || [])
       .map(rv => ({ rating: rv.rating || 0, text: (rv.text?.text || rv.originalText?.text || '').trim().slice(0, 600) }))
       .filter(rv => rv.text);
@@ -7706,7 +7721,7 @@ Five to seven rows. YOU choose the labels for THIS business; they are not a fixe
 THE TEST: if every sentence you write could be replaced by a row in a table, you have failed. The reader already has the table.`;
 
   try {
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
@@ -7724,7 +7739,6 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
       }),
     }, 45000);
     const d = await r.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-sonnet-4-6', d && d.usage); } catch (e) { void e; }
     if (!d || !d.content) return null;
     const txt = (d.content || []).map(c => c.text || '').join('');
     const parsed = parseLLMJSON(txt);
@@ -8429,7 +8443,7 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
       (r.ownerReply ? `\nResponse from the owner: ${r.ownerReply}` : '')
     ).join('\n\n');
     if (!md || md.length < 200) return { read: 0, why: `read ${rv.read} review(s) but they carried almost no text` };
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8439,7 +8453,6 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
       }),
     }, 25000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'deepReviewMine', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -8542,7 +8555,7 @@ const painFromGoogleReviews = async (companyName, placeId, placesKey, apiKey, fc
   const corpusFlat = corpus.toLowerCase().replace(/\s+/g, ' ');
 
   try {
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8566,7 +8579,6 @@ ${corpus}` }]
       }),
     }, 25000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -8619,7 +8631,7 @@ const findOwnerInReviewReplies = async (companyName, placeId, fcKey, apiKey) => 
     const replyBlocks = md.split(/response from the owner/i).slice(1).join('\n').slice(0, 9000);
     if (replyBlocks.length < 80) return null;
 
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8646,7 +8658,6 @@ ${replyBlocks}` }]
       }),
     }, 18000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerInReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8818,7 +8829,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     if (!usable.length) return null;
 
     const corpus = usable.map(p => `--- ${p.key.toUpperCase()} PAGE (${p.url}) ---\n${p.md.slice(0, 4200)}`).join('\n\n');
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8842,7 +8853,6 @@ ${corpus}` }]
       }),
     }, 22000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8973,7 +8983,7 @@ const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
   }
   if (!md) return null;
   try {
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -9000,7 +9010,6 @@ ${md.slice(0, 14000)}` }]
       }),
     }, 20000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -9054,7 +9063,7 @@ const findBusinessPain = async (companyName, website, fcKey, apiKey, industry, l
 
     const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`).join('\n\n').slice(0, 18000);
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -9094,8 +9103,6 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -9198,7 +9205,7 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
   const evaluate = async (hits) => {
     const corpus = hits.map(h => `${h.title || ''} — ${h.description || h.snippet || ''} (${h.url || ''})`).join('\n').slice(0, 6000);
 
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -9221,7 +9228,6 @@ ${corpus}` }]
       }),
     }, 20000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'evaluate', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -9272,7 +9278,7 @@ const findOwnerViaReviewReplies = async (placeId, apifyToken, apiKey, companyNam
     const replies = rv.ownerReplies.slice(0, 12).map(t => `Response from the owner: ${t}`);
     if (!replies.length) return null;
 
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -9298,7 +9304,6 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       }),
     }, 18000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerViaReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -9442,7 +9447,7 @@ const findOwnerViaBusinessName = async (companyName, homepageContent, domain, ap
   if (!NAMEY(companyName)) return null;               // no person-shaped token — skip the call
 
   try {
-    const res = await fetchT('https://api.anthropic.com/v1/messages', {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -9473,8 +9478,6 @@ ${content}` }]
     }, 20000);
 
     const d = await res.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerViaBusinessName', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -10461,7 +10464,7 @@ const findFounderVenting = async (fcKey, apiKey) => {
     const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.content}`)
       .join('\n\n').slice(0, 20000);
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -10497,8 +10500,6 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'findFounderVenting', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -10577,7 +10578,7 @@ const findBusinessesForSale = async (fcKey, apiKey) => {
 
     const corpus = hits.map(h => `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`).join('\n\n').slice(0, 20000);
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -10615,8 +10616,6 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'); let lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -16269,7 +16268,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         if (_cachedAudit) {
           console.log(`\u267b BRAIN CACHE HIT [${company}]: identical evidence AND identical prompt as a run within the last 24h \u2014 reusing that audit and skipping the Sonnet call. Saved ~$0.08. Any change to the evidence or to the instructions produces a fresh audit automatically, so this can never serve a stale answer after a prompt edit.`);
         }
-        const visionRes = _cachedAudit ? null : await fetchT('https://api.anthropic.com/v1/messages', {
+        const visionRes = _cachedAudit ? null : await anthropicFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
@@ -16294,18 +16293,6 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
 
         const vd = _cachedAudit ? _cachedAudit : await safeJson(visionRes);
         if (!_cachedAudit && vd && !vd.error) writeAuditCache(_auditKey, vd);
-        // ── COST METER ───────────────────────────────────────────────────
-        // Anthropic is the largest running cost in this app and until now the
-        // spend was invisible from the logs — the only way to see it was the
-        // billing console the next day. These four numbers make every audit's
-        // cost checkable in place. cache_read at ~0 on repeat runs means the
-        // cached prefix is being invalidated (whitespace drift is the usual
-        // cause) and the saving is silently not happening.
-        // The audit reads `vd`, not `d`, so the auto-metering pass missed it \u2014
-        // which is why the total said $0.0424 while the audit alone cost $0.0879.
-        // A total that omits the largest item is the same failure as the error
-        // message that hid the error.
-        try { meterAnthropic(_CURRENT_LEAD(), 'brainAudit', BRAIN_MODEL, vd && vd.usage); } catch (e) { void e; }
         if (vd.usage && !_cachedAudit) {
           const u = vd.usage;
           const fresh = u.input_tokens || 0;
@@ -17680,7 +17667,7 @@ Return ONLY valid JSON:
   "estimatedEmployees": "your best estimate of employee count as a number if you can infer it from the evidence, otherwise null"
 }`;
 
-            const critiqueRes = await fetchT('https://api.anthropic.com/v1/messages', {
+            const critiqueRes = await anthropicFetch('https://api.anthropic.com/v1/messages', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
               body: JSON.stringify({
@@ -17702,16 +17689,6 @@ Return ONLY valid JSON:
             }, 25000);
 
             const cd = await critiqueRes.json();
-
-            // The fact-check reads `cd`, so the auto-metering pass missed it. It
-
-            // produced ~600 words of flags on a live lead and appeared nowhere in
-
-            // the total \u2014 the same under-reporting as the audit call before it was
-
-            // added. A total that omits calls is not a total.
-
-            try { meterAnthropic(_CURRENT_LEAD(), 'factCheck', 'claude-haiku-4-5-20251001', cd && cd.usage); } catch (e) { void e; }
             const cText = cd.content?.[0]?.text || '';
             let cClean = cText.replace(/```json|```/g, '').trim();
             // Extract just the JSON object if there's trailing text
@@ -18826,6 +18803,27 @@ app.listen(PORT, () => {
     _try('checkUnsendable', () => checkUnsendable('I noticed a few issues with your website', 'X'));
     _try('verifyGeneratedCopy', () => verifyGeneratedCopy({ variantA: { subject: 'your booking page is dead', pitch: 'Test pitch about a measured thing.' } }, {}));
 
+    // ══ NOBODY CAN ADD AN UNMETERED CALL ══════════════════════════════════
+    // The Anthropic meter was wrong three times in a row \u2014 4 of 21 counted, then
+    // 15, then 20 \u2014 and the last live run still showed nine calls firing and six
+    // counted. Every fix was another hand-patched call site.
+    //
+    // Now there is one door, and this is the lock: read our own source and fail
+    // loudly if any request to the Anthropic endpoint bypasses the wrapper. A
+    // cost figure that silently omits calls is how a 12-cent lead reads as six.
+    try {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _total = (_src.match(/https:\/\/api\.anthropic\.com\/v1\/messages/g) || []).length;
+      const _wrapped = (_src.match(/anthropicFetch\('https:\/\/api\.anthropic\.com/g) || []).length;
+      // The wrapper's own definition mentions the URL zero times, so total should
+      // equal wrapped exactly.
+      if (_total !== _wrapped) {
+        console.log(`\u26d4 UNMETERED ANTHROPIC CALLS: ${_total - _wrapped} of ${_total} request(s) to the Anthropic endpoint do NOT go through anthropicFetch, so their cost will be invisible. Every per-lead figure this build reports will be too low. Route them through the wrapper before trusting any cost number.`);
+      } else {
+        console.log(`\u2713 COST METER: all ${_total} Anthropic call sites route through the wrapper \u2014 nothing can be spent without being counted.`);
+      }
+    } catch (e) { void e; }
+
     if (_t.length) {
       console.log(`\u26d4 SELF-TEST FAILED \u2014 ${_t.length} of the pure functions threw when run with representative data. DO NOT RESEARCH LEADS ON THIS BUILD; every one of these would fail mid-audit after credits were spent. ${_t.join(' | ')}`);
     } else {
@@ -19341,7 +19339,7 @@ REAL EXAMPLE FINDINGS (anonymized — do not use company names, describe by indu
 ${realExamples.slice(0, 8).map((e,i) => `${i+1}. [${e.industry}] ${e.pain}`).join('\n')}
 `.trim();
 
-    const r = await fetchT('https://api.anthropic.com/v1/messages', {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -19377,8 +19375,6 @@ Return ONLY valid JSON, no markdown:
     }, 30000);
 
     const data = await r.json();
-
-    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-sonnet-4-6', data && data.usage); } catch (e) { void e; }
     const text = data.content?.[0]?.text || '';
     let clean = text.replace(/```json|```/g, '').trim();
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
