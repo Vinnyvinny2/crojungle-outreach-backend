@@ -5464,6 +5464,55 @@ const measurePhoneConsistency = (googlePhone, pageText) => {
 // Everything an owner can check himself outranks everything he cannot, even when
 // the thing he cannot check matters more to his revenue. That is not a claim
 // about business; it is a claim about cold email.
+// ══ NEVER CALL A SITE DEAD ON ONE VENDOR'S WORD ══════════════════════════════
+// Dr. Richard Joseph, live: Firecrawl returned nothing twice and the audit told
+// a maxillofacial surgeon "the website returned nothing when loaded, twice... a
+// blank page is not a friction point, it is a full stop." His site loads fine.
+//
+// The URL we were handed was http://www.drrichardjoseph.com/ \u2014 plain http. Nearly
+// every live site redirects http\u2192https, and if that redirect is not followed, or
+// the host simply does not answer on port 80, we get zero bytes from a perfectly
+// healthy site.
+//
+// This is the same mistake as the Wade TLS probe, the PageSpeed 429, the Hunter
+// throttle and the forty invented phone numbers: OUR failure recorded as a fact
+// about THEM. It is the most damaging version of it, because "your website is
+// down" is the strongest claim we make and the easiest for an owner to disprove
+// by opening a tab.
+//
+// So before that claim can ever be made, check it ourselves, over https, from a
+// different code path. If we can reach it, Firecrawl failed \u2014 not the business.
+const verifySiteReallyDown = async (website) => {
+  const raw = String(website || '').trim();
+  if (!raw) return { down: null, why: 'no URL to check' };
+  const host = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (!host) return { down: null, why: 'could not parse a hostname' };
+
+  // Try https first, then https without www, then the original. A site answering
+  // ANY of these is not down, whatever Firecrawl saw.
+  const candidates = [
+    `https://${host}`,
+    `https://${host.replace(/^www\./, '')}`,
+    raw.startsWith('http') ? raw : `http://${host}`,
+  ];
+  for (const url of candidates) {
+    try {
+      const r = await fetchT(url, { redirect: 'follow', headers: {
+        // A default fetch UA gets blocked by WAFs far more often than a browser
+        // string, and a block is not a dead site either.
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      } }, 12000);
+      if (!r || !r.ok) continue;
+      const body = await r.text();
+      if (String(body || '').length > 500) {
+        return { down: false, why: `we loaded ${url} ourselves and got ${body.length} characters back, so their site is up and Firecrawl's empty response was a failure on our side`, workingUrl: url };
+      }
+    } catch (e) { void e; }
+  }
+  return { down: true, why: 'we could not reach it over https or http from our own server either, using a browser user-agent and following redirects' };
+};
+
 // ══ A DEAD FINDING MUST SURVIVE A SECOND LOOK ════════════════════════════════
 // This is the highest-stakes claim the system makes and it currently rests on a
 // single fetch from a datacentre IP. That is not enough, because the failure
@@ -5540,8 +5589,10 @@ const HARM_LADDER = [
     costs: 'every visitor who clicks it leaves, and he has no way of knowing they did' },
 
   { harm: 97, checkable: 95, novel: 90, delegable: 80, band: 'DEAD', id: 'site_empty',
-    test: (m) => m.scrapeTrustworthy === false && (m.pageChars || 0) < 200,
-    say: () => 'Their website returned nothing at all when we loaded it, twice',
+    // Only when a SECOND, independent fetch also failed. Firecrawl returning
+    // nothing is our problem until proven otherwise.
+    test: (m) => m.siteConfirmedDown === true,
+    say: () => 'Their website returned nothing when we loaded it \u2014 twice through our scraper, and again directly over https from a different server',
     costs: 'anyone who finds them online finds a blank page' },
 
   { harm: 96, checkable: 92, novel: 92, delegable: 70, band: 'DEAD', id: 'listing_closed',
@@ -12910,6 +12961,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // CONTENT-LEVEL RETRY: a "Connection Reset"/empty scrape is usually transient
       // on the free tier (A1 Restoration lost its whole audit to one). Pause and try
       // once more before we give up the homepage, the owner, and the audit.
+      // ── RETRY THE SAME URL, THEN RETRY A BETTER ONE ──────────────────────
+      // Richard Joseph came to us as http://www.drrichardjoseph.com/ and both
+      // attempts returned nothing. Retrying plain http twice asks the same
+      // question twice. Nearly every live site now serves over https and many
+      // simply do not answer on port 80 at all, so the second attempt should
+      // change something \u2014 and the cheapest thing to change is the scheme.
+      if (looksEmpty(res) && /^http:\/\//i.test(String(website || ''))) {
+        const _https = String(website).replace(/^http:\/\//i, 'https://');
+        console.log(`Firecrawl returned nothing for ${website}, which is a plain http URL. Trying ${_https} before concluding anything \u2014 most sites redirect to https and some do not answer on port 80 at all.`);
+        try {
+          const resS = await firecrawlScrape(fcKey, _https, 30000);
+          if (!looksEmpty(resS)) {
+            console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
+            return resS;
+          }
+        } catch (e) { void e; }
+      }
       if (looksEmpty(res)) {
         // ══ ONLY RETRY WHAT A RETRY COULD PLAUSIBLY FIX ═══════════════════════
         // Every empty result bought a second paid scrape 2.5 seconds later. Some
@@ -13744,6 +13812,24 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     );
     const companyCore = (company || '').toLowerCase().replace(/[^a-z0-9 ]/g,'').split(' ').filter(w=>w.length>3).slice(0,2);
     const pageMentionsCompany = companyCore.length === 0 || companyCore.some(w => lowerContent.includes(w));
+    // ══ IF WE GOT NOTHING, PROVE IT IS THEM BEFORE SAYING SO ═══════════════
+    // Firecrawl returning empty means our fetch failed. It does NOT mean the
+    // site is down, and the difference is the most consequential one in this
+    // system: "your website returns nothing" is the strongest claim we make and
+    // an owner disproves it by opening a tab.
+    //
+    // Dr. Richard Joseph's audit told a surgeon exactly that about a site that
+    // loads fine, on a URL we were handed as plain http.
+    let _siteDownVerdict = { down: null, why: 'not checked' };
+    if (String(content || '').trim().length < 200) {
+      _siteDownVerdict = await verifySiteReallyDown(website);
+      if (_siteDownVerdict.down === false) {
+        console.log(`\u2139 SITE IS NOT DOWN [${company}]: Firecrawl came back empty, but ${_siteDownVerdict.why}. This is our fetch failing, not their business \u2014 no dead-site claim is permitted on this lead, and the audit will be thin because we could not read the page, which is a different and much smaller problem.`);
+      } else if (_siteDownVerdict.down === true) {
+        console.log(`\u26d4 SITE IS GENUINELY DOWN [${company}]: ${_siteDownVerdict.why}. Two independent methods failed, so this is about their site.`);
+      }
+    }
+
     const scrapeTrustworthy = content.length > 300 && !scrapeLooksBroken && pageMentionsCompany;
     // SITE UNREACHABLE — a genuine connection error / dead page, NOT bot-blocking.
     // A1 Restoration returned "Connection Reset" (24 chars) and we then confidently
@@ -13956,6 +14042,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const _harms = rankHarms({
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           scrapeTrustworthy: scrapeTrustworthy,
+          siteConfirmedDown: _siteDownVerdict.down === true,
           pageChars: String(content || '').length,
           businessStatus: gbpHealth && gbpHealth.businessStatus,
           hasPlace: !!effectivePlaceId,
