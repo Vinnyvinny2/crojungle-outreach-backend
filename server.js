@@ -838,6 +838,72 @@ const checkUnsendable = (text, company) => {
   return flags;
 };
 
+// ══ EVERY FIGURE MUST TRACE TO A MEASUREMENT ═════════════════════════════════
+// The guards below this are a BLOCKLIST: twenty-six rules, each written after a
+// specific fabrication had already reached output. A blocklist can only catch
+// what has gone wrong once, and there has been a next class every single time —
+// the 380 reviews, the 65 years, the forty phone numbers, the Google algorithm
+// claim, the invented "one family a month".
+//
+// This is the inverse and it is the only version that scales. Take every FIGURE
+// in the copy and ask what it traces to. A number matching something we measured
+// is fine. A dollar amount is fine — industry-typical value is explicitly
+// permitted and is what makes the loss real. Everything else is flagged BY
+// DEFAULT, including classes nobody has thought of yet.
+//
+// Deliberately narrow on what counts as a "figure", because a false positive
+// here is worse than useless: it trains an operator to skim the flags, and then
+// a real one goes through. So:
+//   \u2022 years inside a quoted string are the prospect's own words \u2014 skip
+//   \u2022 small counts under three are rhetorical ("two other firms", "a third")
+//   \u2022 money is allowed
+//   \u2022 anything else attached to a business noun must be traceable
+const verifyFiguresTrace = (text, measured = {}) => {
+  const flags = [];
+  const body = String(text || '');
+  if (!body.trim()) return flags;
+
+  // Everything we can legitimately say a number about, plus the arithmetic an
+  // owner could do himself from those figures.
+  const allowed = new Set();
+  const add = (v) => { const n = Number(v); if (Number.isFinite(n)) allowed.add(Math.round(n)); };
+  for (const k of ['reviewCount', 'rank', 'above', 'weakerAbove', 'photoCount', 'formFieldCount',
+                   'tenureYears', 'problemCount', 'ownerReplies', 'reviewsRead', 'scanned']) add(measured[k]);
+  if (Number.isFinite(Number(measured.rating))) { add(measured.rating); allowed.add(Math.round(Number(measured.rating) * 10) / 10); }
+  if (Number.isFinite(Number(measured.reviewRecencyDays))) {
+    const d = Number(measured.reviewRecencyDays);
+    add(d); add(Math.round(d / 30)); add(Math.round(d / 365));   // "four years old"
+  }
+  if (Number.isFinite(Number(measured.reviewsPerYear))) add(measured.reviewsPerYear);
+  // Derived and obviously safe.
+  if (Number.isFinite(Number(measured.above))) add(Number(measured.above) + 1);   // position
+  if (Number.isFinite(Number(measured.scanned))) add(measured.scanned);
+  [10, 20].forEach(add);   // the map-pack size and the photo threshold
+
+  // Strip quoted spans first \u2014 a number inside their own copy is theirs.
+  const unquoted = body.replace(/["\u201c\u2018'][^"\u201d\u2019']{0,200}["\u201d\u2019']/g, ' ');
+
+  const seen = new Set();
+  const re = /(\$\s?[\d,]+(?:\.\d+)?(?:\s?[kmb])?)|(\b\d[\d,]*(?:\.\d+)?\b)/gi;
+  let m;
+  while ((m = re.exec(unquoted))) {
+    if (m[1]) continue;                                   // money is permitted
+    const raw = m[2];
+    const n = Number(String(raw).replace(/,/g, ''));
+    if (!Number.isFinite(n)) continue;
+    if (n < 3) continue;                                  // rhetorical
+    if (n >= 1900 && n <= 2100) continue;                 // a year
+    if (allowed.has(Math.round(n))) continue;             // traced
+    // Is it attached to something about their business, or just prose?
+    const around = unquoted.slice(Math.max(0, m.index - 45), m.index + 45);
+    if (!/\b(review|star|rank|position|result|photo|field|year|patient|client|customer|case|matter|job|call|enquir|inquir|form|page|listing|competitor|practice|firm|percent|%)\w*/i.test(around)) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    flags.push(`UNTRACEABLE FIGURE \u2014 "${raw}" in "...${around.trim().slice(0, 70)}...". That number does not match anything we measured on this lead (we hold: ${[...allowed].sort((a, b) => a - b).join(', ') || 'nothing'}). Every figure in the copy has to trace to a measurement or be the typical value of a job in their trade. If it traces to neither it is invented, and one invented number discredits every true one beside it.`);
+  }
+  return flags;
+};
+
 // ══ FOUR FABRICATIONS THAT REACHED A FINISHED EMAIL ══════════════════════════
 // Read from live output, not imagined. Every one of these was in copy the system
 // considered ready to send, and every one is something the recipient can
@@ -1067,9 +1133,27 @@ app.post('/api/claude', async (req, res) => {
             // Fabrication checks need to know what we MEASURED, because a tenure
             // claim is only invented when we have no tenure. The client sends
             // what the audit established.
-            _copyFlags = _copyFlags.concat(checkFabrications(_all, {
+            const _measured = {
               tenureYears: Number(req.body.tenureYears) || null,
-            }));
+              reviewCount: Number(req.body.reviewCount) || null,
+              rating: Number(req.body.rating) || null,
+              rank: Number(req.body.rank) || null,
+              above: Number(req.body.above) || null,
+              weakerAbove: Number(req.body.weakerAbove) || null,
+              photoCount: Number(req.body.photoCount) || null,
+              reviewRecencyDays: Number(req.body.reviewRecencyDays) || null,
+              formFieldCount: Number(req.body.formFieldCount) || null,
+              reviewsPerYear: Number(req.body.reviewsPerYear) || null,
+              problemCount: Number(req.body.problemCount) || null,
+              reviewsRead: Number(req.body.reviewsRead) || null,
+              ownerReplies: Number(req.body.ownerReplies) || null,
+              scanned: Number(req.body.scanned) || null,
+            };
+            _copyFlags = _copyFlags.concat(checkFabrications(_all, _measured));
+            // The allowlist. Blocklists only catch what has already gone wrong;
+            // this catches anything that cannot be traced, including classes we
+            // have not seen yet.
+            _copyFlags = _copyFlags.concat(verifyFiguresTrace(_all, _measured));
             // The unsendable test belongs on SUBJECTS too. Mike's framework is
             // explicit that "I caught a problem" went out identically to a sign
             // shop and a med spa, and a subject that would fit another company is
@@ -7363,7 +7447,7 @@ const measureGrowthConstraint = ({
                 ? `just 1 of the ${_above} businesses ranked above them has FEWER reviews`
                 : `${weakerAbove} of the ${_above} businesses ranked above them have FEWER reviews`;
             return `${_frame}, and they still sit at #${rank}. ${rank <= (_above + 1) / 2 ? 'They ARE in the results, in the middle of them' : 'They ARE in the results; they are near the bottom of them'}, and people choose from the top of a list. \u26a0 OUR NUMBER AND HIS SCREEN DO NOT MATCH. We read the Places API, which returns organic results only. What he sees has SPONSORED listings above them, so his count is always one or two higher than ours \u2014 verified live: we measured a Cincinnati dentist at #9 and counting on the actual page put her at #10, because of one ad. NEVER put the raw digit in an email as something he can count. Say the band \u2014 "in the middle of the first twenty", "not in the top few" \u2014 which survives the ads being there. The digit stays here for the call sheet.
-\u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} of ${scanned || 20}, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
+\u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} with ${_above} above them, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
       : (weakerAbove > 0)
         ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
@@ -12710,6 +12794,51 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
   } catch { return null; }
 };
 
+// ══ MEASURE TWICE, AND ONLY TRUST WHAT AGREES ════════════════════════════════
+// The same business, the same query, minutes apart:
+//   Jane     #9  #13  #9  #12
+//   Bruce    #13 #8          \u2014 bottom half to top half in forty minutes
+//   Deirdre  #3  #12
+//
+// Google's local pack is personalised, geo-weighted and genuinely volatile, so a
+// single call is one draw from a noisy distribution. Two things downstream rest
+// on it: the rank BAND that goes into an email, and the traffic multiplier on
+// conversion harm. Both have been moving with the noise.
+//
+// Same discipline as the catch-all probe and the broken-page check, for the same
+// reason: one probe of a noisy signal is not a measurement.
+//
+// When the samples disagree by more than two places we keep the WORSE one \u2014 not
+// to overstate the problem, but because the error is asymmetric. Saying mid-pack
+// when he is near the bottom is a missed opportunity; saying near the bottom when
+// he is third makes every other measured fact in the email suspect. And we mark
+// it unstable, which stops the digit reaching the copy at all.
+const checkLocalRankStable = async (args) => {
+  const a = await checkLocalRank(args);
+  if (!a || !a.checked || !a.found) return a;
+  await new Promise(r => setTimeout(r, 1200));
+  let b = null;
+  try { b = await checkLocalRank(args); } catch (e) { void e; }
+  if (!b || !b.checked || !b.found) {
+    return { ...a, rankStable: null,
+      rankNote: 'only one usable sample \u2014 the position is approximate and the digit must not appear in the email' };
+  }
+  const drift = Math.abs(a.rank - b.rank);
+  if (drift === 0) {
+    return { ...a, rankStable: true, rankSamples: [a.rank, b.rank],
+      rankNote: `two independent checks both returned #${a.rank}, so this position is real` };
+  }
+  const worse = a.rank >= b.rank ? a : b;
+  return { ...worse,
+    rankStable: drift <= 2,
+    rankDrift: drift,
+    rankSamples: [a.rank, b.rank],
+    rankNote: drift <= 2
+      ? `two checks returned #${a.rank} and #${b.rank} \u2014 close enough to name the band, and the band is all that may be said`
+      : `two checks returned #${a.rank} and #${b.rank}, ${drift} places apart. NOT stable enough to state. Say nothing about position; the weaker-above ratio survives the drift and is the durable claim.`,
+  };
+};
+
 const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
@@ -12839,7 +12968,9 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   const results = [];
 
   // 1. The head term for their trade — the query with the most volume behind it.
-  const head = await checkLocalRank({ companyName, placeId, website, industry, location, placesKey });
+  // Two samples. The head term is the only rank that reaches an email, so it is
+  // the only one worth paying twice for.
+  const head = await checkLocalRankStable({ companyName, placeId, website, industry, location, placesKey });
   if (head.checked) results.push({ ...head, kind: 'primary trade' });
 
   // 2. Their own service pages, shortest first. A shorter slug is usually the
@@ -13604,7 +13735,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               const weak = r.weakerAbove
                 ? ` ${r.weakerAbove} of the ${r.rank - 1} above them have FEWER reviews — reputation is not the problem, visibility is.`
                 : '';
-              console.log(`LOCAL RANK [${company}]: #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind}).${weak}`);
+              console.log(`LOCAL RANK [${company}]: #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind}).${weak}${r.rankNote ? ' \u2014 ' + r.rankNote : ''}`);
+              if (r.rankStable === false) {
+                console.log(`\u26a0 RANK UNSTABLE [${company}]: ${r.rankSamples ? r.rankSamples.join(' and ') : '?'} on the same query minutes apart. The position is NOT sayable. What survives the drift is that businesses with fewer reviews rank above them \u2014 that is true at every one of those positions and is what the email may claim.`);
+              }
             } else {
               console.log(`LOCAL RANK [${company}]: NOT IN TOP ${r.scanned} for "${r.query}" (${r.kind}) — top of that list: ${r.topRivals.map(t => `${t.name} (${t.reviews} rev)`).join(', ')}`);
             }
@@ -14280,7 +14414,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           } else {
             console.log(`\u260e BETTER AS A CALL [${company}]: nothing we found clears the believability gate \u2014 the costliest thing here is "${_harms.worst ? _harms.worst.finding.slice(0, 50) : 'unclear'}" (harm ${_harms.worst ? _harms.worst.harm : '?'}), but he cannot verify it from a cold email and will read it as a pitch \u2014 everything we found is either invisible to him or arguable. ${_harms.all.length} problem(s) were still measured here \u2014 they are just the kind he has to take on trust or can argue with, which is bad news about the email and not a verdict on the business. A first email that opens on "you rank ninth" or "you have no guarantee" is the email every agency sends, and it spends the only first impression we get. Work this one by phone, where the case can be built in conversation.`);
           }
-          if (top.opener < 50) console.log(`\u26a0 WEAK OPENER [${company}]: nothing above opener ${top.opener} \u2014 everything found is either invisible to him or arguable, which is the hardest kind of first email to get answered. That is a statement about our opening line, NOT about their business \u2014 ${_harms.all.length} problem(s) were still measured and a caller should have all of them in front of them.`);
+          // Only when the gate was NOT cleared. Rachel Walker printed
+          // "\u2705 STRONG OPENER \u2014 harm 83, and he can verify it himself" and then
+          // "\u26a0 WEAK OPENER: nothing above opener 26" two lines later, about the
+          // same finding. Both were true statements about different numbers and
+          // together they are useless: an operator cannot act on a log that
+          // contradicts itself.
+          if (!_harms.leadIsGated) console.log(`\u26a0 WEAK OPENER [${company}]: nothing above opener ${top.opener} \u2014 everything found is either invisible to him or arguable, which is the hardest kind of first email to get answered. That is a statement about our opening line, NOT about their business \u2014 ${_harms.all.length} problem(s) were still measured and a caller should have all of them in front of them.`);
           // ══ THE COUNT IS THE PITCH, SO IT HAS TO BE A REAL NUMBER ═══════
           // The email says: here are one or two you can check right now, and
           // there are N more. That N does the persuading — one fault is a typo,
@@ -15542,7 +15682,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           try {
             const _siteHasTel = !!(htmlSignals && htmlSignals.checked && htmlSignals.tel);
             const _phoneFromSite = !!(phoneResult && phoneResult.source && phoneResult.source !== 'google_business_profile');
-            const _bookingRead = (siteAudit && siteAudit.booking) || '';
+            // `siteAudit` has never existed in this file \u2014 the variable is
+            // `sitePages`. This line has been throwing "siteAudit is not defined"
+            // on every lead that reaches this guard, which is the tap-to-call
+            // check, silently disabling it. Found by a static scan for names
+            // bound nowhere, not by any run.
+            const _bookingRead = (sitePages && sitePages.booking) || '';
             const _noPhoneOnSite = !_siteHasTel && !_phoneFromSite;
             const _TAP = /\btap (the|your|that) (number|phone)\b|\btry to (tap|dial|call)\b|\bit does ?n'?t dial\b|\bwon'?t dial\b|\bthe number (on|does)\b|\bplain text\b|\bnot tappable\b|\bcopy (it|the number) by hand\b/i;
             if (_noPhoneOnSite && _TAP.test(_allProse)) {
