@@ -6327,6 +6327,7 @@ const verifySiteReallyDown = async (website) => {
 
   // Try https first, then https without www, then the original. A site answering
   // ANY of these is not down, whatever Firecrawl saw.
+  let certExpired = false;
   const candidates = [
     `https://${host}`,
     `https://${host.replace(/^www\./, '')}`,
@@ -6354,7 +6355,23 @@ const verifySiteReallyDown = async (website) => {
         return { down: false, html: body, workingUrl: url,
           why: `we loaded ${url} ourselves and got ${body.length} characters back, so their site is up and Firecrawl's empty response was a failure on our side` };
       }
-    } catch (e) { void e; }
+    } catch (e) {
+      // ══ AN EXPIRED CERTIFICATE IS NOT A DEAD SITE ═════════════════════════
+      // Node throws a specific error for a certificate problem, and it is worth
+      // separating: an expired cert is not the site being down, it is the browser
+      // refusing to show it. Visitors get a full-page red interstitial and almost
+      // nobody clicks through, so in practice it IS an outage \u2014 but it is a
+      // different finding, it is trivially fixable, and it happens silently when
+      // a renewal fails. The owner will not know until someone tells him.
+      const _msg = String((e && (e.code || e.message)) || '');
+      if (/CERT_HAS_EXPIRED|ERR_TLS_CERT_ALTNAME|DEPTH_ZERO_SELF_SIGNED|UNABLE_TO_VERIFY_LEAF|SELF_SIGNED_CERT/i.test(_msg)) {
+        certExpired = true;
+      }
+    }
+  }
+  if (certExpired) {
+    return { down: false, certExpired: true,
+      why: 'the site is reachable but its SSL certificate is not valid, so browsers block it with a full-page warning \u2014 that is a certificate problem, not a dead site' };
   }
   return { down: true, why: 'we could not reach it over https or http from our own server either, using a browser user-agent and following redirects' };
 };
@@ -6481,6 +6498,94 @@ const HARM_LADDER = [
     say: () => 'Their site is not on HTTPS, so browsers show a "Not secure" warning beside the address',
     costs: 'a warning in the address bar before a stranger has read a word, on a site asking for a name and a phone number' },
 
+
+  // ── FOUR MORE, FROM MAPPING EVERY WAY A STOREFRONT LOSES MONEY ──────────
+  // Found by listing every failure mode a digital storefront can have and
+  // checking each against the ladder, rather than waiting for one to show up in
+  // a live email. All four use data we already hold and cost nothing.
+
+  { harm: 97, specific: 95, novel: 60, delegable: 40, weFix: 95, band: 'DEAD', id: 'no_google_listing',
+    // The most complete version of invisible. A local business with no Google
+    // Business Profile does not appear in the map pack at all, cannot be reviewed,
+    // and cannot be found by anyone searching their trade. We resolve a Place on
+    // every lead and simply had nothing to say when the answer was none.
+    // novel 60: he half-knows he "never set up the Google thing" \u2014 what he does
+    // not know is that it is the reason nobody finds him.
+    test: (m) => m.placeSearched === true && m.hasPlace === false,
+    say: () => 'They have no Google Business Profile at all \u2014 nothing appears in the map results for their name',
+    costs: 'the map pack is where local buying decisions start, and they are not in it' },
+
+  { harm: 74, specific: 96, novel: 92, delegable: 65, weFix: 95, band: 'CONTRADICTS', id: 'wrong_gbp_category',
+    // Bruce Favret, live: a probate law firm categorised on Google as
+    // "Consultant". We logged the category on every lead and never used it.
+    // Google ranks the map pack largely by category, so a wrong one keeps you out
+    // of every search for what you actually do \u2014 and no owner has ever checked it,
+    // which is why novel is high.
+    test: (m) => !!m.gbpCategory && !!m.tradeWord
+      && !String(m.gbpCategory).toLowerCase().includes(String(m.tradeWord).toLowerCase())
+      && !String(m.tradeWord).toLowerCase().includes(String(m.gbpCategory).toLowerCase())
+      && /^(consultant|contractor|business|service|establishment|corporate office|company|store|professional)$/i.test(String(m.gbpCategory).trim()),
+    say: (m) => `Google lists their business category as "${m.gbpCategory}" rather than ${m.tradeWord}`,
+    costs: 'the map pack is ranked largely on category, so the wrong one keeps them out of searches for what they actually do' },
+
+  { harm: 68, specific: 94, novel: 70, delegable: 25, weFix: 95, band: 'INVISIBLE', id: 'review_deficit',
+    // We already read their review count AND the counts of everyone ranking above
+    // them. Saying "you have 22 and the three above you have 400+" requires having
+    // looked at both, which is why specific is 94.
+    // Distinct from outranked_by_weaker, which is the opposite case: there they
+    // have MORE reviews than the businesses beating them.
+    test: (m) => Number(m.reviewCount || 0) > 0 && Number(m.aboveMedianReviews || 0) > 0
+      && Number(m.aboveMedianReviews) >= Number(m.reviewCount) * 4,
+    say: (m) => `They have ${m.reviewCount} reviews; the businesses ranking above them average about ${Math.round(Number(m.aboveMedianReviews))}`,
+    costs: 'a buyer choosing between names on a map reads the review count before anything else' },
+
+  { harm: 92, specific: 92, novel: 88, delegable: 60, weFix: 95, band: 'DEAD', id: 'expired_certificate',
+    // Different from no_https and much worse. An expired certificate does not
+    // show a small "Not secure" note \u2014 the browser puts up a full-page red
+    // interstitial that most people will not click through. It is effectively an
+    // outage, it happens silently on renewal failure, and the owner will not know
+    // until someone tells him.
+    test: (m) => m.certExpired === true,
+    say: () => 'Their SSL certificate has expired, so browsers show a full-page security warning before the site loads',
+    costs: 'almost nobody clicks past a red browser warning \u2014 in practice the site is down' },
+
+  // ── FOUR GAPS FOUND BY AUDITING SIGNAL-BY-SIGNAL ────────────────────────
+  // Every signal we measure was checked against the ladder. These four were
+  // measured on every lead and had no way to become a finding \u2014 including the
+  // single most consequential number on a local business's listing.
+
+  { harm: 84, specific: 90, novel: 55, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'low_rating',
+    // The most consequential number on a local listing and we had nothing to say
+    // about it. A 3.6 next to competitors at 4.8 decides the click before anyone
+    // reads a word. novel is middling \u2014 he knows his rating \u2014 but he very likely
+    // does not know how far below the businesses beating him it sits.
+    test: (m) => Number.isFinite(Number(m.rating)) && Number(m.rating) > 0 && Number(m.rating) < 4.0
+      && Number(m.reviewCount || 0) >= 10,
+    say: (m) => `Their Google rating is ${Number(m.rating).toFixed(1)} across ${m.reviewCount} reviews`,
+    costs: 'a buyer comparing three names on a map picks on the star line before reading anything' },
+
+  { harm: 58, specific: 88, novel: 80, delegable: 55, weFix: 95, band: 'BLOCKS', id: 'no_owner_replies',
+    // Visible to every prospect who reads the reviews, measured directly, and
+    // owners consistently do not realise how it reads. Scott replies to 37 of 40
+    // and it is the best thing about his profile; the inverse is a real finding.
+    test: (m) => Number(m.reviewsRead || 0) >= 15 && Number(m.ownerReplies || 0) === 0,
+    say: (m) => `Not one of the ${m.reviewsRead} reviews we read has a reply from the business`,
+    costs: 'a prospect reading reviews sees a business that does not answer, which is the same signal a bad review sends' },
+
+  { harm: 62, specific: 85, novel: 85, delegable: 85, weFix: 95, band: 'BLOCKS', id: 'no_hours_on_profile',
+    // Free to fix, ten minutes, and genuinely unknown \u2014 nobody looks at their own
+    // listing the way a stranger does at 7pm on a Sunday.
+    test: (m) => m.hasPlace === true && m.hoursListed === false,
+    say: () => 'Their Google listing has no opening hours on it',
+    costs: 'someone deciding whether to call right now cannot tell if they are open' },
+
+  { harm: 70, specific: 82, novel: 75, delegable: 80, weFix: 95, band: 'BLOCKS', id: 'no_mobile_viewport',
+    // A page that does not fit a phone, in 2026, on a business whose traffic is
+    // mostly mobile. He has not opened his own site on a phone recently \u2014 almost
+    // nobody does.
+    test: (m) => m.viewportChecked === true && m.hasViewport === false,
+    say: () => 'Their site has no mobile viewport set, so it renders desktop-width on a phone',
+    costs: 'most of the people finding them are on a phone, and the page arrives zoomed out and unreadable' },
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
   { harm: 72, specific: 98, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
@@ -15342,6 +15447,30 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Without this the absence entry could fire on a lead where the rank
           // check was skipped, which would be a fabricated finding.
           rankChecked: !!(localRank && localRank.checked),
+          // Inputs for the four entries added after the signal-by-signal audit.
+          rating: (localRank && localRank.ours) ? localRank.ours.rating : null,
+          // reviewCount is already supplied above from localRank.ours.reviews \u2014
+          // the low_rating entry reads that same value.
+          reviewsRead: reviewsRead || null,
+          ownerReplies: ownerReplyCount,
+          hoursListed: (gbpHealth && gbpHealth.checked) ? gbpHealth.hasHours !== false : null,
+          viewportChecked: !!(htmlSignals && htmlSignals.checked),
+          // ══ INPUTS FOR THE STOREFRONT-MAP ENTRIES ═══════════════════════
+          // We resolve a Place on every lead. Distinguishing "we looked and there
+          // is none" from "we never looked" is what makes no_google_listing a
+          // finding rather than a guess.
+          placeSearched: true,
+          gbpCategory: (gbpHealth && gbpHealth.checked) ? gbpHealth.primaryCategory : null,
+          tradeWord: customerTrade || verifiedIndustry || req.body.industry || null,
+          // The median review count of the businesses ranking ABOVE them. We
+          // already read both numbers and never compared them.
+          aboveMedianReviews: (() => {
+            const ab = (localRank && Array.isArray(localRank.above)) ? localRank.above : [];
+            const n = ab.map(x => Number(x && x.reviews)).filter(Number.isFinite).sort((a, b) => a - b);
+            return n.length ? n[Math.floor(n.length / 2)] : null;
+          })(),
+          certExpired: _siteDownVerdict && _siteDownVerdict.certExpired === true,
+          hasViewport: htmlSignals ? htmlSignals.hasViewport : null,
           rank: localRank && localRank.rank,
           weakerAbove: localRank && localRank.weakerAbove,
           rankQuery: localRank && localRank.query,
