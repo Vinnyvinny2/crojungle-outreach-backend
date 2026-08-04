@@ -13292,8 +13292,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const _https = String(website).replace(/^http:\/\//i, 'https://');
         console.log(`Firecrawl returned nothing for ${website}, which is a plain http URL. Trying ${_https} before concluding anything \u2014 most sites redirect to https and some do not answer on port 80 at all.`);
         try {
-          const resS = await firecrawlScrape(fcKey, _https, 30000);
-          if (!looksEmpty(resS)) {
+          // `firecrawlScrape(fcKey, ...)` was written here and neither name exists
+          // in this scope \u2014 fcKey is a parameter of auditSitePages, and there is no
+          // firecrawlScrape helper on this path. It threw instantly inside the
+          // try/catch, so the https upgrade silently never ran on a single lead
+          // while the log line above claimed it was being tried.
+          //
+          // This scope has `firecrawlKey` and does its own fetch. Use them.
+          const rS = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: _https, formats: ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'],
+              onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+          }, 30000);
+          const resS = rS && rS.ok ? await rS.json() : null;
+          if (resS && !looksEmpty(resS)) {
             console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
             return resS;
           }
@@ -14769,12 +14782,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     //
     // So: run whenever we have ANY substantive material. The prompt already
     // handles a missing homepage by forbidding claims about it.
-    const _haveGooglePicture = !!(effectivePlaceId && (reviewCount > 0 || (gbpHealth && gbpHealth.checked)));
+    // `reviewCount` is a PROPERTY name in this file, never a variable. I used it
+    // as one and it threw "reviewCount is not defined" on the next live run \u2014 the
+    // ninth runtime error of this kind. gbpHealth.checked already tells us we have
+    // a Google picture, which is the only thing this needs to know.
+    const _haveGooglePicture = !!(effectivePlaceId && gbpHealth && gbpHealth.checked);
     const _siteIsTheFinding = _siteDownVerdict && _siteDownVerdict.down === true;
     if (apiKey && (screenshotUrl || trustedContent.length > 100 || hasDiscoveryContext
                    || _haveGooglePicture || _siteIsTheFinding)) {
       if (!screenshotUrl && trustedContent.length <= 100) {
-        console.log(`\u2139 AUDITING WITHOUT THE SITE [${company}]: their page gave us nothing${_siteIsTheFinding ? ' and two independent checks confirm it is down, which is itself the strongest finding on this lead' : ''}. Building the audit from what we DO hold \u2014 their Google profile, ${reviewCount || 0} reviews, and the review read. \u26a0 Nothing may be claimed about their website's CONTENT: no headline, no CTA, no copy, no form. The only permitted statement about the site is whether it loaded.`);
+        console.log(`\u2139 AUDITING WITHOUT THE SITE [${company}]: their page gave us nothing${_siteIsTheFinding ? ' and two independent checks confirm it is down, which is itself the strongest finding on this lead' : ''}. Building the audit from what we DO hold \u2014 their Google profile and the review read. \u26a0 Nothing may be claimed about their website's CONTENT: no headline, no CTA, no copy, no form. The only permitted statement about the site is whether it loaded.`);
       }
       try {
         // Build message content — always send text, add image if available
