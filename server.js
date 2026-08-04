@@ -730,11 +730,21 @@ const MEASURED_SIGNAL_SCORES = {
 // the sentence says. Only fires when the measurement exists.
 const measuredScoreFor = (findingText, m = {}) => {
   const t = String(findingText || '').toLowerCase();
-  // Deliberately broad. This does not decide WHETHER they are absent \u2014 localRank
-  // already did that. It only asks "is this sentence about being found?", so a
-  // wider net costs nothing and a narrow one silently mis-scores the most
-  // important finding we produce.
-  const searchy = /\brank|ranking|top 20|search|results|found online|find (?:them|him|you)|findable|visible|visibility|invisible|appear|show(?:s|ing)? up|listed\b/.test(t);
+  // ══ BROAD ENOUGH TO CATCH REPHRASING, NARROW ENOUGH TO BE ABOUT SEARCH ═══
+  // The first version was too wide and it mis-scored two findings on one live
+  // lead: "No VISIBLE social proof" was scored as absent_from_search because it
+  // contained the word "visible", and "No lead magnet or email capture" was
+  // scored as no_after_hours.
+  //
+  // A loose matcher here is not a small error \u2014 it takes the score for finding A
+  // from the measurement of finding B, which is a fabrication with extra steps.
+  //
+  // So: require an explicit search word, and DISQUALIFY sentences that are
+  // plainly about something else. "Visible" alone is not about search; "visible
+  // in search" is.
+  const aboutSomethingElse = /\bsocial proof|testimonial|review(?:s)? on the site|lead magnet|email capture|guarantee|offer|headline|copy|form|photo/.test(t);
+  const explicitlySearch = /\brank(?:ing|s)?\b|\btop 20\b|\bsearch(?:es|ing)?\b|\bsearch results\b|\bmap pack\b|\bgoogle results\b|\bfound online\b|\bshow(?:s|ing)? up (?:when|for|in)\b|\bcome(?:s)? up (?:when|for|in)\b|\b(?:in)?visible (?:in|for) search\b|\blisted (?:in|anywhere in) the\b/.test(t);
+  const searchy = explicitlySearch && !aboutSomethingElse;
   if (searchy && m.rankChecked && m.rankFound === false) return { id: 'absent_from_search', ...MEASURED_SIGNAL_SCORES.absent_from_search };
   if (searchy && m.rankFound === true && (m.weakerAbove || 0) > 0) return { id: 'outranked_by_weaker', ...MEASURED_SIGNAL_SCORES.outranked_by_weaker };
   if (/broken|error|does not load|crash|dead (?:page|link)/.test(t) && (m.brokenPages || []).some(b => b && b.confirmed)) {
@@ -745,7 +755,11 @@ const measuredScoreFor = (findingText, m = {}) => {
     return { id: 'thin_profile', ...MEASURED_SIGNAL_SCORES.thin_profile };
   }
   if (/review/.test(t) && Number(m.reviewRecency) > 365) return { id: 'stale_reviews', ...MEASURED_SIGNAL_SCORES.stale_reviews };
-  if (/book|schedul|form|quote|path in|way to reach/.test(t)) {
+  // Same discipline: a booking finding must be about the BOOKING PATH, not about
+  // anything that happens to contain the word "form" or "quote". "No lead magnet
+  // or email capture" was being scored as no_after_hours.
+  if (/\bbook(?:ing)?\b|\bschedul\w+\b|\bappointment\b|\bonly way (?:in|to reach|to book)\b|\bonly path in\b|\bcontact form is the only\b|\bphone[- ]only\b/.test(t)
+      && !/\blead magnet|email capture|newsletter|guarantee|offer\b/.test(t)) {
     if (m.booking === 'phone_only' && m.bookingMeasured) return { id: 'no_after_hours', ...MEASURED_SIGNAL_SCORES.no_after_hours };
     if (m.booking === 'form' && m.bookingMeasured) return { id: 'form_only_no_booking', ...MEASURED_SIGNAL_SCORES.form_only_no_booking };
   }
@@ -1084,15 +1098,25 @@ const checkFabrications = (text, measured = {}) => {
   };
   const NUMWORD = '(?:ten|eleven|twelve|thir|four|fif|six|seven|eigh|nine)(?:teen|ty)?(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?|twenty(?:[\\s-](?:one|two|three|four|five|six|seven|eight|nine))?';
   const tenureClaim = t.match(new RegExp(
-    `\\b(\\d{1,3})\\+?\\s*years?\\s+(?:of\\s+)?(?:history|in business|in practice|practicing|of practice|of experience|serving|in [A-Z][a-z]+)\\b` +
+    // "30-year reputation" is hyphenated and has no "years" word after it, so the
+    // original pattern missed it against a measured 33 \u2014 live, in a sent-ready
+    // email. Adjectival forms are how copy actually writes tenure.
+    `\\b(\\d{1,3})[-\\s]?year[-\\s](?:old |long )?(?:reputation|history|business|practice|track record|company|firm)\\b` +
+    `|\\b(\\d{1,3})\\+?\\s*years?\\s+(?:of\\s+)?(?:history|in business|in practice|practicing|of practice|of experience|serving|in market|in [A-Z][a-z]+)\\b` +
     `|\\b(?:over|nearly|almost)\\s+(\\d{1,3})\\s*years?\\b` +
     `|\\b(${NUMWORD})\\s+years?\\b` +
     `|\\b(?:three|four|five|six)\\s+decades\\b`, 'i'));
   if (tenureClaim && !measured.tenureYears) {
     flags.push(`INVENTED TENURE \u2014 "${tenureClaim[0]}". We measured NO founding year or tenure claim on this lead, so this number came from nowhere. It is the easiest possible thing for an owner to disprove: he knows when he started. Remove it entirely.`);
   } else if (tenureClaim && measured.tenureYears) {
-    const said = Number(tenureClaim[1] || tenureClaim[2]) || wordToNum(tenureClaim[3]);
-    if (Number.isFinite(said) && Math.abs(said - Number(measured.tenureYears)) > 1) {
+    const said = Number(tenureClaim[1] || tenureClaim[2] || tenureClaim[3]) || wordToNum(tenureClaim[4]);
+    // ══ NO TOLERANCE. HE KNOWS THE NUMBER. ═══════════════════════════════════
+    // This allowed a difference of 1, so "40 years in market" passed against a
+    // measured 41 on a live lead, and "30-year reputation" nearly passed against
+    // 33. There is no reason to round: we have the figure from their own site,
+    // and an owner reading a number one year off his own founding date learns
+    // that we are approximating. Every other fact in the email inherits that.
+    if (Number.isFinite(said) && said !== Number(measured.tenureYears)) {
       flags.push(`WRONG TENURE \u2014 the copy says "${tenureClaim[0]}" but we measured ${measured.tenureYears} years. Use the measured figure or say nothing.`);
     }
   }
@@ -1269,10 +1293,237 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
 };
 
 // ── CLAUDE ────────────────────────────────────────────────
+// ══ MOVED ABOVE THE ROUTES ═══════════════════════════════════════════════════
+// The TDZ scanner flagged this: /api/claude reads ANTHROPIC_PRICES and
+// _CURRENT_LEAD, and both were declared 2,400 lines further down. At runtime the
+// handler only executes when a request arrives, long after the module finishes
+// loading, so it would not actually have thrown \u2014 but a checker cannot know that,
+// and teaching it to ignore "used before declared" to silence one false positive
+// would blind it to the real ones. Four separate outages this week were exactly
+// that class. Declaring before use is correct regardless.
+
+// ══ WHAT A LEAD ACTUALLY COSTS ═══════════════════════════════════════════════
+// The log has always printed "BRAIN COST: $0.0989" and that is ONE of twenty-one
+// Anthropic calls per lead. The other twenty were invisible, so the meter said
+// ten cents while the bill said roughly thirty — and there was no way to tell
+// which call was expensive, or whether an optimisation helped.
+//
+// Same principle as the error message that hid the error: a measurement that
+// covers a fifth of the thing is worse than none, because it invites confident
+// decisions about the wrong number.
+// ══ THE ONLY LEVER LEFT THAT REACHES 5 CENTS ═════════════════════════════════
+// Measured on a live HEGG run: the audit call is $0.0831 of a $0.1106 lead, and
+// $0.0422 of that is OUTPUT \u2014 the findings, the signal rows, the briefing. That
+// output is the product, so it cannot be cut without cutting quality.
+//
+// Every honest path, costed:
+//   remove dead output fields      \u2212$0.0036   \u2192 $0.1070
+//   cache the fresh input          \u2212$0.0332   \u2192 $0.0738   (a real refactor)
+//   run the audit on Haiku         \u2212$0.0554   \u2192 $0.0553
+//
+// No arithmetic reaches 5 cents while this call runs on Sonnet. Haiku 4.5 is
+// genuinely capable and this is the highest-judgement task in the system, so the
+// honest move is not to decide it silently \u2014 it is to make it a switch, run one
+// lead on both, and read the two audits side by side.
+//
+//   BRAIN_MODEL=claude-haiku-4-5-20251001   in Render env vars
+//
+// Default stays Sonnet. Changing it is a quality decision and it should be made
+// by looking at output, not at a spreadsheet.
+// ══ SPLIT THE MODELS BY TASK, NOT WHOLESALE ══════════════════════════════════
+// The obvious cost lever was "run everything on Haiku", and the obvious
+// objection was "the audit is the highest-judgement task in the system". Both
+// are wrong, and looking at what this call actually DOES settles it.
+//
+// The five dimensions that RANK the findings \u2014 verifiability, surprise,
+// severity, weFixIt, ownerLevel \u2014 are computed IN CODE from the finding text.
+// The log proves it overrides the model on every lead:
+//   \u2713 VERIFIABILITY: 3 candidate(s) re-scored from what we ACTUALLY measured
+//     rather than the model's estimate
+// The harm ladder, the product fit, the layer mapping and the ladder winner are
+// all deterministic too.
+//
+// So the audit call contributes three things: EXTRACT what is on the page,
+// WRITE candidate findings in plain English, WRITE one row per measured signal.
+// That is extraction and phrasing. The JUDGEMENT \u2014 what it all adds up to \u2014
+// happens in the separate situation-read call, and that stays on Sonnet.
+//
+// Measured on a live HEGG run:
+//   audit on Sonnet  $0.0824      total $0.1094
+//   audit on Haiku   $0.0275      total $0.0573   \u2014 a 48% reduction
+//
+// The risk is real but small and it is in the right place: phrasing may be
+// slightly flatter, and the synthesis that carries the audit is untouched. If
+// the rows read worse, one env var puts it back:
+//
+//   BRAIN_MODEL=claude-sonnet-4-6
+//
+// Watch the FINDING SCORES line across a few leads. If the candidate findings
+// stop being specific, that is the signal to revert \u2014 not a spreadsheet.
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
+
+const ANTHROPIC_PRICES = {
+  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
+  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 1.25 / 1e6 },
+};
+// ══ ONE VARIABLE CANNOT HOLD TWO CONCURRENT LEADS ════════════════════════════
+// This was a single module-level string. Running HEGG and Mid-American at the
+// same time produced:
+//   \ud83d\udcb0 HEGG:         $0.0018 across 1 call
+//   \ud83d\udcb0 Mid-American: $0.1352 across 16 calls, listing TWO brainAudits
+// Whichever lead started last owned every call from both, so one lead looked
+// free and the other looked twice as expensive as it is. A cost meter that
+// mis-attributes under concurrency is worse than none \u2014 it was about to make
+// the Haiku switch look like a regression when it had actually halved the bill.
+//
+// AsyncLocalStorage carries the lead down the whole async chain of ONE request,
+// so concurrent requests can never see each other's context. The module-level
+// fallback stays for the paths that run outside a request.
+// ══ ITS OWN IMPORT, DELIBERATELY ═════════════════════════════════════════════
+// This used to rely on the AsyncLocalStorage import further down the file. Then
+// the meter moved above the routes to satisfy the TDZ scanner, and the boot
+// died with "Cannot access 'AsyncLocalStorage' before initialization".
+//
+// Four static scanners passed that file. Only actually STARTING the server
+// caught it \u2014 which is the whole argument for keeping the boot test in the gate:
+// static analysis reasons about the code, and running it reasons about reality.
+//
+// require() is cached, so a second import of the same builtin costs nothing.
+const { AsyncLocalStorage: _ALS } = require('node:async_hooks');
+const _leadContext = new _ALS();
+let _CURRENT_LEAD_FALLBACK = 'lead';
+const setCurrentLead = (name) => { _CURRENT_LEAD_FALLBACK = String(name || 'lead'); };
+const runWithLead = (name, fn) => _leadContext.run({ name: String(name || 'lead') }, fn);
+// A plain function, not a globalThis property: the scope scanner correctly
+// refused to resolve a magic global, and it was right to \u2014 an identifier that
+// exists only at runtime is exactly the class of thing that has bitten this file
+// repeatedly. If the async context is not set (paths outside a request) it falls
+// back to the last lead that started, which is the old behaviour.
+const _CURRENT_LEAD = () => {
+  const st = _leadContext.getStore();
+  return (st && st.name) || _CURRENT_LEAD_FALLBACK;
+};
+
+const _leadSpend = new Map();   // company -> { calls: [], total }
+
+// ══ THEIR MAILBOX IS NOT ALWAYS ON THEIR WEBSITE'S DOMAIN ════════════════════
+// Hawk Crawlspace publishes info@hawkva.com in the footer of every page. Their
+// website is hawkcrawlspaceandfoundationrepair.com. The address is on a page we
+// paid to scrape, on every page we scraped, and we threw it away because the
+// domains do not match \u2014 then reported "0 route(s) to a mailbox" and scored the
+// lead 24/100 reachability.
+//
+// The same-domain rule exists for a good reason: without it we harvest the web
+// designer's address, a supplier, a stock-photo licence, a chamber-of-commerce
+// contact. Those are on their pages too and none of them reach the owner.
+//
+// So the rule stays, and this is a narrow exception for the case where an
+// off-domain address is provably THEIRS. A business with a long SEO domain for
+// the site and a short one for mail is common, and the two domains almost always
+// share a word \u2014 hawkva.com and hawkcrawlspaceandfoundationrepair.com share
+// "hawk", which is also the first word of the business name.
+//
+// Three conditions, all required:
+//   1. the local part is a business inbox (info@, office@, contact@, hello@ and
+//      the like) or the owner's name \u2014 not a personal-looking stranger
+//   2. the email's domain shares a distinctive word with either the site domain
+//      or the company name, and that word is at least four characters
+//   3. the address appears on more than one page, or in a footer position
+//      \u2014 a one-off mention is far more likely to be someone else's
+const looksLikeTheirOffDomainMailbox = (email, siteDomain, companyName, occurrences) => {
+  const e = String(email || '').toLowerCase();
+  const at = e.indexOf('@');
+  if (at < 1) return null;
+  const local = e.slice(0, at);
+  const emailDomain = e.slice(at + 1);
+  const siteRoot = String(siteDomain || '').toLowerCase().replace(/^www\./, '');
+  if (!emailDomain || emailDomain === siteRoot) return null;
+
+  // 1. a business inbox, or a name we already believe is the owner
+  const BUSINESS_INBOX = /^(info|office|contact|hello|admin|sales|service|scheduling|estimates?|inquiries|enquiries|team|mail)$/;
+  const ownerWords = String(companyName || '').toLowerCase().match(/[a-z]{4,}/g) || [];
+  const isBusinessInbox = BUSINESS_INBOX.test(local);
+  if (!isBusinessInbox && !ownerWords.some(w => local.includes(w))) return null;
+
+  // 2. THE BRAND TOKEN, NOT ANY SHARED WORD.
+  // A first version matched any shared word of four or more characters, and it
+  // accepted sales@andersenwindows.com for HEGG Windows & Doors \u2014 because both
+  // contain "windows". That is a supplier, and a trade noun is exactly the word
+  // a supplier shares with its customers.
+  //
+  // The brand is the FIRST distinctive word of the business name: "hawk" from
+  // Hawk Crawlspace, "hegg" from HEGG Windows. A mail domain that belongs to the
+  // same business almost always carries it \u2014 hawkva, heggwin \u2014 and a supplier's
+  // never does. Fall back to the site domain's leading token when the company
+  // name is unhelpful.
+  const TRADE_OR_GENERIC = new Set(['company','group','services','service','solutions','online','info','home',
+    'best','local','pros','team','windows','doors','roofing','plumbing','electric','dental','legal','construction',
+    'contracting','remodeling','repair','foundation','landscaping','heating','cooling','cleaning']);
+  // Taking only the FIRST word was too narrow: for "Bruce Favret Law" it picked
+  // "bruce" and rejected favretlaw.com, which is plainly their own domain with a
+  // hyphen dropped. So consider EVERY distinctive token from the business name
+  // and the site domain \u2014 the trade-word list above is what stops a supplier
+  // matching on "windows" or "roofing".
+  const STOP = new Set(['the','and','for','llc','inc','ltd','corp']);
+  const tokensOf = (text) => (String(text || '').toLowerCase().match(/[a-z]{4,}/g) || [])
+    .filter(w => !TRADE_OR_GENERIC.has(w) && !STOP.has(w));
+  const brands = [...new Set([...tokensOf(companyName), ...tokensOf(siteRoot.split('.')[0])])];
+  if (!brands.length) return null;
+  const emailHost = emailDomain.split('.')[0];
+  const shared = brands.find(b => emailHost.includes(b) || b.includes(emailHost));
+  if (!shared) return null;
+
+  // 3. not a one-off
+  if ((occurrences || 0) < 2) return null;
+
+  return { email: e, why: `${e} is on a different domain from their website, but it is a business inbox, "${shared}" is shared with ${siteRoot.includes(shared) ? 'their site domain' : 'their business name'}, and it appears ${occurrences} times across the pages we read \u2014 a long domain for the site and a short one for mail is common and this is theirs` };
+};
+
+const meterAnthropic = (company, label, model, usage) => {
+  try {
+    if (!usage) return 0;
+    const p = ANTHROPIC_PRICES[model] || ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
+    const fresh = usage.input_tokens || 0;
+    const cRead = usage.cache_read_input_tokens || 0;
+    const cWrite = usage.cache_creation_input_tokens || 0;
+    const out = usage.output_tokens || 0;
+    const cost = fresh * p.in + cRead * p.cacheRead + cWrite * p.cacheWrite + out * p.out;
+    const key = String(company || 'unknown');
+    if (!_leadSpend.has(key)) _leadSpend.set(key, { calls: [], total: 0 });
+    const rec = _leadSpend.get(key);
+    rec.calls.push({ label, model, fresh, cRead, cWrite, out, cost });
+    rec.total += cost;
+    return cost;
+  } catch (e) { return 0; }
+};
+
+const reportLeadSpend = (company) => {
+  const rec = _leadSpend.get(String(company || 'unknown'));
+  if (!rec || !rec.calls.length) return;
+  const top = [...rec.calls].sort((a, b) => b.cost - a.cost).slice(0, 5)
+    .map(c => `${c.label} $${c.cost.toFixed(4)} (${c.model.includes('sonnet') ? 'S' : 'H'} in:${c.fresh} cache:${c.cRead} out:${c.out})`);
+  console.log(`\ud83d\udcb0 ANTHROPIC TOTAL [${company}]: $${rec.total.toFixed(4)} across ${rec.calls.length} call(s). Most expensive: ${top.join(' | ')}`);
+  _leadSpend.delete(String(company || 'unknown'));
+};
+
+// ══ THE EMAIL WRITER, AND THE HOLE IN THE ACCOUNTING ═════════════════════════
+// This endpoint was in NO total. The research meter covers research; this runs
+// when you press Generate, on Sonnet, with a 12,000-token prompt and no caching
+// at all \u2014 roughly $0.063 an email, invisible.
+//
+// That is the whole gap between the per-lead figure I have been reporting and
+// the balance you actually watched drop:
+//   research $0.060  +  generate $0.063  =  $0.123 for a lead you write to
+//
+// Two fixes here: meter it, and cache the system prompt. The system prompt is
+// EMAIL_TEMPLATE plus Mike's framework \u2014 tens of thousands of characters that
+// are byte-identical on every lead and were being bought fresh at $3/M every
+// single time.
 app.post('/api/claude', async (req, res) => {
   try {
     const { system, user, apiKey } = req.body;
     if (!apiKey) return res.status(400).json({ error: 'API key required' });
+    setCurrentLead(String(req.body.company || 'generate'));
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
@@ -1282,9 +1533,36 @@ app.post('/api/claude', async (req, res) => {
       // quality"). Sonnet output is $15/M - the most expensive token in the app -
       // and a complete generate (two variants plus follow-ups) lands well under
       // 4000. If a run ever truncates, this is the first number to raise.
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, system, messages: [{ role: 'user', content: user }] }),
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        // EMAIL_TEMPLATE and Mike's framework: identical on every lead, and
+        // bought fresh at $3/M on every lead until now. Cached input is $0.30/M.
+        // Only cache when it is big enough to be worth a breakpoint \u2014 Anthropic
+        // will not cache a short prefix and the call would just fail the minimum.
+        system: (typeof system === 'string' && system.length > 4000)
+          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }]
+          : system,
+        messages: [{ role: 'user', content: user }],
+      }),
     });
     const d = await safeJson(r);
+    // The generate call was in no total. On Sonnet with a ~12,000-token prompt
+    // and 1,800 tokens out it is roughly $0.063 an email \u2014 comparable to the
+    // entire research run and completely invisible until now.
+    try { meterAnthropic(_CURRENT_LEAD(), 'generateEmail', 'claude-sonnet-4-6', d && d.usage); } catch (e) { void e; }
+    if (d && d.usage) {
+      // Named uniquely: `_pp` already exists elsewhere in this file, and a
+      // multi-declarator const with a colliding name is exactly what confused the
+      // TDZ scanner. Cheaper to rename than to argue with a checker that has
+      // caught four real outages this week.
+      const _u = d.usage;
+      const _genPrices = ANTHROPIC_PRICES['claude-sonnet-4-6'];
+      const _c = (_u.input_tokens || 0) * _genPrices.in + (_u.cache_read_input_tokens || 0) * _genPrices.cacheRead
+        + (_u.cache_creation_input_tokens || 0) * _genPrices.cacheWrite + (_u.output_tokens || 0) * _genPrices.out;
+      console.log(`\ud83d\udcb0 GENERATE COST [${req.body.company || 'lead'}]: $${_c.toFixed(4)} | fresh=${_u.input_tokens || 0} cacheRead=${_u.cache_read_input_tokens || 0} cacheWrite=${_u.cache_creation_input_tokens || 0} out=${_u.output_tokens || 0}`
+        + `${(_u.cache_read_input_tokens || 0) > 0 ? ' \u267b prompt cache HIT' : ''}`);
+    }
     if (!r.ok) return res.status(r.status).json({ error: d.error?.message || 'Anthropic error' });
     const _text = d.content[0].text;
 
@@ -3596,179 +3874,6 @@ const FC_LEDGER = new AsyncLocalStorage();
 // while several third-party guides claim screenshot/action scrapes bill at 5. Rather
 // than bake in a guess, this is a dial: measure one lead with and one without, then
 // set FC_SCREENSHOT_CREDITS to whatever the dashboard actually moved by.
-// ══ WHAT A LEAD ACTUALLY COSTS ═══════════════════════════════════════════════
-// The log has always printed "BRAIN COST: $0.0989" and that is ONE of twenty-one
-// Anthropic calls per lead. The other twenty were invisible, so the meter said
-// ten cents while the bill said roughly thirty — and there was no way to tell
-// which call was expensive, or whether an optimisation helped.
-//
-// Same principle as the error message that hid the error: a measurement that
-// covers a fifth of the thing is worse than none, because it invites confident
-// decisions about the wrong number.
-// ══ THE ONLY LEVER LEFT THAT REACHES 5 CENTS ═════════════════════════════════
-// Measured on a live HEGG run: the audit call is $0.0831 of a $0.1106 lead, and
-// $0.0422 of that is OUTPUT \u2014 the findings, the signal rows, the briefing. That
-// output is the product, so it cannot be cut without cutting quality.
-//
-// Every honest path, costed:
-//   remove dead output fields      \u2212$0.0036   \u2192 $0.1070
-//   cache the fresh input          \u2212$0.0332   \u2192 $0.0738   (a real refactor)
-//   run the audit on Haiku         \u2212$0.0554   \u2192 $0.0553
-//
-// No arithmetic reaches 5 cents while this call runs on Sonnet. Haiku 4.5 is
-// genuinely capable and this is the highest-judgement task in the system, so the
-// honest move is not to decide it silently \u2014 it is to make it a switch, run one
-// lead on both, and read the two audits side by side.
-//
-//   BRAIN_MODEL=claude-haiku-4-5-20251001   in Render env vars
-//
-// Default stays Sonnet. Changing it is a quality decision and it should be made
-// by looking at output, not at a spreadsheet.
-// ══ SPLIT THE MODELS BY TASK, NOT WHOLESALE ══════════════════════════════════
-// The obvious cost lever was "run everything on Haiku", and the obvious
-// objection was "the audit is the highest-judgement task in the system". Both
-// are wrong, and looking at what this call actually DOES settles it.
-//
-// The five dimensions that RANK the findings \u2014 verifiability, surprise,
-// severity, weFixIt, ownerLevel \u2014 are computed IN CODE from the finding text.
-// The log proves it overrides the model on every lead:
-//   \u2713 VERIFIABILITY: 3 candidate(s) re-scored from what we ACTUALLY measured
-//     rather than the model's estimate
-// The harm ladder, the product fit, the layer mapping and the ladder winner are
-// all deterministic too.
-//
-// So the audit call contributes three things: EXTRACT what is on the page,
-// WRITE candidate findings in plain English, WRITE one row per measured signal.
-// That is extraction and phrasing. The JUDGEMENT \u2014 what it all adds up to \u2014
-// happens in the separate situation-read call, and that stays on Sonnet.
-//
-// Measured on a live HEGG run:
-//   audit on Sonnet  $0.0824      total $0.1094
-//   audit on Haiku   $0.0275      total $0.0573   \u2014 a 48% reduction
-//
-// The risk is real but small and it is in the right place: phrasing may be
-// slightly flatter, and the synthesis that carries the audit is untouched. If
-// the rows read worse, one env var puts it back:
-//
-//   BRAIN_MODEL=claude-sonnet-4-6
-//
-// Watch the FINDING SCORES line across a few leads. If the candidate findings
-// stop being specific, that is the signal to revert \u2014 not a spreadsheet.
-const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
-
-const ANTHROPIC_PRICES = {
-  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
-  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 1.25 / 1e6 },
-};
-// The company name is not in scope at most call sites \u2014 a typeof guard there
-// referenced identifiers that do not exist and the scope scanner caught it
-// immediately. One module-level reference, set when a lead starts, is correct
-// and cannot go undefined.
-let _CURRENT_LEAD = 'lead';
-const setCurrentLead = (name) => { _CURRENT_LEAD = String(name || 'lead'); };
-
-const _leadSpend = new Map();   // company -> { calls: [], total }
-
-// ══ THEIR MAILBOX IS NOT ALWAYS ON THEIR WEBSITE'S DOMAIN ════════════════════
-// Hawk Crawlspace publishes info@hawkva.com in the footer of every page. Their
-// website is hawkcrawlspaceandfoundationrepair.com. The address is on a page we
-// paid to scrape, on every page we scraped, and we threw it away because the
-// domains do not match \u2014 then reported "0 route(s) to a mailbox" and scored the
-// lead 24/100 reachability.
-//
-// The same-domain rule exists for a good reason: without it we harvest the web
-// designer's address, a supplier, a stock-photo licence, a chamber-of-commerce
-// contact. Those are on their pages too and none of them reach the owner.
-//
-// So the rule stays, and this is a narrow exception for the case where an
-// off-domain address is provably THEIRS. A business with a long SEO domain for
-// the site and a short one for mail is common, and the two domains almost always
-// share a word \u2014 hawkva.com and hawkcrawlspaceandfoundationrepair.com share
-// "hawk", which is also the first word of the business name.
-//
-// Three conditions, all required:
-//   1. the local part is a business inbox (info@, office@, contact@, hello@ and
-//      the like) or the owner's name \u2014 not a personal-looking stranger
-//   2. the email's domain shares a distinctive word with either the site domain
-//      or the company name, and that word is at least four characters
-//   3. the address appears on more than one page, or in a footer position
-//      \u2014 a one-off mention is far more likely to be someone else's
-const looksLikeTheirOffDomainMailbox = (email, siteDomain, companyName, occurrences) => {
-  const e = String(email || '').toLowerCase();
-  const at = e.indexOf('@');
-  if (at < 1) return null;
-  const local = e.slice(0, at);
-  const emailDomain = e.slice(at + 1);
-  const siteRoot = String(siteDomain || '').toLowerCase().replace(/^www\./, '');
-  if (!emailDomain || emailDomain === siteRoot) return null;
-
-  // 1. a business inbox, or a name we already believe is the owner
-  const BUSINESS_INBOX = /^(info|office|contact|hello|admin|sales|service|scheduling|estimates?|inquiries|enquiries|team|mail)$/;
-  const ownerWords = String(companyName || '').toLowerCase().match(/[a-z]{4,}/g) || [];
-  const isBusinessInbox = BUSINESS_INBOX.test(local);
-  if (!isBusinessInbox && !ownerWords.some(w => local.includes(w))) return null;
-
-  // 2. THE BRAND TOKEN, NOT ANY SHARED WORD.
-  // A first version matched any shared word of four or more characters, and it
-  // accepted sales@andersenwindows.com for HEGG Windows & Doors \u2014 because both
-  // contain "windows". That is a supplier, and a trade noun is exactly the word
-  // a supplier shares with its customers.
-  //
-  // The brand is the FIRST distinctive word of the business name: "hawk" from
-  // Hawk Crawlspace, "hegg" from HEGG Windows. A mail domain that belongs to the
-  // same business almost always carries it \u2014 hawkva, heggwin \u2014 and a supplier's
-  // never does. Fall back to the site domain's leading token when the company
-  // name is unhelpful.
-  const TRADE_OR_GENERIC = new Set(['company','group','services','service','solutions','online','info','home',
-    'best','local','pros','team','windows','doors','roofing','plumbing','electric','dental','legal','construction',
-    'contracting','remodeling','repair','foundation','landscaping','heating','cooling','cleaning']);
-  // Taking only the FIRST word was too narrow: for "Bruce Favret Law" it picked
-  // "bruce" and rejected favretlaw.com, which is plainly their own domain with a
-  // hyphen dropped. So consider EVERY distinctive token from the business name
-  // and the site domain \u2014 the trade-word list above is what stops a supplier
-  // matching on "windows" or "roofing".
-  const STOP = new Set(['the','and','for','llc','inc','ltd','corp']);
-  const tokensOf = (text) => (String(text || '').toLowerCase().match(/[a-z]{4,}/g) || [])
-    .filter(w => !TRADE_OR_GENERIC.has(w) && !STOP.has(w));
-  const brands = [...new Set([...tokensOf(companyName), ...tokensOf(siteRoot.split('.')[0])])];
-  if (!brands.length) return null;
-  const emailHost = emailDomain.split('.')[0];
-  const shared = brands.find(b => emailHost.includes(b) || b.includes(emailHost));
-  if (!shared) return null;
-
-  // 3. not a one-off
-  if ((occurrences || 0) < 2) return null;
-
-  return { email: e, why: `${e} is on a different domain from their website, but it is a business inbox, "${shared}" is shared with ${siteRoot.includes(shared) ? 'their site domain' : 'their business name'}, and it appears ${occurrences} times across the pages we read \u2014 a long domain for the site and a short one for mail is common and this is theirs` };
-};
-
-const meterAnthropic = (company, label, model, usage) => {
-  try {
-    if (!usage) return 0;
-    const p = ANTHROPIC_PRICES[model] || ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
-    const fresh = usage.input_tokens || 0;
-    const cRead = usage.cache_read_input_tokens || 0;
-    const cWrite = usage.cache_creation_input_tokens || 0;
-    const out = usage.output_tokens || 0;
-    const cost = fresh * p.in + cRead * p.cacheRead + cWrite * p.cacheWrite + out * p.out;
-    const key = String(company || 'unknown');
-    if (!_leadSpend.has(key)) _leadSpend.set(key, { calls: [], total: 0 });
-    const rec = _leadSpend.get(key);
-    rec.calls.push({ label, model, fresh, cRead, cWrite, out, cost });
-    rec.total += cost;
-    return cost;
-  } catch (e) { return 0; }
-};
-
-const reportLeadSpend = (company) => {
-  const rec = _leadSpend.get(String(company || 'unknown'));
-  if (!rec || !rec.calls.length) return;
-  const top = [...rec.calls].sort((a, b) => b.cost - a.cost).slice(0, 5)
-    .map(c => `${c.label} $${c.cost.toFixed(4)} (${c.model.includes('sonnet') ? 'S' : 'H'} in:${c.fresh} cache:${c.cRead} out:${c.out})`);
-  console.log(`\ud83d\udcb0 ANTHROPIC TOTAL [${company}]: $${rec.total.toFixed(4)} across ${rec.calls.length} call(s). Most expensive: ${top.join(' | ')}`);
-  _leadSpend.delete(String(company || 'unknown'));
-};
-
 const FC_SCREENSHOT_CREDITS = Number(process.env.FC_SCREENSHOT_CREDITS || 1);
 
 const fcCreditCost = (kind) => {
@@ -4547,8 +4652,25 @@ const verifyEmailSMTP = async (email, verifierKey) => {
   if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
   if (VERIFIER_EXHAUSTED || VERIFIER_DEAD) return { valid: null, catchAll: null, unknown: true, error: true };
   try {
+    // ══ 12 SECONDS IS NOT ENOUGH FOR AN SMTP HANDSHAKE ══════════════════════
+    // Every recent lead \u2014 HEGG, Hawk, Craig, Rachel, Scott, Mid-American \u2014
+    // logged "SMTP verify failed: timeout", then "catch-all probe COULD NOT
+    // RUN", then "T4 inferred only \u2014 BLOCKED from sending". Owners found,
+    // corroborated, matched to a mailbox, and unsendable.
+    //
+    // The error was ALWAYS "timeout" \u2014 never 401, never quota, never invalid
+    // key. So the verifier was not refusing us; we were hanging up on it.
+    //
+    // This endpoint performs a real SMTP conversation with the recipient's
+    // mail server: connect, EHLO, MAIL FROM, RCPT TO. Against a greylisting
+    // server that takes 15-30 seconds BY DESIGN \u2014 greylisting deliberately
+    // stalls a first contact to defeat spammers. A 12-second cap fails exactly
+    // the well-defended domains that most reward being reached.
+    //
+    // 30 seconds costs us nothing when the answer comes back fast, and buys
+    // the entire send path on the leads where it does not.
     const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
-    const r = await fetchT(url, {}, 12000);
+    const r = await fetchT(url, {}, 30000);   // was 12000 \u2014 see note above
     const d = await safeJson(r);
     const status = String(d?.Status || d?.status || '').toLowerCase();
     const blob = JSON.stringify(d || {}).toLowerCase();
@@ -5206,7 +5328,7 @@ ${corpus}` }]
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerViaBrain', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerViaBrain', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = d.content?.[0]?.text || '';
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -5367,7 +5489,7 @@ ${corpus}` }]
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = d.content?.[0]?.text || '';
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -5473,7 +5595,7 @@ ABOUT THE EMAIL — this matters a lot:
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'visionAuditPage', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'visionAuditPage', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5547,7 +5669,7 @@ Return ONLY JSON:
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'confirmDomainMatch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'confirmDomainMatch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5635,7 +5757,7 @@ ${corpus}` }]
 
     const d = await r2.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'findSizeViaSearch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'findSizeViaSearch', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -5668,7 +5790,7 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
     }, 12000);
     const d = await r.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'fetchGoogleReviews', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'fetchGoogleReviews', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     return (d.reviews || [])
       .map(rv => ({ rating: rv.rating || 0, text: (rv.text?.text || rv.originalText?.text || '').trim().slice(0, 600) }))
       .filter(rv => rv.text);
@@ -7566,7 +7688,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
       }),
     }, 45000);
     const d = await r.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-sonnet-4-6', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-sonnet-4-6', d && d.usage); } catch (e) { void e; }
     if (!d || !d.content) return null;
     const txt = (d.content || []).map(c => c.text || '').join('');
     const parsed = parseLLMJSON(txt);
@@ -8281,7 +8403,7 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
       }),
     }, 25000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'deepReviewMine', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'deepReviewMine', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -8408,7 +8530,7 @@ ${corpus}` }]
       }),
     }, 25000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -8488,7 +8610,7 @@ ${replyBlocks}` }]
       }),
     }, 18000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerInReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerInReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8684,7 +8806,7 @@ ${corpus}` }]
       }),
     }, 22000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8842,7 +8964,7 @@ ${md.slice(0, 14000)}` }]
       }),
     }, 20000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -8937,7 +9059,7 @@ ${corpus}` }]
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -9063,7 +9185,7 @@ ${corpus}` }]
       }),
     }, 20000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'evaluate', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'evaluate', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -9140,7 +9262,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       }),
     }, 18000);
     const d = await res.json();
-    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerViaReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerViaReviewReplies', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -9316,7 +9438,7 @@ ${content}` }]
 
     const d = await res.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'findOwnerViaBusinessName', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'findOwnerViaBusinessName', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
@@ -10340,7 +10462,7 @@ ${corpus}` }]
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'findFounderVenting', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'findFounderVenting', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -10458,7 +10580,7 @@ ${corpus}` }]
 
     const d = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-haiku-4-5-20251001', d && d.usage); } catch (e) { void e; }
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'); let lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -16147,7 +16269,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         // which is why the total said $0.0424 while the audit alone cost $0.0879.
         // A total that omits the largest item is the same failure as the error
         // message that hid the error.
-        try { meterAnthropic(_CURRENT_LEAD, 'brainAudit', BRAIN_MODEL, vd && vd.usage); } catch (e) { void e; }
+        try { meterAnthropic(_CURRENT_LEAD(), 'brainAudit', BRAIN_MODEL, vd && vd.usage); } catch (e) { void e; }
         if (vd.usage && !_cachedAudit) {
           const u = vd.usage;
           const fresh = u.input_tokens || 0;
@@ -17553,7 +17675,7 @@ Return ONLY valid JSON:
 
             // added. A total that omits calls is not a total.
 
-            try { meterAnthropic(_CURRENT_LEAD, 'factCheck', 'claude-haiku-4-5-20251001', cd && cd.usage); } catch (e) { void e; }
+            try { meterAnthropic(_CURRENT_LEAD(), 'factCheck', 'claude-haiku-4-5-20251001', cd && cd.usage); } catch (e) { void e; }
             const cText = cd.content?.[0]?.text || '';
             let cClean = cText.replace(/```json|```/g, '').trim();
             // Extract just the JSON object if there's trailing text
@@ -18439,7 +18561,18 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 // Each research run gets its OWN credit ledger. Without this, two leads researched
 // at the same time each reported the other's spend as their own — the exact reason
 // the per-lead FIRECRAWL SPEND figures were roughly double reality.
-const runResearch = (req, res) => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => _runResearchInner(req, res));
+// ══ THE SAME FIX, FOR THE SAME REASON, ONE LAYER OUT ═════════════════════════
+// The comment above records that two concurrent leads each reported the other's
+// FIRECRAWL spend as their own. I then built the Anthropic meter on a single
+// module-level variable and reproduced the identical bug: running HEGG and
+// Mid-American together produced "$0.0018 across 1 call" for one and "$0.1352
+// across 16 calls, listing TWO brainAudits" for the other.
+//
+// It nearly cost a correct decision \u2014 the merged total made the Haiku switch
+// look like a regression when it had actually halved the bill.
+const runResearch = (req, res) => runWithLead(
+  (req.body && (req.body.company || req.body.name)) || 'lead',
+  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => _runResearchInner(req, res)));
 
 app.post('/api/research', runResearch);
 
@@ -19209,7 +19342,7 @@ Return ONLY valid JSON, no markdown:
 
     const data = await r.json();
 
-    try { meterAnthropic(_CURRENT_LEAD, 'anthropic', 'claude-sonnet-4-6', data && data.usage); } catch (e) { void e; }
+    try { meterAnthropic(_CURRENT_LEAD(), 'anthropic', 'claude-sonnet-4-6', data && data.usage); } catch (e) { void e; }
     const text = data.content?.[0]?.text || '';
     let clean = text.replace(/```json|```/g, '').trim();
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
