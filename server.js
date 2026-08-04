@@ -5717,7 +5717,16 @@ const verifySiteReallyDown = async (website) => {
       if (!r || !r.ok) continue;
       const body = await r.text();
       if (String(body || '').length > 500) {
-        return { down: false, why: `we loaded ${url} ourselves and got ${body.length} characters back, so their site is up and Firecrawl's empty response was a failure on our side`, workingUrl: url };
+        // ── KEEP THE PAGE. DO NOT JUST PROVE IT EXISTS. ──────────────────
+        // The first version returned true/false and discarded the body. On
+        // Comfort-Air that meant proving the site was up, holding 176,280
+        // characters of it in memory, and then blocking the lead for having
+        // no content. Three leads died that way in one run.
+        //
+        // If we can read it, we can audit it. Firecrawl gives cleaner markdown,
+        // but raw HTML we actually fetched beats nothing at all.
+        return { down: false, html: body, workingUrl: url,
+          why: `we loaded ${url} ourselves and got ${body.length} characters back, so their site is up and Firecrawl's empty response was a failure on our side` };
       }
     } catch (e) { void e; }
   }
@@ -14157,7 +14166,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     if (String(content || '').trim().length < 200) {
       _siteDownVerdict = await verifySiteReallyDown(website);
       if (_siteDownVerdict.down === false) {
-        console.log(`\u2139 SITE IS NOT DOWN [${company}]: Firecrawl came back empty, but ${_siteDownVerdict.why}. This is our fetch failing, not their business \u2014 no dead-site claim is permitted on this lead, and the audit will be thin because we could not read the page, which is a different and much smaller problem.`);
+        console.log(`\u2139 SITE IS NOT DOWN [${company}]: Firecrawl came back empty, but ${_siteDownVerdict.why}. No dead-site claim is permitted on this lead.`);
+        // Use what we fetched. Strip tags to something the audit can read \u2014 it is
+        // coarser than Firecrawl's markdown, but a coarse read of the real page
+        // beats blocking a lead whose site we are holding in memory.
+        if (_siteDownVerdict.html) {
+          const _salvaged = String(_siteDownVerdict.html)
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+            .replace(/\s+/g, ' ').trim();
+          if (_salvaged.length > 400) {
+            content = _salvaged.slice(0, 60000);
+            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.`);
+          }
+        }
       } else if (_siteDownVerdict.down === true) {
         console.log(`\u26d4 SITE IS GENUINELY DOWN [${company}]: ${_siteDownVerdict.why}. Two independent methods failed, so this is about their site.`);
       }
@@ -14168,6 +14192,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // A1 Restoration returned "Connection Reset" (24 chars) and we then confidently
     // pitched "your page shows a connection error" — auditing our own failed fetch.
     // This may be transient or our-side, so we must NOT claim their site is broken.
+    // ══ THE HOMEPAGE IS NOT THE ONLY PAGE WE READ ═════════════════════════
+    // Henry Excavating and Bradley Construction were both blocked with "their
+    // website returned nothing" \u2014 and both had readable inner pages in the same
+    // run. Henry produced a STORY ("family-owned, founded 1985") and a measured
+    // booking path; Bradley mapped 21 URLs and scraped its about page.
+    //
+    // The gate reads one variable. If the homepage scrape came back empty but the
+    // site audit read real pages, we have plenty to audit and blocking the lead
+    // throws away everything already paid for.
+    //
+    // The audit is thinner and it must know that: homepage-specific reads (hero
+    // headline, above-the-fold CTA) stay unmeasured and must claim nothing.
+    if (String(content || '').trim().length < 200) {
+      const _inner = String((sitePages && sitePages.corpus) || '').trim();
+      if (_inner.length > 400) {
+        content = _inner.slice(0, 60000);
+        console.log(`\u267b INNER PAGES [${company}]: the homepage scrape came back empty, but the site audit read ${_inner.length} characters from their other pages. Auditing from those instead of blocking the lead \u2014 everything upstream was already paid for. \u26a0 The audit is thinner: nothing about their HOMEPAGE specifically (hero headline, the first thing a visitor sees, above-the-fold CTA) was measured, so no claim may be made about it.`);
+      }
+    }
+
     const siteUnreachable = /connection reset|can'?t be reached|took too long|refused to connect|err_|dns_probe|502 bad gateway|503 service|504 gateway|temporarily unavailable|account suspended|domain (is )?(for sale|parked)/i.test(lowerContent.slice(0,600))
       || (content.length > 0 && content.length < 60 && !scrapeTrustworthy);
     if (siteUnreachable) console.log(`SITE UNREACHABLE [${company}]: page returned a connection/error state — auditing from signals only, NOT claiming their site is broken`);
