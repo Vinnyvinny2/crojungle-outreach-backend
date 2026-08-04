@@ -14154,6 +14154,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     );
     const companyCore = (company || '').toLowerCase().replace(/[^a-z0-9 ]/g,'').split(' ').filter(w=>w.length>3).slice(0,2);
     const pageMentionsCompany = companyCore.length === 0 || companyCore.some(w => lowerContent.includes(w));
+    // ══ THE HOMEPAGE IS NOT THE ONLY PAGE WE READ ═════════════════════════
+    // Henry Excavating and Bradley Construction were both blocked with "their
+    // website returned nothing" \u2014 and both had readable inner pages in the same
+    // run. Henry produced a STORY ("family-owned, founded 1985") and a measured
+    // booking path; Bradley mapped 21 URLs and scraped its about page.
+    //
+    // The gate reads one variable. If the homepage scrape came back empty but the
+    // site audit read real pages, we have plenty to audit and blocking the lead
+    // throws away everything already paid for.
+    //
+    // The audit is thinner and it must know that: homepage-specific reads (hero
+    // headline, above-the-fold CTA) stay unmeasured and must claim nothing.
+    if (String(content || '').trim().length < 200) {
+      const _inner = String((sitePages && sitePages.corpus) || '').trim();
+      if (_inner.length > 400) {
+        content = _inner.slice(0, 60000);
+        console.log(`\u267b INNER PAGES [${company}]: the homepage scrape came back empty, but the site audit read ${_inner.length} characters from their other pages. Auditing from those instead of blocking the lead \u2014 everything upstream was already paid for. \u26a0 The audit is thinner: nothing about their HOMEPAGE specifically (hero headline, the first thing a visitor sees, above-the-fold CTA) was measured, so no claim may be made about it.`);
+      }
+    }
+
     // ══ IF WE GOT NOTHING, PROVE IT IS THEM BEFORE SAYING SO ═══════════════
     // Firecrawl returning empty means our fetch failed. It does NOT mean the
     // site is down, and the difference is the most consequential one in this
@@ -14187,31 +14207,30 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       }
     }
 
-    const scrapeTrustworthy = content.length > 300 && !scrapeLooksBroken && pageMentionsCompany;
+    // ══ RECOMPUTE AFTER A FALLBACK REPLACES THE CONTENT ═══════════════════
+    // pageMentionsCompany and scrapeLooksBroken are computed from `content` a few
+    // lines above. Both the salvage path and the inner-pages path REPLACE
+    // `content` after that point, so on those leads the verdict describes the
+    // empty string we started with, not the pages we recovered.
+    //
+    // Henry Excavating: 10,549 characters recovered from his own inner pages,
+    // then "SCRAPE GUARD: content not trustworthy (mentionsCompany:false)" \u2014
+    // computed when content was "". The recovered pages were stripped straight
+    // back out of the prompt. We paid for them, recovered them, and threw them
+    // away one line later.
+    //
+    // A derived value is only true of the input it was derived from. Recompute.
+    const _lowerNow = String(content || '').toLowerCase();
+    const _mentionsNow = companyCore.length === 0 || companyCore.some(w => _lowerNow.includes(w));
+    const _brokenNow = scrapeLooksBroken && _lowerNow.length < 300;
+    const scrapeTrustworthy = content.length > 300 && !_brokenNow && _mentionsNow;
+    if (_mentionsNow !== pageMentionsCompany) {
+      console.log(`\u2139 TRUST RECOMPUTED [${company}]: the mention check was run on the original scrape and said ${pageMentionsCompany}; against the ${content.length} characters we actually ended up with it says ${_mentionsNow}. Using the recomputed value \u2014 the earlier one describes content we no longer have.`);
+    }
     // SITE UNREACHABLE — a genuine connection error / dead page, NOT bot-blocking.
     // A1 Restoration returned "Connection Reset" (24 chars) and we then confidently
     // pitched "your page shows a connection error" — auditing our own failed fetch.
     // This may be transient or our-side, so we must NOT claim their site is broken.
-    // ══ THE HOMEPAGE IS NOT THE ONLY PAGE WE READ ═════════════════════════
-    // Henry Excavating and Bradley Construction were both blocked with "their
-    // website returned nothing" \u2014 and both had readable inner pages in the same
-    // run. Henry produced a STORY ("family-owned, founded 1985") and a measured
-    // booking path; Bradley mapped 21 URLs and scraped its about page.
-    //
-    // The gate reads one variable. If the homepage scrape came back empty but the
-    // site audit read real pages, we have plenty to audit and blocking the lead
-    // throws away everything already paid for.
-    //
-    // The audit is thinner and it must know that: homepage-specific reads (hero
-    // headline, above-the-fold CTA) stay unmeasured and must claim nothing.
-    if (String(content || '').trim().length < 200) {
-      const _inner = String((sitePages && sitePages.corpus) || '').trim();
-      if (_inner.length > 400) {
-        content = _inner.slice(0, 60000);
-        console.log(`\u267b INNER PAGES [${company}]: the homepage scrape came back empty, but the site audit read ${_inner.length} characters from their other pages. Auditing from those instead of blocking the lead \u2014 everything upstream was already paid for. \u26a0 The audit is thinner: nothing about their HOMEPAGE specifically (hero headline, the first thing a visitor sees, above-the-fold CTA) was measured, so no claim may be made about it.`);
-      }
-    }
-
     const siteUnreachable = /connection reset|can'?t be reached|took too long|refused to connect|err_|dns_probe|502 bad gateway|503 service|504 gateway|temporarily unavailable|account suspended|domain (is )?(for sale|parked)/i.test(lowerContent.slice(0,600))
       || (content.length > 0 && content.length < 60 && !scrapeTrustworthy);
     if (siteUnreachable) console.log(`SITE UNREACHABLE [${company}]: page returned a connection/error state — auditing from signals only, NOT claiming their site is broken`);
@@ -14733,7 +14752,30 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     let brainError = '';
 
 
-    if (apiKey && (screenshotUrl || trustedContent.length > 100 || hasDiscoveryContext)) {
+    // ══ A DEAD SITE IS THE STRONGEST FINDING, NOT A REASON TO GIVE UP ═════
+    // Bradley Construction: we confirmed with two independent methods that his
+    // website is genuinely down, read 50 reviews, found a repeating pattern
+    // about quote delays in 3 of them, measured a healthy Google profile, and
+    // produced "\u2705 STRONG OPENER: DEAD harm 97 \u2014 the only combination that gets a
+    // reply. This is the email."
+    //
+    // Then the audit was blocked, because the gate required a page.
+    //
+    // The system found its single best possible finding \u2014 a contractor whose
+    // site does not load \u2014 and refused to write it up BECAUSE the site does not
+    // load. On this lead the empty page is not a failure to research; it IS the
+    // research, and there is a Google profile, a review corpus and a phone number
+    // to build the rest of the audit from.
+    //
+    // So: run whenever we have ANY substantive material. The prompt already
+    // handles a missing homepage by forbidding claims about it.
+    const _haveGooglePicture = !!(effectivePlaceId && (reviewCount > 0 || (gbpHealth && gbpHealth.checked)));
+    const _siteIsTheFinding = _siteDownVerdict && _siteDownVerdict.down === true;
+    if (apiKey && (screenshotUrl || trustedContent.length > 100 || hasDiscoveryContext
+                   || _haveGooglePicture || _siteIsTheFinding)) {
+      if (!screenshotUrl && trustedContent.length <= 100) {
+        console.log(`\u2139 AUDITING WITHOUT THE SITE [${company}]: their page gave us nothing${_siteIsTheFinding ? ' and two independent checks confirm it is down, which is itself the strongest finding on this lead' : ''}. Building the audit from what we DO hold \u2014 their Google profile, ${reviewCount || 0} reviews, and the review read. \u26a0 Nothing may be claimed about their website's CONTENT: no headline, no CTA, no copy, no form. The only permitted statement about the site is whether it loaded.`);
+      }
       try {
         // Build message content — always send text, add image if available
         const msgContent = [];
@@ -17411,7 +17453,18 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         // is losing real customers the same way.
         : (!String(content || '').trim().length)
         ? `Their website returned nothing. We fetched it twice and both attempts came back empty, so there was no page to audit \u2014 this is about their site, not your Anthropic key and not your Firecrawl balance. Everything that does not need the page was still measured: the owner lookup, their Google profile and their reviews. If their site is genuinely down or blocking automated visitors, that is worth knowing before anyone calls them.`
-        : 'Brain analysis failed — the Anthropic API returned an error. If this says "rate limit," it is NOT a billing problem — just retry. Otherwise check your key (sk-ant-...) in Settings.';
+        // ══ PRINT THE ERROR WE ACTUALLY HAVE ═══════════════════════════════
+        // brainError already holds the real message — "Claude API error: ...",
+        // "rate limit", "overloaded", "credit balance is low", or the response
+        // shape when the body came back empty. This branch threw all of it away
+        // and printed a generic sentence instead.
+        //
+        // Henry Excavating died here and the log said only "the Anthropic API
+        // returned an error", so the cause was unknowable from the run. An error
+        // message that hides the error costs more than the bug it is hiding.
+        : (brainError
+            ? `Brain analysis failed — ${brainError}`
+            : 'Brain analysis failed and NO error was captured, which is itself a fault: the call neither threw nor returned a usable audit.');
 
       console.log(`Brain gate blocked: ${reason}`);
       return res.status(422).json({
