@@ -1846,10 +1846,23 @@ app.post('/api/claude', async (req, res) => {
               // number. Test that instead.
               const _sub = String(sub).trim();
               const _namesSomething = /\d|\b(?:your|their)\s+\w+|booking|form|quote|listing|profile|reviews?|page|site|phone|number|search|rank|windows?|doors?|dental|dentist|surgeon|attorney|lawyer|plumb|electric|roof|hvac|excavat|crawlspace|foundation/i.test(_sub);
-              const _isVagueShape = /^(?:i|we)\s+(?:caught|found|spotted|noticed)\s+(?:a|an|some|something)\b/i.test(_sub)
-                || /^\s*(?:quick question|following up|checking in|a quick note|touching base|circling back)\s*$/i.test(_sub);
+              // ══ THIS WAS FIGHTING MIKE'S OWN FRAMEWORK ═══════════════════
+              // I flagged the "I caught a ___" shape as generic. His rules list
+              // "I caught a problem" as an EXPLICIT PASS:
+              //   "They also say 'I caught...' and 'I found...' because they did,
+              //    and because it explains why they are messaging at all."
+              //
+              // What actually fails is the VOCABULARY, not the shape. "I caught
+              // your review gap" fails because no employee has ever said "gap".
+              // "I caught a problem" passes because that is how people talk.
+              //
+              // So: flag the banned words and the pure filler, and leave the
+              // colleague shape alone.
+              const _consultantWord = /\b(gap|goes quiet|aren'?t showing|opportunity|room|potential|underperform\w*|optimi[sz]e|lever|leverage|synerg\w*|invisible|outranked|visibility|conversion|funnel|pipeline)\b/i.test(_sub);
+              const _isVagueShape = _consultantWord
+                || /^\s*(?:quick question|following up|checking in|a quick note|touching base|circling back|hello|hi there)\s*$/i.test(_sub);
               if (_isVagueShape && !_namesSomething) {
-                _copyFlags.push(`GENERIC SUBJECT \u2014 "${sub}". It names nothing that belongs to them: no trade, no place, no page, no number. Mike's framework records this exact failure \u2014 "I caught a problem" went out identically to a sign shop and a med spa \u2014 and "${sub}" is the same sentence with a different noun. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Name the thing that is wrong on THEIR property.`);
+                _copyFlags.push(`SUBJECT IS NOT IN HIS VOICE \u2014 "${sub}". Mike's one test: could this exact line have been sent by someone who WORKS at his company? A colleague says broken, down, dead, not working, stuck, problem, nothing, nobody. They never say gap, goes quiet, opportunity, potential, optimize or lever \u2014 those are consultant words and they are what makes a subject read as an agency. Note that "I caught a problem" PASSES his test; the shape is fine, the vocabulary is not. It names nothing that belongs to them: no trade, no place, no page, no number. Mike's framework records this exact failure \u2014 "I caught a problem" went out identically to a sign shop and a med spa \u2014 and "${sub}" is the same sentence with a different noun. A subject that would fit another company in another industry is a template, and a template is what an automated sequence looks like. Name the thing that is wrong on THEIR property.`);
               }
             }
           } catch (e) { void e; }
@@ -7055,6 +7068,94 @@ const AREA_OF = {
   undifferentiated: 'Why choose them',
 };
 
+// ══ SUBJECT LINES, BUILT FROM THE FINDING ════════════════════════════════════
+// Eleven subjects produced live. Five were the same sentence with a different
+// noun \u2014 "I caught a dead end", "I caught a dead follow-up", "I caught a response
+// gap", "I caught something on your site", "I caught a dead response gap" \u2014 and
+// EVERY ONE of them was variant B.
+//
+// Variant A is consistently good: "invisible in Dublin", "nothing answers after
+// 5", "your quote form goes cold". So the model can write a subject. It writes
+// one, and then reaches for a template when asked for a second.
+//
+// The subject was the last piece of pure free text in the email. Everything else
+// \u2014 the claim, the reframe, the CTA, the count \u2014 is now built from measurements.
+// Mike's rule is that the subject names the broken COMPONENT, and the ladder
+// already knows which component that is, so code can write it.
+//
+// Two per finding, deliberately different in shape: one names the thing, one
+// names what happens. The model picks and may sharpen the wording; it no longer
+// invents from nothing, which is where the template came from.
+const SUBJECTS_FOR = {
+  // ══ MIKE'S REGISTER, NOT MINE ═════════════════════════════════════════════
+  // My first pass wrote these in the voice I thought was good and it broke his
+  // rule in both directions. "your quote form goes quiet" is an EXPLICIT FAIL in
+  // his framework \u2014 "nobody at a company says this. COPYWRITER" \u2014 and I had
+  // called it a good subject. "I caught a problem" is an EXPLICIT PASS and my
+  // guard was flagging that shape as generic.
+  //
+  // The one test: could this exact line have been sent by someone who WORKS at
+  // his company? A colleague writes short, plain and slightly blunt, because
+  // they are not performing \u2014 they just want you to look at the thing.
+  //
+  // Their words:  broken \u00b7 down \u00b7 dead \u00b7 not working \u00b7 stuck \u00b7 problem \u00b7 nothing \u00b7 nobody
+  // Never:        gap \u00b7 goes quiet \u00b7 aren't showing \u00b7 opportunity \u00b7 room \u00b7 potential
+  //               \u00b7 underperforming \u00b7 optimize \u00b7 lever \u00b7 invisible \u00b7 outranked
+  // Under 30 characters. Lowercase, like a message not a headline.
+  broken_page:          ['your booking page is broken', 'that page is down'],
+  site_empty:           ['your site is down', 'nothing loads on the site'],
+  listing_closed:       ['google says we are closed', 'our listing says closed'],
+  no_website_on_profile:['no site link on google', 'google has no website for us'],
+  expired_certificate:  ['our site is throwing a warning', 'the site is blocked'],
+  no_https:             ['the site says not secure', 'browsers are flagging us'],
+  phone_mismatch:       ['wrong number on google', 'google has the old number'],
+  tap_to_call_broken:   ['the number does not dial', 'tapping the number is broken'],
+  absent_from_search:   ['we are not showing up', 'nobody can find us'],
+  outranked_by_weaker:  ['smaller shops are above us', 'we are buried in search'],
+  wrong_gbp_category:   ['google has us as {cat}', 'wrong category on google'],
+  no_google_listing:    ['we have no google listing', 'we are not on the map'],
+  no_after_hours:       ['nobody can reach us after 5', 'nothing answers at night'],
+  form_only_no_booking: ['no way to book online', 'the form is the only way in'],
+  long_form:            ['the form asks for too much', '{n} fields on the form'],
+  stale_copyright:      ['the site still says {year}', 'footer says {year}'],
+  placeholder_text:     ['dummy text on the site', 'placeholder text is live'],
+  dead_blog:            ['the blog stopped in {year}', 'nothing new since {year}'],
+  stale_reviews:        ['the reviews stopped', 'no new reviews'],
+  thin_profile:         ['only {n} photos on google', 'our listing is bare'],
+  low_rating:           ['our rating is {rating}', 'the star rating is a problem'],
+  no_owner_replies:     ['nobody is answering reviews', 'the reviews sit unanswered'],
+  no_hours_on_profile:  ['google has no hours for us', 'our hours are missing'],
+  no_mobile_viewport:   ['the site is broken on mobile', 'site is down on phones'],
+  review_deficit:       ['they have more reviews', 'we are behind on reviews'],
+  not_compounding:      ['{years} years and {n} reviews', 'the reviews are not adding up'],
+  no_offer:             ['nothing says why us', 'we do not say why us'],
+  no_lead_magnet:       ['nothing to give people', 'the only ask is a quote'],
+  undifferentiated:     ['who is the site talking to', 'the copy says nothing'],
+  dated_credibility:    ['the site looks old', 'our site is dated'],
+};
+
+const buildSubjects = (lead, m = {}) => {
+  if (!lead || !lead.id) return [];
+  const raw = SUBJECTS_FOR[lead.id] || [];
+  const city = String(m.city || m.rankCity || '').split(',')[0].trim();
+  return raw
+    .map(t => t
+      .replace('{city}', city || '')
+      .replace('{year}', String(m.copyrightYear || m.newestPostYear || ''))
+      .replace('{rating}', String(m.rating || ''))
+      .replace('{cat}', String(m.gbpCategory || '').toLowerCase())
+      .replace('{years}', String(m.tenureYears || ''))
+      .replace('{n}', String(m.formFieldCount || m.photoCount || m.reviewCount || '')))
+    // Drop any that still contain an unfilled placeholder \u2014 a subject with a
+    // blank in it is worse than one fewer option.
+    // Mike's own constraints, enforced rather than requested: under 30
+    // characters, and none of the words no employee has ever typed.
+    .filter(t => !/\{|\}|\s{2,}|^\s*$/.test(t))
+    .filter(t => t.length <= 30)
+    .filter(t => !/\b(gap|goes quiet|aren'?t showing|opportunity|room|potential|underperform\w*|optimi[sz]e|lever|invisible|outranked|leverage|synerg\w*)\b/i.test(t))
+    .map(t => t.trim());
+};
+
 const buildProblemList = (harms) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
   return harms.byHarm
@@ -7109,7 +7210,15 @@ const buildFactualSpine = (harms, m = {}) => {
     claimId: lead.id,
     costs: String(lead.costs || '').trim(),
     figures,
-    problemCount: (harms.all || []).length,
+    // ══ ONE COUNT, OR THE CALL STARTS WRONG ═══════════════════════════════
+    // This was harms.all.length while the AUDIT section renders
+    // buildProblemList(harms), which maps harms.byHarm. If those two lists ever
+    // differ, the email tells him "6 things" and the audit Mike opens shows a
+    // different number \u2014 on the one call the whole system exists to produce.
+    //
+    // Both now count the same list, so the number in the email is the number of
+    // rows he will be walked through.
+    problemCount: buildProblemList(harms).length,
     // Everything else we found, worst first \u2014 for the call sheet, not the email.
     rest: (harms.byHarm || []).filter(x => x.id !== lead.id).map(x => x.finding),
   };
@@ -16169,6 +16278,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // model. Every entry is measured, every entry is genuinely a problem,
             // and each carries what it costs and which area it belongs to.
             problemList: buildProblemList(_harms),
+            // Subjects built from the finding. The last free-text field in the
+            // email, and the one that produced "I caught a dead end" five times.
+            subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
             problemCount: _harms.all.length,
             harmsRanked: _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
           };
@@ -18279,6 +18391,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               parsed.harmsRanked = _harmsForResponse.harmsRanked;
               parsed.factualSpine = _harmsForResponse.factualSpine;
               parsed.problemList = _harmsForResponse.problemList;
+              parsed.subjectOptions = _harmsForResponse.subjectOptions;
               // ══ ATTACHED HERE, NOT AT THE ALLOWED-CONSEQUENCES LOG ═════════
               // I first set this next to that log, which the run order shows
               // executes BEFORE the audit \u2014 so `brainAudit` was still in its
