@@ -1081,7 +1081,10 @@ const checkAbsenceByShape = (text) => {
   if (!t.trim()) return flags;
   const sentences = t.split(/(?<=[.!?])\s+/);
   const PROOF = /\b(review|reviews|rating|ratings|star|stars|testimonial|proof|social proof|feedback)\b/i;
-  const ABSENT = /\b(none of (it|them|that)|not (on|anywhere on) (that|the|your) (page|site|homepage)|nowhere on (that|the|your) (page|site)|(isn'?t|is not|aren'?t|are not) (on|anywhere on) (that|the|your) (page|site)|no(ne)? of (it|that) (shows|appears|is there))\b/i;
+  // Widened after "Not one of those names shows up on your own site" walked past
+  // the first version. Enumerating phrasings is a losing game \u2014 the sitemap check
+  // above is the real defence \u2014 but this catches the common shapes cheaply.
+  const ABSENT = /\b(none of (it|them|that)|not one of (them|those|these)|not a single|not (on|anywhere on) (that|the|your) (page|site|homepage)|nowhere on (that|the|your) (page|site)|(isn'?t|is not|aren'?t|are not) (on|anywhere on) (that|the|your) (page|site)|no(ne)? of (it|that) (shows|appears|is there)|(shows?|show) up (?:anywhere )?on (your|their|the) (own )?site)\b/i;
   for (let i = 0; i < sentences.length; i++) {
     if (!ABSENT.test(sentences[i])) continue;
     // Look back two sentences for what the absence is about.
@@ -1244,6 +1247,70 @@ const checkFabrications = (text, measured = {}) => {
   }
 
   return flags;
+};
+
+// ══ WHICH FLAGS MUST STOP A SEND, AND WHICH ARE ADVICE ═══════════════════════
+// Every fabrication this week was CAUGHT \u2014 the reviews-on-his-site claim, the
+// invented Monday morning, the price from Peak Windows, "31 years" against a
+// measured 32, "one job a month". The guards did their job.
+//
+// And every one of them could still have gone out, because the Approve button
+// never read the flags. That is the whole gap between "we detect problems" and
+// "we cannot send a bad email", and it is why the operator has not pressed send:
+// doing so means betting a sending domain on having read every warning
+// correctly, every time, forever.
+//
+// So split them. A flag is BLOCKING when the prospect can disprove it himself
+// and the email dies on contact:
+//   \u2022 a claim about a page we never opened          (he opens it)
+//   \u2022 a number that contradicts what we measured     (he knows his own numbers)
+//   \u2022 a figure that traces to no measurement         (he checks)
+//   \u2022 an action attributed to a named competitor     (he may know them)
+//   \u2022 what happens after a customer makes contact    (he runs that process)
+//   \u2022 a rate we never counted                        (it is his own volume)
+//
+// Everything else \u2014 tone, altitude, a soft subject, describing our process \u2014 is
+// real feedback that makes the email worse, not false. Those stay advisory,
+// because blocking on style would train the operator to override the block, and
+// then the blocking ones stop working too.
+const BLOCKING_FLAG = /^(?:ABSENCE CLAIM|UNTRACEABLE FIGURE|WRONG TENURE|INVENTED TENURE|INVENTED FREQUENCY|INVENTED COMPETITOR ACTION|INVENTED ALGORITHM MECHANICS|INVENTED COMPETITOR DETAIL|POST-CONTACT CLAIM|BACKEND CLAIM|claims post-submission|claims reviews)/i;
+
+const splitFlags = (flags = []) => {
+  const blocking = [], advisory = [];
+  for (const f of flags) (BLOCKING_FLAG.test(String(f).trim()) ? blocking : advisory).push(f);
+  return { blocking, advisory };
+};
+
+// ══ DID IT USE OUR SENTENCE, OR WRITE ITS OWN? ═══════════════════════════════
+// The guards below all ask "is this specific phrasing a known lie?", which is a
+// losing game. This asks the only question that matters under the new
+// architecture: does the email's factual claim come from the sentence WE built
+// from measurements, or did the model write its own?
+//
+// If it used ours, the claim is true by construction and no wording check is
+// needed. If it did not, nothing downstream can save it \u2014 and that is the case
+// worth stopping, not the individual phrasings.
+//
+// Matched on content words rather than exact string, because the model is
+// allowed to change tense, add a first name and split the sentence. Six or more
+// of our distinctive words present means our claim is what it is asserting.
+const spineWasUsed = (bodyText, claim) => {
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  const STOP = new Set(['the','their','they','a','an','of','on','in','is','are','to','and','for','it','that','this','with','at','from','has','have','no','not','any','all','one','only','own','you','your','we']);
+  const want = [...new Set(norm(claim).filter(w => w.length > 3 && !STOP.has(w)))];
+  if (want.length < 3) return { ok: true, why: 'claim too short to fingerprint' };
+  const got = new Set(norm(bodyText));
+  const hit = want.filter(w => got.has(w));
+  const ratio = hit.length / want.length;
+  return {
+    ok: ratio >= 0.5,
+    ratio,
+    matched: hit.length,
+    total: want.length,
+    why: ratio >= 0.5
+      ? `the email carries ${hit.length} of ${want.length} distinctive words from the measured claim`
+      : `only ${hit.length} of ${want.length} distinctive words from the measured claim appear \u2014 the email is asserting something we did not write`,
+  };
 };
 
 const verifyGeneratedCopy = (copy = {}, opts = {}) => {
@@ -1672,6 +1739,8 @@ app.post('/api/claude', async (req, res) => {
     // "Approved for Send" beside it using flags that belonged to the audit. If
     // the response parses as the email JSON, run the guards on it here.
     let _copyFlags = [];
+    let _blockingFlags = [];
+    let _advisoryFlags = [];
     try {
       const _clean = String(_text).replace(/```json|```/g, '').trim();
       const _fb = _clean.indexOf('{'), _lb = _clean.lastIndexOf('}');
@@ -1715,6 +1784,31 @@ app.post('/api/claude', async (req, res) => {
             // have not seen yet.
             _copyFlags = _copyFlags.concat(verifyFiguresTrace(_all, _measured));
             _copyFlags = _copyFlags.concat(checkAbsenceByShape(_all));
+            // ══ THE ONE CHECK THAT MATTERS ═══════════════════════════════════
+            // Under the new architecture the factual claim is written by code.
+            // This asks whether the email actually used it. Everything else in
+            // this function is a smoke alarm; this is the door lock.
+            try {
+              const _claim = String(req.body.spineClaim || '').trim();
+              if (_claim) {
+                const _v = spineWasUsed(_all, _claim);
+                if (!_v.ok) {
+                  _copyFlags.push(`WROTE ITS OWN FACT \u2014 ${_v.why}. The measured claim was "${_claim.slice(0, 90)}". Every fabrication this system has produced came from the model restating a fact in its own words rather than using the one we built from measurements. Regenerate; do not edit around it.`);
+                } else {
+                  console.log(`\u2713 SPINE USED [${req.body.company || 'lead'}]: ${_v.why}. The factual claim in this email is the one code wrote from measurements.`);
+                }
+              }
+            } catch (e) { void e; }
+            // ══ SPLIT THEM SO THE UI CAN REFUSE ═══════════════════════════
+            // A flagged email has always been sendable, because nothing read the
+            // flags. The client now gets them separated: blocking ones disable
+            // Approve outright, advisory ones stay as feedback.
+            const _split = splitFlags(_copyFlags);
+            _blockingFlags = _split.blocking;
+            _advisoryFlags = _split.advisory;
+            if (_blockingFlags.length) {
+              console.log(`\u26d4 SEND BLOCKED [${req.body.company || 'lead'}]: ${_blockingFlags.length} claim(s) the prospect can disprove himself. This email cannot be approved until they are removed \u2014 not because the copy is weak, but because one checkable falsehood kills every true thing beside it. ${_blockingFlags.map(f => String(f).split('\u2014')[0].trim()).join(' | ')}`);
+            }
             // The unsendable test belongs on SUBJECTS too. Mike's framework is
             // explicit that "I caught a problem" went out identically to a sign
             // shop and a med spa, and a subject that would fit another company is
@@ -3651,7 +3745,54 @@ const writeAuditCache = (key, payload) => {
   _auditCache.set(key, { at: Date.now(), payload });
 };
 
-const BRAIN_STATIC = `
+// ══ ONE RULE, EVERY PROMPT THAT DESCRIBES THIS BUSINESS ══════════════════════
+// The email was fixed by taking fact-writing away from the model. The same
+// problem exists in four other places and the same rule fixes all of them.
+//
+// What the live logs show each one doing:
+//   situationRead rows   "Nineteen reviews \u2014 about one a year, for jobs that run
+//                        six or seven figures"   19 measured; the rate is the
+//                        model's arithmetic; the job value is invented.
+//   signalReads          "161 reviews at 4.9, every recent one answered
+//                        personally"   161 and 4.9 measured; "every recent one"
+//                        is a paraphrase of "40 of the 40 we read".
+//   candidateFindings    "No visible social proof on the site" \u2014 he has a
+//                        Reviews page. This produced the Thomas email.
+//   deepReviewMine       "2 of ~501 reviews mention this" \u2014 we read 40, not 501.
+//   story                the owner's history, restated in the model's words.
+//
+// None of these is a bad measurement. All are the model retelling one.
+//
+// The rule: a number or a claim about THIS business must appear in the copy the
+// same way it appears in the evidence. Reasoning, interpretation and what it
+// MEANS are the model's job and always were. Restating is not.
+const FACT_DISCIPLINE = `
+\u26d4 HOW TO HANDLE FACTS. This applies to every sentence you write.
+
+YOU ARE NOT THE SOURCE OF ANY FACT HERE. Every number and every claim about this
+business was measured and is stated above in specific words. Your job is to say
+what it MEANS \u2014 the reasoning, the connection, the consequence. Not to restate it.
+
+\u2022 A number appears in your output EXACTLY as it appears in the evidence.
+  \u2713 "161 reviews"        \u2717 "over 150 reviews"   \u2717 "about 160"
+  \u2713 "40 of the 40 we read" \u2717 "every recent one"  \u2717 "nearly all"
+\u2022 NO ARITHMETIC. Do not divide reviews by years, estimate a rate, or convert a
+  count into a frequency. If the evidence gives you a computed figure, use that
+  figure; if it does not, the arithmetic is not available to you.
+\u2022 NO VALUES WE DID NOT MEASURE. Never "jobs that run six or seven figures",
+  never a price, never a deal size, unless it is in the evidence above.
+\u2022 ABSENCE IS NOT YOURS TO CONCLUDE. We read a sample of their site. "I did not
+  see it" is not "it is not there". Only absences stated as measured above may
+  be described as missing.
+\u2022 WHEN THE EVIDENCE IS SILENT, SAY LESS. A shorter true line beats a longer one
+  with a guess in it. There is no credit for filling space.
+
+Everything you are good at \u2014 what these signals ADD UP TO, which one matters
+most, what it costs him \u2014 is untouched by this. Only the retelling is.
+`;
+
+const BRAIN_STATIC = `${FACT_DISCIPLINE}
+
 
 CROJungle offerings (full-service — can combine):
 - Website Rebuild ($50k+): homepage conversion failures, weak positioning, no CTA — full rebuild only
@@ -6743,6 +6884,110 @@ const measureAbandonment = (text) => {
   };
 };
 
+// ══ THE FACTS ARE WRITTEN BY CODE, NOT BY A MODEL ════════════════════════════
+// Every fabrication this system has produced came from one step: the model
+// restating a measured fact in its own words. Not one came from a bad
+// measurement.
+//
+//   "none of them are on your site"    \u2014 he has a Reviews page
+//   "31 years of honest installs"      \u2014 measured 32
+//   "one lost job a month"             \u2014 we count no jobs
+//   "they already got a price from Peak" \u2014 we never contacted Peak
+//   "gets nothing back until Monday"   \u2014 we never submitted the form
+//
+// Guarding the output was always going to lose, because there are infinite ways
+// to phrase a false claim and a finite number of regexes. And an audit that
+// needs a filter in front of it is not trustworthy \u2014 it is supervised.
+//
+// So the model stops writing facts. This function assembles the factual spine of
+// the email from measured values only: the claim, the number that supports it,
+// and the exact words permitted. The model writes the connective tissue \u2014 the
+// behavioural reframe, which is a general truth about PEOPLE and therefore
+// cannot be false about THIS business \u2014 and nothing else.
+//
+// A fact that is not in this block does not go in the email.
+// ══ A MEASUREMENT THAT LOOKS ABSURD IS A BROKEN PARSER ═══════════════════════
+// The spine treats measurements as ground truth, which is right \u2014 and it means
+// a WRONG measurement now reaches the email with total confidence, and no guard
+// objects, because the sentence came from code.
+//
+// That has already happened three times, and a human caught all three:
+//   the phone check reported 40 numbers on one site
+//   the rank query returned "#7 of 6"
+//   the form count summed every input on the page
+//
+// None of those was a finding. Each was a parser producing a number no real
+// business would produce. Code can notice that, and it is the last place a
+// fabrication can enter.
+const measurementLooksWrong = (m = {}) => {
+  const bad = [];
+  const n = (v) => Number(v);
+  if (Number.isFinite(n(m.rank)) && Number.isFinite(n(m.scanned)) && n(m.rank) > n(m.scanned)) {
+    bad.push(`rank #${m.rank} out of ${m.scanned} results \u2014 a position cannot exceed the list it is in`);
+  }
+  if (Number.isFinite(n(m.formFieldCount)) && n(m.formFieldCount) > 25) {
+    bad.push(`${m.formFieldCount} fields in one form \u2014 almost certainly the whole page counted, not a single form`);
+  }
+  if (Number.isFinite(n(m.reviewCount)) && Number.isFinite(n(m.reviewsRead)) && n(m.reviewsRead) > n(m.reviewCount)) {
+    bad.push(`we read ${m.reviewsRead} reviews of ${m.reviewCount} \u2014 we cannot read more than exist`);
+  }
+  if (Number.isFinite(n(m.rating)) && (n(m.rating) < 1 || n(m.rating) > 5)) {
+    bad.push(`a Google rating of ${m.rating} \u2014 outside the 1-5 range`);
+  }
+  if (Number.isFinite(n(m.tenureYears)) && (n(m.tenureYears) > 150 || n(m.tenureYears) < 0)) {
+    bad.push(`${m.tenureYears} years in business \u2014 outside what a local business plausibly reports`);
+  }
+  if (Number.isFinite(n(m.photoCount)) && n(m.photoCount) < 0) bad.push(`${m.photoCount} photos`);
+  if (Number.isFinite(n(m.reviewRecency)) && n(m.reviewRecency) < 0) {
+    bad.push(`a newest review ${m.reviewRecency} days old \u2014 a date in the future`);
+  }
+  return bad;
+};
+
+const buildFactualSpine = (harms, m = {}) => {
+  if (!harms || !harms.lead) return null;
+  // Refuse to build a spine on a measurement that cannot be true. A confident
+  // sentence built from a broken parser is the worst output this system can
+  // produce, because every check downstream trusts it.
+  const _absurd = measurementLooksWrong(m);
+  if (_absurd.length) {
+    console.log(`\u26d4 MEASUREMENT LOOKS WRONG: ${_absurd.join(' | ')}. No factual spine will be built for this lead \u2014 a sentence assembled from a broken parser reaches the email with total confidence and nothing downstream would object, because it came from code.`);
+    return null;
+  }
+  const lead = harms.lead;
+
+  // The lead sentence, exactly as the ladder built it from measurements. It is
+  // handed over as a QUOTE, not a brief \u2014 the model may adjust tense and add the
+  // owner's name, and may not restate the fact in different words.
+  const claim = String(lead.finding || '').trim();
+
+  // Supporting numbers, each traceable to something we measured. These are the
+  // ONLY figures permitted in the copy; the allowlist check downstream reads the
+  // same set, so the two can never disagree.
+  const figures = [];
+  const add = (label, v) => { if (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))) figures.push(`${label}: ${v}`); };
+  add('reviews', m.reviewCount);
+  add('rating', m.rating);
+  add('rank position', m.rankFound ? m.rank : null);
+  add('results scanned', m.scanned);
+  add('competitors above with fewer reviews', m.weakerAbove);
+  add('years in business', m.tenureYears);
+  add('reviews per year', m.reviewsPerYear);
+  add('Google photos', m.photoCount);
+  add('days since newest review', m.reviewRecency);
+  add('form fields', m.formFieldCountIsSingleForm ? m.formFieldCount : null);
+
+  return {
+    claim,
+    claimId: lead.id,
+    costs: String(lead.costs || '').trim(),
+    figures,
+    problemCount: (harms.all || []).length,
+    // Everything else we found, worst first \u2014 for the call sheet, not the email.
+    rest: (harms.byHarm || []).filter(x => x.id !== lead.id).map(x => x.finding),
+  };
+};
+
 const rankHarms = (m = {}) => {
   const hits = [];
   for (const h of HARM_LADDER) {
@@ -7909,7 +8154,9 @@ CORRECT OUTPUT:
 }
 WHY IT IS RIGHT: it puts two numbers next to each other that he has never put together himself, and the conclusion is about his business rather than his website.`;
 
-  const sys = `You are a business strategist, not an auditor. You are looking at one local business and answering one question: what is actually going on here?
+  const sys = `${FACT_DISCIPLINE}
+
+You are a business strategist, not an auditor. You are looking at one local business and answering one question: what is actually going on here?
 
 A colleague who has never heard of this business will read your answer before a call. They need to understand the business in six minutes.
 
@@ -8717,7 +8964,17 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 700,
-        messages: [{ role: 'user', content: `This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md.slice(0, 22000)}` }]
+        messages: [{ role: 'user', content: `${FACT_DISCIPLINE}
+
+\u26d4 COUNT ONLY WHAT IS IN FRONT OF YOU. The text below is the reviews we actually
+read \u2014 not their whole profile. A live audit reported "2 of ~501 reviews mention
+this" when we had read 40. That is an extrapolation dressed as a count, and the
+owner can check his own review page.
+\u2022 Say "2 of the reviews we read", never "2 of 501".
+\u2022 Never estimate what share of the unread reviews would say the same.
+\u2022 If a pattern appears in only one review, it is not a pattern. Say nothing.
+
+This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md.slice(0, 22000)}` }]
       }),
     }, 25000);
     const d = await res.json();
@@ -9198,6 +9455,31 @@ ${corpus}` }]
     // undefined the entire time and finding nothing, which is indistinguishable
     // from finding nothing because there is nothing.
     out.corpus = corpus;
+    // ══ WHAT EXISTS BUT WE DID NOT READ ═══════════════════════════════════
+    // Thomas Taneff: his site has a page literally called Reviews. We mapped his
+    // sitemap, saw the URL, chose not to read it, and the email then said
+    // "344 five-star reviews on Google, and none of them are on your site."
+    //
+    // He opens his own site, sees the Reviews page, and every other true thing
+    // in that email dies with it. This is the worst class of claim we make and
+    // the guards were fighting it with regexes on the wording \u2014 "none of them",
+    // "not one of those names" \u2014 while the answer was sitting in a list we
+    // already had.
+    //
+    // Record what the sitemap contains that we did NOT open. Absence can only be
+    // claimed about things we actually looked for.
+    const _unread = (urls || []).filter(u => !usable.some(p => p.url === u));
+    out.existsButUnread = {
+      reviews: _unread.some(u => /review|testimonial|praise|feedback|what.?(?:our|my).?(?:client|patient|customer)/i.test(u)),
+      pricing: _unread.some(u => /pricing|price|rates?|fees?|cost/i.test(u)),
+      booking: _unread.some(u => /book|schedul|appointment|consult/i.test(u)),
+      about:   _unread.some(u => /about|our-?story|who-?we-?are|team|staff/i.test(u)),
+      urls: _unread.slice(0, 40),
+    };
+    const _flagged = Object.entries(out.existsButUnread).filter(([k, v]) => k !== 'urls' && v).map(([k]) => k);
+    if (_flagged.length) {
+      console.log(`\u26a0 EXISTS BUT UNREAD [${companyName}]: their sitemap has ${_flagged.join(', ')} page(s) we did not open. NO absence claim may be made about ${_flagged.join(' or ')} \u2014 we did not look. A live email told an attorney with a Reviews page that none of his reviews were on his site.`);
+    }
     // ══ THE RENDERS, ATTACHED TO THE PAGES THEY CAME FROM ══════════════════
     // Captured in the same request that fetched the text, for the same credit.
     // Without this the audit view shows one image \u2014 the homepage \u2014 and every
@@ -15569,7 +15851,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           //
           // The PUSH belongs here (the facts are being assembled). The writes
           // belong later, once the response exists. Stash and carry.
+          // The factual spine, built from measurements. This is what the email
+          // may assert \u2014 not a brief to interpret, a quote to use.
           _harmsForResponse = {
+            factualSpine: buildFactualSpine(_harms, _harmInputs || {}),
             problemCount: _harms.all.length,
             harmsRanked: _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
           };
@@ -15686,7 +15971,37 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // be as rich as the facts handed to it, and the briefing was thin partly
       // because half of what we measure never arrived here.
       if (sitePages && Array.isArray(sitePages.prices) && sitePages.prices.length) push(`Their own published prices: ${sitePages.prices.map(x => `${x.amount} (${x.what})`).join('; ')}`);
-      if (sitePages && sitePages.pagesRead && sitePages.pagesRead.length) push(`Pages we read beyond the homepage: ${sitePages.pagesRead.join(', ')}`);
+      // ══ THE ONE RULE THAT WOULD HAVE STOPPED EVERY FALSE ABSENCE ══════════
+      // Thomas Taneff has a page called Reviews, with names on it. We read four
+      // pages, none of them that one, and the model wrote "No visible social
+      // proof on the site" \u2014 which became "344 five-star reviews on Google, and
+      // none of them are on your site."
+      //
+      // He opens his own site and the email is dead. Guards downstream were
+      // chasing the WORDING; the cause is that the model was allowed to turn
+      // "I did not see it" into "it is not there".
+      //
+      // Those are different statements and only one of them is knowable from a
+      // partial read. Every genuine absence in this system comes from a MEASURED
+      // check \u2014 booking path, form fields, tel link, guarantee, lead magnet,
+      // photos, hours \u2014 and those are all in the facts above with their own
+      // wording. The model never needs to derive one.
+      push(`\u26d4 ABSENCE IS NOT YOURS TO CONCLUDE. You are reading a SAMPLE of their site. If something is not in the text you were given, that means YOU DID NOT SEE IT \u2014 it does not mean it is not there. Their site almost certainly has pages we did not open.
+   \u2022 You may write: "the homepage does not show X" \u2014 about a page you actually read.
+   \u2022 You may NOT write: "there is no X", "X is missing", "none of their X", "X is nowhere on the site", or any wording that claims absence from the SITE.
+   \u2022 Every real absence is already stated as a measured fact above. Use those words. Do not invent new ones.
+   A live email told an attorney with a Reviews page, carrying named reviews, that none of his reviews were on his site. Nothing else in that email mattered after he scrolled.`);
+      if (sitePages && sitePages.pagesRead && sitePages.pagesRead.length) push(`Pages we read beyond the homepage: ${sitePages.pagesRead.join(', ')} \u2014 that is ${sitePages.pagesRead.length} page(s) out of an unknown total. Everything you did not see is a gap in OUR reading, not a gap in THEIR business.`);
+      // ══ AND WHAT WE DID NOT LOOK AT ═══════════════════════════════════════
+      // A live email told an attorney with a page called Reviews that none of his
+      // 344 reviews were on his site. We had his sitemap. We just never said so.
+      if (sitePages && sitePages.existsButUnread) {
+        const _eu = sitePages.existsButUnread;
+        const _names = ['reviews', 'pricing', 'booking', 'about'].filter(k => _eu[k]);
+        if (_names.length) {
+          push(`\u26d4 THEIR SITE HAS ${_names.map(n => n.toUpperCase()).join(', ')} PAGE(S) THAT WE DID NOT OPEN. You may NOT say any of those things is missing, absent, nowhere, or not on their site \u2014 we did not look. Absence is only claimable about pages we actually read.`);
+        }
+      }
       // Only variables proven to exist in THIS scope. Four earlier candidates
       // (visionRead, heroHeadline, reviewQuotes, hasAdsTag) are defined later or
       // elsewhere; referencing them would have thrown a ReferenceError that the
@@ -15732,6 +16047,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       trade: customerTrade || verifiedIndustry || req.body.industry || '',
     });
     if (allowedConsequences.checked) {
+      // ══ THE SAFE REFRAMES, WHICH NEVER LEFT THE SERVER ═══════════════════
+      // Built from measured walls, used to check the audit's own sentences, and
+      // then discarded \u2014 so the email prompt, which needs a behavioural reframe
+      // more than anything else does, invents its own every time.
+      //
+      // That reframe is the sentence most likely to drift from a truth about
+      // PEOPLE ("people comparing three contractors call the one that dials")
+      // into a claim about HIS customers ("your callers give up and phone
+      // someone else"). The first is always safe; the second we never observed.
+      // Handing over the pre-approved list closes the largest free-text gap left.
+      if (brainAudit && allowedConsequences.checked) brainAudit.allowedReframes = allowedConsequences.lines;
       console.log(`ALLOWED CONSEQUENCES [${company}]: supplied ${allowedConsequences.lines.length} safe behavioural reframe(s) built from measured walls`);
     }
     if (growthConstraint.checked) {
@@ -17638,6 +17964,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             if (_harmsForResponse) {
               parsed.problemCount = _harmsForResponse.problemCount;
               parsed.harmsRanked = _harmsForResponse.harmsRanked;
+              parsed.factualSpine = _harmsForResponse.factualSpine;
             }
             if (_openerForResponse) parsed.openerStrength = _openerForResponse;
 
