@@ -16681,6 +16681,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           })(),
         };
         const _harms = rankHarms(_harmInputs);
+        // ══ TRACE: THIS HAS TO PRINT ON EVERY LEAD ═══════════════════════════════
+        // Five sessions have gone into guessing why the composer does not run, and
+        // static analysis has said "it should" every time. It prints where it got to
+        // instead. If the next line is the last one you see, the answer is there.
+        console.log(`\u25b6 COMPOSE TRACE [${company}] step 1: harm ladder produced ${(_harms.all || []).length} finding(s), lead=${_harms.lead ? _harms.lead.id : 'none'}, worst=${_harms.worst ? _harms.worst.id : ((_harms.byHarm || [])[0] ? _harms.byHarm[0].id : 'none')}`);
+
         if (_harms.all && _harms.all.length) {
           const top = _harms.lead;
           console.log(`\u2709 EMAIL OPENS ON [${company}]: ${top.band} opener=${top.opener} \u2014 ${top.finding}.`);
@@ -16733,6 +16739,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             problemCount: _harms.all.length,
             harmsRanked: _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
           };
+          console.log(`\u25b6 COMPOSE TRACE [${company}] step 2: _harmsForResponse built \u2014 spine=${_harmsForResponse.factualSpine ? 'yes' : 'NO'}, subjects=${(_harmsForResponse.subjectOptions || []).length}, problems=${_harmsForResponse.problemCount}`);
           _openerForResponse = {
             score: top.opener, band: top.band, finding: top.finding,
             // Cleared the believability gate AND costly = send. Cleared it but
@@ -18491,7 +18498,39 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
         //
         // I built the composer to be independent of the model and then nested it
         // inside a check on the model's output.
+        console.log(`\u25b6 COMPOSE TRACE [${company}] step 3: reached the attach block \u2014 _harmsForResponse=${!!_harmsForResponse}, parsed=${!!parsed}. If step 4 does not follow, one of those two is false.`);
+
         if (_harmsForResponse && parsed) {
+          // ══ THE AUDIT LEADS ON WHAT THE EMAIL WILL LEAD ON ═══════════════════
+          // Two things were deciding what matters: the LADDER (30 measured findings,
+          // ranked by harm, code-decided) and the BRAIN (pitchAngle and
+          // candidateFindings, free choice). The email uses the ladder. The audit
+          // narrative used the Brain.
+          //
+          // Live, Kraig Solomon: the audit led on "no meta description and no schema
+          // markup" while the ladder was holding a booking path and a positioning
+          // gap. I excluded meta tags from the ladder deliberately \u2014 "invisible to
+          // the owner, invisible to customers, pure SEO trivia" \u2014 and the Brain
+          // picked one anyway. Every SEO fabrication in that email followed from it:
+          // "Google reads a blank page", "page source", "the two things Google uses".
+          // It was explaining a technical finding to a remodeler because that was the
+          // finding it had been handed.
+          //
+          // The ladder already knows what is worth leading on and it is measured.
+          // Overwrite the Brain's choice with it, and say so in the log so the
+          // disagreement is visible rather than silent.
+          if (_harmsForResponse.factualSpine && _harmsForResponse.factualSpine.claim) {
+            const _ladderLead = _harmsForResponse.factualSpine.claim;
+            const _brainLead = String(parsed.pitchAngle || '').slice(0, 90);
+            const _sameThing = _brainLead && _ladderLead.toLowerCase().split(/\s+/)
+              .filter(w => w.length > 4)
+              .some(w => _brainLead.toLowerCase().includes(w));
+            if (_brainLead && !_sameThing) {
+              console.log(`\u2696 LEAD OVERRIDDEN [${company}]: the audit was going to open on "${_brainLead}" and the measured ladder leads on "${_ladderLead.slice(0, 70)}". The ladder wins \u2014 it is measured and it is what the email will say. A narrative that leads somewhere the email does not go sends Mike into a call on the wrong finding.`);
+            }
+            parsed.pitchAngle = _ladderLead;
+          }
+
             parsed.problemCount = _harmsForResponse.problemCount;
             parsed.harmsRanked = _harmsForResponse.harmsRanked;
             parsed.factualSpine = _harmsForResponse.factualSpine;
@@ -18549,11 +18588,20 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // disagree about the business, cannot count different problems, and
             // cannot open on different findings \u2014 three failures that each cost
             // a session to find.
-            parsed.composedEmail = composeFullEmail(parsed.factualSpine, {
-              founderName: (decisionMaker && decisionMaker.name) || verifiedCEO || '',
-              subjects: parsed.subjectOptions,
-              reframes: (allowedConsequences && allowedConsequences.lines) || [],
-            });
+            // ══ STEP 4, WHICH MUST NOT BE ABLE TO FAIL SILENTLY ═══════════════
+            // If composeFullEmail throws, an enclosing catch swallows it and the
+            // absence looks identical to the block never running at all. Several
+            // sessions have been lost to exactly that ambiguity.
+            try {
+              parsed.composedEmail = composeFullEmail(parsed.factualSpine, {
+                founderName: (decisionMaker && decisionMaker.name) || verifiedCEO || '',
+                subjects: parsed.subjectOptions,
+                reframes: (allowedConsequences && allowedConsequences.lines) || [],
+              });
+            } catch (e) {
+              console.log(`\u26d4 COMPOSE TRACE [${company}] step 4 THREW: ${e && e.message}. The email was not composed and THIS is the reason \u2014 not a missing deploy and not a cached audit.`);
+            }
+            console.log(`\u25b6 COMPOSE TRACE [${company}] step 4: composeFullEmail returned ${parsed.composedEmail ? 'an email' : 'NULL'}${parsed.factualSpine ? '' : ' (no factual spine was attached, which is why)'}`);
             if (parsed.composedEmail && parsed.composedEmail.variantA) {
               const _w = parsed.composedEmail.variantA.body.split(/\s+/).length;
               console.log(`\u2709 EMAIL COMPOSED [${company}]: "${parsed.composedEmail.variantA.subject}" \u2014 ${_w} words, every one traceable to a measurement. CTA is the ${parsed.composedEmail.ctaKind} form. No model wrote any part of this.`);
