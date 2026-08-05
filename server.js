@@ -9277,10 +9277,42 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     //   · match against the PATH only, so the domain cannot create false hits
     //   · prefer shallower paths — /about beats /blog/2019/about-our-new-truck
     //   · prefer shorter paths — /about beats /about-our-service-area-and-team
+    // ══ THE CAP WAS NEVER THE LIMIT \u2014 THIS WAS ═════════════════════════════
+    // Four intent categories, and this took ranked[0] from each. So the real
+    // maximum was FOUR pages no matter what the cap said, and on a site whose
+    // URLs do not use our vocabulary it collapsed to one:
+    //
+    //   Thermal King   398 URLs mapped \u2192 1 page read
+    //   Dentique       278 URLs mapped \u2192 3 pages read
+    //   HEGG           330 URLs mapped \u2192 3 pages read
+    //
+    // Thermal King's sitemap is /windows/double-hung-windows, /doors/patio-doors,
+    // /siding/vinyl-siding, /offers, /gallery, /kansas-city-mo-replacement-windows
+    // \u2014 real service and location pages, none of which say "services".
+    //
+    // Take TWO per category, then backfill from whatever is left, shortest-path
+    // first. A shallow URL on a business site is almost always a real page rather
+    // than a blog post or a tag archive.
     const picked = [];
     for (const intent of PAGE_INTENT) {
-      const ranked = rankUrlsByIntent(clean, intent.re, 4).filter(u => !picked.some(p => p.url === u));
-      if (ranked.length) picked.push({ key: intent.key, url: ranked[0] });
+      const ranked = rankUrlsByIntent(clean, intent.re, 6).filter(u => !picked.some(p => p.url === u));
+      ranked.slice(0, 2).forEach(u => picked.push({ key: intent.key, url: u }));
+    }
+    // Backfill: a site can be full of substance and match none of our words.
+    if (picked.length < 8) {
+      // Excluded deliberately: the homepage (already scraped, would be paid for
+      // twice), thank-you and test pages (no customer ever sees them), and the
+      // usual CMS furniture. On a live sitemap the first pass picked "/" and
+      // "/testing" \u2014 one duplicate and one page the owner forgot to delete.
+      const NOISE = /\/(blog|news|category|tag|author|privacy|terms|sitemap|feed|wp-|cart|checkout|account|login|search|thank-?you|test(?:ing)?|staging|preview|404|coming-?soon)\b|\.(xml|json|pdf|jpg|png)$/i;
+      const spare = clean
+        .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u))
+        // Never the homepage \u2014 it is already scraped and would be bought twice.
+        .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } })
+        .sort((a, b) => (a.split('/').length - b.split('/').length) || (a.length - b.length))
+        .slice(0, 8 - picked.length);
+      spare.forEach(u => picked.push({ key: 'page', url: u }));
+      if (spare.length) console.log(`SITE AUDIT [${companyName}]: only ${picked.length - spare.length} page(s) matched our intent words, so ${spare.length} more were taken from the sitemap by shallowest path. Their URLs do not use our vocabulary \u2014 that is our gap, not a thin site.`);
     }
     if (!picked.length) return null;
 
