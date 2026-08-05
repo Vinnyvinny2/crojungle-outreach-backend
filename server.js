@@ -7367,7 +7367,24 @@ const buildProblemList = (harms) => {
 };
 
 const buildFactualSpine = (harms, m = {}) => {
-  if (!harms || !harms.lead) return null;
+  // ══ THE SPINE IS ABOUT TRUTH, NOT ABOUT WHETHER TO SEND ═══════════════════
+  // This required harms.lead \u2014 the finding that clears the OPENER gate. On a
+  // business whose only problems are positioning, nothing clears it: all four
+  // positioning findings score specific < 60 and are disqualified from leading.
+  //
+  // Kraig Kirschner, live: 25 years, a real team, a lead magnet, decent reviews.
+  // His only genuine problem IS the positioning. So no lead, no spine, and the
+  // email fell back to the FULL evidence prompt \u2014 the exact path that produces
+  // the most invention, on the exact lead least able to survive it.
+  //
+  // Those are two different questions and I had them tangled:
+  //   should we EMAIL him?      \u2014 the opener gate, and it was right to say no
+  //   what may the email SAY?   \u2014 the spine, and it is needed either way
+  //
+  // If an email is going to be written at all, it needs a measured sentence.
+  // Fall back to the costliest measured finding, whatever its opener score.
+  const anchor = (harms && (harms.lead || harms.worst || (harms.byHarm || [])[0])) || null;
+  if (!anchor) return null;
   // Refuse to build a spine on a measurement that cannot be true. A confident
   // sentence built from a broken parser is the worst output this system can
   // produce, because every check downstream trusts it.
@@ -7376,7 +7393,7 @@ const buildFactualSpine = (harms, m = {}) => {
     console.log(`\u26d4 MEASUREMENT LOOKS WRONG: ${_absurd.join(' | ')}. No factual spine will be built for this lead \u2014 a sentence assembled from a broken parser reaches the email with total confidence and nothing downstream would object, because it came from code.`);
     return null;
   }
-  const lead = harms.lead;
+  const lead = anchor;
 
   // The lead sentence, exactly as the ladder built it from measurements. It is
   // handed over as a QUOTE, not a brief \u2014 the model may adjust tense and add the
