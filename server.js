@@ -1608,9 +1608,57 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
   // Mike Part 7, absolute: the email never names what we sell or what it costs.
   // Every field checked here is prospect-facing, so there is no internal-note
   // false positive to worry about.
+  // Fires only when BOTH patterns are present \u2014 the number AND language that
+  // makes it ours. A price beside "a kitchen remodel" is his revenue and stays.
+  const flagIf = (re, mustAlsoMatch, why) => {
+    // ══ THE CONTEXT MUST BE IN THE SAME SENTENCE ═══════════════════════════
+    // This tested the qualifier against allCopy \u2014 both variants and both
+    // follow-ups concatenated. So a follow-up containing "monthly" or "rebuild"
+    // made a JOB VALUE in email 1 read as our fee, and "a kitchen remodel here
+    // runs $30k-$80k" was flagged as QUOTES OUR PRICE on a live lead.
+    //
+    // That is the strongest legitimate line in the email \u2014 it is what makes the
+    // loss real \u2014 and cutting it leaves a page critique with no money attached.
+    // The distinction is whether THIS sentence is about our work or his, so look
+    // at this sentence.
+    const m = allCopy.match(re);
+    if (!m) return;
+    const at = allCopy.indexOf(m[0]);
+    // Sentences end at a full stop OR a line break OR a dash separator. Scoping
+    // only on '.' let the search run back into a previous FIELD \u2014 subject, body,
+    // follow-up 1 \u2014 and drag its vocabulary in, so a follow-up saying "monthly"
+    // still made a job value in email 1 read as our fee. Take the nearest of all
+    // three boundaries in each direction.
+    const bound = (idx, dir) => {
+      const marks = ['.', '!', '?', '\n', '\u2014', '|'];
+      const hits = marks
+        .map(c => (dir < 0 ? allCopy.lastIndexOf(c, idx) : allCopy.indexOf(c, idx)))
+        .filter(i => i !== -1);
+      if (!hits.length) return dir < 0 ? 0 : allCopy.length;
+      return dir < 0 ? Math.max(...hits) + 1 : Math.min(...hits) + 1;
+    };
+    const sentence = allCopy.slice(bound(at, -1), bound(at + m[0].length, 1));
+    if (mustAlsoMatch.test(sentence)) flags.push(`${why} \u2014 "${String(m[0]).slice(0, 60)}"`);
+  };
+
   flag(/\b(AI Brain|Website Rebuild|Custom AI Software Build|CRO Retainer|Revenue Growth\s*\/?\s*CRO|End-to-End Marketing|Exit\s*\/?\s*Valuation Advisory|CROJungle)\b/i,
     'NAMES OUR PRODUCT: the email must never say what we sell. It turns a colleague who found a problem into a vendor with something to move');
-  flag(/\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i,
+  // ══ OUR FEE, NOT THE VALUE OF HIS JOB ══════════════════════════════════════
+  // This flagged "$30k\u2013$80k" in a live email \u2014 the cost of a kitchen remodel.
+  // That is HIS revenue, and Mike's framework does not merely permit it, it is
+  // what turns a page problem into money: "a LASIK case runs several thousand
+  // dollars", "a full window job runs $10,000\u2013$20,000".
+  //
+  // What must stay off email 1 is OUR fee \u2014 $50k+ for a rebuild, $10k\u2013$35k a
+  // month for a retainer. The shape of the number is identical; what separates
+  // them is whether the sentence is about our work or his.
+  //
+  // Flagging the strongest legitimate line in the email is worse than missing a
+  // weak one: it is the sentence that makes the loss real, and cutting it leaves
+  // a page critique with no money attached.
+  flagIf(
+    /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i,
+    /\b(?:rebuild|retainer|engagement|our fee|we charge|the build|the project would|investment|package|scope of work|per month|monthly|advisory|valuation)\b/i,
     'QUOTES OUR PRICE: price belongs on the call, never in email 1');
 
   return { checked: true, flags, clean: flags.length === 0 };
@@ -7281,51 +7329,51 @@ const AREA_OF = {
 // names what happens. The model picks and may sharpen the wording; it no longer
 // invents from nothing, which is where the template came from.
 const SUBJECTS_FOR = {
-  // ══ MIKE'S REGISTER, NOT MINE ═════════════════════════════════════════════
-  // My first pass wrote these in the voice I thought was good and it broke his
-  // rule in both directions. "your quote form goes quiet" is an EXPLICIT FAIL in
-  // his framework \u2014 "nobody at a company says this. COPYWRITER" \u2014 and I had
-  // called it a good subject. "I caught a problem" is an EXPLICIT PASS and my
-  // guard was flagging that shape as generic.
+  // ══ THE SHAPE IS "YOUR [THING] IS [BROKEN]" ═══════════════════════════════
+  // The one that actually got opened in the wild was "your traffic is broken",
+  // and the reason recorded was that it looked like someone on the team wrote it.
   //
-  // The one test: could this exact line have been sent by someone who WORKS at
-  // his company? A colleague writes short, plain and slightly blunt, because
-  // they are not performing \u2014 they just want you to look at the thing.
+  // My first pass dropped the possessive on about half of these \u2014 "no way to
+  // book online", "the form is the only way in". Those read like a note to self
+  // or an observation about a website, which is what an agency sends. "YOUR
+  // booking is broken" is a colleague talking about OUR thing.
   //
-  // Their words:  broken \u00b7 down \u00b7 dead \u00b7 not working \u00b7 stuck \u00b7 problem \u00b7 nothing \u00b7 nobody
-  // Never:        gap \u00b7 goes quiet \u00b7 aren't showing \u00b7 opportunity \u00b7 room \u00b7 potential
-  //               \u00b7 underperforming \u00b7 optimize \u00b7 lever \u00b7 invisible \u00b7 outranked
-  // Under 30 characters. Lowercase, like a message not a headline.
-  broken_page:          ['your booking page is broken', 'that page is down'],
-  site_empty:           ['your site is down', 'nothing loads on the site'],
-  listing_closed:       ['google says we are closed', 'our listing says closed'],
-  no_website_on_profile:['no site link on google', 'google has no website for us'],
-  expired_certificate:  ['our site is throwing a warning', 'the site is blocked'],
-  no_https:             ['the site says not secure', 'browsers are flagging us'],
-  phone_mismatch:       ['wrong number on google', 'google has the old number'],
-  tap_to_call_broken:   ['the number does not dial', 'tapping the number is broken'],
-  absent_from_search:   ['we are not showing up', 'nobody can find us'],
-  outranked_by_weaker:  ['smaller shops are above us', 'we are buried in search'],
-  wrong_gbp_category:   ['google has us as {cat}', 'wrong category on google'],
-  no_google_listing:    ['we have no google listing', 'we are not on the map'],
-  no_after_hours:       ['nobody can reach us after 5', 'nothing answers at night'],
-  form_only_no_booking: ['no way to book online', 'the form is the only way in'],
-  long_form:            ['the form asks for too much', '{n} fields on the form'],
-  stale_copyright:      ['the site still says {year}', 'footer says {year}'],
-  placeholder_text:     ['dummy text on the site', 'placeholder text is live'],
-  dead_blog:            ['the blog stopped in {year}', 'nothing new since {year}'],
-  stale_reviews:        ['the reviews stopped', 'no new reviews'],
-  thin_profile:         ['only {n} photos on google', 'our listing is bare'],
-  low_rating:           ['our rating is {rating}', 'the star rating is a problem'],
-  no_owner_replies:     ['nobody is answering reviews', 'the reviews sit unanswered'],
-  no_hours_on_profile:  ['google has no hours for us', 'our hours are missing'],
-  no_mobile_viewport:   ['the site is broken on mobile', 'site is down on phones'],
-  review_deficit:       ['they have more reviews', 'we are behind on reviews'],
-  not_compounding:      ['{years} years and {n} reviews', 'the reviews are not adding up'],
-  no_offer:             ['nothing says why us', 'we do not say why us'],
-  no_lead_magnet:       ['nothing to give people', 'the only ask is a quote'],
-  undifferentiated:     ['who is the site talking to', 'the copy says nothing'],
-  dated_credibility:    ['the site looks old', 'our site is dated'],
+  // Live comparison: "your reviews aren't working" beat everything I built,
+  // because it also names a TENSION \u2014 you have them, they are not doing anything
+  // \u2014 where mine named a component and stopped.
+  //
+  // His words: broken \u00b7 down \u00b7 dead \u00b7 not working \u00b7 stuck \u00b7 nothing \u00b7 nobody
+  // Under 30 characters, lowercase, possessive wherever it fits.
+  broken_page:          ['your booking page is broken', 'your booking page is down'],
+  site_empty:           ['your site is down', 'your site loads nothing'],
+  listing_closed:       ['google says you are closed', 'your listing says closed'],
+  no_website_on_profile:['your listing has no site link', 'google has no site for you'],
+  expired_certificate:  ['your site shows a warning', 'browsers are blocking you'],
+  no_https:             ['your site says not secure', 'browsers are flagging you'],
+  phone_mismatch:       ['google has your old number', 'your numbers do not match'],
+  tap_to_call_broken:   ['your number will not dial', 'tapping your number is dead'],
+  absent_from_search:   ['you are not showing up', 'nobody can find you'],
+  outranked_by_weaker:  ['your reviews are not working', 'smaller shops are above you'],
+  wrong_gbp_category:   ['google has your category wrong', 'your category is wrong'],
+  no_google_listing:    ['you have no google listing', 'you are not on the map'],
+  no_after_hours:       ['your door closes at 5', 'nobody can reach you at night'],
+  form_only_no_booking: ['your form is the only way in', 'nobody can book a time'],
+  long_form:            ['your form asks for too much', 'your form is too long'],
+  stale_copyright:      ['your footer still says {year}', 'your site still says {year}'],
+  placeholder_text:     ['your site has dummy text on it', 'placeholder text is live'],
+  dead_blog:            ['your blog stopped in {year}', 'nothing new since {year}'],
+  stale_reviews:        ['your reviews stopped', 'your last review is old'],
+  thin_profile:         ['your listing looks bare', 'only {n} photos on google'],
+  low_rating:           ['your rating is {rating}', 'your star line is hurting you'],
+  no_owner_replies:     ['your reviews sit unanswered', 'nobody answers your reviews'],
+  no_hours_on_profile:  ['google has no hours for you', 'your hours are missing'],
+  no_mobile_viewport:   ['your site breaks on a phone', 'your site is down on mobile'],
+  review_deficit:       ['you are behind on reviews', 'they have more reviews'],
+  not_compounding:      ['your reviews are not adding up', '{years} years, {n} reviews'],
+  no_offer:             ['your site never says why you', 'nothing says why you'],
+  no_lead_magnet:       ['your only ask is a quote', 'nothing to take away'],
+  undifferentiated:     ['your copy says nothing', 'your headline says nothing'],
+  dated_credibility:    ['your site looks old', 'your site is showing its age'],
 };
 
 const buildSubjects = (lead, m = {}) => {
@@ -7349,6 +7397,167 @@ const buildSubjects = (lead, m = {}) => {
     .filter(t => !/\b(gap|goes quiet|aren'?t showing|opportunity|room|potential|underperform\w*|optimi[sz]e|lever|invisible|outranked|leverage|synerg\w*)\b/i.test(t))
     .map(t => t.trim());
 };
+
+// ══ THE EMAIL, COMPOSED BY CODE ══════════════════════════════════════════════
+// Six of the seven parts of the email are already written by code: the subject,
+// the reframe, the fact, what it costs, the count and the CTA. The model only
+// JOINS them \u2014 and every fabrication produced today lives in the joining:
+//
+//   "One homeowner a month"      joining the cost to the money
+//   "I mapped where it breaks"   joining the fact to the CTA
+//   "what Google reads"          joining the fact to the cost
+//   "25 years"                   joining his reputation to the problem
+//
+// Six rounds of prompt rules have not stopped it, because at each of those
+// joins the model has a job to do and the honest material runs out. It fills the
+// gap, and a filled gap is an invention.
+//
+// So the joins become code too. The skeletons below are the connective tissue,
+// written once, from the same measured strings. Nothing is generated at write
+// time, so nothing can be invented at write time.
+//
+// ON IT READING AS A TEMPLATE: Mike's test is whether the email could be sent to
+// anyone else. Every sentence here names something measured about HIM \u2014 his
+// booking path, his review count, his position, his money. A fixed skeleton
+// carrying his facts is unsendable to anyone else; a hand-written email full of
+// invented details is sendable to everyone, because none of it is his. The
+// skeletons vary in order and rhythm so 550 a month do not arrive identical.
+// Sentence-case helpers. The ladder writes each string to stand alone, so when
+// two are joined the seam needs handling: a fragment following a dash starts
+// lowercase, a fragment starting a sentence starts capital. Getting this wrong
+// produced "answers first. everyone who decides..." in the first draft \u2014 which
+// reads as carelessness, and carelessness is what the whole email argues against.
+const upper1 = (t) => { const x = String(t || '').trim(); return x ? x.charAt(0).toUpperCase() + x.slice(1) : x; };
+const lower1 = (t) => {
+  const x = String(t || '').trim();
+  if (!x) return x;
+  // Never lowercase a proper noun or an acronym.
+  if (/^(?:[A-Z]{2,}|Google|Your|You)\b/.test(x)) return x;
+  return x.charAt(0).toLowerCase() + x.slice(1);
+};
+
+const EMAIL_SKELETONS = [
+  // Fact first. The most direct, and the right shape when the fact is alarming.
+  ({ first, fact, costs, reframe, count, cta }) =>
+    `${first} — ${lower1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.\n\n${count}\n\n${cta}`,
+
+  // Reframe first. Right when the fact needs a reason to matter before it lands.
+  ({ first, fact, costs, reframe, count, cta }) =>
+    `${first} — ${lower1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.\n\n${count}\n\n${cta}`,
+
+  // Cost first. Opens on his money rather than his page.
+  ({ first, fact, costs, reframe, count, cta }) =>
+    `${first} — right now ${lower1(costs)}.\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+
+  // Tight. Four short paragraphs, no connective at all.
+  ({ first, fact, costs, reframe, count, cta }) =>
+    `${first} — ${lower1(fact)}.\n\n${upper1(costs)}.\n\n${upper1(reframe)}\n\n${count} ${cta}`,
+];
+
+// Turn a ladder sentence into second person. The ladder writes about the
+// business in the third person because the audit is read by us; the email is
+// read by him. This is mechanical substitution, not rewriting \u2014 the claim is
+// unchanged and no new words enter.
+const toSecondPerson = (t) => String(t || '')
+  .replace(/\bTheir\b/g, 'Your').replace(/\btheir\b/g, 'your')
+  .replace(/\bThey have\b/g, 'You have').replace(/\bthey have\b/g, 'you have')
+  .replace(/\bThey are\b/g, "You're").replace(/\bthey are\b/g, "you're")
+  .replace(/\bThey do not\b/g, "You don't").replace(/\bthey do not\b/g, "you don't")
+  .replace(/\bThey\b/g, 'You').replace(/\bthey\b/g, 'you')
+  .replace(/\bThem\b/g, 'You').replace(/\bthem\b/g, 'you')
+  .replace(/\btheirs\b/g, 'yours')
+  .replace(/\bthe business\b/gi, 'you')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .replace(/\.$/, '');
+
+const composeEmail = (spine, opts = {}) => {
+  if (!spine || !spine.claim) return null;
+  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || 'there';
+  const fact = toSecondPerson(spine.claim);
+  const costs = toSecondPerson(spine.costs || '');
+  const reframe = String(opts.reframe || '').trim();
+  const n = Number(spine.problemCount) || 0;
+
+  // The count sentence, in a few shapes so it is not identical every time.
+  const countForms = [
+    `That's one of ${n} things I found.`,
+    `There are ${n} of these.`,
+    `${n} things, and that's the one you can check fastest.`,
+  ];
+  const count = n > 1 ? countForms[(opts.variantIndex || 0) % countForms.length] : '';
+
+  const cta = String(opts.cta || 'The write-up is yours whenever you want it.').trim();
+  const skeleton = EMAIL_SKELETONS[(opts.variantIndex || 0) % EMAIL_SKELETONS.length];
+  const body = skeleton({ first, fact, costs, reframe, count, cta })
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/ {2,}/g, ' ')
+    .replace(/\s+([.,])/g, '$1')
+    .trim();
+  return { body, composedBy: 'code' };
+};
+
+// ══ THE CTA, DECIDED WHERE THE FINDING LIVES ═════════════════════════════════
+// This branch lived only in the frontend, so the server held six of the seven
+// pieces of the email and composed nothing while the browser did the assembling
+// by asking a model. That split is what kept producing invention.
+//
+// The rule is Mike's: something BROKEN earns a question about accountability and
+// a call, because nobody told their booking page is down wants a document. A GAP
+// earns the write-up and no ask, because there is no urgency to justify one and
+// asking turns a soft email into a cold pitch.
+const CTA_FOR = (finding) => {
+  const broken = /\bbroken\b|returns? (?:a )?(?:server )?error|does not load|is down|appears nowhere|do(?:es)? not appear|contradict|expired|closed|no longer|will not dial|does not dial/i
+    .test(String(finding || ''));
+  return broken
+    // A question about accountability is not a pitch: it is about him, it gets
+    // answered, and it cannot be forwarded — he is the only person who can answer
+    // it. That matters, because the finding itself CAN be forwarded and fixed in
+    // five minutes without us ever hearing back.
+    ? { text: "Who's handling the site for you at the moment?", kind: 'accountability' }
+    // Phrased as something that already exists. Never "shall I put something
+    // together?", which turns finished work back into a proposal.
+    : { text: 'The write-up is yours whenever you want it.', kind: 'writeup' };
+};
+
+// ══ THE WHOLE EMAIL, INCLUDING THE FOLLOW-UPS ════════════════════════════════
+// Follow-up 1 names the SECOND finding — a different fact, so a man who ignored
+// the first has a new reason to look. Follow-up 2 carries only the count, which
+// is the one thing he cannot resolve on his own.
+const composeFullEmail = (spine, opts = {}) => {
+  if (!spine || !spine.claim) return null;
+  const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
+  const reframes = Array.isArray(opts.reframes) ? opts.reframes : [];
+  const cta = CTA_FOR(spine.claim);
+  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || 'there';
+
+  const variant = (i) => {
+    const composed = composeEmail(spine, {
+      founderName: opts.founderName,
+      variantIndex: i,
+      reframe: reframes[i % Math.max(1, reframes.length)] || '',
+      cta: cta.text,
+    });
+    return composed ? { subject: subjects[i % Math.max(1, subjects.length)] || '', body: composed.body } : null;
+  };
+
+  const second = (spine.rest || [])[0] || null;
+  const n = Number(spine.problemCount) || 0;
+
+  return {
+    variantA: variant(0),
+    variantB: variant(1),
+    followUp1: second
+      ? `${first} — one more: ${toSecondPerson(second).replace(/^./, (c) => c.toLowerCase())}.\n\n${cta.text}`
+      : null,
+    followUp2: n > 1
+      ? `${first} — I'll leave it here. There were ${n} things in total; that's more than one afternoon's work.\n\nIf you want the list, say the word.`
+      : null,
+    ctaKind: cta.kind,
+    composedBy: 'code',
+  };
+};
+
 
 const buildProblemList = (harms) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
@@ -7415,6 +7624,12 @@ const buildFactualSpine = (harms, m = {}) => {
   add('Google photos', m.photoCount);
   add('days since newest review', m.reviewRecency);
   add('form fields', m.formFieldCountIsSingleForm ? m.formFieldCount : null);
+  // "You personally replied to 38 of the 40 reviews we read" is one of the
+  // strongest lines this system can write \u2014 measured, specific, flattering and
+  // impossible to fake. It was missing from the permitted list, so the model used
+  // it and the allowlist called it invented.
+  add('reviews we read', m.reviewsRead);
+  add('reviews the owner answered', m.ownerReplies);
 
   return {
     claim,
@@ -8957,6 +9172,29 @@ const measureTenure = (pageText, story) => {
       why: `their copyright line runs from ${y}, so the site has existed at least that long` };
   }
   // Not knowable. Say so — never guess a founding year.
+  // ══ THREE FORMS REAL SITES USE THAT WE MISSED ═════════════════════════════
+  // Kraig Solomon: the audit read 25 years off his page and this returned
+  // nothing, so the email stated a tenure the allowlist correctly called
+  // invented. The guard was right; the extractor was short.
+  //
+  //   "Est. 1985"                      the abbreviation, no verb
+  //   "25+ years building homes"       the plus sign, no "of experience"
+  //   "remodeling homes for 25 years"  duration after the trade, not before
+  //
+  // A tenure that is on the page and not in our hands is the worst combination:
+  // the model sees it, uses it, and our own guard blocks the email over it.
+  const estAbbrev = text.match(/\best\.?\s*(19\d{2}|20[0-2]\d)\b/i);
+  if (estAbbrev && sane(Number(estAbbrev[1]))) {
+    return { checked: true, years: now - Number(estAbbrev[1]), foundedYear: Number(estAbbrev[1]),
+      basis: 'est_abbreviation', why: `their site says "Est. ${estAbbrev[1]}"` };
+  }
+  const directYears = text.match(/\b(\d{1,3})\s*\+\s*years?\b/i)
+    || text.match(/\bfor\s+(?:over\s+|more than\s+)?(\d{1,3})\s+years?\b/i);
+  if (directYears && Number(directYears[1]) > 0 && Number(directYears[1]) < 150) {
+    return { checked: true, years: Number(directYears[1]), foundedYear: null,
+      basis: 'stated_duration', why: `their site states ${directYears[1]} years directly` };
+  }
+
   return { checked: false, why: 'no founding year or tenure claim appears anywhere we read' };
 };
 
@@ -17994,7 +18232,23 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const _facing = [parsed.pitchAngle, parsed.emailBody, parsed.subject]
               .filter(Boolean).join(' \n ');
             const _PRODUCT_NAMES = /\b(AI Brain|Website Rebuild|Custom AI Software Build|CRO Retainer|Revenue Growth\s*\/?\s*CRO|End-to-End Marketing|Exit\s*\/?\s*Valuation Advisory|CROJungle)\b/i;
-            const _PRICE_TAGS = /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i;
+            // ══ OUR PRICE, NOT THE VALUE OF HIS JOB ══════════════════════════════════════
+// This flagged "$30k\u2013$80k" in a live email \u2014 the cost of a kitchen remodel. That
+// is the value of HIS work, and Mike's framework not only permits it, it is what
+// turns a page problem into money: "a LASIK case runs several thousand dollars",
+// "a full window job runs $10,000\u2013$20,000".
+//
+// What belongs on the call is OUR fee: $50k+ for a rebuild, $10k\u2013$35k a month
+// for a retainer, $25k+ for an AI build. Those are the numbers that make a first
+// email read as a quote.
+//
+// The two are told apart by what the sentence is ABOUT, not by the shape of the
+// number \u2014 so the pattern below matches a price, and the check that uses it
+// requires our own product language nearby before flagging.
+const _PRICE_TAGS = /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i;
+// Our offer vocabulary. A price is only OUR price when it sits beside one of
+// these; beside "a kitchen remodel" it is his revenue and it stays.
+const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|the build|the project would|investment|package|scope of work|per month|monthly|advisory|valuation|website (?:rebuild|project))\b/i;
             const _pm = _facing.match(_PRODUCT_NAMES);
             if (_pm) {
               const _msg = `NAMES OUR PRODUCT IN PROSPECT-FACING COPY \u2014 "${_pm[0]}". Mike's rule is absolute: the email never names what we sell. It turns a colleague who found a problem into a vendor with something to move, and that is the switch that kills the reply. Diagnose the problem the product fixes; do not name the product.`;
@@ -18601,8 +18855,69 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               parsed.problemCount = _harmsForResponse.problemCount;
               parsed.harmsRanked = _harmsForResponse.harmsRanked;
               parsed.factualSpine = _harmsForResponse.factualSpine;
+              // ══ ONE SET OF NUMBERS, SHIPPED WHOLE ═══════════════════════════
+              // The allowlist reads tenureYears, reviewsRead and ownerReplies off
+              // the lead. None of them was ever stored there, so it held only
+              // {0, 1, 4.9, 5, 10, 20, 46} and flagged "38 of the 40 reviews we
+              // read" as invented \u2014 a figure straight out of this run's own log.
+              //
+              // A guard that flags a TRUE number is worse than one that misses a
+              // false one: it teaches the reader that the flags are noise, and
+              // then the real ones get skipped too.
+              //
+              // So the server ships the exact set it measured, in one object, and
+              // the client passes it through untouched. No field names to keep in
+              // step, nothing to forget to store.
+              parsed.measuredNumbers = {
+                reviewCount: (localRank && localRank.ours) ? localRank.ours.reviews : null,
+                rating: (localRank && localRank.ours) ? localRank.ours.rating : null,
+                rank: (localRank && localRank.found) ? localRank.rank : null,
+                scanned: localRank ? localRank.scanned : null,
+                weakerAbove: localRank ? localRank.weakerAbove : null,
+                photoCount: gbpHealth ? gbpHealth.photoCount : null,
+                reviewRecencyDays: (gbpHealth && gbpHealth.reviewRecency) ? gbpHealth.reviewRecency.newestDays : null,
+                tenureYears: (history && history.tenure) ? history.tenure.years : null,
+                reviewsRead: reviewsRead || null,
+                ownerReplies: ownerReplyCount || null,
+                // Form fields are measured inside the site audit, which is a
+                // different scope. Read it off the object we already hold rather
+                // than reaching for a local that does not exist here.
+                formFieldCount: (sitePages && sitePages.formFieldCountIsSingleForm) ? sitePages.formFieldCount : null,
+                reviewsPerYear: (history && history.reviewsPerYear) || null,
+                problemCount: _harmsForResponse.problemCount,
+              };
+              // ══ SAY WHETHER A SPINE WAS BUILT ═══════════════════════════════
+              // Three separate sessions have been spent guessing where the spine
+              // went \u2014 the banner in the UI says whether one ARRIVED, and nothing
+              // said whether one was ever BUILT. Those are different failures with
+              // different fixes, and without this line they look identical.
+              if (parsed.factualSpine && parsed.factualSpine.claim) {
+                console.log(`\u2713 FACTUAL SPINE [${company}]: "${String(parsed.factualSpine.claim).slice(0, 80)}" \u2014 ${parsed.factualSpine.figures.length} figure(s) permitted, ${parsed.factualSpine.problemCount} problem(s) counted. The email may assert this sentence and nothing else about their business.`);
+              } else {
+                console.log(`\u26d4 NO FACTUAL SPINE [${company}]: nothing measured could anchor an email, so Generate will fall back to the full evidence prompt \u2014 the path that produces the most invention. Either the harm ladder found no qualifying finding, or a measurement looked implausible and the spine refused to build on it.`);
+              }
               parsed.problemList = _harmsForResponse.problemList;
               parsed.subjectOptions = _harmsForResponse.subjectOptions;
+              // ══ THE EMAIL ARRIVES WITH THE AUDIT ════════════════════════════
+              // Everything the email needs was measured by this point: the fact,
+              // what it costs, the count, the safe reframes, the subjects. The
+              // only thing the browser added was a model call to JOIN them, and
+              // the joining is where every fabrication lived.
+              //
+              // Composing here makes the audit and the email one object, built
+              // from the same measurements at the same moment. They cannot
+              // disagree about the business, cannot count different problems, and
+              // cannot open on different findings \u2014 three failures that each cost
+              // a session to find.
+              parsed.composedEmail = composeFullEmail(parsed.factualSpine, {
+                founderName: (decisionMaker && decisionMaker.name) || verifiedCEO || '',
+                subjects: parsed.subjectOptions,
+                reframes: (allowedConsequences && allowedConsequences.lines) || [],
+              });
+              if (parsed.composedEmail && parsed.composedEmail.variantA) {
+                const _w = parsed.composedEmail.variantA.body.split(/\s+/).length;
+                console.log(`\u2709 EMAIL COMPOSED [${company}]: "${parsed.composedEmail.variantA.subject}" \u2014 ${_w} words, every one traceable to a measurement. CTA is the ${parsed.composedEmail.ctaKind} form. No model wrote any part of this.`);
+              }
               // ══ ATTACHED HERE, NOT AT THE ALLOWED-CONSEQUENCES LOG ═════════
               // I first set this next to that log, which the run order shows
               // executes BEFORE the audit \u2014 so `brainAudit` was still in its
