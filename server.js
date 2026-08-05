@@ -1212,6 +1212,26 @@ const checkFabrications = (text, measured = {}) => {
     flags.push(`INVENTED FREQUENCY \u2014 "${rateClaim[0]}". The typical VALUE of a job in their trade is permitted; a RATE is not. We have none of his volume numbers, so "${rateClaim[0]}" is arithmetic about a business we have never seen inside. State the value of one and let him do the multiplication \u2014 he will, and the number he reaches is one he believes.`);
   }
 
+  // ══ "657 FIVE-STAR REVIEWS" WHEN THE RATING IS 4.8 ════════════════════════
+  // Live, in both variants for a dermatology practice: "657 people took the time
+  // to leave you a five-star review" and "you have 657 five-star reviews".
+  //
+  // We measured 657 reviews at 4.8. A 4.8 average means a meaningful number of
+  // them are NOT five stars \u2014 at 657 reviews, roughly 80 of them are four or
+  // below. He knows that; he has read them. It is the easiest possible thing to
+  // disprove and it sits in the first sentence.
+  //
+  // The count is measured and the STAR CLAIM is not. Attaching a rating to the
+  // count is a separate assertion and it needs its own evidence.
+  const starClaim = t.match(/\b(\d[\d,]*)\s+(?:five[- ]star|5[- ]star|perfect|\u2b50)\s+review/i)
+    || t.match(/\b(\d[\d,]*)\s+(?:people|patients?|clients?|customers?)[^.]{0,40}\bfive[- ]star\b/i);
+  if (starClaim) {
+    const measuredRating = Number(measured && measured.rating);
+    if (!Number.isFinite(measuredRating) || measuredRating < 5) {
+      flags.push(`ALL-FIVE-STAR CLAIM \u2014 "${starClaim[0].trim().slice(0, 60)}". ${Number.isFinite(measuredRating) ? `Their measured rating is ${measuredRating}, not 5.0, so a share of those reviews are four stars or below \u2014 at that volume, dozens of them.` : 'We measured a review COUNT, not that every one is five stars.'} He has read his own reviews and knows which ones are not perfect. Say the count, or say the count and the rating; never turn the count into a rating.`);
+    }
+  }
+
   // ══ WHAT A NAMED COMPETITOR DID, WHICH WE NEVER SAW ═══════════════════════
   // Live, in a sent-ready email: "By then they've already got a price from Peak
   // Windows."
@@ -1257,7 +1277,9 @@ const checkFabrications = (text, measured = {}) => {
   // would stay legal \u2014 and then "I went through your entire quote path" walked
   // through, because a quote path is not on the property list. The verb belongs
   // back; the exception below is what keeps the legal form legal.
-  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built|went through|walked through|traced|documented|reviewed)\b[^.]{0,70}/i);
+  // "I searched your three specialized services in Dallas and documented..."
+  // walked past the first list \u2014 "searched" and "checked" were not in it.
+  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built|went through|walked through|traced|documented|reviewed|searched|checked|tested|looked at|examined)\b[^.]{0,70}/i);
   if (processClaim && !/\b(?:your|their|his|her)\s+(?:site|website|listing|profile|homepage|page|reviews|copy)\b/i.test(processClaim[0])) {
     flags.push(`DESCRIBES OUR PROCESS \u2014 "${processClaim[0].trim().slice(0, 60)}". Mike's rule: never describe our work. He does not care what we did, he cares what is true about his business, and every word about our method is a word not spent on his problem. State what is wrong; that we found it is implied.`);
   }
@@ -1858,7 +1880,11 @@ app.post('/api/claude', async (req, res) => {
               //
               // So: flag the banned words and the pure filler, and leave the
               // colleague shape alone.
-              const _consultantWord = /\b(gap|goes quiet|aren'?t showing|opportunity|room|potential|underperform\w*|optimi[sz]e|lever|leverage|synerg\w*|invisible|outranked|visibility|conversion|funnel|pipeline)\b/i.test(_sub);
+              // "your IRS page isn't showing up" went out live. Mike bans
+              // "aren't showing"; this is the same phrase in the singular and the
+              // first version only matched the plural. His banned list is about
+              // the PHRASE, not the conjugation.
+              const _consultantWord = /\b(gap|goes quiet|(?:are|is)n'?t showing|not showing up|opportunity|room|potential|underperform\w*|optimi[sz]e|lever|leverage|synerg\w*|invisible|outranked|visibility|conversion|funnel|pipeline)\b/i.test(_sub);
               const _isVagueShape = _consultantWord
                 || /^\s*(?:quick question|following up|checking in|a quick note|touching base|circling back|hello|hi there)\s*$/i.test(_sub);
               if (_isVagueShape && !_namesSomething) {
