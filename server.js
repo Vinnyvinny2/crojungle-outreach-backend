@@ -8302,6 +8302,16 @@ async function _situationReadAttempt(facts, apiKey, company, correction) {
   // wanted output has failed repeatedly in this file; showing it works. Two
   // examples because one teaches the topic and two teach the SHAPE of the task.
   const goldExamples = `
+\u26d4 THE NUMBERS IN THESE EXAMPLES ARE NOT REAL AND ARE NOT YOURS.
+Every figure below \u2014 317 reviews, 16 years, #1 of 17, 38 of 40 \u2014 belongs to a
+business that is not this one. A live run wrote "Sixteen years..." about a
+plumbing company with no connection to sixteen of anything, because that number
+was sitting in the example it was copying.
+
+If a number appears in your output, it must have come from THE MEASURED FACTS
+above, not from anything you read here. Before you write any figure, find it in
+the facts. If it is not there, it is one of these examples leaking.
+
 \u26d4 READ THIS BEFORE THE EXAMPLES. They exist to show you the DEPTH of reasoning
 wanted \u2014 how far past the page a real read goes. They are NOT sentence patterns,
 and copying their construction is the single most common failure in this system.
