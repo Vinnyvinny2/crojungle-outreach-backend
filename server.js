@@ -18478,6 +18478,96 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             }
           }
 
+        // ══ MEASUREMENTS DO NOT NEED THE BRAIN TO HAVE SPOKEN ═══════════════
+        // This whole block sat inside `if (parsed.candidateFindings.length)`,
+        // three levels deep. candidateFindings are written by the MODEL; the harm
+        // ladder, the spine, the subjects and the composer are all code reading
+        // measurements and need none of it.
+        //
+        // So on any lead where the Brain returned no candidates \u2014 or returned
+        // them in a shape that failed Array.isArray \u2014 the ladder was computed and
+        // then silently discarded: no spine, no subjects, no composed email, and
+        // no log line saying why. That is why nothing appeared in Render.
+        //
+        // I built the composer to be independent of the model and then nested it
+        // inside a check on the model's output.
+        if (_harmsForResponse && parsed) {
+            parsed.problemCount = _harmsForResponse.problemCount;
+            parsed.harmsRanked = _harmsForResponse.harmsRanked;
+            parsed.factualSpine = _harmsForResponse.factualSpine;
+            // ══ ONE SET OF NUMBERS, SHIPPED WHOLE ═══════════════════════════
+            // The allowlist reads tenureYears, reviewsRead and ownerReplies off
+            // the lead. None of them was ever stored there, so it held only
+            // {0, 1, 4.9, 5, 10, 20, 46} and flagged "38 of the 40 reviews we
+            // read" as invented \u2014 a figure straight out of this run's own log.
+            //
+            // A guard that flags a TRUE number is worse than one that misses a
+            // false one: it teaches the reader that the flags are noise, and
+            // then the real ones get skipped too.
+            //
+            // So the server ships the exact set it measured, in one object, and
+            // the client passes it through untouched. No field names to keep in
+            // step, nothing to forget to store.
+            parsed.measuredNumbers = {
+              reviewCount: (localRank && localRank.ours) ? localRank.ours.reviews : null,
+              rating: (localRank && localRank.ours) ? localRank.ours.rating : null,
+              rank: (localRank && localRank.found) ? localRank.rank : null,
+              scanned: localRank ? localRank.scanned : null,
+              weakerAbove: localRank ? localRank.weakerAbove : null,
+              photoCount: gbpHealth ? gbpHealth.photoCount : null,
+              reviewRecencyDays: (gbpHealth && gbpHealth.reviewRecency) ? gbpHealth.reviewRecency.newestDays : null,
+              tenureYears: (history && history.tenure) ? history.tenure.years : null,
+              reviewsRead: reviewsRead || null,
+              ownerReplies: ownerReplyCount || null,
+              // Form fields are measured inside the site audit, which is a
+              // different scope. Read it off the object we already hold rather
+              // than reaching for a local that does not exist here.
+              formFieldCount: (sitePages && sitePages.formFieldCountIsSingleForm) ? sitePages.formFieldCount : null,
+              reviewsPerYear: (history && history.reviewsPerYear) || null,
+              problemCount: _harmsForResponse.problemCount,
+            };
+            // ══ SAY WHETHER A SPINE WAS BUILT ═══════════════════════════════
+            // Three separate sessions have been spent guessing where the spine
+            // went \u2014 the banner in the UI says whether one ARRIVED, and nothing
+            // said whether one was ever BUILT. Those are different failures with
+            // different fixes, and without this line they look identical.
+            if (parsed.factualSpine && parsed.factualSpine.claim) {
+              console.log(`\u2713 FACTUAL SPINE [${company}]: "${String(parsed.factualSpine.claim).slice(0, 80)}" \u2014 ${parsed.factualSpine.figures.length} figure(s) permitted, ${parsed.factualSpine.problemCount} problem(s) counted. The email may assert this sentence and nothing else about their business.`);
+            } else {
+              console.log(`\u26d4 NO FACTUAL SPINE [${company}]: nothing measured could anchor an email, so Generate will fall back to the full evidence prompt \u2014 the path that produces the most invention. Either the harm ladder found no qualifying finding, or a measurement looked implausible and the spine refused to build on it.`);
+            }
+            parsed.problemList = _harmsForResponse.problemList;
+            parsed.subjectOptions = _harmsForResponse.subjectOptions;
+            // ══ THE EMAIL ARRIVES WITH THE AUDIT ════════════════════════════
+            // Everything the email needs was measured by this point: the fact,
+            // what it costs, the count, the safe reframes, the subjects. The
+            // only thing the browser added was a model call to JOIN them, and
+            // the joining is where every fabrication lived.
+            //
+            // Composing here makes the audit and the email one object, built
+            // from the same measurements at the same moment. They cannot
+            // disagree about the business, cannot count different problems, and
+            // cannot open on different findings \u2014 three failures that each cost
+            // a session to find.
+            parsed.composedEmail = composeFullEmail(parsed.factualSpine, {
+              founderName: (decisionMaker && decisionMaker.name) || verifiedCEO || '',
+              subjects: parsed.subjectOptions,
+              reframes: (allowedConsequences && allowedConsequences.lines) || [],
+            });
+            if (parsed.composedEmail && parsed.composedEmail.variantA) {
+              const _w = parsed.composedEmail.variantA.body.split(/\s+/).length;
+              console.log(`\u2709 EMAIL COMPOSED [${company}]: "${parsed.composedEmail.variantA.subject}" \u2014 ${_w} words, every one traceable to a measurement. CTA is the ${parsed.composedEmail.ctaKind} form. No model wrote any part of this.`);
+            }
+            // ══ ATTACHED HERE, NOT AT THE ALLOWED-CONSEQUENCES LOG ═════════
+            // I first set this next to that log, which the run order shows
+            // executes BEFORE the audit \u2014 so `brainAudit` was still in its
+            // temporal dead zone and three live runs died with
+            // "Cannot access 'brainAudit' before initialization".
+            // parsed is the audit object itself and is unambiguously alive here.
+            parsed.allowedReframes = (allowedConsequences && allowedConsequences.lines) || [];
+        }
+
+
           if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
             const _cands = parsed.candidateFindings;
             const _dupes = [];
@@ -18851,81 +18941,6 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // nothing telling the operator. So when they diverge, say so.
             // The harm ladder ran long before this point and stashed its result.
             // Attach it now that there is somewhere to attach it to.
-            if (_harmsForResponse) {
-              parsed.problemCount = _harmsForResponse.problemCount;
-              parsed.harmsRanked = _harmsForResponse.harmsRanked;
-              parsed.factualSpine = _harmsForResponse.factualSpine;
-              // ══ ONE SET OF NUMBERS, SHIPPED WHOLE ═══════════════════════════
-              // The allowlist reads tenureYears, reviewsRead and ownerReplies off
-              // the lead. None of them was ever stored there, so it held only
-              // {0, 1, 4.9, 5, 10, 20, 46} and flagged "38 of the 40 reviews we
-              // read" as invented \u2014 a figure straight out of this run's own log.
-              //
-              // A guard that flags a TRUE number is worse than one that misses a
-              // false one: it teaches the reader that the flags are noise, and
-              // then the real ones get skipped too.
-              //
-              // So the server ships the exact set it measured, in one object, and
-              // the client passes it through untouched. No field names to keep in
-              // step, nothing to forget to store.
-              parsed.measuredNumbers = {
-                reviewCount: (localRank && localRank.ours) ? localRank.ours.reviews : null,
-                rating: (localRank && localRank.ours) ? localRank.ours.rating : null,
-                rank: (localRank && localRank.found) ? localRank.rank : null,
-                scanned: localRank ? localRank.scanned : null,
-                weakerAbove: localRank ? localRank.weakerAbove : null,
-                photoCount: gbpHealth ? gbpHealth.photoCount : null,
-                reviewRecencyDays: (gbpHealth && gbpHealth.reviewRecency) ? gbpHealth.reviewRecency.newestDays : null,
-                tenureYears: (history && history.tenure) ? history.tenure.years : null,
-                reviewsRead: reviewsRead || null,
-                ownerReplies: ownerReplyCount || null,
-                // Form fields are measured inside the site audit, which is a
-                // different scope. Read it off the object we already hold rather
-                // than reaching for a local that does not exist here.
-                formFieldCount: (sitePages && sitePages.formFieldCountIsSingleForm) ? sitePages.formFieldCount : null,
-                reviewsPerYear: (history && history.reviewsPerYear) || null,
-                problemCount: _harmsForResponse.problemCount,
-              };
-              // ══ SAY WHETHER A SPINE WAS BUILT ═══════════════════════════════
-              // Three separate sessions have been spent guessing where the spine
-              // went \u2014 the banner in the UI says whether one ARRIVED, and nothing
-              // said whether one was ever BUILT. Those are different failures with
-              // different fixes, and without this line they look identical.
-              if (parsed.factualSpine && parsed.factualSpine.claim) {
-                console.log(`\u2713 FACTUAL SPINE [${company}]: "${String(parsed.factualSpine.claim).slice(0, 80)}" \u2014 ${parsed.factualSpine.figures.length} figure(s) permitted, ${parsed.factualSpine.problemCount} problem(s) counted. The email may assert this sentence and nothing else about their business.`);
-              } else {
-                console.log(`\u26d4 NO FACTUAL SPINE [${company}]: nothing measured could anchor an email, so Generate will fall back to the full evidence prompt \u2014 the path that produces the most invention. Either the harm ladder found no qualifying finding, or a measurement looked implausible and the spine refused to build on it.`);
-              }
-              parsed.problemList = _harmsForResponse.problemList;
-              parsed.subjectOptions = _harmsForResponse.subjectOptions;
-              // ══ THE EMAIL ARRIVES WITH THE AUDIT ════════════════════════════
-              // Everything the email needs was measured by this point: the fact,
-              // what it costs, the count, the safe reframes, the subjects. The
-              // only thing the browser added was a model call to JOIN them, and
-              // the joining is where every fabrication lived.
-              //
-              // Composing here makes the audit and the email one object, built
-              // from the same measurements at the same moment. They cannot
-              // disagree about the business, cannot count different problems, and
-              // cannot open on different findings \u2014 three failures that each cost
-              // a session to find.
-              parsed.composedEmail = composeFullEmail(parsed.factualSpine, {
-                founderName: (decisionMaker && decisionMaker.name) || verifiedCEO || '',
-                subjects: parsed.subjectOptions,
-                reframes: (allowedConsequences && allowedConsequences.lines) || [],
-              });
-              if (parsed.composedEmail && parsed.composedEmail.variantA) {
-                const _w = parsed.composedEmail.variantA.body.split(/\s+/).length;
-                console.log(`\u2709 EMAIL COMPOSED [${company}]: "${parsed.composedEmail.variantA.subject}" \u2014 ${_w} words, every one traceable to a measurement. CTA is the ${parsed.composedEmail.ctaKind} form. No model wrote any part of this.`);
-              }
-              // ══ ATTACHED HERE, NOT AT THE ALLOWED-CONSEQUENCES LOG ═════════
-              // I first set this next to that log, which the run order shows
-              // executes BEFORE the audit \u2014 so `brainAudit` was still in its
-              // temporal dead zone and three live runs died with
-              // "Cannot access 'brainAudit' before initialization".
-              // parsed is the audit object itself and is unambiguously alive here.
-              parsed.allowedReframes = (allowedConsequences && allowedConsequences.lines) || [];
-            }
             if (_openerForResponse) parsed.openerStrength = _openerForResponse;
 
             const _ladderWinner = _sortedC[0] || null;
