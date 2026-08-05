@@ -1204,12 +1204,57 @@ const checkFabrications = (text, measured = {}) => {
     // "One of those a month, gone quietly" walked past the first version: the
     // number is followed by a PRONOUN, not a noun. The rate is identical and the
     // fabrication is identical \u2014 we count no cases at this practice.
-    t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:of\s+(?:those|them|these|the\s+\w+)\s+)?(?:\w+\s+){0,3}?(?:famil\w+|client|patient|customer|case|job|matter|call|caller|lead|enquir\w+|inquir\w+|project|install|sale|appointment|booking|quote|estimate)s?\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
+    t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:of\s+(?:those|them|these|the\s+\w+)\s+)?(?:\w+\s+){0,3}?(?:famil\w+|client|patient|customer|case|job|matter|call|caller|lead|enquir\w+|inquir\w+|project|install|sale|appointment|booking|quote|estimate|homeowner|owner|buyer|visitor|person|people|prospect|guest|member|student|resident)s?\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
     || t.match(/\b(?:one|two|three|four|five|\d+)\s+of\s+(?:those|them|these)\s+(?:\w+\s+){0,2}?(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
     || t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
     || t.match(/\b(?:every|each)\s+(?:day|week|month|year)\b[^.]{0,60}\b(?:goes|go|lose|losing|lost|miss|missing|walks?|leaves?|never reaches?)\b/i);
   if (rateClaim) {
     flags.push(`INVENTED FREQUENCY \u2014 "${rateClaim[0]}". The typical VALUE of a job in their trade is permitted; a RATE is not. We have none of his volume numbers, so "${rateClaim[0]}" is arithmetic about a business we have never seen inside. State the value of one and let him do the multiplication \u2014 he will, and the number he reaches is one he believes.`);
+  }
+
+  // ══ WHAT A COMPETITOR'S PAGE SAYS, WHICH WE NEVER OPENED ═════════════════
+  // Live: "your homepage says 'No one builds it better.' So does the guy ranked
+  // #2." We read the map pack \u2014 names, positions, review counts. We have never
+  // opened a competitor's website.
+  //
+  // And: "the two surgeons ranked above you aren't more experienced." We did not
+  // measure their experience, their credentials or anything else about them.
+  //
+  // This is the most checkable fabrication in the email, because the prospect
+  // very likely knows those businesses personally.
+  const compContent = t.match(/\b(?:so does|same as|just like|unlike)\s+(?:the\s+)?(?:guy|firm|shop|practice|company|one|business)\b[^.]{0,40}/i)
+    || t.match(/\bthe\s+(?:\w+\s+){0,2}?(?:ranked|ranking)\s+above\s+(?:you|them)\b[^.]{0,60}\b(?:are|aren'?t|is|isn'?t|have|haven'?t|has|say|says|use|run|show)\b[^.]{0,40}/i)
+    || t.match(/\b(?:they|competitors?|rivals?)\s+(?:all\s+)?(?:say|says|run|use|show|have)\s+the\s+same\b[^.]{0,40}/i);
+  if (compContent) {
+    flags.push(`CLAIM ABOUT A COMPETITOR'S PAGE OR CREDENTIALS \u2014 "${compContent[0].trim().slice(0, 62)}". We read the map pack: their name, their position, their review count. We have never opened a competitor's website and never measured anyone's experience or credentials. The prospect very likely knows these businesses personally, which makes this the most checkable false claim we can make. Compare on what we MEASURED \u2014 position and review count \u2014 and nothing else.`);
+  }
+
+  // ══ A DURATION WE NEVER TIMED ════════════════════════════════════════════
+  // "about sixty seconds of scrolling" appeared in THREE of four live emails.
+  // We have never timed a visitor, on this business or any other. It reads as
+  // research and it is decoration.
+  // "on sixty seconds of reading" has no leading about/in/takes \u2014 the number
+  // and the unit are what make it a measurement, not the preposition.
+  const invDuration = t.match(/\b(?:\d+|a few|thirty|sixty|ninety|ten|fifteen|twenty|five)\s*(?:-|\s)?(?:seconds?|minutes?)\b[^.]{0,50}/i);
+  // A duration attached to a RESPONSE is a proposed fix ("a form that replied in
+  // 30 seconds"), not a claim about how long a stranger reads. Look at the whole
+  // sentence, not just the matched fragment \u2014 the qualifier often follows it.
+  const _durSentence = (t.slice(Math.max(0, t.indexOf(invDuration ? invDuration[0] : '') - 60), (t.indexOf(invDuration ? invDuration[0] : '') + 120)) || '');
+  if (invDuration && !/respond\w*|response|repl(?:y|ied|ies)|call ?back|answer\w*|load\w*|within .{0,12}of (?:a|the) (?:form|submission)/i.test(_durSentence)) {
+    flags.push(`INVENTED DURATION \u2014 "${invDuration[0].trim().slice(0, 55)}". We have never timed a visitor on any site. "People decide fast" is a true and usable sentence; putting a number of seconds on it makes it a measurement we do not have.`);
+  }
+
+  // ══ CLAIMING A DELIVERABLE WE HAVE NOT MADE ══════════════════════════════
+  // "I wrote a version of your homepage" and "I put together a homepage
+  // rewrite" \u2014 both live, and neither is true. We produced an audit. Promising
+  // work that does not exist is the one lie that survives to the call, where he
+  // asks for it and there is nothing to send.
+  // "I wrote A VERSION OF your homepage" and "I put together A HOMEPAGE
+  // REWRITE" both put words between the verb and the noun. Match the verb and
+  // the artefact within a sentence, not a fixed shape between them.
+  const falseDeliverable = t.match(/\b(?:I|we)\s+(?:wrote|rewrote|re-?built|built|designed|drafted|put together|created|made)\b[^.]{0,60}?\b(?:homepage|home page|website|site|landing page|page|copy|headline|rewrite|version|mock-?up)\b/i);
+  if (falseDeliverable) {
+    flags.push(`PROMISED WORK THAT DOES NOT EXIST \u2014 "${falseDeliverable[0].trim().slice(0, 58)}". We produced an audit. No homepage, no rewrite and no copy has been written for this business. This is the one fabrication that survives to the call: he asks for it, and there is nothing to send. Offer the write-up we actually have.`);
   }
 
   // ══ ROUNDING A MEASUREMENT TOWARD THE PITCH ══════════════════════════════
@@ -1375,6 +1420,52 @@ const splitFlags = (flags = []) => {
 // Matched on content words rather than exact string, because the model is
 // allowed to change tense, add a first name and split the sentence. Six or more
 // of our distinctive words present means our claim is what it is asserting.
+// ══ THE TWO VARIANTS MUST AGREE ABOUT HIS BUSINESS ═══════════════════════════
+// Live, Steve Parker Masonry:
+//   Variant A: "your homepage says 'No one builds it better'"
+//   Variant B: "your site opens with 'Quality Comes First'"
+//
+// Same business, same homepage, two different headlines, both quoted as fact.
+// At least one is invented \u2014 and we send one of them without knowing which.
+//
+// This needs no vocabulary and no list to maintain, which is why it is worth
+// more than any of the keyword guards: if the two variants state DIFFERENT
+// things about the same business, one of them is made up, whatever the subject
+// is and whatever words it used. It catches classes I have not thought of yet.
+const variantsDisagree = (a, b) => {
+  const findings = [];
+  const A = String(a || ''), B = String(b || '');
+  if (!A || !B) return findings;
+
+  // 1. Quoted text \u2014 headlines, taglines, button labels. If both quote something
+  //    and the sets do not overlap, they are describing different pages.
+  const quotes = (t) => [...t.matchAll(/["\u201c']([A-Za-z][^"\u201d']{6,60})["\u201d']/g)]
+    .map(m => m[1].trim().toLowerCase())
+    .filter(q => q.split(/\s+/).length >= 2);
+  const qa = quotes(A), qb = quotes(B);
+  if (qa.length && qb.length) {
+    const overlap = qa.some(x => qb.some(y => x === y || x.includes(y) || y.includes(x)));
+    if (!overlap) {
+      findings.push(`THE TWO VARIANTS QUOTE DIFFERENT TEXT \u2014 A says ${qa.map(q => `"${q}"`).join(', ')} and B says ${qb.map(q => `"${q}"`).join(', ')}. They are describing the same page, so at least one of these is invented. Whichever gets sent, we do not know if it is the true one \u2014 and he only has to look at his own homepage.`);
+    }
+  }
+
+  // 2. Numbers about the business. Different figures for the same thing means one
+  //    was made up; the measurements do not change between variants.
+  const nums = (t) => [...t.matchAll(/\b(\d[\d,]*)\s+(reviews?|years?|photos?|fields?|patients?|cases?|days?)\b/gi)]
+    .map(m => `${m[2].toLowerCase().replace(/s$/, '')}:${m[1].replace(/,/g, '')}`);
+  const na = new Set(nums(A)), nb = new Set(nums(B));
+  const kinds = new Set([...na, ...nb].map(x => x.split(':')[0]));
+  for (const kind of kinds) {
+    const va = [...na].filter(x => x.startsWith(kind + ':')).map(x => x.split(':')[1]);
+    const vb = [...nb].filter(x => x.startsWith(kind + ':')).map(x => x.split(':')[1]);
+    if (va.length && vb.length && !va.some(x => vb.includes(x))) {
+      findings.push(`THE TWO VARIANTS GIVE DIFFERENT NUMBERS for ${kind} \u2014 A says ${va.join('/')} and B says ${vb.join('/')}. Measurements do not change between variants, so one of these was invented.`);
+    }
+  }
+  return findings;
+};
+
 const spineWasUsed = (bodyText, claim) => {
   const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
   const STOP = new Set(['the','their','they','a','an','of','on','in','is','are','to','and','for','it','that','this','with','at','from','has','have','no','not','any','all','one','only','own','you','your','we']);
@@ -1865,6 +1956,18 @@ app.post('/api/claude', async (req, res) => {
             // have not seen yet.
             _copyFlags = _copyFlags.concat(verifyFiguresTrace(_all, _measured));
             _copyFlags = _copyFlags.concat(checkAbsenceByShape(_all));
+            // ══ THE TWO VARIANTS MUST AGREE ══════════════════════════════════
+            // Live: variant A quoted his homepage as "No one builds it better",
+            // variant B as "Quality Comes First". One is invented and we would
+            // have sent one without knowing which. Needs no vocabulary, so it
+            // catches classes no keyword list covers.
+            try {
+              const _vA = String((req.body.variantA && req.body.variantA.body) || req.body.bodyA || '');
+              const _vB = String((req.body.variantB && req.body.variantB.body) || req.body.bodyB || '');
+              if (_vA && _vB) {
+                variantsDisagree(_vA, _vB).forEach(f => _copyFlags.push(f));
+              }
+            } catch (e) { void e; }
             // ══ THE ONE CHECK THAT MATTERS ═══════════════════════════════════
             // Under the new architecture the factual claim is written by code.
             // This asks whether the email actually used it. Everything else in
