@@ -1,4 +1,4 @@
-require('dotenv').config(); 
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
@@ -21395,11 +21395,14 @@ app.post('/api/compose-email', (req, res) => {
           console.log(`\u267b SPINE REBUILT [${company}]: no harm ladder was stored, but the measured problem list was \u2014 ${rebuilt.count} problem(s). That list carries harm but NOT the opener score, so the believability gate could not be applied and the COSTLIEST finding was used instead of the most checkable one. That is a different rule from the one a fresh Research follows, so read this email before it sends. Leading on: "${String(useSpine.claim).slice(0, 80)}"`);
         }
       } else {
+        const _keys = Object.keys(audit || {}).length;
+        const _hasR = Array.isArray(audit.harmsRanked) ? audit.harmsRanked.length : 0;
+        const _hasP = Array.isArray(audit.problemList) ? audit.problemList.length : 0;
         const why = rebuilt.reason === 'spine-refused'
           ? 'a stored ladder was found, but a measurement in it looked implausible and the spine refused to build on it \u2014 which is the correct outcome, because a confident sentence assembled from a broken parser is the worst thing this system can produce'
-          : 'this audit carries neither a factual spine nor a stored harm ladder, so there is nothing measured to build an email around';
-        console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: ${why}. Re-run Research on this lead.`);
-        return res.json({ composed: null, reason: 'no-spine', detail: rebuilt.reason });
+          : `this payload carries no factual spine and no stored harm ladder (harmsRanked=${_hasR}, problemList=${_hasP}, ${_keys} field(s) in the audit object)`;
+        console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: ${why}. If the audit screen for this lead IS showing a problem list, the data exists and the payload is being read from the wrong object \u2014 not a research failure. Otherwise this lead genuinely predates the ladder and needs Research re-run.`);
+        return res.json({ composed: null, reason: 'no-spine', detail: rebuilt.reason, harmsRanked: _hasR, problemList: _hasP });
       }
     }
     // Subjects are built from the finding, so a rebuilt spine needs them rebuilt
