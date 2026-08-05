@@ -715,7 +715,9 @@ const VERIFIABILITY_RULES = [
 const MEASURED_SIGNAL_SCORES = {
   //                     verifiability, surprise, weFixIt, ownerLevel
   absent_from_search:  { v: 4, s: 4, w: 5, o: 5 },
-  outranked_by_weaker: { v: 4, s: 2, w: 5, o: 5 },
+  // s was 2 for the same wrong reason \u2014 see the ladder entry. The comparison is
+  // news even when the position is not.
+  outranked_by_weaker: { v: 4, s: 4, w: 5, o: 5 },
   broken_page:         { v: 5, s: 5, w: 5, o: 4 },
   phone_mismatch:      { v: 5, s: 5, w: 5, o: 4 },
   thin_profile:        { v: 5, s: 3, w: 5, o: 3 },
@@ -1199,7 +1201,11 @@ const checkFabrications = (text, measured = {}) => {
   // sent-ready email. Allow a few words in between; a rate is a rate however it
   // is dressed.
   const rateClaim =
-    t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:\w+\s+){0,3}?(?:famil\w+|client|patient|customer|case|job|matter|call|caller|lead|enquir\w+|inquir\w+|project|install|sale|appointment|booking|quote|estimate)s?\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
+    // "One of those a month, gone quietly" walked past the first version: the
+    // number is followed by a PRONOUN, not a noun. The rate is identical and the
+    // fabrication is identical \u2014 we count no cases at this practice.
+    t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:of\s+(?:those|them|these|the\s+\w+)\s+)?(?:\w+\s+){0,3}?(?:famil\w+|client|patient|customer|case|job|matter|call|caller|lead|enquir\w+|inquir\w+|project|install|sale|appointment|booking|quote|estimate)s?\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
+    || t.match(/\b(?:one|two|three|four|five|\d+)\s+of\s+(?:those|them|these)\s+(?:\w+\s+){0,2}?(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
     || t.match(/\b(?:one|two|three|four|five|a|an|\d+)\s+(?:a|per|every)\s+(?:day|week|month|year|quarter)\b/i)
     || t.match(/\b(?:every|each)\s+(?:day|week|month|year)\b[^.]{0,60}\b(?:goes|go|lose|losing|lost|miss|missing|walks?|leaves?|never reaches?)\b/i);
   if (rateClaim) {
@@ -1219,6 +1225,16 @@ const checkFabrications = (text, measured = {}) => {
   // Naming a competitor is fine and often strong. Attributing an ACTION to them
   // is not.
   const COMPETITOR_ACTION = /\b(?:got|get|receive[ds]?|hear[ds]?|book(?:s|ed)?|call(?:s|ed)?|reply|replied|respond(?:s|ed)?|answer(?:s|ed)?|quot(?:e|ed|ing)|sent)\b[^.]{0,40}\bfrom\s+([A-Z][A-Za-z&.'-]+(?:\s+[A-Z][A-Za-z&.'-]+){0,3})\b|\b([A-Z][A-Za-z&.'-]+(?:\s+[A-Z][A-Za-z&.'-]+){0,3})\s+(?:already\s+)?(?:respond(?:s|ed)|replie[ds]|answer(?:s|ed)|call(?:s|ed) (?:them |him |her )?back|books?|gets? back|beat you)\b/;
+  // A competitor claim does not need a NAME to be a fabrication. Live:
+  // "a homeowner comparing three window companies at 8pm has two options that
+  // answer and one that doesn't" \u2014 we never checked whether any competitor
+  // answers at 8pm. Saying it about unnamed rivals is the same invention with
+  // the evidence removed.
+  const compUnnamed = t.match(/\b(?:two|three|four|\d+)\s+(?:other\s+)?(?:\w+\s+){0,2}?(?:compan|contractor|firm|practice|competitor|shop|builder|dentist|attorney|surgeon)\w*\b[^.]{0,60}\b(?:that\s+)?(?:answer|respond|repl(?:y|ies)|pick\s*up|get\s+back|are\s+open|will\s+call)\b/i);
+  if (compUnnamed) {
+    flags.push(`INVENTED COMPETITOR AVAILABILITY \u2014 "${compUnnamed[0].trim().slice(0, 70)}". We never checked whether any competitor answers at that hour, and we have no data on their response behaviour at all. Removing the name does not make it measured \u2014 it is the same claim with the evidence hidden. What people do in general is fine; what specific rivals do is not.`);
+  }
+
   const compAction = t.match(COMPETITOR_ACTION);
   if (compAction) {
     const who = (compAction[1] || compAction[2] || 'that competitor').trim();
@@ -6844,7 +6860,21 @@ const HARM_LADDER = [
     costs: 'every person searching for exactly what they sell is choosing from a list they are not on' },
 
 
-  { harm: 92, specific: 92, novel: 18, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
+  // ══ I SCORED THE RANK. THE FINDING IS THE COMPARISON. ══════════════════
+  // novel was 18, on "he already half-knows he is outranked". True of the
+  // POSITION, false of the finding, and that difference is the whole entry.
+  //
+  // The sentence is not "you rank eighth" \u2014 he may well know that. It is "6 of
+  // the 7 businesses above you have FEWER REVIEWS than you do." Every outranked
+  // contractor believes he needs more reviews. This tells him reviews are not
+  // the problem, which is the opposite of what he thinks and reframes the whole
+  // conversation.
+  //
+  // At novel 18 this scored 14 and lost to a phone-only booking path at 30. So
+  // on Thermal King the AUDIT said "the ranking gap is the real cost" while the
+  // EMAIL opened on a contact form \u2014 two different stories about one business,
+  // and Mike would have taken a call on the wrong one.
+  { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
     test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
     say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
     costs: 'the reputation is real and it is not reaching the people searching right now' },
@@ -6885,9 +6915,33 @@ const measureAbandonment = (text) => {
 
   // Copyright: take the LATEST year mentioned in a copyright context. A range
   // like "2019-2024" is current; a bare "2019" is not.
-  const years = [...t.matchAll(/(?:\u00a9|&copy;|copyright)[^\n]{0,40}?((?:19|20)\d{2})(?:\s*[-\u2013]\s*((?:19|20)\d{2}))?/gi)]
+  // ══ THE MODEL READ 2015 AND THIS DID NOT ═════════════════════════════════
+  // Thermal King, live: the audit wrote "Footer copyright reads 2015 \u2014 the site
+  // has not been updated in a decade" and stale_copyright never fired. The model
+  // found it in the page text; this regex did not.
+  //
+  // Widened for what real footers actually contain: the numeric entity &#169;,
+  // the plain-text (c), and the year sitting further from the symbol than 40
+  // characters once tags are stripped and everything collapses onto one line.
+  //
+  // A decade-old copyright is one of the strongest website-rebuild signals we can
+  // find, and it is free \u2014 missing it costs a whole product fit.
+  const years = [...t.matchAll(/(?:\u00a9|&copy;|&#0?169;|\(c\)|copyright)[^\n]{0,90}?((?:19|20)\d{2})(?:\s*[-\u2013\u2014]\s*((?:19|20)\d{2}))?/gi)]
     .flatMap(m => [Number(m[1]), Number(m[2])].filter(Boolean));
   const copyrightYear = years.length ? Math.max(...years) : null;
+  // If a plausible year sits in the text but no copyright context matched, say
+  // so. Silence here reads as "their site is current" when it may mean our
+  // pattern missed the footer \u2014 which is exactly what happened on Thermal King.
+  if (!copyrightYear) {
+    const loose = [...t.matchAll(/\b(19[89]\d|20[0-2]\d)\b/g)].map(m => Number(m[1]))
+      .filter(y => y >= 1990 && y <= now);
+    if (loose.length) {
+      const newest = Math.max(...loose);
+      if (now - newest >= 3) {
+        console.log(`\u26a0 COPYRIGHT NOT ATTRIBUTED: the newest year anywhere in their page text is ${newest}, ${now - newest} years old, but it is not next to a copyright symbol so we cannot claim it is their copyright line. NO dated-site claim is permitted from this \u2014 but it is worth a human glance, because a footer we cannot parse is still a footer.`);
+      }
+    }
+  }
 
   // Placeholder left in production. Deliberately narrow — these strings never
   // appear intentionally.
@@ -6965,6 +7019,58 @@ const measurementLooksWrong = (m = {}) => {
   return bad;
 };
 
+// ══ THE PROBLEMS SECTION, BUILT FROM MEASUREMENTS ════════════════════════════
+// "What we found that is broken, wrong, or costing them customers" was rendering
+// signalReads \u2014 one model-written row per measured signal, INCLUDING the healthy
+// ones. On Thermal King that produced six entries of which three were not
+// problems at all:
+//
+//   "What 40 years actually produced"   \u2014 "this is NOT a thin profile" (praise)
+//   "The one pattern worth watching"    \u2014 "at 2 of 271 it's small"
+//   "Positioning"                       \u2014 "not a liability at their scale"
+//
+// A section promising broken things, half full of things that are fine. And the
+// 2015 copyright \u2014 a decade-old site \u2014 appeared nowhere, because it had never
+// been measured.
+//
+// The harm ladder already knows exactly which findings are problems, how much
+// each costs, and in what order. That is the whole job. So the problems section
+// is built from the ladder rather than written by a model, with a fixed shape:
+// what is wrong, what it costs, in which area. Clean signals go elsewhere.
+const AREA_OF = {
+  broken_page: 'Website', site_empty: 'Website', no_https: 'Website',
+  expired_certificate: 'Website', stale_copyright: 'Website',
+  placeholder_text: 'Website', dead_blog: 'Website', dated_credibility: 'Website',
+  no_mobile_viewport: 'Website', tap_to_call_broken: 'Website',
+  long_form: 'Getting in touch', form_only_no_booking: 'Getting in touch',
+  no_after_hours: 'Getting in touch', phone_mismatch: 'Getting in touch',
+  absent_from_search: 'Being found', outranked_by_weaker: 'Being found',
+  wrong_gbp_category: 'Being found', no_google_listing: 'Being found',
+  no_website_on_profile: 'Being found',
+  listing_closed: 'Google listing', thin_profile: 'Google listing',
+  no_hours_on_profile: 'Google listing', stale_reviews: 'Google listing',
+  low_rating: 'Reputation', no_owner_replies: 'Reputation',
+  review_deficit: 'Reputation', not_compounding: 'Reputation',
+  no_offer: 'Why choose them', no_lead_magnet: 'Why choose them',
+  undifferentiated: 'Why choose them',
+};
+
+const buildProblemList = (harms) => {
+  if (!harms || !Array.isArray(harms.byHarm)) return [];
+  return harms.byHarm
+    // Under this heading, everything must actually be a problem. The ladder only
+    // contains problems, so nothing needs filtering \u2014 which is the point.
+    .map(h => ({
+      area: AREA_OF[h.id] || 'Other',
+      problem: h.finding,       // measured sentence, written by code
+      costs: h.costs,           // what it does to his business
+      harm: h.harm,
+      id: h.id,
+    }))
+    // Costliest first, so the reader meets the worst thing immediately.
+    .sort((a, b) => b.harm - a.harm);
+};
+
 const buildFactualSpine = (harms, m = {}) => {
   if (!harms || !harms.lead) return null;
   // Refuse to build a spine on a measurement that cannot be true. A confident
@@ -7006,6 +7112,48 @@ const buildFactualSpine = (harms, m = {}) => {
     problemCount: (harms.all || []).length,
     // Everything else we found, worst first \u2014 for the call sheet, not the email.
     rest: (harms.byHarm || []).filter(x => x.id !== lead.id).map(x => x.finding),
+  };
+};
+
+// ══ A PRACTITIONER AT A GROUP IS NOT AN OWNER ════════════════════════════════
+// Live: "Dr. Maelee (Mae) Yang, MD" on thesurgicalclinics.com. She is one surgeon
+// at a multi-doctor practice \u2014 she does not own the site, does not set the
+// marketing budget, and cannot buy anything we sell. Google Places lists
+// individual practitioners as separate businesses and we audited her as one, for
+// 13 Firecrawl credits and a full model run.
+//
+// The tell is a name/domain mismatch:
+//   "Dr. Yash Plastic Surgery"  \u2192 dryashplasticsurgery.com   the name IS the
+//                                  domain. His practice. Audit it.
+//   "Dr. Maelee (Mae) Yang, MD" \u2192 thesurgicalclinics.com     a person on a
+//                                  group's domain. An employee.
+//
+// Deliberately narrow: it only fires when the Place name is clearly a PERSON
+// (title, or two capitalised words and nothing business-like) AND shares no
+// meaningful word with the domain. "Smith Plumbing" on smithplumbing.com shares
+// "smith" and passes. A false block costs a real lead, so the bar is high.
+const looksLikePractitionerAtGroup = (companyName, website) => {
+  const name = String(companyName || '').trim();
+  if (!name || !website) return null;
+
+  const PERSON_TITLE = /\b(?:dr|doctor|md|do|dds|dmd|dvm|od|phd|esq|cpa|jr|sr|iii)\b/i;
+  const BUSINESSY = /\b(?:clinic|center|centre|group|associates|partners|practice|company|co|inc|llc|lp|llp|pa|pc|corp|services|solutions|studio|salon|shop|store|works|systems|plumbing|electric|roofing|hvac|law|dental|surgery|surgical|medical|health|realty|construction|contracting)\b/i;
+
+  const looksPersonal = PERSON_TITLE.test(name) || (!BUSINESSY.test(name) && name.split(/\s+/).filter(w => /^[A-Z]/.test(w)).length >= 2);
+  if (!looksPersonal) return null;
+
+  let host = '';
+  try { host = new URL(website).hostname.replace(/^www\./, '').split('.')[0].toLowerCase(); } catch (e) { void e; return null; }
+  if (!host) return null;
+
+  // Does any distinctive word from the business name appear in the domain?
+  const words = name.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 2 && !PERSON_TITLE.test(w) && !/^(the|and|for|of)$/.test(w));
+  const shared = words.some(w => host.includes(w) || w.includes(host));
+  if (shared) return null;
+
+  return {
+    why: `"${name}" reads as a person, and the website is ${host} \u2014 a domain named after something else entirely. On a practice they OWN, the name is in the domain ("Dr. Yash Plastic Surgery" \u2192 dryashplasticsurgery.com). A person on a group's domain is almost always one practitioner among several: they do not control the site, do not set the marketing budget, and cannot buy what we sell.`,
   };
 };
 
@@ -7106,7 +7254,36 @@ const rankHarms = (m = {}) => {
     // anyone else" \u2014 which lived in the copy guards and never reached the
     // ranking. A finding that could be sent to any business in the country is a
     // template, whether or not he can verify it.
-    const openerScore = Math.round((harmAdj / 100) * (h.specific / 100) * (h.novel / 100) * (weFixThis / 100) * 100);
+    // ══ HARM DECIDES. THE MODIFIERS ONLY GATE AND BREAK TIES. ═══════════
+    // This multiplied four factors, and four factors multiplied means ONE wrong
+    // number destroys the result. Every ranking failure this week was exactly
+    // that, and not one of them was a wrong HARM score:
+    //
+    //   weFix 60      Google saying he is CLOSED ranked fifth
+    //   novel 55      invisible in search ranked seventh
+    //   novel 18      harm 92 lost to harm 72 \u2014 the audit and the email then
+    //                 told two different stories about the same business
+    //   checkable 34  the best insight we produce ranked fifteenth
+    //
+    // I fixed each by hand after it failed live. That is not a scoring system
+    // getting better, it is one being tuned to the leads I happened to see, and
+    // the next unfamiliar finding breaks it the same way.
+    //
+    // So: the modifiers become GATES, not multipliers. A finding that survives
+    // them is ranked by what it COSTS HIM. A harm-92 finding can no longer lose
+    // to a harm-72 one whatever I got wrong elsewhere.
+    //
+    // The gates are deliberately far from real values \u2014 they exclude the clearly
+    // unusable, they do not fine-tune. specific < 60 means anyone could have
+    // written it without looking at his business; weFix < 30 means it is not ours
+    // to fix (clinical care, workmanship, staff conduct).
+    const _disqualified =
+      h.specific < 60 ? `anyone could write this without looking at his business (specific ${h.specific})`
+      : weFixThis < 30 ? 'not ours to fix'
+      : null;
+    // Novel survives as a TIEBREAK only: among findings within 8 harm points of
+    // each other, the one he is least likely to know already goes first.
+    const openerScore = _disqualified ? 0 : Math.round(harmAdj + (h.novel / 100) * 7);
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -7174,7 +7351,16 @@ const rankHarms = (m = {}) => {
   // stale copyright at 25 and phone-only intake at 23 \u2014 and still excludes the
   // whole OPINION band, which tops out at 2. The HARM_FLOOR below is what stops
   // trivia winning; this only decides what is eligible to be considered.
-  const OPENER_GATE = 20;
+  // ══ RESCALED WITH THE SCORING ═════════════════════════════════════════════
+  // 20 was tuned against the old multiplied score, which ran 13-84. The new
+  // score is harm plus a small novelty tiebreak, so it runs 48-104 and a gate of
+  // 20 would pass literally everything.
+  //
+  // 45 matches the old HARM_FLOOR, which is the honest bar anyway: below that a
+  // finding is not costing him enough to open a cold email with. The
+  // disqualifiers above already removed anything unprovable or not ours to fix,
+  // so this gate is now only about whether it MATTERS.
+  const OPENER_GATE = 45;
   // ══ A SECOND FLOOR, ON HARM ═══════════════════════════════════════════
   // Bruce Favret opened on "the copyright line still reads 2023" \u2014 opener 26,
   // harm 40 \u2014 while the same lead carried a harm-92 ranking problem, a harm-64
@@ -7195,7 +7381,10 @@ const rankHarms = (m = {}) => {
   // Among things that clear all three bars, lead with the costliest. This is the
   // answer to "shouldn't we lead with the most harmful thing?" \u2014 yes, and this
   // is the qualifier that makes it work.
-  const eligible = hits.filter(h => h.opener >= OPENER_GATE && h.harm >= HARM_FLOOR).sort((a, b) => b.harm - a.harm);
+  // Sorted by the harm-first score, which IS harm plus the tiebreak \u2014 so this is
+  // "costliest first, and where two are within a few points, the one he is least
+  // likely to already know".
+  const eligible = hits.filter(h => h.opener >= OPENER_GATE && h.harm >= HARM_FLOOR).sort((a, b) => b.opener - a.opener);
   // Nothing clears the gate: fall back to the most checkable thing we have, and
   // the caller is warned separately that this lead is weak for email.
   const lead = eligible[0] || byOpener[0] || null;
@@ -9299,18 +9488,25 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
       ranked.slice(0, 2).forEach(u => picked.push({ key: intent.key, url: u }));
     }
     // Backfill: a site can be full of substance and match none of our words.
-    if (picked.length < 8) {
+    if (picked.length < 7) {
       // Excluded deliberately: the homepage (already scraped, would be paid for
       // twice), thank-you and test pages (no customer ever sees them), and the
       // usual CMS furniture. On a live sitemap the first pass picked "/" and
       // "/testing" \u2014 one duplicate and one page the owner forgot to delete.
-      const NOISE = /\/(blog|news|category|tag|author|privacy|terms|sitemap|feed|wp-|cart|checkout|account|login|search|thank-?you|test(?:ing)?|staging|preview|404|coming-?soon)\b|\.(xml|json|pdf|jpg|png)$/i;
+      // Thermal King mapped 404 URLs including /post-sitemap.xml,
+      // /author-sitemap.xml and /category-sitemap.xml. Those are SHORT paths, so
+      // the shallowest-path sort picked them first \u2014 and /posts then tripped
+      // Firecrawl's rate limiter three times before giving up.
+      //
+      // Sitemap and feed files are machine plumbing: a customer never sees them
+      // and they contain no evidence about the business.
+      const NOISE = /\/(blog|posts?|news|article|category|categories|tag|tags|author|privacy|terms|disclaimer|accessibility|sitemap[\w-]*|[\w-]*-sitemap|feed|rss|amp|wp-|cart|checkout|account|login|register|search|thank-?you|test(?:ing)?|staging|preview|404|coming-?soon)\b|\.(xml|json|pdf|jpe?g|png|gif|webp|txt|css|js)(?:$|\?)/i;
       const spare = clean
         .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u))
         // Never the homepage \u2014 it is already scraped and would be bought twice.
         .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } })
         .sort((a, b) => (a.split('/').length - b.split('/').length) || (a.length - b.length))
-        .slice(0, 8 - picked.length);
+        .slice(0, 7 - picked.length);
       spare.forEach(u => picked.push({ key: 'page', url: u }));
       if (spare.length) console.log(`SITE AUDIT [${companyName}]: only ${picked.length - spare.length} page(s) matched our intent words, so ${spare.length} more were taken from the sitemap by shallowest path. Their URLs do not use our vocabulary \u2014 that is our gap, not a thin site.`);
     }
@@ -9359,7 +9555,11 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     // same size. That matters: the audit prompt already carries ~13-16k fresh
     // tokens and is the single largest line on the Anthropic bill. Ten pages of
     // evidence for the same token cost is the trade; more tokens is not.
-    const top = [about, booking, ...rest].filter(Boolean).slice(0, 10);
+    // 10 \u2192 7. Eight pages in one batch tripped Firecrawl's rate limiter three
+    // times on a live run, the batch then timed out, and every page re-scraped
+    // INDIVIDUALLY at 1 credit instead of 0.5 \u2014 so asking for more pages bought
+    // fewer pages at double the price. Seven completed cleanly on the same run.
+    const top = [about, booking, ...rest].filter(Boolean).slice(0, 7);
     console.log(`SITE AUDIT [${companyName}]: reading ${top.length} page(s) beyond the homepage \u2014 ${top.map(p => p.key).join(', ')}`);
 
     // BATCH: these URLs are all known up front and all on the same site, which is
@@ -14164,8 +14364,35 @@ const checkLocalRankStable = async (args) => {
     return { ...a, rankStable: true, rankSamples: [a.rank, b.rank],
       rankNote: `two independent checks both returned #${a.rank}, so this position is real` };
   }
-  const worse = a.rank >= b.rank ? a : b;
-  return { ...worse,
+    const worse = a.rank >= b.rank ? a : b;
+  // ══ WHEN IT IS NOT SAYABLE, DO NOT HAND OVER THE DIGIT ═══════════════════
+  // Dentique, live: the two samples returned #10 and #1, nine places apart. We
+  // logged "NOT stable enough to state. Say nothing about position." We then
+  // passed rank: 10 into the prompt anyway, and the audit wrote "they land near
+  // the bottom of the first twenty results" \u2014 stating a position we had just
+  // declared unsayable, in the exact phrase the prompt names as a caught
+  // overstatement.
+  //
+  // Two explicit instructions, both ignored. An instruction not to use a number
+  // loses to a model that has the number. So stop giving it the number: strip
+  // rank and scanned when the samples disagree, and leave only what survives the
+  // drift \u2014 that businesses with fewer reviews rank above them, which is true at
+  // #1 and at #10 alike.
+  if (drift > 2) {
+    const { rank: _r, scanned: _sc, ...durable } = worse;
+    void _r; void _sc;
+    return {
+      ...durable,
+      rankStable: false,
+      rankDrift: drift,
+      rankSamples: [a.rank, b.rank],
+      rankFound: true,
+      rankSuppressed: true,
+      rankNote: `two checks returned #${a.rank} and #${b.rank}, ${drift} places apart. The position has been REMOVED from the evidence rather than passed along with a warning \u2014 a warning did not stop a live audit writing "near the bottom of the first twenty" about a rank we had just called unsayable. What remains is the durable claim: businesses with fewer reviews rank above them, which is true at every position measured.`,
+    };
+  }
+  return {
+    ...worse,
     rankStable: drift <= 2,
     rankDrift: drift,
     rankSamples: [a.rank, b.rank],
@@ -14500,6 +14727,23 @@ const _runResearchInner = async (req, res) => {
   // entirely by a nonsense query. Search always prefers this.
   let customerTrade = '';
   console.log(`Research: ${company} | ${website||'no website'}`);
+  // ══ STOP BEFORE SPENDING ON SOMEONE WHO CANNOT BUY ════════════════════════
+  // Dr. Mae Yang cost 13 Firecrawl credits and a full model run before anyone
+  // noticed she is one surgeon at a multi-doctor practice on a group's domain.
+  // Google Places lists individual practitioners as separate businesses, so this
+  // will keep happening on every medical, dental and legal search.
+  //
+  // Checked FIRST, before a single paid call, because the whole point is not to
+  // spend on a lead nobody can sell to.
+  const _prac = looksLikePractitionerAtGroup(company, website);
+  if (_prac) {
+    console.log(`\u26d4 NOT AN OWNER [${company}]: ${_prac.why} Stopping before any paid call \u2014 a full audit on this lead costs ~13 Firecrawl credits and produces an email for someone who cannot say yes.`);
+    return res.status(422).json({
+      error: 'This looks like one practitioner at a group practice, not an owner-operated business.',
+      reason: _prac.why,
+      notAnOwner: true,
+    });
+  }
   setCurrentLead(company);
 
   try {
@@ -15911,6 +16155,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // may assert \u2014 not a brief to interpret, a quote to use.
           _harmsForResponse = {
             factualSpine: buildFactualSpine(_harms, _harmInputs || {}),
+            // The problems section, built from the ladder instead of written by a
+            // model. Every entry is measured, every entry is genuinely a problem,
+            // and each carries what it costs and which area it belongs to.
+            problemList: buildProblemList(_harms),
             problemCount: _harms.all.length,
             harmsRanked: _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
           };
@@ -18020,6 +18268,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               parsed.problemCount = _harmsForResponse.problemCount;
               parsed.harmsRanked = _harmsForResponse.harmsRanked;
               parsed.factualSpine = _harmsForResponse.factualSpine;
+              parsed.problemList = _harmsForResponse.problemList;
               // ══ ATTACHED HERE, NOT AT THE ALLOWED-CONSEQUENCES LOG ═════════
               // I first set this next to that log, which the run order shows
               // executes BEFORE the audit \u2014 so `brainAudit` was still in its
