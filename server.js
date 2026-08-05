@@ -1212,6 +1212,49 @@ const checkFabrications = (text, measured = {}) => {
     flags.push(`INVENTED FREQUENCY \u2014 "${rateClaim[0]}". The typical VALUE of a job in their trade is permitted; a RATE is not. We have none of his volume numbers, so "${rateClaim[0]}" is arithmetic about a business we have never seen inside. State the value of one and let him do the multiplication \u2014 he will, and the number he reaches is one he believes.`);
   }
 
+  // ══ ROUNDING A MEASUREMENT TOWARD THE PITCH ══════════════════════════════
+  // Live subject line: "your last review is a year old". Measured: 312 days.
+  //
+  // 312 days is ten months. We moved our own measurement 53 days in the
+  // direction that helps, and put it in the first thing he reads \u2014 while the
+  // BODY of the same email said "312 days". The email contradicts itself.
+  //
+  // This is worse than an invented number. An invented number is unverifiable;
+  // a rounded one sits next to the real number and shows him we moved it. Once
+  // he sees that, every other figure in the email is suspect, and they are all
+  // true.
+  //
+  // The rule is not "do not round" \u2014 it is "do not round PAST the truth". Ten
+  // months is fair for 312 days. A year is not.
+  const DAY_WORDS = { week: 7, month: 30.4, year: 365 };
+  const NUMWORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, eighteen: 18 };
+  const measuredDays = Number(measured && measured.reviewRecency);
+  if (Number.isFinite(measuredDays) && measuredDays > 0) {
+    const durMatch = t.match(/\b(a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|\d+)[\s-]+(week|month|year)s?\b/i);
+    if (durMatch) {
+      const n = NUMWORDS[String(durMatch[1]).toLowerCase()] ?? Number(durMatch[1]);
+      const claimedDays = Number(n) * DAY_WORDS[String(durMatch[2]).toLowerCase()];
+      // Allow rounding DOWN or a small round up. Flag when the copy overstates by
+      // more than 15% \u2014 that is the point where a reader with a calendar notices.
+      if (Number.isFinite(claimedDays) && claimedDays > measuredDays * 1.15) {
+        flags.push(`ROUNDED PAST THE TRUTH \u2014 the copy says "${durMatch[0]}" but we measured ${Math.round(measuredDays)} days, which is about ${(measuredDays / 30.4).toFixed(1)} months. Rounding UP by ${Math.round(claimedDays - measuredDays)} days moves our own measurement in the direction that helps us, and he can check it in one click. Worse, the real figure usually appears elsewhere in the same email, so it contradicts itself. Say the measured number, or round DOWN.`);
+      }
+    }
+  }
+
+  // ══ A QUANTIFIED CLAIM ABOUT BEHAVIOUR IS A STATISTIC ════════════════════
+  // Live: "most move on without clicking at all". We measured no clicks, no
+  // sessions, no behaviour of any kind on this business or any other.
+  //
+  // "People comparing three contractors call the one that answers" is a general
+  // truth and always allowed. "MOST people..." is a number, and we do not have
+  // it. The quantifier is what turns a safe sentence into a fabricated one.
+  const quantified = t.match(/\b(most|majority of|nearly all|almost all|the average|\d+\s*(?:%|percent)|\d+\s+out of\s+\d+|nine out of ten)\b[^.]{0,70}\b(?:move on|leave|click|call|book|buy|choose|pick|decide|bounce|never|do not|don'?t)\b/i);
+  if (quantified) {
+    flags.push(`QUANTIFIED BEHAVIOUR CLAIM \u2014 "${quantified[0].trim().slice(0, 60)}". A general truth about how people behave is fine and is often the strongest line in the email. Putting a QUANTIFIER on it makes it a statistic, and we have measured no clicks, no sessions and no behaviour \u2014 not on this business and not on any other. Drop the quantifier and the sentence stays true.`);
+  }
+
   // ══ "657 FIVE-STAR REVIEWS" WHEN THE RATING IS 4.8 ════════════════════════
   // Live, in both variants for a dermatology practice: "657 people took the time
   // to leave you a five-star review" and "you have 657 five-star reviews".
