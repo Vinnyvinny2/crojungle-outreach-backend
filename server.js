@@ -7476,7 +7476,27 @@ const composeEmail = (spine, opts = {}) => {
   const first = String(opts.founderName || '').trim().split(/\s+/)[0] || 'there';
   const fact = toSecondPerson(spine.claim);
   const costs = toSecondPerson(spine.costs || '');
-  const reframe = String(opts.reframe || '').trim();
+  // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
+  // The reframes are written as clauses and stored without a full stop —
+  // "people comparing three contractors call the one that answers first". Every
+  // skeleton drops that straight against the next sentence, and a live compose
+  // produced "...call the one that answers first Anyone deciding in the evening
+  // or at the weekend has nowhere to go."
+  //
+  // Two sentences fused into one is the single most obvious tell that no human
+  // read the email before it sent, and it undoes the entire point of composing
+  // from measurements rather than asking a model.
+  //
+  // Terminating it here rather than in the skeletons is deliberate: there are
+  // four skeletons, three of them place the reframe against another sentence,
+  // and a fix applied per-skeleton is a fix that gets missed the next time one
+  // is added.
+  const endSentence = (t) => {
+    const x = String(t || '').trim();
+    if (!x) return '';
+    return /[.!?]$/.test(x) ? x : x + '.';
+  };
+  const reframe = endSentence(opts.reframe);
   const n = Number(spine.problemCount) || 0;
 
   // The count sentence, in a few shapes so it is not identical every time.
@@ -7692,6 +7712,18 @@ const looksLikePractitionerAtGroup = (companyName, website) => {
   };
 };
 
+// ══ ONE PAIR OF GATES, READ IN TWO PLACES ═══════════════════════════════════
+// The ladder decides which finding the email opens on: clear both bars, then
+// lead with the most checkable. Compose-on-demand has to reach the SAME finding
+// from the stored audit, or an email rebuilt today opens somewhere a fresh
+// Research would not — and nothing would ever report the disagreement.
+//
+// Copying "45" into the reconstructor would have worked on the day it was
+// written and drifted the first time either bar moved. One declaration, read by
+// both, so drift is not expressible.
+const LADDER_OPENER_GATE = 45;
+const LADDER_HARM_FLOOR = 45;
+
 const rankHarms = (m = {}) => {
   const hits = [];
   for (const h of HARM_LADDER) {
@@ -7895,7 +7927,7 @@ const rankHarms = (m = {}) => {
   // finding is not costing him enough to open a cold email with. The
   // disqualifiers above already removed anything unprovable or not ours to fix,
   // so this gate is now only about whether it MATTERS.
-  const OPENER_GATE = 45;
+  const OPENER_GATE = LADDER_OPENER_GATE;
   // ══ A SECOND FLOOR, ON HARM ═══════════════════════════════════════════
   // Bruce Favret opened on "the copyright line still reads 2023" \u2014 opener 26,
   // harm 40 \u2014 while the same lead carried a harm-92 ranking problem, a harm-64
@@ -7910,7 +7942,7 @@ const rankHarms = (m = {}) => {
   // Checkability earns a finding the right to be CONSIDERED. It cannot promote
   // something that costs him almost nothing. So: a floor on harm as well, and
   // anything below it is supporting material for the call, never the first line.
-  const HARM_FLOOR = 45;
+  const HARM_FLOOR = LADDER_HARM_FLOOR;
   const byHarm = [...hits].sort((a, b) => b.harm - a.harm);
   const byOpener = [...hits].sort((a, b) => b.opener - a.opener);
   // Among things that clear all three bars, lead with the costliest. This is the
@@ -16679,6 +16711,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             if (/<font\b|<center\b|\bbgcolor=/i.test(String(rawHtml || ''))) marks++;                // pre-CSS tags
             return marks >= 2;
           })(),
+          // ══ THE ONE FIGURE THE SPINE READS AND NOTHING SUPPLIED ═══════════
+          // buildFactualSpine reads fourteen names to build `figures` — the ONLY
+          // numbers the email is permitted to contain. Thirteen were already
+          // here and correct. `scanned` was not, so "results scanned: 20" could
+          // never be permitted, and a rank finding could state the position
+          // without the size of the list it came from. "#7" alone is a weaker
+          // sentence than "#7 of 20", and the second one was measured.
+          //
+          // Everything else in this object was already right. An earlier version
+          // of this edit re-added seven of them from different sources — reading
+          // formFieldCount off sitePages rather than htmlSignals, and review
+          // recency off gbpHealth.reviewRecency.newestDays rather than
+          // gbpHealth.reviewRecencyDays. Because a later key wins in an object
+          // literal, that would have replaced three working measurements with
+          // null while looking like a fix. The duplicate-key check caught it.
+          scanned: localRank ? localRank.scanned : null,
         };
         const _harms = rankHarms(_harmInputs);
         // ══ TRACE: THIS HAS TO PRINT ON EVERY LEAD ═══════════════════════════════
@@ -16737,7 +16785,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // email, and the one that produced "I caught a dead end" five times.
             subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
             problemCount: _harms.all.length,
-            harmsRanked: _harms.byHarm.map(h => ({ band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
+            // ══ THE ID IS NOT COSMETIC ══════════════════════════════════════
+            // Subjects are looked up by ladder id (SUBJECTS_FOR[id]), so a
+            // ranked list stored without ids can be rebuilt into an email with
+            // no subject line at all. That is exactly what a live rebuild
+            // produced: a correct, measured body and an empty subject, which is
+            // unsendable. One field, and it costs nothing to carry.
+            harmsRanked: _harms.byHarm.map(h => ({ id: h.id, band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
           };
           console.log(`\u25b6 COMPOSE TRACE [${company}] step 2: _harmsForResponse built \u2014 spine=${_harmsForResponse.factualSpine ? 'yes' : 'NO'}, subjects=${(_harmsForResponse.subjectOptions || []).length}, problems=${_harmsForResponse.problemCount}`);
           _openerForResponse = {
@@ -20570,6 +20624,58 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 SELF-TEST COULD NOT RUN \u2014 ${(e && e.message) || e}. That is itself a fault: the harness references something that does not exist.`);
   }
+  // ══ THE FIGURE ALLOWLIST HAS TO BE REACHABLE ═════════════════════════════
+  // buildFactualSpine reads a fixed set of field names to decide which numbers
+  // the email may contain. For most of this system's life SEVEN of them were
+  // never supplied by the object passed in, so they could never be permitted —
+  // and the guard downstream, reading that starved list, flagged true
+  // measurements as invented. "38 of your 40 Google reviews" went out flagged on
+  // a lead whose own log had counted exactly that.
+  //
+  // The failure is invisible by construction: no exception, no empty output,
+  // just a shorter list than anyone intended. Only a comparison catches it, so
+  // the comparison runs on every boot.
+  try {
+    const _spineReads = [
+      'reviewCount', 'rating', 'rankFound', 'rank', 'scanned', 'weakerAbove',
+      'tenureYears', 'reviewsPerYear', 'photoCount', 'reviewRecency',
+      'formFieldCountIsSingleForm', 'formFieldCount', 'reviewsRead', 'ownerReplies',
+    ];
+    // A spine built with every field present must expose every figure. Any name
+    // the function does not actually consume shows up here as a silent drop.
+    //
+    // The values have to be internally CONSISTENT, not merely present: the
+    // plausibility guard refuses to build a spine on measurements that cannot
+    // both be true, and it was right to reject the first version of this probe
+    // (14 reviews read out of a total of 2). A probe that trips a real guard
+    // tests the guard, not the thing it was written to test.
+    const _probe = {
+      reviewCount: 46, rating: 4.9, rankFound: true, rank: 7, scanned: 20,
+      weakerAbove: 3, tenureYears: 25, reviewsPerYear: 4, photoCount: 12,
+      reviewRecency: 251, formFieldCountIsSingleForm: true, formFieldCount: 10,
+      reviewsRead: 40, ownerReplies: 38,
+    };
+    const _s = buildFactualSpine(
+      { all: [{ id: 'x', finding: 'a measured finding', costs: 'what it costs', harm: 80, opener: 80 }],
+        byHarm: [{ id: 'x', finding: 'a measured finding', costs: 'what it costs', harm: 80, opener: 80 }],
+        lead: { id: 'x', finding: 'a measured finding', costs: 'what it costs', harm: 80, opener: 80 } },
+      _probe
+    );
+    const _got = (_s && Array.isArray(_s.figures)) ? _s.figures.length : 0;
+    // Twelve of the fourteen names produce a figure; rankFound and
+    // formFieldCountIsSingleForm are gates on rank and formFieldCount, not
+    // figures of their own.
+    const _expect = _spineReads.length - 2;
+    if (!_s) {
+      console.log(`\u26d4 SPINE CHECK: buildFactualSpine returned NULL on a fully-populated probe. The email composer cannot work on this build \u2014 every lead will fall back to the model, which is the path that invents.`);
+    } else if (_got < _expect) {
+      console.log(`\u26d4 SPINE CHECK: ${_expect} figures were supplied and only ${_got} were permitted. ${_expect - _got} measurement(s) are being read under a name nothing supplies, so a TRUE number in the copy will be flagged as invented. Fix the name before researching leads on this build.`);
+    } else {
+      console.log(`\u2713 SPINE CHECK: all ${_expect} measured figures reach the permitted list. A true number in the copy can no longer be flagged as invented because of a field name.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SPINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
   const _missing = _FEATURES.filter(([, t]) => t !== 'function').map(([n]) => n);
   if (_missing.length) console.log(`\u26d4 STALE BUILD \u2014 ${_missing.join(', ')} are not in this server.js. Anything depending on them will silently do nothing. Deploy the current file before reading any result from this run.`);
 });
@@ -21140,6 +21246,128 @@ Return ONLY valid JSON, no markdown:
 // audit was built. Generate calls it whenever a lead has no composed email yet,
 // so pressing Generate always produces the composed version regardless of when
 // the lead was researched.
+// ══ A SPINE FROM AN AUDIT THAT ALREADY EXISTS ═══════════════════════════════
+// The composer only ever ran inside Research, so every lead researched before it
+// existed falls through to the model — and the model, handed the full audit,
+// invents. That is not a small population: it is the entire pipeline as it
+// stands. Answering it with "re-run Research" spends Firecrawl and Anthropic
+// credits again on every lead to recover something already measured and already
+// stored.
+//
+// It does not need re-measuring. harmsRanked is persisted and carries band,
+// harm, opener, finding and costs for every rung — which is precisely what the
+// ladder's own lead selection consumes. So the SAME finding can be recovered,
+// not a near-enough one.
+//
+// Two sources, and the difference between them is stated honestly rather than
+// smoothed over:
+//   harmsRanked  — carries opener AND harm, so both gates apply and the lead is
+//                  identical to what a fresh Research would choose.
+//   problemList  — carries harm but NO opener, so the gate cannot be applied.
+//                  Falls back to the costliest finding and SAYS SO. That is a
+//                  different rule, and a quieter one would be a lie about how
+//                  the email was chosen.
+const spineFromStoredAudit = (audit, company) => {
+  if (!audit) return { spine: null, reason: 'no-audit' };
+
+  const ranked = Array.isArray(audit.harmsRanked) && audit.harmsRanked.length
+    ? audit.harmsRanked
+    : (audit._persisted && Array.isArray(audit._persisted.harmsRanked) && audit._persisted.harmsRanked.length
+        ? audit._persisted.harmsRanked : null);
+
+  const problems = Array.isArray(audit.problemList) && audit.problemList.length
+    ? audit.problemList
+    : (audit._persisted && Array.isArray(audit._persisted.problemList) && audit._persisted.problemList.length
+        ? audit._persisted.problemList : null);
+
+  let hits = null;
+  let source = null;
+  let idsRecovered = 0;
+  if (ranked) {
+    // ══ RECOVERING THE LADDER ID ═══════════════════════════════════════════
+    // Subjects are looked up by ladder id, so an id is not decoration — without
+    // it the rebuild produces a measured body and a blank subject line.
+    // harmsRanked did not carry ids until this session, but problemList did,
+    // and both were written from the same ladder in the same pass: its `problem`
+    // IS the other's `finding`, character for character. So the id can be
+    // joined back rather than guessed.
+    //
+    // Where it cannot be recovered, the rank position stands in. That keeps
+    // rest[] and claimId stable and unique within the lead, which is all they
+    // need — it just will not find subjects, and the caller is told so.
+    const byText = new Map();
+    (problems || []).forEach(p => {
+      const t = String(p && p.problem || '').trim();
+      if (t && p.id) byText.set(t, p.id);
+    });
+    hits = ranked
+      .filter(h => h && String(h.finding || '').trim())
+      .map((h, i) => {
+        const text = String(h.finding || '').trim();
+        const realId = h.id || byText.get(text) || null;
+        if (realId) idsRecovered++;
+        return {
+          id: realId || `stored_${i}`,
+          finding: text,
+          costs: String(h.costs || '').trim(),
+          harm: Number(h.harm) || 0,
+          opener: Number(h.opener) || 0,
+          band: h.band || null,
+        };
+      });
+    source = 'harmsRanked';
+  } else if (problems) {
+    hits = problems
+      .filter(p => p && String(p.problem || '').trim())
+      .map((p, i) => ({
+        id: p.id || `stored_${i}`,
+        finding: String(p.problem || '').trim(),
+        costs: String(p.costs || '').trim(),
+        harm: Number(p.harm) || 0,
+        opener: null,               // never measured into this list
+        band: null,
+      }));
+    source = 'problemList';
+  }
+
+  if (!hits || !hits.length) return { spine: null, reason: 'no-ladder' };
+
+  const byHarm = [...hits].sort((a, b) => b.harm - a.harm);
+  let lead = null;
+  let gated = false;
+  if (source === 'harmsRanked') {
+    // Byte-for-byte the rule in rankHarms, reading the same two constants.
+    const byOpener = [...hits].sort((a, b) => b.opener - a.opener);
+    const eligible = hits
+      .filter(h => h.opener >= LADDER_OPENER_GATE && h.harm >= LADDER_HARM_FLOOR)
+      .sort((a, b) => b.opener - a.opener);
+    gated = !!eligible.length;
+    lead = eligible[0] || byOpener[0] || null;
+  } else {
+    lead = byHarm[0] || null;
+  }
+  if (!lead) return { spine: null, reason: 'no-ladder' };
+
+  const harms = { all: hits, byHarm, lead, worst: byHarm[0] || null, leadIsGated: gated };
+
+  // The permitted figures. measuredNumbers is shipped whole by Research; the
+  // three names below differ between the two halves of the system and are
+  // translated here rather than left to fall silently null.
+  const raw = audit.measuredNumbers
+    || (audit._persisted && audit._persisted.measuredNumbers)
+    || {};
+  const m = {
+    ...raw,
+    rankFound: raw.rankFound ?? (raw.rank !== null && raw.rank !== undefined),
+    reviewRecency: raw.reviewRecency ?? raw.reviewRecencyDays ?? null,
+    formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
+      ?? (raw.formFieldCount !== null && raw.formFieldCount !== undefined),
+  };
+
+  const spine = buildFactualSpine(harms, m);
+  return { spine, source, gated, count: hits.length, reason: spine ? null : 'spine-refused' };
+};
+
 app.post('/api/compose-email', (req, res) => {
   try {
     const audit = req.body && req.body.brainAudit;
@@ -21152,16 +21380,71 @@ app.post('/api/compose-email', (req, res) => {
     const spine = audit.factualSpine
       || (audit._persisted && audit._persisted.factualSpine)
       || null;
-    if (!spine || !spine.claim) {
-      console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: this audit carries no factual spine, so there is nothing measured to build an email around. It was researched before the spine existed \u2014 re-run Research on this lead.`);
-      return res.json({ composed: null, reason: 'no-spine' });
+    // ══ NO SPINE IS NOT THE SAME AS NOTHING MEASURED ═══════════════════════
+    // This used to stop here and send the lead to the model. But a lead
+    // researched before the spine existed still has its ladder stored, and the
+    // ladder is the measurement — the spine is only a view onto it. Rebuild it.
+    let useSpine = spine;
+    if (!useSpine || !useSpine.claim) {
+      const rebuilt = spineFromStoredAudit(audit, company);
+      if (rebuilt.spine && rebuilt.spine.claim) {
+        useSpine = rebuilt.spine;
+        if (rebuilt.source === 'harmsRanked') {
+          console.log(`\u267b SPINE REBUILT [${company}]: this audit predates the composer, but its harm ladder is stored \u2014 ${rebuilt.count} rung(s) carrying both opener and harm. Both gates were re-applied, so the finding below is the one a fresh Research would open on, not an approximation of it. Nothing was re-measured and no credit was spent. Leading on: "${String(useSpine.claim).slice(0, 80)}"${rebuilt.gated ? '' : ' (nothing cleared the believability gate \u2014 the most checkable finding was used, and this lead is a better phone call than an email)'}`);
+        } else {
+          console.log(`\u267b SPINE REBUILT [${company}]: no harm ladder was stored, but the measured problem list was \u2014 ${rebuilt.count} problem(s). That list carries harm but NOT the opener score, so the believability gate could not be applied and the COSTLIEST finding was used instead of the most checkable one. That is a different rule from the one a fresh Research follows, so read this email before it sends. Leading on: "${String(useSpine.claim).slice(0, 80)}"`);
+        }
+      } else {
+        const why = rebuilt.reason === 'spine-refused'
+          ? 'a stored ladder was found, but a measurement in it looked implausible and the spine refused to build on it \u2014 which is the correct outcome, because a confident sentence assembled from a broken parser is the worst thing this system can produce'
+          : 'this audit carries neither a factual spine nor a stored harm ladder, so there is nothing measured to build an email around';
+        console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: ${why}. Re-run Research on this lead.`);
+        return res.json({ composed: null, reason: 'no-spine', detail: rebuilt.reason });
+      }
     }
-    const composed = composeFullEmail(spine, {
+    // Subjects are built from the finding, so a rebuilt spine needs them rebuilt
+    // too — the stored ones belong to whatever the audit ORIGINALLY led on, and
+    // if the ladder now leads elsewhere those subjects describe a different
+    // finding than the body does. A subject that disagrees with its own email is
+    // the clearest possible tell that it was assembled by a machine.
+    const storedSubjects = audit.subjectOptions
+      || (audit._persisted && audit._persisted.subjectOptions) || [];
+    let subjects = storedSubjects;
+    if (useSpine !== spine) {
+      try {
+        const rebuiltSubjects = buildSubjects(
+          { finding: useSpine.claim, id: useSpine.claimId, costs: useSpine.costs },
+          audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {}
+        );
+        if (Array.isArray(rebuiltSubjects) && rebuiltSubjects.length) {
+          subjects = rebuiltSubjects;
+          console.log(`\u267b SUBJECTS REBUILT [${company}]: ${rebuiltSubjects.length} built from the finding this email actually opens on.`);
+        } else if (storedSubjects.length) {
+          console.log(`\u26a0 SUBJECTS [${company}]: none could be built for the rebuilt finding, so the ${storedSubjects.length} stored with the audit are being used \u2014 those were written for whatever the audit ORIGINALLY led on. Read the subject against the body before sending; if they describe different findings, re-run Research.`);
+        } else {
+          console.log(`\u26d4 SUBJECTS [${company}]: no subject could be built and none was stored, so this email would send with a blank subject line. That is unsendable, and it means the ladder id behind "${String(useSpine.claim).slice(0, 50)}" is not one the subject table covers. Re-run Research on this lead.`);
+        }
+      } catch (e) {
+        console.log(`SUBJECTS [${company}]: could not rebuild (${e && e.message}) \u2014 falling back to the ${storedSubjects.length} stored with the audit.`);
+      }
+    }
+    const composed = composeFullEmail(useSpine, {
       founderName: req.body.founderName || '',
-      subjects: audit.subjectOptions || (audit._persisted && audit._persisted.subjectOptions) || [],
+      subjects,
       reframes: audit.allowedReframes || (audit._persisted && audit._persisted.allowedReframes) || [],
     });
     if (composed && composed.variantA) {
+      // ══ A BLANK SUBJECT IS NOT A MINOR DEFECT ═══════════════════════════
+      // The first live rebuild returned a correct, fully-measured body with
+      // subject "". Every downstream check passed it, because every check is
+      // about the BODY. An email with no subject is not a weak email; it cannot
+      // be sent, and returning one quietly means the failure is discovered in
+      // the send queue instead of here.
+      const _subjA = String((composed.variantA && composed.variantA.subject) || '').trim();
+      if (!_subjA) {
+        console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: the body composed correctly from measurements, but no subject line could be built for it \u2014 so this is not sendable. Returning nothing rather than an email that looks finished and is not. Re-run Research on this lead to get a ladder id the subject table covers.`);
+        return res.json({ composed: null, reason: 'no-subject' });
+      }
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words, every one traceable to a measurement. No model call, no tokens.`);
     }
     return res.json({ composed });
