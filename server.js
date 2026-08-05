@@ -21129,6 +21129,48 @@ Return ONLY valid JSON, no markdown:
   }
 });
 
+// ══ COMPOSE ON DEMAND, SO THE ORDER STOPS MATTERING ══════════════════════════
+// The composer ran only during research, which meant Generate on a lead
+// researched earlier silently fell back to the model. That is a two-step
+// sequence with nothing on either button to say which one you needed, and it
+// has cost several rounds of "why did nothing appear in the log".
+//
+// This endpoint takes an audit that already exists and composes from it. No
+// model, no tokens, no measuring \u2014 everything it needs was measured when the
+// audit was built. Generate calls it whenever a lead has no composed email yet,
+// so pressing Generate always produces the composed version regardless of when
+// the lead was researched.
+app.post('/api/compose-email', (req, res) => {
+  try {
+    const audit = req.body && req.body.brainAudit;
+    const company = (req.body && req.body.company) || 'lead';
+    if (!audit) {
+      return res.status(400).json({ error: 'No audit supplied. Re-run Research on this lead.' });
+    }
+    // The spine may sit in any of three places depending on which path the lead
+    // came through \u2014 fresh response, stored object, or the persisted copy.
+    const spine = audit.factualSpine
+      || (audit._persisted && audit._persisted.factualSpine)
+      || null;
+    if (!spine || !spine.claim) {
+      console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: this audit carries no factual spine, so there is nothing measured to build an email around. It was researched before the spine existed \u2014 re-run Research on this lead.`);
+      return res.json({ composed: null, reason: 'no-spine' });
+    }
+    const composed = composeFullEmail(spine, {
+      founderName: req.body.founderName || '',
+      subjects: audit.subjectOptions || (audit._persisted && audit._persisted.subjectOptions) || [],
+      reframes: audit.allowedReframes || (audit._persisted && audit._persisted.allowedReframes) || [],
+    });
+    if (composed && composed.variantA) {
+      console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words, every one traceable to a measurement. No model call, no tokens.`);
+    }
+    return res.json({ composed });
+  } catch (e) {
+    console.log(`\u26d4 COMPOSE ON DEMAND FAILED: ${e && e.message}`);
+    return res.status(500).json({ error: String(e && e.message) });
+  }
+});
+
 app.post('/api/diagnostics', async (req, res) => {
   const { keys } = req.body;
   const { adzunaId, adzunaKey, indeedKey, crunchbaseKey, hunterKey, firecrawlKey } = keys || {};
