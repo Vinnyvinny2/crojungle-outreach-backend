@@ -1224,7 +1224,14 @@ const checkFabrications = (text, measured = {}) => {
   // very likely knows those businesses personally.
   const compContent = t.match(/\b(?:so does|same as|just like|unlike)\s+(?:the\s+)?(?:guy|firm|shop|practice|company|one|business)\b[^.]{0,40}/i)
     || t.match(/\bthe\s+(?:\w+\s+){0,2}?(?:ranked|ranking)\s+above\s+(?:you|them)\b[^.]{0,60}\b(?:are|aren'?t|is|isn'?t|have|haven'?t|has|say|says|use|run|show)\b[^.]{0,40}/i)
-    || t.match(/\b(?:they|competitors?|rivals?)\s+(?:all\s+)?(?:say|says|run|use|show|have)\s+the\s+same\b[^.]{0,40}/i);
+    || t.match(/\b(?:they|competitors?|rivals?)\s+(?:all\s+)?(?:say|says|run|use|show|have)\s+the\s+same\b[^.]{0,40}/i)
+    // "the same service list every competitor publishes" and "the exact same
+    // bullets every garage door company in the city uses" \u2014 both live, and both
+    // assert what is on other people's websites. We have opened none of them.
+    // The shape is "the same X every Y does", with the competitor as the SUBJECT
+    // of a verb about their own page.
+    || t.match(/\bthe\s+(?:exact\s+)?same\b[^.]{0,50}?\bevery\s+(?:\w+\s+){0,3}?(?:competitor|company|firm|shop|contractor|practice|business|one)\b[^.]{0,30}\b(?:uses?|use|publish\w*|run\w*|say\w*|show\w*|has|have|list\w*)\b/i)
+    || t.match(/\bevery\s+(?:other\s+)?(?:\w+\s+){0,3}?(?:competitor|company|firm|shop|contractor|practice|business)\b[^.]{0,30}\b(?:uses?|publish\w*|runs?|says?|shows?|lists?)\b[^.]{0,30}/i);
   if (compContent) {
     flags.push(`CLAIM ABOUT A COMPETITOR'S PAGE OR CREDENTIALS \u2014 "${compContent[0].trim().slice(0, 62)}". We read the map pack: their name, their position, their review count. We have never opened a competitor's website and never measured anyone's experience or credentials. The prospect very likely knows these businesses personally, which makes this the most checkable false claim we can make. Compare on what we MEASURED \u2014 position and review count \u2014 and nothing else.`);
   }
@@ -1274,7 +1281,19 @@ const checkFabrications = (text, measured = {}) => {
   const DAY_WORDS = { week: 7, month: 30.4, year: 365 };
   const NUMWORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
     seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, eighteen: 18 };
-  const measuredDays = Number(measured && measured.reviewRecency);
+  // ══ THE CLIENT CALLS THIS reviewRecencyDays ═══════════════════════════════
+  // This read measured.reviewRecency. The client sends reviewRecencyDays. So the
+  // rounding guard \u2014 the one that catches "a year old" against a measured 312
+  // days \u2014 could never fire in production, and passed 9/9 in my tests only
+  // because I handed it the field it wanted.
+  //
+  // Same class as the persistence bug: every step correct, and the two ends
+  // disagree on a name. Accept both, and the boot check below now compares the
+  // two lists so this cannot recur.
+  const measuredDays = Number(
+    (measured && measured.reviewRecencyDays) ??
+    (measured && measured.reviewRecency)
+  );
   if (Number.isFinite(measuredDays) && measuredDays > 0) {
     const durMatch = t.match(/\b(a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|\d+)[\s-]+(week|month|year)s?\b/i);
     if (durMatch) {
@@ -1367,7 +1386,10 @@ const checkFabrications = (text, measured = {}) => {
   // back; the exception below is what keeps the legal form legal.
   // "I searched your three specialized services in Dallas and documented..."
   // walked past the first list \u2014 "searched" and "checked" were not in it.
-  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built|went through|walked through|traced|documented|reviewed|searched|checked|tested|looked at|examined)\b[^.]{0,70}/i);
+  // "I wrote up where that comparison breaks down" \u2014 "wrote up" was in neither
+  // list: not a process verb here, and no artefact noun for the deliverable
+  // guard to find. It is still a sentence about our work.
+  const processClaim = t.match(/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|built|went through|walked through|traced|documented|reviewed|searched|checked|tested|looked at|examined|wrote up|wrote down|noted)\b[^.]{0,70}/i);
   if (processClaim && !/\b(?:your|their|his|her)\s+(?:site|website|listing|profile|homepage|page|reviews|copy)\b/i.test(processClaim[0])) {
     flags.push(`DESCRIBES OUR PROCESS \u2014 "${processClaim[0].trim().slice(0, 60)}". Mike's rule: never describe our work. He does not care what we did, he cares what is true about his business, and every word about our method is a word not spent on his problem. State what is wrong; that we found it is implied.`);
   }
