@@ -4187,7 +4187,17 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
     const links = d.links || d.data?.links || [];
     const out = links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
     fcNote(true, 'map', _mk);
-    if (out.length) _MAP_CACHE.set(_mk, { urls: out, at: Date.now() });
+    // ══ CACHE THE EMPTY ANSWER TOO ══════════════════════════════════════════════
+  // This was `if (out.length)`, so a domain that returns NO urls was never
+  // cached and every caller re-paid for the same doomed call. Dr. Yang's site is
+  // down; the map returned 0 URLs; and the log shows FOUR paid map calls on that
+  // one domain in 32 seconds, from findOwnerViaBrain, auditSitePages,
+  // scrapeCareersPage and the guaranteed-pass rank check.
+  //
+  // "We asked and there was nothing" is an answer worth remembering. Four
+  // credits to learn it once is three too many.
+  _MAP_CACHE.set(_mk, { urls: out, at: Date.now() });
+  if (!out.length) console.log(`\u267b MAP EMPTY [${_mk}]: no URLs returned, and that answer is now cached \u2014 the other callers on this lead will not re-pay to learn the same thing.`);
     return out;
   } catch(e) {
     console.log('firecrawlMap error:', e.message);
@@ -5025,9 +5035,20 @@ const isCatchAllDomain = async (domain, verifierKey) => {
 // ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
 // An address published on their own site is the strongest evidence there is.
 // Also harvests EVERY address found, which feeds the pattern-learning corpus.
-const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false) => {
+const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false, siteIsDown = false) => {
   const out = { emails: [], source: '' };
   if (!website) return out;
+  // ══ DO NOT SCRAPE A SITE WE HAVE ALREADY PROVEN IS DOWN ═══════════════════
+  // Dr. Mae Yang, live: "\u26d4 SITE IS GENUINELY DOWN" at 00:53:36 \u2014 two independent
+  // methods, confirmed. Then at 00:54:24 and 00:54:34 we scraped /contact and
+  // /contact-us on that same site, both timed out, 48 seconds and 2 credits gone
+  // to re-learn something we had established a minute earlier.
+  //
+  // Guessing contact URLs is only worth it when the site answers.
+  if (siteIsDown) {
+    console.log('EMAIL SCRAPE: skipped \u2014 two independent checks already confirmed this site does not answer, so guessing contact URLs on it can only time out (saves ~3 credits and ~45s per dead-site lead).');
+    return out;
+  }
   const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   if (!domain) return out;
 
@@ -10417,7 +10438,7 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   } catch(e) { console.log('hunterFindPersonEmail failed:', e.message); return null; }
 };
 
-const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '' }) => {
+const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '' }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
   // Set when a PAID lookup was refused (spent quota / dead key) rather than
@@ -10556,7 +10577,7 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   }
 
   // ── TIER 1: published on their own website ────────────────────────────────
-  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed);
+  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown);
   if (scraped.emails.length > 0) {
     // Learn the company's convention from every address we found
     for (const e of scraped.emails) {
@@ -15325,6 +15346,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           hunterName: email.founderName || '',
           hunterTitle: email.title || '',
           verifierKey,
+          // Two independent checks already proved this site does not answer.
+          // Guessing contact URLs on it can only time out.
+          siteIsDown: !!(_siteDownVerdict && _siteDownVerdict.down === true),
           hunterKey,
           // The trade decides WHICH company mailboxes are worth probing —
           // frontdesk@ for a practice, service@ for a trade. Without this the
@@ -16057,7 +16081,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // into a claim about HIS customers ("your callers give up and phone
       // someone else"). The first is always safe; the second we never observed.
       // Handing over the pre-approved list closes the largest free-text gap left.
-      if (brainAudit && allowedConsequences.checked) brainAudit.allowedReframes = allowedConsequences.lines;
       console.log(`ALLOWED CONSEQUENCES [${company}]: supplied ${allowedConsequences.lines.length} safe behavioural reframe(s) built from measured walls`);
     }
     if (growthConstraint.checked) {
@@ -17965,6 +17988,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               parsed.problemCount = _harmsForResponse.problemCount;
               parsed.harmsRanked = _harmsForResponse.harmsRanked;
               parsed.factualSpine = _harmsForResponse.factualSpine;
+              // ══ ATTACHED HERE, NOT AT THE ALLOWED-CONSEQUENCES LOG ═════════
+              // I first set this next to that log, which the run order shows
+              // executes BEFORE the audit \u2014 so `brainAudit` was still in its
+              // temporal dead zone and three live runs died with
+              // "Cannot access 'brainAudit' before initialization".
+              // parsed is the audit object itself and is unambiguously alive here.
+              parsed.allowedReframes = (allowedConsequences && allowedConsequences.lines) || [];
             }
             if (_openerForResponse) parsed.openerStrength = _openerForResponse;
 
@@ -19354,13 +19384,56 @@ app.post('/api/research-async', (req, res) => {
     httpStatus: null,
   };
   _jobs.set(id, job);
+  // ══ ONE FREE INSTANCE CANNOT RESEARCH THREE LEADS AT ONCE ═════════════════
+  // Three were started together; two never reported a done or error line at all
+  // and the UI fell back to "Run Research" with the credits already spent.
+  // Each run holds a page corpus, several screenshots and model responses in
+  // memory at the same time, and Render's free tier is one small instance.
+  // Nothing limited how many ran at once.
+  //
+  // Queue rather than refuse: the work still happens, just in order, and the
+  // client contract is unchanged \u2014 it polls and gets a result either way.
+  const _runningNow = [..._jobs.values()].filter(j => j.status === 'running' && j.id !== id).length;
+  if (_runningNow >= 2) {
+    console.log(`JOB ${id} [${job.company}]: QUEUED \u2014 ${_runningNow} already running. Three at once is what made two runs stop mid-way and report nothing. This starts when a slot frees.`);
+  }
   console.log(`JOB ${id} [${job.company}]: accepted — running in background, client will poll`);
 
   // Fire and forget. Deliberately NOT awaited: the whole point is that the HTTP
   // response returns now. Any throw is captured onto the job so the client sees a
   // real error instead of a spinner that never stops.
+  // ══ A JOB THAT HANGS MUST STILL REPORT ═══════════════════════════════════
+  // Three leads were started together and two never logged a done or an error
+  // line at all \u2014 the UI simply fell back to "Run Research" and the credits were
+  // already spent. There was no job timeout, so a run that stalls inside a fetch
+  // stays 'running' forever and the client polls a job that will never finish.
+  //
+  // Eight minutes is well past the slowest legitimate run observed (266s) and
+  // guarantees the client always gets an answer, even when the answer is that we
+  // gave up.
+  const _jobTimer = setTimeout(() => {
+    if (job.status === 'running') {
+      job.status = 'error';
+      job.error = 'This run passed 8 minutes without finishing and was stopped. Everything already measured was still paid for. The usual cause is several leads researched at once on a single free-tier instance \u2014 run them one at a time and this will not happen.';
+      job.finishedAt = Date.now();
+      console.log(`\u26d4 JOB ${id} [${job.company}]: TIMED OUT after 8 minutes and was closed so the client stops polling. Credits already spent are not recoverable.`);
+    }
+  }, 8 * 60 * 1000);
+  if (_jobTimer && _jobTimer.unref) _jobTimer.unref();
+
+  // Wait for a slot before starting. Polling keeps the client contract identical.
+  const _waitForSlot = async () => {
+    let waited = 0;
+    while ([..._jobs.values()].filter(j => j.status === 'running' && j.id !== id).length >= 2 && waited < 6 * 60 * 1000) {
+      await new Promise(r => setTimeout(r, 3000));
+      waited += 3000;
+    }
+  };
+
   Promise.resolve()
+    .then(() => _waitForSlot())
     .then(() => runResearch(req, _captureRes(job)))
+    .finally(() => clearTimeout(_jobTimer))
     .catch((e) => {
       job.status = 'error';
       job.error = e && e.message ? e.message : String(e);
