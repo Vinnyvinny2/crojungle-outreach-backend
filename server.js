@@ -5,7 +5,7 @@ const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-
+ 
 // ═══ BULLETPROOF CORS ═══════════════════════════════════════════════════════
 // Set the headers manually on EVERY response and answer OPTIONS preflight
 // immediately, before any other middleware or route can interfere or crash.
