@@ -7140,6 +7140,7 @@ const HARM_LADDER = [
   // single most consequential number on a local business's listing.
 
   { harm: 84, specific: 90, novel: 55, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'low_rating',
+    reframe: 'people filter by rating before they read a single word',
     // The most consequential number on a local listing and we had nothing to say
     // about it. A 3.6 next to competitors at 4.8 decides the click before anyone
     // reads a word. novel is middling \u2014 he knows his rating \u2014 but he very likely
@@ -7150,6 +7151,7 @@ const HARM_LADDER = [
     costs: 'a buyer comparing three names on a map picks on the star line before reading anything' },
 
   { harm: 58, specific: 88, novel: 80, delegable: 55, weFix: 95, band: 'BLOCKS', id: 'no_owner_replies',
+    reframe: 'a stranger reading reviews sees a business that does not answer, whatever the stars say',
     // Visible to every prospect who reads the reviews, measured directly, and
     // owners consistently do not realise how it reads. Scott replies to 37 of 40
     // and it is the best thing about his profile; the inverse is a real finding.
@@ -7186,27 +7188,32 @@ const HARM_LADDER = [
   // worse than a missing one: it looks like coverage.
 
   { harm: 66, specific: 92, novel: 86, delegable: 95, weFix: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
+    reframe: 'most people search for this on a phone and expect the number to dial',
     test: (m) => m.tapToCallGenuinelyBroken === true,
     say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
     costs: 'most of his traffic is mobile, and tapping is how a mobile visitor calls' },
 
   // ── BLOCKS ──────────────────────────────────────────────────────────────
   { harm: 74, specific: 80, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
+  reframe: 'people comparing three options go with whichever one lets them start',
     test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true,
     say: () => 'The only way to reach them is a phone call during office hours',
     costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
 
   { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
+    reframe: 'people abandon a long form and go back to the results page',
     test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
     say: (m) => `Their enquiry form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
     costs: 'each extra field costs completions, and this is the only way in' },
 
   { harm: 58, specific: 80, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
+  reframe: 'people comparing three options go with whichever one lets them start',
     test: (m) => m.booking === 'form' && m.bookingMeasured === true,
     say: () => 'There is no way to book a time — the only option is a form and a wait',
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
   { harm: 46, specific: 88, novel: 70, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'stale_reviews',
+  reframe: 'people check how recent the reviews are before they trust the rating',
     test: (m) => (m.reviewRecency || 0) > 365,
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
     costs: 'a buyer comparing options reads that as a business that may not still be running' },
@@ -7226,6 +7233,7 @@ const HARM_LADDER = [
   // search. outranked_by_weaker keeps novel 18 because he genuinely does half-know
   // that others are above him; absence is a different fact and it is news.
   { harm: 96, specific: 90, novel: 80, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
+  reframe: 'people searching pick from what is in front of them, not from who is actually best',
     // HEGG Windows, live: "NOT IN TOP 20 for replacement windows and doors
     // contractor in Dublin" \u2014 a 33-year business that does not appear at all \u2014
     // and the ladder scored it as NOTHING, because the only search entry it had
@@ -7259,6 +7267,7 @@ const HARM_LADDER = [
   // EMAIL opened on a contact form \u2014 two different stories about one business,
   // and Mike would have taken a call on the wrong one.
   { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
+  reframe: 'people searching pick from what is in front of them, not from who is actually best',
     // ══ THIS IS TRUE AT EVERY POSITION, SO IT MUST NOT REQUIRE ONE ══════════
     // The old test demanded rank > 5. Two consequences, both live:
     //
@@ -7285,6 +7294,7 @@ const HARM_LADDER = [
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
   { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
+  reframe: 'the listing is what people see before they ever reach the site',
     test: (m) => (m.photoCount || 0) < 5,
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
@@ -7304,6 +7314,7 @@ const HARM_LADDER = [
   // A pattern requires two or more mentions by construction, so "more than one"
   // is measured, not estimated.
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
+    reframe: 'a stranger comparing three companies reads the reviews before anything else',
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
     say: (m) => `more than one of their own Google reviews names the same thing — ${String(m.reviewPainTop).toLowerCase()}`,
     costs: 'a complaint that repeats is the one a stranger comparing three companies will find' },
@@ -7318,6 +7329,7 @@ const HARM_LADDER = [
   // which is correct. It belongs in the write-up and on the call, not usually in
   // the first sentence.
   { harm: 54, specific: 78, novel: 30, delegable: 45, weFix: 85, band: 'OPINION', id: 'no_published_pricing',
+    reframe: 'most people will not hand over their details just to find out what something costs',
     test: (m) => m.pricingMeasured === true && m.pricesPublished === 0,
     say: () => 'no price and no range appears anywhere on the pages we read',
     costs: 'someone comparing three companies has to ask them to find out, and people generally ask whoever tells them first' },
@@ -7329,28 +7341,33 @@ const HARM_LADDER = [
   // a thin sample. All-Weather answers 33 of 40 — 82% — and this correctly stays
   // silent there.
   { harm: 48, specific: 94, novel: 68, delegable: 25, weFix: 85, band: 'INVISIBLE', id: 'partial_owner_replies',
+    reframe: 'a stranger reading reviews sees a business that does not answer, whatever the stars say',
     test: (m) => (m.reviewsRead || 0) >= 10 && (m.ownerReplies || 0) > 0
               && ((m.ownerReplies || 0) / (m.reviewsRead || 1)) < 0.6,
     say: (m) => `${m.ownerReplies} of the ${m.reviewsRead} reviews we read have a reply from the business`,
     costs: 'the ones without a reply are the ones a stranger reads as unanswered' },
 
   { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
+    reframe: 'people comparing companies read the reviews first, and a thin record reads as a thin business',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
     say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
     costs: 'the work is being done and almost none of it becomes proof for the next customer' },
 
   // ── OPINION ─────────────────────────────────────────────────────────────
   { harm: 56, specific: 45, novel: 20, delegable: 20, weFix: 95, band: 'OPINION', id: 'no_offer',
+    reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.guarantee === false && m.namedOffer === false,
     say: () => 'There is no guarantee and no named offer anywhere on the site',
     costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
 
   { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
+  reframe: 'most people are not ready to buy the day they look, and they remember whoever gave them something',
     test: (m) => m.leadMagnet === false,
     say: () => 'There is nothing to take away short of asking for a quote',
     costs: 'everyone not ready to commit today leaves with nothing' },
 
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
+    reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
     say: () => 'The copy does not name who the business is for',
     costs: 'a stranger has to work out for himself whether it applies to him' },
@@ -7798,26 +7815,26 @@ const EMAIL_SKELETONS = [
   {
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, count, cta }) =>
-      `${first} — ${lower1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.\n\n${count}\n\n${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+      `${first} — ${lower1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
     needsReframe: true,
-    render: ({ first, fact, costs, reframe, count, cta }) =>
-      `${first} — ${lower1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.\n\n${count}\n\n${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+      `${first} — ${lower1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, count, cta }) =>
-      `${first} — right now ${lower1(costs)}.\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+      `${first} — right now ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, count, cta }) =>
-      `${first} — ${lower1(fact)}.\n\n${upper1(costs)}.\n\n${upper1(reframe)}\n\n${count} ${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+      `${first} — ${lower1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
   },
 ];
 
@@ -7863,7 +7880,19 @@ const composeEmail = (spine, opts = {}) => {
     if (!x) return '';
     return /[.!?]$/.test(x) ? x : x + '.';
   };
-  const reframe = endSentence(opts.reframe);
+  // The finding's own reframe wins. The model-written list is a fallback for any
+  // rung that does not carry one, and it is still matched against the claim
+  // rather than taken positionally.
+  const reframe = endSentence(spine.reframe || opts.reframe);
+  // ══ THE MONEY ═════════════════════════════════════════════════════════════
+  // The value of ONE job in their trade, and nothing else. Never his revenue,
+  // never his volume, never a total — those are claims about a business we have
+  // never seen inside, and the guards reject them. "One job a month" was flagged
+  // on a live send as INVENTED FREQUENCY for exactly that reason.
+  //
+  // So: state what one is worth and stop. He does the multiplication himself,
+  // and the number he arrives at is one he already believes.
+  const money = spine.jobValue ? endSentence(String(spine.jobValue)) : '';
   const n = Number(spine.problemCount) || 0;
 
   // The count sentence, in a few shapes so it is not identical every time.
@@ -7880,7 +7909,7 @@ const composeEmail = (spine, opts = {}) => {
   // coming out identical.
   const eligible = EMAIL_SKELETONS.filter(sk => reframe || !sk.needsReframe);
   const skeleton = (eligible.length ? eligible : EMAIL_SKELETONS)[(opts.variantIndex || 0) % Math.max(1, eligible.length || EMAIL_SKELETONS.length)];
-  const body = skeleton.render({ first, fact, costs, reframe, count, cta })
+  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -8018,6 +8047,79 @@ const buildProblemList = (harms) => {
     .sort((a, b) => b.harm - a.harm);
 };
 
+// ══ WHAT ONE JOB IS WORTH IN THEIR TRADE ═════════════════════════════════════
+// The composed emails carry no money. Zero dollar figures across four live
+// sends, on findings the system's own tier rule calls MEASURED-HARD — which
+// "WRITE ALL THREE ELEMENTS" explicitly includes a loss for. The prompt already
+// recorded this failure once: "THE LOSS ARRIVED WITHOUT A NUMBER in four of four
+// emails ... that is a gesture at a loss, not a loss, and an owner cannot act on
+// a gesture."
+//
+// The model-written emails had it ("a kitchen remodel here runs $30k-$80k")
+// because a model knows what a kitchen costs. The composer calls no model, and
+// its permitted-figure list holds only reviews, rating, rank, photos, form
+// fields — nothing an owner counts in dollars. So the loss element was not
+// missing by oversight; it was unreachable.
+//
+// The guards already allow this and say so in their own words: every figure must
+// "trace to a measurement OR BE THE TYPICAL VALUE OF A JOB IN THEIR TRADE".
+// That is public knowledge about an industry, not a claim about his books.
+//
+// Why a table and not a model call: a model asked for a job value will always
+// answer, including for a trade it is guessing at, and a wrong price is the most
+// checkable falsehood an email can contain — he sells these every week. A table
+// can only be right or absent. When the trade is not listed, NO money sentence
+// is written and the email is shorter. That is the correct failure.
+//
+// Ranges are deliberately wide and conservative — the low end of national
+// figures. The claim is "a job in this trade runs about this", never "your job".
+const TRADE_JOB_VALUE = [
+  // Home exterior / structural
+  { re: /custom home|home build|new construction|luxury home/i, say: 'a custom home runs several hundred thousand dollars' },
+  { re: /kitchen (?:and|&) bath|kitchen remodel|bath(?:room)? remodel|remodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
+  { re: /window|door|siding|exterior/i, say: 'a window or siding job runs $8k-$40k' },
+  { re: /roof/i, say: 'a roof replacement runs $8k-$30k' },
+  { re: /foundation|basement|crawlspace|structural/i, say: 'a foundation repair runs five figures' },
+  { re: /pool|spa install/i, say: 'a pool build runs $40k-$100k' },
+  { re: /concrete|paving|asphalt|driveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
+  { re: /landscap|hardscape|lawn care/i, say: 'a landscaping project runs $5k-$30k' },
+  { re: /solar/i, say: 'a solar install runs $15k-$40k' },
+  { re: /fence|deck|patio/i, say: 'a deck or fence job runs $5k-$25k' },
+  // Home services / trades
+  { re: /hvac|heating|air condition|furnace/i, say: 'a system replacement runs $6k-$15k' },
+  { re: /plumb/i, say: 'a repipe or major plumbing job runs $4k-$15k' },
+  { re: /electric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
+  { re: /restoration|water damage|mold|disaster|cleanup/i, say: 'a restoration job runs five figures' },
+  { re: /pest|exterminat/i, say: 'an annual pest contract runs several hundred dollars' },
+  { re: /garage door|overhead door/i, say: 'a garage door replacement runs $2k-$6k' },
+  { re: /paint/i, say: 'a whole-home paint job runs $4k-$12k' },
+  { re: /floor/i, say: 'a flooring job runs $5k-$20k' },
+  // Medical / dental / aesthetic
+  { re: /dentist|dental|dds|dmd|orthodon/i, say: 'a single implant or ortho case runs several thousand dollars' },
+  { re: /plastic surg|cosmetic surg|aesthetic|med ?spa|dermatolog/i, say: 'a single procedure runs several thousand dollars' },
+  { re: /lasik|ophthalm|eye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
+  { re: /chiropract/i, say: 'a care plan runs $1k-$3k' },
+  { re: /veterinar|animal hospital/i, say: 'a surgical case runs $1k-$5k' },
+  { re: /assisted living|senior (?:living|care)|memory care/i, say: 'one resident is several thousand dollars a month' },
+  // Professional services
+  { re: /attorney|law (?:firm|office)|legal|esq\b/i, say: 'a single matter runs several thousand dollars' },
+  { re: /cpa|account(?:ant|ing)|bookkeep|tax/i, say: 'an annual engagement runs several thousand dollars' },
+  { re: /insurance/i, say: 'one policy is years of renewal commission' },
+  { re: /real estate|realtor|broker/i, say: 'one closing is a full commission' },
+  { re: /mortgage|lending|loan/i, say: 'one funded loan is a full commission' },
+  // Commercial / logistics
+  { re: /truck|freight|logistics|transport|hauling/i, say: 'one contracted lane is recurring revenue' },
+  { re: /commercial clean|janitorial|facility/i, say: 'one building contract is recurring monthly revenue' },
+  { re: /security|alarm|surveillance/i, say: 'one monitored account is recurring monthly revenue' },
+];
+
+const tradeJobValue = (tradeWord) => {
+  const t = String(tradeWord || '').trim();
+  if (!t) return null;
+  const hit = TRADE_JOB_VALUE.find(x => x.re.test(t));
+  return hit ? hit.say : null;   // unlisted trade -> no money sentence, shorter email
+};
+
 const buildFactualSpine = (harms, m = {}) => {
   // ══ THE SPINE IS ABOUT TRUTH, NOT ABOUT WHETHER TO SEND ═══════════════════
   // This required harms.lead \u2014 the finding that clears the OPENER gate. On a
@@ -8079,6 +8181,12 @@ const buildFactualSpine = (harms, m = {}) => {
     claimId: lead.id,
     costs: String(lead.costs || '').trim(),
     figures,
+    // The finding's own reframe, and what one job in this trade is worth. These
+    // are the second and third of the three elements the pitch must carry; the
+    // composer had access to neither, which is why every composed email so far
+    // has been a fact and a cost with no money in it and no reason to care.
+    reframe: lead.reframe || null,
+    jobValue: tradeJobValue(m.tradeWord),
     // ══ ONE COUNT, OR THE CALL STARTS WRONG ═══════════════════════════════
     // This was harms.all.length while the AUDIT section renders
     // buildProblemList(harms), which maps harms.byHarm. If those two lists ever
@@ -8304,7 +8412,21 @@ const rankHarms = (m = {}) => {
 
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
-      opener: openerScore, finding: sentence, costs: h.costs });
+      opener: openerScore, finding: sentence, costs: h.costs,
+      // ══ THE REFRAME BELONGS TO THE FINDING ═══════════════════════════════
+      // Reframes used to arrive as a model-written list built from ALL the
+      // measured walls, and the composer picked one positionally. On the live
+      // leads none of them was about the finding the email opened on, so the
+      // matcher correctly dropped them and the emails fell to 45 words — fact,
+      // cost, count, CTA. The fact-checker named the result exactly: "a number
+      // that needs a 'so what'."
+      //
+      // The reframe IS the "so what". It is the second of the three elements the
+      // pitch is required to carry, and it cannot be reliably supplied by a list
+      // written without knowing which rung would win. So each rung carries its
+      // own — a general truth about how PEOPLE behave, never a claim about this
+      // business's systems, which is the line the fabrication guards draw.
+      reframe: h.reframe || null });
   }
   // ══ CHECKABILITY IS A GATE, NOT A RANKING ═══════════════════════════════
   // Ordering by opener alone was wrong, and wrong in a way that shows up
@@ -11864,6 +11986,26 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
           email: built, ...EMAIL_TIERS.PATTERN_LEARNED,
           label: `Built from ${hunterName}'s confirmed address pattern at this domain`,
           name, pattern: learned,
+          // ══ THIS ADDRESS IS FOR A DIFFERENT PERSON THAN THE ONE ON FILE ═══
+          // Hunter's address belongs to someone else at this company. We just
+          // built one for the decision-maker off Hunter's own confirmed pattern,
+          // and the caller decides whether to keep it by TIER alone — so an
+          // unverified address for the right person loses to a verified address
+          // for the wrong one.
+          //
+          // Live on Hannah Custom Homes: the engine logged "Hunter had Kacie
+          // Carriço (Director of Operations), but decision-maker is Dusty Hannah.
+          // Built dusty@hannahcustomhomes.com", the run reported EMAIL RESULT
+          // dusty@ ... sendable: true, and the lead was then filed under kacie@
+          // with a red "may reach the wrong person" banner and reachability cut
+          // from 100 to 45. The system solved it and then discarded the answer.
+          //
+          // A verified mailbox belonging to the wrong human is not a better
+          // address; it is a worse one. Mike's pitch is written to an owner, and
+          // an operations director reading an owner-level email forwards it or
+          // bins it. This flag says so out loud so tier is not the only input.
+          builtForDecisionMaker: true,
+          replacesPersonNamed: hunterName || null,
         };
       }
     }
@@ -16864,8 +17006,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             }
           }
           console.log(`EMAIL RESULT [${company}]: ${emailResult.email} | ${emailResult.label} | score ${emailResult.score} | sendable: ${emailResult.sendable}`);
-          // Only overwrite the browser-found email if ours is better evidence
-          if (!email.email || emailResult.tier <= 2) {
+          // ══ THE RIGHT PERSON BEATS THE VERIFIED PERSON ═══════════════════
+          // This kept the existing address unless ours was tier 2 or better —
+          // which is correct when both point at the same human, and wrong when
+          // they do not. Hannah Custom Homes: Hunter supplied the Director of
+          // Operations, the engine built the owner's address off Hunter's own
+          // confirmed pattern, the SMTP verifier timed out so it stayed tier 3,
+          // and this line put the operations director back. The audit then
+          // flagged its own lead "may reach the wrong person" and cut
+          // reachability from 100 to 45 — a correct answer, discarded, then
+          // reported as a fault.
+          //
+          // A verified mailbox for the wrong human is not better evidence. The
+          // email is written at owner altitude; a staff member reads it as
+          // something to forward, and the conversation ends in a queue.
+          const _rightPerson = emailResult.builtForDecisionMaker === true;
+          if (!email.email || emailResult.tier <= 2 || _rightPerson) {
+            if (_rightPerson && email.email && email.email !== emailResult.email) {
+              console.log(`\u21c4 EMAIL SWAPPED [${company}]: the address on file (${email.email}) belongs to ${emailResult.replacesPersonNamed || 'someone else at this company'}, not to the decision-maker. Using ${emailResult.email}, built from that same confirmed pattern. It is not SMTP-verified \u2014 but an unverified address for the person who decides beats a verified one for somebody who does not.`);
+            }
             email.email = emailResult.email;
           }
           if (!verifiedCEO && emailResult.name) verifiedCEO = emailResult.name;
@@ -17398,7 +17557,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // no subject line at all. That is exactly what a live rebuild
             // produced: a correct, measured body and an empty subject, which is
             // unsendable. One field, and it costs nothing to carry.
-            harmsRanked: _harms.byHarm.map(h => ({ id: h.id, band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs })),
+            harmsRanked: _harms.byHarm.map(h => ({ id: h.id, band: h.band, harm: h.harm, opener: h.opener, finding: h.finding, costs: h.costs, reframe: h.reframe || null })),
           };
           console.log(`\u25b6 COMPOSE TRACE [${company}] step 2: _harmsForResponse built \u2014 spine=${_harmsForResponse.factualSpine ? 'yes' : 'NO'}, subjects=${(_harmsForResponse.subjectOptions || []).length}, problems=${_harmsForResponse.problemCount}`);
           _openerForResponse = {
@@ -22204,6 +22363,11 @@ const spineFromStoredAudit = (audit, company) => {
         const text = String(h.finding || '').trim();
         const realId = h.id || byText.get(text) || null;
         if (realId) idsRecovered++;
+        // The reframe is the finding's own "so what". Stored rungs written before
+        // it existed do not carry one, but the ladder does — and the id is the
+        // key. Looking it up costs nothing and means a rebuilt email argues its
+        // point instead of stating a fact and stopping.
+        const _rung = realId ? HARM_LADDER.find(x => x.id === realId) : null;
         return {
           id: realId || `stored_${i}`,
           finding: text,
@@ -22211,6 +22375,7 @@ const spineFromStoredAudit = (audit, company) => {
           harm: Number(h.harm) || 0,
           opener: Number(h.opener) || 0,
           band: h.band || null,
+          reframe: h.reframe || (_rung && _rung.reframe) || null,
         };
       });
     source = 'harmsRanked';
