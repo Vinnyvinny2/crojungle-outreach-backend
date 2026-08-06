@@ -7574,20 +7574,27 @@ const SUBJECTS_FOR = {
   outranked_by_weaker:  ['your reviews are not working', 'smaller shops are above you'],
   wrong_gbp_category:   ['google has your category wrong', 'your category is wrong'],
   no_google_listing:    ['you have no google listing', 'you are not on the map'],
-  no_after_hours:       ['your door closes at 5', 'nobody can reach you at night'],
+  // "your door closes at 5" was here, and it states a closing time nobody
+  // measured. The body guard already bans exactly this — "SPECIFIC OPERATING
+  // HOURS ... a time like 'closes at 3pm on Fridays' is invented, and it is the
+  // most checkable false statement an email can contain" — but no guard read the
+  // subject, so the rule was enforced in the body and broken in the headline.
+  // What we actually measure is that there is no way to book outside office
+  // hours, so that is what these say.
+  no_after_hours:       ['no way to book after hours', 'nobody can book at night'],
   form_only_no_booking: ['your form is the only way in', 'nobody can book a time'],
   long_form:            ['your form asks for too much', 'your form is too long'],
   stale_copyright:      ['your footer still says {year}', 'your site still says {year}'],
   placeholder_text:     ['your site has dummy text on it', 'placeholder text is live'],
   dead_blog:            ['your blog stopped in {year}', 'nothing new since {year}'],
   stale_reviews:        ['your reviews stopped', 'your last review is old'],
-  thin_profile:         ['your listing looks bare', 'only {n} photos on google'],
+  thin_profile:         ['your listing looks bare', 'only {photos} photos on google'],
   low_rating:           ['your rating is {rating}', 'your star line is hurting you'],
   no_owner_replies:     ['your reviews sit unanswered', 'nobody answers your reviews'],
   no_hours_on_profile:  ['google has no hours for you', 'your hours are missing'],
   no_mobile_viewport:   ['your site breaks on a phone', 'your site is down on mobile'],
   review_deficit:       ['you are behind on reviews', 'they have more reviews'],
-  not_compounding:      ['your reviews are not adding up', '{years} years, {n} reviews'],
+  not_compounding:      ['your reviews are not adding up', '{years} years, {reviews} reviews'],
   no_offer:             ['your site never says why you', 'nothing says why you'],
   no_lead_magnet:       ['your only ask is a quote', 'nothing to take away'],
   undifferentiated:     ['your copy says nothing', 'your headline says nothing'],
@@ -7605,7 +7612,29 @@ const buildSubjects = (lead, m = {}) => {
       .replace('{rating}', String(m.rating || ''))
       .replace('{cat}', String(m.gbpCategory || '').toLowerCase())
       .replace('{years}', String(m.tenureYears || ''))
-      .replace('{n}', String(m.formFieldCount || m.photoCount || m.reviewCount || '')))
+      // ══ A PLACEHOLDER HAS TO NAME ITS MEASUREMENT ═══════════════════════
+      // {n} meant "some number" and resolved formFieldCount || photoCount ||
+      // reviewCount. Two templates used it and they mean different numbers:
+      //
+      //   thin_profile     'only {n} photos on google'     wants photoCount
+      //   not_compounding  '{years} years, {n} reviews'    wants reviewCount
+      //
+      // One fallback chain cannot serve both. On All-Weather, photoCount was 10
+      // and reviewCount was 127, so the chain returned 10 first and the subject
+      // that went out read "40 years, 10 reviews" to a business with 127 of
+      // them. That is a checkable falsehood in the most visible line of the
+      // email, produced by code, on the path whose banner says nothing in it can
+      // be invented — and no guard caught it, because every guard downstream
+      // checks the BODY.
+      //
+      // Named placeholders. A template now says which number it means, so this
+      // class of error is not expressible.
+      .replace('{reviews}', String(m.reviewCount ?? ''))
+      .replace('{photos}', String(m.photoCount ?? ''))
+      .replace('{fields}', String(m.formFieldCount ?? ''))
+      // Kept only so a template still carrying {n} resolves to the form-field
+      // count it originally meant rather than silently picking another number.
+      .replace('{n}', String(m.formFieldCount ?? '')))
     // Drop any that still contain an unfilled placeholder \u2014 a subject with a
     // blank in it is worse than one fewer option.
     // Mike's own constraints, enforced rather than requested: under 30
@@ -7730,6 +7759,10 @@ const composeEmail = (spine, opts = {}) => {
   const body = skeleton({ first, fact, costs, reframe, count, cta })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
+    // A dropped reframe leaves the skeleton's separating space at the start of
+    // the line. Invisible in code, obvious in an inbox.
+    .replace(/\n +/g, '\n')
+    .replace(/^ +/, '')
     .replace(/\s+([.,])/g, '$1')
     .trim();
   return { body, composedBy: 'code' };
@@ -7762,6 +7795,54 @@ const CTA_FOR = (finding) => {
 // Follow-up 1 names the SECOND finding — a different fact, so a man who ignored
 // the first has a new reason to look. Follow-up 2 carries only the count, which
 // is the one thing he cannot resolve on his own.
+// ══ THE REFRAME HAS TO BE ABOUT THE FINDING ══════════════════════════════════
+// Reframes were handed out positionally — variant 0 took reframes[0] — and they
+// are generated from ALL of the measured walls, not from the one the email opens
+// on. So the second paragraph regularly argued a different point from the first.
+//
+// Live on All-Weather, the email led on review volume and then said:
+//
+//   "127 reviews across 40 years of trading — about 3.2 a year.
+//    Most people will not hand over their details just to find out what
+//    something costs — they go and find a number somewhere else first."
+//
+// Both sentences are true and neither belongs beside the other. Pricing friction
+// is the OTHER finding on that lead. To Doug it reads as an email that changed
+// subject halfway through, which is exactly how a template reads.
+//
+// So the reframe is chosen by overlap with what the email actually asserts, and
+// if nothing overlaps it is left out. A shorter email that holds one thought
+// beats a longer one that wanders.
+const REFRAME_STOP = new Set(['the','a','an','and','or','but','of','to','in','on','for','is','are','was','were','be','been','it','its','they','them','their','you','your','that','this','these','those','with','without','not','no','who','what','when','where','how','will','would','can','could','has','have','had','do','does','did','at','by','from','as','if','then','than','so','up','out','one','more','most','some','any','all','just','only','still','about','into','over','after','before','because','while','people','someone','anyone','everyone',
+  // ══ GENERIC WORDS ARE NOT TOPICS ══════════════════════════════════════════
+  // Without these, "A caller who reaches voicemail rings the NEXT number" scored
+  // a hit against "...proof for the NEXT customer" and was chosen as the reframe
+  // for a finding about review volume. One shared connective is not relevance,
+  // and a reframe that is nearly on-topic is worse than none: it reads like the
+  // email is arguing something it never establishes.
+  'next','first','last','thing','things','another','other','others','same','different','right','wrong','good','better','best','real','whole','every','each','both','also','even','much','many','well','back','down','away','here','there','again','ever','never','always','often','usually','likely','rather','quite','very','really','something','anything','nothing','everything','someone','somewhere','anywhere','elsewhere','else','make','makes','made','take','takes','give','gives','want','wants','need','needs','know','knows','find','finds','look','looks','come','comes','goes','going','gets','getting']);
+const contentWords = (t) => new Set(
+  String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 3 && !REFRAME_STOP.has(w)));
+
+const pickReframe = (spine, reframes, variantIndex = 0) => {
+  const list = (Array.isArray(reframes) ? reframes : []).filter(r => String(r || '').trim());
+  if (!list.length) return '';
+  const target = contentWords(`${spine.claim || ''} ${spine.costs || ''}`);
+  if (!target.size) return list[variantIndex % list.length] || '';
+  const scored = list.map((r, i) => {
+    const words = contentWords(r);
+    let hits = 0;
+    words.forEach(w => { if (target.has(w)) hits++; });
+    return { r, i, hits };
+  }).sort((a, b) => (b.hits - a.hits) || (a.i - b.i));
+  // Rotate through the reframes that DO relate to this finding, so two variants
+  // are not identical when more than one fits.
+  const related = scored.filter(x => x.hits > 0);
+  if (!related.length) return '';   // nothing here is about this finding
+  return related[variantIndex % related.length].r;
+};
+
 const composeFullEmail = (spine, opts = {}) => {
   if (!spine || !spine.claim) return null;
   const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
@@ -7773,7 +7854,7 @@ const composeFullEmail = (spine, opts = {}) => {
     const composed = composeEmail(spine, {
       founderName: opts.founderName,
       variantIndex: i,
-      reframe: reframes[i % Math.max(1, reframes.length)] || '',
+      reframe: pickReframe(spine, reframes, i),
       cta: cta.text,
     });
     return composed ? { subject: subjects[i % Math.max(1, subjects.length)] || '', body: composed.body } : null;
@@ -10350,12 +10431,46 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
         + '|\\/(covid|coronavirus|pandemic)[\\w-]*'
         + '|\\/(locations?|service-area|areas?-we-serve)\\/[\\w-]+',
         'i');
+      // ══ THE SITE ALREADY TOLD US WHICH PAGES MATTER ═══════════════════════
+      // Backfill sorted by shallowest path, and on a contractor site the
+      // shallowest URLs are the city landing pages: /olathe-ks, /leawood-ks,
+      // /lees-summit-mo, /overland-park-ks. All-Weather spent four of its seven
+      // reads on those plus /covid-19-policy while its reviews and pricing pages
+      // went unread — 229 URLs in the sitemap and the audit picked the five that
+      // say least about the business.
+      //
+      // Depth is a guess about importance. The site's own NAVIGATION is a
+      // statement of it: whatever the owner put in the header is what he thinks
+      // a visitor needs, in the order he thinks they need it. We already harvest
+      // those links for free, and until now used them only when the sitemap came
+      // back empty.
+      //
+      // So nav order ranks first, and path depth only breaks ties among pages
+      // the nav does not mention.
+      let _navOrder = new Map();
+      try {
+        let _host = '';
+        try { _host = new URL(clean[0] || website).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { void e; }
+        const _nav = _HTML_LINKS.get(_host) || [];
+        _nav.forEach((u, i) => {
+          const key = String(u).replace(/\/+$/, '').toLowerCase();
+          if (!_navOrder.has(key)) _navOrder.set(key, i);
+        });
+      } catch (e) { void e; }
+      const _navRank = (u) => {
+        const k = String(u).replace(/\/+$/, '').toLowerCase();
+        return _navOrder.has(k) ? _navOrder.get(k) : Number.MAX_SAFE_INTEGER;
+      };
       const spare = clean
         .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u) && !LOW_VALUE.test(u))
         // Never the homepage \u2014 it is already scraped and would be bought twice.
         .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } })
-        .sort((a, b) => (a.split('/').length - b.split('/').length) || (a.length - b.length))
+        .sort((a, b) => (_navRank(a) - _navRank(b))
+                     || (a.split('/').length - b.split('/').length)
+                     || (a.length - b.length))
         .slice(0, 7 - picked.length);
+      const _fromNav = spare.filter(u => _navRank(u) !== Number.MAX_SAFE_INTEGER).length;
+      if (_fromNav) console.log(`SITE AUDIT [${companyName}]: ${_fromNav} of the ${spare.length} backfilled page(s) were chosen because the site links them in its own navigation, not because their URL happened to be short. Nav order is the owner's own statement of what a visitor needs.`);
       spare.forEach(u => picked.push({ key: 'page', url: u }));
       if (spare.length) console.log(`SITE AUDIT [${companyName}]: only ${picked.length - spare.length} page(s) matched our intent words, so ${spare.length} more were taken from the sitemap by shallowest path. Their URLs do not use our vocabulary \u2014 that is our gap, not a thin site.`);
     }
@@ -15932,6 +16047,42 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // coarser than Firecrawl's markdown, but a coarse read of the real page
         // beats blocking a lead whose site we are holding in memory.
         if (_siteDownVerdict.html) {
+          // ══ THE PAGE SOURCE WE ALREADY HAVE ═══════════════════════════════
+          // htmlSignals is computed ~100 lines above from Firecrawl's rawHtml.
+          // When Firecrawl returns nothing that object stays {checked:false} for
+          // the whole run — while we are holding the real homepage right here.
+          // On All-Weather that was 79,349 characters, fetched by the dead-site
+          // verifier, stripped to plain text and thrown away.
+          //
+          // That is not a small loss. EIGHT of the ladder's 28 rungs read
+          // measurements that only exist once the source is parsed:
+          //
+          //   no_https · no_mobile_viewport · tap_to_call_broken · long_form
+          //   dated_credibility · stale_copyright · placeholder_text · dead_blog
+          //
+          // So on any lead whose homepage Firecrawl cannot fetch, 29% of the
+          // audit is dark — not because the business is clean, but because
+          // nothing looked. All-Weather returned two findings and read as a thin
+          // audit for exactly this reason.
+          //
+          // The markup is what Firecrawl would have returned: a plain GET of the
+          // same URL. Parsing it costs no request and no credit.
+          if (!htmlSignals || !htmlSignals.checked) {
+            try {
+              const _recovered = extractHtmlSignals(_siteDownVerdict.html, _siteDownVerdict.workingUrl || website);
+              if (_recovered && _recovered.checked) {
+                htmlSignals = _recovered;
+                const _saw = [];
+                if (_recovered.hasMetaDescription === false) _saw.push('no meta description');
+                if (_recovered.hasViewport === false) _saw.push('no mobile viewport');
+                if (_recovered.tapToCallGenuinelyBroken) _saw.push('tap-to-call broken');
+                if (_recovered.formFieldCountIsSingleForm) _saw.push(_recovered.formFieldCount + '-field form');
+                console.log(`\u26d3 SIGNALS RECOVERED [${company}]: the page source Firecrawl could not return was parsed out of the copy we fetched ourselves, at no cost. Eight ladder rungs read these and would otherwise have been skipped on this lead${_saw.length ? ' \u2014 measured: ' + _saw.join(', ') : ''}.`);
+              }
+            } catch (e) {
+              console.log(`SIGNALS [${company}]: could not parse the page we fetched (${e && e.message}) \u2014 the website rungs stay unmeasured and will claim nothing.`);
+            }
+          }
           // Read the navigation out of the markup BEFORE the tags are stripped.
           // This is the only moment the links exist; two lines below they are
           // gone. On All-Weather this markup was 79,343 characters of real
@@ -21035,6 +21186,82 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 FALLBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A PAGE WE FETCHED OURSELVES IS STILL A PAGE ══════════════════════════
+  // htmlSignals is computed from Firecrawl's rawHtml. When Firecrawl returns
+  // nothing — which it did on All-Weather's homepage on every attempt across
+  // four runs — that object stayed {checked:false} for the whole run, while the
+  // dead-site verifier was holding 79,349 characters of the same homepage.
+  //
+  // Eight of the ladder's 28 rungs read measurements that only exist once the
+  // source is parsed, so 29% of the audit went dark on those leads. Not because
+  // the business was clean — because nothing looked.
+  //
+  // This proves both halves: a real page parses, and an error page is still
+  // refused. The second half matters more. Linda Vista Concrete returned
+  // "Connection Reset", every tag came back absent, and the audit recommended a
+  // $50,000 rebuild for a site nobody had read.
+  try {
+    const _filler = 'Replacement windows, entry doors and siding for homeowners across the metro since 1986, with a showroom where every product can be seen before you decide. '.repeat(4);
+    const _page = '<!DOCTYPE html><html><head><title>A Real Business</title>'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1"></head><body>'
+      + '<header><nav><a href="/about">About</a><a href="/book">Book</a><a href="/work">Work</a></nav></header>'
+      + '<main><h1>Windows</h1><p>' + _filler + '</p><a href="tel:9135551234">call</a>'
+      + '<form><input name="a"><input name="b"><input name="c"><input name="d">'
+      + '<input name="e"><input name="f"><input name="g"><textarea name="h"></textarea></form>'
+      + '</main><footer>&copy; 2019</footer></body></html>';
+    const _good = extractHtmlSignals(_page, 'https://example.com');
+    const _err = extractHtmlSignals('<html><body><p>Connection Reset</p></body></html>'.padEnd(600, ' '), 'https://example.com');
+    if (!_good || !_good.checked) {
+      console.log(`\u26d4 SOURCE RECOVERY CHECK: a normal homepage was NOT parsed, so any lead whose page Firecrawl cannot fetch loses eight ladder rungs and reads as a thin audit.`);
+    } else if (_err && _err.checked) {
+      console.log(`\u26d4 SOURCE RECOVERY CHECK: an ERROR page was accepted as a real page. Every missing tag then reads as a measured fault on a site nobody could load \u2014 that is how a $50,000 rebuild got recommended for a working website.`);
+    } else if (!_good.formFieldCountIsSingleForm || _good.hasViewport !== true) {
+      console.log(`\u26d4 SOURCE RECOVERY CHECK: the page parsed but the structural reads came back wrong (form=${_good.formFieldCount}, viewport=${_good.hasViewport}). The website rungs will misfire.`);
+    } else {
+      console.log(`\u2713 SOURCE RECOVERY CHECK: a homepage fetched by us parses to the same signals Firecrawl would have given (${_good.formFieldCount}-field form, viewport, tel link), and an error page is still refused. Eight ladder rungs no longer go dark when Firecrawl comes back empty.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SUBJECT LINE IS COPY TOO ═══════════════════════════════════════════
+  // Every fabrication guard in this system reads the BODY. The subject was never
+  // checked, and it is the most visible line in the email.
+  //
+  // {n} meant "some number" and resolved formFieldCount || photoCount ||
+  // reviewCount. On All-Weather — 127 reviews, 10 Google photos — the template
+  // "{years} years, {n} reviews" produced "40 years, 10 reviews" and shipped it
+  // under a banner reading "nothing in it can be invented". Placeholders now
+  // name their measurement; this proves they resolve to it.
+  try {
+    const _m = { reviewCount: 127, photoCount: 10, formFieldCount: 9, tenureYears: 40, rating: 4.6 };
+    const _bad = [];
+    Object.keys(SUBJECTS_FOR).forEach(id => {
+      buildSubjects({ id }, _m).forEach(s => {
+        // Any number in a subject must be one we measured.
+        (String(s).match(/\d+(?:\.\d+)?/g) || []).forEach(numStr => {
+          const num = Number(numStr);
+          const known = Object.values(_m).some(v => Number(v) === num);
+          if (!known) _bad.push(`${id}: "${s}" contains ${numStr}, which is not a measurement`);
+        });
+        // And the right one: a subject about reviews must not carry the photo count.
+        if (/\breviews?\b/i.test(s) && /\b10\b/.test(s) && !/\b127\b/.test(s)) {
+          _bad.push(`${id}: "${s}" says reviews but carries the photo count`);
+        }
+        if (/\bphotos?\b/i.test(s) && /\b127\b/.test(s)) {
+          _bad.push(`${id}: "${s}" says photos but carries the review count`);
+        }
+      });
+    });
+    if (_bad.length) {
+      console.log(`\u26d4 SUBJECT CHECK: ${_bad.length} subject(s) state a number that is not the measurement they name \u2014 ${_bad[0]}. A false number in the subject is the first thing the reader sees and the easiest thing for them to disprove.`);
+    } else {
+      console.log(`\u2713 SUBJECT CHECK: every placeholder in every subject template resolves to the measurement it names \u2014 no subject can state a number we did not measure.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SUBJECT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ MEASURED WORK HAS TO REACH THE BROWSER ═══════════════════════════════
