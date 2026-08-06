@@ -5958,6 +5958,42 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     const corpus = pages.join(
 '\n').slice(0, 22000);
+
+    // ══ THE ROSTER IS READ BEFORE THE MODEL IS ASKED ═════════════════════════
+    // What a company publishes about who runs it is the best evidence that
+    // exists. It is not an inference, not a search result, and not a third-party
+    // record that may be years stale — it is the company stating, in its own
+    // words, on a page it maintains, who the owner is.
+    //
+    // Hannah Custom Homes: their team page says "Dusty Hannah — CO-OWNER/CEO"
+    // and "Kacie Carrico — COO". We had that page. The model returned the name
+    // with no title, so authority never reached the gate, eight paid searches
+    // ran to establish what the page already said, and downstream nothing knew
+    // Kacie was the COO — so a verified mailbox for the operations director beat
+    // an unverified one for the CEO.
+    //
+    // Reading it here costs nothing and cannot hallucinate: every name and title
+    // is copied out of the page verbatim or not returned at all.
+    try {
+      const _roster = parseTeamRoster(corpus);
+      const _owners = _roster.filter(r => r.isOwner);
+      if (_owners.length) {
+        const _pick = _owners[0];
+        const _others = _roster.filter(r => r.name !== _pick.name);
+        console.log(`\u{1F464} ROSTER [${companyName}]: their own team page names ${_roster.length} ${_roster.length === 1 ? 'person' : 'people'} and states the titles. ${_pick.name} is "${_pick.title}" \u2014 that is the company saying who owns it, on a page they maintain, so no search can outrank it.${_others.length ? ' Also listed: ' + _others.map(r => `${r.name} (${r.title})`).join(', ') + '.' : ''}`);
+        return {
+          name: _pick.name,
+          title: _pick.title,
+          confidence: 'high',
+          source: 'own_website_brain',
+          // Read verbatim from the page, so downstream can stop buying proof.
+          fromRoster: true,
+          rosterStaff: _others.map(r => ({ name: r.name, title: r.title })),
+        };
+      }
+    } catch (e) {
+      console.log(`ROSTER [${companyName}]: could not read the team page structure (${e && e.message}) \u2014 falling through to the model.`);
+    }
     // Record what we actually read. The gate below asks "did their website return
     // nothing" and only ever looked at the homepage \u2014 so Hawk Crawlspace, whose
     // about page carries the whole team and whose footer carries info@hawkva.com,
@@ -6001,7 +6037,17 @@ These are still names that LITERALLY APPEAR in the content — you are reading t
 inferring. The anti-fabrication rule is unchanged: never invent a name that is not written there.
 
 Return ONLY valid JSON, no markdown:
-{"name":"Full Name or null","title":"their exact title as written, or null","evidence":"the exact sentence naming them, verbatim from the content","confidence":"high|medium|low"}
+{"name":"Full Name or null","title":"their exact title as written, or null","evidence":"the exact sentence naming them, verbatim from the content","confidence":"high|medium|low","team":[{"name":"Full Name","title":"their exact title as written"}]}
+
+THE "team" ARRAY: every OTHER named person on the page, with the title written beside
+them. Leave it empty if the page names nobody else. Do NOT invent titles and do NOT
+include a person whose name does not literally appear.
+
+Why this matters more than it looks: Hannah Custom Homes publishes a team page reading
+"Dusty Hannah — CO-OWNER/CEO", "Kacie Carrico — COO". Our email finder had an address
+for Kacie and no way to know she was the COO rather than the owner, so a lead was filed
+under an operations director while the CEO sat one row above her on the same page we had
+already paid to scrape. The roster is how we tell whose mailbox we are holding.
 
 confidence: high = name explicitly tied to an ownership title. medium = clearly the principal but title is looser. low = a name appears but their authority is ambiguous.
 
@@ -6106,6 +6152,117 @@ const dmSearchedRecently = (domain) => {
 
 const rememberDmSearchFailed = (domain) => {
   if (domain) _dmNegativeCache.set(String(domain).toLowerCase(), Date.now());
+};
+
+// ══ THE COMPANY'S OWN ROSTER IS THE PRIMARY SOURCE ═══════════════════════════
+// Hannah Custom Homes publishes a team page. Under the first photograph it says,
+// in the company's own words:
+//
+//     Dusty Hannah — CO-OWNER/CEO
+//     Kacie Carrico — COO
+//
+// We paid to scrape that page at 14:13:17 and found the NAME two seconds later
+// — "Dusty Hannah (?)" — with no title. Because no title meant authority under
+// the 90 gate, stage 1 could not settle, and eight paid searches ran anyway to
+// establish something the page had already stated. They agreed, two seconds
+// later, at a cost of roughly twelve Firecrawl credits.
+//
+// The deeper problem is not cost. Nothing downstream knew Kacie was the COO
+// rather than the owner, so a verified mailbox for an operations director beat
+// an unverified one for the CEO, and the lead was filed under the wrong person.
+//
+// Why parse it ourselves rather than fix the prompt: Firecrawl has returned
+// empty for hannahcustomhomes.com on every attempt across five runs. The model
+// cannot extract a title from a page it never received. We fetch the markup
+// ourselves for the dead-site check anyway, and a roster is one of the most
+// regular structures on the web — a person's name, and their title within a few
+// hundred characters of it. Reading it directly needs no model, no request, and
+// no credit, and it works precisely when the scrape has failed.
+//
+// The rule this implements: what a company publishes about who runs it is the
+// best evidence that exists. No web search outranks the company's own page.
+const OWNER_TITLE_RE = /\b(?:co[- ]?)?(?:owner|founder|co[- ]?founder|proprietor|principal|president|chief\s+executive(?:\s+officer)?|ceo|managing\s+(?:director|partner|member)|partner)\b/i;
+// Titles that are senior but are NOT the owner. Getting this list wrong is how
+// a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
+const NON_OWNER_TITLE_RE = /\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
+
+const parseTeamRoster = (html) => {
+  const out = [];
+  if (!html) return out;
+  // Strip scripts and styles; keep tags so the name/title pairing survives.
+  const cleaned = String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  // Text runs, in document order, with their tags removed. A roster entry is a
+  // capitalised human name followed shortly after by a job title.
+  // Split on tags AND newlines AND markdown bullets, so this reads a raw HTML
+  // roster and a Firecrawl markdown corpus with the same code. Firecrawl returns
+  // markdown; the dead-site fallback holds HTML; a roster looks the same in both
+  // — a name on one line, a title on the next.
+  const runs = cleaned
+    .split(/<[^>]+>|\r?\n|\||[•·]|\s{4,}/)
+    .map(t => t.replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/&#\d+;/g, ' ')
+               .replace(/^[#>*_\-\s]+|[*_\s]+$/g, '').trim())
+    .filter(t => t && t.length < 120);
+  const NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?\s+[A-Z][a-z'’-]{1,25})$/;
+  // ══ A TWO-WORD TITLE LOOKS EXACTLY LIKE A NAME ═════════════════════════
+  // "Managing Partner", "Office Manager" and "Vice President" all satisfy the
+  // First-Last pattern, so the loop below treated them as the next person and
+  // dropped the entry it was building. Three of six test rosters vanished
+  // silently — no error, just fewer people than the page lists, which is the
+  // worst way for a parser to fail because the output still looks plausible.
+  //
+  // So "is this a job title?" is asked BEFORE "does this look like a name?",
+  // and a run that matches a title pattern is never mistaken for a person.
+  const titleKind = (t) => {
+    if (!t || t.length > 70) return null;
+    const junior = /\b(?:manager|coordinator|assistant|associate|representative|specialist|clerk)\b/i.test(t);
+    // ══ "PRESIDENT" IS INSIDE "VICE PRESIDENT" ═══════════════════════════
+    // The owner pattern matched Joe Adams, Vice President, as an owner, because
+    // the word president is a substring of his title. A deputy is not a
+    // principal, and filing one as the decision-maker sends an owner-altitude
+    // email to somebody who has to forward it. Checked before the owner
+    // pattern, never after.
+    const deputy = /\b(?:vice|deputy|interim|acting|assoc(?:iate)?|junior|jr)[\s.-]*(?:president|partner|principal|director)\b|\bvp\b/i.test(t);
+    if (deputy) return 'staff';
+    if (OWNER_TITLE_RE.test(t) && !junior) return 'owner';
+    if (NON_OWNER_TITLE_RE.test(t) || junior) return 'staff';
+    return null;
+  };
+  for (let i = 0; i < runs.length; i++) {
+    if (titleKind(runs[i])) continue;            // a title, not a person
+    const m = runs[i].match(NAME_RE);
+    if (!m) continue;
+    // The title is normally the next non-empty run, occasionally the one after.
+    for (let j = i + 1; j <= Math.min(i + 3, runs.length - 1); j++) {
+      const t = runs[j];
+      if (!t) break;
+      const kind = titleKind(t);
+      if (!kind && NAME_RE.test(t)) break;       // the next person, no title
+      if (t.length > 70) continue;
+      // ══ AN OWNER TOKEN WINS OVER A C-SUITE ONE ═══════════════════════
+      // "CO-OWNER/CFO" is Misty Pyle at Hannah Custom Homes. Checking the
+      // non-owner pattern first filed her as staff, because CFO matched — but a
+      // co-owner who is also the CFO is an owner, and the ownership word is the
+      // one that decides who can buy. The non-owner list only decides titles
+      // that carry NO ownership word at all: "COO" is Kacie, and she is staff.
+      //
+      // The one exception is a junior marker, which no owner's title carries and
+      // which stops "Partner Relations Manager" reading as a partner.
+      const isOwner = kind === 'owner';
+      if (kind) {
+        out.push({ name: m[1].trim(), title: t.replace(/\s+/g, ' ').trim(), isOwner });
+        break;
+      }
+    }
+  }
+  // Deduplicate by name, preferring the entry we read as an owner.
+  const byName = new Map();
+  out.forEach(r => {
+    const k = r.name.toLowerCase();
+    if (!byName.has(k) || (r.isOwner && !byName.get(k).isOwner)) byName.set(k, r);
+  });
+  return [...byName.values()];
 };
 
 const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, location = '') => {
@@ -11727,10 +11884,24 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       && ranked.sources.includes('own_website_brain')
       && (brainHit && brainHit.confidence === 'high')
       && _isEponymousOwner(ranked.name, companyName, website);
-    if (eponymousConfident && !(corroborated || ownSiteConfident)) {
+    // ══ THE COMPANY'S OWN ROSTER SETTLES IT ═══════════════════════════════
+    // A title read verbatim off the company's team page is the primary source.
+    // Hannah's page said CO-OWNER/CEO; we bought eight searches to be told the
+    // same thing two seconds later, at roughly twelve Firecrawl credits.
+    //
+    // This does not lower the evidence bar — it recognises that the bar was
+    // already cleared by the strongest source available. No third-party record
+    // outranks a company stating who owns it on a page it maintains.
+    const rosterConfident = !!(brainHit && brainHit.fromRoster
+      && ranked.sources.includes('own_website_brain')
+      && sameName(ranked.name, brainHit.name));
+    if (rosterConfident && !(corroborated || ownSiteConfident)) {
+      console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
+    }
+    if (eponymousConfident && !(corroborated || ownSiteConfident || rosterConfident)) {
       console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, confirmed high-confidence by their own site and corroborated by the business name (${independent} independent sources). Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
     }
-    return (corroborated || ownSiteConfident || eponymousConfident) ? ranked : null;
+    return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident) ? ranked : null;
   };
 
   // ── STAGE 1 — free, or paid for by something else anyway ──────────────────
@@ -21638,6 +21809,42 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE COMPANY'S OWN ROSTER, READ CORRECTLY ═════════════════════════════
+  // Hannah Custom Homes publishes "Dusty Hannah — CO-OWNER/CEO" and "Kacie
+  // Carrico — COO". We held that page and still filed the lead under the COO.
+  //
+  // Two mistakes this check exists to catch, both found while writing it:
+  //   · "CO-OWNER/CFO" read as staff, because CFO matched before CO-OWNER
+  //   · "Vice President" read as an owner, because president is inside it
+  // Either one sends an owner-altitude email to somebody who has to forward it.
+  try {
+    const _fig = (n, t) => `<figure><h3>${n}</h3><p>${t}</p></figure>`;
+    const _page = [
+      ['Dusty Hannah', 'CO-OWNER/CEO'], ['Misty (Hannah) Pyle', 'CO-OWNER/CFO'],
+      ['Kacie Carrico', 'COO'], ['Tom Reed', 'Managing Partner'],
+      ['Joe Adams', 'Vice President'], ['Ann Lee', 'VP of Sales'],
+      ['Bill Chen', 'Founder & President'], ['Kim Park', 'Office Manager'],
+      ['Ana Diaz', 'Director of Operations'], ['Sue Ellis', 'Proprietor'],
+      ['Rob Vale', 'Chief Executive Officer'], ['Dan Fox', 'Estimator'],
+    ];
+    const _want = { 'Dusty Hannah': 1, 'Misty (Hannah) Pyle': 1, 'Kacie Carrico': 0,
+      'Tom Reed': 1, 'Joe Adams': 0, 'Ann Lee': 0, 'Bill Chen': 1, 'Kim Park': 0,
+      'Ana Diaz': 0, 'Sue Ellis': 1, 'Rob Vale': 1, 'Dan Fox': 0 };
+    const _got = parseTeamRoster(_page.map(([n, t]) => _fig(n, t)).join(''));
+    const _wrong = _got.filter(r => (r.isOwner ? 1 : 0) !== _want[r.name])
+      .map(r => `${r.name} read as ${r.isOwner ? 'owner' : 'staff'} from "${r.title}"`);
+    const _missing = _page.map(x => x[0]).filter(n => !_got.some(r => r.name === n));
+    if (_missing.length) {
+      console.log(`\u26d4 ROSTER CHECK: ${_missing.length} of ${_page.length} people on a team page were not read at all \u2014 ${_missing.join(', ')}. A roster that silently returns fewer people than the page lists still looks plausible, which is why this is checked rather than eyeballed.`);
+    } else if (_wrong.length) {
+      console.log(`\u26d4 ROSTER CHECK: ${_wrong.length} title(s) classified wrongly \u2014 ${_wrong[0]}. An owner misread as staff loses the lead; staff misread as the owner sends an owner-level email to somebody who forwards it.`);
+    } else {
+      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, and a vice president is not a president.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE ASK MUST MATCH THE FINDING ═══════════════════════════════════════
