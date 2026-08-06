@@ -22708,6 +22708,16 @@ app.post('/api/send-to-hunter', async (req, res) => {
   const fu1BodySlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Body');
   const fu2SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 2 Subject');
   const fu2BodySlug = await ensureHunterAttribute(hunterKey, 'Follow Up 2 Body');
+  // ══ THE BREAK-UP NEEDS A HOME TOO ════════════════════════════════════════
+  // The composer builds four touches; the sequence only had attributes for
+  // three. The break-up is the touch that closes the loop without asking or
+  // counting anything, and the data shows it earns replies from people who read
+  // every earlier email and did nothing. Creating the attribute here means a
+  // fourth step in Hunter can reference {{break_up_body}} and be filled per-lead,
+  // exactly like the other two. If no fourth step exists the attribute is simply
+  // unused — costing nothing and breaking nothing.
+  const breakSubjSlug = await ensureHunterAttribute(hunterKey, 'Break Up Subject');
+  const breakBodySlug = await ensureHunterAttribute(hunterKey, 'Break Up Body');
   const fuSlugsReady = !!(fu1SubjSlug && fu1BodySlug && fu2SubjSlug && fu2BodySlug);
   if (!fuSlugsReady) {
     console.log('HUNTER: could not create all four follow-up attributes — steps 2 and 3 will fall back to whatever static text is in the sequence. Check the Hunter key\'s permissions.');
@@ -22768,15 +22778,43 @@ app.post('/api/send-to-hunter', async (req, res) => {
       if (fu1BodySlug) customAttrs[fu1BodySlug] = String(fu1.body || '').slice(0, 5000);
       if (fu2SubjSlug) customAttrs[fu2SubjSlug] = String(fu2.subject || '').slice(0, 500);
       if (fu2BodySlug) customAttrs[fu2BodySlug] = String(fu2.body || '').slice(0, 5000);
+      const bu = lead.breakup || (lead.generatedResult && lead.generatedResult.breakup) || {};
+      if (breakSubjSlug) customAttrs[breakSubjSlug] = String(bu.subject || '').slice(0, 500);
+      if (breakBodySlug) customAttrs[breakBodySlug] = String(bu.body || '').slice(0, 5000);
 
       // Visible warning rather than a silent gap: a lead pushed without follow-up
       // copy will receive whatever static text sits in steps 2 and 3, which is
       // exactly the generic bump the whole follow-up design exists to avoid.
+      // ══ A MISSING FOLLOW-UP MUST STOP THE PUSH, NOT WARN ABOUT IT ═════════
+      // The sequence steps hold {{follow_up_1_body:"MISSING FOLLOWUP 1 BODY —
+      // DO NOT SEND"}}. That fallback does NOT prevent a send — Hunter delivers
+      // the fallback text as the email. The words are a note to us; the person
+      // who receives them is the prospect, three days after a carefully measured
+      // first email.
+      //
+      // This used to log a warning and push the lead regardless. A console line
+      // nobody is watching is not a safeguard when the failure mode is sending a
+      // customer a message that reads DO NOT SEND.
+      //
+      // So the lead does not enter the sequence at all unless every step it will
+      // reach has copy. Refusing costs one re-run of Generate; the alternative is
+      // unrecoverable — you cannot unsend it, and it is the last thing that
+      // prospect will ever read from us.
       const missingFu = [];
       if (!fu1.body) missingFu.push('follow-up 1');
       if (!fu2.body) missingFu.push('follow-up 2');
       if (missingFu.length) {
-        console.log(`HUNTER [${lead.name}]: pushed WITHOUT ${missingFu.join(' and ')} — re-run Generate for this lead or steps 2/3 will send generic text.`);
+        console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 ${missingFu.join(' and ')} ${missingFu.length > 1 ? 'have' : 'has'} no copy, and the sequence step would send its "MISSING \u2026 DO NOT SEND" placeholder to ${lead.email} as a real email. Re-run Generate on this lead and push again.`);
+        // `continue`, NOT `return` — this sits inside `for (const lead of leads)`
+        // within the Express handler. A return here would exit the whole handler:
+        // no response sent, the request hanging until timeout, and every
+        // remaining lead silently skipped. The loop's own convention is to record
+        // the failure and move to the next lead, which is what this does.
+        results.failed.push({
+          name: lead.name, email: lead.email,
+          reason: `no copy for ${missingFu.join(' and ')} — the sequence step would have sent its "DO NOT SEND" placeholder as a real email. Re-run Generate and push again.`,
+        });
+        continue;
       }
 
       // Upsert (create-or-update by email) — avoids duplicate-email errors if
@@ -23125,6 +23163,46 @@ app.post('/api/compose-email', (req, res) => {
         const _jv = tradeJobValue(_m0.tradeWord || req.body.tradeWord);
         if (_jv) useSpine = { ...useSpine, jobValue: _jv };
       }
+      // ══ THE FOLLOW-UPS NEED THE OTHER FINDINGS, WHICH STORED SPINES LACK ═══
+      // Live on Hannah: the Generate panel showed the break-up and NOTHING else.
+      // Both follow-ups were null because they are built from spine.restRungs,
+      // and every spine stored before that field existed has no restRungs — the
+      // same shape as the reframe and jobValue recoveries directly above.
+      //
+      // Silently losing them is the expensive version of this bug: 42% of replies
+      // live in the follow-ups, and a sequence that ships with only a break-up
+      // sends one email and then a goodbye.
+      //
+      // The findings themselves are on the stored ladder, so they can be rebuilt
+      // at no cost — every other rung, worst first, excluding the one the email
+      // already opens on.
+      if (!Array.isArray(useSpine.restRungs) || !useSpine.restRungs.length) {
+        const _stored = Array.isArray(audit.harmsRanked) ? audit.harmsRanked
+          : (audit._persisted && Array.isArray(audit._persisted.harmsRanked)) ? audit._persisted.harmsRanked
+          : [];
+        const _rest = _stored
+          .filter(h => h && h.finding && String(h.finding).trim() !== String(useSpine.claim).trim())
+          .map(h => {
+            // Older ladders stored no id, so recover the rung by its costs text
+            // exactly as the subject and reframe recovery does.
+            const _rung = (h.id ? HARM_LADDER.find(x => x.id === h.id) : null)
+              || (h.costs ? HARM_LADDER.find(x => String(x.costs || '').trim() === String(h.costs).trim()) : null);
+            return {
+              id: h.id || (_rung && _rung.id) || null,
+              finding: h.finding,
+              costs: h.costs || null,
+              harm: Number(h.harm) || 0,
+              reframe: h.reframe || (_rung && _rung.reframe) || null,
+            };
+          })
+          .sort((a, b) => b.harm - a.harm);
+        if (_rest.length) {
+          useSpine = { ...useSpine, restRungs: _rest };
+          console.log(`\u267b FOLLOW-UPS REBUILT [${company}]: this spine predates the sequence composer, so the other ${_rest.length} finding(s) were recovered from the stored ladder \u2014 ${_rest.slice(0, 2).map(r => `${r.id || 'unknown'} (harm ${r.harm})`).join(', ')}. Nothing re-measured, no credit spent.`);
+        } else {
+          console.log(`\u26a0 FOLLOW-UPS [${company}]: only one finding is stored for this lead, so there is nothing to follow up WITH. The first email and the break-up will send; steps 2 and 3 stay empty rather than repeating the opener.`);
+        }
+      }
       console.log(`\u2696 EMAIL ELEMENTS [${company}]: the fact | ${useSpine.reframe ? 'the reframe' : 'NO reframe (claimId=' + JSON.stringify(useSpine.claimId || null) + ' matched no rung)'} | ${useSpine.jobValue ? 'the money' : 'NO money (tradeWord=' + JSON.stringify(_m0.tradeWord || req.body.tradeWord || null) + ')'}.`);
     }
     if (!useSpine || !useSpine.claim) {
@@ -23173,8 +23251,21 @@ app.post('/api/compose-email', (req, res) => {
         console.log(`SUBJECTS [${company}]: could not rebuild (${e && e.message}) \u2014 falling back to the ${storedSubjects.length} stored with the audit.`);
       }
     }
+    // ══ THE NAME MUST BE A STRING, WHATEVER THE CLIENT SENDS ════════════════
+    // A live email opened "[object Object] — 39 reviews across 21 years" because
+    // the client sent the decision-maker OBJECT and the composer takes the first
+    // word of whatever it receives. The client is fixed, but the composer should
+    // not be able to print that no matter what it is handed — this is the most
+    // visible line in the email and the cheapest possible thing to guard.
+    const _fn = req.body.founderName;
+    const _founder = typeof _fn === 'string' ? _fn
+      : (_fn && typeof _fn === 'object' && typeof _fn.name === 'string') ? _fn.name
+      : '';
+    if (_fn && !_founder) {
+      console.log(`\u26a0 NAME [${company}]: a non-string founderName arrived (${typeof _fn}) with no usable .name, so the email will open on the fact instead of a greeting. Better a missing name than "[object Object]" in the first four characters.`);
+    }
     const composed = composeFullEmail(useSpine, {
-      founderName: req.body.founderName || '',
+      founderName: _founder,
       company,   // seeds subject rotation so two leads on one rung differ
       subjects,
       reframes: audit.allowedReframes || (audit._persisted && audit._persisted.allowedReframes) || [],
