@@ -5991,6 +5991,12 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
           rosterStaff: _others.map(r => ({ name: r.name, title: r.title })),
         };
       }
+      // ══ SILENCE IS NOT A RESULT ═══════════════════════════════════════
+      // This logged only on success, so a roster that parsed nothing produced no
+      // line at all and looked identical to the parser never having run. On
+      // Hannah's re-run there was no ROSTER line anywhere and no way to tell
+      // whether the corpus lacked the team page or the parser had failed on it.
+      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}. Falling through to the model. If their site does publish a team page with titles, the page did not reach this corpus \u2014 usually because the scrape came back thin.`);
     } catch (e) {
       console.log(`ROSTER [${companyName}]: could not read the team page structure (${e && e.message}) \u2014 falling through to the model.`);
     }
@@ -12280,7 +12286,22 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   // domain, re-confirm it cheaply and keep it. Re-confirming matters — mailboxes
   // do get closed — but a single silent probe is very different from starting the
   // waterfall over and guessing.
-  if (priorEmail && String(priorEmail).includes('@' + domain) && (priorEmailTier === 1 || priorEmailTier === 2)) {
+  // ══ REUSE PROTECTS A GOOD ADDRESS, NOT A SHARED INBOX ═══════════════════
+  // This exists so a verified personal mailbox is never re-derived into a weaker
+  // guess, and that is right. But it fires on ANY prior tier-1 address, and a
+  // published info@ is tier 1. Hannah Custom Homes locked onto info@ here and
+  // returned before the waterfall could try the owner's own mailbox — the same
+  // run graded its answer "D — generic inbox, low open odds".
+  //
+  // A shared inbox is not the thing this branch was written to protect. When the
+  // prior address is generic AND we know who the owner is, fall through: the
+  // published address is on their site and will be found again a few lines
+  // below, so nothing is lost, and the owner's mailbox gets its chance first.
+  const _priorIsShared = priorEmail && GENERIC_LOCAL.test(priorEmail) && !!ceoName;
+  if (_priorIsShared) {
+    console.log(`EMAIL [${domain}]: ${priorEmail} was proven on an earlier run, but it is a shared inbox and we know the owner is ${ceoName}. Not locking onto it — the published address is still on their site and will be found again if nothing better verifies.`);
+  }
+  if (!_priorIsShared && priorEmail && String(priorEmail).includes('@' + domain) && (priorEmailTier === 1 || priorEmailTier === 2)) {
     const _still = verifierKey ? await verifyEmailSMTP(priorEmail, verifierKey) : { unknown: true };
     if (_still.invalid === true) {
       console.log(`EMAIL [${domain}]: the previously verified address ${priorEmail} is now REFUSED by their mail server. Not reusing it \u2014 the mailbox has been closed or renamed since we last looked.`);
