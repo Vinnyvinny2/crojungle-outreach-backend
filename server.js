@@ -5996,7 +5996,20 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
       // line at all and looked identical to the parser never having run. On
       // Hannah's re-run there was no ROSTER line anywhere and no way to tell
       // whether the corpus lacked the team page or the parser had failed on it.
-      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}. Falling through to the model. If their site does publish a team page with titles, the page did not reach this corpus \u2014 usually because the scrape came back thin.`);
+      // ══ SHOW THE SHAPE WE COULD NOT READ ══════════════════════════════
+      // Hannah's about-us page DID reach this corpus — 10,776 characters — and
+      // the parser found zero name/title pairs in it. So the page is here and the
+      // structure is one the pairing logic does not match. Guessing at a fix
+      // without seeing that structure is how a working parser gets broken.
+      //
+      // When an ownership word IS present but no pair was built, print the text
+      // around it. That is the exact shape to fix, and it costs one log line on
+      // the runs where the parser is already failing.
+      const _hint = OWNER_TITLE_RE.exec(corpus);
+      const _sample = _hint
+        ? corpus.slice(Math.max(0, _hint.index - 120), _hint.index + 120).replace(/\s+/g, ' ').trim()
+        : null;
+      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}. Falling through to the model, which still finds the owner \u2014 this only costs the paid searches the roster would have skipped.${_sample ? ` An ownership word IS in the text, so the page is here and the layout is what we cannot read. Around it: "\u2026${_sample}\u2026"` : ' No ownership word appears anywhere in the text, so their pages genuinely do not state who owns the business.'}`);
     } catch (e) {
       console.log(`ROSTER [${companyName}]: could not read the team page structure (${e && e.message}) \u2014 falling through to the model.`);
     }
@@ -7513,7 +7526,21 @@ const HARM_LADDER = [
   { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
     reframe: 'people comparing companies read the reviews first, and a thin record reads as a thin business',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
-    say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
+    // ══ STATE THE TWO MEASUREMENTS, NOT THE DIVISION ══════════════════════
+    // "— about 1.9 a year" was flagged by the fact-checker on three consecutive
+    // live runs, each time for the same reason: it presents arithmetic as if it
+    // were a measurement. The division is honest and correct, but he did not
+    // publish 1.9 anywhere, and a number he cannot find is a number he has to
+    // take on trust.
+    //
+    // Mike's rule about money says exactly what to do here: "state the value of
+    // one and let him do the multiplication — he will, and the number he reaches
+    // is one he believes." Thirty-nine reviews across twenty-one years does the
+    // division in his head, and the conclusion is his rather than ours.
+    //
+    // Only the sentence changes. reviewsPerYear still drives the test above, so
+    // the rung fires on exactly the same leads as before.
+    say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading`,
     costs: 'the work is being done and almost none of it becomes proof for the next customer' },
 
   // ── OPINION ─────────────────────────────────────────────────────────────
@@ -20004,7 +20031,24 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               _cf.sort((a, b) => (Number(b && b.total) || 0) - (Number(a && a.total) || 0));
               const _gap = (Number(_cf[0].total) || 0) - (Number(_cf[1].total) || 0);
               if (_gap <= 2) {
-                const _inLayer = _cf.filter(c => c && layerForFinding(c.signal, c.finding) === growthConstraint.layer);
+                // ══ ONLY A CANDIDATE INSIDE THE TIE CAN WIN THE TIE ══════════
+                // This filtered the WHOLE sorted list, then took the first
+                // binding-layer finding anywhere in it. On Hannah Custom Homes
+                // the top two were 19 and 18 — a genuine tie — and this nominated
+                // conversion_leak at 15, in FOURTH place, four points below the
+                // pair it was resolving.
+                //
+                // That is not a tiebreak, it is an override, and it fired a ⛔ and
+                // pushed a claim risk onto the review checklist for a finding the
+                // scoring never put in contention. The whole justification is
+                // "this difference is inside scoring noise" — a four-point deficit
+                // is outside it, which is exactly what the scores are saying.
+                //
+                // The tie is the top score and anything within the same noise
+                // threshold of it. Nothing below that is eligible.
+                const _tieFloor = (Number(_cf[0].total) || 0) - 2;
+                const _tied = _cf.filter(c => (Number(c && c.total) || 0) >= _tieFloor);
+                const _inLayer = _tied.filter(c => c && layerForFinding(c.signal, c.finding) === growthConstraint.layer);
                 const _winnerLayer = _cf[0] ? layerForFinding(_cf[0].signal, _cf[0].finding) : undefined;
                 if (_inLayer.length && _winnerLayer !== growthConstraint.layer) {
                   const _should = _inLayer[0];
