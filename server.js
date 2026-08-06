@@ -7259,7 +7259,28 @@ const HARM_LADDER = [
   // EMAIL opened on a contact form \u2014 two different stories about one business,
   // and Mike would have taken a call on the wrong one.
   { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
-    test: (m) => m.rankFound === true && (m.rank || 0) > 5 && (m.weakerAbove || 0) > 0,
+    // ══ THIS IS TRUE AT EVERY POSITION, SO IT MUST NOT REQUIRE ONE ══════════
+    // The old test demanded rank > 5. Two consequences, both live:
+    //
+    //   A business at #2 or #3 with a weaker competitor ABOVE it produced no
+    //   rank finding at all — even though "someone with fewer reviews is ahead
+    //   of you" is arguably sharper at #2 than at #9, because the one spot that
+    //   matters is held by a business with less proof.
+    //
+    //   And when the two rank samples disagree, the position is deliberately
+    //   removed from the evidence — correctly, it is not sayable. But the code
+    //   that removes it logs, in its own words: "what survives the drift is that
+    //   businesses with fewer reviews rank above them — that is true at every
+    //   one of those positions and is what the email may claim." Then rank came
+    //   back null, `rank > 5` was false, and the claim it had just declared
+    //   survivable could not be made. Romo's: rank suppressed, weakerAbove 4,
+    //   no rank finding in the audit.
+    //
+    // The sentence this rung writes never mentions a position. It only needs to
+    // know the check RAN and that somebody weaker is above them. rankFound is
+    // dropped too, because an unstable rank leaves it true with rank null, and
+    // a business that is not in the pack at all has weakerAbove 0 anyway.
+    test: (m) => m.rankChecked === true && (m.weakerAbove || 0) > 0,
     say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
@@ -16570,10 +16591,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           localRank = lv.results.find(r => r.kind === 'primary trade' && r.found) || lv.results.find(r => r.found) || lv.results[0];
           for (const r of lv.results) {
             if (r.found) {
+              // ══ THE POSITION MAY HAVE BEEN REMOVED ON PURPOSE ═════════════
+              // When two samples disagree the rank is stripped from the evidence
+              // so nothing can state it. This line still printed it, and printed
+              // arithmetic on it, so an intentional suppression came out as
+              // "#undefined of undefined ... 4 of the NaN above them have FEWER
+              // reviews". The finding underneath is real and important; the line
+              // reporting it read like a crash.
+              const _pos = Number.isFinite(Number(r.rank)) ? Number(r.rank) : null;
+              const _scanned = Number.isFinite(Number(r.scanned)) ? Number(r.scanned) : null;
+              const _above = _pos !== null ? _pos - 1 : null;
               const weak = r.weakerAbove
-                ? ` ${r.weakerAbove} of the ${r.rank - 1} above them have FEWER reviews — reputation is not the problem, visibility is.`
+                ? (_above !== null
+                    ? ` ${r.weakerAbove} of the ${_above} above them have FEWER reviews — reputation is not the problem, visibility is.`
+                    : ` ${r.weakerAbove} business(es) ranking above them have FEWER reviews — reputation is not the problem, visibility is. The position itself is not sayable on this lead, but this is true at every position we measured.`)
                 : '';
-              console.log(`LOCAL RANK [${company}]: #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind}).${weak}${r.rankNote ? ' \u2014 ' + r.rankNote : ''}`);
+              const _where = _pos !== null
+                ? `#${_pos}${_scanned !== null ? ' of ' + _scanned : ''}`
+                : 'position not sayable — two samples disagreed';
+              console.log(`LOCAL RANK [${company}]: ${_where} for "${r.query}" (${r.kind}).${weak}${r.rankNote ? ' \u2014 ' + r.rankNote : ''}`);
               if (r.rankStable === false) {
                 console.log(`\u26a0 RANK UNSTABLE [${company}]: ${r.rankSamples ? r.rankSamples.join(' and ') : '?'} on the same query minutes apart. The position is NOT sayable. What survives the drift is that businesses with fewer reviews rank above them \u2014 that is true at every one of those positions and is what the email may claim.`);
               }
