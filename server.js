@@ -12310,8 +12310,50 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     const nameParts = name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2);
     const nameMatch = scraped.emails.find(e => nameParts.some(p => e.split('@')[0].includes(p)));
     const personal  = scraped.emails.find(e => !GENERIC_LOCAL.test(e));
-    const best = nameMatch || personal || scraped.emails[0];
-    const isGeneric = GENERIC_LOCAL.test(best);
+    let best = nameMatch || personal || scraped.emails[0];
+    let isGeneric = GENERIC_LOCAL.test(best);
+
+    // ══ A SHARED INBOX IS NOT THE OWNER ══════════════════════════════════════
+    // When the only address a site publishes is info@, this returned it and
+    // stopped — tier 1, score 85, done. Hannah Custom Homes: info@ was taken,
+    // dusty@ was never attempted, and the same run graded its own answer
+    // "D — generic inbox (info@), low open odds".
+    //
+    // That matters more here than it would for most senders. The email is
+    // written at owner altitude and asks a question only an owner can answer.
+    // A shared inbox is the one place that argument reliably dies: it is read
+    // by whoever handles enquiries, and an owner-level email arriving there gets
+    // filed as a vendor pitch.
+    //
+    // So when the published address is generic and we know who the owner is, try
+    // building theirs — but ONLY swap if SMTP actually confirms the mailbox
+    // exists. An unverified guess must never displace an address the company
+    // published; that would trade a low-open-rate certainty for a bounce, and
+    // bounce rate is the single biggest differentiator between senders.
+    if (isGeneric && name && verifierKey) {
+      try {
+        const _learned = domainPatternMemory.get(domain);
+        const _tryPatterns = _learned ? [_learned] : ['first', 'firstlast', 'f.last', 'first.last'];
+        const _catchAll = await isCatchAllDomain(domain, verifierKey);
+        if (_catchAll === false) {                      // catch-all proves nothing
+          for (const _pat of _tryPatterns) {
+            const _cand = applyPattern(_pat, name, domain);
+            if (!_cand || _cand === best) continue;
+            const _res = await verifyEmailSMTP(_cand, verifierKey);
+            if (_res && _res.valid === true) {
+              console.log(`\u21c4 EMAIL [${domain}]: their site publishes only ${best}, a shared inbox. ${_cand} is ${name}'s own mailbox and SMTP confirms it exists, so the email reaches the person it argues with instead of whoever reads enquiries.`);
+              best = _cand;
+              isGeneric = false;
+              domainPatternMemory.set(domain, _pat);
+              break;
+            }
+          }
+          if (isGeneric) console.log(`EMAIL [${domain}]: only the shared inbox ${best} is published and no personal mailbox for ${name} could be confirmed, so the published address stands. An unverified guess is not worth a bounce.`);
+        }
+      } catch (e) {
+        console.log(`EMAIL [${domain}]: could not test a personal mailbox (${e && e.message}) \u2014 keeping the published address.`);
+      }
+    }
     console.log(`✓ EMAIL [${domain}] T1 scraped from ${scraped.source}: ${best}${isGeneric ? ' (generic)' : ''}`);
     return {
       email: best, ...EMAIL_TIERS.CONFIRMED_SCRAPED,
