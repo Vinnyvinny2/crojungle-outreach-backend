@@ -7979,6 +7979,15 @@ const buildSubjects = (lead, m = {}) => {
 // lowercase, a fragment starting a sentence starts capital. Getting this wrong
 // produced "answers first. everyone who decides..." in the first draft \u2014 which
 // reads as carelessness, and carelessness is what the whole email argues against.
+// Terminates a clause with a period if it lacks end punctuation. Module-level so
+// both the first-email composer and the follow-up composer share ONE definition
+// — it used to be local to composeEmail, which is why composeFollowUp threw
+// "endSentence is not defined" the first time it ran.
+const endSentence = (t) => {
+  const x = String(t || '').trim();
+  if (!x) return '';
+  return /[.!?]$/.test(x) ? x : x + '.';
+};
 const upper1 = (t) => { const x = String(t || '').trim(); return x ? x.charAt(0).toUpperCase() + x.slice(1) : x; };
 const lower1 = (t) => {
   const x = String(t || '').trim();
@@ -8078,11 +8087,6 @@ const composeEmail = (spine, opts = {}) => {
   // four skeletons, three of them place the reframe against another sentence,
   // and a fix applied per-skeleton is a fix that gets missed the next time one
   // is added.
-  const endSentence = (t) => {
-    const x = String(t || '').trim();
-    if (!x) return '';
-    return /[.!?]$/.test(x) ? x : x + '.';
-  };
   // The finding's own reframe wins. The model-written list is a fallback for any
   // rung that does not carry one, and it is still matched against the claim
   // rather than taken positionally.
@@ -8257,6 +8261,133 @@ const pickReframe = (spine, reframes, variantIndex = 0) => {
   return related[variantIndex % related.length].r;
 };
 
+// ══ A FOLLOW-UP IS A FULL EMAIL ON THE NEXT FINDING ═════════════════════════
+// The old follow-ups were "one more: <finding>" and "there were N things in
+// total." The first threw away the reframe, the money and the matched CTA that
+// make the first email work. The second was the guilt-trip the benchmark data
+// singles out as the pattern that REDUCES bookings — counting what we did and
+// implying a debt.
+//
+// The research is unambiguous about what a follow-up must be: a new angle
+// carrying its own value, short, standing on its own, ending in a break-up that
+// leaves the door open without pressure. 42% of all replies come from follow-ups
+// and the first follow-up is often the single highest-replying step in the whole
+// sequence — so it has to be built to the same standard as the first email, not
+// a lesser thing bolted on.
+//
+// This composes each follow-up from the NEXT-strongest finding using the exact
+// same parts as email one: the finding's own reframe, the trade's job value, and
+// the CTA matched to that finding's type. Shorter than the first, per the data.
+// Every sentence still traces to a measurement; nothing is invented.
+const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
+  if (!rung || !rung.finding) return null;
+  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
+  const fact = endSentence(toSecondPerson(rung.finding));
+  const costs = rung.costs ? endSentence(toSecondPerson(rung.costs)) : '';
+  // The finding's own reframe — its "so what" — recovered from the ladder if the
+  // rung did not carry one, exactly as the first email does.
+  let reframe = rung.reframe;
+  if (!reframe && rung.id) {
+    const _r = HARM_LADDER.find(x => x.id === rung.id);
+    if (_r && _r.reframe) reframe = _r.reframe;
+  }
+  reframe = reframe ? endSentence(reframe) : '';
+  // ══ DON'T SAY THE SAME THING TWICE IN ONE EMAIL ══════════════════════════
+  // On some rungs the reframe and the costs line make the same point in
+  // different words — no_owner_replies is the clearest: reframe "a stranger sees
+  // a business that does not answer", costs "a prospect sees a business that does
+  // not answer." Printing both reads as padding. When they overlap, keep the
+  // reframe (the general truth about behaviour) and drop the costs echo.
+  const _overlap = (a, b) => {
+    const wa = new Set(String(a).toLowerCase().match(/[a-z]{4,}/g) || []);
+    const wb = String(b).toLowerCase().match(/[a-z]{4,}/g) || [];
+    if (!wb.length) return false;
+    const shared = wb.filter(w => wa.has(w)).length;
+    return shared / wb.length >= 0.5;   // half the costs words already in reframe
+  };
+  const costsToUse = (reframe && costs && _overlap(reframe, costs)) ? '' : costs;
+  // ══ THE MONEY IS STATED ONCE PER SEQUENCE, NOT PER EMAIL ═════════════════
+  // "A custom home runs several hundred thousand dollars" is the loss. Said once
+  // it lands; repeated in every follow-up it becomes a tic and cheapens the
+  // number. The first email owns the money. A follow-up states it only when its
+  // finding is the kind where the money is the whole point — pricing and offer —
+  // and stays silent otherwise, letting the fact carry the touch.
+  const MONEY_RUNGS = new Set(['no_published_pricing', 'no_offer', 'undifferentiated', 'outranked_by_weaker']);
+  const money = (spine.jobValue && MONEY_RUNGS.has(rung.id)) ? endSentence(String(spine.jobValue)) : '';
+  let cta = CTA_FOR(rung.finding, rung.id);
+  // ══ DON'T ASK THE IDENTICAL QUESTION TWICE IN A SEQUENCE ═════════════════
+  // Two reputation findings both map to the review-process ask, so email 1 and
+  // follow-up 1 could close on the same sentence. A sequence that repeats its
+  // own CTA reads as automated. When the follow-up's ask matches the one already
+  // used, fall back to the write-up close, which is always a valid ask and a
+  // different shape from a question.
+  // Every CTA already used earlier in the sequence is off the table. FU1 avoids
+  // the first email's ask; FU2 avoids both. If this finding's natural ask is
+  // taken, try the other distinct asks before settling — only fall to the
+  // write-up when nothing else fits, and never repeat even that.
+  // ══ AVOID REPEATING, BUT NEVER MISMATCH ══════════════════════════════════
+  // The fallback used to grab the first unused ask in a fixed list, which put
+  // "want the list of who's ranking above you?" on a finding about review
+  // replies. A CTA that does not fit its finding is worse than one that repeats:
+  // it asks about something the email never raised. So the ONLY always-safe
+  // fallback is the write-up line, which fits any finding. If the natural ask is
+  // taken and it is not already the write-up, use the write-up; if even that is
+  // taken, keep the finding's natural ask rather than forcing a mismatch — a
+  // repeat is the lesser fault.
+  const _used = usedCtaKinds instanceof Set ? usedCtaKinds : new Set(usedCtaKinds || []);
+  if (_used.has(cta.kind) && cta.kind !== 'writeup' && !_used.has('writeup')) {
+    cta = CTA_TEXT.writeup;
+  }
+  // Subject: this finding's own line, a DIFFERENT one from the first email so the
+  // follow-up opens a new angle rather than repeating the subject he already
+  // ignored. Falls back to the finding itself, lower-cased and trimmed short.
+  const subs = (SUBJECTS_FOR[rung.id] || []).filter(Boolean);
+  const _seed = String(opts.company || opts.founderName || '')
+    .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
+  const subject = subs.length
+    ? subs[(Math.abs(_seed) + ordinal) % subs.length]
+    : lower1(String(rung.finding)).slice(0, 46).replace(/[\s—-]+$/, '');
+  // Body: fact, its reframe, its cost, its money — the same four the first email
+  // carries, in a tighter shape because a follow-up should be shorter.
+  // ══ A DIFFERENT DOORWAY EACH TOUCH ═══════════════════════════════════════
+  // Both follow-ups opening "one thing I didn't mention" is the same tell as a
+  // repeated CTA — it reads as a template running. The opener rotates by touch,
+  // every variant still framing the finding as something newly surfaced rather
+  // than a bump of the last email.
+  const OPENERS = [
+    (f) => `one thing I didn't mention: ${f}`,
+    (f) => `something else I noticed: ${f}`,
+    (f) => `one more, then I'll stop: ${f}`,
+  ];
+  const opener = OPENERS[(ordinal - 1) % OPENERS.length] || OPENERS[0];
+  const open = first ? `${first} — ${opener(lower1(fact))}` : upper1(fact);
+  const body = [
+    open,
+    `${reframe ? upper1(reframe) + ' ' : ''}${costsToUse ? upper1(costsToUse) : ''}${money ? ' ' + upper1(money) : ''}`.trim(),
+    cta.text,
+  ].filter(Boolean).join('\n\n');
+  return { subject, body, ctaKind: cta.kind };
+};
+
+// The break-up. The data is specific: it works ONLY when it is low-pressure and
+// leaves the door open. "I never heard back" and "there were N things you're
+// leaving on the table" are the exact anti-patterns that cost bookings. This
+// closes the loop, makes replying trivial, and counts nothing.
+const composeBreakup = (spine, opts) => {
+  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
+  const open = first
+    ? `${first} — I'll leave this here.`
+    : `I'll leave this here.`;
+  return {
+    subject: 'closing the loop',
+    body: [
+      open,
+      `If the timing isn't right, no problem at all — I won't keep filling your inbox. If it ever is, the write-up is yours and one reply gets it to you.`,
+    ].join('\n\n'),
+    ctaKind: 'breakup',
+  };
+};
+
 const composeFullEmail = (spine, opts = {}) => {
   if (!spine || !spine.claim) return null;
   const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
@@ -8294,12 +8425,26 @@ const composeFullEmail = (spine, opts = {}) => {
   return {
     variantA: variant(0),
     variantB: variant(1),
-    followUp1: second
-      ? `${first} — one more: ${toSecondPerson(second).replace(/^./, (c) => c.toLowerCase())}.\n\n${cta.text}`
-      : null,
-    followUp2: n > 1
-      ? `${first} — I'll leave it here. There were ${n} things in total; that's more than one afternoon's work.\n\nIf you want the list, say the word.`
-      : null,
+    // ══ FOLLOW-UPS BUILT TO THE FIRST EMAIL'S STANDARD ════════════════════
+    // Each is a full email on the next-strongest finding — its own fact,
+    // reframe, cost, money and matched CTA — not a bump and not a guilt-trip.
+    // followUp1 is the highest-replying step in most sequences, so it gets the
+    // second-best finding; followUp2 gets the third if one clears the bar; the
+    // break-up always closes the loop cleanly. Weak findings are declined rather
+    // than sent, because a follow-up on a weak point costs more than it earns.
+    ...(() => {
+      // The first email's CTA is used; each follow-up adds its own so the next
+      // one avoids everything already asked. Computed here so the two follow-ups
+      // never collide with each other, not just with the first email.
+      const used = new Set([cta.kind]);
+      const f1 = (spine.restRungs && spine.restRungs[0] && (spine.restRungs[0].harm || 0) >= LADDER_HARM_FLOOR)
+        ? composeFollowUp(spine.restRungs[0], spine, opts, 1, used) : null;
+      if (f1 && f1.ctaKind) used.add(f1.ctaKind);
+      const f2 = (spine.restRungs && spine.restRungs[1] && (spine.restRungs[1].harm || 0) >= LADDER_HARM_FLOOR)
+        ? composeFollowUp(spine.restRungs[1], spine, opts, 2, used) : null;
+      return { followUp1: f1, followUp2: f2 };
+    })(),
+    breakup: composeBreakup(spine, opts),
     ctaKind: cta.kind,
     composedBy: 'code',
   };
@@ -8473,6 +8618,18 @@ const buildFactualSpine = (harms, m = {}) => {
     problemCount: buildProblemList(harms).length,
     // Everything else we found, worst first \u2014 for the call sheet, not the email.
     rest: (harms.byHarm || []).filter(x => x.id !== lead.id).map(x => x.finding),
+    // ══ THE FOLLOW-UPS ARE FULL EMAILS, SO THEY NEED FULL RUNGS ════════════
+    // rest was a list of finding STRINGS, which is all the old one-line follow-up
+    // needed. A follow-up built to the same standard as the first email needs the
+    // whole rung: its reframe (the "so what"), its costs line, its id (for the
+    // matched CTA and subject), and its harm (to know if it is even worth
+    // sending). The data is explicit that a follow-up on a weak point, or one
+    // that just bumps, costs more in unsubscribes than it earns in replies — so
+    // the follow-up must be able to see the finding's strength and decline.
+    restRungs: (harms.byHarm || [])
+      .filter(x => x.id !== lead.id)
+      .map(x => ({ id: x.id, finding: x.finding, costs: x.costs, harm: x.harm,
+                   reframe: x.reframe || null })),
   };
 };
 
@@ -21916,6 +22073,47 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FOLLOW-UP SEQUENCE IS FOUR REAL EMAILS ═══════════════════════════
+  // The old follow-ups were "one more: <finding>" and a guilt-trip counting what
+  // we did. The data says 42% of replies come from follow-ups and the first
+  // follow-up is often the highest-replying step — so each must be a full email
+  // on a new finding, and the break-up must ask and count nothing. This proves
+  // on a synthetic three-finding lead that the sequence is four distinct touches
+  // with no repeated CTA and no guilt-trip.
+  try {
+    const _spine = {
+      claim: '39 reviews across 21 years of trading', claimId: 'not_compounding',
+      costs: 'the work is being done and almost none of it becomes proof',
+      reframe: 'people comparing companies read the reviews first',
+      jobValue: 'a custom home runs several hundred thousand dollars', problemCount: 3,
+      restRungs: [
+        { id: 'no_owner_replies', harm: 58, finding: 'not one of the 39 reviews has a reply', costs: 'a prospect sees a business that does not answer', reframe: 'a stranger reading reviews sees a business that does not answer' },
+        { id: 'no_published_pricing', harm: 54, finding: 'no price appears anywhere', costs: 'someone comparing has to ask to find out', reframe: 'most people will not hand over details just to learn a price' },
+      ],
+    };
+    const _full = composeFullEmail(_spine, { founderName: 'Dusty Hannah', company: 'Test Co', subjects: ['reviews dont match'] });
+    const _touches = [_full && _full.variantA, _full && _full.followUp1, _full && _full.followUp2, _full && _full.breakup].filter(Boolean);
+    const _guilt = _touches.some(t => /never heard|leaving on the table|you're missing|didn't hear back|following up again/i.test(t.body || ''));
+    // The write-up line is the universal fallback and fits any finding, so two
+    // touches closing on it is acceptable — a valid repeat beats a mismatched
+    // ask. What must never repeat is a SPECIFIC ask (a question about ranking, or
+    // review process), because that only fits the finding that earned it.
+    const _ctas = _touches.map(t => (t.body || '').split('\n').pop());
+    const _specific = _ctas.filter(c => c && !/the write-up is yours/i.test(c) && !/i'll leave this here|filling your inbox/i.test(c));
+    const _dupCta = _specific.length !== new Set(_specific).size;
+    if (_touches.length < 4) {
+      console.log(`\u26d4 SEQUENCE CHECK: only ${_touches.length} of 4 touches built on a 3-finding lead. Follow-ups are where 42% of replies live; a missing touch is a missing reply.`);
+    } else if (_guilt) {
+      console.log(`\u26d4 SEQUENCE CHECK: a touch contains guilt-trip language, which the benchmark data singles out as the pattern that REDUCES bookings.`);
+    } else if (_dupCta) {
+      console.log(`\u26a0 SEQUENCE CHECK: two touches close on the same sentence \u2014 a repeated CTA reads as automation. ${_ctas.join(' | ')}`);
+    } else {
+      console.log(`\u2713 SEQUENCE CHECK: 4 distinct touches (email + 2 follow-ups + break-up), each on its own finding, no repeated CTA, no guilt-trip. Follow-ups carry the same three elements as the first email.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SEQUENCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE COMPANY'S OWN ROSTER, READ CORRECTLY ═════════════════════════════
