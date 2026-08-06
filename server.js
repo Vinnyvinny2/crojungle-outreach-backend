@@ -15431,6 +15431,29 @@ const _runResearchInner = async (req, res) => {
   FIRECRAWL_OUT_OF_CREDITS = false; // reset per run so the flag reflects THIS request
   const { company, keys, apiKey } = req.body;
   let website = req.body.website;  // mutable — the website guard may resolve/blank it
+  // ══ AUDIT THE HOMEPAGE, NOT THE PAGE WE WERE HANDED ════════════════════════
+  // Leads arrive from Google Places and directory listings, which routinely
+  // point at a location, services or booking page. All-Weather Windows was
+  // stored as .../showroom-locations/ and every downstream step treated that
+  // page as "the homepage": it was the URL scraped, the page the audit read, and
+  // the page all seven site-audit reads were counted "beyond". Their actual
+  // homepage — https://www.allweatherkc.com/ — was never reviewed, on a lead
+  // whose whole finding is about how a visitor experiences the site.
+  //
+  // A visitor arriving from a Google search lands on the root. That is the page
+  // the email is describing, so that is the page the audit has to read.
+  //
+  // The entered URL is kept: it is a real page, it goes into the page list, and
+  // it is what the UI shows as the site we were pointed at. Only the anchor
+  // moves.
+  const _enteredUrl = website;
+  if (website) {
+    const _root = siteBase(website);
+    if (_root && _root !== String(website).replace(/\/+$/, '')) {
+      console.log(`\u2302 HOMEPAGE [${company}]: this lead was stored as ${website}, which is a page inside the site rather than its front door. Auditing ${_root} instead \u2014 that is where a visitor from a Google search lands, and it is the page every finding about their site is really about. The entered page is kept and read alongside the others.`);
+      website = _root;
+    }
+  }
   const { firecrawlKey, fbToken, ninjaPearKey, companiesApiKey, verifierKey } = keys || {};
   // Apify powers the review mine and the free owner-from-review-replies path.
   // Accepted from keys{} or the body top level, same tolerance as hunterKey.
