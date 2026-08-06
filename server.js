@@ -22441,7 +22441,7 @@ Return ONLY valid JSON, no markdown:
 //                  Falls back to the costliest finding and SAYS SO. That is a
 //                  different rule, and a quieter one would be a lie about how
 //                  the email was chosen.
-const spineFromStoredAudit = (audit, company) => {
+const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   if (!audit) return { spine: null, reason: 'no-audit' };
 
   const ranked = Array.isArray(audit.harmsRanked) && audit.harmsRanked.length
@@ -22548,6 +22548,8 @@ const spineFromStoredAudit = (audit, company) => {
     || {};
   const m = {
     ...raw,
+    // The lead's own trade, for audits stored before tradeWord was shipped.
+    tradeWord: raw.tradeWord || tradeWordFallback || null,
     rankFound: raw.rankFound ?? (raw.rank !== null && raw.rank !== undefined),
     reviewRecency: raw.reviewRecency ?? raw.reviewRecencyDays ?? null,
     formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
@@ -22605,13 +22607,16 @@ app.post('/api/compose-email', (req, res) => {
         if (_r && _r.reframe) useSpine = { ...useSpine, reframe: _r.reframe };
       }
       if (!useSpine.jobValue) {
-        const _jv = tradeJobValue(_m0.tradeWord);
+        // measuredNumbers.tradeWord exists only on audits stored after it
+        // shipped. req.body.tradeWord is the lead's own trade, sent by the
+        // client, so a lead researched earlier still gets its loss figure.
+        const _jv = tradeJobValue(_m0.tradeWord || req.body.tradeWord);
         if (_jv) useSpine = { ...useSpine, jobValue: _jv };
       }
-      console.log(`\u2696 EMAIL ELEMENTS [${company}]: the fact | ${useSpine.reframe ? 'the reframe' : 'NO reframe (claimId=' + JSON.stringify(useSpine.claimId || null) + ' matched no rung)'} | ${useSpine.jobValue ? 'the money' : 'NO money (tradeWord=' + JSON.stringify(_m0.tradeWord || null) + ')'}.`);
+      console.log(`\u2696 EMAIL ELEMENTS [${company}]: the fact | ${useSpine.reframe ? 'the reframe' : 'NO reframe (claimId=' + JSON.stringify(useSpine.claimId || null) + ' matched no rung)'} | ${useSpine.jobValue ? 'the money' : 'NO money (tradeWord=' + JSON.stringify(_m0.tradeWord || req.body.tradeWord || null) + ')'}.`);
     }
     if (!useSpine || !useSpine.claim) {
-      const rebuilt = spineFromStoredAudit(audit, company);
+      const rebuilt = spineFromStoredAudit(audit, company, req.body.tradeWord);
       if (rebuilt.spine && rebuilt.spine.claim) {
         useSpine = rebuilt.spine;
         if (rebuilt.source === 'harmsRanked') {
