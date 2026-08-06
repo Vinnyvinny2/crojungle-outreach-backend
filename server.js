@@ -10263,6 +10263,18 @@ const PAGE_INTENT = [
   { key: 'about',    re: /(about|our-story|my-story|who-we-are|meet[-_]|history|founder|owner|team|company|staff|leadership|bio|profile|provider|our-(doctor|dentist|attorney|surgeon|physician)|dr[-_.][a-z]|[-_](md|dds|dmd|dvm|cpa|esq)\b)/i },
   { key: 'services', re: /(services|what-we-do|solutions|offerings|specialt|practice-areas|treatments)/i },
   { key: 'booking',  re: /(book|schedule|appointment|consult|estimate|quote|request|get-started|contact)/i },
+  // ══ PROOF. THE CATEGORY THAT WAS MISSING ═══════════════════════════════════
+  // There was no category for reviews, testimonials, galleries or past work —
+  // the pages that decide whether a stranger believes the business. On
+  // All-Weather the sitemap held 229 URLs and the run logged "EXISTS BUT UNREAD:
+  // their sitemap has reviews, pricing, about page(s) we did not open", then
+  // spent its remaining reads on four city landing pages and a COVID-19 policy.
+  //
+  // This category is also the one the absence guards care about most. The
+  // system already knows the failure by heart: a live email told an attorney
+  // with a Reviews page that none of his reviews were on his site. Not reading
+  // the proof page is how that sentence gets written.
+  { key: 'proof',    re: /(review|testimonial|gallery|portfolio|our-work|past-work|projects?|case-stud|before-?and-?after|results)/i },
 ];
 
 const auditSitePages = async (website, fcKey, apiKey, companyName) => {
@@ -10319,8 +10331,27 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
       // Sitemap and feed files are machine plumbing: a customer never sees them
       // and they contain no evidence about the business.
       const NOISE = /\/(blog|posts?|news|article|category|categories|tag|tags|author|privacy|terms|disclaimer|accessibility|sitemap[\w-]*|[\w-]*-sitemap|feed|rss|amp|wp-|cart|checkout|account|login|register|search|thank-?you|test(?:ing)?|staging|preview|404|coming-?soon)\b|\.(xml|json|pdf|jpe?g|png|gif|webp|txt|css|js)(?:$|\?)/i;
+      // ══ CITY PAGES ARE THE SAME PAGE, N TIMES ══════════════════════════════
+      // The backfill sorts by shallowest path, and a location landing page is as
+      // shallow as it gets: /olathe-ks, /leawood-ks, /lees-summit-mo,
+      // /overland-park-ks. All-Weather spent four of its seven reads on those
+      // plus /covid-19-policy, while its reviews and pricing pages went unread.
+      //
+      // They are near-identical service copy with the city swapped, so the
+      // second one teaches us nothing the first did not, and none of them tells
+      // us anything about how the business sells or what it can prove. One is
+      // occasionally worth reading for local positioning; four never are.
+      //
+      // Matching a US state suffix (-ks, -mo, -tx) or a "city-state" shape is
+      // the reliable tell, along with the standing policy notices that every
+      // site added in 2020 and nobody has looked at since.
+      const LOW_VALUE = new RegExp(
+        '\\/[a-z][a-z-]{2,}-(?:al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\\/?$'
+        + '|\\/(covid|coronavirus|pandemic)[\\w-]*'
+        + '|\\/(locations?|service-area|areas?-we-serve)\\/[\\w-]+',
+        'i');
       const spare = clean
-        .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u))
+        .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u) && !LOW_VALUE.test(u))
         // Never the homepage \u2014 it is already scraped and would be bought twice.
         .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } })
         .sort((a, b) => (a.split('/').length - b.split('/').length) || (a.length - b.length))
