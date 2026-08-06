@@ -22758,7 +22758,26 @@ app.post('/api/send-to-hunter', async (req, res) => {
       });
       continue;
     }
-    const fullName = (lead.founderName || lead.verifiedCEO || '').trim();
+    // ══ THE CONTACT RECORD MUST NAME THE PERSON WE EMAILED ═══════════════════
+    // This read founderName FIRST — the stale name discovery captured before the
+    // decision-maker resolved. Live result: the email body correctly opened
+    // "Dusty —" and went to dusty@hannahcustomhomes.com, while the Hunter lead
+    // was created as "Kacie Carriço", the COO.
+    //
+    // The composer was fixed to prefer the confirmed owner; this was not, so the
+    // two disagreed about who the lead is. Any step using {{first_name}} would
+    // greet him as Kacie, and the lead list itself is wrong for Mike when he
+    // calls. Confirmed decision-maker wins here too, and objects are handled —
+    // decisionMaker is { name, title }, not a string.
+    const _nameOf = (v) => {
+      if (!v) return '';
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'object' && typeof v.name === 'string') return v.name.trim();
+      return '';
+    };
+    const fullName = _nameOf(lead.verifiedCEO)
+      || _nameOf(lead.decisionMaker)
+      || _nameOf(lead.founderName);
     const parts = fullName.split(/\s+/);
     try {
       const customAttrs = {};
