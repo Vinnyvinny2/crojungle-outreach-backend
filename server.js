@@ -7696,13 +7696,16 @@ const SUBJECTS_FOR = {
   placeholder_text:     ['your site has dummy text on it', 'placeholder text is live'],
   dead_blog:            ['your blog stopped in {year}', 'nothing new since {year}'],
   stale_reviews:        ['your reviews stopped', 'your last review is old'],
-  thin_profile:         ['your listing looks bare', 'only {photos} photos on google'],
+  thin_profile:         ['your listing looks bare', 'your google page is empty', 'nothing on your listing'],
   low_rating:           ['your rating is {rating}', 'your star line is hurting you'],
   no_owner_replies:     ['your reviews sit unanswered', 'nobody answers your reviews'],
   no_hours_on_profile:  ['google has no hours for you', 'your hours are missing'],
   no_mobile_viewport:   ['your site breaks on a phone', 'your site is down on mobile'],
   review_deficit:       ['you are behind on reviews', 'they have more reviews'],
-  not_compounding:      ['your reviews are not adding up', '{years} years, {reviews} reviews'],
+  // '{years} years, {reviews} reviews' was here and broke two of Mike's own
+  // subject rules at once — numbers, and two clauses split for rhythm. Three
+  // options so two leads leading on the same rung do not get the same line.
+  not_compounding:      ['your reviews are not adding up', 'your reviews stopped', "reviews don't match the work"],
   // Colleague voice, under 30 characters, nothing a consultant would type.
   review_pain_pattern:  ['your reviews keep saying it', 'the same complaint twice'],
   partial_owner_replies:['some reviews have no reply', 'your replies stopped'],
@@ -7816,25 +7819,25 @@ const EMAIL_SKELETONS = [
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta }) =>
-      `${first} — ${lower1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+      `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
     needsReframe: true,
     render: ({ first, fact, costs, reframe, money, count, cta }) =>
-      `${first} — ${lower1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+      `${first ? first + ' — ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta }) =>
-      `${first} — right now ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+      `${first ? first + ' — right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta }) =>
-      `${first} — ${lower1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
+      `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
   },
 ];
 
@@ -7857,7 +7860,17 @@ const toSecondPerson = (t) => String(t || '')
 
 const composeEmail = (spine, opts = {}) => {
   if (!spine || !spine.claim) return null;
-  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || 'there';
+  // ══ NO NAME MEANS NO GREETING, NOT A FAKE ONE ═══════════════════════════
+  // This fell back to 'there', so an unnamed lead opened "there — the only way
+  // to reach you is a phone call". Mike's rule is explicit and was written after
+  // a live send: "IF NO FIRST NAME IS CONFIRMED, WRITE NO DASH ... that dangling
+  // dash is the first character of the email AND of the preview text, and it
+  // reads as a broken mail-merge." A wrong greeting is worse than none — it is
+  // the very first thing he sees, and it says nobody checked.
+  //
+  // Empty string here; the skeletons omit the whole "Name — " opener and start
+  // on the fact, capitalised.
+  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
   const fact = toSecondPerson(spine.claim);
   const costs = toSecondPerson(spine.costs || '');
   // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
@@ -7897,8 +7910,18 @@ const composeEmail = (spine, opts = {}) => {
 
   // The count sentence, in a few shapes so it is not identical every time.
   const countForms = [
-    `That's one of ${n} things I found.`,
+    // ══ NEVER DESCRIBE OUR WORK ═══════════════════════════════════════════
+    // "That's one of 4 things I found" was on three of four live emails. The
+    // COPY VERIFY guard flags exactly this shape in model output — "DESCRIBES
+    // OUR PROCESS ... he does not care what we did, he cares what is true about
+    // his business, and every word about our method is a word not spent on his
+    // problem" — and then the composer's own template did it.
+    //
+    // The count is the one thing he cannot resolve on his own and it earns its
+    // place. It just has to be stated as a fact about his business rather than
+    // as a report on our afternoon. "That we found it is implied."
     `There are ${n} of these.`,
+    `That's one of ${n}.`,
     `${n} things, and that's the one you can check fastest.`,
   ];
   const count = n > 1 ? countForms[(opts.variantIndex || 0) % countForms.length] : '';
@@ -7930,18 +7953,66 @@ const composeEmail = (spine, opts = {}) => {
 // a call, because nobody told their booking page is down wants a document. A GAP
 // earns the write-up and no ask, because there is no urgency to justify one and
 // asking turns a soft email into a cold pitch.
-const CTA_FOR = (finding) => {
+// ══ THE ASK HAS TO MATCH WHAT YOU JUST TOLD HIM ══════════════════════════════
+// This was binary: anything matching /broken|down|expired/ got an accountability
+// question, everything else got "The write-up is yours whenever you want it."
+// So four consecutive live emails — a window contractor, a custom home builder,
+// a kitchen remodeler — all closed on the same sentence. Mike's own rule: "There
+// is no single right CTA, and using one ending for every email is what makes it
+// read as a template. Grade the finding you led with, then pick."
+//
+// The 2026 benchmark data says the same thing from the other direction: vague
+// asks "generate zero urgency", and low-friction SPECIFIC asks measurably
+// outperform them.
+//
+// Keyed by rung id rather than by regex on the sentence, because the id is what
+// the ladder actually decided and a regex on prose drifts the moment wording
+// changes. Each ask is one sentence, one question, and — the important part —
+// one only HE can answer. A question he can forward to his web person is a
+// question that ends the conversation in somebody else's queue.
+const CTA_BY_FINDING = {
+  // Something is broken. Accountability, not a pitch: the finding itself can be
+  // forwarded and fixed in five minutes without us ever hearing back, so the ask
+  // has to be the one thing that cannot.
+  broken_page: 'accountability', site_empty: 'accountability', no_https: 'accountability',
+  expired_certificate: 'accountability', tap_to_call_broken: 'accountability',
+  no_mobile_viewport: 'accountability', placeholder_text: 'accountability',
+  stale_copyright: 'accountability', dated_credibility: 'accountability',
+  dead_blog: 'accountability', phone_mismatch: 'accountability',
+  // Their Google listing. Same logic, different owner in most businesses.
+  listing_closed: 'listing', no_google_listing: 'listing', wrong_gbp_category: 'listing',
+  no_hours_on_profile: 'listing', no_website_on_profile: 'listing', thin_profile: 'listing',
+  // Reputation. The ask is about their PROCESS after a job — a question no
+  // employee can answer for him and the exact conversation the call needs to
+  // start on.
+  review_pain_pattern: 'process', not_compounding: 'process', no_owner_replies: 'process',
+  partial_owner_replies: 'process', stale_reviews: 'process', review_deficit: 'process',
+  low_rating: 'process',
+  // Search. There is a concrete artefact to hand over, so hand it over.
+  outranked_by_weaker: 'list', absent_from_search: 'list',
+  // Everything about how they are bought from — offer, positioning, booking.
+  // The write-up already exists; it is delivered, not proposed.
+  no_offer: 'writeup', undifferentiated: 'writeup', no_lead_magnet: 'writeup',
+  no_published_pricing: 'writeup', no_after_hours: 'writeup',
+  form_only_no_booking: 'writeup', long_form: 'writeup',
+};
+
+const CTA_TEXT = {
+  accountability: { text: "Who's handling the site for you at the moment?", kind: 'accountability' },
+  listing: { text: 'Who looks after the Google listing?', kind: 'listing' },
+  process: { text: "When a job's finished, does anyone ask the customer for a review?", kind: 'process' },
+  list: { text: "Want the list of who's ranking above you?", kind: 'list' },
+  writeup: { text: 'The write-up is yours whenever you want it.', kind: 'writeup' },
+};
+
+const CTA_FOR = (finding, claimId) => {
+  const byId = claimId && CTA_BY_FINDING[claimId];
+  if (byId && CTA_TEXT[byId]) return CTA_TEXT[byId];
+  // Fallback for a rung with no mapping: the original text test, so a new rung
+  // added without touching this table still closes sensibly rather than oddly.
   const broken = /\bbroken\b|returns? (?:a )?(?:server )?error|does not load|is down|appears nowhere|do(?:es)? not appear|contradict|expired|closed|no longer|will not dial|does not dial/i
     .test(String(finding || ''));
-  return broken
-    // A question about accountability is not a pitch: it is about him, it gets
-    // answered, and it cannot be forwarded — he is the only person who can answer
-    // it. That matters, because the finding itself CAN be forwarded and fixed in
-    // five minutes without us ever hearing back.
-    ? { text: "Who's handling the site for you at the moment?", kind: 'accountability' }
-    // Phrased as something that already exists. Never "shall I put something
-    // together?", which turns finished work back into a proposal.
-    : { text: 'The write-up is yours whenever you want it.', kind: 'writeup' };
+  return broken ? CTA_TEXT.accountability : CTA_TEXT.writeup;
 };
 
 // ══ THE WHOLE EMAIL, INCLUDING THE FOLLOW-UPS ════════════════════════════════
@@ -8000,8 +8071,8 @@ const composeFullEmail = (spine, opts = {}) => {
   if (!spine || !spine.claim) return null;
   const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
   const reframes = Array.isArray(opts.reframes) ? opts.reframes : [];
-  const cta = CTA_FOR(spine.claim);
-  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || 'there';
+  const cta = CTA_FOR(spine.claim, spine.claimId);
+  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
 
   const variant = (i) => {
     const composed = composeEmail(spine, {
@@ -8010,7 +8081,21 @@ const composeFullEmail = (spine, opts = {}) => {
       reframe: pickReframe(spine, reframes, i),
       cta: cta.text,
     });
-    return composed ? { subject: subjects[i % Math.max(1, subjects.length)] || '', body: composed.body } : null;
+    // ══ TWO LEADS ON THE SAME RUNG MUST NOT GET THE SAME SUBJECT ══════════
+    // Subjects are per-rung, so "your reviews are not adding up" went to a
+    // window contractor and a custom home builder on the same day. Mike's rule:
+    // "a subject that would fit another company in another industry is a
+    // template, and a template is what an automated sequence looks like."
+    //
+    // Rotating the starting point by the company name keeps every option in
+    // Mike's voice while making a collision between two specific leads unlikely.
+    // Deterministic, so regenerating never changes what was already assigned.
+    const _seed = String(opts.company || opts.founderName || '')
+      .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
+    const _pick = subjects.length
+      ? subjects[(Math.abs(_seed) + i) % subjects.length]
+      : '';
+    return composed ? { subject: _pick || '', body: composed.body } : null;
   };
 
   const second = (spine.rest || [])[0] || null;
@@ -19399,6 +19484,14 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               formFieldCount: _mm.formFieldCount,
               formFieldCountIsSingleForm: _mm.formFieldCountIsSingleForm,
               reviewsPerYear: _mm.reviewsPerYear,
+              // ══ THE TRADE, BECAUSE THE MONEY DEPENDS ON IT ════════════════
+              // tradeJobValue() keys off this to write the one sentence that
+              // puts a number on the loss — the third of the three elements the
+              // pitch is required to carry. It reaches the harm ladder and never
+              // reached the client, so a rebuilt email could not contain money
+              // no matter what trade the business was in. Measured on every lead
+              // during domain confirmation, at no cost.
+              tradeWord: customerTrade || verifiedIndustry || null,
               problemCount: _harmsForResponse.problemCount,
             };
             // ══ SAY WHETHER A SPINE WAS BUILT ═══════════════════════════════
@@ -19431,6 +19524,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             try {
               parsed.composedEmail = composeFullEmail(parsed.factualSpine, {
                 founderName: (decisionMaker && decisionMaker.name) || verifiedCEO || '',
+                company,   // same seed as the rebuild path, so both agree
                 subjects: parsed.subjectOptions,
                 reframes: (allowedConsequences && allowedConsequences.lines) || [],
               });
@@ -21546,6 +21640,29 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE ASK MUST MATCH THE FINDING ═══════════════════════════════════════
+  // Four consecutive live emails closed on the same sentence because the CTA was
+  // binary: broken, or everything else. Mike's rule names that failure exactly
+  // — "using one ending for every email is what makes it read as a template" —
+  // and the 2026 benchmarks agree from the other side: vague asks generate no
+  // urgency, specific low-friction ones measurably outperform.
+  //
+  // A rung added later without a CTA mapping silently reverts to the generic
+  // closer, which is the same failure arriving quietly. This names them.
+  try {
+    const _unmapped = HARM_LADDER.map(r => r.id).filter(id => !CTA_BY_FINDING[id]);
+    const _kinds = new Set(Object.values(CTA_BY_FINDING).map(k => CTA_TEXT[k] && CTA_TEXT[k].kind));
+    if (_unmapped.length) {
+      console.log(`\u26a0 CTA CHECK: ${_unmapped.length} rung(s) have no ask of their own and will close on the generic write-up line \u2014 ${_unmapped.join(', ')}. Every email that leads on one of those ends the same way.`);
+    } else if (_kinds.size < 3) {
+      console.log(`\u26d4 CTA CHECK: every rung maps, but only ${_kinds.size} distinct ask(s) exist across the whole ladder. That is a template with extra steps.`);
+    } else {
+      console.log(`\u2713 CTA CHECK: all ${HARM_LADDER.length} rungs carry an ask matched to the finding, across ${_kinds.size} distinct asks. No two findings of different kinds close the same way.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 CTA CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ A SUBJECT LINE IS COPY TOO ═══════════════════════════════════════════
   // Every fabrication guard in this system reads the BODY. The subject was never
   // checked, and it is the most visible line in the email.
@@ -22367,9 +22484,19 @@ const spineFromStoredAudit = (audit, company) => {
         // it existed do not carry one, but the ladder does — and the id is the
         // key. Looking it up costs nothing and means a rebuilt email argues its
         // point instead of stating a fact and stopping.
-        const _rung = realId ? HARM_LADDER.find(x => x.id === realId) : null;
+        // Match by id first. If the audit predates id persistence, the rung's
+        // `costs` line is a fixed literal in the ladder and identical in the
+        // stored copy, so it identifies the rung just as well. Without one of
+        // these the email loses its reframe and drops back to a bare fact.
+        const _costs = String(h.costs || '').trim();
+        const _rung = (realId ? HARM_LADDER.find(x => x.id === realId) : null)
+          || (_costs ? HARM_LADDER.find(x => String(x.costs || '').trim() === _costs) : null);
         return {
-          id: realId || `stored_${i}`,
+          // If the rung was identified by its costs line, take its real id too —
+          // subjects are keyed by id, so recovering the reframe without the id
+          // produced a correct body and a blank subject line, which the composer
+          // then refused outright. Recover both or neither.
+          id: realId || (_rung && _rung.id) || `stored_${i}`,
           finding: text,
           costs: String(h.costs || '').trim(),
           harm: Number(h.harm) || 0,
@@ -22428,6 +22555,19 @@ const spineFromStoredAudit = (audit, company) => {
   };
 
   const spine = buildFactualSpine(harms, m);
+  // ══ SAY WHICH OF THE THREE ELEMENTS THIS EMAIL WILL HAVE ═══════════════════
+  // The pitch is required to carry an unexpected fact, how customers behave, and
+  // the money. Two of those come from data that reaches this function or does
+  // not, and when either is missing the email silently drops to a bare fact and
+  // a cost — which is exactly what shipped, twice, looking like the composer
+  // simply wrote a short email.
+  if (spine) {
+    const _has = [];
+    if (spine.claim) _has.push('the fact');
+    if (spine.reframe) _has.push('the reframe'); else _has.push('NO reframe (the rung carries none, and neither id nor costs matched the ladder)');
+    if (spine.jobValue) _has.push('the money'); else _has.push(`NO money (tradeWord=${JSON.stringify(m.tradeWord || null)} \u2014 either it was not sent or the trade is not in the value table)`);
+    console.log(`\u2696 EMAIL ELEMENTS [${company}]: ${_has.join(' | ')}. An email missing the reframe states a fact without a reason to care; one missing the money describes a website problem instead of a revenue one.`);
+  }
   return { spine, source, gated, count: hits.length, reason: spine ? null : 'spine-refused' };
 };
 
@@ -22448,6 +22588,28 @@ app.post('/api/compose-email', (req, res) => {
     // researched before the spine existed still has its ladder stored, and the
     // ladder is the measurement — the spine is only a view onto it. Rebuild it.
     let useSpine = spine;
+    // ══ A STORED SPINE PREDATES THE REFRAME AND THE MONEY ═════════════════
+    // The rebuild path below only runs when there is NO spine. Every lead
+    // researched before those two fields existed HAS a spine — it just carries
+    // neither — so the rebuild was skipped and the stored spine used as-is.
+    // Hannah Custom Homes came back at 45 words on three consecutive presses of
+    // Regenerate for exactly this reason, and the diagnostic that would have
+    // said so lives in the branch that never ran.
+    //
+    // Both are recoverable without re-measuring anything: the reframe from the
+    // rung the spine already names, the money from the trade already measured.
+    if (useSpine && useSpine.claim) {
+      const _m0 = audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {};
+      if (!useSpine.reframe && useSpine.claimId) {
+        const _r = HARM_LADDER.find(x => x.id === useSpine.claimId);
+        if (_r && _r.reframe) useSpine = { ...useSpine, reframe: _r.reframe };
+      }
+      if (!useSpine.jobValue) {
+        const _jv = tradeJobValue(_m0.tradeWord);
+        if (_jv) useSpine = { ...useSpine, jobValue: _jv };
+      }
+      console.log(`\u2696 EMAIL ELEMENTS [${company}]: the fact | ${useSpine.reframe ? 'the reframe' : 'NO reframe (claimId=' + JSON.stringify(useSpine.claimId || null) + ' matched no rung)'} | ${useSpine.jobValue ? 'the money' : 'NO money (tradeWord=' + JSON.stringify(_m0.tradeWord || null) + ')'}.`);
+    }
     if (!useSpine || !useSpine.claim) {
       const rebuilt = spineFromStoredAudit(audit, company);
       if (rebuilt.spine && rebuilt.spine.claim) {
@@ -22496,6 +22658,7 @@ app.post('/api/compose-email', (req, res) => {
     }
     const composed = composeFullEmail(useSpine, {
       founderName: req.body.founderName || '',
+      company,   // seeds subject rotation so two leads on one rung differ
       subjects,
       reframes: audit.allowedReframes || (audit._persisted && audit._persisted.allowedReframes) || [],
     });
