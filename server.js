@@ -7249,9 +7249,40 @@ const measureAbandonment = (text) => {
 // None of those was a finding. Each was a parser producing a number no real
 // business would produce. Code can notice that, and it is the last place a
 // fabrication can enter.
+// ══ ABSENT IS NOT ZERO ═══════════════════════════════════════════════════════
+// Number(null) is 0, and Number.isFinite(0) is true. So every "did we measure
+// this?" test in this function answered YES for a measurement that was never
+// taken, and then compared it as a zero.
+//
+// On Let's Remodel KC that produced, verbatim in production:
+//
+//   ⛔ MEASUREMENT LOOKS WRONG: we read 40 reviews of null — we cannot read
+//      more than exist | a Google rating of null — outside the 1-5 range
+//
+// The word "null" is printed in both messages, which is the tell: the template
+// interpolated the raw value while the comparison had already coerced it to 0.
+// 40 > 0 is true, and 0 < 1 is true, so a lead with 46 reviews and a 4.9 rating
+// was declared to have impossible measurements. The spine refused to build,
+// Generate fell through to the full-evidence prompt, and that run produced
+// "25 years in the trade" and "38 of your 40 Google reviews" — inventions the
+// guards then had to catch. One coercion, and the entire honest path collapsed
+// into the dishonest one.
+//
+// null, '', false and [] all coerce to 0. Only undefined is safe, and relying on
+// which flavour of absence a caller happens to pass is not a guarantee. This
+// refuses every one of them.
+const strictNum = (v) => {
+  if (v === null || v === undefined) return NaN;
+  if (typeof v === 'boolean') return NaN;
+  if (Array.isArray(v)) return NaN;
+  if (typeof v === 'string' && v.trim() === '') return NaN;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+};
+
 const measurementLooksWrong = (m = {}) => {
   const bad = [];
-  const n = (v) => Number(v);
+  const n = strictNum;
   if (Number.isFinite(n(m.rank)) && Number.isFinite(n(m.scanned)) && n(m.rank) > n(m.scanned)) {
     bad.push(`rank #${m.rank} out of ${m.scanned} results \u2014 a position cannot exceed the list it is in`);
   }
@@ -7272,6 +7303,87 @@ const measurementLooksWrong = (m = {}) => {
     bad.push(`a newest review ${m.reviewRecency} days old \u2014 a date in the future`);
   }
   return bad;
+};
+
+// ══ ONE DEFINITION OF WHAT WE MEASURED ═══════════════════════════════════════
+// These numbers were being derived TWICE, independently — once into the harm
+// ladder's inputs and once into measuredNumbers for the client — and the two
+// copies had already drifted apart:
+//
+//   harm ladder :  reviewRecency: gbpHealth.reviewRecencyDays      <- does not exist
+//   client      :  reviewRecencyDays: gbpHealth.reviewRecency.newestDays
+//
+// gbpHealth returns reviewRecency as an OBJECT, {checked, newestDays, stale,
+// veryCold}. There is no reviewRecencyDays on it. So the ladder's copy resolved
+// to undefined on every lead ever run, the stale_reviews rung could never fire,
+// and "days since newest review" could never become a permitted figure — while
+// the client's copy read it correctly the whole time. Nothing failed, nothing
+// logged, and the two halves of the system quietly disagreed about what had been
+// measured.
+//
+// A second instance of the same shape: reviewCount and rating were read only
+// from localRank.ours, which exists ONLY when the local-rank search ran AND
+// found the business. On this lead it was skipped — "no city could be parsed
+// from the location" — so both came back null, even though the Places Details
+// call had already returned rating 4.9 and 46 reviews into gbpHealth, and Apify
+// had read 40 of those 46. The data was measured, present, and thrown away for
+// want of a fallback.
+//
+// So: one function, every fallback chain written down once, both callers reading
+// from it. Drift stops being a thing that can happen rather than a thing we
+// keep finding.
+const resolveMeasurements = ({
+  localRank = null, gbpHealth = null, history = null, htmlSignals = null,
+  reviewsRead = null, ownerReplyCount = null, deepReviews = null,
+} = {}) => {
+  const num = (v) => (strictNum(v) === strictNum(v) ? strictNum(v) : null); // NaN -> null
+  // First source that actually holds a number wins. Order is authority order,
+  // not convenience order.
+  const first = (...vals) => {
+    for (const v of vals) { const n = num(v); if (n !== null) return n; }
+    return null;
+  };
+
+  const _ours = (localRank && localRank.ours) ? localRank.ours : null;
+  const _recency = (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked)
+    ? gbpHealth.reviewRecency : null;
+
+  return {
+    // Reviews and rating: the rank search is the narrowest source and the first
+    // to go missing, so it is tried first only because it is same-query; Places
+    // Details and the review read are both authoritative and always attempted.
+    reviewCount: first(_ours && _ours.reviews, gbpHealth && gbpHealth.reviewCount,
+                       deepReviews && deepReviews.totalReviews),
+    rating: first(_ours && _ours.rating, gbpHealth && gbpHealth.rating,
+                  deepReviews && deepReviews.rating),
+
+    // Search position. rankFound is a GATE, not a figure: without it a rank of
+    // null reads as position zero.
+    rankFound: !!(localRank && localRank.found),
+    rank: (localRank && localRank.found) ? num(localRank.rank) : null,
+    scanned: localRank ? num(localRank.scanned) : null,
+    weakerAbove: localRank ? num(localRank.weakerAbove) : null,
+
+    // Google profile.
+    photoCount: gbpHealth ? num(gbpHealth.photoCount) : null,
+    reviewRecency: _recency ? num(_recency.newestDays) : null,
+
+    // History. tenure.checked matters: an unchecked tenure is not a tenure of 0,
+    // and a live email once told an owner his own founding year.
+    tenureYears: (history && history.tenure && history.tenure.checked)
+      ? num(history.tenure.years) : null,
+    reviewsPerYear: history ? num(history.reviewsPerYear) : null,
+
+    // What we actually read, as opposed to what exists.
+    reviewsRead: num(reviewsRead),
+    ownerReplies: num(ownerReplyCount),
+
+    // Form size. The gate distinguishes "one form with ten fields" from "ten
+    // fields counted across a whole page", which are different claims.
+    formFieldCountIsSingleForm: !!(htmlSignals && htmlSignals.formFieldCountIsSingleForm),
+    formFieldCount: (htmlSignals && htmlSignals.formFieldCountIsSingleForm)
+      ? num(htmlSignals.formFieldCount) : null,
+  };
 };
 
 // ══ THE PROBLEMS SECTION, BUILT FROM MEASUREMENTS ════════════════════════════
@@ -16630,6 +16742,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       try {
         // Named, so the finding scorers downstream consult the SAME measurements
         // instead of re-deriving them from whatever words the model chose.
+        // Every number below comes from here, so the ladder and the client can
+        // no longer disagree about what was measured.
+        const _measured = resolveMeasurements({
+          localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
+        });
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           scrapeTrustworthy: scrapeTrustworthy,
@@ -16643,21 +16760,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
           booking: sitePages && sitePages.booking,
           bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
-          formFieldCount: htmlSignals && htmlSignals.formFieldCount,
-          formFieldCountIsSingleForm: !!(htmlSignals && htmlSignals.formFieldCountIsSingleForm),
-          reviewRecency: gbpHealth && gbpHealth.reviewRecencyDays,
-          photoCount: gbpHealth && gbpHealth.photoCount,
-          rankFound: !!(localRank && localRank.found),
+          formFieldCount: _measured.formFieldCount,
+          formFieldCountIsSingleForm: _measured.formFieldCountIsSingleForm,
+          reviewRecency: _measured.reviewRecency,
+          photoCount: _measured.photoCount,
+          rankFound: _measured.rankFound,
           // Distinguish "we looked and they were absent" from "we never looked".
           // Without this the absence entry could fire on a lead where the rank
           // check was skipped, which would be a fabricated finding.
           rankChecked: !!(localRank && localRank.checked),
           // Inputs for the four entries added after the signal-by-signal audit.
-          rating: (localRank && localRank.ours) ? localRank.ours.rating : null,
+          rating: _measured.rating,
           // reviewCount is already supplied above from localRank.ours.reviews \u2014
           // the low_rating entry reads that same value.
-          reviewsRead: reviewsRead || null,
-          ownerReplies: ownerReplyCount,
+          reviewsRead: _measured.reviewsRead,
+          ownerReplies: _measured.ownerReplies,
           hoursListed: (gbpHealth && gbpHealth.checked) ? gbpHealth.hasHours !== false : null,
           viewportChecked: !!(htmlSignals && htmlSignals.checked),
           // ══ INPUTS FOR THE STOREFRONT-MAP ENTRIES ═══════════════════════
@@ -16676,12 +16793,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           })(),
           certExpired: _siteDownVerdict && _siteDownVerdict.certExpired === true,
           hasViewport: htmlSignals ? htmlSignals.hasViewport : null,
-          rank: localRank && localRank.rank,
-          weakerAbove: localRank && localRank.weakerAbove,
+          rank: _measured.rank,
+          weakerAbove: _measured.weakerAbove,
           rankQuery: localRank && localRank.query,
-          tenureYears: history && history.tenure && history.tenure.checked ? history.tenure.years : null,
-          reviewCount: localRank && localRank.ours ? localRank.ours.reviews : null,
-          reviewsPerYear: history && history.reviewsPerYear,
+          tenureYears: _measured.tenureYears,
+          reviewCount: _measured.reviewCount,
+          reviewsPerYear: _measured.reviewsPerYear,
           guarantee: offerStrength && offerStrength.checked ? offerStrength.guarantee : null,
           namedOffer: offerStrength && offerStrength.checked ? !offerStrength.genericOnly : null,
           leadMagnet: leadMagnet && leadMagnet.checked ? !!leadMagnet.found : null,
@@ -16726,7 +16843,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // gbpHealth.reviewRecencyDays. Because a later key wins in an object
           // literal, that would have replaced three working measurements with
           // null while looking like a fix. The duplicate-key check caught it.
-          scanned: localRank ? localRank.scanned : null,
+          scanned: _measured.scanned,
         };
         const _harms = rankHarms(_harmInputs);
         // ══ TRACE: THIS HAS TO PRINT ON EVERY LEAD ═══════════════════════════════
@@ -18601,22 +18718,38 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // So the server ships the exact set it measured, in one object, and
             // the client passes it through untouched. No field names to keep in
             // step, nothing to forget to store.
+            // ══ THE SAME RESOLVER THE LADDER USED ═════════════════════════
+            // This block used to re-derive all of it from the raw objects, and
+            // that second derivation is exactly where the drift lived: it read
+            // gbpHealth.reviewRecency.newestDays correctly while the ladder read
+            // gbpHealth.reviewRecencyDays and got undefined forever.
+            //
+            // sitePages was also wrong here — form fields are measured by
+            // htmlSignals, and sitePages carries no formFieldCount at all, so
+            // this shipped null on every lead. The resolver reads the object
+            // that actually holds it.
+            const _mm = resolveMeasurements({
+              localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
+            });
             parsed.measuredNumbers = {
-              reviewCount: (localRank && localRank.ours) ? localRank.ours.reviews : null,
-              rating: (localRank && localRank.ours) ? localRank.ours.rating : null,
-              rank: (localRank && localRank.found) ? localRank.rank : null,
-              scanned: localRank ? localRank.scanned : null,
-              weakerAbove: localRank ? localRank.weakerAbove : null,
-              photoCount: gbpHealth ? gbpHealth.photoCount : null,
-              reviewRecencyDays: (gbpHealth && gbpHealth.reviewRecency) ? gbpHealth.reviewRecency.newestDays : null,
-              tenureYears: (history && history.tenure) ? history.tenure.years : null,
-              reviewsRead: reviewsRead || null,
-              ownerReplies: ownerReplyCount || null,
-              // Form fields are measured inside the site audit, which is a
-              // different scope. Read it off the object we already hold rather
-              // than reaching for a local that does not exist here.
-              formFieldCount: (sitePages && sitePages.formFieldCountIsSingleForm) ? sitePages.formFieldCount : null,
-              reviewsPerYear: (history && history.reviewsPerYear) || null,
+              reviewCount: _mm.reviewCount,
+              rating: _mm.rating,
+              rank: _mm.rank,
+              rankFound: _mm.rankFound,
+              scanned: _mm.scanned,
+              weakerAbove: _mm.weakerAbove,
+              photoCount: _mm.photoCount,
+              // Both names are shipped deliberately. The client and the spine
+              // grew up calling this different things, and renaming either one
+              // breaks a stored audit that is already in the database.
+              reviewRecency: _mm.reviewRecency,
+              reviewRecencyDays: _mm.reviewRecency,
+              tenureYears: _mm.tenureYears,
+              reviewsRead: _mm.reviewsRead,
+              ownerReplies: _mm.ownerReplies,
+              formFieldCount: _mm.formFieldCount,
+              formFieldCountIsSingleForm: _mm.formFieldCountIsSingleForm,
+              reviewsPerYear: _mm.reviewsPerYear,
               problemCount: _harmsForResponse.problemCount,
             };
             // ══ SAY WHETHER A SPINE WAS BUILT ═══════════════════════════════
@@ -20624,6 +20757,116 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 SELF-TEST COULD NOT RUN \u2014 ${(e && e.message) || e}. That is itself a fault: the harness references something that does not exist.`);
   }
+  // ══ AN ABSENT MEASUREMENT MUST NOT LOOK LIKE A WRONG ONE ═════════════════
+  // Number(null) is 0 and Number.isFinite(0) is true, so the plausibility guard
+  // used to read every un-taken measurement as a zero and declare it impossible.
+  // Production consequence, verbatim: "we read 40 reviews of null" on a business
+  // with 46 reviews. The spine refused to build, Generate fell through to the
+  // full-evidence prompt, and that run invented a tenure and a review split.
+  //
+  // Every flavour of absence is tested, because relying on callers to pass one
+  // particular flavour is not a guarantee — it is a hope.
+  try {
+    const _absences = [null, undefined, '', false, []];
+    const _falseTrips = [];
+    _absences.forEach(a => {
+      // A real reading paired with an absent one: the exact shape that broke.
+      [
+        { reviewsRead: 40, reviewCount: a },
+        { rating: a },
+        { rank: 7, scanned: a },
+        { tenureYears: a },
+        { photoCount: a },
+        { reviewRecency: a },
+        { formFieldCount: a },
+      ].forEach(probe => {
+        const out = measurementLooksWrong(probe);
+        if (out.length) _falseTrips.push(`${JSON.stringify(a)} -> ${out[0]}`);
+      });
+    });
+    // And the guard must still catch measurements that ARE impossible.
+    const _realFaults = [
+      measurementLooksWrong({ reviewsRead: 40, reviewCount: 2 }).length,
+      measurementLooksWrong({ rating: 7 }).length,
+      measurementLooksWrong({ rank: 30, scanned: 20 }).length,
+      measurementLooksWrong({ tenureYears: 400 }).length,
+    ].filter(Boolean).length;
+
+    if (_falseTrips.length) {
+      console.log(`\u26d4 ABSENCE CHECK: ${_falseTrips.length} case(s) where a measurement we never took is reported as impossible. A lead with real numbers will be refused a factual spine and pushed to the invention path. First: ${_falseTrips[0]}`);
+    } else if (_realFaults < 4) {
+      console.log(`\u26d4 ABSENCE CHECK: absent values are handled, but the guard now misses ${4 - _realFaults} genuinely impossible measurement(s). Loosening it too far is worse than the bug it replaced \u2014 a sentence built on a broken parser reaches the email with total confidence.`);
+    } else {
+      console.log(`\u2713 ABSENCE CHECK: no measurement we never took is mistaken for an impossible one (${_absences.length} flavours of absence \u00d7 7 shapes), and all 4 genuinely impossible readings are still caught.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 ABSENCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE RESOLVER MUST RECOVER WHAT THE RANK SEARCH DOES NOT ══════════════
+  // reviewCount and rating had exactly one source: localRank.ours, which exists
+  // only when the local-rank search ran AND found the business. On a lead whose
+  // city could not be parsed the search never ran, so both came back null even
+  // though the Places Details call had already returned them.
+  try {
+    const _noRank = resolveMeasurements({
+      localRank: null,
+      gbpHealth: { reviewCount: 46, rating: 4.9, photoCount: 10,
+                   reviewRecency: { checked: true, newestDays: 62 } },
+      history: { tenure: { checked: false, years: null }, reviewsPerYear: 4 },
+      htmlSignals: { formFieldCountIsSingleForm: true, formFieldCount: 10 },
+      reviewsRead: 40, ownerReplyCount: 40,
+    });
+    const _recovered = ['reviewCount', 'rating', 'reviewRecency']
+      .filter(k => _noRank[k] !== null && _noRank[k] !== undefined);
+    if (_recovered.length < 3) {
+      console.log(`\u26d4 FALLBACK CHECK: with no local rank, only ${_recovered.length}/3 of reviewCount, rating and reviewRecency were recovered from the Google profile. The rest are measured and then discarded, and the ladder will run on less than we know.`);
+    } else if (_noRank.tenureYears !== null) {
+      console.log(`\u26d4 FALLBACK CHECK: an UNCHECKED tenure came back as a number. An unchecked tenure is not a tenure of zero, and stating a founding year we never read is the easiest claim in the email for an owner to disprove.`);
+    } else {
+      console.log(`\u2713 FALLBACK CHECK: with no local rank at all, reviews (${_noRank.reviewCount}), rating (${_noRank.rating}) and review recency (${_noRank.reviewRecency}d) still resolve from the Google profile, and an unchecked tenure stays null.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FALLBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE CHAIN, NOT THE LINKS ═════════════════════════════════════════════
+  // Each check above passes on its own. The failure that cost this build was in
+  // the JOIN between them: the resolver handed the guard a null, the guard read
+  // the null as a zero, and the spine refused. Every individual function was
+  // behaving exactly as written.
+  //
+  // So this replays the real lead end to end — a business with a full Google
+  // profile whose local-rank search never ran because no city could be parsed —
+  // and asserts a spine comes out the far side. If it does not, Generate falls
+  // back to the full-evidence prompt on every lead of that shape, which is the
+  // path that invents.
+  try {
+    const _m = resolveMeasurements({
+      localRank: null,
+      gbpHealth: { reviewCount: 46, rating: 4.9, photoCount: 10,
+                   reviewRecency: { checked: true, newestDays: 62 } },
+      history: { tenure: { checked: false, years: null }, reviewsPerYear: 4 },
+      htmlSignals: { formFieldCountIsSingleForm: true, formFieldCount: 10 },
+      reviewsRead: 40, ownerReplyCount: 40,
+    });
+    const _wrong = measurementLooksWrong(_m);
+    const _f = { id: 'no_lead_magnet', finding: 'There is nothing to take away short of asking for a quote',
+                 costs: 'Anyone still deciding leaves with nothing tying them to this business',
+                 harm: 50, opener: 40 };
+    const _spine = _wrong.length ? null
+      : buildFactualSpine({ all: [_f], byHarm: [_f], lead: _f }, _m);
+    if (_wrong.length) {
+      console.log(`\u26d4 END-TO-END CHECK: a lead with 46 reviews and a 4.9 rating but no local-rank search is STILL reported as having impossible measurements \u2014 "${_wrong[0]}". No spine will be built for it and Generate will invent. This is the exact production failure and it is not fixed.`);
+    } else if (!_spine || !_spine.claim) {
+      console.log(`\u26d4 END-TO-END CHECK: the measurements pass the plausibility guard now, but no factual spine is produced from them. The composer will not run and Generate falls back to the model.`);
+    } else {
+      console.log(`\u2713 END-TO-END CHECK: the lead that broke this build \u2014 full Google profile, no local-rank search \u2014 now yields a factual spine with ${(_spine.figures || []).length} permitted figure(s). The composer can run on it without a model call.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 END-TO-END CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE FIGURE ALLOWLIST HAS TO BE REACHABLE ═════════════════════════════
   // buildFactualSpine reads a fixed set of field names to decide which numbers
   // the email may contain. For most of this system's life SEVEN of them were
