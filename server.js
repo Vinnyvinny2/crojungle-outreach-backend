@@ -4369,7 +4369,24 @@ const cityState = (location) => {
 // because the slug contains "about" — three wasted Firecrawl credits on one lead.
 const CONTENT_URL_EXCLUDE = /\/(blog|news|press|article|articles|post|posts|category|categories|tag|tags|events?|resources?|guides?|faq|case-stud|testimonial|review)s?(\/|$)/i;
 
-const rankUrlsByIntent = (urls, re, limit = 4) => {
+// ══ WHAT COUNTS AS NOISE DEPENDS ON WHAT YOU ARE LOOKING FOR ═════════════════
+// CONTENT_URL_EXCLUDE drops blog, news, case studies, testimonials and reviews.
+// That is correct for the OWNER FINDER it was written for — a blog post will not
+// tell you who runs the company — and it was then applied to every intent search
+// in the file, including the site audit.
+//
+// So the `proof` category, added specifically to read a business's reviews and
+// testimonials pages, could never match one: this filter deleted those URLs two
+// lines before the category was consulted. All-Weather logged
+// "EXISTS BUT UNREAD: their sitemap has reviews, pricing" on every run while a
+// category existed whose entire job was to open that page.
+//
+// A reviews page is noise when hunting for the owner and is the single most
+// valuable page on the site when judging whether a stranger would believe them.
+// The caller says which it is.
+const PROOF_URL_TOKENS = /\/(case-stud|testimonial|review)s?(\/|$)/i;
+
+const rankUrlsByIntent = (urls, re, limit = 4, opts = {}) => {
   const pathOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return String(u).toLowerCase(); } };
   // A hint must be its own path SEGMENT ("/about", "/our-team"), not a fragment
   // buried inside a long article slug. Segments are split on / - _ so
@@ -4378,7 +4395,13 @@ const rankUrlsByIntent = (urls, re, limit = 4) => {
     .some(seg => seg.split(/[-_]/).length <= 4 && re.test(seg));
   return (urls || [])
     .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
-    .filter(u => !CONTENT_URL_EXCLUDE.test(pathOf(u)))
+    .filter(u => {
+      const p = pathOf(u);
+      if (!CONTENT_URL_EXCLUDE.test(p)) return true;
+      // Excluded — unless the caller is looking for proof and this is a proof
+      // page rather than a blog post.
+      return !!opts.wantProof && PROOF_URL_TOKENS.test(p);
+    })
     .filter(u => re.test(pathOf(u)) && hintIsASegment(pathOf(u)))
     .map(u => { const p = pathOf(u); return { u, score: p.split('/').filter(Boolean).length * 100 + p.length }; })
     .sort((a, b) => a.score - b.score)
@@ -7684,21 +7707,46 @@ const lower1 = (t) => {
 };
 
 const EMAIL_SKELETONS = [
-  // Fact first. The most direct, and the right shape when the fact is alarming.
-  ({ first, fact, costs, reframe, count, cta }) =>
-    `${first} — ${lower1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.\n\n${count}\n\n${cta}`,
-
-  // Reframe first. Right when the fact needs a reason to matter before it lands.
-  ({ first, fact, costs, reframe, count, cta }) =>
-    `${first} — ${lower1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.\n\n${count}\n\n${cta}`,
-
-  // Cost first. Opens on his money rather than his page.
-  ({ first, fact, costs, reframe, count, cta }) =>
-    `${first} — right now ${lower1(costs)}.\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
-
-  // Tight. Four short paragraphs, no connective at all.
-  ({ first, fact, costs, reframe, count, cta }) =>
-    `${first} — ${lower1(fact)}.\n\n${upper1(costs)}.\n\n${upper1(reframe)}\n\n${count} ${cta}`,
+  // ══ A SKELETON HAS TO SAY WHETHER IT NEEDS THE REFRAME ═══════════════════
+  // The reframe is now dropped whenever none of them is about the finding the
+  // email opens on — which is right, a near-miss reframe reads worse than none.
+  // But two of these skeletons OPEN with it, and an empty opener is not a
+  // shorter email, it is a broken one. Live on All-Weather, variant B went out
+  // as:
+  //
+  //     Doug —
+  //
+  //     127 reviews across 40 years of trading — about 3.2 a year, so...
+  //
+  // The greeting, a dash, and nothing. Whitespace cleanup cannot fix that,
+  // because the sentence that was supposed to be there never existed.
+  //
+  // So each skeleton declares its dependency and composeEmail picks only from
+  // the ones that can stand without one.
+  {
+    // Fact first. The most direct, and the right shape when the fact is alarming.
+    needsReframe: false,
+    render: ({ first, fact, costs, reframe, count, cta }) =>
+      `${first} — ${lower1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.\n\n${count}\n\n${cta}`,
+  },
+  {
+    // Reframe first. Right when the fact needs a reason to matter before it lands.
+    needsReframe: true,
+    render: ({ first, fact, costs, reframe, count, cta }) =>
+      `${first} — ${lower1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.\n\n${count}\n\n${cta}`,
+  },
+  {
+    // Cost first. Opens on his money rather than his page.
+    needsReframe: false,
+    render: ({ first, fact, costs, reframe, count, cta }) =>
+      `${first} — right now ${lower1(costs)}.\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+  },
+  {
+    // Tight. Four short paragraphs, no connective at all.
+    needsReframe: false,
+    render: ({ first, fact, costs, reframe, count, cta }) =>
+      `${first} — ${lower1(fact)}.\n\n${upper1(costs)}.\n\n${upper1(reframe)}\n\n${count} ${cta}`,
+  },
 ];
 
 // Turn a ladder sentence into second person. The ladder writes about the
@@ -7755,8 +7803,12 @@ const composeEmail = (spine, opts = {}) => {
   const count = n > 1 ? countForms[(opts.variantIndex || 0) % countForms.length] : '';
 
   const cta = String(opts.cta || 'The write-up is yours whenever you want it.').trim();
-  const skeleton = EMAIL_SKELETONS[(opts.variantIndex || 0) % EMAIL_SKELETONS.length];
-  const body = skeleton({ first, fact, costs, reframe, count, cta })
+  // Only skeletons that can stand up without a reframe are eligible when we do
+  // not have one. Rotating within the eligible set keeps the two variants from
+  // coming out identical.
+  const eligible = EMAIL_SKELETONS.filter(sk => reframe || !sk.needsReframe);
+  const skeleton = (eligible.length ? eligible : EMAIL_SKELETONS)[(opts.variantIndex || 0) % Math.max(1, eligible.length || EMAIL_SKELETONS.length)];
+  const body = skeleton.render({ first, fact, costs, reframe, count, cta })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -10395,7 +10447,10 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     // than a blog post or a tag archive.
     const picked = [];
     for (const intent of PAGE_INTENT) {
-      const ranked = rankUrlsByIntent(clean, intent.re, 6).filter(u => !picked.some(p => p.url === u));
+      // The proof category is the one that WANTS reviews and testimonials pages;
+      // every other category still treats them as content noise.
+      const ranked = rankUrlsByIntent(clean, intent.re, 6, { wantProof: intent.key === 'proof' })
+        .filter(u => !picked.some(p => p.url === u));
       ranked.slice(0, 2).forEach(u => picked.push({ key: intent.key, url: u }));
     }
     // Backfill: a site can be full of substance and match none of our words.
