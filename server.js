@@ -7268,6 +7268,51 @@ const HARM_LADDER = [
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
+  // ══ WHAT THEIR OWN CUSTOMERS WROTE DOWN, MORE THAN ONCE ═══════════════════
+  // The Brain prompt calls this the MANDATORY opening — "a pain repeating across
+  // their own Google reviews with a count ... outranks every other opener
+  // including news triggers". It had no rung. So once the ladder became the
+  // thing that decides what the email opens on, the single strongest piece of
+  // evidence this system collects went structurally invisible, and the
+  // fact-checker caught it on All-Weather: "the pitch should lead with the
+  // callback finding, not bury it in a review-velocity stat".
+  //
+  // specific 98 because nobody could write this sentence without reading their
+  // reviews. delegable 20 because "your customers say the same thing twice" is
+  // not something an owner hands to a web developer — it is his to answer.
+  // A pattern requires two or more mentions by construction, so "more than one"
+  // is measured, not estimated.
+  { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
+    test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
+    say: (m) => `more than one of their own Google reviews names the same thing — ${String(m.reviewPainTop).toLowerCase()}`,
+    costs: 'a complaint that repeats is the one a stranger comparing three companies will find' },
+
+  // ══ NO PRICE ANYWHERE ON THE SITE ════════════════════════════════════════
+  // pricingMeasured is the "did we look?" gate: a null prices array means the
+  // page audit never ran, and this system does not get to call something absent
+  // that it never went looking for.
+  //
+  // novel is low (30) on purpose — he knows perfectly well he does not publish
+  // prices — so this scores as a real finding for the audit and a weak opener,
+  // which is correct. It belongs in the write-up and on the call, not usually in
+  // the first sentence.
+  { harm: 54, specific: 78, novel: 30, delegable: 45, weFix: 85, band: 'OPINION', id: 'no_published_pricing',
+    test: (m) => m.pricingMeasured === true && m.pricesPublished === 0,
+    say: () => 'no price and no range appears anywhere on the pages we read',
+    costs: 'someone comparing three companies has to ask them to find out, and people generally ask whoever tells them first' },
+
+  // ══ HE ANSWERS SOME OF THEM ══════════════════════════════════════════════
+  // no_owner_replies only fires at ZERO. An owner answering 12 of 40 is doing
+  // the work and getting little of the benefit, and nothing in the ladder could
+  // say so. Threshold 0.6 and a floor of 10 reviews read, so this cannot fire on
+  // a thin sample. All-Weather answers 33 of 40 — 82% — and this correctly stays
+  // silent there.
+  { harm: 48, specific: 94, novel: 68, delegable: 25, weFix: 85, band: 'INVISIBLE', id: 'partial_owner_replies',
+    test: (m) => (m.reviewsRead || 0) >= 10 && (m.ownerReplies || 0) > 0
+              && ((m.ownerReplies || 0) / (m.reviewsRead || 1)) < 0.6,
+    say: (m) => `${m.ownerReplies} of the ${m.reviewsRead} reviews we read have a reply from the business`,
+    costs: 'the ones without a reply are the ones a stranger reads as unanswered' },
+
   { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
     say: (m) => `${m.reviewCount} reviews across ${m.tenureYears} years of trading — about ${m.reviewsPerYear} a year`,
@@ -7547,6 +7592,8 @@ const AREA_OF = {
   no_hours_on_profile: 'Google listing', stale_reviews: 'Google listing',
   low_rating: 'Reputation', no_owner_replies: 'Reputation',
   review_deficit: 'Reputation', not_compounding: 'Reputation',
+  review_pain_pattern: 'Reputation', partial_owner_replies: 'Reputation',
+  no_published_pricing: 'Why choose them',
   no_offer: 'Why choose them', no_lead_magnet: 'Why choose them',
   undifferentiated: 'Why choose them',
 };
@@ -7618,6 +7665,10 @@ const SUBJECTS_FOR = {
   no_mobile_viewport:   ['your site breaks on a phone', 'your site is down on mobile'],
   review_deficit:       ['you are behind on reviews', 'they have more reviews'],
   not_compounding:      ['your reviews are not adding up', '{years} years, {reviews} reviews'],
+  // Colleague voice, under 30 characters, nothing a consultant would type.
+  review_pain_pattern:  ['your reviews keep saying it', 'the same complaint twice'],
+  partial_owner_replies:['some reviews have no reply', 'your replies stopped'],
+  no_published_pricing: ['no price anywhere on site', 'nobody can find your prices'],
   no_offer:             ['your site never says why you', 'nothing says why you'],
   no_lead_magnet:       ['your only ask is a quote', 'nothing to take away'],
   undifferentiated:     ['your copy says nothing', 'your headline says nothing'],
@@ -17228,6 +17279,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // literal, that would have replaced three working measurements with
           // null while looking like a fix. The duplicate-key check caught it.
           scanned: _measured.scanned,
+          // ══ SIGNALS WE MEASURE AND THE LADDER COULD NOT SEE ═══════════════
+          // A repeating complaint in their own Google reviews is, by the Brain
+          // prompt's own words, the MANDATORY opening that "outranks every other
+          // opener". The ladder had no rung for it, so once the ladder started
+          // deciding the email's spine, the strongest evidence we collect became
+          // structurally invisible. On All-Weather the fact-checker said so
+          // outright: "the pitch should lead with the callback finding, not bury
+          // it in a review-velocity stat".
+          //
+          // Published pricing and owner reply rate are the same story: measured,
+          // logged, and unreachable by any rung.
+          reviewPainCount: Array.isArray(publicPainSignals) ? publicPainSignals.length : 0,
+          reviewPainTop: (Array.isArray(publicPainSignals) && publicPainSignals[0])
+            ? String(publicPainSignals[0]).split(' \u2014 evidence:')[0].trim() : null,
+          // Array.isArray is the "did we look?" test. A null prices array means
+          // the page audit never ran, and absence can only be claimed about
+          // something we actually looked for.
+          pricingMeasured: !!(sitePages && Array.isArray(sitePages.prices)),
+          pricesPublished: (sitePages && Array.isArray(sitePages.prices)) ? sitePages.prices.length : null,
         };
         const _harms = rankHarms(_harmInputs);
         // ══ TRACE: THIS HAS TO PRINT ON EVERY LEAD ═══════════════════════════════
