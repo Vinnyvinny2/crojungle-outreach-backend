@@ -4197,16 +4197,43 @@ let FC_CREDITS_SAVED = 0;   // operations served from our own cache instead
 // found" / "no owner found", because the contact and about pages were never actually
 // read. This is why leads with a resolved owner still came back with no mailbox.
 // Strip query and hash, keep any real subpath, drop the trailing slash.
+// ══ THE ROOT OF THE SITE, NOT WHERE WE HAPPENED TO ENTER IT ═════════════════
+// This returned origin + pathname, and both callers append root-relative paths
+// to it. That is correct only when the lead's stored website IS the homepage.
+//
+// All-Weather Windows was stored as:
+//     https://www.allweatherkc.com/showroom-locations/
+//
+// so every guess became a URL that does not exist:
+//     https://www.allweatherkc.com/showroom-locations/contact
+//     https://www.allweatherkc.com/showroom-locations/contact-us
+//     https://www.allweatherkc.com/showroom-locations/about
+//     https://www.allweatherkc.com/showroom-locations/about-us
+//     https://www.allweatherkc.com/showroom-locations/team
+//     https://www.allweatherkc.com/showroom-locations/our-team
+//
+// Six paid scrapes, six pages that were never there. Firecrawl bills a 404 as a
+// successful fetch, so nothing errored and nothing logged — the run simply cost
+// six credits and learned nothing. That lead spent 15 credits against 8 for a
+// comparable lead entered at its homepage.
+//
+// Leads arrive from Google Places and directory listings, which routinely point
+// at a location page, a services page or a booking page rather than the root.
+// This is not an edge case; it is a large share of the pipeline.
+//
+// Both callers want the site ROOT. Nothing wants the entry path.
 const siteBase = (website) => {
   const raw = String(website || '').trim();
   if (!raw) return '';
   try {
     const u = new URL(raw.startsWith('http') ? raw : 'https://' + raw);
-    return (u.origin + u.pathname).replace(/\/+$/, '');
+    return u.origin;
   } catch {
-    // Not parseable as a URL — fall back to cutting at the first ? or # by hand
-    // rather than returning something that will be concatenated into nonsense.
-    return raw.split(/[?#]/)[0].replace(/\/+$/, '');
+    // Not parseable as a URL — cut at the first ? or # by hand, then drop any
+    // path, rather than returning something that concatenates into nonsense.
+    const cut = raw.split(/[?#]/)[0].replace(/\/+$/, '');
+    const m = cut.match(/^(https?:\/\/)?([^/]+)/i);
+    return m ? ((m[1] || 'https://') + m[2]) : cut;
   }
 };
 
@@ -4426,6 +4453,72 @@ const fcNote = (paid, kind, what) => {
 // truncates an unranked list and the leadership page can be cut off before
 // rankUrlsByIntent ever sees it. Two leads in the last run mapped EXACTLY 60 — they
 // were both being truncated. Same credit, full sitemap, ranking now has real input.
+// ══ THE SITE'S OWN NAVIGATION, FOR FREE ══════════════════════════════════════
+// When Firecrawl's map returns nothing we fall through to guessing six fixed
+// paths — and Firecrawl bills a 404 as a successful fetch, so guessing costs
+// real credits to learn nothing. All-Weather Windows spent six that way.
+//
+// But at that exact moment we are usually holding the homepage already. The
+// dead-site verifier fetches it with our own HTTP client to prove the site is up
+// (79,343 characters on All-Weather), and the code strips the tags to plain text
+// and throws the markup away — including every <a href> in the site's own
+// navigation, which is a more accurate list of real pages than any guess and
+// more current than a sitemap.
+//
+// So: harvest the links before discarding the markup, and let the map consult
+// them when it has nothing of its own. Zero credits, zero extra requests.
+const linksFromHtml = (html, pageUrl) => {
+  const out = [];
+  if (!html || !pageUrl) return out;
+  let origin = '', host = '';
+  try { const u = new URL(pageUrl); origin = u.origin; host = u.hostname.replace(/^www\./, '').toLowerCase(); }
+  catch { return out; }
+  const seen = new Set();
+  const re = /<a\b[^>]*?href\s*=\s*["']([^"']+)["']/gi;
+  let m;
+  while ((m = re.exec(String(html))) !== null) {
+    let href = m[1].trim();
+    if (!href || href.startsWith('#')) continue;
+    if (/^(mailto:|tel:|javascript:|data:)/i.test(href)) continue;
+    let abs;
+    // Resolve against the PAGE, not the origin. A browser resolves "contact/"
+    // on /showroom-locations/ to /showroom-locations/contact/, and inventing a
+    // different answer here would reintroduce exactly the bug this replaces:
+    // a plausible URL that the site does not serve, paid for as a 404.
+    try { abs = new URL(href, pageUrl).toString(); } catch { continue; }
+    let u;
+    try { u = new URL(abs); } catch { continue; }
+    // Same site only. An off-site link is someone else's page.
+    if (u.hostname.replace(/^www\./, '').toLowerCase() !== host) continue;
+    // Assets are not pages.
+    if (/\.(jpe?g|png|gif|svg|webp|avif|ico|css|js|pdf|zip|mp4|mp3|woff2?|ttf|eot)(\?|$)/i.test(u.pathname)) continue;
+    u.hash = '';
+    const clean = u.toString().replace(/\/+$/, '');
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= 300) break;
+  }
+  return out;
+};
+
+// Links harvested from pages we fetched ourselves, keyed by hostname. Populated
+// wherever we already hold markup; read by firecrawlMap when it comes up empty.
+const _HTML_LINKS = new Map();
+const rememberHtmlLinks = (html, pageUrl, companyName) => {
+  const links = linksFromHtml(html, pageUrl);
+  if (!links.length) return 0;
+  let host = '';
+  try { host = new URL(pageUrl).hostname.replace(/^www\./, '').toLowerCase(); } catch { return 0; }
+  const prev = _HTML_LINKS.get(host) || [];
+  const merged = [...new Set([...prev, ...links])];
+  _HTML_LINKS.set(host, merged);
+  if (companyName) {
+    console.log(`\u26d3 LINKS HARVESTED [${companyName}]: ${links.length} internal link(s) read out of markup we had already fetched, at no cost. If the sitemap comes back empty these are used instead of guessing fixed paths, which bills a 404 as a fetch.`);
+  }
+  return links.length;
+};
+
 const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   void search;
   if (!fcKey || !url) return [];
@@ -4468,7 +4561,20 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   // "We asked and there was nothing" is an answer worth remembering. Four
   // credits to learn it once is three too many.
   _MAP_CACHE.set(_mk, { urls: out, at: Date.now() });
-  if (!out.length) console.log(`\u267b MAP EMPTY [${_mk}]: no URLs returned, and that answer is now cached \u2014 the other callers on this lead will not re-pay to learn the same thing.`);
+  if (!out.length) {
+    // ══ EMPTY MAP IS NOT AN EMPTY SITE ═══════════════════════════
+    // A site with no sitemap, or one Firecrawl cannot read, still has a
+    // navigation bar. If we have already fetched a page from this host, those
+    // links are in hand and they beat guessing: they are URLs the site really
+    // publishes, so nothing is spent discovering a 404.
+    const _harvested = _HTML_LINKS.get(_mk) || [];
+    if (_harvested.length) {
+      console.log(`\u267b MAP EMPTY [${_mk}]: Firecrawl returned no URLs, but ${_harvested.length} internal link(s) were already harvested from this site\u2019s own markup at no cost. Using those instead \u2014 they are pages the site really publishes, where the fallback guesses six fixed paths and pays for whichever are not there.`);
+      _MAP_CACHE.set(_mk, { urls: _harvested, at: Date.now() });
+      return _harvested;
+    }
+    console.log(`\u267b MAP EMPTY [${_mk}]: no URLs returned and no markup harvested from this host yet, so that answer is now cached \u2014 the other callers on this lead will not re-pay to learn the same thing.`);
+  }
     return out;
   } catch(e) {
     console.log('firecrawlMap error:', e.message);
@@ -15670,6 +15776,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // to only run on a real page (rawHtml present); a bot-challenge page was
     // already blanked upstream, so this never reads a challenge page.
     htmlSignals = rawHtml ? extractHtmlSignals(rawHtml, website) : { checked: false };
+    // Harvest this page's navigation while we hold its markup. This is the
+    // common path — Firecrawl succeeded — and the links cost nothing because the
+    // page is already fetched and parsed. They are only ever consulted if the
+    // sitemap comes back empty, which is when we would otherwise guess fixed
+    // paths and pay for the ones that are not there.
+    if (rawHtml) {
+      try { rememberHtmlLinks(rawHtml, website, company); }
+      catch (e) { console.log(`LINKS [${company}]: harvest failed (${e && e.message}) \u2014 discovery falls back to the sitemap.`); }
+    }
     // Probe HTTPS for real and merge it in. Free — a plain fetch, no API credit.
     if (htmlSignals.checked) {
       const _https = await checkHttpsSupport(website);
@@ -15763,6 +15878,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // coarser than Firecrawl's markdown, but a coarse read of the real page
         // beats blocking a lead whose site we are holding in memory.
         if (_siteDownVerdict.html) {
+          // Read the navigation out of the markup BEFORE the tags are stripped.
+          // This is the only moment the links exist; two lines below they are
+          // gone. On All-Weather this markup was 79,343 characters of real
+          // homepage, and the run went on to guess six paths that did not exist.
+          try {
+            rememberHtmlLinks(_siteDownVerdict.html, _siteDownVerdict.workingUrl || website, company);
+          } catch (e) {
+            console.log(`LINKS [${company}]: could not harvest from the page we fetched (${e && e.message}) \u2014 discovery falls back to the sitemap.`);
+          }
           const _salvaged = String(_siteDownVerdict.html)
             .replace(/<script[\s\S]*?<\/script>/gi, ' ')
             .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -19327,6 +19451,35 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             suppressed: unverifiedQuotes,
           };
           brainAudit = {
+            // ══ THE MEASURED HALF OF THE AUDIT ═══════════════════════════════
+            // Everything below this comment was computed, logged, and then
+            // dropped on the floor. brainAudit is an explicit literal, so a
+            // field that is not named here does not exist as far as the browser
+            // is concerned — no error, no warning, just absence.
+            //
+            // The server would log, truthfully:
+            //   ✓ FACTUAL SPINE: "127 reviews across 40 years of trading"
+            //   ✉ EMAIL COMPOSED: "your reviews are not adding up" — 66 words,
+            //     every one traceable to a measurement. No model wrote any part.
+            //
+            // and the browser would receive none of it, fall through to the
+            // model, and show a banner reading "this lead predates the composer"
+            // about a lead researched sixty seconds earlier. The compose-on-
+            // demand endpoint reported harmsRanked=0, problemList=0 for the same
+            // reason: there was nothing in the audit to rebuild from, because
+            // nothing measured had ever been put in it.
+            //
+            // This is why the composer appeared not to work for six sessions.
+            // It was working the entire time; its output had nowhere to go.
+            composedEmail: parsed.composedEmail || null,
+            factualSpine: parsed.factualSpine || null,
+            harmsRanked: Array.isArray(parsed.harmsRanked) ? parsed.harmsRanked : [],
+            problemList: Array.isArray(parsed.problemList) ? parsed.problemList : [],
+            problemCount: parsed.problemCount ?? null,
+            subjectOptions: Array.isArray(parsed.subjectOptions) ? parsed.subjectOptions : [],
+            allowedReframes: Array.isArray(parsed.allowedReframes) ? parsed.allowedReframes : [],
+            measuredNumbers: parsed.measuredNumbers || null,
+            openerStrength: parsed.openerStrength || null,
             // Carry the fabrication flags through to the response so the review
             // checklist can show them. brainAudit is an explicit literal, so without
             // this line _claimRisks would silently never reach the UI.
@@ -20828,6 +20981,66 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 FALLBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ MEASURED WORK HAS TO REACH THE BROWSER ═══════════════════════════════
+  // brainAudit is an explicit literal. A field the composer sets on `parsed`
+  // but that is not named in that literal is computed, logged and discarded —
+  // silently, because an object simply lacks a key. Nine fields were in exactly
+  // that state, including composedEmail and factualSpine, which is why Generate
+  // fell back to the model on leads whose logs said EMAIL COMPOSED.
+  //
+  // Reading the literal out of our own source is the only check that works here:
+  // there is no runtime signal to test, because the failure IS the absence.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _i = _src.indexOf('brainAudit = {');
+    const _lit = _i > -1 ? _src.slice(_i, _i + 6000) : '';
+    const _required = ['composedEmail', 'factualSpine', 'harmsRanked', 'problemList',
+                       'subjectOptions', 'allowedReframes', 'measuredNumbers'];
+    const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
+    if (!_lit) {
+      console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
+    } else if (_absent.length) {
+      console.log(`\u26d4 RESPONSE CHECK: ${_absent.length} measured field(s) are computed but never sent to the browser \u2014 ${_absent.join(', ')}. Generate will fall back to the model and the log will still say EMAIL COMPOSED, because composing and delivering are different things.`);
+    } else {
+      console.log(`\u2713 RESPONSE CHECK: all ${_required.length} measured fields \u2014 spine, ladder, problems, subjects, reframes, figures and the composed email \u2014 are named in the response the browser receives.`);
+    }
+  } catch (e) {
+    console.log(`\u26a0 RESPONSE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A LEAD ENTERED AT A DEEP PAGE MUST STILL FIND THE SITE ROOT ══════════
+  // siteBase returned origin + pathname, and both callers append root-relative
+  // paths to it. A lead stored as .../showroom-locations/ therefore produced six
+  // guesses under /showroom-locations/, none of which existed. Firecrawl bills a
+  // 404 as a successful fetch, so nothing errored and nothing logged — the lead
+  // simply cost 15 credits against 8 for a comparable one entered at its root.
+  //
+  // Leads come from Places and directory listings, which routinely point at a
+  // location, services or booking page. This is a large share of the pipeline,
+  // not an edge case.
+  try {
+    const _deep = siteBase('https://www.allweatherkc.com/showroom-locations/');
+    const _flat = siteBase('https://www.letsremodelkc.com/');
+    const _bare = siteBase('example.com');
+    const _bad = [];
+    if (_deep !== 'https://www.allweatherkc.com') _bad.push(`deep page -> ${_deep}`);
+    if (_flat !== 'https://www.letsremodelkc.com') _bad.push(`homepage -> ${_flat}`);
+    if (_bare !== 'https://example.com') _bad.push(`bare domain -> ${_bare}`);
+    // And the harvester must read a site's own navigation out of markup.
+    const _links = linksFromHtml(
+      "<a href='/about-us/'>a</a><a href='contact/'>b</a><a href='mailto:x@y.z'>c</a><a href='https://facebook.com/p'>d</a><a href='/logo.png'>e</a>",
+      'https://www.allweatherkc.com/showroom-locations/');
+    if (_links.length !== 2) _bad.push(`harvester returned ${_links.length} link(s), expected 2 (off-site, mailto and image must be dropped)`);
+
+    if (_bad.length) {
+      console.log(`\u26d4 URL CHECK: ${_bad.join(' | ')}. Guessed page URLs will hang off the wrong path and every miss is billed as a fetch.`);
+    } else {
+      console.log(`\u2713 URL CHECK: a lead stored at a deep page still resolves to its site root, and a page's own navigation can be read out of markup we already hold (off-site links, mailto and assets excluded).`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 URL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE CHAIN, NOT THE LINKS ═════════════════════════════════════════════
