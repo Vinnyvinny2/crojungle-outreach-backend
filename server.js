@@ -4,7 +4,7 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 
 const app = express();
-const PORT = process.env.PORT || 3001; 
+const PORT = process.env.PORT || 3001;
 
 // ═══ BULLETPROOF CORS ═══════════════════════════════════════════════════════
 // Set the headers manually on EVERY response and answer OPTIONS preflight
@@ -7263,7 +7263,7 @@ const HARM_LADDER = [
     test: (m) => (m.brokenPages || []).some(b => b && b.confirmed === true),
     say: (m) => { const b = (m.brokenPages || []).find(x => x && x.confirmed === true);
       return `Their ${b.key || 'linked'} page returns ${b.why} — ${b.url} does not load at all`; },
-    costs: 'every visitor who clicks it leaves, and he has no way of knowing they did' },
+    costs: 'every visitor who clicks it leaves, and nothing records that it happened' },
 
   { harm: 97, specific: 95, novel: 90, delegable: 80, weFix: 95, band: 'DEAD', id: 'site_empty',
     // Only when a SECOND, independent fetch also failed. Firecrawl returning
@@ -7407,7 +7407,7 @@ const HARM_LADDER = [
   { harm: 72, specific: 98, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
     test: (m) => m.phoneMismatch === true,
     say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
-    costs: 'the number a searcher dials and the number on his site are different lines' },
+    costs: 'the number a searcher dials and the number on the website are different lines' },
 
   // REMOVED: title_wrong_place. It read m.titleMentionsWrongCity, m.titleCity and
   // m.realCity \u2014 three fields nothing has ever supplied, so it could never fire.
@@ -7420,7 +7420,7 @@ const HARM_LADDER = [
     reframe: 'most people search for this on a phone and expect the number to dial',
     test: (m) => m.tapToCallGenuinelyBroken === true,
     say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
-    costs: 'most of his traffic is mobile, and tapping is how a mobile visitor calls' },
+    costs: 'most local traffic is mobile, and tapping is how a mobile visitor calls' },
 
   // ── BLOCKS ──────────────────────────────────────────────────────────────
   { harm: 74, specific: 80, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
@@ -7648,7 +7648,7 @@ const HARM_LADDER = [
     reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
     say: () => 'The copy does not name who the business is for',
-    costs: 'a stranger has to work out for himself whether it applies to him' },
+    costs: 'a stranger has to work out on their own whether it applies to them' },
 ];
 
 // Runs against measurements, not prose. Returns everything true, worst first.
@@ -8241,6 +8241,23 @@ const toSecondPerson = (t) => String(t || '')
   .replace(/\bThey\b/g, 'You').replace(/\bthey\b/g, 'you')
   .replace(/\bThem\b/g, 'You').replace(/\bthem\b/g, 'you')
   .replace(/\btheirs\b/g, 'yours')
+  // ══ THE MALE PRONOUNS WERE NEVER CONVERTED ═══════════════════════════════
+  // Four ladder strings are written in third person about a man — "the number on
+  // his site", "he has no way of knowing", "whether it applies to him". This
+  // converter handled they/their/them and nothing else, so those went out as
+  // written. Live on Dr. Broc Pratt: "The number a searcher dials and the number
+  // on HIS site are different lines", in an email addressed to him by name.
+  //
+  // Reads as a template with the wrong merge field — worse than no
+  // personalisation, because it proves the sentence was written about somebody
+  // else. Fixed at the converter so it covers every rung, present and future,
+  // rather than patching four strings and waiting for the fifth.
+  .replace(/\bhis\b/g, 'your').replace(/\bHis\b/g, 'Your')
+  .replace(/\bhe has\b/g, 'you have').replace(/\bHe has\b/g, 'You have')
+  .replace(/\bhe is\b/g, "you're").replace(/\bHe is\b/g, "You're")
+  .replace(/\bhimself\b/g, 'yourself')
+  .replace(/\bhe\b/g, 'you').replace(/\bHe\b/g, 'You')
+  .replace(/\bhim\b/g, 'you').replace(/\bHim\b/g, 'You')
   .replace(/\bthe business\b/gi, 'you')
   .replace(/\s+/g, ' ')
   .trim()
@@ -8444,7 +8461,12 @@ const REFRAME_STOP = new Set(['the','a','an','and','or','but','of','to','in','on
   // for a finding about review volume. One shared connective is not relevance,
   // and a reframe that is nearly on-topic is worse than none: it reads like the
   // email is arguing something it never establishes.
-  'next','first','last','thing','things','another','other','others','same','different','right','wrong','good','better','best','real','whole','every','each','both','also','even','much','many','well','back','down','away','here','there','again','ever','never','always','often','usually','likely','rather','quite','very','really','something','anything','nothing','everything','someone','somewhere','anywhere','elsewhere','else','make','makes','made','take','takes','give','gives','want','wants','need','needs','know','knows','find','finds','look','looks','come','comes','goes','going','gets','getting']);
+  'next','first','last','thing','things','another','other','others','same','different','right','wrong','good','better','best','real','whole','every','each','into','onto','over','under','about','after','before','than','then','when','where','while','been','being','were','also','just','only','more','most','less','very','much','many','some','any','all','both','with','from','that','this','they','them','there','here','what','which','would','could','should','will','does','doing','done','make','makes','made','take','takes','taken','give','gives','given','have','having','need','needs',
+  // "their" is in almost every sentence this system writes, so it matched a
+  // PRICING reframe to a PHONE-NUMBER finding on Dr. Broc Pratt and the email
+  // argued about something it never raised. Pronouns are never evidence of topic.
+  'their','yours','ours','people','person','someone','somebody','business','company','customer','customers','site','website','page','pages',
+]);
 const contentWords = (t) => new Set(
   String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
     .filter(w => w.length > 3 && !REFRAME_STOP.has(w)));
@@ -8462,7 +8484,12 @@ const pickReframe = (spine, reframes, variantIndex = 0) => {
   }).sort((a, b) => (b.hits - a.hits) || (a.i - b.i));
   // Rotate through the reframes that DO relate to this finding, so two variants
   // are not identical when more than one fits.
-  const related = scored.filter(x => x.hits > 0);
+  // ══ ONE SHARED WORD IS NOT A TOPIC MATCH ═══════════════════════════════
+  // hits > 0 let a single common word carry a reframe onto an unrelated finding.
+  // Two content words is a low bar that still means the sentences are about the
+  // same thing, and when nothing clears it the reframe is dropped — a missing
+  // reframe makes the email shorter, a wrong one makes it incoherent.
+  const related = scored.filter(x => x.hits >= 2);
   if (!related.length) return '';   // nothing here is about this finding
   return related[variantIndex % related.length].r;
 };
@@ -11590,7 +11617,18 @@ ${corpus}` }]
       // Guaranteed" badge in a footer never survives summarisation. Keeping the
       // corpus lets free, mechanical checks (LSA today, others later) scan pages
       // we have ALREADY paid to fetch instead of paying again.
-      rawText: usable.map(p => p.md).join('\n\n').slice(0, 40000),
+      // ══ THE PAGES MUST ARRIVE LABELLED ═══════════════════════════════════
+      // These were joined with blank lines and nothing else, so seven pages
+      // reached the brain as one undifferentiated blob. The prompt asks it to
+      // "compare the promise on these pages against the homepage and against each
+      // other" — which is impossible when it cannot tell the about page from the
+      // pricing page. It is the single most useful comparison available on a lead
+      // and we made it unreadable.
+      //
+      // Each page now carries its own header with the intent we classified it
+      // under and its URL, so the model can actually say "the about page and the
+      // three service pages make the same promise in the same words".
+      rawText: usable.map(p => `\n=== PAGE: ${p.key.toUpperCase()}${p.url ? ' — ' + p.url : ''} ===\n${p.md}`).join('\n').slice(0, 40000),
       ownerStory,
       storyQuote,
       prices,
@@ -18694,6 +18732,31 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
         }
 
+        // ══ THE BOOKING PAGE IS WHERE THE MONEY IS DECIDED ═══════════════════
+        // We capture a full-page render of every interior page and send exactly
+        // one of them — the homepage. Every conversion finding this system makes
+        // is about the page where someone tries to get in touch, and the model has
+        // never seen it. It reads that page as markdown, which is why "booking"
+        // findings come out as category labels rather than descriptions of what a
+        // customer actually faces.
+        //
+        // One extra image, chosen by intent rather than order: booking first,
+        // then a service page. Capped the same way as the homepage shot, and any
+        // failure is silent — a missing second image costs nothing, and a stalled
+        // vision call costs the whole audit.
+        try {
+          const _shots = (sitePages && Array.isArray(sitePages.pageShots)) ? sitePages.pageShots : [];
+          const _second = _shots.find(x => x.key === 'booking') || _shots.find(x => x.key === 'services');
+          if (_second && _second.shot && msgContent.length) {
+            const _r = await fetchT(_second.shot, {}, 8000);
+            const _b = await _r.buffer();
+            if (_b.length < 3 * 1024 * 1024) {
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _b.toString('base64') } });
+              console.log(`\ud83d\udc41 SECOND RENDER [${company}]: the ${_second.key} page is in front of the model as well as the homepage \u2014 that is the page where someone actually tries to get in touch, and it has never been looked at before.`);
+            }
+          }
+        } catch (e) { console.log(`Second render skipped: ${e && e.message}`); }
+
         // ═══ VISION AUDIT — the eyes of the operation ════════════════════════
         // Look at the ACTUAL rendered page instead of grepping HTML. These
         // findings are mechanical (a human would agree) and OVERRIDE the
@@ -19136,7 +19199,7 @@ A positioning observation stated flatly is a critique, and a critique gets ignor
 THEIR HOMEPAGE COPY (verbatim — quote from it, do not invent):
 ${trustedContent.slice(0, 1800)}
 
-${sitePages && sitePages.rawText ? `THE OTHER PAGES WE READ (${(sitePages.pagesRead || []).join(', ')}) — these are ALREADY SCRAPED, so use them: compare the promise on these pages against the homepage and against each other. If they all say the same interchangeable thing, that is the finding.${(sitePages.services && sitePages.services.length) ? `\nWhat they actually sell, per their own pages: ${sitePages.services.slice(0,8).join(', ')}. If the copy does not differentiate between these, a buyer cannot either.` : ''}\n${sitePages.rawText.slice(0, 2200)}` : 'Only the homepage was read for this lead — assess positioning from the homepage alone, and do NOT claim anything about their service or landing pages.'}` : 'Their homepage copy was not captured, so make NO claim about their positioning or offer — do not guess what their site says.'}
+${sitePages && sitePages.rawText ? `THEIR ACTUAL PAGES, LABELLED (${(sitePages.pagesRead || []).join(', ')}) \u2014 READ THESE PROPERLY. This is the richest evidence on the lead and it has been under-used: the audits keep returning category labels like \u2018no named offer\u2019 or \u2018generic positioning\u2019 when the pages themselves are right here and can be QUOTED.\n\u2192 QUOTE THEIR WORDS. A finding that contains a sentence from their own homepage is unanswerable and unmistakably researched. \u2018Your homepage opens with \"Experience You Can Trust\" and your about page opens with \"Trusted Experience\"\u2019 beats \u2018your positioning is generic\u2019 by an enormous margin. Copy the phrase EXACTLY as written \u2014 a quote that does not appear in the text is the worst error this system can make.\n\u2192 COMPARE THE PAGES AGAINST EACH OTHER. They arrive labelled by page. If the same promise appears on the homepage and on three service pages, say so and name them. If the service pages are near-identical to each other with only the service word swapped, that is a finding no owner has ever been told.\n\u2192 READ WHAT IS MISSING FROM PAGES THAT SHOULD HAVE IT. A service page with no price, no timeline, no next step, and no reason to choose them is a finding about THAT PAGE, named. Not \u2018the site lacks offers\u2019.\n\u2192 READ THE ORDER. What the page leads with is what they think matters. A surgeon whose homepage opens on credentials and buries results, a contractor whose first section is about the company rather than the customer\u2019s problem \u2014 that is a positioning finding drawn from their own layout.\n\u2192 DO NOT SUMMARISE THE PAGES BACK. The owner wrote them. Every observation must be something he could not have told you himself.${(sitePages.services && sitePages.services.length) ? `\nWhat they actually sell, per their own pages: ${sitePages.services.slice(0,8).join(', ')}. If the copy does not differentiate between these, a buyer cannot either.` : ''}\n${sitePages.rawText.slice(0, 24000)}` : 'Only the homepage was read for this lead — assess positioning from the homepage alone, and do NOT claim anything about their service or landing pages.'}` : 'Their homepage copy was not captured, so make NO claim about their positioning or offer — do not guess what their site says.'}
 
 ═══ MONEY ON FIRE — provable, undeniable, and no competitor will ever tell them ═══
 ${moneyOnFire.count > 0 ? `${moneyOnFire.headline}
@@ -22444,6 +22507,33 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BRAIN MUST ACTUALLY RECEIVE THE SITE ═════════════════════════════
+  // We scrape up to seven interior pages and capture a full-page render of each.
+  // The brain was receiving 2,200 characters of that — 5.5% of what we paid for —
+  // joined with blank lines and no page labels, then asked to "compare the promise
+  // on these pages against each other". That is why the positioning findings kept
+  // coming back as category labels like "no named offer" instead of a quote from
+  // the owner's own homepage.
+  //
+  // This asserts the two things that made it useless: the corpus is large enough
+  // to hold more than one page, and every page is labelled.
+  try {
+    const _CORPUS_MIN = 20000;
+    const _src = String(require('fs').readFileSync(__filename, 'utf8'));
+    const _sliceMatch = _src.match(/sitePages\.rawText\.slice\(0,\s*(\d+)\)/);
+    const _cap = _sliceMatch ? Number(_sliceMatch[1]) : 0;
+    const _labelled = /=== PAGE: \$\{p\.key\.toUpperCase\(\)\}/.test(_src);
+    if (_cap < _CORPUS_MIN) {
+      console.log(`\u26d4 SITE CORPUS CHECK: the brain receives only ${_cap} characters of their pages. We fetch up to 40,000 and pay for all of it \u2014 at that cap it cannot compare one page against another, which is the sharpest positioning finding available.`);
+    } else if (!_labelled) {
+      console.log(`\u26d4 SITE CORPUS CHECK: the pages reach the brain unlabelled, so it cannot tell the about page from the pricing page and cannot make the comparison the prompt asks for.`);
+    } else {
+      console.log(`\u2713 SITE CORPUS CHECK: ${_cap} characters of their own pages reach the brain, each labelled by page, so positioning findings can quote their copy instead of naming a category.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SITE CORPUS CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ RECOGNITION MUST BE EARNED, NOT HANDED OUT ═══════════════════════════
