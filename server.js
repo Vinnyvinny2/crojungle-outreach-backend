@@ -7519,7 +7519,19 @@ const HARM_LADDER = [
     // dropped too, because an unstable rank leaves it true with rank null, and
     // a business that is not in the pack at all has weakerAbove 0 anyway.
     test: (m) => m.rankChecked === true && (m.weakerAbove || 0) > 0,
-    say: (m) => `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`,
+    // ══ ONE BUSINESS IS NOT "BUSINESSES" ══════════════════════════════════
+    // This was unconditionally plural. Rose Garage Door Solutions is #3 with
+    // exactly ONE of the two above them holding fewer reviews, and the audit's
+    // own growth-constraint line warned "use that exact ratio; do not inflate
+    // it" — then the email said "businesses" anyway.
+    //
+    // He can count the two results above him in thirty seconds. On an email whose
+    // whole argument is that every sentence was measured, a plural that should be
+    // singular is the cheapest way to lose him. weakerAbove is already measured,
+    // so the sentence only has to read it.
+    say: (m) => (Number(m.weakerAbove) === 1
+      ? `A business with fewer reviews than theirs is ranking above them for "${m.rankQuery}"`
+      : `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`),
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
   { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
