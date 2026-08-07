@@ -12269,7 +12269,19 @@ const scrapeCareersPage = async (website, fcKey, apiKey, companyName) => {
     // contains no careers-shaped URL at all, the site almost certainly has no
     // careers page — and guessing /careers, /jobs, /employment means paying for
     // up to three 404s, which Firecrawl still bills as successful fetches.
-    if (!paths.length && Array.isArray(urls) && urls.length >= 1) {
+    // ══ A ONE-URL SITEMAP PROVES NOTHING ══════════════════════════════════
+    // The gate is right: guessing /careers on a site that clearly has no careers
+    // page bills three 404s. But it fired on ANY non-empty sitemap, and Property
+    // Masters mapped to a single URL — the homepage. One URL is not a sitemap
+    // that lacks a careers page; it is a map that failed, and we concluded from
+    // it that they are not hiring.
+    //
+    // Who a business is hiring is the one signal that comes from the owner's own
+    // decisions rather than his website, and it feeds the strongest argument we
+    // have — recurring salary against a one-time build, made of his own posted
+    // numbers. Worth three speculative fetches when the map came back too thin
+    // to have ruled it out.
+    if (!paths.length && Array.isArray(urls) && urls.length >= 5) {
       console.log(`CAREERS [${companyName}]: sitemap has ${urls.length} URLs and none look like a careers page — skipping (saves up to 3 credits on guessed 404s)`);
       return null;
     }
@@ -18908,11 +18920,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           ownerReplies: _measured.ownerReplies,
           hoursListed: (gbpHealth && gbpHealth.checked) ? gbpHealth.hasHours !== false : null,
           viewportChecked: !!(htmlSignals && htmlSignals.checked),
-          // ══ INPUTS FOR THE STOREFRONT-MAP ENTRIES ═══════════════════════
-          // We resolve a Place on every lead. Distinguishing "we looked and there
-          // is none" from "we never looked" is what makes no_google_listing a
-          // finding rather than a guess.
-          placeSearched: true,
+          // ══ A FAILED MATCH IS NOT PROOF OF ABSENCE ══════════════════════
+          // This was hardcoded true, meaning "we ran a lookup" — and the ladder
+          // read it as "we established there is no listing". Those are different
+          // claims, and resolvePlaceId matches on EXACT WEBSITE, so any business
+          // whose Google listing points at a different domain than the one we
+          // audited fails the match while having a perfectly good profile.
+          //
+          // Property Masters: we audited propertymastersres.com, their own email
+          // is @propertymasters.com — two domains. The match failed and the audit
+          // said "you have no Google Business Profile at all" (harm 97) while
+          // ALSO listing "their Google listing has null photos on it" and quoting
+          // 75 reviews at 4.8 from that same listing. Three statements, no two of
+          // which can be true together.
+          //
+          // So: only claim absence when a lookup ran AND the business has no
+          // review data from any source. If we hold reviews for them, a listing
+          // exists — we simply failed to tie it to this URL, which is our problem
+          // and not a finding about them.
+          placeSearched: !(Number(reviewsRead) > 0 || Number(gbpHealth && gbpHealth.reviewCount) > 0
+            || Number(req.body.reviewCount) > 0 || Number(req.body.reviews) > 0),
           gbpCategory: (gbpHealth && gbpHealth.checked) ? gbpHealth.primaryCategory : null,
           // The money line is built from this. "real-estate" from a lead source
           // would have quoted property prices at a foundation repair company — the
