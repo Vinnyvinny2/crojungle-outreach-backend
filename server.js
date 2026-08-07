@@ -7529,9 +7529,32 @@ const HARM_LADDER = [
     // whole argument is that every sentence was measured, a plural that should be
     // singular is the cheapest way to lose him. weakerAbove is already measured,
     // so the sentence only has to read it.
-    say: (m) => (Number(m.weakerAbove) === 1
-      ? `A business with fewer reviews than theirs is ranking above them for "${m.rankQuery}"`
-      : `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`),
+    // ══ NAME THEM ═══════════════════════════════════════════════════════════
+    // "A business with fewer reviews than theirs" is true, checkable, and reads
+    // exactly like every SEO email he has ever deleted — because the shape is
+    // identical whether or not anyone did the work. The 2026 data is blunt about
+    // it: a named competitor roughly doubles reply rate against the same body,
+    // because it proves the research instead of claiming it.
+    //
+    // weakerNames comes from the Places API on the exact query a customer types,
+    // filtered to businesses ABOVE them holding FEWER reviews. He knows the name.
+    // He has lost jobs to it. That is not a template any tool could have written.
+    //
+    // Falls back to the counted form when names are unavailable, so a lead with a
+    // measured weakerAbove but no name list still gets a true sentence.
+    say: (m) => {
+      const names = Array.isArray(m.weakerNames) ? m.weakerNames : [];
+      const ours = Number(m.ourReviews);
+      if (names.length && Number.isFinite(ours)) {
+        const top = names[0];
+        const more = names.length - 1;
+        return `${top.name} ranks above them for "${m.rankQuery}" with ${top.reviews} review${top.reviews === 1 ? '' : 's'} against their ${ours}`
+          + (more > 0 ? `, and ${more} other${more === 1 ? '' : 's'} above them also have fewer` : '');
+      }
+      return Number(m.weakerAbove) === 1
+        ? `A business with fewer reviews than theirs is ranking above them for "${m.rankQuery}"`
+        : `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`;
+    },
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
   { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
@@ -7830,6 +7853,31 @@ const resolveMeasurements = ({
     rank: (localRank && localRank.found) ? num(localRank.rank) : null,
     scanned: localRank ? num(localRank.scanned) : null,
     weakerAbove: localRank ? num(localRank.weakerAbove) : null,
+    // ══ THE COMPETITOR'S NAME IS THE STRONGEST FACT WE HOLD ═══════════════
+    // localRank.above already carries { name, reviews, rating } for every
+    // business ranked ahead — measured by the Places API on the exact query a
+    // customer types. The AUDIT prompt receives them. The code-owned ladder
+    // never did, so every outranked email said "a business with fewer reviews",
+    // and four of seven leads in one night opened on a sentence that differed
+    // only by trade and town.
+    //
+    // A named competitor is the single highest-leverage change available: the
+    // 2026 data puts a named-competitor line at roughly double the reply rate of
+    // the same body without it, because it proves the research is real rather
+    // than asserting it. He knows that name. He has lost jobs to them.
+    //
+    // Only businesses ABOVE him with FEWER reviews qualify — that is the whole
+    // sting, and it is the comparison already measured as weakerAbove.
+    weakerNames: (() => {
+      const ours = localRank && localRank.ours ? Number(localRank.ours.reviews) : null;
+      if (!localRank || !Array.isArray(localRank.above) || !Number.isFinite(ours)) return null;
+      const names = localRank.above
+        .filter(a => a && a.name && Number.isFinite(Number(a.reviews)) && Number(a.reviews) < ours)
+        .map(a => ({ name: String(a.name).trim(), reviews: Number(a.reviews) }));
+      return names.length ? names : null;
+    })(),
+    ourReviews: (localRank && localRank.ours && Number.isFinite(Number(localRank.ours.reviews)))
+      ? Number(localRank.ours.reviews) : null,
 
     // Google profile.
     photoCount: gbpHealth ? num(gbpHealth.photoCount) : null,
@@ -8085,6 +8133,59 @@ const lower1 = (t) => {
   return x.charAt(0).toLowerCase() + x.slice(1);
 };
 
+// ══ RECOGNITION BEFORE THE GAP ══════════════════════════════════════════════
+// Every email this system writes opens on what is wrong. Rose Garage Door has
+// 260 reviews at a perfect 5 stars and the owner has personally replied to every
+// one of the forty we read — which is rare, hard, and took years — and the email
+// mentioned 260 only as the losing side of a comparison.
+//
+// The audit already knew: "The reputation is genuinely exceptional — and
+// businesses with less of it are sitting above them in search." That sentence
+// recognises him and then names the gap, and it is far stronger than the gap
+// alone. Vin's own rule says the same thing: reframing criticism as recognition
+// is the strongest asset this system has. The composer never learned it.
+//
+// THE DISCIPLINE THAT KEEPS THIS FROM BECOMING FLATTERY:
+//   · It is a MEASURED NUMBER, never an adjective. "260 reviews at 5 stars" is a
+//     fact he can check. "Your reputation is impressive" is a compliment, and the
+//     research is explicit that generic pleasantries trigger the spam filter in
+//     a reader's head.
+//   · The thresholds are HIGH. If every lead gets a recognition line it is
+//     wallpaper and worth nothing. Only genuinely unusual records qualify.
+//   · It never softens the finding that follows. The contrast IS the argument:
+//     what he built, then who is ahead of him anyway.
+const earnedLine = (m = {}) => {
+  const reviews = Number(m.reviewCount);
+  const rating = Number(m.rating);
+  const read = Number(m.reviewsRead);
+  const replies = Number(m.ownerReplies);
+  const years = Number(m.tenureYears);
+
+  // A large book of near-perfect reviews. 100+ at 4.7+ is genuinely uncommon for
+  // an owner-operated local business and takes years to accumulate.
+  const bigBook = Number.isFinite(reviews) && reviews >= 100
+    && Number.isFinite(rating) && rating >= 4.7;
+  // He answers his own reviews. Measured as a ratio of what we actually read, so
+  // it never implies we read more than we did.
+  const answersThem = Number.isFinite(read) && read >= 10
+    && Number.isFinite(replies) && replies / read >= 0.8;
+  const longRun = Number.isFinite(years) && years >= 15;
+
+  if (bigBook && answersThem) {
+    return `${reviews} reviews at ${rating} stars, and you have answered nearly every one we read`;
+  }
+  if (bigBook && longRun) {
+    return `${reviews} reviews at ${rating} stars across ${years} years`;
+  }
+  if (bigBook) {
+    return `${reviews} reviews at ${rating} stars`;
+  }
+  if (answersThem && Number.isFinite(reviews) && reviews >= 40) {
+    return `you have replied to nearly every one of the ${read} reviews we read`;
+  }
+  return '';
+};
+
 const EMAIL_SKELETONS = [
   // ══ A SKELETON HAS TO SAY WHETHER IT NEEDS THE REFRAME ═══════════════════
   // The reframe is now dropped whenever none of them is about the finding the
@@ -8105,25 +8206,25 @@ const EMAIL_SKELETONS = [
   {
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta }) =>
-      `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(reframe)} ${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
+      `${first ? first + ' — ' : ''}${earned ? (first ? earned : upper1(earned)) + '. ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.\n\n${upper1(reframe)} ${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
     needsReframe: true,
-    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
       `${first ? first + ' — ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
       `${first ? first + ' — right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
       `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
   },
 ];
@@ -8214,7 +8315,11 @@ const composeEmail = (spine, opts = {}) => {
   // coming out identical.
   const eligible = EMAIL_SKELETONS.filter(sk => reframe || !sk.needsReframe);
   const skeleton = (eligible.length ? eligible : EMAIL_SKELETONS)[(opts.variantIndex || 0) % Math.max(1, eligible.length || EMAIL_SKELETONS.length)];
-  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta })
+  // The recognition line, when the record is genuinely unusual. Passed to every
+  // skeleton; only the fact-first one uses it today, and the rest ignore it
+  // harmlessly rather than needing a separate code path.
+  const earned = earnedLine(opts.measured || {});
+  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -8284,7 +8389,20 @@ const CTA_TEXT = {
   listing: { text: 'Who looks after the Google listing?', kind: 'listing' },
   process: { text: "When a job's finished, does anyone ask the customer for a review?", kind: 'process' },
   list: { text: "Want the list of who's ranking above you?", kind: 'list' },
-  writeup: { text: 'The write-up is yours whenever you want it.', kind: 'writeup' },
+  // ══ AN OFFER IS EASY TO IGNORE; A QUESTION IS NOT ═════════════════════════
+  // "The write-up is yours whenever you want it." asks for nothing, so nothing is
+  // the easy answer. It also arrives as the fourth flat statement in a row, which
+  // is why Francis Well & Pump reads as three true observations and then a shrug.
+  //
+  // Vin's version does three things the offer does not: it says the work is
+  // already done rather than something we would go and build, it states the
+  // count as a fact about his business, and it ends on a yes/no question — the
+  // cheapest reply there is. The rule against pitch mode still holds; this is not
+  // a calendar request and it does not sell anything.
+  //
+  // The count is filled by the composer from the measured problem count, so the
+  // sentence never claims a number we did not find.
+  writeup: { text: "I've written up the rest — want me to send them over?", kind: 'writeup' },
 };
 
 const CTA_FOR = (finding, claimId) => {
@@ -8425,6 +8543,11 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
   const _used = usedCtaKinds instanceof Set ? usedCtaKinds : new Set(usedCtaKinds || []);
   if (_used.has(cta.kind) && cta.kind !== 'writeup' && !_used.has('writeup')) {
     cta = CTA_TEXT.writeup;
+  } else if (_used.has(cta.kind) && cta.kind === 'writeup') {
+    // Both this finding and an earlier one close on the write-up question. Asking
+    // the identical question twice in one sequence is the automation tell, so the
+    // second one asks for the same thing in the plainest possible way instead.
+    cta = { text: 'Want the rest of them?', kind: 'writeup_short' };
   }
   // Subject: this finding's own line, a DIFFERENT one from the first email so the
   // follow-up opens a new angle rather than repeating the subject he already
@@ -8489,6 +8612,10 @@ const composeFullEmail = (spine, opts = {}) => {
       variantIndex: i,
       reframe: pickReframe(spine, reframes, i),
       cta: cta.text,
+      // The measurement set, so the recognition line can read his review count,
+      // rating and reply ratio. Without this the composer has only the spine's
+      // one sentence and cannot say what he has built.
+      measured: opts.measured || spine.measured || {},
     });
     // ══ TWO LEADS ON THE SAME RUNG MUST NOT GET THE SAME SUBJECT ══════════
     // Subjects are per-rung, so "your reviews are not adding up" went to a
@@ -8700,6 +8827,16 @@ const buildFactualSpine = (harms, m = {}) => {
   // it and the allowlist called it invented.
   add('reviews we read', m.reviewsRead);
   add('reviews the owner answered', m.ownerReplies);
+  // ══ THE NAMED COMPETITOR'S REVIEW COUNT ══════════════════════════════════
+  // The finding now says "Overhead Door Company ranks above them with 41 reviews
+  // against their 260". Both numbers are measured by the Places API on the exact
+  // query, but neither was on the permitted list — so the allowlist would have
+  // called the sharpest, most checkable line in the email invented and blocked
+  // the send. The figure guard and the sentence have to be extended together.
+  if (Array.isArray(m.weakerNames) && m.weakerNames.length) {
+    add("the top competitor's reviews", m.weakerNames[0].reviews);
+  }
+  add('our reviews on the ranked query', m.ourReviews);
 
   return {
     claim,
@@ -22309,6 +22446,68 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ RECOGNITION MUST BE EARNED, NOT HANDED OUT ═══════════════════════════
+  // Every email opened on what was wrong. Rose Garage Door has 260 reviews at a
+  // perfect 5 stars with the owner replying to all forty we read, and the email
+  // mentioned 260 only as the losing side of a comparison.
+  //
+  // The danger in fixing that is flattery: if every lead gets a compliment it is
+  // wallpaper, and generic praise reads as sales copy. So this proves both
+  // directions — the genuinely unusual records get a line, and the ordinary ones
+  // get silence.
+  try {
+    const _cases = [
+      ['Rose', { reviewCount: 260, rating: 5.0, reviewsRead: 40, ownerReplies: 40 }, true],
+      ['Amaka', { reviewCount: 361, rating: 5.0, reviewsRead: 40, ownerReplies: 8 }, true],
+      ['Hannah', { reviewCount: 39, rating: 4.9, reviewsRead: 39, ownerReplies: 0, tenureYears: 21 }, false],
+      ['Romo', { reviewCount: 21, rating: 4.8, reviewsRead: 21, ownerReplies: 6 }, false],
+      ['nothing measured', {}, false],
+    ];
+    const _wrong = _cases.filter(([, m, want]) => !!earnedLine(m) !== want)
+      .map(([n, m]) => `${n} -> "${earnedLine(m) || '(silent)'}"`);
+    const _hasAdjective = _cases.some(([, m]) => /impressive|excellent|outstanding|great|amazing/i.test(earnedLine(m)));
+    if (_wrong.length) {
+      console.log(`\u26d4 RECOGNITION CHECK: ${_wrong.length} lead(s) on the wrong side of the threshold \u2014 ${_wrong[0]}. Praise on an ordinary record is flattery, and flattery reads as sales copy.`);
+    } else if (_hasAdjective) {
+      console.log(`\u26d4 RECOGNITION CHECK: the line contains an adjective. It must be a measured number he can check, never a compliment.`);
+    } else {
+      console.log(`\u2713 RECOGNITION CHECK: only genuinely unusual records earn an opening line, and it is always a measured number \u2014 260 reviews at 5 stars, never "impressive reputation". Ordinary leads open on the finding.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 RECOGNITION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ NAME THE COMPETITOR, OR THE EMAIL IS A TEMPLATE ══════════════════════
+  // Four of seven leads in one night opened on "businesses with fewer reviews
+  // than yours are ranking above you", differing only by trade and town. True,
+  // checkable, and shaped exactly like every SEO email the owner has deleted.
+  //
+  // The names were measured the whole time — the Places API returns them with
+  // review counts for the exact query — and only the audit prompt received them.
+  // The 2026 benchmarks put a named competitor at roughly double the reply rate
+  // against identical body copy, because it proves the research rather than
+  // asserting it.
+  //
+  // Checked at boot because the failure is silent: without names the sentence is
+  // still true, still sends, and quietly performs at half the rate.
+  try {
+    const _rung = HARM_LADDER.find(h => h.id === 'outranked_by_weaker');
+    const _named = _rung && _rung.say({
+      weakerNames: [{ name: 'Overhead Door Company', reviews: 41 }],
+      ourReviews: 260, rankQuery: 'garage door repair in Carmel', weakerAbove: 1,
+    });
+    const _fallback = _rung && _rung.say({ rankQuery: 'plumber in Tulsa', weakerAbove: 4 });
+    const _ok = _named && /Overhead Door Company/.test(_named) && /41/.test(_named) && /260/.test(_named)
+      && _fallback && /Businesses with fewer reviews/.test(_fallback);
+    if (!_ok) {
+      console.log(`\u26d4 COMPETITOR NAME CHECK: the outranked finding is not naming the business ranked above them \u2014 got "${String(_named).slice(0, 80)}". Without the name the sentence is generic and reads as a template no matter how true it is.`);
+    } else {
+      console.log(`\u2713 COMPETITOR NAME CHECK: the outranked finding names the business above them with both review counts, and still falls back to the counted form when no names were measured.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 COMPETITOR NAME CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE MONEY MUST BELONG TO THEIR TRADE ═════════════════════════════════
   // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k",
   // in email one and again in follow-up one. The bare word `door` in the exterior
@@ -22418,7 +22617,10 @@ app.listen(PORT, () => {
     // ask. What must never repeat is a SPECIFIC ask (a question about ranking, or
     // review process), because that only fits the finding that earned it.
     const _ctas = _touches.map(t => (t.body || '').split('\n').pop());
-    const _specific = _ctas.filter(c => c && !/the write-up is yours/i.test(c) && !/i'll leave this here|filling your inbox/i.test(c));
+    // The write-up close is now a QUESTION ("want me to send them over?"), so two
+    // in a row is a genuine repeat rather than the harmless universal fallback it
+    // used to be. It is no longer exempt; only the break-up is.
+    const _specific = _ctas.filter(c => c && !/i'll leave this here|filling your inbox/i.test(c));
     const _dupCta = _specific.length !== new Set(_specific).size;
     if (_touches.length < 4) {
       console.log(`\u26d4 SEQUENCE CHECK: only ${_touches.length} of 4 touches built on a 3-finding lead. Follow-ups are where 42% of replies live; a missing touch is a missing reply.`);
@@ -23634,6 +23836,12 @@ app.post('/api/compose-email', (req, res) => {
       company,   // seeds subject rotation so two leads on one rung differ
       subjects,
       reframes: audit.allowedReframes || (audit._persisted && audit._persisted.allowedReframes) || [],
+      // The measurement set feeds the recognition line. Read straight off the
+      // audit — the same source the subject rebuild two lines above uses — rather
+      // than a resolver variable that is not in scope here. The endpoint caught
+      // that as "_m0 is not defined" and refused to compose, which is the correct
+      // failure: no email is better than a broken one.
+      measured: audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {},
     });
     if (composed && composed.variantA) {
       // ══ A BLANK SUBJECT IS NOT A MINOR DEFECT ═══════════════════════════
