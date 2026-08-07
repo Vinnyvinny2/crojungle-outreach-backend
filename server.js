@@ -4215,6 +4215,7 @@ THE CORRECT SHAPE: diagnose the PROBLEM the product fixes. Never name the produc
 \u26a0 IN BOTH CASES: never name what we sell, what it costs, or what we did for another client. And never itemise what is left \u2014 say how MANY and stop. The count is the reason to talk; the contents are the conversation.
 
 (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work that runs itself overnight — and you are still the one fixing it when it breaks. I wrote up where it is going. Want me to send it over?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. I put together what is automatable. Should I send it?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot hold anyone — that combination is exactly the fire that never gets put out. Want the breakdown?'"
+  "patternLine": "ONE SENTENCE: what a finding like the lead one USUALLY MEANS in a business of this kind. This is the line that separates an expert from a scanner, and it is the only place in this JSON asked for judgement drawn from having seen many businesses rather than from what we measured on this one. \u2192 IT IS A CLAIM ABOUT THE CATEGORY, NEVER ABOUT THEM. That is what makes it both safe and valuable. 'On a crew that size it usually means the last hour of the job has no owner' is a statement about crews, not about his crew, so it cannot be a false claim about his business \u2014 and he still recognises himself in it, which is the whole effect. \u2192 WHY IT MATTERS: the finding tells him something he did not know; the reframe tells him how people behave; NEITHER tells him we have seen this before and know what causes it. That is what makes an owner think 'these people know my business' rather than 'these people ran a scan'. \u2192 SHAPE: open with a generality marker \u2014 'usually', 'nearly always', 'in most', 'normally', 'nine times out of ten'. Then the structural cause. Under 25 words. NO numbers of any kind. NEVER their company name. NEVER 'you' or 'your'. \u2192 IT MUST BE A CAUSE, NOT A RESTATEMENT. BAD: 'this usually means reviews are not being asked for' \u2014 that is the finding again. GOOD: 'a review record that thin next to that much work usually means asking got attached to whoever finished the job rather than to the job itself.' The first repeats; the second explains, and only someone who has fixed it could write it. \u2192 REGISTER, no jargon: 'phone-only intake nearly always survives because it worked when the business was smaller and nobody chose to change it'; 'when a site says one thing and the Google listing says another it is usually two people updating them a year apart'; 'a strong record that is not converting is normally a positioning problem rather than a traffic one'. \u2192 IF YOU DO NOT ACTUALLY KNOW what a finding like this usually means, RETURN AN EMPTY STRING. A missing line makes the email one sentence shorter; a guessed one makes us sound like every other agency, which is worse than silence.",
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + a broken path to booking (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
@@ -7157,7 +7158,28 @@ const verifySiteReallyDown = async (website) => {
       } }, 12000);
       if (!r || !r.ok) continue;
       const body = await r.text();
-      if (String(body || '').length > 500) {
+      // ══ A REFUSAL IS NOT A DEATH ══════════════════════════════════════════
+      // ramjack.com answered with 168 characters. That is not an empty response,
+      // it is a bot-challenge page — Cloudflare or similar deciding we are not a
+      // browser. The site is up; a homeowner loads it fine; the owner loads it
+      // fine. We told Alex Holley his website "returned nothing", twice, in two
+      // separate runs.
+      //
+      // The comment eight lines above already says "a block is not a dead site
+      // either" — the browser user-agent was added for exactly this reason — and
+      // then the length test threw that away, because a challenge page is short.
+      //
+      // A short body that carries challenge markers means BLOCKED, and blocked
+      // must never produce a dead-site claim. It is the most damaging thing this
+      // system can say: instantly checkable, instantly false, and it ends the
+      // conversation with the one person we wanted to talk to.
+      const _b = String(body || '');
+      const _blocked = _b.length < 2000 && /cloudflare|cf-ray|challenge-platform|just a moment|checking your browser|captcha|are you a robot|access denied|ddos|incapsula|imperva|akamai|bot detection|enable javascript/i.test(_b);
+      if (_blocked) {
+        return { down: null, blocked: true, workingUrl: url,
+          why: `${url} answered with ${_b.length} characters carrying a bot-challenge marker. Their site is up and refusing US, not returning nothing to visitors. NO dead-site claim is permitted on this lead.` };
+      }
+      if (_b.length > 500) {
         // ── KEEP THE PAGE. DO NOT JUST PROVE IT EXISTS. ──────────────────
         // The first version returned true/false and discarded the body. On
         // Comfort-Air that meant proving the site was up, holding 176,280
@@ -8182,6 +8204,232 @@ const lower1 = (t) => {
 // states a number that is not in the measurements. It is converted to second
 // person like every other sentence, and it is refused if it is too long to be an
 // opening line or if it reads as a claim about their revenue.
+// ══ THE PATTERN LINE — WHAT AN EXPERT KNOWS THAT A SCANNER DOES NOT ═════════
+// The finding tells him something he did not know. The reframe tells him how
+// people behave. Neither tells him we have seen this before and know what causes
+// it — and that is the entire difference between "these people ran a scan" and
+// "these people know my business".
+//
+// THE SAFETY MODEL, which is what makes this buildable at all:
+// A pattern line is a claim about the CATEGORY, never about this business. "On a
+// crew that size it usually means the last hour of the job has no owner" is a
+// statement about crews. It cannot be a false claim about HIS crew because it is
+// not about his crew — while he still recognises himself in it, which is the
+// whole effect. Same safety profile as the behavioural reframe, which has never
+// been a fabrication source in this system.
+//
+// This validator enforces that property mechanically rather than trusting the
+// instruction. Every rejection makes the email one sentence shorter, which is
+// always the correct failure: a guessed pattern line makes us sound like every
+// other agency, and that is worse than silence.
+// ══ VERIFYING AN EMAIL THE MODEL WROTE ══════════════════════════════════════
+// The code composer cannot fabricate, and it also cannot write. It emits four
+// separate assertions joined by paragraph breaks — "X. Y. Z." — where a person
+// writes "X, which means Y, so Z". No amount of better slot content fixes that:
+// adding slots to a template leaves it a template.
+//
+// So the model writes, and this decides whether what it wrote may be sent. The
+// architecture that makes that safe:
+//
+//   1. It receives ONLY verified pieces — the spine sentence, the permitted
+//      figures, the recognition line, the pattern line, the money line, the ask.
+//   2. Its job is to CONNECT them, not to add. Every fact it needs is handed to
+//      it, so it never has to reach for one.
+//   3. This function checks the result mechanically.
+//   4. If ANY check fails the output is discarded and the code composer runs.
+//
+// Point 4 is the whole safety argument: the floor is the email we would have
+// sent anyway. A failed verification costs prose quality, never correctness, and
+// it can never block a send.
+// ══ THE MODEL WRITES; THE CODE DECIDES WHETHER IT MAY BE SENT ═══════════════
+// The code composer emits four separate assertions joined by paragraph breaks.
+// A person writes "X, which means Y, so Z"; it writes "X. Y. Z." That is why the
+// emails read as assembled no matter how good the individual slots get — and
+// adding more slots was never going to fix it.
+//
+// This hands the model every fact already verified and asks for ONE thing:
+// connect them into something a person would actually send. It is given no
+// measurements to reach for, because everything it needs is in front of it.
+//
+// The output is a CANDIDATE. verifyBrainEmail decides whether it ships, and if
+// anything fails the code composer runs instead. The floor is the email we would
+// have sent anyway, so this can improve the prose and can never damage the facts.
+const writeEmailWithBrain = async (parts, apiKey, company) => {
+  if (!apiKey) return null;
+  const { first, spine, earned, pattern, reframe, money, count, cta } = parts;
+  const supplied = [
+    earned ? `WHAT THEY HAVE EARNED (measured, true): ${earned}` : '',
+    `THE FINDING (the one verified fact — this MUST survive): ${spine}`,
+    reframe ? `HOW PEOPLE BEHAVE (general truth, safe): ${reframe}` : '',
+    pattern ? `WHAT THIS USUALLY MEANS in businesses of this kind (general, safe): ${pattern}` : '',
+    money ? `WHAT THE WORK IS WORTH in their trade (public knowledge): ${money}` : '',
+    count ? `HOW MANY THINGS WE FOUND IN TOTAL: ${count}` : '',
+    `THE ASK (use close to verbatim): ${cta}`,
+  ].filter(Boolean).join('\n');
+
+  const prompt = `You are writing one cold email to ${first || 'the owner'} at ${company}.
+
+Every fact you need is below. It has all been measured and verified.
+
+${supplied}
+
+YOUR ONLY JOB IS TO CONNECT THESE INTO SOMETHING A PERSON WOULD SEND.
+Right now they are being pasted in as separate sentences and it reads like a
+report. Write them as one short argument instead — "this, which means this, so
+this". That is the entire task.
+
+ABSOLUTE RULES, and the email is discarded if any is broken:
+- Do NOT add any fact not listed above. No numbers, no times, no competitor
+  counts, no dollar figures beyond the one supplied.
+- Never say what happens AFTER someone contacts them: no callbacks, no voicemail,
+  no auto-replies, no "they go elsewhere", no "you never hear from them". We have
+  never observed any of it.
+- Never state their revenue, their losses, their conversion rate or their hours.
+- The FINDING must still be recognisable and its numbers must appear exactly.
+- No marketing words: funnel, CRM, pixel, SEO, conversion rate, landing page,
+  optimisation, leverage, unlock.
+${first ? `- Open "${first} — " and then go straight into it.` : '- No greeting; open on the fact.'}
+
+VOICE: a colleague who noticed something, not a vendor. Short sentences.
+Contractions. Say it the way you would standing in his shop. 55-85 words.
+
+Return ONLY the email body. No subject, no signature, no preamble.`;
+
+  try {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    }, 30000, 'email-writer');
+    const j = await r.json();
+    const text = (j && j.content && j.content[0] && j.content[0].text) || '';
+    return String(text).trim() || null;
+  } catch (e) {
+    console.log(`EMAIL WRITER [${company}]: model call failed (${e && e.message}) — the composed email stands.`);
+    return null;
+  }
+};
+
+const NUMBER_TOKENS = (t) => (String(t || '').match(/\d[\d,.]*/g) || [])
+  .map(x => x.replace(/[.,]$/, ''));
+const verifyBrainEmail = (body, opts = {}) => {
+  const text = String(body || '').trim();
+  if (!text) return { ok: false, why: 'empty' };
+
+  const words = text.split(/\s+/).length;
+  if (words > 120) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
+  if (words < 25) return { ok: false, why: `${words} words — too short to carry the finding and the ask` };
+
+  // ── EVERY NUMBER MUST BE ONE WE MEASURED ────────────────────────────────
+  // The single most damaging thing an email can contain is a figure about his
+  // business that we invented, because it is instantly checkable and instantly
+  // false. The permitted list is built from measurements; anything outside it
+  // fails. Money ranges are permitted as written since they come from the trade
+  // table, not from his books.
+  const permitted = new Set();
+  (opts.figures || []).forEach(f => NUMBER_TOKENS(f).forEach(n => permitted.add(n)));
+  NUMBER_TOKENS(opts.money || '').forEach(n => permitted.add(n));
+  NUMBER_TOKENS(opts.spine || '').forEach(n => permitted.add(n));
+  NUMBER_TOKENS(opts.earned || '').forEach(n => permitted.add(n));
+  NUMBER_TOKENS(String(opts.count == null ? '' : opts.count)).forEach(n => permitted.add(n));
+  const unknown = NUMBER_TOKENS(text).filter(n => !permitted.has(n));
+  if (unknown.length) {
+    return { ok: false, why: `contains ${unknown.length} figure(s) we never measured — ${unknown.slice(0, 3).join(', ')}` };
+  }
+
+  // ── THE FABRICATION FAMILIES THAT KEEP RECURRING ────────────────────────
+  // These are the exact shapes that reached live inboxes before the code
+  // composer existed. They are claims about what happens AFTER contact, inside
+  // their systems, or in their customers' heads — none of which we observe.
+  const FABRICATION = [
+    [/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission behaviour'],
+    [/\bdisappears? forever\b/i, 'claims an outcome we cannot see'],
+    [/\bno (auto[- ]?reply|autoresponder|automatic (reply|response))\b/i, 'claims there is no auto-reply — we never submit the form'],
+    [/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'claims nothing responds after contact'],
+    [/\b(nobody|no one|no-one|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back)\b/i, 'claims their calls go unanswered — never tested'],
+    [/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'asserts the fate of a message we never sent'],
+    [/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'states what their prospect already did'],
+    [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'claims a competitor response time'],
+    [/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'invented competitor count'],
+    [/\b(is|are|'?s|'?re) (gone|lost)\b/i, 'states the visitor is gone — an outcome we never observed'],
+    // The first version required "them" and a live test draft said "never hears
+    // from YOU again" — same fabrication, different pronoun, and it passed. The
+    // object can be either party, so match on the verb and the "again".
+    [/\bnever (hear|hears|heard) (from|back from) (them|you|him|her|us)\b/i, 'states they never return — an outcome we never observed'],
+    [/\bnever (see|sees|saw) (them|you|him|her) again\b/i, 'states they never return — unknowable'],
+    // A whole family of "what the customer did next" claims, which is the single
+    // most common drift: we measure the wall, never what happened after it.
+    [/\b(finds?|found|calls?|called|picks?|picked|chooses?|chose|books?|booked|goes? with|went with) (them|someone else|somebody else|the other|whoever)\b[^.]{0,40}\b(first|instead)\b/i, 'states which business the customer chose — never observed'],
+    [/\bends? up (calling|booking|hiring|choosing|going)\b/i, 'states what the customer ended up doing'],
+    [/\bmoves? on to (the )?(next|another)\b/i, 'states the visitor moved on — unobserved'],
+    [/\b(has|have) nowhere to go\b/i, 'states the outcome of a visit we did not track'],
+    [/\byou'?re losing \$|\bcosting you \$|\blosing \$[\d,]+/i, 'states a loss figure for their business'],
+    [/\byour (revenue|turnover|margin|profit|conversion rate|close rate|ad spend)\b/i, 'states a business figure we have never seen'],
+    [/\bat \d{1,2}\s*(am|pm)\b/i, 'states a specific hour — we never measured their hours'],
+    [/\b(I|we) audited your business\b|\ba (full|complete) audit\b/i, 'overclaims scope — we read a digital front door, not a business'],
+  ];
+  for (const [re, why] of FABRICATION) {
+    const m = text.match(re);
+    if (m) return { ok: false, why: `${why} — "${m[0].slice(0, 40)}"` };
+  }
+  const pc = detectPostContactClaims(text);
+  if (pc.length) return { ok: false, why: String(pc[0]).slice(0, 90) };
+
+  // ── VOCABULARY THE OWNER WOULD NEVER USE ────────────────────────────────
+  const JARGON = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg)\b/i;
+  const j = text.match(JARGON);
+  if (j) return { ok: false, why: `agency vocabulary — "${j[0]}"` };
+
+  // ── IT MUST STILL BE ABOUT THE THING WE MEASURED ────────────────────────
+  // A fluent email about the wrong subject is worse than a clumsy one about the
+  // right subject. At least two content words of the spine must survive.
+  const spineWords = [...contentWords(opts.spine || '')];
+  if (spineWords.length >= 3) {
+    const kept = spineWords.filter(w => text.toLowerCase().includes(w)).length;
+    if (kept < 2) return { ok: false, why: 'drifted off the measured finding — the spine is barely present' };
+  }
+  return { ok: true, body: text };
+};
+
+const PATTERN_GENERALITY = /\b(usually|normally|nearly always|almost always|in most|most of the time|tends? to|typically|more often than not|nine times out of ten|generally)\b/i;
+const patternLineSafe = (raw, opts = {}) => {
+  const t = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!t) return { ok: false, why: 'none supplied' };
+  // A pattern line is one sentence of judgement, not a paragraph of analysis.
+  const words = t.split(/\s+/).length;
+  if (words > 34) return { ok: false, why: `${words} words — a pattern line is one sentence, and a long one reads as filler` };
+  if (words < 6) return { ok: false, why: 'too short to carry a cause' };
+  // ── THE HARD RULE: it must not be about THEM ──────────────────────────────
+  // Second person turns a claim about the category into a claim about his
+  // business, which is exactly the thing we cannot verify and must never assert.
+  if (/\b(you|your|yours|you're|youre)\b/i.test(t)) {
+    return { ok: false, why: 'addresses them directly, which turns a category truth into an unverified claim about their business' };
+  }
+  // Any digit is a measurement, and a measurement about them is a claim we did
+  // not make. The generality is the point; a number destroys it.
+  if (/\d/.test(t)) return { ok: false, why: 'contains a number — a pattern is a general cause, and a figure reads as a measurement of them' };
+  // Their own name would make it specific to them by definition.
+  const co = String(opts.company || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(w => w.length > 3);
+  if (co.some(w => t.toLowerCase().includes(w))) {
+    return { ok: false, why: 'names the business, so it is not a statement about the category' };
+  }
+  // Without a generality marker it is an assertion about this business wearing
+  // the clothes of a pattern — the most dangerous shape this field can take.
+  if (!PATTERN_GENERALITY.test(t)) {
+    return { ok: false, why: 'no generality marker (usually / normally / tends to), so it reads as a claim about them rather than about businesses like theirs' };
+  }
+  // The banned-vocabulary rule applies to every field, and this one is read by
+  // the owner directly.
+  if (/\b(pixel|retargeting|schema|SEO|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|above the fold)\b/i.test(t)) {
+    return { ok: false, why: 'contains agency vocabulary, which files the email with every other agency email' };
+  }
+  return { ok: true, line: t.replace(/[.\s]+$/, '') };
+};
+
 const insightLine = (situationRead) => {
   const h = String((situationRead && situationRead.headline) || '').trim();
   if (!h) return '';
@@ -8256,31 +8504,31 @@ const EMAIL_SKELETONS = [
   {
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
       // ══ INSIGHT, RECOGNITION, THEN THE PROOF ═══════════════════════════
       // Order matters and it is the whole argument. The insight names what is
       // going on — the thing he feels and has never said out loud. The
       // recognition proves we looked. The finding is the evidence underneath
       // both. Leading on the finding, which is what this did, gives him a
       // scanner output and makes him supply the meaning himself.
-      `${first ? first + ' — ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.\n\n${endSentence([upper1(reframe), costs ? upper1(costs) : ''].filter(Boolean).join(' '))}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+      `${first ? first + ' — ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.\n\n${endSentence([upper1(reframe), costs ? upper1(costs) : '', pattern ? upper1(pattern) : ''].filter(Boolean).join(' '))}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
     needsReframe: true,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
       `${first ? first + ' — ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
       `${first ? first + ' — right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
       `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
   },
 ];
@@ -8402,6 +8650,13 @@ const composeEmail = (spine, opts = {}) => {
   // The insight — what all the signals add up to — converted to second person
   // like every other sentence in the email.
   let insight = toSecondPerson(insightLine(opts.situationRead));
+  // ══ THE PATTERN LINE IS NOT CONVERTED TO SECOND PERSON ══════════════════
+  // Every other sentence is rewritten to address him. This one must NOT be:
+  // its value comes from being about businesses like his rather than about his,
+  // and toSecondPerson would turn "on a crew that size it usually means..." into
+  // a direct claim about his crew — the exact fabrication the validator exists
+  // to prevent. It is already validated as second-person-free at source.
+  const pattern = String(opts.patternLine || '').trim();
   // ══ THE INSIGHT AND THE COST CANNOT BOTH MAKE THE POINT ═════════════════
   // The headline names what the signals add up to; costs names what the finding
   // costs. On a reputation lead they are the same sentence twice, forty words
@@ -8426,13 +8681,39 @@ const composeEmail = (spine, opts = {}) => {
   // weaker version of the same job, so it goes — the word-overlap test was too
   // conservative and left both in on the very lead it was written for.
   if (insight && costs) costs = '';
+  // ══ THE INSIGHT MUST NOT BE THE GENERIC VERSION OF THE FINDING ═══════════
+  // On Rose the headline read "businesses with less of it are sitting above you
+  // in search" and the finding read "Overhead Door Company ranks above you with
+  // 41 reviews against your 260". The same claim twice — and the weaker one was
+  // first, in the position that decides whether he keeps reading.
+  //
+  // The named-competitor finding wins every time: it carries the company and both
+  // numbers. When they overlap, the insight goes and the email opens on the
+  // sharper sentence. Uses the same content-word test as the follow-up dedupe.
+  // Word overlap cannot see this: "businesses with less of it are sitting above
+  // you in search" and "Overhead Door ranks above you with 41 reviews against
+  // your 260" share exactly one content word and make an identical claim. So the
+  // test is by CONCEPT — if both sentences are about the same thing, the more
+  // specific one survives and the generic one goes.
+  const _CONCEPTS = [
+    /\brank|ranking|ranks|above them|above you|search results|first twenty|top \d|map pack|visib/i,
+    /\breview|reputation|star|rating|testimonial/i,
+    /\bbook|booking|contact|reach|phone|call|form|enquir|inquir/i,
+    /\bpric|cost|quote|estimate|rate\b/i,
+    /\boffer|guarantee|promise|positioning|differenti/i,
+    /\bwebsite (?:is )?(?:down|blank|empty)|returned nothing|loads nothing/i,
+  ];
+  const _sameConcept = (a, b) => _CONCEPTS.some(re => re.test(a) && re.test(b));
+  if (insight && fact && _sameConcept(insight, fact)) {
+    insight = '';
+  }
   // ══ ONE EM-DASH PER SENTENCE ════════════════════════════════════════════
   // The greeting already uses one. A headline carrying its own dash produced
   // "Tyler — your reputation is exceptional — and businesses with less..." which
   // reads as two interruptions in a row. The headline's dash becomes a comma
   // when a greeting is present.
   if (insight && first) insight = insight.replace(/\s+[—–]\s+/g, ', ');
-  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight })
+  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -8751,6 +9032,8 @@ const composeFullEmail = (spine, opts = {}) => {
       // The synthesis — what all the signals add up to. Written and fact-checked
       // during Research, never used until now.
       situationRead: opts.situationRead || null,
+      // The brain's judgement line, already validated as category-level.
+      patternLine: opts.patternLine || '',
     });
     // ══ TWO LEADS ON THE SAME RUNG MUST NOT GET THE SAME SUBJECT ══════════
     // Subjects are per-rung, so "your reviews are not adding up" went to a
@@ -8775,6 +9058,20 @@ const composeFullEmail = (spine, opts = {}) => {
   return {
     variantA: variant(0),
     variantB: variant(1),
+    // ══ THE VERIFIED PIECES, EXPOSED ═══════════════════════════════════════
+    // The email writer needs exactly what the composer used and nothing else —
+    // if it has to reach outside this set it is reaching for a fact nobody
+    // measured. Exposing them here rather than re-deriving them at the endpoint
+    // means the writer and the composer can never drift apart.
+    _parts: {
+      first: greetingName(opts.founderName),
+      earned: earnedLine(opts.measured || {}),
+      pattern: String(opts.patternLine || '').trim(),
+      reframe: pickReframe(spine, reframes, 0),
+      money: spine.jobValue ? String(spine.jobValue).trim() : '',   // jobValue, not money — the field the composer itself reads
+      count: Number(spine.problemCount) || 0,
+      cta: cta.text,
+    },
     // ══ FOLLOW-UPS BUILT TO THE FIRST EMAIL'S STANDARD ════════════════════
     // Each is a full email on the next-strongest finding — its own fact,
     // reframe, cost, money and matched CTA — not a bump and not a guilt-trip.
@@ -16123,11 +16420,40 @@ const WEIGHTS = {
           reachabilityBlocked: reach.hardBlock,
         };
       })
-      // Sort by score, but a BURNING window jumps the queue — that lead expires.
+      // ══ A TRIGGER OUTRANKS A SCORE ══════════════════════════════════════════
+      // The last discovery run returned 111 of 120 leads from plain Google Places
+      // — no trigger at all — while Adzuna, SEC EDGAR, Google News, BizBuySell,
+      // TheirStack and the live ad check all fired and contributed nine.
+      //
+      // The 2026 benchmarks are not marginal about this: trigger-based outreach
+      // replies at 15-25% against 1-3% for generic cold, and layering intent
+      // signals onto an ICP list moves reply rates from ~3.4% to ~18%. The reason
+      // is that only about 3% of any market is actively buying — a trigger finds
+      // that 3% instead of spraying the other 97%.
+      //
+      // The old sort let one trigger concept jump the queue (a burning window) and
+      // then fell straight to icpScore, so a lead with a REAL trigger and a score
+      // of 90 lost to an untriggered 95. ICP score measures fit; a trigger
+      // measures timing, and timing is the larger multiplier.
+      //
+      // Freshness matters as much as the trigger itself: a funding round from two
+      // months ago is not a trigger, it is old news. So the tiers are ordered by
+      // how fast the window is closing, not by how interesting the signal is.
       .sort((a, b) => {
-        const aBurn = a.freshness === 'burning' ? 1 : 0;
-        const bBurn = b.freshness === 'burning' ? 1 : 0;
-        if (aBurn !== bBurn) return bBurn - aBurn;
+        const tier = (c) => {
+          // 3 — expiring now. Nothing outranks a window measured in days.
+          if (c.freshness === 'burning') return 3;
+          // 2 — stacked: the same company surfaced by two INDEPENDENT sources.
+          // That is the strongest confirmation available at find time and it is
+          // rare: one company in the last run of 579.
+          if ((c.sourceCount || 0) >= 2) return 2;
+          // 1 — a single live trigger, window still open.
+          if (c.freshness === 'hot' || c.freshness === 'warm') return 1;
+          if (c.source && c.source !== 'google_places') return 1;
+          return 0;   // 0 — fit only, no timing signal
+        };
+        const ta = tier(a), tb = tier(b);
+        if (ta !== tb) return tb - ta;
         return b.icpScore - a.icpScore;
       });
 
@@ -17261,6 +17587,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     let _siteDownVerdict = { down: null, why: 'not checked' };
     if (String(content || '').trim().length < 200) {
       _siteDownVerdict = await verifySiteReallyDown(website);
+      // ══ BLOCKED IS NOT DOWN, AND IT IS NOT SILENT EITHER ══════════════════
+      // verifySiteReallyDown now returns { down: null, blocked: true } when the
+      // page answers with a bot-challenge. down:null already stops the dead-site
+      // rung — siteConfirmedDown reads `=== true` — but it stopped it silently,
+      // and a silent skip is how this came back twice. Saying it out loud means
+      // the log answers the question "why is there no website finding" before
+      // anyone has to ask it.
+      if (_siteDownVerdict.blocked) {
+        console.log(`\u26d4 SITE IS BLOCKED, NOT DOWN [${company}]: ${_siteDownVerdict.why} We told this owner his site "returned nothing" twice before this was separated \u2014 he can load it in one click, and so can every customer.`);
+      }
       if (_siteDownVerdict.down === false) {
         console.log(`\u2139 SITE IS NOT DOWN [${company}]: Firecrawl came back empty, but ${_siteDownVerdict.why}. No dead-site claim is permitted on this lead.`);
         // Use what we fetched. Strip tags to something the audit can read \u2014 it is
@@ -20504,6 +20840,23 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // "Cannot access 'brainAudit' before initialization".
             // parsed is the audit object itself and is unambiguously alive here.
             parsed.allowedReframes = (allowedConsequences && allowedConsequences.lines) || [];
+            // ══ THE PATTERN LINE, VALIDATED BEFORE IT IS KEPT ═══════════════
+            // The brain returns this alongside the pitch. It is the one field
+            // asked for judgement rather than measurement, so it is checked here
+            // and DISCARDED unless it is provably a statement about the category
+            // rather than about this business. Rejection is logged with the
+            // reason, because a field that silently disappears is a field nobody
+            // notices has stopped working.
+            const _pl = patternLineSafe(parsed.patternLine, { company });
+            if (_pl.ok) {
+              parsed.patternLine = _pl.line;
+              console.log(`\u{1F9ED} PATTERN [${company}]: "${_pl.line}" \u2014 a claim about businesses of this kind, not about theirs, so it cannot be a false statement about them. This is the sentence that reads as experience rather than a scan.`);
+            } else {
+              if (parsed.patternLine) {
+                console.log(`\u{1F9ED} PATTERN [${company}]: discarded \u2014 ${_pl.why}. The email runs one sentence shorter, which is the right failure: a guessed pattern reads like every other agency.`);
+              }
+              parsed.patternLine = '';
+            }
         }
 
 
@@ -21076,6 +21429,11 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             subjectOptions: Array.isArray(parsed.subjectOptions) ? parsed.subjectOptions : [],
             allowedReframes: Array.isArray(parsed.allowedReframes) ? parsed.allowedReframes : [],
             measuredNumbers: parsed.measuredNumbers || null,
+            // Computed, validated and persisted — and it was never put in the
+            // response, so the browser could not pass it back on a recompose.
+            // The RESPONSE CHECK caught this at boot before it shipped, which is
+            // exactly the failure mode it was written for.
+            patternLine: parsed.patternLine || '',
             openerStrength: parsed.openerStrength || null,
             // Carry the fabrication flags through to the response so the review
             // checklist can show them. brainAudit is an explicit literal, so without
@@ -22697,6 +23055,153 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE MODEL MAY WRITE, BUT ONLY WHAT SURVIVES THIS ═════════════════════
+  // The code composer cannot fabricate and cannot write — it emits four
+  // assertions joined by paragraph breaks. The model connects them into prose.
+  // That is only safe because everything it produces is checked here and anything
+  // failing falls back to the composed email, so the floor never moves.
+  //
+  // Both directions are proved. Over-blocking costs the only thing this build was
+  // for; under-blocking puts a false statement about his own business in front of
+  // an owner, which is the one error that cannot be taken back.
+  try {
+    const _o = {
+      spine: 'Overhead Door Company of Indianapolis ranks above them for "garage door repair in Carmel" with 41 reviews against their 260',
+      figures: ['41', '260', '5', '2'], money: 'a garage door replacement runs $1k-$4k',
+      earned: '260 reviews at 5 stars, and you have answered nearly every one we read', count: 2,
+    };
+    const _good = 'Tyler — you have 260 reviews at 5 stars and you have answered nearly every one, which is what makes this odd: Overhead Door Company of Indianapolis sits above you for "garage door repair in Carmel" with 41. People pick from what is in front of them, not from who is actually best, and a garage door replacement runs $1k-$4k. There are 2 of these. Want to know why they are above you?';
+    const _base = 'Tyler — you have 260 reviews at 5 stars but Overhead Door Company outranks you for "garage door repair in Carmel" with 41. ';
+    const _bad = [
+      ['invented figure', _base + 'That gap is costing you roughly 15 calls every single month at the moment.'],
+      ['loss figure', _base + 'That is worth about $40,000 a year in work you are not seeing at all.'],
+      ['post-contact', _base + 'Anyone who fills out your form waits for a callback the following morning.'],
+      ['customer outcome', _base + 'Anyone who finds them first never hears from you again after that point.'],
+      ['chose a competitor', _base + 'Most people searching find them first and call whoever appears at the top instead.'],
+      ['specific hour', _base + 'Someone searching at 8pm ends up somewhere else entirely that evening.'],
+      ['agency jargon', _base + 'Your funnel is leaking badly at the top and nothing is catching them.'],
+      ['drifted off finding', 'Tyler — your website looks dated and the branding feels tired next to the others working in your area right now honestly.'],
+    ];
+    const _leaked = _bad.filter(([, t]) => verifyBrainEmail(t, _o).ok).map(([l]) => l);
+    const _goodV = verifyBrainEmail(_good, _o);
+    if (_leaked.length) {
+      console.log(`\u26d4 EMAIL WRITER CHECK: ${_leaked.length} fabrication(s) would reach a prospect \u2014 ${_leaked.join(', ')}. The model may only connect facts we handed it, and this is the only thing standing between a fluent sentence and a false one.`);
+    } else if (!_goodV.ok) {
+      console.log(`\u26d4 EMAIL WRITER CHECK: a clean draft was rejected (${_goodV.why}), so every lead falls back to the composed email and the model writes nothing. Over-blocking costs the entire build.`);
+    } else {
+      console.log(`\u2713 EMAIL WRITER CHECK: a clean connected draft passes and ${_bad.length} fabrications are rejected \u2014 invented figures, loss numbers, post-contact claims, customer outcomes, jargon and drift. A rejected draft falls back to the composed email, so the floor never moves.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 EMAIL WRITER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A TRIGGER MUST OUTRANK A SCORE ═══════════════════════════════════════
+  // The last discovery run returned 111 of 120 leads from plain Google Places
+  // while every trigger source fired and contributed nine. The benchmarks put
+  // trigger-based outreach at 15-25% reply against 1-3% generic, because only
+  // about 3% of a market is buying at any moment and a trigger finds that 3%.
+  //
+  // ICP score measures FIT. A trigger measures TIMING. Timing is the larger
+  // multiplier, so it sorts first — and the old sort let a 95-scoring untriggered
+  // lead outrank a real signal.
+  try {
+    const _tier = (c) => {
+      if (c.freshness === 'burning') return 3;
+      if ((c.sourceCount || 0) >= 2) return 2;
+      if (c.freshness === 'hot' || c.freshness === 'warm') return 1;
+      if (c.source && c.source !== 'google_places') return 1;
+      return 0;
+    };
+    const _leads = [
+      { n: 'places-100', source: 'google_places', icpScore: 100 },
+      { n: 'forsale-84', source: 'for_sale', icpScore: 84 },
+      { n: 'burning-71', source: 'adzuna_ai', freshness: 'burning', icpScore: 71 },
+      { n: 'stacked-66', source: 'theirstack', sourceCount: 2, icpScore: 66 },
+    ];
+    const _order = _leads.map(l => ({ ...l, t: _tier(l) }))
+      .sort((a, b) => (a.t !== b.t ? b.t - a.t : b.icpScore - a.icpScore))
+      .map(l => l.n);
+    const _want = ['burning-71', 'stacked-66', 'forsale-84', 'places-100'];
+    if (JSON.stringify(_order) !== JSON.stringify(_want)) {
+      console.log(`\u26d4 TRIGGER ORDER CHECK: leads are not ordered by timing \u2014 got ${_order.join(' > ')}. A perfect-fit lead with no trigger is being worked before a lead whose window is closing this week.`);
+    } else {
+      console.log(`\u2713 TRIGGER ORDER CHECK: a closing window outranks a stacked signal, which outranks a single trigger, which outranks a perfect ICP score with no timing at all. Fit decides ties; timing decides order.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TRIGGER ORDER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE PATTERN LINE MUST BE ABOUT THE CATEGORY, NEVER ABOUT THEM ════════
+  // This is the one field in the whole system where the brain is asked for
+  // judgement instead of measurement — what a finding like this USUALLY means in
+  // a business of this kind. It is what makes an owner think "these people know
+  // my business" rather than "these people ran a scan".
+  //
+  // It is only safe because a claim about the category cannot be a false claim
+  // about him. That property is enforced here, not trusted: anything addressing
+  // him directly, carrying a number, naming his company, or missing a generality
+  // marker is discarded and the email runs one sentence shorter.
+  try {
+    const _co = 'Rose Garage Door Solutions';
+    const _mustPass = [
+      'On a crew that size it usually means the last hour of the job has no owner',
+      'phone-only intake nearly always survives because it worked when the business was smaller and nobody chose to change it',
+      'a strong record that is not converting is normally a positioning problem rather than a traffic one',
+    ];
+    const _mustFail = [
+      ['second person', 'your crew usually loses the last hour of the job'],
+      ['a number', 'businesses like this usually lose 3 jobs a month to it'],
+      ['names them', 'at Rose Garage Door this usually means nobody owns the handoff'],
+      ['no generality marker', 'the last hour of the job has no owner'],
+      ['agency jargon', 'this usually means the funnel has no retargeting layer'],
+    ];
+    const _leaked = _mustFail.filter(([, t]) => patternLineSafe(t, { company: _co }).ok).map(([l]) => l);
+    const _blocked = _mustPass.filter(t => !patternLineSafe(t, { company: _co }).ok);
+    if (_leaked.length) {
+      console.log(`\u26d4 PATTERN LINE CHECK: ${_leaked.length} unverifiable line(s) would reach an email \u2014 ${_leaked[0]}. A pattern that talks about THEM is an assertion we never measured, wearing the clothes of expertise.`);
+    } else if (_blocked.length) {
+      console.log(`\u26d4 PATTERN LINE CHECK: a legitimate expert line was rejected \u2014 "${String(_blocked[0]).slice(0, 60)}". Over-blocking here costs the sentence that makes us sound like we have done this before.`);
+    } else {
+      console.log(`\u2713 PATTERN LINE CHECK: ${_mustPass.length} category-level expert lines pass and ${_mustFail.length} disguised claims about the business are discarded. The email can say what a finding usually means without asserting anything about them.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PATTERN LINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A BLOCKED SITE MUST NEVER BE CALLED A DEAD ONE ═══════════════════════
+  // ramjack.com answered with 168 characters — a Cloudflare challenge page. The
+  // verifier's length test read that as nothing and we told the owner his website
+  // "returned nothing when we loaded it", in two separate runs, about a site he
+  // and every customer can load in one click.
+  //
+  // It is the most damaging sentence this system can produce: instantly
+  // checkable, instantly false, and it ends the conversation with the one person
+  // we wanted. Checked at boot in both directions, because being too eager here
+  // would suppress a genuinely dead site — which is a real and valuable finding.
+  try {
+    const _isBlocked = (b) => {
+      const _b = String(b || '');
+      return _b.length < 2000 && /cloudflare|cf-ray|challenge-platform|just a moment|checking your browser|captcha|are you a robot|access denied|ddos|incapsula|imperva|akamai|bot detection|enable javascript/i.test(_b);
+    };
+    const _mustBlock = [
+      '<html><head><title>Just a moment...</title></head><body><div class="cf-browser-verification">Checking your browser</div></body></html>',
+      '<html><body>Access Denied. Enable JavaScript and cookies to continue.</body></html>',
+      '<html><head><meta name="cf-ray" content="abc"></head><body>challenge-platform</body></html>',
+    ];
+    const _mustNotBlock = ['', '<html><body></body></html>', '<html><head><title>404</title></head><body>Not Found</body></html>'];
+    const _missed = _mustBlock.filter(b => !_isBlocked(b)).length;
+    const _over = _mustNotBlock.filter(b => _isBlocked(b)).length;
+    if (_missed) {
+      console.log(`\u26d4 BLOCKED-NOT-DEAD CHECK: ${_missed} bot-challenge page(s) would still be reported as a dead website. That is the Ram Jack failure \u2014 telling an owner his working site returns nothing.`);
+    } else if (_over) {
+      console.log(`\u26d4 BLOCKED-NOT-DEAD CHECK: ${_over} genuinely empty response(s) would be excused as a block, which suppresses a real and valuable finding.`);
+    } else {
+      console.log(`\u2713 BLOCKED-NOT-DEAD CHECK: a bot-challenge page is reported as blocked and makes no claim, while a genuinely empty response still produces the dead-site finding.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BLOCKED-NOT-DEAD CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE FACT-CHECK MUST BE ABLE TO STOP A SEND ═══════════════════════════
   // Every bad email tonight was caught by the fact-checker and composed anyway.
   // Ram Jack printed "WEBSITE STATUS CONTRADICTION" and the email said "your site
@@ -23084,7 +23589,7 @@ app.listen(PORT, () => {
     const _i = _src.indexOf('brainAudit = {');
     const _lit = _i > -1 ? _src.slice(_i, _i + 6000) : '';
     const _required = ['composedEmail', 'factualSpine', 'harmsRanked', 'problemList',
-                       'subjectOptions', 'allowedReframes', 'measuredNumbers'];
+                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine'];
     const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
     if (!_lit) {
       console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
@@ -23999,7 +24504,10 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   return { spine, source, gated, count: hits.length, reason: spine ? null : 'spine-refused' };
 };
 
-app.post('/api/compose-email', (req, res) => {
+// async because the email writer makes a model call. Everything before it stays
+// synchronous and the composer remains the fallback, so an await here cannot
+// change what gets sent when the model is unavailable — only how it reads.
+app.post('/api/compose-email', async (req, res) => {
   try {
     const audit = req.body && req.body.brainAudit;
     const company = (req.body && req.body.company) || 'lead';
@@ -24210,6 +24718,16 @@ app.post('/api/compose-email', (req, res) => {
       // failure: no email is better than a broken one.
       measured: audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {},
       situationRead: audit.situationRead || (audit._persisted && audit._persisted.situationRead) || null,
+      // The client round-trips it for leads whose stored audit predates the
+      // field. Re-validated here regardless of source — a value arriving over
+      // HTTP is never trusted just because we sent it out earlier.
+      patternLine: (() => {
+        const _raw = audit.patternLine
+          || (audit._persisted && audit._persisted.patternLine)
+          || req.body.patternLine || '';
+        const _v = patternLineSafe(_raw, { company });
+        return _v.ok ? _v.line : '';
+      })(),
     });
     if (composed && composed.variantA) {
       // ══ A BLANK SUBJECT IS NOT A MINOR DEFECT ═══════════════════════════
@@ -24223,6 +24741,40 @@ app.post('/api/compose-email', (req, res) => {
         console.log(`\u26d4 COMPOSE ON DEMAND [${company}]: the body composed correctly from measurements, but no subject line could be built for it \u2014 so this is not sendable. Returning nothing rather than an email that looks finished and is not. Re-run Research on this lead to get a ladder id the subject table covers.`);
         return res.json({ composed: null, reason: 'no-subject' });
       }
+      // ══ THE MODEL REWRITES WHAT THE CODE ASSEMBLED ═══════════════════════
+      // Everything above is verified and safe, and it reads like a report because
+      // it IS one — four assertions joined by paragraph breaks. This hands those
+      // same verified pieces to the model with one instruction: connect them.
+      //
+      // The result is a CANDIDATE. verifyBrainEmail checks every number against
+      // the permitted list, runs the fabrication families that reached live
+      // inboxes before the composer existed, and confirms the finding survived.
+      // Anything failing is discarded and the composed version below stands.
+      //
+      // So the floor is exactly the email we would have sent anyway. This can
+      // improve the prose; it cannot damage the facts.
+      try {
+        const _spineTxt = String(useSpine.claim || '');
+        const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
+        const _parts = composed._parts || {};
+        if (req.body.apiKey && _spineTxt) {
+          const _written = await writeEmailWithBrain({
+            first: _parts.first || '', spine: _spineTxt, earned: _parts.earned || '',
+            pattern: _parts.pattern || '', reframe: _parts.reframe || '',
+            money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
+          }, req.body.apiKey, company);
+          const _v = _written ? verifyBrainEmail(_written, {
+            spine: _spineTxt, figures: _figs, money: _parts.money || '',
+            earned: _parts.earned || '', count: _parts.count || '',
+          }) : { ok: false, why: 'model returned nothing' };
+          if (_v.ok) {
+            composed.variantA = { ...composed.variantA, body: _v.body, writtenBy: 'brain' };
+            console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
+          } else {
+            console.log(`\u270d\ufe0f BRAIN DRAFT REJECTED [${company}]: ${_v.why}. Sending the composed version instead \u2014 the floor is the email we would have sent anyway.`);
+          }
+        }
+      } catch (e) { console.log(`Email writer skipped: ${e && e.message}`); }
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words, every one traceable to a measurement. No model call, no tokens.`);
     }
     return res.json({ composed });
