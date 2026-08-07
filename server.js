@@ -4216,7 +4216,7 @@ THE CORRECT SHAPE: diagnose the PROBLEM the product fixes. Never name the produc
 \u26a0 IN BOTH CASES: never name what we sell, what it costs, or what we did for another client. And never itemise what is left \u2014 say how MANY and stop. The count is the reason to talk; the contents are the conversation.
 
 (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work that runs itself overnight — and you are still the one fixing it when it breaks. I wrote up where it is going. Want me to send it over?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. I put together what is automatable. Should I send it?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot hold anyone — that combination is exactly the fire that never gets put out. Want the breakdown?'"
-  "patternLine": "ONE SENTENCE: what a finding like the lead one USUALLY MEANS in a business of this kind. This is the line that separates an expert from a scanner, and it is the only place in this JSON asked for judgement drawn from having seen many businesses rather than from what we measured on this one. \u2192 IT IS A CLAIM ABOUT THE CATEGORY, NEVER ABOUT THEM. That is what makes it both safe and valuable. 'On a crew that size it usually means the last hour of the job has no owner' is a statement about crews, not about his crew, so it cannot be a false claim about his business \u2014 and he still recognises himself in it, which is the whole effect. \u2192 WHY IT MATTERS: the finding tells him something he did not know; the reframe tells him how people behave; NEITHER tells him we have seen this before and know what causes it. That is what makes an owner think 'these people know my business' rather than 'these people ran a scan'. \u2192 SHAPE: open with a generality marker \u2014 'usually', 'nearly always', 'in most', 'normally', 'nine times out of ten'. Then the structural cause. Under 25 words. NO numbers of any kind. NEVER their company name. NEVER 'you' or 'your'. \u2192 IT MUST BE A CAUSE, NOT A RESTATEMENT. BAD: 'this usually means reviews are not being asked for' \u2014 that is the finding again. GOOD: 'a review record that thin next to that much work usually means asking got attached to whoever finished the job rather than to the job itself.' The first repeats; the second explains, and only someone who has fixed it could write it. \u2192 REGISTER, no jargon: 'phone-only intake nearly always survives because it worked when the business was smaller and nobody chose to change it'; 'when a site says one thing and the Google listing says another it is usually two people updating them a year apart'; 'a strong record that is not converting is normally a positioning problem rather than a traffic one'. \u2192 IF YOU DO NOT ACTUALLY KNOW what a finding like this usually means, RETURN AN EMPTY STRING. A missing line makes the email one sentence shorter; a guessed one makes us sound like every other agency, which is worse than silence.",
+  "patternLine": "ONE SENTENCE: what a finding like the lead one USUALLY MEANS in businesses of this kind. This is the line that separates an expert from a scanner \u2014 the finding tells him something he did not know, and this tells him we have seen it before and know what causes it. \u2192 THE ONE RULE, AND IT IS ABSOLUTE: WRITE ABOUT THE CATEGORY, NEVER ABOUT THEM. This has been rejected on four live leads for breaking it, so here are the exact rewrites. WRONG: 'your phone-only setup usually survives because it worked when you were smaller.' RIGHT: 'phone-only intake nearly always survives because it worked when the business was smaller and nobody chose to change it.' WRONG: 'your reviews are thin because asking got attached to whoever finished the job.' RIGHT: 'a review record that thin next to that much work usually means asking got attached to whoever finished the job rather than to the job itself.' WRONG: 'your homepage and listing disagree because two people updated them.' RIGHT: 'when a site says one thing and the Google listing says another it is usually two people updating them a year apart.' \u2192 THE TEST BEFORE YOU RETURN IT: does the sentence contain the word 'you' or 'your'? If yes it is WRONG and will be discarded \u2014 rewrite it about businesses of this kind. Does it begin with a generality marker \u2014 'usually', 'nearly always', 'normally', 'in most', 'nine times out of ten', 'tends to'? If no it is WRONG and will be discarded. Does it contain a number? If yes it is WRONG \u2014 a pattern is a general cause, not a measurement. \u2192 IT MUST BE A CAUSE, NOT A RESTATEMENT. BAD: 'this usually means reviews are not being asked for' \u2014 that is the finding again. GOOD: the review example above \u2014 it explains WHY, and only somebody who has fixed it could write it. \u2192 Under 40 words. No marketing vocabulary. \u2192 IF YOU DO NOT ACTUALLY KNOW what a finding like this usually means, RETURN AN EMPTY STRING. A missing line makes the email one sentence shorter; a guessed one makes us sound like every other agency.",
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
   "savingsEstimate": "Money estimate ONLY with a real input. Object {monthlyLow, monthlyHigh, annualLow, annualHigh, basis, execution} OR null. RULES: (1) numbers ONLY from a CONFIRMED input: job-posting count (labor) OR verified ads + a broken path to booking (ad waste). NEVER invent from a weak website alone. (2) MODERATE ranges: labor = roles x $45k-$65k loaded salary x 60-80% automatable; ad waste = verified ad count x $800-$2000/mo placeholder x 20-40% waste. (3) basis = one sentence showing inputs and math. (4) execution = one sentence on HOW CROJungle captures it, so the closer knows what to sell. No confirmed input = null, never fabricate.",
@@ -9635,8 +9635,27 @@ const rankHarms = (m = {}) => {
     // cannot fix alone.
     const _selfFix = computeSelfFix(sentence, h.id);
     const _selfFixPenalty = _selfFix.score >= 3 ? (_selfFix.score - 2) * 7 : 0;
+    // ══ THE FINDING NOBODY ELSE COULD HAVE PRODUCED ═══════════════════════
+    // A repeating complaint mined from forty of his own reviews is the single
+    // most valuable thing this system makes. It required volume he would never
+    // do himself — he has read his reviews; he has not tabulated them looking
+    // for repeats — and it is the one finding he cannot hand to anybody, because
+    // it is about how his business actually runs.
+    //
+    // On Comfort-Air it scored harm 86 against outranked_by_weaker at 92, so the
+    // email opened on "a business with fewer reviews ranks above you" — true, and
+    // the shape of every SEO email he has ever deleted — while "estimate delays
+    // and slow quote turnaround, twice in your own reviews" sat in Follow-up 1.
+    //
+    // harm is NOT changed: being outranked probably does cost more money, and
+    // distorting the harm ladder to win an argument about email craft would
+    // corrupt the audit and the call sheet too. Only the OPENER moves, and only
+    // for a pattern verified across multiple reviews with its quotes checked.
+    // novel contributes at most 7 points, which was never enough to carry it.
+    const _isMinedPattern = h.id === 'review_pain_pattern';
+    const _minedBonus = _isMinedPattern ? 10 : 0;
     const openerScore = _disqualified ? 0
-      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 - _selfFixPenalty));
+      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -23226,6 +23245,44 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE MAILBOX AND THE GREETING MUST BE THE SAME PERSON ═════════════════
+  // Comfort-Air: research resolved Tom Freund and built tfreund@ from Hunter's
+  // own pattern. A precedence bug put Patrick Freund's address back, and an
+  // email written for Tom — his reviews, his rank, his decision — was delivered
+  // to Patrick. It could not be recalled.
+  //
+  // The precedence bug is fixed. This guard exists for the next variant of it,
+  // and it sits at the last line before the send. The subtle part: a shared
+  // surname is NOT a match. The first version accepted any mailbox containing
+  // the surname, so "pfreund" passed the very send it was written to stop.
+  try {
+    const _addrOk = (email, name) => {
+      const parts = String(name || '').trim().split(/\s+/);
+      const local = String(email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
+      const f = String(parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
+      const l = String(parts.slice(1).join('')).toLowerCase().replace(/[^a-z]/g, '');
+      const personal = local.length > 2 && !/^(info|office|hello|contact|admin|team|sales|support|help|enquir|inquir|mail|service)/.test(local);
+      if (!personal || !f || !l) return true;
+      const at = local.indexOf(l);
+      if (at > 0) return f.startsWith(local.slice(0, at));
+      if (at === 0 && local === l) return true;
+      return local.includes(f) || local === (f[0] + l) || local === (f + l[0]) || local === (f[0] + '' + l[0]);
+    };
+    const _mustBlock = [['pfreund@comfort-air.com', 'Tom Freund'], ['kacie@hannahcustomhomes.com', 'Dusty Hannah'], ['jsmith@acme.com', 'Tom Smith']];
+    const _mustSend = [['tfreund@comfort-air.com', 'Tom Freund'], ['dusty@hannahcustomhomes.com', 'Dusty Hannah'], ['info@rosedoorsolutions.com', 'Tyler Rose'], ['deirdre@dtaylorcpa.com', 'Deirdre L Taylor'], ['aholley@ramjack.com', 'Alex Holley'], ['tomfreund@comfort-air.com', 'Tom Freund']];
+    const _leaked = _mustBlock.filter(([e, n]) => _addrOk(e, n));
+    const _blocked = _mustSend.filter(([e, n]) => !_addrOk(e, n));
+    if (_leaked.length) {
+      console.log(`\u26d4 RECIPIENT CHECK: ${_leaked[0][0]} would still be sent an email addressed to ${_leaked[0][1]}. That is the Comfort-Air failure \u2014 the right research delivered to the wrong human, and no way to take it back.`);
+    } else if (_blocked.length) {
+      console.log(`\u26d4 RECIPIENT CHECK: ${_blocked[0][0]} would be blocked from an email correctly addressed to ${_blocked[0][1]}. Over-blocking here stops real sends.`);
+    } else {
+      console.log(`\u2713 RECIPIENT CHECK: an email cannot be sent to a mailbox built from a different person's name \u2014 including a relative sharing the surname \u2014 while shared inboxes and every real address pattern still send.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 RECIPIENT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ NO ABSENCE CLAIM ABOUT A PAGE WE NEVER OPENED ════════════════════════
   // existsButUnread was computed, logged as a warning and handed to the prompt,
   // and never reached the harm ladder — which is the only place it matters,
@@ -24434,6 +24491,61 @@ app.post('/api/send-to-hunter', async (req, res) => {
           reason: `no copy for ${missingFu.join(' and ')} — the sequence step would have sent its "DO NOT SEND" placeholder as a real email. Re-run Generate and push again.`,
         });
         continue;
+      }
+
+      // ══ THE ADDRESS AND THE GREETING MUST NAME THE SAME PERSON ═══════════
+      // Comfort-Air: research resolved Tom Freund and built tfreund@ from
+      // Hunter's own pattern. A precedence bug in the client put Patrick's
+      // address back, and an email written for Tom — his reviews, his rank, his
+      // decision to make — was delivered to Patrick. Nothing could take it back.
+      //
+      // That specific bug is fixed. This is the guard for the next variant of it,
+      // and it belongs HERE because this is the last line before the send: any
+      // path that reintroduces a mismatch, from any direction, stops at this
+      // point rather than at a review nobody has time to do.
+      //
+      // The test is deliberately narrow — it fires only when the mailbox is
+      // clearly built from a DIFFERENT person's name than the one we greet, so
+      // shared inboxes (info@, office@) and initial-based addresses still pass.
+      const _local = String(lead.email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
+      const _firstName = String(parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
+      const _lastName = String(parts.slice(1).join('')).toLowerCase().replace(/[^a-z]/g, '');
+      const _looksPersonal = _local.length > 2 && !/^(info|office|hello|contact|admin|team|sales|support|help|enquir|inquir|mail|service)/.test(_local);
+      if (_looksPersonal && _firstName && _lastName) {
+        // ══ A SHARED SURNAME IS NOT A MATCH ═══════════════════════════════
+        // The first version accepted any mailbox containing the surname, and
+        // "pfreund" contains "freund" — so it passed the very send it was written
+        // to stop. At a family business everyone shares a surname; Patrick and
+        // Tom Freund are two different people at one company, and the initial is
+        // the entire distinguishing signal.
+        //
+        // So when the mailbox is built from the surname, whatever sits in front
+        // of it must be consistent with the first name we are greeting.
+        let _namedInMailbox;
+        const _at = _local.indexOf(_lastName);
+        if (_at > 0) {
+          // flast / f.last / firstlast — the prefix must belong to this person.
+          const _prefix = _local.slice(0, _at);
+          // "pfreund" for Tom Freund: prefix "p", first name "tom" — no match.
+          // "tfreund" for Tom Freund: prefix "t" — matches. "tomfreund" likewise.
+          _namedInMailbox = _firstName.startsWith(_prefix);
+        } else if (_at === 0 && _local === _lastName) {
+          // Surname only — nothing contradicts the greeting.
+          _namedInMailbox = true;
+        } else {
+          _namedInMailbox = _local.includes(_firstName)
+            || _local === (_firstName[0] + _lastName)
+            || _local === (_firstName + _lastName[0])
+            || _local === (_firstName[0] + '' + _lastName[0]);
+        }
+        if (!_namedInMailbox) {
+          console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 the email is addressed to "${parts.join(' ')}" but the mailbox is ${lead.email}, which is built from a different name. An audit written at owner altitude, delivered to someone else, is the one delivery error that cannot be undone. Re-run Research on this lead to resolve the decision-maker, then send.`);
+          results.failed.push({
+            name: lead.name, email: lead.email,
+            reason: `Greeting names ${parts.join(' ')} but the mailbox (${lead.email}) belongs to someone else — re-run Research`,
+          });
+          continue;
+        }
       }
 
       // Upsert (create-or-update by email) — avoids duplicate-email errors if
