@@ -8468,6 +8468,22 @@ const verifyBrainEmail = (body, opts = {}) => {
   const pc = detectPostContactClaims(text);
   if (pc.length) return { ok: false, why: String(pc[0]).slice(0, 90) };
 
+  // ── THE COUNT MUST NOT BE ATTACHED TO THE WRONG THING ───────────────────
+  // Live on Deirdre Taylor: "We found six things like this on your listing."
+  // Six findings is true; six things ON HER LISTING is not — two are listing
+  // issues and the rest are her website and her review cadence. She can check
+  // that in one click.
+  //
+  // The number check passed it because six WAS measured. It verifies that
+  // figures are real; it never verified what they were attached to. A true
+  // number bolted to the wrong noun is still a false statement, and it is the
+  // kind an owner spots instantly.
+  const COUNT_SCOPE = /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:more\s+)?(?:things?|issues?|problems?|items?|of these)\b[^.]{0,30}\b(on|with|in)\s+(?:your|the)\s+(listing|profile|site|website|page|reviews?|form)\b/i;
+  const scope = text.match(COUNT_SCOPE);
+  if (scope) {
+    return { ok: false, why: `the count is attached to one surface — "${scope[0].slice(0, 46)}" — but the findings span the site, the listing and the reviews` };
+  }
+
   // ── VOCABULARY THE OWNER WOULD NEVER USE ────────────────────────────────
   const JARGON = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg)\b/i;
   const j = text.match(JARGON);
@@ -23297,6 +23313,12 @@ app.listen(PORT, () => {
       ['specific hour', _base + 'Someone searching at 8pm ends up somewhere else entirely that evening.'],
       ['agency jargon', _base + 'Your funnel is leaking badly at the top and nothing is catching them.'],
       ['drifted off finding', 'Tyler — your website looks dated and the branding feels tired next to the others working in your area right now honestly.'],
+      // Live on Deirdre Taylor: "We found six things like this on your listing."
+      // Six findings is true; six ON HER LISTING is not — two were listing
+      // issues, the rest her site and her review cadence. The number check
+      // passed it because six WAS measured. A true number bolted to the wrong
+      // noun is still a false statement, and it is one she can check instantly.
+      ['count attached to one surface', _base + 'We found six things like this on your listing and they are all costing you work.'],
     ];
     const _leaked = _bad.filter(([, t]) => verifyBrainEmail(t, _o).ok).map(([l]) => l);
     const _goodV = verifyBrainEmail(_good, _o);
