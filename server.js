@@ -18002,7 +18002,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           reviewsPerYear: _measured.reviewsPerYear,
           guarantee: offerStrength && offerStrength.checked ? offerStrength.guarantee : null,
           namedOffer: offerStrength && offerStrength.checked ? !offerStrength.genericOnly : null,
-          leadMagnet: leadMagnet && leadMagnet.checked ? !!leadMagnet.found : null,
+          // ══ THE READER RETURNS hasAny, NOT found ═══════════════════════════
+          // readLeadMagnet() returns { checked, hasAny, assets, gaps }. There is
+          // no `found` field on it, so this read undefined, coerced to false, and
+          // the no_lead_magnet rung fired on every lead that HAS a lead magnet.
+          //
+          // Live on Amaka Aesthetics: the log said "LEAD MAGNET: found — a list a
+          // stranger can join", their contact page has a newsletter subscribe, and
+          // follow-up 2 still went out saying "there is nothing to take away short
+          // of asking for a quote." A false claim about their own website, on a
+          // page she would open to check.
+          //
+          // The model prompt at the LEADS-layer block reads leadMagnet.assets and
+          // was told correctly; only this line, the one feeding the code-owned
+          // ladder, had the wrong field name. Classic computed-but-not-passed:
+          // measured right, logged right, delivered wrong.
+          leadMagnet: leadMagnet && leadMagnet.checked ? !!leadMagnet.hasAny : null,
           marketClarity: marketClarity && marketClarity.band,
           // Free reads over text already scraped — no fetch, no credit.
           ...measureAbandonment(String(content || '') + ' ' + String((sitePages && sitePages.corpus) || '')),
