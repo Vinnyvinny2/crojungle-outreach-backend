@@ -8154,6 +8154,46 @@ const lower1 = (t) => {
 //     wallpaper and worth nothing. Only genuinely unusual records qualify.
 //   · It never softens the finding that follows. The contrast IS the argument:
 //     what he built, then who is ahead of him anyway.
+// ══ THE INSIGHT, NOT THE OBSERVATION ════════════════════════════════════════
+// Every lead gets a situationRead.headline — one declarative sentence naming
+// what all the signals ADD UP TO. It is written before any finding is chosen,
+// it is fact-checked against the measurements, and it is the single best
+// sentence this system produces:
+//
+//   "The reputation is genuinely exceptional — and businesses with less of it
+//    are sitting above them in search."
+//   "Thirty years of doing the work himself, and almost none of it is building
+//    the next client."
+//   "The reputation is immaculate. Two quiet friction points are doing the work
+//    a bad review never could."
+//
+// None of it has ever reached an email. The emails carry OBSERVATIONS — a form
+// field count, a phone number mismatch — and an observation is something anyone
+// with a browser could produce. The headline is an INSIGHT: it names a tension
+// the owner feels and has never put into words, which is the thing that makes
+// him think somebody actually understands his business.
+//
+// The 2026 research is explicit that this is the difference: outreach that
+// demonstrates genuine account knowledge lifts C-level reply rates well above
+// average, and the instruction from practitioners is to lead with a read of the
+// prospect's current state and then offer the insight.
+//
+// SAFETY: the headline is already fact-checked in its own pass and rejected if it
+// states a number that is not in the measurements. It is converted to second
+// person like every other sentence, and it is refused if it is too long to be an
+// opening line or if it reads as a claim about their revenue.
+const insightLine = (situationRead) => {
+  const h = String((situationRead && situationRead.headline) || '').trim();
+  if (!h) return '';
+  // An opening line, not a paragraph. Anything longer was written as a heading
+  // for the briefing rather than as the first thing a man reads on his phone.
+  if (h.length > 130) return '';
+  // Never assert their money. The headline is a read of their situation; if it
+  // has drifted into revenue language it is not safe to send.
+  if (/revenue|profit|turnover|margin|\$[\d,]/i.test(h)) return '';
+  return h.replace(/\s+/g, ' ').replace(/[.\s]+$/, '');
+};
+
 const earnedLine = (m = {}) => {
   const reviews = Number(m.reviewCount);
   const rating = Number(m.rating);
@@ -8161,14 +8201,24 @@ const earnedLine = (m = {}) => {
   const replies = Number(m.ownerReplies);
   const years = Number(m.tenureYears);
 
-  // A large book of near-perfect reviews. 100+ at 4.7+ is genuinely uncommon for
-  // an owner-operated local business and takes years to accumulate.
-  const bigBook = Number.isFinite(reviews) && reviews >= 100
-    && Number.isFinite(rating) && rating >= 4.7;
+  // ══ THE THRESHOLD HAS TO BE UNUSUAL WITHIN THE ICP, NOT IN GENERAL ══════
+  // I set this at 100 reviews and 4.7 stars without checking where the leads come
+  // from. Find only sources businesses at 4+ stars, so a strong rating is the
+  // ENTRY CONDITION for being in the pipeline at all — six of eight leads in one
+  // night cleared it. A line that nearly everyone gets is wallpaper, and the
+  // owner reading it learns only that we can read a number he already knows.
+  //
+  // Raised to what is genuinely rare among businesses that are already good:
+  // 250+ reviews, which takes years even for a busy operation.
+  const bigBook = Number.isFinite(reviews) && reviews >= 250
+    && Number.isFinite(rating) && rating >= 4.8;
   // He answers his own reviews. Measured as a ratio of what we actually read, so
   // it never implies we read more than we did.
-  const answersThem = Number.isFinite(read) && read >= 10
-    && Number.isFinite(replies) && replies / read >= 0.8;
+  // Replying to nearly every review IS rare and is a choice the owner made
+  // personally — it stays, at a higher bar, because it distinguishes him from the
+  // other 4-star businesses rather than restating that he is one.
+  const answersThem = Number.isFinite(read) && read >= 20
+    && Number.isFinite(replies) && replies / read >= 0.9;
   const longRun = Number.isFinite(years) && years >= 15;
 
   if (bigBook && answersThem) {
@@ -8206,25 +8256,31 @@ const EMAIL_SKELETONS = [
   {
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
-      `${first ? first + ' — ' : ''}${earned ? (first ? earned : upper1(earned)) + '. ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.\n\n${upper1(reframe)} ${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
+      // ══ INSIGHT, RECOGNITION, THEN THE PROOF ═══════════════════════════
+      // Order matters and it is the whole argument. The insight names what is
+      // going on — the thing he feels and has never said out loud. The
+      // recognition proves we looked. The finding is the evidence underneath
+      // both. Leading on the finding, which is what this did, gives him a
+      // scanner output and makes him supply the meaning himself.
+      `${first ? first + ' — ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.\n\n${endSentence([upper1(reframe), costs ? upper1(costs) : ''].filter(Boolean).join(' '))}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
     needsReframe: true,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
       `${first ? first + ' — ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
       `${first ? first + ' — right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight }) =>
       `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
   },
 ];
@@ -8258,6 +8314,13 @@ const toSecondPerson = (t) => String(t || '')
   .replace(/\bhimself\b/g, 'yourself')
   .replace(/\bhe\b/g, 'you').replace(/\bHe\b/g, 'You')
   .replace(/\bhim\b/g, 'you').replace(/\bHim\b/g, 'You')
+  // ══ "THE REPUTATION" IS HIS REPUTATION ═══════════════════════════════════
+  // The situation-read headline is written about the business in the third
+  // person, so it opens "The reputation is genuinely exceptional". In an email
+  // addressed to him by name that reads detached, like a case-study heading. A
+  // narrow list of nouns he unmistakably owns, and nothing else.
+  .replace(/\bThe (reputation|work|business|practice|site|website|copy|record|profile|listing)\b/g, 'Your $1')
+  .replace(/\bthe (reputation|work|business|practice|site|website|copy|record|profile|listing)\b/g, 'your $1')
   .replace(/\bthe business\b/gi, 'you')
   .replace(/\s+/g, ' ')
   .trim()
@@ -8277,7 +8340,7 @@ const composeEmail = (spine, opts = {}) => {
   // on the fact, capitalised.
   const first = greetingName(opts.founderName);
   const fact = toSecondPerson(spine.claim);
-  const costs = toSecondPerson(spine.costs || '');
+  let costs = toSecondPerson(spine.costs || '');
   // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
   // The reframes are written as clauses and stored without a full stop —
   // "people comparing three contractors call the one that answers first". Every
@@ -8336,7 +8399,40 @@ const composeEmail = (spine, opts = {}) => {
   // skeleton; only the fact-first one uses it today, and the rest ignore it
   // harmlessly rather than needing a separate code path.
   const earned = earnedLine(opts.measured || {});
-  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned })
+  // The insight — what all the signals add up to — converted to second person
+  // like every other sentence in the email.
+  let insight = toSecondPerson(insightLine(opts.situationRead));
+  // ══ THE INSIGHT AND THE COST CANNOT BOTH MAKE THE POINT ═════════════════
+  // The headline names what the signals add up to; costs names what the finding
+  // costs. On a reputation lead they are the same sentence twice, forty words
+  // apart — live: "your reputation is genuinely exceptional and businesses with
+  // less of it are above you" followed by "the reputation is real and it is not
+  // reaching the people searching right now".
+  //
+  // The insight is the better sentence and it comes first, so when they overlap
+  // the costs line is dropped. Same word-overlap test the follow-ups use.
+  const _overlapWords = (a, b) => {
+    const wa = contentWords(a);
+    const wb = [...contentWords(b)];
+    if (!wb.length) return 0;
+    return wb.filter(w => wa.has(w)).length;
+  };
+  // Drop the cost line when the insight already made that point. Placed here,
+  // after both are declared — the first attempt put it sixty lines earlier and
+  // the TDZ scanner correctly refused it: at runtime that reads `insight` before
+  // its `let` and throws, taking the whole compose down.
+  // The insight IS the "what this means" sentence, written across every signal
+  // rather than about one finding. Whenever it is present the cost line is the
+  // weaker version of the same job, so it goes — the word-overlap test was too
+  // conservative and left both in on the very lead it was written for.
+  if (insight && costs) costs = '';
+  // ══ ONE EM-DASH PER SENTENCE ════════════════════════════════════════════
+  // The greeting already uses one. A headline carrying its own dash produced
+  // "Tyler — your reputation is exceptional — and businesses with less..." which
+  // reads as two interruptions in a row. The headline's dash becomes a comma
+  // when a greeting is present.
+  if (insight && first) insight = insight.replace(/\s+[—–]\s+/g, ', ');
+  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -8405,7 +8501,16 @@ const CTA_TEXT = {
   accountability: { text: "Who's handling the site for you at the moment?", kind: 'accountability' },
   listing: { text: 'Who looks after the Google listing?', kind: 'listing' },
   process: { text: "When a job's finished, does anyone ask the customer for a review?", kind: 'process' },
-  list: { text: "Want the list of who's ranking above you?", kind: 'list' },
+  // ══ NEVER ASK FOR SOMETHING HE CAN GET HIMSELF ═══════════════════════════
+  // "Want the list of who's ranking above you?" offers him a Google search. He
+  // can run it in ten seconds and does not need us, so the ask has no value and
+  // the email ends on nothing. Worse, we already NAMED the top competitor in the
+  // first sentence — so the close offers a list we started giving away for free.
+  //
+  // The thing he cannot get himself is WHY. Position is public; the reason a
+  // business with a fifth of his reviews sits above him is not, and it is the
+  // question he has actually been wondering about.
+  list: { text: 'Want to know why they are above you?', kind: 'list' },
   // ══ AN OFFER IS EASY TO IGNORE; A QUESTION IS NOT ═════════════════════════
   // "The write-up is yours whenever you want it." asks for nothing, so nothing is
   // the easy answer. It also arrives as the fourth flat statement in a row, which
@@ -8643,6 +8748,9 @@ const composeFullEmail = (spine, opts = {}) => {
       // rating and reply ratio. Without this the composer has only the spine's
       // one sentence and cannot say what he has built.
       measured: opts.measured || spine.measured || {},
+      // The synthesis — what all the signals add up to. Written and fact-checked
+      // during Research, never used until now.
+      situationRead: opts.situationRead || null,
     });
     // ══ TWO LEADS ON THE SAME RUNG MUST NOT GET THE SAME SUBJECT ══════════
     // Subjects are per-rung, so "your reviews are not adding up" went to a
@@ -17361,7 +17469,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           hunterName: email.founderName || '', hunterTitle: email.title || '',
           location: req.body.location || '',
           placeId: effectivePlaceId,
-          industry: customerTrade || verifiedIndustry || req.body.industry || '',
+          // ══ ONLY A TRADE READ OFF THEIR OWN SITE MAY BECOME A CLAIM ══
+          // req.body.industry is whatever the lead source guessed. For Ram Jack
+          // Louisville it said "real-estate"; they are a foundation repair company.
+          // That value became the search query, the query became a measured rank,
+          // and the rank became a sentence telling a contractor he does not appear
+          // for "real estate in Louisville".
+          //
+          // customerTrade is read off their homepage during domain confirmation and
+          // verifiedIndustry is confirmed against the business — those are evidence.
+          // The lead-source field is a hint: fine for routing, never for a claim. With
+          // it removed, checkLocalRankStable already refuses on an empty industry, so
+          // no rank finding exists rather than a wrong one.
+          industry: customerTrade || verifiedIndustry || '',
           apifyToken,
         });
         if (decisionMaker && decisionMaker.name) {
@@ -17564,7 +17684,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // free, and lands ~25 seconds BEFORE this line. It was sitting in scope
           // unused. Now the first attempt uses the best trade available, which is
           // also the one the fallback would eventually have used anyway.
-          industry: customerTrade || verifiedIndustry || req.body.industry || '',
+          // ══ ONLY A TRADE READ OFF THEIR OWN SITE MAY BECOME A CLAIM ══
+          // req.body.industry is whatever the lead source guessed. For Ram Jack
+          // Louisville it said "real-estate"; they are a foundation repair company.
+          // That value became the search query, the query became a measured rank,
+          // and the rank became a sentence telling a contractor he does not appear
+          // for "real estate in Louisville".
+          //
+          // customerTrade is read off their homepage during domain confirmation and
+          // verifiedIndustry is confirmed against the business — those are evidence.
+          // The lead-source field is a hint: fine for routing, never for a claim. With
+          // it removed, checkLocalRankStable already refuses on an empty industry, so
+          // no rank finding exists rather than a wrong one.
+          industry: customerTrade || verifiedIndustry || '',
           location: req.body.location || '',
           placesKey, sitemapUrls: _siteUrls,
         });
@@ -17684,7 +17816,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // email is forced onto its weakest available signal — which is exactly what
         // happened to Eric Jans Insurance Agency. deriveTrade only fires on an
         // unambiguous match, so a wrong guess cannot produce a false search claim.
-        let _trade = customerTrade || verifiedIndustry || req.body.industry || '';
+        // Same rule as the first rank path: the lead source's guess is a hint, not
+        // evidence, and it must never become a search query. deriveTrade below reads
+        // their own page and only fires on an unambiguous match, so the fallback is
+        // still evidence-based.
+        let _trade = customerTrade || verifiedIndustry || '';
         if (!_trade) {
           // `content` (not trustedContent) — trustedContent is declared further down,
           // so referencing it here is a temporal-dead-zone crash. deriveTrade needs a
@@ -18253,7 +18389,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // finding rather than a guess.
           placeSearched: true,
           gbpCategory: (gbpHealth && gbpHealth.checked) ? gbpHealth.primaryCategory : null,
-          tradeWord: customerTrade || verifiedIndustry || req.body.industry || null,
+          // The money line is built from this. "real-estate" from a lead source
+          // would have quoted property prices at a foundation repair company — the
+          // same class of error as the garage door quoted window prices. Only a
+          // trade we read off their own site may price their work.
+          tradeWord: customerTrade || verifiedIndustry || null,
           // The median review count of the businesses ranking ABOVE them. We
           // already read both numbers and never compared them.
           aboveMedianReviews: (() => {
@@ -21283,7 +21423,18 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             //
             // The test is not whether the word CRITICAL appears. It is whether the
             // prospect can look at the claim and see that it is false.
-            const _CRITICAL = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bthe opposite of the finding\b|\bcontradicts the (measured )?evidence\b|\bevidence shows [^.]{0,40}\bnot\b|\bINFLATED RATIO\b|\bthe inverse of the finding\b/i;
+            // ══ THE PATTERN MISSED EVERY REAL CONTRADICTION ═══════════════
+            // Ram Jack's own fact-check said "WEBSITE STATUS CONTRADICTION ...
+            // This is a direct contradiction" and "SEARCH RANK CLAIM MISMATCH",
+            // and Dr Louis Valentine's said "EVIDENCE CONTRADICTS THIS". None of
+            // them matched, so nothing was marked critical, so nothing stopped —
+            // and a man whose website works fine was told his site was down.
+            //
+            // The words the checker actually reaches for are CONTRADICTION,
+            // MISMATCH, MISALIGNMENT and "backwards". Those are added, and the
+            // pattern is proved at boot against real flags in both directions so
+            // it can never silently stop matching again.
+            const _CRITICAL = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bfactually backwards\b|\bthe opposite of the finding\b|\bcontradicts?\b|\bcontradiction\b|\bMISMATCH\b|\bMISALIGNMENT\b|\bdirectly contradict/i;
             const _criticalFlags = _realFlags.filter(f => _CRITICAL.test(f));
             if (_criticalFlags.length) {
               parsed._criticalFactCheck = _criticalFlags;
@@ -22507,6 +22658,61 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FACT-CHECK MUST BE ABLE TO STOP A SEND ═══════════════════════════
+  // Every bad email tonight was caught by the fact-checker and composed anyway.
+  // Ram Jack printed "WEBSITE STATUS CONTRADICTION" and the email said "your site
+  // is down" under a banner reading "Checks passed". The check was correct and
+  // had no authority.
+  //
+  // Two things must hold and both are asserted here: the pattern recognises the
+  // language the checker actually uses, and it does NOT fire on advisory notes —
+  // a gate that blocks everything gets switched off within a day.
+  try {
+    const _mustBlock = [
+      'WEBSITE STATUS CONTRADICTION: the raw evidence shows Firecrawl successfully scraped 29,943 characters. This is a direct contradiction.',
+      'EVIDENCE CONTRADICTS THIS. The measured fact states 4 of the businesses ranked ABOVE them have FEWER reviews.',
+      'SEARCH RANK CLAIM MISMATCH: the audit states real estate but they are a foundation repair company.',
+      'BUSINESS CATEGORY MISALIGNMENT: they sell foundation repair, not real estate.',
+      'The pitch as written is factually backwards.',
+    ];
+    const _mustPass = [
+      'The pitch angle presents a calculated estimate as if it were a measured fact. Should frame as measured review count only.',
+      'POST-CONTACT CLAIM: says what happens after a customer contacts THIS business.',
+      'marketing jargon banned in the email voice — rewrite in the owner\u2019s words',
+      'This framing implies a problem when the measured fact is that their newest review is recent.',
+    ];
+    const _re = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bfactually backwards\b|\bthe opposite of the finding\b|\bcontradicts?\b|\bcontradiction\b|\bMISMATCH\b|\bMISALIGNMENT\b|\bdirectly contradict/i;
+    const _missed = _mustBlock.filter(f => !_re.test(f));
+    const _overblocked = _mustPass.filter(f => _re.test(f));
+    if (_missed.length) {
+      console.log(`\u26d4 FACT-CHECK GATE: ${_missed.length} real contradiction(s) would NOT be blocked \u2014 "${_missed[0].slice(0, 70)}". That is the Ram Jack failure exactly: a false claim about the prospect's own business reaching an inbox.`);
+    } else if (_overblocked.length) {
+      console.log(`\u26d4 FACT-CHECK GATE: an advisory note would block a send \u2014 "${_overblocked[0].slice(0, 70)}". A gate that stops everything gets turned off, and then it stops nothing.`);
+    } else {
+      console.log(`\u2713 FACT-CHECK GATE: ${_mustBlock.length} real contradictions block the compose and ${_mustPass.length} advisory notes do not. An audit that disagrees with its own measurements cannot become an email.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FACT-CHECK GATE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ AN UNVERIFIED TRADE MUST NOT BECOME A CLAIM ══════════════════════════
+  // Ram Jack Louisville arrived from the lead source labelled "real-estate".
+  // They repair foundations. That field became the search query, the query became
+  // a measured rank, and the rank became a sentence in an email.
+  try {
+    const _src = String(require('fs').readFileSync(__filename, 'utf8'));
+    const _leaks = (_src.match(/industry: customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
+      + (_src.match(/tradeWord: customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
+      + (_src.match(/let _trade = customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length;
+    if (_leaks) {
+      console.log(`\u26d4 TRADE SOURCE CHECK: ${_leaks} path(s) still let the lead source's guess reach a search query or a job value. Only a trade read off their own site may become a claim about their business.`);
+    } else {
+      console.log(`\u2713 TRADE SOURCE CHECK: rank queries and job values are built only from a trade read off their own site. An unverified lead-source label can route a lead but can no longer describe one.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TRADE SOURCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE BRAIN MUST ACTUALLY RECEIVE THE SITE ═════════════════════════════
@@ -23921,6 +24127,35 @@ app.post('/api/compose-email', (req, res) => {
     if (_fn && !_founder) {
       console.log(`\u26a0 NAME [${company}]: a non-string founderName arrived (${typeof _fn}) with no usable .name, so the email will open on the fact instead of a greeting. Better a missing name than "[object Object]" in the first four characters.`);
     }
+    // ══ THE FACT-CHECK IS A GATE, NOT A NOTE ════════════════════════════════
+    // Every bad email tonight was caught by the fact-checker and sent anyway.
+    // Ram Jack's own audit printed "WEBSITE STATUS CONTRADICTION — the raw
+    // evidence shows Firecrawl successfully scraped 29,943 characters" and the
+    // composer then wrote "your site is down" underneath a banner reading
+    // "Checks passed". Amaka's printed that they DO have a lead magnet while the
+    // email said there was nothing to take away.
+    //
+    // The check works. It just had no authority. A warning the operator has to
+    // notice is not a safeguard when the failure it prevents is a false statement
+    // about the prospect's own business — the one thing that cannot be undone.
+    //
+    // So: a critical flag stops the compose. No email is produced, the reason is
+    // returned to the browser, and the operator re-runs Research or skips. This
+    // is the ONLY thing that makes it safe to let the model write more freely
+    // later — the net has to be real before the rope gets longer.
+    const _criticalFlags = []
+      .concat(audit._criticalFactCheck || [])
+      .concat((audit._persisted && audit._persisted._criticalFactCheck) || [])
+      .filter(Boolean);
+    if (_criticalFlags.length) {
+      console.log(`\u26d4 COMPOSE BLOCKED [${company}]: ${_criticalFlags.length} claim(s) in this audit contradict what we measured, so no email is written. ${String(_criticalFlags[0]).slice(0, 180)}`);
+      return res.json({
+        composed: null,
+        reason: 'critical-fact-check',
+        criticalFlags: _criticalFlags.slice(0, 5),
+        message: 'This audit contains claims that contradict the measurements, so no email was written. Re-run Research on this lead, or skip it.',
+      });
+    }
     const composed = composeFullEmail(useSpine, {
       founderName: _founder,
       company,   // seeds subject rotation so two leads on one rung differ
@@ -23932,6 +24167,7 @@ app.post('/api/compose-email', (req, res) => {
       // that as "_m0 is not defined" and refused to compose, which is the correct
       // failure: no email is better than a broken one.
       measured: audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {},
+      situationRead: audit.situationRead || (audit._persisted && audit._persisted.situationRead) || null,
     });
     if (composed && composed.variantA) {
       // ══ A BLANK SUBJECT IS NOT A MINOR DEFECT ═══════════════════════════
