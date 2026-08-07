@@ -4216,6 +4216,7 @@ THE CORRECT SHAPE: diagnose the PROBLEM the product fixes. Never name the produc
 \u26a0 IN BOTH CASES: never name what we sell, what it costs, or what we did for another client. And never itemise what is left \u2014 say how MANY and stop. The count is the reason to talk; the contents are the conversation.
 
 (7) No flattery, no 'hope this finds you well'. The audit IS the personalization. GOOD (owner-operator): 'You are paying four salaries to do work that runs itself overnight — and you are still the one fixing it when it breaks. I wrote up where it is going. Want me to send it over?' GOOD (exit-prep): 'Every dollar of manual labor you cut before the sale multiplies straight into your asking price. I put together what is automatable. Should I send it?' GOOD (stagnated/bloated): 'You have grown headcount faster than revenue and the ads are pouring into a page that cannot hold anyone — that combination is exactly the fire that never gets put out. Want the breakdown?'"
+  "businessModel": "REQUIRED. How this business actually acquires customers, which decides whether the measured findings mean anything at all. Every rung in our scanner assumes a homeowner searching a map pack \u2014 and we told a contractor who turns properties for REO funds and PE firms across 24 states that he ranks poorly for 'renovation contractor in Woodstock'. He does not sell in Woodstock. That email is deleted on sight, and the finding was measured, true and completely irrelevant. Return {model, evidence, why}. \u2192 model, one of exactly these: LOCAL_CONSUMER (individuals within driving distance find them by searching \u2014 plumbers, dentists, garage doors, restaurants; the map pack IS their acquisition channel, and this is the default when the evidence is not clear); B2B_INSTITUTIONAL (they sell to companies, funds, agencies or institutions \u2014 buyers arrive by RFP, broker, procurement or relationship, and local search is close to irrelevant); REFERRAL_PROFESSIONAL (individuals, but arriving by referral from another professional rather than by search \u2014 many specialist medical, legal and financial practices); NATIONAL_REMOTE (individuals or businesses anywhere, served remotely \u2014 geography does not bound the market). \u2192 evidence: QUOTE THE WORDS ON THEIR PAGE that establish it. 'We deliver turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states' is proof. It must be text that actually appears in the pages above \u2014 a quote we cannot find is discarded and the model falls back to LOCAL_CONSUMER. \u2192 why: one sentence on what that means for how they get customers. \u2192 BE CONSERVATIVE. A local trade that also does some commercial work is still LOCAL_CONSUMER. Choose B2B_INSTITUTIONAL only when their own copy makes clear that institutions are the buyer, not a side line. Getting this wrong in the other direction silences findings that were the whole point.",
   "patternLine": "ONE SENTENCE: what a finding like the lead one USUALLY MEANS in businesses of this kind. This is the line that separates an expert from a scanner \u2014 the finding tells him something he did not know, and this tells him we have seen it before and know what causes it. \u2192 THE ONE RULE, AND IT IS ABSOLUTE: WRITE ABOUT THE CATEGORY, NEVER ABOUT THEM. This has been rejected on four live leads for breaking it, so here are the exact rewrites. WRONG: 'your phone-only setup usually survives because it worked when you were smaller.' RIGHT: 'phone-only intake nearly always survives because it worked when the business was smaller and nobody chose to change it.' WRONG: 'your reviews are thin because asking got attached to whoever finished the job.' RIGHT: 'a review record that thin next to that much work usually means asking got attached to whoever finished the job rather than to the job itself.' WRONG: 'your homepage and listing disagree because two people updated them.' RIGHT: 'when a site says one thing and the Google listing says another it is usually two people updating them a year apart.' \u2192 THE TEST BEFORE YOU RETURN IT: does the sentence contain the word 'you' or 'your'? If yes it is WRONG and will be discarded \u2014 rewrite it about businesses of this kind. Does it begin with a generality marker \u2014 'usually', 'nearly always', 'normally', 'in most', 'nine times out of ten', 'tends to'? If no it is WRONG and will be discarded. Does it contain a number? If yes it is WRONG \u2014 a pattern is a general cause, not a measurement. \u2192 IT MUST BE A CAUSE, NOT A RESTATEMENT. BAD: 'this usually means reviews are not being asked for' \u2014 that is the finding again. GOOD: the review example above \u2014 it explains WHY, and only somebody who has fixed it could write it. \u2192 Under 40 words. No marketing vocabulary. \u2192 IF YOU DO NOT ACTUALLY KNOW what a finding like this usually means, RETURN AN EMPTY STRING. A missing line makes the email one sentence shorter; a guessed one makes us sound like every other agency.",
   "topThreeProducts": "REQUIRED — always return exactly 3 items. Array of the 3 most relevant CROJungle offerings ranked by dollar-impact fit, each as {product, price, why}. #1 MUST match recommendedProduct. #2 and #3 are the NEXT best fits — always include all 3 even if the fit is weaker. Never return fewer than 3. Rank by what would move the most money for THIS business. ANTI-DEFAULT: only rank Custom AI Software Build #1 when there is a CONFIRMED manual-labor signal (multiple job postings) — otherwise lead with marketing, CRO, or exit advisory.",
   "reachPlan": "Object {who, channel, timing, opener} — the BEST way to reach the decision-maker. STRICT: 'who' must be a name from CONTACT INTELLIGENCE (site owners or Hunter contact) or a role like 'the owner' — NEVER invent a name. 'channel' = highest-grade real option: personal email > phone from their site > LinkedIn > contact form. 'timing' = use the TIMING WINDOW given. 'opener' = one sentence on how to open given who they are and why now. If no contact info exists, return null.",
@@ -7307,7 +7308,9 @@ const HARM_LADDER = [
   { harm: 88, specific: 92, novel: 85, delegable: 90, weFix: 95, band: 'DEAD', id: 'no_website_on_profile',
     test: (m) => m.hasPlace === true && m.websiteOnProfile === false,
     say: () => 'Their Google listing has no website link on it',
-    costs: 'every searcher who finds the listing has nowhere to go but the phone' },
+    // Same correction: the measurement is that the listing carries no link. What
+    // a searcher then does is not something we can see.
+    costs: 'the listing offers no route to the site at all' },
 
   // ── ABANDONED ───────────────────────────────────────────────────────────
   // Free: all three read text we already scraped. Nothing extra is fetched.
@@ -7452,7 +7455,16 @@ const HARM_LADDER = [
     // phone is the only route — we did not look at the page built to be the route.
     test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true,
     say: () => 'The only way to reach them is a phone call during office hours',
-    costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
+    // ══ DESCRIBE THE WALL, NOT WHAT SOMEBODY DID AT IT ═══════════════════
+    // "has nowhere to go" is an outcome — it says what a person did after
+    // hitting the wall, which we have never observed. CLAIM VERIFY flagged this
+    // exact phrase live on Comfort-Air, meaning the ladder was producing a
+    // sentence its own verifier rejected. Every lead with this rung generated a
+    // false-positive warning, and warnings that fire on our own templates teach
+    // the operator that flags are noise.
+    //
+    // What we DID measure: the only published route is a phone line with hours.
+    costs: 'outside those hours there is no published way in at all' },
 
   { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
     reframe: 'people abandon a long form and go back to the results page',
@@ -8230,6 +8242,84 @@ const lower1 = (t) => {
 // states a number that is not in the measurements. It is converted to second
 // person like every other sentence, and it is refused if it is too long to be an
 // opening line or if it reads as a claim about their revenue.
+// ══ WHICH FINDINGS EVEN APPLY TO THIS BUSINESS ═════════════════════════════
+// Every rung in the harm ladder assumes one shape of company: a local business
+// whose customers find it by searching. That is the ICP and it is right for most
+// leads. It is completely wrong for some.
+//
+// Property Masters turns properties for REO funds and PE firms across 24 states.
+// The brain read that off their own homepage and said so. The ladder then opened
+// the email with "businesses with fewer reviews are ranking above you for
+// renovation contractor in Woodstock" — measured, true, and about a market he
+// does not sell into. Kelly Brooks deletes that in two seconds, and he is right
+// to. We had the bazooka and we fired it through a filter built for something
+// else.
+//
+// THE SAFETY MODEL, and it is the reason this is buildable:
+// Classification is not invention. The brain is reading their own words and
+// naming what kind of business wrote them, and the evidence must be a QUOTE we
+// can find in the corpus we fetched. More importantly, this only ever SUPPRESSES
+// findings — it can silence a rung, never create one. The worst case is an audit
+// with fewer findings; it cannot produce a false one.
+//
+// And it defaults to LOCAL_CONSUMER whenever the evidence does not hold up,
+// because that is the ICP and the ladder is built for it.
+const BUSINESS_MODELS = new Set(['LOCAL_CONSUMER', 'B2B_INSTITUTIONAL', 'REFERRAL_PROFESSIONAL', 'NATIONAL_REMOTE']);
+const resolveBusinessModel = (raw, corpus) => {
+  const fallback = { model: 'LOCAL_CONSUMER', why: 'default — no verified evidence of another model', verified: false };
+  if (!raw || typeof raw !== 'object') return fallback;
+  const model = String(raw.model || '').trim().toUpperCase();
+  if (!BUSINESS_MODELS.has(model)) return fallback;
+  // The default needs no proof; anything that SILENCES findings does.
+  if (model === 'LOCAL_CONSUMER') return { model, why: String(raw.why || '').trim(), verified: true };
+  const ev = String(raw.evidence || '').trim();
+  if (!ev) return { ...fallback, why: `claimed ${model} with no quoted evidence — falling back` };
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const hay = norm(corpus);
+  const needle = norm(ev);
+  if (!hay || needle.length < 12) return { ...fallback, why: `evidence too short or no corpus to check it against — falling back` };
+  let found = hay.includes(needle);
+  if (!found) {
+    const w = needle.split(' ');
+    for (let n = Math.min(10, w.length); n >= 6 && !found; n--) {
+      if (hay.includes(w.slice(0, n).join(' '))) found = true;
+    }
+  }
+  if (!found) return { ...fallback, why: `the quoted evidence does not appear on any page we read — falling back` };
+  return { model, evidence: ev, why: String(raw.why || '').trim(), verified: true };
+};
+
+// The rungs that only describe a business whose customers find it by searching
+// locally. On any other model these are not weak findings — they are findings
+// about somebody else's business.
+// ══ EVERY ID HERE MUST EXIST IN THE LADDER ═══════════════════════════════════
+// The first version of this list was written from memory and FOUR of its eleven
+// ids were not real rungs — gbp_no_photos, gbp_thin, review_count_gap and
+// no_local_signal do not exist. Those entries did nothing at all, so the rungs
+// they were meant to withhold fired anyway. A suppression list that silently
+// matches nothing is worse than no list, because the log says it worked.
+// LADDER ID CHECK now asserts every id against the real ladder at boot.
+//
+// The test for membership: does this finding ONLY matter to a business whose
+// customers find it by searching locally? Anything true of any company with a
+// website stays out of this set. When it is genuinely borderline the finding is
+// KEPT — not_compounding is the example, because a fund doing diligence reads
+// reviews too. Suppressing a true finding is the damage this whole mechanism is
+// supposed to avoid.
+const LOCAL_ONLY_RUNGS = new Set([
+  'no_google_listing',      // absent from the map pack entirely
+  'absent_from_search',     // not in the first twenty local results
+  'outranked_by_weaker',    // local competitors ranked above them
+  'wrong_gbp_category',     // Google ranks the map pack largely on category
+  'review_deficit',         // their review count against the businesses ranking above them
+  'thin_profile',           // photos on the Google listing
+  'no_hours_on_profile',    // hours matter to somebody deciding whether to call now
+  'no_website_on_profile',  // a listing that does not link through to the site
+  'stale_reviews',          // the listing reads as quiet to a searcher
+  'no_after_hours',         // "decides on a Sunday evening" is consumer behaviour
+  'phone_mismatch',         // only bites someone who found them through Google
+]);
+
 // ══ FINDINGS THE SCANNER COULD NOT PRODUCE ═════════════════════════════════
 // Six audits in one night listed "no price and no range appears anywhere" and
 // four listed "there is nothing to take away short of asking for a quote". Those
@@ -8549,6 +8639,33 @@ const insightLine = (situationRead) => {
   // Never assert their money. The headline is a read of their situation; if it
   // has drifted into revenue language it is not safe to send.
   if (/revenue|profit|turnover|margin|\$[\d,]/i.test(h)) return '';
+
+  // ══ THIS IS THE FIRST SENTENCE OF THE EMAIL, AND IT WAS UNGUARDED ═══════
+  // The insight line goes into the composed email verbatim. When the brain
+  // writes the email, verifyBrainEmail catches anything invented — but when the
+  // draft is REJECTED, or no API key is present, the COMPOSED email ships and
+  // this sentence has never been through a fabrication check at all.
+  //
+  // Attacked directly, four families walked straight through: an invented
+  // percentage, a post-contact claim, a competitor claim and a customer outcome.
+  // "Callers who reach voicemail never call back" would have opened an email to
+  // a man whose voicemail we never rang.
+  //
+  // The headline is a READ OF WHAT WE MEASURED. It may name a wall; it may never
+  // claim what happens on the other side of one.
+  const INSIGHT_FABRICATION = [
+    [/\d+\s*%|\bpercent\b/i, 'a percentage we never measured'],
+    [/\b(never|not) (call|calls|calling|hear|hears|come|comes|get|gets) back\b/i, 'what a customer did after contact'],
+    [/\b(unanswered|unread|ignored|into a void)\b/i, 'the fate of a message we never sent'],
+    [/\b(competitor|competitors|rival|the other (guy|firm|shop))\b/i, 'a claim about a competitor we never audited'],
+    [/\bvoicemail\b|\bauto[- ]?reply\b|\bcallback\b/i, 'post-contact behaviour we never observed'],
+    [/\bat \d{1,2}\s*(am|pm)\b|\bmonday morning\b|\bnext (morning|day)\b/i, 'a specific time we never measured'],
+    [/\b(losing|lost|leaking)\s+\d/i, 'a quantity of lost business'],
+    [/\bevery (form|submission|call|caller|enquiry|inquiry)\b/i, 'what happens to every contact — never observed'],
+  ];
+  for (const [re, why] of INSIGHT_FABRICATION) {
+    if (re.test(h)) return '';
+  }
   return h.replace(/\s+/g, ' ').replace(/[.\s]+$/, '');
 };
 
@@ -9498,7 +9615,20 @@ const LADDER_HARM_FLOOR = 45;
 
 const rankHarms = (m = {}) => {
   const hits = [];
+  // ══ A FINDING ABOUT SOMEBODY ELSE'S BUSINESS MODEL ══════════════════════
+  // Eleven rungs describe a company whose customers find it by searching
+  // locally. That is the ICP and they are the best findings we have — for that
+  // ICP. On a contractor who turns properties for REO funds across 24 states,
+  // "you rank poorly for renovation contractor in Woodstock" is measured, true,
+  // and about a market he does not sell into.
+  //
+  // m.businessModel only ever arrives verified: the brain must quote the words
+  // on their page that establish it, and anything unproven falls back to
+  // LOCAL_CONSUMER. So this can silence a rung, never invent one.
+  const _model = String(m.businessModel || 'LOCAL_CONSUMER');
+  const _localOnlyApplies = _model === 'LOCAL_CONSUMER';
   for (const h of HARM_LADDER) {
+    if (!_localOnlyApplies && LOCAL_ONLY_RUNGS.has(h.id)) continue;
     let on = false;
     try { on = !!h.test(m); } catch (e) { on = false; }
     if (!on) continue;
@@ -20946,9 +21076,46 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             parsed.pitchAngle = _ladderLead;
           }
 
-            parsed.problemCount = _harmsForResponse.problemCount;
-            parsed.harmsRanked = _harmsForResponse.harmsRanked;
-            parsed.factualSpine = _harmsForResponse.factualSpine;
+            // ══ THE LADDER RAN BEFORE THE BRAIN KNEW WHAT THIS BUSINESS IS ══
+            // rankHarms fires ~40 seconds before the audit returns, so gating it
+            // on the business model changes nothing — the model does not exist
+            // yet. This is the first moment both are in hand.
+            //
+            // Eleven rungs describe a company whose customers find it by
+            // searching locally. On Property Masters — REO funds and PE firms
+            // across 24 states, read off their own homepage — those findings are
+            // measured, true, and about a market he does not sell into.
+            //
+            // Only ever SUBTRACTS. The model falls back to LOCAL_CONSUMER unless
+            // the brain quotes words we can find in their pages, so the worst
+            // case is an audit with fewer findings, never a false one. And if
+            // filtering would leave nothing at all, the original list stands —
+            // a lead with no findings is worse than one with imperfect framing.
+            const _bmCorpus = (sitePages && sitePages.rawText) || trustedContent || '';
+            const _bm = resolveBusinessModel(parsed.businessModel, _bmCorpus);
+            parsed.businessModel = _bm;
+            let _ranked = _harmsForResponse.harmsRanked;
+            let _spine = _harmsForResponse.factualSpine;
+            let _pcount = _harmsForResponse.problemCount;
+            if (_bm.model !== 'LOCAL_CONSUMER' && Array.isArray(_ranked)) {
+              const _kept = _ranked.filter(h => !LOCAL_ONLY_RUNGS.has(h.id));
+              const _dropped = _ranked.length - _kept.length;
+              if (_kept.length) {
+                _ranked = _kept;
+                _pcount = _kept.length;
+                if (_spine && LOCAL_ONLY_RUNGS.has(_spine.claimId)) {
+                  const _lead = _kept[0];
+                  _spine = { ...(_spine), claim: _lead.finding, claimId: _lead.id, costs: _lead.costs, problemCount: _kept.length };
+                  console.log(`\u{1F3E2} SPINE REBUILT [${company}]: the email was going to open on a local-search finding. It now opens on "${String(_lead.finding).slice(0, 90)}".`);
+                }
+                console.log(`\u{1F3E2} BUSINESS MODEL [${company}]: ${_bm.model} \u2014 ${_bm.why} Their own page says: "${String(_bm.evidence || '').slice(0, 110)}". ${_dropped} local-search finding(s) withheld: they are measured and true, and they are about a market this business does not sell into.`);
+              } else {
+                console.log(`\u{1F3E2} BUSINESS MODEL [${company}]: ${_bm.model}, but every finding on this lead is a local-search one. Keeping them rather than producing an empty audit \u2014 Mike should know the framing may not fit how they actually sell.`);
+              }
+            }
+            parsed.problemCount = _pcount;
+            parsed.harmsRanked = _ranked;
+            parsed.factualSpine = _spine;
             // ══ ONE SET OF NUMBERS, SHIPPED WHOLE ═══════════════════════════
             // The allowlist reads tenureYears, reviewsRead and ownerReplies off
             // the lead. None of them was ever stored there, so it held only
@@ -21668,6 +21835,14 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // exactly the failure mode it was written for.
             patternLine: parsed.patternLine || '',
             originalFindings: Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [],
+            // ══ COMPUTED, USED, AND NEVER DELIVERED ═══════════════════════
+            // The verified model already filters the harms before they are
+            // stored, so no email is wrong without this. But the classification
+            // itself never reached the browser or the database — so the operator
+            // could not see WHY three findings were missing, and a re-run had to
+            // rediscover it. That is the "computed but not passed" shape this
+            // system has lost fields to five separate times.
+            businessModel: parsed.businessModel || null,
             openerStrength: parsed.openerStrength || null,
             // Carry the fabrication flags through to the response so the review
             // checklist can show them. brainAudit is an explicit literal, so without
@@ -23289,6 +23464,151 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE LADDER MUST NOT WRITE WHAT ITS OWN VERIFIER REJECTS ══════════════
+  // Two ladder sentences said "has nowhere to go" — an outcome, describing what
+  // a person did after hitting a wall we measured. CLAIM VERIFY flagged that
+  // exact phrase live on Comfort-Air, which means the system was generating a
+  // sentence it then warned about, on every lead carrying that rung.
+  //
+  // A guard that fires on our own templates is worse than no guard: it fills the
+  // review panel with noise, and the operator learns to skim past the real ones.
+  // Checked at boot across every rung, because a new rung is written in prose and
+  // nothing else would notice.
+  try {
+    const _OUTCOME = [
+      [/\bhas nowhere to go\b/i, 'states the outcome of a visit'],
+      [/\bnever (hear|hears|call|calls|come|comes) back\b/i, 'states the customer never returned'],
+      [/\b(is|are) (gone|lost)\b/i, 'states the visitor is gone'],
+      [/\bwaits? for (a )?(human )?callback\b/i, 'states post-submission behaviour'],
+      [/\bgoes? to voicemail\b/i, 'states what their phone does'],
+      [/\bat \d{1,2}\s*(am|pm)\b/i, 'states a specific hour we never measured'],
+      [/\b(two|three|several) other (companies|firms|contractors|builders)\b/i, 'invents a competitor count'],
+    ];
+    const _sentences = [];
+    for (const h of HARM_LADDER) {
+      if (typeof h.costs === 'string') _sentences.push([h.id, h.costs]);
+      if (typeof h.reframe === 'string') _sentences.push([h.id, h.reframe]);
+    }
+    const _bad = [];
+    for (const [id, t] of _sentences) {
+      for (const [re, why] of _OUTCOME) if (re.test(t)) _bad.push(`${id} (${why})`);
+    }
+    if (_bad.length) {
+      console.log(`\u26d4 LADDER PROSE CHECK: ${_bad.length} rung sentence(s) claim something we never observed \u2014 ${_bad.slice(0, 2).join(', ')}. CLAIM VERIFY will flag our own template on every lead carrying them, and a guard that fires on itself teaches the reader to ignore it.`);
+    } else {
+      console.log(`\u2713 LADDER PROSE CHECK: all ${_sentences.length} rung sentences describe the wall we measured rather than what somebody did at it. Nothing in the ladder trips our own fabrication battery.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 LADDER PROSE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FIRST SENTENCE OF THE EMAIL WAS UNGUARDED ════════════════════════
+  // The insight line is the brain's headline and it goes into the composed email
+  // verbatim. When the brain WRITES the email, verifyBrainEmail catches anything
+  // invented — but when the draft is rejected, or no API key is present, the
+  // composed email ships and this sentence had never been through a fabrication
+  // check at all.
+  //
+  // Found by attacking it directly rather than assuming: four families walked
+  // through. "Callers who reach voicemail never call back" would have opened an
+  // email to a man whose voicemail we never rang.
+  try {
+    const _bad = [
+      ['invented percentage', 'You are losing 40% of your leads before anyone answers'],
+      ['post-contact claim', 'Every form submission sits unanswered until Monday morning'],
+      ['competitor claim', 'Your two biggest competitors both answer the phone at night'],
+      ['customer outcome', 'Callers who reach voicemail never call back'],
+      ['revenue claim', 'You are leaving $40,000 a year on the table'],
+      ['specific hour', 'A parent deciding at 9pm has nowhere to go'],
+    ];
+    // Every headline the brain actually produced tonight, across six businesses.
+    const _good = [
+      'The reputation is genuinely earned and the phone is the only door',
+      'The reputation is perfect. The infrastructure around it is working against her',
+      'The work is real. The proof is almost invisible',
+      'The brand name opens the door and the digital infrastructure walks people back out',
+      'The reputation is real. Almost none of it is reaching the next customer',
+    ];
+    const _leaked = _bad.filter(([, h]) => insightLine({ headline: h })).map(([l]) => l);
+    const _blocked = _good.filter(h => !insightLine({ headline: h }));
+    if (_leaked.length) {
+      console.log(`\u26d4 INSIGHT LINE CHECK: ${_leaked.join(', ')} would open an email. This sentence is the first thing the owner reads and it bypasses the email verifier whenever the composed version ships.`);
+    } else if (_blocked.length) {
+      console.log(`\u26d4 INSIGHT LINE CHECK: a real headline was rejected \u2014 "${String(_blocked[0]).slice(0, 60)}". Over-blocking here removes the best sentence the brain writes.`);
+    } else {
+      console.log(`\u2713 INSIGHT LINE CHECK: ${_bad.length} fabrication families are blocked from the email's first sentence, and all ${_good.length} headlines the brain actually produced still pass.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 INSIGHT LINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SUPPRESSION LIST THAT MATCHES NOTHING IS THE WORST KIND ════════════
+  // The first LOCAL_ONLY_RUNGS was written from memory and four of its eleven
+  // ids were not real rungs. Those entries silenced nothing, the findings fired
+  // anyway, and every log line said the mechanism was working. A guard that
+  // quietly matches nothing is more dangerous than no guard, because it stops
+  // anybody looking.
+  try {
+    const _real = new Set(HARM_LADDER.map(h => h.id));
+    const _ghosts = [...LOCAL_ONLY_RUNGS].filter(id => !_real.has(id));
+    const _survivors = HARM_LADDER.filter(h => !LOCAL_ONLY_RUNGS.has(h.id)).length;
+    // These must NEVER be suppressed: they are true of any business with a
+    // website, and two of them are the best findings this system produces.
+    const _mustSurvive = ['site_empty', 'review_pain_pattern', 'no_published_pricing',
+      'no_offer', 'no_lead_magnet', 'undifferentiated', 'not_compounding',
+      'no_owner_replies', 'long_form', 'dated_credibility'];
+    const _wronglySilenced = _mustSurvive.filter(id => LOCAL_ONLY_RUNGS.has(id));
+    if (_ghosts.length) {
+      console.log(`\u26d4 LADDER ID CHECK: ${_ghosts.length} withheld id(s) do not exist in the ladder \u2014 ${_ghosts.join(', ')}. Those rungs fire on every business regardless, and the log reports the filter as working.`);
+    } else if (_wronglySilenced.length) {
+      console.log(`\u26d4 LADDER ID CHECK: ${_wronglySilenced.join(', ')} would be withheld from a non-local business. Those findings are true of any company with a website \u2014 suppressing a real finding is the damage this mechanism exists to avoid.`);
+    } else if (_survivors < 20) {
+      console.log(`\u26d4 LADDER ID CHECK: only ${_survivors} of ${HARM_LADDER.length} rungs survive on a non-local business. The subtraction has grown past what it was for.`);
+    } else {
+      console.log(`\u2713 LADDER ID CHECK: all ${LOCAL_ONLY_RUNGS.size} withheld ids are real rungs, ${_survivors} of ${HARM_LADDER.length} still apply to a non-local business, and every finding true of any company with a website survives.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 LADDER ID CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A FINDING MUST BE ABOUT A MARKET THEY ACTUALLY SELL INTO ═════════════
+  // Every rung in the harm ladder assumes a company whose customers find it by
+  // searching locally. That is the ICP and those are the best findings we have —
+  // for that ICP.
+  //
+  // Property Masters turns properties for REO funds and PE firms across 24
+  // states. The brain read that off their own homepage and said so, and the
+  // ladder still opened the email with "you rank poorly for renovation
+  // contractor in Woodstock". Measured, true, and about a market he does not
+  // sell into. That email is deleted on sight and he is right to delete it.
+  //
+  // The safety property: this only ever SUBTRACTS. The model falls back to
+  // LOCAL_CONSUMER unless the brain quotes words we can find in their own pages,
+  // so it can silence a rung and never invent one.
+  try {
+    const _corp = 'Property Masters delivers turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states.';
+    const _real = resolveBusinessModel({ model: 'B2B_INSTITUTIONAL', evidence: 'turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states', why: 'buyers are funds' }, _corp);
+    const _fakes = [
+      ['fabricated evidence', { model: 'B2B_INSTITUTIONAL', evidence: 'We serve Fortune 500 clients nationwide exclusively' }],
+      ['no evidence at all', { model: 'B2B_INSTITUTIONAL', evidence: '' }],
+      ['unknown model', { model: 'ENTERPRISE_SAAS', evidence: 'turn-key renovations for REO funds' }],
+      ['nothing returned', null],
+    ];
+    const _leaked = _fakes.filter(([, x]) => resolveBusinessModel(x, _corp).model !== 'LOCAL_CONSUMER').map(([l]) => l);
+    const _localFree = resolveBusinessModel({ model: 'LOCAL_CONSUMER', why: 'homeowners searching' }, _corp);
+    if (_real.model !== 'B2B_INSTITUTIONAL') {
+      console.log(`\u26d4 BUSINESS MODEL CHECK: a model quoted straight from their own homepage was rejected (${_real.why}), so every lead is treated as a local business and the map-pack findings go to companies that do not sell locally.`);
+    } else if (_leaked.length) {
+      console.log(`\u26d4 BUSINESS MODEL CHECK: ${_leaked.join(', ')} would silence real findings on evidence we cannot verify. Suppressing a true finding on a fabricated quote is the one way this can do damage.`);
+    } else if (!_localFree.verified) {
+      console.log(`\u26d4 BUSINESS MODEL CHECK: LOCAL_CONSUMER now requires evidence. It is the default and the fallback \u2014 requiring proof of it breaks every ordinary lead.`);
+    } else {
+      console.log(`\u2713 BUSINESS MODEL CHECK: a model quoted from their own pages withholds the local-search findings, and ${_fakes.length} unverifiable claims fall back to LOCAL_CONSUMER. Findings can be silenced by evidence, never by assertion.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BUSINESS MODEL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE MAILBOX AND THE GREETING MUST BE THE SAME PERSON ═════════════════
   // Comfort-Air: research resolved Tom Freund and built tfreund@ from Hunter's
   // own pattern. A precedence bug put Patrick Freund's address back, and an
@@ -23928,7 +24248,7 @@ app.listen(PORT, () => {
     const _i = _src.indexOf('brainAudit = {');
     const _lit = _i > -1 ? _src.slice(_i, _i + 6000) : '';
     const _required = ['composedEmail', 'factualSpine', 'harmsRanked', 'problemList',
-                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine', 'originalFindings'];
+                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine', 'originalFindings', 'businessModel'];
     const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
     if (!_lit) {
       console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
