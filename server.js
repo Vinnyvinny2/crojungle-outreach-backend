@@ -23480,12 +23480,30 @@ app.post('/api/compose-email', (req, res) => {
         const _r = HARM_LADDER.find(x => x.id === useSpine.claimId);
         if (_r && _r.reframe) useSpine = { ...useSpine, reframe: _r.reframe };
       }
-      if (!useSpine.jobValue) {
-        // measuredNumbers.tradeWord exists only on audits stored after it
-        // shipped. req.body.tradeWord is the lead's own trade, sent by the
-        // client, so a lead researched earlier still gets its loss figure.
-        const _jv = tradeJobValue(_m0.tradeWord || req.body.tradeWord);
-        if (_jv) useSpine = { ...useSpine, jobValue: _jv };
+      // ══ THE TRADE IS THE FACT; THE MONEY IS A LOOKUP ══════════════════════
+      // This only computed a figure when the spine had none, so a stored jobValue
+      // was trusted forever. Rose Garage Door Solutions had "a window or siding
+      // job runs $8k-$40k" cached from before the trade table knew that a garage
+      // door is not a window — and Regenerate handed it straight back, twice,
+      // after the table was fixed.
+      //
+      // A stored money line is a cached ANSWER from whatever the table said that
+      // day. The trade word is the durable measurement. So the lookup is redone
+      // whenever the trade is known, and the stored value survives only when the
+      // trade is not — which is the case where we have nothing better.
+      //
+      // measuredNumbers.tradeWord exists only on audits stored after it shipped;
+      // req.body.tradeWord is the lead's own trade sent by the client, so a lead
+      // researched earlier still resolves.
+      const _trade = _m0.tradeWord || req.body.tradeWord;
+      const _jv = _trade ? tradeJobValue(_trade) : null;
+      if (_jv && _jv !== useSpine.jobValue) {
+        if (useSpine.jobValue) {
+          console.log(`\u{1F4B2} MONEY RECOMPUTED [${company}]: the stored figure was "${useSpine.jobValue}" but their trade is "${_trade}", which is worth "${_jv}". The trade is the measurement and the figure is only a lookup, so the fresh one wins \u2014 a stale money line is a number the owner knows is wrong.`);
+        }
+        useSpine = { ...useSpine, jobValue: _jv };
+      } else if (!useSpine.jobValue && !_jv) {
+        console.log(`EMAIL [${company}]: no job value for trade "${_trade || 'unknown'}" \u2014 the email runs shorter rather than quoting a figure from a trade that is not theirs.`);
       }
       // ══ THE FOLLOW-UPS NEED THE OTHER FINDINGS, WHICH STORED SPINES LACK ═══
       // Live on Hannah: the Generate panel showed the break-up and NOTHING else.
@@ -23557,7 +23575,18 @@ app.post('/api/compose-email', (req, res) => {
     const storedSubjects = audit.subjectOptions
       || (audit._persisted && audit._persisted.subjectOptions) || [];
     let subjects = storedSubjects;
-    if (useSpine !== spine) {
+    // ══ SUBJECTS GO STALE THE SAME WAY THE MONEY DID ═══════════════════════
+    // This rebuilt only when the spine object had been REPLACED. A stored spine
+    // that we enrich in place fails that test, so the subject list written at
+    // Research time survived every Regenerate — including after the templates
+    // themselves changed. Rose kept "your reviews are not working" after a softer
+    // line was added to the rotation, and no rebuild line appeared in the log to
+    // say why.
+    //
+    // Rebuilding is free, deterministic, and seeded by company name, so it
+    // produces the same answer every time for the same lead. The only reason to
+    // keep the stored list is if a rebuild yields nothing.
+    if (useSpine && useSpine.claim) {
       try {
         const rebuiltSubjects = buildSubjects(
           { finding: useSpine.claim, id: useSpine.claimId, costs: useSpine.costs },
