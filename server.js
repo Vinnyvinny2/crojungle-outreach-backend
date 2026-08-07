@@ -18938,8 +18938,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // review data from any source. If we hold reviews for them, a listing
           // exists — we simply failed to tie it to this URL, which is our problem
           // and not a finding about them.
-          placeSearched: !(Number(reviewsRead) > 0 || Number(gbpHealth && gbpHealth.reviewCount) > 0
-            || Number(req.body.reviewCount) > 0 || Number(req.body.reviews) > 0),
+          // The first fix checked reviewsRead and gbpHealth — neither of which
+          // holds anything when the placeId lookup failed, so it changed nothing
+          // and Property Masters claimed "no Google Business Profile" a second
+          // time. The 75 reviews came from localRank.ours: the LOCAL RANK search
+          // found this business in Google's own local results, carrying 75
+          // reviews at 4.8. A business Google returns in a local search, with a
+          // review count attached, HAS a listing. We failed to tie it to this URL
+          // because resolvePlaceId matches on exact website and their listing
+          // points at propertymasters.com while we audited propertymastersres.com.
+          //
+          // So the only honest version: claim absence when a lookup ran and NO
+          // source anywhere holds review evidence for them.
+          placeSearched: !(
+            Number(localRank && localRank.ours && localRank.ours.reviews) > 0
+            || Number(reviewsRead) > 0
+            || Number(gbpHealth && gbpHealth.reviewCount) > 0
+            || Number(req.body.reviewCount) > 0
+            || Number(req.body.reviews) > 0
+          ),
           gbpCategory: (gbpHealth && gbpHealth.checked) ? gbpHealth.primaryCategory : null,
           // The money line is built from this. "real-estate" from a lead source
           // would have quoted property prices at a foundation repair company — the
