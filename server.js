@@ -8032,6 +8032,25 @@ const buildSubjects = (lead, m = {}) => {
 // lowercase, a fragment starting a sentence starts capital. Getting this wrong
 // produced "answers first. everyone who decides..." in the first draft \u2014 which
 // reads as carelessness, and carelessness is what the whole email argues against.
+// ══ THE GREETING USES HER NAME, NOT HER TITLE ══════════════════════════════
+// Every composer took the first whitespace token of founderName. When the
+// decision-maker resolved as "Dr. Amaka Nwubah" — which is how doctors, dentists
+// and lawyers usually resolve — all four touches opened "Dr. —". The same lead
+// opened "Amaka —" on an earlier run, so this appears only when the title comes
+// attached, and it looks like a mail-merge failure in the first two characters.
+//
+// Titles are stripped; the name is then re-capitalised, because
+// cleanPersonForEmail lower-cases for mailbox building.
+const greetingName = (fullName) => {
+  const raw = String(fullName || '').trim();
+  if (!raw) return '';
+  let parts = [];
+  try { parts = cleanPersonForEmail(raw); } catch (e) { parts = []; }
+  const first = parts[0] || raw.split(/\s+/)[0].replace(/[^A-Za-z'\u2019-]/g, '');
+  if (!first) return '';
+  return first.charAt(0).toUpperCase() + first.slice(1);
+};
+
 // Terminates a clause with a period if it lacks end punctuation. Module-level so
 // both the first-email composer and the follow-up composer share ONE definition
 // — it used to be local to composeEmail, which is why composeFollowUp threw
@@ -8122,7 +8141,7 @@ const composeEmail = (spine, opts = {}) => {
   //
   // Empty string here; the skeletons omit the whole "Name — " opener and start
   // on the fact, capitalised.
-  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
+  const first = greetingName(opts.founderName);
   const fact = toSecondPerson(spine.claim);
   const costs = toSecondPerson(spine.costs || '');
   // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
@@ -8334,7 +8353,7 @@ const pickReframe = (spine, reframes, variantIndex = 0) => {
 // Every sentence still traces to a measurement; nothing is invented.
 const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
   if (!rung || !rung.finding) return null;
-  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
+  const first = greetingName(opts.founderName);
   const fact = endSentence(toSecondPerson(rung.finding));
   const costs = rung.costs ? endSentence(toSecondPerson(rung.costs)) : '';
   // The finding's own reframe — its "so what" — recovered from the ladder if the
@@ -8427,7 +8446,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
 // leaving on the table" are the exact anti-patterns that cost bookings. This
 // closes the loop, makes replying trivial, and counts nothing.
 const composeBreakup = (spine, opts) => {
-  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
+  const first = greetingName(opts.founderName);
   const open = first
     ? `${first} — I'll leave this here.`
     : `I'll leave this here.`;
@@ -8446,7 +8465,7 @@ const composeFullEmail = (spine, opts = {}) => {
   const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
   const reframes = Array.isArray(opts.reframes) ? opts.reframes : [];
   const cta = CTA_FOR(spine.claim, spine.claimId);
-  const first = String(opts.founderName || '').trim().split(/\s+/)[0] || '';
+  const first = greetingName(opts.founderName);
 
   const variant = (i) => {
     const composed = composeEmail(spine, {
@@ -8722,6 +8741,27 @@ const looksLikePractitionerAtGroup = (companyName, website) => {
     .filter(w => w.length > 2 && !PERSON_TITLE.test(w) && !/^(the|and|for|of)$/.test(w));
   const shared = words.some(w => host.includes(w) || w.includes(host));
   if (shared) return null;
+  // ══ INITIALS ARE STILL THEIR OWN DOMAIN ═══════════════════════════════════
+  // This refused two real leads in one session on the grounds that the domain was
+  // "named after something else entirely":
+  //
+  //   Dan Thompson Agency        -> dtainsure   (DTA + insure)
+  //   Russell Brothers Remodeling -> rbrrva     (RBR + RVA, Richmond Virginia)
+  //
+  // Both domains ARE the business, abbreviated. Registering initials is what a
+  // small owner-operated firm does when the full name is too long to type, and it
+  // is evidence of ownership rather than against it. The literal-substring test
+  // could never see it, so each refusal cost a lead that was in the ICP, silently
+  // and permanently — the guard is a hard stop before any paid call.
+  //
+  // Deliberately strict: the host must START with the acronym, and the acronym
+  // must be at least two letters. "dtainsure" starts with "dta"; a coincidental
+  // shared letter cannot pass, and a genuine group domain still fails.
+  const acro = words.map(w => w[0]).join('');
+  if (acro.length >= 2 && host.startsWith(acro)) {
+    console.log(`OWNER GUARD [${name}]: the domain "${host}" is not a literal match, but it opens with "${acro}" \u2014 the initials of the business itself. That is their own domain abbreviated, not a group's, so the lead proceeds.`);
+    return null;
+  }
 
   return {
     why: `"${name}" reads as a person, and the website is ${host} \u2014 a domain named after something else entirely. On a practice they OWN, the name is in the domain ("Dr. Yash Plastic Surgery" \u2192 dryashplasticsurgery.com). A person on a group's domain is almost always one practitioner among several: they do not control the site, do not set the marketing budget, and cannot buy what we sell.`,
@@ -12795,11 +12835,28 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
     // IS the person. Blocking these on an unhelpful SMTP probe was throwing away the
     // most reachable owners in the entire pipeline.
     if (name) {
-      const nameParts = String(name).toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      // ══ "Dr." IS NOT A FIRST NAME ═════════════════════════════════════════
+      // This split the raw name and kept any token over two characters. On
+      // "Dr. Amaka Nwubah" that keeps "dr." — with the dot, which makes it three
+      // characters — so the owner's mailbox was built as dr.@amakaaesthetics.com.
+      // A local part cannot end in a dot; the address is malformed and bounces.
+      //
+      // The same lead resolved as "Amaka Nwubah" on an earlier run and produced
+      // amaka@ correctly, so this only appears when the decision-maker arrives
+      // with their title attached — which for doctors, dentists and lawyers is
+      // most of the time.
+      //
+      // cleanPersonForEmail() already strips honorifics and punctuation and is
+      // used by every other mailbox path. This one was building its own parts and
+      // skipping it, so the fix is to stop having a second implementation.
+      const nameParts = cleanPersonForEmail(name).filter(w => w.length > 2);
       const domRoot = domain.split('.')[0].toLowerCase();
       const eponymous = nameParts.some(w => domRoot.includes(w));
       const firstName = nameParts[0];
-      const epEmail = `${firstName}@${domain}`;
+      if (!firstName) {
+        console.log(`EMAIL [${domain}]: "${name}" reduces to nothing usable once titles and punctuation are stripped, so no eponymous mailbox can be built from it.`);
+      }
+      const epEmail = firstName ? `${firstName}@${domain}` : '';
       // The gate is now this ONE address, not the whole batch. If the server
       // explicitly refused this mailbox we honour that and fall through; if it
       // refused some other pattern, that is not evidence about this one.
@@ -12956,9 +13013,13 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
   // is named after the person, a first-name mailbox on their own domain is a fact
   // about the business, not a guess.
   if (name && catchAll !== true) {
-    const nameParts = String(name).toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    // Same fix as the eponymous branch above: cleanPersonForEmail strips the
+    // honorific and the punctuation, so "Dr. Amaka Nwubah" yields amaka and not
+    // the malformed "dr." local part. Two copies of this logic existed and only
+    // one would have been fixed if this were done inline.
+    const nameParts = cleanPersonForEmail(name).filter(w => w.length > 2);
     const domRoot = domain.split('.')[0].toLowerCase();
-    if (nameParts.some(w => domRoot.includes(w))) {
+    if (nameParts.length && nameParts.some(w => domRoot.includes(w))) {
       const epEmail = `${nameParts[0]}@${domain}`;
       console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
       return {
@@ -22213,6 +22274,33 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A TITLE IS NOT A FIRST NAME ══════════════════════════════════════════
+  // Amaka Aesthetics resolved as "Dr. Amaka Nwubah" and produced a mailbox of
+  // dr.@amakaaesthetics.com — a local part ending in a dot, which is malformed
+  // and bounces — while all four touches opened "Dr. —". The same lead had
+  // resolved as "Amaka Nwubah" on an earlier run and been correct, so this only
+  // surfaces when the decision-maker arrives with their title attached, which
+  // for doctors, dentists and lawyers is most of the time.
+  try {
+    const _cases = [
+      ['Dr. Amaka Nwubah', 'amaka', 'Amaka'],
+      ['Mr. Mike Massey', 'mike', 'Mike'],
+      ['Dusty Hannah', 'dusty', 'Dusty'],
+      ['Dr Yash Patel', 'yash', 'Yash'],
+    ];
+    const _bad = _cases.filter(([raw, mailbox, greet]) => {
+      const parts = cleanPersonForEmail(raw).filter(w => w.length > 2);
+      return parts[0] !== mailbox || greetingName(raw) !== greet;
+    }).map(([raw]) => `"${raw}" -> ${cleanPersonForEmail(raw).filter(w => w.length > 2)[0]}@ / "${greetingName(raw)}"`);
+    if (_bad.length) {
+      console.log(`\u26d4 TITLE CHECK: ${_bad.length} name(s) still carry a title into the mailbox or the greeting \u2014 ${_bad[0]}. A local part ending in a dot bounces, and "Dr. \u2014" in the first two characters reads as a broken mail merge.`);
+    } else {
+      console.log(`\u2713 TITLE CHECK: honorifics are stripped from both the mailbox and the greeting \u2014 "Dr. Amaka Nwubah" yields amaka@ and opens "Amaka \u2014", not dr.@ and "Dr. \u2014".`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TITLE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A FINDING HE CAN FIX ALONE MUST NOT OPEN THE EMAIL ═══════════════════
