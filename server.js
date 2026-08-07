@@ -16922,6 +16922,9 @@ const _runResearchInner = async (req, res) => {
 
   let domain = website ? website.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','') : '';
   let verifiedIndustry = null;  // declared early — the domain-confirmation step uses it
+  // The Companies API's category, kept under its own name so it can never be
+  // mistaken for a trade we read off their site.
+  let capiIndustry = null;
   // The phrase a CUSTOMER would type, read from their own homepage. Kept apart from
   // verifiedIndustry because the Companies API overwrites that with a LinkedIn-style
   // SECTOR: a LASIK surgeon whose trade we correctly read as "LASIK surgeon" was
@@ -17395,7 +17398,24 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const capi = await enrichViaCompaniesAPI(website, companiesApiKey);
         if (capi) {
           if (capi.employees && !verifiedEmployees) verifiedEmployees = capi.employees;
-          if (capi.industry) verifiedIndustry = capi.industry;
+          // ══ A THIRD-PARTY LABEL IS NOT A TRADE WE READ ══════════════════
+          // This overwrote verifiedIndustry with the Companies API's category —
+          // and verifiedIndustry is one of the two values allowed to build a
+          // search query. The API called Ram Jack Louisville "real-estate"; they
+          // repair foundations. Their homepage was down that run so nothing
+          // overrode it, and the email told a contractor he does not appear for
+          // "real estate in Louisville".
+          //
+          // The comment 40 lines above already says the Companies API overwrites
+          // this with a LinkedIn-style label, which is why customerTrade was kept
+          // separate. It is kept for display and scoring under its own name, and
+          // it no longer feeds anything that becomes a sentence.
+          if (capi.industry) {
+            capiIndustry = capi.industry;
+            if (!verifiedIndustry) {
+              console.log(`INDUSTRY [${company}]: Companies API says "${capi.industry}". Recorded for scoring, but it is a third-party label rather than a trade read off their own site, so it will not build a search query or price a job.`);
+            }
+          }
         }
       } catch(e) { console.log('CompaniesAPI research enrich skipped:', e.message); }
     }
@@ -21438,6 +21458,23 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             const _criticalFlags = _realFlags.filter(f => _CRITICAL.test(f));
             if (_criticalFlags.length) {
               parsed._criticalFactCheck = _criticalFlags;
+              // ══ THE EMAIL IS WRITTEN BEFORE THIS RUNS ═══════════════════════
+              // composeFullEmail fires at step 4 of Research; the fact-checker
+              // finishes seventeen seconds later. So the compose-time gate could
+              // never see these flags — Ram Jack's log reads "EMAIL COMPOSED" at
+              // 05:07:29 and "NOT sendable as written" at 05:07:46, and the email
+              // sat in Generate under a banner saying Checks passed.
+              //
+              // This is the only moment where both the email and the verdict
+              // exist. The composed email is removed here, so nothing downstream
+              // can display, store or send copy the checker has just contradicted.
+              // Re-running Research rewrites both together; the on-demand gate
+              // then keeps it from being recomposed while the flags stand.
+              if (parsed.composedEmail) {
+                parsed._composedEmailWithdrawn = true;
+                parsed.composedEmail = null;
+                console.log(`\u26d4 EMAIL WITHDRAWN [${company}]: the email was composed before the fact-check finished, and the check contradicts it. Removed rather than shown \u2014 an operator reading "Checks passed" under a false claim is worse than no email at all.`);
+              }
               console.log(`\u26d4 FACT CHECK CRITICAL [${company}]: ${_criticalFlags.length} claim(s) the prospect could disprove on sight. This lead is NOT sendable as written \u2014 ${_criticalFlags.map(f => String(f).slice(0, 110)).join(' | ')}`);
             }
             const _cleared = _rawFlags.length - _realFlags.length;
@@ -22705,11 +22742,16 @@ app.listen(PORT, () => {
     const _src = String(require('fs').readFileSync(__filename, 'utf8'));
     const _leaks = (_src.match(/industry: customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
       + (_src.match(/tradeWord: customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
-      + (_src.match(/let _trade = customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length;
+      + (_src.match(/let _trade = customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
+      // The Companies API label is the same class of leak by a different route:
+      // it used to overwrite verifiedIndustry, which IS allowed to build a query.
+      // Ram Jack's homepage was down, nothing overrode it, and "real-estate"
+      // reached the email even after the req.body path was closed.
+      + (_src.match(/if \(capi\.industry\) verifiedIndustry = capi\.industry/g) || []).length;
     if (_leaks) {
       console.log(`\u26d4 TRADE SOURCE CHECK: ${_leaks} path(s) still let the lead source's guess reach a search query or a job value. Only a trade read off their own site may become a claim about their business.`);
     } else {
-      console.log(`\u2713 TRADE SOURCE CHECK: rank queries and job values are built only from a trade read off their own site. An unverified lead-source label can route a lead but can no longer describe one.`);
+      console.log(`\u2713 TRADE SOURCE CHECK: rank queries and job values come only from a trade read off their own site \u2014 not the lead source's guess and not the Companies API's category. An unverified label can route a lead but can no longer describe one.`);
     }
   } catch (e) {
     console.log(`\u26d4 TRADE SOURCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
