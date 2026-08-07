@@ -313,6 +313,59 @@ const computeProductFit = (layer, leadSignal) => {
 // every time, ties become genuine ties resolved by the binding-layer rule rather
 // than by which way the model leaned that minute.
 
+// ══ CAN HE JUST FIX IT HIMSELF? ═════════════════════════════════════════════
+// weFixIt asks "do we sell the fix?" — and for review capture the honest answer
+// is yes, we sell a system for it, so it scores high and wins the email.
+//
+// Vin caught what that misses. Dusty Hannah reads "39 reviews across 21 years,
+// does anyone ask the customer for a review?" and thinks: fair point, I'll tell
+// the crew to start asking. Costs him nothing, takes one conversation, and he
+// never replies. The finding was true, he could verify it in ten seconds, and
+// the email handed him the answer for free.
+//
+// That is a DIFFERENT axis from "do we sell it". A finding can be squarely what
+// we sell AND trivially self-fixable — those are the worst possible openers,
+// because they are the most persuasive and the least monetisable at once.
+//
+// The test is not difficulty, it is dependency: after reading this sentence,
+// does he need anyone? Asking customers for reviews needs nobody. Replying to
+// reviews needs nobody. Uploading photos to a Google profile needs nobody.
+// Ranking below competitors, a broken conversion path, positioning that does not
+// separate him — none of those resolve without expertise he does not have.
+//
+// This DEMOTES the email opener only. The finding stays in the audit and on the
+// call sheet at full weight, because on a call it is excellent: Mike can raise
+// it, Dusty agrees it is true, and that agreement opens the conversation about
+// everything he cannot fix alone. In an email it is a gift with no ask.
+const SELF_FIX_RULES = [
+  // 5 = one conversation with his own staff, today, at no cost.
+  [5, /\breviews? (?:across|per|a year)|review velocity|nothing.{0,25}compound|does not compound|asks? (?:for|customers for) (?:a )?reviews?\b/i,
+      'asking finished customers for a review needs nobody — he tells his crew and it is done'],
+  [5, /\bno(?:t one)? (?:of the )?\d*\s*reviews?.{0,30}(?:repl(?:y|ies)|answered|response)|no owner repl|never replied to (?:a )?review\b/i,
+      'replying to his own reviews is an afternoon of his own time'],
+  [4, /\bno photos?|photo count|\d+ photos?\b.{0,20}profile|missing (?:hours|description) on\b/i,
+      'uploading photos or filling in profile fields is self-serve and free'],
+  [4, /\bhours (?:are )?(?:not listed|missing)|no business description\b/i,
+      'a Google profile field he can fill in himself in minutes'],
+  // 1-2 = he cannot resolve this without help he does not have.
+  [1, /\brank|ranking|#\d+ of \d+|map pack|competitors? (?:above|ahead)|fewer reviews than|absent from (?:the )?search|not in (?:the )?top\b/i,
+      'nobody fixes their own search position by deciding to'],
+  [1, /\bno (?:booking|scheduling)|phone[- ]only|only way to (?:book|start|hire)|conversion path|no lead magnet|no instant\b/i,
+      'this is a build, not a decision'],
+  [1, /\bpositioning|generic promise|interchangeable|who this is for|no guarantee|no named offer|risk reversal\b/i,
+      'if he could write his own positioning it would already be written'],
+  [2, /\bno pricing|no published pricing|no price and no range\b/i,
+      'he could publish a number today, but deciding WHICH number is the part he cannot do alone'],
+  [1, /\bdated|out of date|hasn.t changed since|design\b/i, 'a rebuild is not something he does himself'],
+];
+const computeSelfFix = (findingText, signal) => {
+  const t = `${findingText || ''} ${signal || ''}`;
+  for (const [score, re, why] of SELF_FIX_RULES) if (re.test(t)) return { score, why };
+  // Unmatched defaults to 2 — assume he needs us, because demoting a finding we
+  // have not classified would silently bury good openers.
+  return { score: 2, why: 'no rule matched — assumed to need us', unmatched: true };
+};
+
 const WEFIXIT_RULES = [
   // ── VOCABULARY THE LIVE RUNS KEPT MISSING ──────────────────────────────────
   [5, /\bno social profile|no social profiles|social profiles? linked\b/i, 'linking their own accounts is ordinary web work and squarely inside what a rebuild or retainer covers'],
@@ -8813,7 +8866,21 @@ const rankHarms = (m = {}) => {
       : null;
     // Novel survives as a TIEBREAK only: among findings within 8 harm points of
     // each other, the one he is least likely to know already goes first.
-    const openerScore = _disqualified ? 0 : Math.round(harmAdj + (h.novel / 100) * 7);
+    // ══ A FINDING HE CAN FIX ALONE IS A GIFT, NOT AN OPENER ═══════════════
+    // Scored above as selfFix. The penalty is deliberately heavy because the
+    // failure is invisible: the email reads well, the finding is true, he agrees
+    // with it — and then he fixes it himself and never writes back. A 20-point
+    // demotion is roughly the gap between adjacent findings on a real lead, which
+    // is exactly enough to let something he CANNOT fix alone take the opener.
+    //
+    // Only the opener moves. harm, the audit, the call sheet and the follow-up
+    // findings are untouched, because the finding is still true and still useful
+    // — on a call it is the thing he agrees with before Mike raises the things he
+    // cannot fix alone.
+    const _selfFix = computeSelfFix(sentence, h.id);
+    const _selfFixPenalty = _selfFix.score >= 3 ? (_selfFix.score - 2) * 7 : 0;
+    const openerScore = _disqualified ? 0
+      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -8844,6 +8911,7 @@ const rankHarms = (m = {}) => {
 
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
+      selfFix: _selfFix.score, selfFixWhy: _selfFix.why,
       opener: openerScore, finding: sentence, costs: h.costs,
       // ══ THE REFRAME BELONGS TO THE FINDING ═══════════════════════════════
       // Reframes used to arrive as a model-written list built from ALL the
@@ -18007,6 +18075,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (_harms.all && _harms.all.length) {
           const top = _harms.lead;
           console.log(`\u2709 EMAIL OPENS ON [${company}]: ${top.band} opener=${top.opener} \u2014 ${top.finding}.`);
+          // Name anything that lost the opener because he could fix it himself.
+          // Silent demotion is how a scoring change becomes impossible to audit.
+          const _selfFixed = (_harms.byHarm || []).filter(h => (h.selfFix || 0) >= 4 && h.id !== top.id);
+          if (_selfFixed.length) {
+            console.log(`\u{1F381} SELF-FIXABLE, NOT LEADING [${company}]: ${_selfFixed.length} finding(s) scored higher on harm but he can resolve them without us, so the email does not open there \u2014 ${_selfFixed.slice(0, 2).map(h => `"${String(h.finding).slice(0, 44)}" (harm ${h.harm}, ${h.selfFixWhy})`).join(' | ')}. They stay in the audit and on the call sheet, where agreement is the point.`);
+          }
           if (top.forwardable) console.log(`\u26a0 FORWARDABLE [${company}]: he can hand this to whoever runs his site and consider it handled. The email MUST carry the count (${_harms.all.length}) and the accountability question, or the likely outcome is that it gets fixed and we never hear back.`);
           if (_harms.worst && _harms.worst.id !== top.id) {
             console.log(`\u25b6 BUT THE COSTLIEST THING IS [${company}]: harm=${_harms.worst.harm} \u2014 ${_harms.worst.finding}. ${_harms.worst.costs}. That is what he should be buying; it is just a weak first line because he cannot check it as easily.`);
@@ -21703,6 +21777,25 @@ const _sweepJobs = () => {
   for (const [id, j] of _jobs) {
     const age = now - (j.finishedAt || j.startedAt || now);
     if (j.status !== 'running' && age > JOB_TTL_MS) _jobs.delete(id);
+    // ══ A JOB THAT NEVER FINISHES MUST NOT HOLD A SLOT FOREVER ═════════════
+    // Only FINISHED jobs were swept. A run that hangs inside a fetch stays
+    // 'running' and keeps its slot — two of those and every later lead waits for
+    // a slot that never frees, which is exactly the "one lead, nothing else
+    // running, still failed" case.
+    //
+    // Ten minutes is past the 8-minute timeout, so this only ever catches jobs
+    // whose timer did not fire — a dyno pause, a swallowed error, a timer lost
+    // to unref. It frees the slot and says so rather than failing in silence.
+    if (j.status === 'running' && j.phase === 'running') {
+      const workAge = now - (j.startedWorkAt || j.startedAt || now);
+      if (workAge > 10 * 60 * 1000) {
+        j.status = 'error';
+        j.phase = 'dead';
+        j.finishedAt = now;
+        j.error = 'This run stopped reporting and was cleared after 10 minutes so it would stop holding a slot. Re-run this lead.';
+        console.log(`\u26d4 JOB ${id} [${j.company}]: STALE \u2014 still marked running after ${Math.round(workAge / 60000)} minutes with no result. Cleared so the next lead can start. This is the fault that made single leads fail with nothing else running.`);
+      }
+    }
   }
   // Hard ceiling so a long-running process can never grow this without bound.
   if (_jobs.size > JOB_MAX) {
@@ -21763,8 +21856,25 @@ app.post('/api/research-async', (req, res) => {
   const job = {
     id,
     status: 'running',
+    // ══ QUEUED IS NOT RUNNING ══════════════════════════════════════════════
+    // Every accepted job was marked 'running' immediately, including ones that
+    // had not started. Three consequences, all live:
+    //
+    //   · the slot counter counted QUEUED jobs as running, so queued jobs
+    //     blocked each other and the second lead never got a slot
+    //   · the 8-minute timeout started at ACCEPTANCE, so a job that waited six
+    //     minutes for a slot had two minutes left to do five minutes of work
+    //     and was killed mid-run with the credits already spent
+    //   · a job hung inside a fetch stayed 'running' until its timer fired, and
+    //     two of those blocked EVERY new job — which is why a single lead failed
+    //     with nothing else running
+    //
+    // phase is the truth; status stays 'running' on the wire so the client
+    // contract does not change at all.
+    phase: 'queued',
     company: req.body?.company || 'unknown',
     startedAt: Date.now(),
+    startedWorkAt: null,
     finishedAt: null,
     result: null,
     error: null,
@@ -21780,7 +21890,7 @@ app.post('/api/research-async', (req, res) => {
   //
   // Queue rather than refuse: the work still happens, just in order, and the
   // client contract is unchanged \u2014 it polls and gets a result either way.
-  const _runningNow = [..._jobs.values()].filter(j => j.status === 'running' && j.id !== id).length;
+  const _runningNow = [..._jobs.values()].filter(j => j.status === 'running' && j.phase === 'running' && j.id !== id).length;
   if (_runningNow >= 2) {
     console.log(`JOB ${id} [${job.company}]: QUEUED \u2014 ${_runningNow} already running. Three at once is what made two runs stop mid-way and report nothing. This starts when a slot frees.`);
   }
@@ -21798,28 +21908,43 @@ app.post('/api/research-async', (req, res) => {
   // Eight minutes is well past the slowest legitimate run observed (266s) and
   // guarantees the client always gets an answer, even when the answer is that we
   // gave up.
-  const _jobTimer = setTimeout(() => {
+  let _jobTimer = null;
+  const _armTimeout = () => {
+    _jobTimer = setTimeout(() => {
     if (job.status === 'running') {
       job.status = 'error';
       job.error = 'This run passed 8 minutes without finishing and was stopped. Everything already measured was still paid for. The usual cause is several leads researched at once on a single free-tier instance \u2014 run them one at a time and this will not happen.';
       job.finishedAt = Date.now();
       console.log(`\u26d4 JOB ${id} [${job.company}]: TIMED OUT after 8 minutes and was closed so the client stops polling. Credits already spent are not recoverable.`);
     }
-  }, 8 * 60 * 1000);
-  if (_jobTimer && _jobTimer.unref) _jobTimer.unref();
+    }, 8 * 60 * 1000);
+    if (_jobTimer && _jobTimer.unref) _jobTimer.unref();
+  };
 
   // Wait for a slot before starting. Polling keeps the client contract identical.
   const _waitForSlot = async () => {
     let waited = 0;
-    while ([..._jobs.values()].filter(j => j.status === 'running' && j.id !== id).length >= 2 && waited < 6 * 60 * 1000) {
+    // Counts only jobs actually WORKING. Queued jobs no longer block each other.
+    const busy = () => [..._jobs.values()].filter(j => j.status === 'running' && j.phase === 'running' && j.id !== id).length;
+    while ((_sweepJobs(), busy()) >= 2 && waited < 15 * 60 * 1000) {
+      // Sweep on every pass: a job that died while this one waited must release
+      // its slot here, not only when the next lead happens to be submitted.
+      if (waited === 0) console.log(`JOB ${id} [${job.company}]: waiting for a slot \u2014 ${busy()} run(s) working. Its 8-minute clock has NOT started; it begins when the work does.`);
       await new Promise(r => setTimeout(r, 3000));
       waited += 3000;
     }
+    if (waited) console.log(`JOB ${id} [${job.company}]: slot free after ${Math.round(waited / 1000)}s in the queue \u2014 starting now with a full 8 minutes.`);
   };
 
   Promise.resolve()
     .then(() => _waitForSlot())
-    .then(() => runResearch(req, _captureRes(job)))
+    .then(() => {
+      // The work begins HERE, so the timeout begins here too.
+      job.phase = 'running';
+      job.startedWorkAt = Date.now();
+      _armTimeout();
+      return runResearch(req, _captureRes(job));
+    })
     .finally(() => clearTimeout(_jobTimer))
     .catch((e) => {
       job.status = 'error';
@@ -22073,6 +22198,30 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A FINDING HE CAN FIX ALONE MUST NOT OPEN THE EMAIL ═══════════════════
+  // Hannah Custom Homes went out opening on "39 reviews across 21 years — does
+  // anyone ask the customer for a review?". True, verifiable, and the answer is
+  // one conversation with his crew. He agrees, fixes it free, never replies.
+  // This proves the two self-fixable findings lose the opener to findings he
+  // cannot resolve without help, while keeping their harm score intact.
+  try {
+    const _cases = [
+      ['39 reviews across 21 years of trading', 'not_compounding', 5],
+      ['Not one of the 39 reviews we read has a reply from the business', 'no_owner_replies', 5],
+      ['no price and no range appears anywhere on the pages we read', 'no_published_pricing', 2],
+      ['Businesses with fewer reviews than theirs are ranking above them', 'outranked_by_weaker', 1],
+    ];
+    const _wrong = _cases.filter(([t, id, want]) => computeSelfFix(t, id).score !== want)
+      .map(([t, id, want]) => `"${t.slice(0, 34)}" wanted ${want} got ${computeSelfFix(t, id).score}`);
+    if (_wrong.length) {
+      console.log(`\u26d4 SELF-FIX CHECK: ${_wrong.length} finding(s) misclassified \u2014 ${_wrong[0]}. A self-fixable finding leading the email hands the owner the answer for free.`);
+    } else {
+      console.log(`\u2713 SELF-FIX CHECK: review-asking and review-replying score 5 (he needs nobody), while pricing, ranking and conversion score 1-2. The email opens on what he cannot fix alone; the rest stay in the audit.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SELF-FIX CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE FOLLOW-UP SEQUENCE IS FOUR REAL EMAILS ═══════════════════════════
