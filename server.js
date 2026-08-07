@@ -8401,6 +8401,98 @@ const verifyOriginalFinding = (item, corpus) => {
 // instruction. Every rejection makes the email one sentence shorter, which is
 // always the correct failure: a guessed pattern line makes us sound like every
 // other agency, and that is worse than silence.
+// ══ READING THE EMAIL AS THE MAN WHO RECEIVES IT ════════════════════════════
+// Every check in this system verifies that the email is TRUE. Not one of them
+// can tell you it is true and beside the point — and that is the failure that
+// got through tonight. Kelly Brooks turns properties for REO funds across 24
+// states and we told him he ranks poorly in Woodstock. Measured, verified,
+// fact-checked, and deleted on sight.
+//
+// So the model reads the finished email AS HIM. Not as a critic, not as our
+// reviewer — as a busy owner who has never heard of us, opening one of the
+// twenty emails he got this morning.
+//
+// THREE THINGS IT DELIBERATELY DOES NOT KNOW:
+//   · that we wrote the email      — it would grade our work politely
+//   · why we think the finding matters — our reasoning would persuade it
+//   · that this is a test          — it would perform rather than react
+// It sees exactly what he sees: a stranger's email, and his own business.
+//
+// SAFETY: this produces NO prospect-facing text. Nothing it writes goes into
+// any email, ever. It cannot fabricate into an inbox because it has no route to
+// one. The worst case is an opinion you disagree with, shown next to the draft.
+const simulateProspect = async ({ email, subject, lead }, apiKey) => {
+  if (!apiKey || !email) return null;
+  const who = [
+    lead.founderName ? `Your name is ${lead.founderName}.` : '',
+    lead.title ? `You are the ${lead.title}.` : '',
+    `You own ${lead.company}${lead.trade ? `, a ${lead.trade} business` : ''}${lead.location ? ` in ${lead.location}` : ''}.`,
+    lead.tenure ? `You have been running it ${lead.tenure} years.` : '',
+    // The single most important line: the thing that made the Property Masters
+    // email irrelevant was a business-model mismatch, and only he would notice.
+    lead.businessModelWhy ? `How you actually get customers: ${lead.businessModelWhy}` : '',
+  ].filter(Boolean).join(' ');
+
+  const prompt = `${who}
+
+It is a Tuesday morning. You are between jobs, on your phone, going through email. You get a lot of these — agencies, SEO people, software salesmen. Most get deleted without a second thought and you do not feel bad about it.
+
+This one just arrived from someone you have never heard of.
+
+Subject: ${subject || '(no subject)'}
+
+${email}
+
+React the way you actually would. Not the way a reasonable person ought to, and not with the benefit of thinking it over — your real first response in the four seconds before you decide what to do with it.
+
+Things that decide it for you, honestly:
+- Does this person understand what my business actually is, or are they guessing from a template? If they are describing a problem that does not apply to how I get customers, I am done reading.
+- Do they know something about my business I did not know? That is rare and it earns a moment.
+- Am I being sold to, or told something?
+- Is replying going to cost me a sales call I did not ask for?
+
+Answer ONLY with this JSON and nothing else:
+{"verdict":"reply|ignore|delete","reaction":"your actual first thought, one sentence, in your own words","wouldReply":"the one thing that would have got a reply out of you, one sentence"}
+
+Be honest. Most cold emails are a delete and saying so is the useful answer. If it is a delete, say delete.`;
+
+  try {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    }, 25000, 'prospect-sim');
+    const j = await r.json();
+    const text = (j && j.content && j.content[0] && j.content[0].text) || '';
+    return parseProspectVerdict(text);
+  } catch (e) {
+    console.log(`PROSPECT SIM: could not run (${e && e.message}) — the email stands unreviewed.`);
+    return null;
+  }
+};
+
+// Parse and clamp. A malformed response must return null rather than a broken
+// object, because a half-filled panel reads as a verdict nobody gave.
+const parseProspectVerdict = (text) => {
+  const raw = String(text || '').replace(/```json|```/g, '').trim();
+  let o = null;
+  try { o = JSON.parse(raw); } catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) { try { o = JSON.parse(m[0]); } catch { return null; } }
+  }
+  if (!o || typeof o !== 'object') return null;
+  const verdict = String(o.verdict || '').trim().toLowerCase();
+  if (!['reply', 'ignore', 'delete'].includes(verdict)) return null;
+  const clean = (s) => String(s || '').replace(/\s+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 240);
+  const reaction = clean(o.reaction);
+  if (!reaction) return null;
+  return { verdict, reaction, wouldReply: clean(o.wouldReply) };
+};
+
 // ══ VERIFYING AN EMAIL THE MODEL WROTE ══════════════════════════════════════
 // The code composer cannot fabricate, and it also cannot write. It emits four
 // separate assertions joined by paragraph breaks — "X. Y. Z." — where a person
@@ -23464,6 +23556,45 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ A HALF-PARSED VERDICT IS A VERDICT NOBODY GAVE ═══════════════════════
+  // The prospect reading is the only check that can catch an email which is true
+  // and beside the point — the Kelly Brooks failure, where every mechanical
+  // verifier passed and the man deletes it because we described a market he does
+  // not sell into.
+  //
+  // Because it is shown as HIS reaction, a malformed or partial response must
+  // return null rather than a broken object. A panel reading "Read as Kelly —
+  // undefined" is worse than no panel: it puts words in his mouth that no model
+  // actually produced, which is the same error as everything else guarded here.
+  try {
+    const _ok = [
+      ['clean json', '{"verdict":"delete","reaction":"I do not sell in Woodstock","wouldReply":"name my real buyers"}'],
+      ['fenced', '\u0060\u0060\u0060json\n{"verdict":"reply","reaction":"How do they know that","wouldReply":"nothing"}\n\u0060\u0060\u0060'],
+      ['with preamble', 'Here is my reaction:\n{"verdict":"ignore","reaction":"Maybe later","wouldReply":"a real number"}'],
+    ];
+    const _null = [
+      ['prose, not json', 'I would probably delete this one'],
+      ['invalid verdict', '{"verdict":"maybe","reaction":"hmm"}'],
+      ['empty reaction', '{"verdict":"delete","reaction":""}'],
+      ['empty string', ''],
+      ['an array', '[1,2,3]'],
+    ];
+    const _failedParse = _ok.filter(([, t]) => !parseProspectVerdict(t)).map(([l]) => l);
+    const _leaked = _null.filter(([, t]) => parseProspectVerdict(t) !== null).map(([l]) => l);
+    const _san = parseProspectVerdict('{"verdict":"DELETE","reaction":"<b>not</b> my market","wouldReply":"' + 'x'.repeat(400) + '"}');
+    if (_failedParse.length) {
+      console.log(`\u26d4 PROSPECT SIM CHECK: ${_failedParse.join(', ')} did not parse, so the reading would be lost on responses that are perfectly usable.`);
+    } else if (_leaked.length) {
+      console.log(`\u26d4 PROSPECT SIM CHECK: ${_leaked.join(', ')} produced a verdict object. A panel built from a malformed response puts words in the owner's mouth that nothing actually said.`);
+    } else if (!_san || _san.verdict !== 'delete' || /[<>]/.test(_san.reaction) || _san.wouldReply.length > 240) {
+      console.log(`\u26d4 PROSPECT SIM CHECK: the verdict is not being sanitised \u2014 case, markup or length is getting through into the panel.`);
+    } else {
+      console.log(`\u2713 PROSPECT SIM CHECK: ${_ok.length} well-formed readings parse, ${_null.length} malformed ones return null rather than a partial verdict, and the text is lowercased, stripped of markup and length-clamped.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PROSPECT SIM CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE LADDER MUST NOT WRITE WHAT ITS OWN VERIFIER REJECTS ══════════════
   // Two ladder sentences said "has nowhere to go" — an outcome, describing what
   // a person did after hitting a wall we measured. CLAIM VERIFY flagged that
@@ -25494,6 +25625,35 @@ app.post('/api/compose-email', async (req, res) => {
       // reported the brain had written. The provenance label is the one thing in
       // this system that can never be allowed to drift — an operator who cannot
       // trust the label cannot trust anything under it.
+      // ══ THE LAST CHECK IS A HUMAN ONE ═══════════════════════════════════
+      // Everything above verifies the email is TRUE. Nothing above can tell you
+      // it is true and beside the point — and that is what got through: Kelly
+      // Brooks sells to REO funds and we told him about a Woodstock map pack.
+      //
+      // Runs on the variant that will ACTUALLY SEND, because reviewing the other
+      // one reviews an email nobody receives. Advisory only: it changes nothing,
+      // blocks nothing, and produces no text that reaches anybody. If it fails
+      // or times out the email stands exactly as composed.
+      try {
+        const _send = (req.body.abVariant === 'B' && composed.variantB) ? composed.variantB : composed.variantA;
+        if (req.body.apiKey && _send && _send.body) {
+          const _sim = await simulateProspect({
+            email: _send.body, subject: _send.subject,
+            lead: {
+              company, founderName: _founder, title: req.body.title || '',
+              trade: audit.measuredNumbers && audit.measuredNumbers.tradeWord,
+              location: req.body.location || '',
+              businessModelWhy: (audit.businessModel && audit.businessModel.why) || '',
+            },
+          }, req.body.apiKey);
+          if (_sim) {
+            composed.prospectSim = _sim;
+            const _mark = _sim.verdict === 'reply' ? '\u2713' : _sim.verdict === 'ignore' ? '\u25cb' : '\u26d4';
+            console.log(`${_mark} READ AS ${(_founder || 'the owner').toUpperCase()} [${company}]: ${_sim.verdict.toUpperCase()} \u2014 "${_sim.reaction}"${_sim.wouldReply ? ` | what would have got a reply: ${_sim.wouldReply}` : ''}`);
+          }
+        }
+      } catch (e) { console.log(`Prospect sim skipped: ${e && e.message}`); }
+
       const _byBrain = composed.variantA && composed.variantA.writtenBy === 'brain';
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words. ${_byBrain ? 'The brain connected the verified pieces into prose; every figure was traced back to a measurement before it was accepted.' : 'Assembled from measurements \u2014 no model call, no tokens.'}`);
     }
