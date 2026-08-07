@@ -7922,7 +7922,11 @@ const SUBJECTS_FOR = {
   phone_mismatch:       ['google has your old number', 'your numbers do not match'],
   tap_to_call_broken:   ['your number will not dial', 'tapping your number is dead'],
   absent_from_search:   ['you are not showing up', 'nobody can find you'],
-  outranked_by_weaker:  ['your reviews are not working', 'smaller shops are above you'],
+  // Vin's read: "not working" is a judgement about him, "smaller shops are above
+  // you" is a comparison that stings. "Your reviews are broken" states a fact
+  // about a thing rather than a verdict on his effort — same information, less
+  // accusation, and it is the phrasing he would use himself.
+  outranked_by_weaker:  ['your reviews are broken', 'your reviews are not working', 'smaller shops are above you'],
   wrong_gbp_category:   ['google has your category wrong', 'your category is wrong'],
   no_google_listing:    ['you have no google listing', 'you are not on the map'],
   // "your door closes at 5" was here, and it states a closing time nobody
@@ -8569,10 +8573,27 @@ const TRADE_JOB_VALUE = [
   // Home exterior / structural
   { re: /custom home|home build|new construction|luxury home/i, say: 'a custom home runs several hundred thousand dollars' },
   { re: /kitchen (?:and|&) bath|kitchen remodel|bath(?:room)? remodel|remodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
-  { re: /window|door|siding|exterior/i, say: 'a window or siding job runs $8k-$40k' },
+  // ══ A GARAGE DOOR IS NOT A WINDOW ═════════════════════════════════════════
+  // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k"
+  // in email one and again in follow-up one. The bare word `door` in the exterior
+  // -remodeling entry caught "garage door repair", and a garage door job is
+  // roughly a tenth of that — a service call is hundreds, a full replacement is
+  // low thousands.
+  //
+  // Getting a trade's own economics wrong is worse than saying nothing. The whole
+  // email argues that we measured his business carefully; a figure he knows is
+  // ten times off proves we did not, and every true sentence around it dies with
+  // it. Specific trades are matched BEFORE the broad exterior bucket, and `door`
+  // is no longer a bare alternative.
+  { re: /garage door|overhead door|dock door|roll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
+  { re: /window|siding|exterior|entry door|patio door|replacement door/i, say: 'a window or siding job runs $8k-$40k' },
   { re: /roof/i, say: 'a roof replacement runs $8k-$30k' },
   { re: /foundation|basement|crawlspace|structural/i, say: 'a foundation repair runs five figures' },
-  { re: /pool|spa install/i, say: 'a pool build runs $40k-$100k' },
+  // Same trap as the garage door: a pool SERVICE company maintains pools, it does
+  // not build them, and quoting a build price at a maintenance business is the
+  // same ten-times error. Service is matched first.
+  { re: /pool (?:service|cleaning|maintenance)|pool tech/i, say: 'a season of pool service runs several hundred dollars' },
+  { re: /pool build|pool install|pool construction|spa install|pool/i, say: 'a pool build runs $40k-$100k' },
   { re: /concrete|paving|asphalt|driveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
   { re: /landscap|hardscape|lawn care/i, say: 'a landscaping project runs $5k-$30k' },
   { re: /solar/i, say: 'a solar install runs $15k-$40k' },
@@ -22274,6 +22295,38 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE MONEY MUST BELONG TO THEIR TRADE ═════════════════════════════════
+  // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k",
+  // in email one and again in follow-up one. The bare word `door` in the exterior
+  // -remodeling entry caught "garage door repair", and the real figure is about a
+  // tenth of that.
+  //
+  // This is the worst failure the composer can produce. Every other sentence is
+  // measured off their own site, and one number the owner knows is ten times
+  // wrong proves we never understood the business — it discredits the true
+  // sentences around it. Checked at boot because the failure is silent: the email
+  // reads perfectly to anyone who does not know the trade.
+  try {
+    const _pairs = [
+      ['garage door repair', /garage door/i],
+      ['window replacement', /window or siding/i],
+      ['pool service', /pool service/i],
+      ['pool builder', /pool build/i],
+      ['plumber', /plumbing/i],
+      ['custom home builder', /custom home/i],
+      ['kitchen and bath remodeling', /kitchen or bathroom/i],
+    ];
+    const _wrong = _pairs.filter(([trade, want]) => !want.test(String(tradeJobValue(trade) || '')))
+      .map(([trade]) => `"${trade}" -> "${tradeJobValue(trade) || 'no figure'}"`);
+    if (_wrong.length) {
+      console.log(`\u26d4 TRADE MONEY CHECK: ${_wrong.length} trade(s) get a figure from the wrong trade \u2014 ${_wrong[0]}. An owner who knows his own numbers reads that as proof we never looked at his business.`);
+    } else {
+      console.log(`\u2713 TRADE MONEY CHECK: every trade tested gets its own job value \u2014 a garage door is not a window, and pool service is not a pool build.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TRADE MONEY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A TITLE IS NOT A FIRST NAME ══════════════════════════════════════════
