@@ -4155,6 +4155,7 @@ Return ONLY valid JSON, no markdown:
 
   "signalReads": "Array of {signal, says}, one per MEASURED signal you were given. 'signal' is a short label (Local search rank, Reputation, Booking path, Google profile, Positioning, Site technicals). 'says' is ONE sentence of INTERPRETATION for a colleague \u2014 what the fact MEANS for the business, never the fact itself, because the reader already has the fact. WRONG: 'Ranks #15 for plastic surgeon'. RIGHT: '#15 of 20 in Dallas and 10 of the 14 above him have fewer reviews \u2014 the position is not being earned on reputation.' WRONG: '1 profile gap'. RIGHT: 'His Google profile has no description \u2014 the one thing on this list he could fix himself this afternoon.' WRONG: 'Form only, 17 fields'. RIGHT: 'Seventeen fields is the only way in, and the people filling it in have just been in a car accident.' Where a signal is a STRENGTH say so plainly \u2014 a briefing that lists only problems misleads the reader about what kind of business this is.",
   \u2605 ORDER MATTERS AND IT IS DELIBERATE: you write situationRead and signalReads BEFORE candidateFindings. Reason about the whole business first, then choose the findings that EVIDENCE that read. Doing it the other way round \u2014 findings first, synthesis after \u2014 makes the synthesis a summary of choices already made, and it collapses back into a restatement of one finding. Decide what is going on here, then prove it.
+  "originalFindings": "REQUIRED. Array of 0-3 findings YOU discovered by reading their actual pages, which the scanner could not produce. The measured list above is the same handful of checks on every lead — phone-only, no price, nothing to take away — and an owner who reads three of those knows he received a scan. THESE are what make him think somebody actually looked. \u2192 THE ONLY THREE KINDS THAT COUNT, and every one needs work he would never do himself: (1) A CONTRADICTION between two things he controls. He wrote the homepage, he wrote the service pages, he set the Google listing — he cannot hold them all in his head at once, so when they disagree he literally cannot see it. 'Your homepage promises same-day response; your contact page lists office hours' or 'the treatments page names six services and the homepage names three'. Quote both sides. (2) WHAT HIS OWN COPY SAYS, quoted, next to what it does not say. Not 'positioning is generic' — that is a category label and the scanner already produces those. Instead: 'Every service page opens with the same sentence about experience you can trust' with the phrase quoted exactly. The quote IS the finding. (3) WHAT HIS REVIEWERS SAY next to what his site sells. If the review text we read repeats something his pages never mention, that is the sharpest thing available on the lead: his customers have told you what they value and his website is silent on it. \u2192 RULES: every finding must QUOTE or NAME something specific from the pages, exact as written. If you cannot point to the words, it is not one of these — leave it out. NEVER a category label ('generic', 'weak', 'unclear', 'thin', 'lacks'). NEVER an absence claim about a page we did not read — the prompt above lists which pages were opened. Return an EMPTY ARRAY rather than padding: three real ones is exceptional, one is good, zero is honest. Each item: {finding: \"one sentence, containing the quoted words\", evidence: \"the exact text from their page that proves it\"}.",
   "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions. (c) IF THE SITE IS VISIBLY OLD, THAT IS ITS OWN CANDIDATE \u2014 use signal \u2018dated_site\u2019. A copyright year years out of date, a layout from another decade, or a design a buyer would hesitate to hand a card to is not a technical leak and it is not positioning: it is a CREDIBILITY problem, and for a high-ticket local trade it is often the first thing a customer reacts to and the whole reason a rebuild is worth buying. It was invisible to this list before, so a contractor whose site had not changed since 2015 had no way for that to become the lead. Score it like anything else: VERIFIABLE is high (he can look at it), SURPRISE is usually LOW (he knows it is old), so it wins only when it is genuinely severe. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
   "leadSignal": "The winner from candidateFindings above \u2014 the ONE finding your pitch will be built on. Answer with EXACTLY ONE of: \"review_pattern\", \"search_absence\", \"gbp_gap\", \"conversion_leak\", \"technical_leak\", \"dated_site\", \"positioning_offer\". \u26a0 conversion_leak IS NEW AND IT IS THE ONE MOST OFTEN FILED WRONG. It covers the path from INTERESTED to CUSTOMER: no booking tool, a form that captures and then waits, no visible instant-response layer, an over-long form, no way to start outside business hours. Those are NOT technical_leak. technical_leak is page MECHANICS \u2014 no HTTPS, no mobile viewport, no tap-to-call link. Ask which question the finding answers: \"can this page function?\" is technical_leak; \"can a person who already wants to hire them actually do it?\" is conversion_leak. On live runs every conversion finding was filed as technical_leak, which put the highest-leverage layer on this kind of lead into the lowest-ranked bucket. This is a DECISION you are making now, before writing, not a description of something already written. The pitch that follows must be built on this finding. Answer with EXACTLY ONE of these strings and nothing else: \"review_pattern\" (a pain repeating across their own Google reviews), \"search_absence\" (a measured search-rank absence), \"gbp_gap\" (a measured Google Business Profile gap), \"technical_leak\" (a measured site/technical leak \u2014 no HTTPS, no mobile viewport, no tap-to-call link, slow mobile. NOT forms \u2014 an over-long form is conversion_leak, as stated above), \"positioning_offer\" (their market positioning, generic promise, or missing offer/guarantee). Be honest \u2014 name what the FIRST sentence of the pitch is actually about, not what you wish it led with. This is checked against what we measured.",
   "leadSignalReason": "ONLY fill this in if you deliberately did NOT lead with the highest-ranked signal available. Explain in one sentence why \u2014 for example the recurring review pain is about pricing or workmanship, which we do not fix, so leading with it would make us sound like a complaint tracker. Leave as null if you led with the highest-ranked signal.",
@@ -8204,6 +8205,55 @@ const lower1 = (t) => {
 // states a number that is not in the measurements. It is converted to second
 // person like every other sentence, and it is refused if it is too long to be an
 // opening line or if it reads as a claim about their revenue.
+// ══ FINDINGS THE SCANNER COULD NOT PRODUCE ═════════════════════════════════
+// Six audits in one night listed "no price and no range appears anywhere" and
+// four listed "there is nothing to take away short of asking for a quote". Those
+// are HARM_LADDER rungs — 33 fixed sentences, a handful of which fit every lead.
+// An owner reading three of them knows he received a scan.
+//
+// The brain now gets 24,000 labelled characters of their own pages and was still
+// only asked to RE-RANK the scanner's list. It is a scorer, not a researcher.
+// originalFindings asks it for the three things only reading can produce: a
+// contradiction between two things he wrote, his own copy quoted, or what his
+// reviewers say next to what his site does not.
+//
+// THE SAFETY MODEL: every one must QUOTE text that actually appears in the
+// corpus. That is checkable — we hold the corpus — so a finding that cannot be
+// traced to their own words is dropped. It also happens to be exactly what makes
+// the finding good: the quote IS the finding, and a category label has nothing
+// to quote.
+const CATEGORY_LABEL = /\b(generic|weak|unclear|thin|lacks?|lacking|poor|insufficient|suboptimal|not optimi[sz]ed|could be (better|stronger|improved)|room for improvement)\b/i;
+const verifyOriginalFinding = (item, corpus) => {
+  const finding = String((item && item.finding) || '').replace(/\s+/g, ' ').trim();
+  const evidence = String((item && item.evidence) || '').replace(/\s+/g, ' ').trim();
+  if (!finding) return { ok: false, why: 'no finding text' };
+  if (finding.split(/\s+/).length > 45) return { ok: false, why: 'too long to be one finding' };
+  // A category label is what the scanner already produces, phrased as an opinion.
+  const lbl = finding.match(CATEGORY_LABEL);
+  if (lbl) return { ok: false, why: `category label — "${lbl[0]}" is a judgement, not something read off their page` };
+  if (!evidence || evidence.length < 12) {
+    return { ok: false, why: 'no evidence quoted — if you cannot point to their words it is not one of these' };
+  }
+  // ── THE QUOTE MUST ACTUALLY BE ON THEIR PAGES ──────────────────────────
+  // This is the whole guarantee. Normalised comparison so punctuation and
+  // whitespace differences do not reject a real quote, but the words must be
+  // theirs. A fabricated quote is the worst error available: it puts words in
+  // his mouth that he can see he never wrote.
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const hay = norm(corpus);
+  if (!hay) return { ok: false, why: 'no page corpus to verify the quote against' };
+  const needle = norm(evidence);
+  if (needle.length < 12) return { ok: false, why: 'quoted fragment too short to verify' };
+  if (hay.includes(needle)) return { ok: true, finding, evidence };
+  // Allow a long quote to match on its first solid run of words — models often
+  // join two nearby sentences when quoting.
+  const words = needle.split(' ');
+  for (let n = Math.min(10, words.length); n >= 6; n--) {
+    if (hay.includes(words.slice(0, n).join(' '))) return { ok: true, finding, evidence };
+  }
+  return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}"` };
+};
+
 // ══ THE PATTERN LINE — WHAT AN EXPERT KNOWS THAT A SCANNER DOES NOT ═════════
 // The finding tells him something he did not know. The reframe tells him how
 // people behave. Neither tells him we have seen this before and know what causes
@@ -8401,7 +8451,12 @@ const patternLineSafe = (raw, opts = {}) => {
   if (!t) return { ok: false, why: 'none supplied' };
   // A pattern line is one sentence of judgement, not a paragraph of analysis.
   const words = t.split(/\s+/).length;
-  if (words > 34) return { ok: false, why: `${words} words — a pattern line is one sentence, and a long one reads as filler` };
+  // ══ 34 WAS TOO TIGHT ═══════════════════════════════════════════════════
+  // Live on Michael Richards Orthodontics: the brain wrote a pattern line and it
+  // was binned at 40 words. Over-blocking here costs the exact sentence this
+  // whole field exists to produce. A cause worth stating sometimes needs a
+  // subordinate clause; what it must never be is a paragraph.
+  if (words > 48) return { ok: false, why: `${words} words — a pattern is one sentence, and past this length it reads as filler rather than judgement` };
   if (words < 6) return { ok: false, why: 'too short to carry a cause' };
   // ── THE HARD RULE: it must not be about THEM ──────────────────────────────
   // Second person turns a claim about the category into a claim about his
@@ -8960,7 +9015,11 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
     // Both this finding and an earlier one close on the write-up question. Asking
     // the identical question twice in one sequence is the automation tell, so the
     // second one asks for the same thing in the plainest possible way instead.
-    cta = { text: 'Want the rest of them?', kind: 'writeup_short' };
+    // A third distinct wording, because "Want the rest of them?" was itself
+    // reused across two touches in the live sequence — caught by SEQUENCE CHECK
+    // as "two touches close on the same specific ask", which is the automation
+    // tell the check exists to find.
+    cta = { text: 'Worth a look at the other two?', kind: 'writeup_short' };
   }
   // Subject: this finding's own line, a DIFFERENT one from the first email so the
   // follow-up opens a new angle rather than repeating the subject he already
@@ -20847,6 +20906,25 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // rather than about this business. Rejection is logged with the
             // reason, because a field that silently disappears is a field nobody
             // notices has stopped working.
+            // ══ THE FINDINGS ONLY READING COULD PRODUCE ═══════════════════
+            // Each must quote text that actually appears on the pages we read.
+            // We hold the corpus, so this is checkable — and a finding that can
+            // be traced to their own words is exactly the one that makes an owner
+            // think somebody looked rather than scanned.
+            const _corpus = (sitePages && sitePages.rawText) || trustedContent || '';
+            const _origIn = Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [];
+            const _origOk = [];
+            for (const _it of _origIn.slice(0, 3)) {
+              const _v = verifyOriginalFinding(_it, _corpus);
+              if (_v.ok) _origOk.push({ finding: _v.finding, evidence: _v.evidence });
+              else console.log(`\u{1F50E} ORIGINAL FINDING [${company}]: dropped \u2014 ${_v.why}`);
+            }
+            parsed.originalFindings = _origOk;
+            if (_origOk.length) {
+              console.log(`\u{1F50E} ORIGINAL FINDINGS [${company}]: ${_origOk.length} finding(s) the scanner could not have produced, each quoting their own pages \u2014 "${_origOk[0].finding.slice(0, 110)}"`);
+            } else if (_origIn.length) {
+              console.log(`\u{1F50E} ORIGINAL FINDINGS [${company}]: none survived verification. The audit runs on the measured ladder alone, which is honest but is the same list every lead gets.`);
+            }
             const _pl = patternLineSafe(parsed.patternLine, { company });
             if (_pl.ok) {
               parsed.patternLine = _pl.line;
@@ -21434,6 +21512,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // The RESPONSE CHECK caught this at boot before it shipped, which is
             // exactly the failure mode it was written for.
             patternLine: parsed.patternLine || '',
+            originalFindings: Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [],
             openerStrength: parsed.openerStrength || null,
             // Carry the fabrication flags through to the response so the review
             // checklist can show them. brainAudit is an explicit literal, so without
@@ -23055,6 +23134,40 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ A FINDING MUST QUOTE THEIR OWN PAGE, OR IT IS A LABEL ════════════════
+  // Six audits in one night listed "no price and no range appears anywhere" and
+  // four listed "there is nothing to take away". Those are ladder rungs, and an
+  // owner who reads three of them knows he received a scan.
+  //
+  // originalFindings asks the brain for what only reading produces — a
+  // contradiction between two things he wrote, or his own copy quoted. The
+  // guarantee is that the quoted text must actually appear in the pages we
+  // fetched: we hold the corpus, so a fabricated quote is catchable, and putting
+  // words in an owner's mouth that he can see he never wrote is the worst error
+  // available to this system.
+  try {
+    const _corp = '=== PAGE: HOME === Experience You Can Trust. Serving Salt Lake families for 30 years. === PAGE: ABOUT === Experience You Can Trust and a team creating confident smiles since 1995.';
+    const _pass = verifyOriginalFinding({
+      finding: 'Your homepage and your about page both open on the same line, "Experience You Can Trust"',
+      evidence: 'Experience You Can Trust',
+    }, _corp);
+    const _fails = [
+      ['fabricated quote', { finding: 'Your homepage promises same-day appointments', evidence: 'We guarantee same-day appointments for every new patient' }],
+      ['category label', { finding: 'The positioning across the site is generic and does not differentiate at all', evidence: 'Experience You Can Trust' }],
+      ['no evidence', { finding: 'Your homepage and about page repeat the same promise', evidence: '' }],
+    ];
+    const _leaked = _fails.filter(([, x]) => verifyOriginalFinding(x, _corp).ok).map(([l]) => l);
+    if (_leaked.length) {
+      console.log(`\u26d4 ORIGINAL FINDING CHECK: ${_leaked.join(', ')} would reach an audit. A quote we cannot find in their pages is a sentence we put in the owner's mouth.`);
+    } else if (!_pass.ok) {
+      console.log(`\u26d4 ORIGINAL FINDING CHECK: a genuine quoted finding was rejected (${_pass.why}), so every audit falls back to the same measured list every lead gets.`);
+    } else {
+      console.log(`\u2713 ORIGINAL FINDING CHECK: a finding quoting their real page passes and ${_fails.length} that cannot be traced to their words are dropped. The audit can say what only reading their site could find.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 ORIGINAL FINDING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE MODEL MAY WRITE, BUT ONLY WHAT SURVIVES THIS ═════════════════════
   // The code composer cannot fabricate and cannot write — it emits four
   // assertions joined by paragraph breaks. The model connects them into prose.
@@ -23589,7 +23702,7 @@ app.listen(PORT, () => {
     const _i = _src.indexOf('brainAudit = {');
     const _lit = _i > -1 ? _src.slice(_i, _i + 6000) : '';
     const _required = ['composedEmail', 'factualSpine', 'harmsRanked', 'problemList',
-                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine'];
+                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine', 'originalFindings'];
     const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
     if (!_lit) {
       console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
@@ -24775,7 +24888,13 @@ app.post('/api/compose-email', async (req, res) => {
           }
         }
       } catch (e) { console.log(`Email writer skipped: ${e && e.message}`); }
-      console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words, every one traceable to a measurement. No model call, no tokens.`);
+      // ══ THE LOG MUST SAY WHO WROTE IT ═══════════════════════════════════
+      // This printed "No model call, no tokens" on the very email the line above
+      // reported the brain had written. The provenance label is the one thing in
+      // this system that can never be allowed to drift — an operator who cannot
+      // trust the label cannot trust anything under it.
+      const _byBrain = composed.variantA && composed.variantA.writtenBy === 'brain';
+      console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words. ${_byBrain ? 'The brain connected the verified pieces into prose; every figure was traced back to a measurement before it was accepted.' : 'Assembled from measurements \u2014 no model call, no tokens.'}`);
     }
     return res.json({ composed });
   } catch (e) {
