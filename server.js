@@ -7448,7 +7448,9 @@ const HARM_LADDER = [
   // ── BLOCKS ──────────────────────────────────────────────────────────────
   { harm: 74, specific: 80, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
   reframe: 'people comparing three options go with whichever one lets them start',
-    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true,
+    // If their sitemap lists a booking page we never opened, we cannot say the
+    // phone is the only route — we did not look at the page built to be the route.
+    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true,
     say: () => 'The only way to reach them is a phone call during office hours',
     costs: 'everyone who decides in the evening or at the weekend has nowhere to go' },
 
@@ -7460,7 +7462,7 @@ const HARM_LADDER = [
 
   { harm: 58, specific: 80, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
   reframe: 'people comparing three options go with whichever one lets them start',
-    test: (m) => m.booking === 'form' && m.bookingMeasured === true,
+    test: (m) => m.booking === 'form' && m.bookingMeasured === true && m.unreadBooking !== true,
     say: () => 'There is no way to book a time — the only option is a form and a wait',
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
@@ -7617,7 +7619,9 @@ const HARM_LADDER = [
   // the first sentence.
   { harm: 54, specific: 78, novel: 30, delegable: 45, weFix: 85, band: 'OPINION', id: 'no_published_pricing',
     reframe: 'most people will not hand over their details just to find out what something costs',
-    test: (m) => m.pricingMeasured === true && m.pricesPublished === 0,
+    // The unread gate: if their sitemap lists a pricing page we did not open, we
+    // cannot say a price appears nowhere. We did not look.
+    test: (m) => m.pricingMeasured === true && m.pricesPublished === 0 && m.unreadPricing !== true,
     say: () => 'no price and no range appears anywhere on the pages we read',
     costs: 'someone comparing three companies has to ask them to find out, and people generally ask whoever tells them first' },
 
@@ -7663,7 +7667,9 @@ const HARM_LADDER = [
 
   { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
   reframe: 'most people are not ready to buy the day they look, and they remember whoever gave them something',
-    test: (m) => m.leadMagnet === false,
+    // "Nothing to take away" is a claim about every page. Any unopened page
+    // could hold the guide, the checklist or the price sheet that disproves it.
+    test: (m) => m.leadMagnet === false && m.unreadPricing !== true && m.unreadBooking !== true,
     say: () => 'There is nothing to take away short of asking for a quote',
     costs: 'everyone not ready to commit today leaves with nothing' },
 
@@ -7848,6 +7854,9 @@ const measurementLooksWrong = (m = {}) => {
 const resolveMeasurements = ({
   localRank = null, gbpHealth = null, history = null, htmlSignals = null,
   reviewsRead = null, ownerReplyCount = null, deepReviews = null,
+  // Pages listed in their sitemap that we never opened. Needed here because the
+  // absence rungs must not fire about a page we chose not to read.
+  sitePagesArg = null,
 } = {}) => {
   const num = (v) => (strictNum(v) === strictNum(v) ? strictNum(v) : null); // NaN -> null
   // First source that actually holds a number wins. Order is authority order,
@@ -7876,6 +7885,22 @@ const resolveMeasurements = ({
     rank: (localRank && localRank.found) ? num(localRank.rank) : null,
     scanned: localRank ? num(localRank.scanned) : null,
     weakerAbove: localRank ? num(localRank.weakerAbove) : null,
+    // ══ PAGES THAT EXIST AND WE NEVER OPENED ═════════════════════════════
+    // existsButUnread was computed, logged as a warning, handed to the prompt —
+    // and never reached the harm ladder, whose absence rungs are the only place
+    // it actually matters. Live on James River Remodeling: the guard printed
+    // "their sitemap has pricing page(s) we did not open. NO absence claim may
+    // be made", and the email led on "no price and no range appears anywhere".
+    //
+    // An absence claim about a page we chose not to read is indistinguishable
+    // from a lie to the owner, who can open that page in one click.
+    // resolveMeasurements receives sitePages as a PARAMETER — referencing the
+    // outer-scope name broke two boot checks with "sitePages is not defined",
+    // because the probes call this function directly with their own arguments.
+    // Read it off the destructured parameter like every other field here.
+    unreadPricing: !!(sitePagesArg && sitePagesArg.existsButUnread && sitePagesArg.existsButUnread.pricing),
+    unreadBooking: !!(sitePagesArg && sitePagesArg.existsButUnread && sitePagesArg.existsButUnread.booking),
+    unreadReviews: !!(sitePagesArg && sitePagesArg.existsButUnread && sitePagesArg.existsButUnread.reviews),
     // ══ THE COMPETITOR'S NAME IS THE STRONGEST FACT WE HOLD ═══════════════
     // localRank.above already carries { name, reviews, rating } for every
     // business ranked ahead — measured by the Places API on the exact query a
@@ -8239,10 +8264,24 @@ const verifyOriginalFinding = (item, corpus) => {
   // whitespace differences do not reject a real quote, but the words must be
   // theirs. A fabricated quote is the worst error available: it puts words in
   // his mouth that he can see he never wrote.
+  // ══ THE MODEL LABELS ITS QUOTES, AND THAT BROKE THE MATCH ══════════════
+  // All three findings on James River Remodeling were dropped as unverifiable.
+  // The evidence read: Homepage: 'We pride ourselves in producing superior...'
+  // and About page: 'I developed a fascination about this...'. The quotes were
+  // almost certainly real; the page label in front of them never appears in
+  // their copy, so the whole string failed to match.
+  //
+  // Rejecting a true finding because of a prefix the model added is the
+  // over-blocking failure — it silently returns every audit to the same list
+  // every lead gets, which is the exact thing this field exists to escape.
+  const stripLabel = (t) => String(t || '')
+    .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:\u2014-]\s*/i, '')
+    .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
+    .trim();
   const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   const hay = norm(corpus);
   if (!hay) return { ok: false, why: 'no page corpus to verify the quote against' };
-  const needle = norm(evidence);
+  const needle = norm(stripLabel(evidence));
   if (needle.length < 12) return { ok: false, why: 'quoted fragment too short to verify' };
   if (hay.includes(needle)) return { ok: true, finding, evidence };
   // Allow a long quote to match on its first solid run of words — models often
@@ -15493,7 +15532,7 @@ app.get('/api/cron/discover', async (req, res) => {
 });
 
 app.post('/api/discover', async (req, res) => {
-  const { keywords, keys, apiKey, knownDomains } = req.body;
+  const { keywords, keys, apiKey, knownDomains, knownNames } = req.body;
   // ── DEDUPE ────────────────────────────────────────────────────────────────
   // Nothing previously stopped a company you have already researched from coming
   // back in a later scan, taking a queue slot and — if you did not recognise the
@@ -15511,7 +15550,37 @@ app.post('/api/discover', async (req, res) => {
     try { return new URL(String(u).startsWith('http') ? u : 'https://' + u).hostname.replace(/^www\./, '').toLowerCase(); }
     catch { return ''; }
   };
-  if (_knownHosts.size) console.log(`DEDUPE: client already holds ${_knownHosts.size} domains — those will be skipped`);
+  // ══ THE SAME BUSINESS UNDER A DIFFERENT URL, OR NO URL AT ALL ═══════════
+  // Host matching missed a company already in the pipeline whenever it had no
+  // website stored, or turned up under a URL different from the one we hold —
+  // which is why researched leads kept reappearing in Find.
+  //
+  // Normalising strips the legal suffix and punctuation, so "James River
+  // Remodeling LLC" and "James River Remodeling, L.L.C." are one business. Kept
+  // deliberately conservative: two genuinely different companies sharing a
+  // normalised name is rare, and the cost of a false match is one lead skipped
+  // against ~10 Firecrawl credits and a queue slot for one already owned.
+  const _normName = (n) => String(n || '').toLowerCase()
+    // "&" and "and" are the same word to everyone except a string comparison —
+    // "Tuck & Howell" and "Tuck and Howell" are one business.
+    .replace(/&/g, ' and ')
+    .replace(/[.,'’]/g, ' ')
+    // "and" too: "Tuck & Howell Plumbing, Heating & Air" and "Tuck and Howell
+    // Plumbing Heating Air" are the same shop written by two different sources.
+    // Dropping it entirely makes them identical without bringing unrelated
+    // businesses together — the distinguishing words are the proper nouns.
+    .replace(/\b(llc|l l c|inc|incorporated|corp|corporation|co|ltd|limited|pllc|pc|pa|lp|llp|the|and)\b/g, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const _knownNames = new Set();
+  for (const n of (Array.isArray(knownNames) ? knownNames : [])) {
+    const k = _normName(n);
+    if (k && k.length > 4) _knownNames.add(k);
+  }
+  if (_knownHosts.size || _knownNames.size) {
+    console.log(`DEDUPE: client already holds ${_knownHosts.size} domain(s) and ${_knownNames.size} business name(s) — those will be skipped before they take a queue slot or cost an audit.`);
+  }
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
   // Google Places key comes from Render env vars (not the frontend), so it stays
   // server-side and can't leak. Set GOOGLE_PLACES_KEY in Render's environment tab.
@@ -16535,6 +16604,11 @@ const WEIGHTS = {
       if (_knownHosts.size) {
         const h = _hostOf(c.website || '');
         if (h && _knownHosts.has(h)) { _skippedKnown++; continue; }
+      }
+      // Name match catches the ones with no website stored, or a different URL.
+      if (_knownNames.size) {
+        const k = _normName(c.name || c.company || '');
+        if (k && k.length > 4 && _knownNames.has(k)) { _skippedKnown++; continue; }
       }
       const isPureAdzuna = c.sourceCount === 1 && c.source === 'adzuna_ai';
       if (isPureAdzuna) {
@@ -18767,6 +18841,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // no longer disagree about what was measured.
         const _measured = resolveMeasurements({
           localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
+          sitePagesArg: sitePages,
         });
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
@@ -20820,6 +20895,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // that actually holds it.
             const _mm = resolveMeasurements({
               localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
+              sitePagesArg: sitePages,
             });
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
@@ -23132,6 +23208,33 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SOURCE RECOVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ NO ABSENCE CLAIM ABOUT A PAGE WE NEVER OPENED ════════════════════════
+  // existsButUnread was computed, logged as a warning and handed to the prompt,
+  // and never reached the harm ladder — which is the only place it matters,
+  // because the ladder is what writes the email. Live on James River Remodeling:
+  // "their sitemap has pricing page(s) we did not open. NO absence claim may be
+  // made" printed, and the email led on "no price and no range appears anywhere".
+  //
+  // An absence claim about a page we chose not to read is indistinguishable from
+  // a lie to the owner, who can open that page in one click.
+  try {
+    const _rungOf = (id) => HARM_LADDER.find(h => h.id === id);
+    const _unread = { pricingMeasured: true, pricesPublished: 0, booking: 'phone_only', bookingMeasured: true, leadMagnet: false, unreadPricing: true, unreadBooking: true };
+    const _read = { ...(_unread), unreadPricing: false, unreadBooking: false };
+    const _ids = ['no_published_pricing', 'no_lead_magnet'];
+    const _stillFires = _ids.filter(id => { const r = _rungOf(id); return r && r.test(_unread); });
+    const _wontFire = _ids.filter(id => { const r = _rungOf(id); return r && !r.test(_read); });
+    if (_stillFires.length) {
+      console.log(`\u26d4 UNREAD PAGE CHECK: ${_stillFires.join(', ')} still claims an absence on a lead whose sitemap lists that very page unopened. That is a checkable false statement about his own website.`);
+    } else if (_wontFire.length) {
+      console.log(`\u26d4 UNREAD PAGE CHECK: ${_wontFire.join(', ')} no longer fires even when we DID read everything \u2014 the gate is suppressing real findings.`);
+    } else {
+      console.log(`\u2713 UNREAD PAGE CHECK: absence findings are suppressed when their sitemap lists that page and we never opened it, and still fire when we read the whole site.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 UNREAD PAGE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A FINDING MUST QUOTE THEIR OWN PAGE, OR IT IS A LABEL ════════════════
