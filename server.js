@@ -6279,6 +6279,21 @@ const parseTeamRoster = (html) => {
     .map(t => t.replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/&#\d+;/g, ' ')
                .replace(/^[#>*_\-\s]+|[*_\s]+$/g, '').trim())
     .filter(t => t && t.length < 120);
+  // ══ A PAGE HEADING IS NOT A PERSON ═══════════════════════════════════════
+  // NAME_RE only requires two capitalised words, and "About Us" satisfies it.
+  // Live on DuraMark: the roster returned About Us as the decision-maker, the
+  // email opened "About —", and the prospect simulator read it as About Us.
+  // Bill Bussick's name was sitting in the very string we captured.
+  //
+  // These are the headings that sit directly above a team block, so they land
+  // in exactly the position a name would.
+  const NOT_A_NAME = new Set([
+    'about us', 'our team', 'the team', 'our story', 'contact us', 'our people',
+    'leadership team', 'our staff', 'get started', 'our process', 'our mission',
+    'our values', 'our history', 'read more', 'learn more', 'view all',
+    'see more', 'find us', 'call us', 'our work', 'case studies',
+    'our services', 'why choose', 'meet our', 'privacy policy', 'terms of',
+  ]);
   const NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?\s+[A-Z][a-z'’-]{1,25})$/;
   // ══ A TWO-WORD TITLE LOOKS EXACTLY LIKE A NAME ═════════════════════════
   // "Managing Partner", "Office Manager" and "Vice President" all satisfy the
@@ -6308,6 +6323,9 @@ const parseTeamRoster = (html) => {
     if (titleKind(runs[i])) continue;            // a title, not a person
     const m = runs[i].match(NAME_RE);
     if (!m) continue;
+    // A section heading occupies the same position as a name and matches the
+    // same shape. "About Us" reached a live email as the greeting.
+    if (NOT_A_NAME.has(m[1].toLowerCase().trim())) continue;
     // The title is normally the next non-empty run, occasionally the one after.
     for (let j = i + 1; j <= Math.min(i + 3, runs.length - 1); j++) {
       const t = runs[j];
@@ -7158,6 +7176,22 @@ const verifySiteReallyDown = async (website) => {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml',
       } }, 12000);
+      // ══ A REFUSAL IS NOT A DEATH, EVEN WITHOUT A BODY ═══════════════════
+      // !r.ok skipped every non-200, so an HTTP 403 fell through both candidates
+      // and the verifier concluded "genuinely down". Live on Charlotte's Best
+      // Roofing: the log read "SITE FINGERPRINT: BLOCKED — HTTP 403. Our direct
+      // fetch was REFUSED", then "SITE IS GENUINELY DOWN", and the email opened
+      // with "your website returned nothing" — while the site audit read 12,800
+      // characters from their other pages. Their own fact-checker caught it.
+      //
+      // The earlier blocked-not-dead fix reads the BODY for challenge markers,
+      // and a bare 403 has no body to read. The STATUS is the signal: these codes
+      // mean a server answered and refused us. A dead site does not refuse — it
+      // fails to answer at all.
+      if (r && (r.status === 403 || r.status === 401 || r.status === 429 || r.status === 406)) {
+        return { down: null, blocked: true, workingUrl: url,
+          why: `${url} answered HTTP ${r.status} — their server is up and refusing US, not failing to respond. NO dead-site claim is permitted on this lead.` };
+      }
       if (!r || !r.ok) continue;
       const body = await r.text();
       // ══ A REFUSAL IS NOT A DEATH ══════════════════════════════════════════
@@ -7430,7 +7464,22 @@ const HARM_LADDER = [
     costs: 'most of the people finding them are on a phone, and the page arrives zoomed out and unreadable' },
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
-  { harm: 72, specific: 98, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
+  // ══ A SECOND PHONE LINE IS AN ANNOYANCE, NOT A FIRE ══════════════════════
+  // harm 72 with novel 92 put this at opener 85 on George Plumbing, ahead of
+  // "there is no way to reach them outside office hours" at harm 81 — for a
+  // plumber, whose customers have a leak right now. Tyler's own read: "nobody's
+  // calling that number instead of booking online or calling the one on my site,
+  // and this is the opening move before they pitch me."
+  //
+  // It is genuinely surprising and genuinely checkable, which is why novel and
+  // specific stay high. It is not costly: most businesses run a tracking number
+  // on Google deliberately, and the ones that do not lose a caller occasionally
+  // rather than continuously. delegable 92 says it plainly — he forwards it to
+  // his web guy and it is fixed by lunchtime, with no reason to reply to us.
+  //
+  // Dropped to 48 so it sits with the other tidy-ups. It still appears in the
+  // audit and on the call sheet, where it is a good specific detail for Mike.
+  { harm: 48, specific: 98, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
     test: (m) => m.phoneMismatch === true,
     say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
     costs: 'the number a searcher dials and the number on the website are different lines' },
@@ -7635,7 +7684,14 @@ const HARM_LADDER = [
     // cannot say a price appears nowhere. We did not look.
     test: (m) => m.pricingMeasured === true && m.pricesPublished === 0 && m.unreadPricing !== true,
     say: () => 'no price and no range appears anywhere on the pages we read',
-    costs: 'someone comparing three companies has to ask them to find out, and people generally ask whoever tells them first' },
+    // ══ NOT EVERY "THEM" IS THE BUSINESS ═══════════════════════════════════
+    // toSecondPerson rewrites every "them" to "you", which is right for the
+    // business and wrong for anyone else in the sentence. Live on Deck Daddy's:
+    // "people generally ask whoever tells you first" — the "them" referred to
+    // the PEOPLE comparing companies, not to William.
+    //
+    // Rewritten so the only "them" left is the one that means the business.
+    costs: 'someone comparing three companies has to ask them to find out, and the first company to answer usually gets the call' },
 
   // ══ HE ANSWERS SOME OF THEM ══════════════════════════════════════════════
   // no_owner_replies only fires at ZERO. An owner answering 12 of 40 is doing
@@ -7869,6 +7925,10 @@ const resolveMeasurements = ({
   // Pages listed in their sitemap that we never opened. Needed here because the
   // absence rungs must not fire about a page we chose not to read.
   sitePagesArg = null,
+  // The trade, for purchase-urgency classification.
+  tradeWordArg = '',
+  // The measured growth constraint, so the email can open in the binding layer.
+  growthConstraintArg = null,
 } = {}) => {
   const num = (v) => (strictNum(v) === strictNum(v) ? strictNum(v) : null); // NaN -> null
   // First source that actually holds a number wins. Order is authority order,
@@ -7897,6 +7957,12 @@ const resolveMeasurements = ({
     rank: (localRank && localRank.found) ? num(localRank.rank) : null,
     scanned: localRank ? num(localRank.scanned) : null,
     weakerAbove: localRank ? num(localRank.weakerAbove) : null,
+    // Derived from the trade read off their own homepage — a measurement, not a
+    // judgement, so no verification pass is needed.
+    purchaseUrgency: purchaseUrgency(tradeWordArg || ''),
+    // The measured binding layer, so the ladder can prefer findings that sit in
+    // it. Null when the constraint was not measured — no constraint, no bonus.
+    bindingLayer: (growthConstraintArg && growthConstraintArg.checked && growthConstraintArg.layer) || null,
     // ══ PAGES THAT EXIST AND WE NEVER OPENED ═════════════════════════════
     // existsButUnread was computed, logged as a warning, handed to the prompt —
     // and never reached the harm ladder, whose absence rungs are the only place
@@ -8242,6 +8308,151 @@ const lower1 = (t) => {
 // states a number that is not in the measurements. It is converted to second
 // person like every other sentence, and it is refused if it is too long to be an
 // opening line or if it reads as a claim about their revenue.
+// ══ THE EMAIL MUST OPEN IN THE LAYER THAT IS ACTUALLY BINDING ══════════════
+// measureGrowthConstraint already computes which part of the revenue chain is
+// stuck, in Hormozi's order: MARKET > OFFER > LEADS > CONVERSION > THROUGHPUT.
+// The system prints it on every lead. It then opens the email wherever the harm
+// ladder happens to land, and flags its own disagreement:
+//
+//   🎯 GROWTH CONSTRAINT [Deirdre]: OFFER
+//   ⛔ LADDER TIEBREAK: the winner sits in the LEADS layer while the MEASURED
+//      binding constraint is OFFER
+//
+//   🎯 GROWTH CONSTRAINT [Comfort-Air]: THROUGHPUT
+//   · PRODUCT: the lead finding points at capture while the measured binding
+//      layer is THROUGHPUT. Followed the finding.
+//
+// That is precisely the failure Hormozi warns about — "businesses lose millions
+// by misconstruing the actual constraint" — and it is happening inside a system
+// that has already diagnosed the constraint correctly.
+//
+// SIGNAL_LAYER maps the AUDIT's categories. The harm ladder's 33 rungs, which
+// are what the email actually opens on, have never had a layer at all. This is
+// that mapping, and it is the missing link between the diagnosis and the email.
+//
+// A rung's layer is the part of the chain the finding SITS IN, not the part it
+// affects — a dead website hurts everything, but it is a break in the path from
+// interested to customer, which is CONVERSION.
+const HARM_LADDER_LAYER = {
+  // MARKET — who this is for. The highest layer and the rarest to measure.
+  undifferentiated:      'MARKET',
+
+  // OFFER — why choose them over the next name. Hormozi's "most businesses do
+  // not have a traffic problem, they have an offer problem."
+  no_offer:              'OFFER',
+  no_published_pricing:  'OFFER',
+  no_lead_magnet:        'OFFER',
+
+  // LEADS — whether the people looking ever see them.
+  no_google_listing:     'LEADS',
+  absent_from_search:    'LEADS',
+  outranked_by_weaker:   'LEADS',
+  wrong_gbp_category:    'LEADS',
+  thin_profile:          'LEADS',
+  no_hours_on_profile:   'LEADS',
+  no_website_on_profile: 'LEADS',
+  stale_reviews:         'LEADS',
+  review_deficit:        'LEADS',
+  not_compounding:       'LEADS',
+
+  // CONVERSION — the path from interested to customer.
+  no_after_hours:        'CONVERSION',
+  form_only_no_booking:  'CONVERSION',
+  long_form:             'CONVERSION',
+  tap_to_call_broken:    'CONVERSION',
+  phone_mismatch:        'CONVERSION',
+  site_empty:            'CONVERSION',
+  broken_page:           'CONVERSION',
+  no_https:              'CONVERSION',
+  expired_certificate:   'CONVERSION',
+  no_mobile_viewport:    'CONVERSION',
+  dated_credibility:     'CONVERSION',
+  stale_copyright:       'CONVERSION',
+  placeholder_text:      'CONVERSION',
+  dead_blog:             'CONVERSION',
+  listing_closed:        'CONVERSION',
+
+  // THROUGHPUT — delivering what they already sold. These are the findings that
+  // come out of what their own customers said happened.
+  review_pain_pattern:   'THROUGHPUT',
+  no_owner_replies:      'THROUGHPUT',
+  partial_owner_replies: 'THROUGHPUT',
+  low_rating:            'THROUGHPUT',
+};
+
+// How much a finding gains for sitting in the measured binding layer.
+//
+// SIZE MATTERS AND THIS NUMBER IS DELIBERATE. The audit's own tiebreak rule
+// already reads "if your top two are within 2 points, the one in the measured
+// binding layer wins". Opener scores span roughly 26 to 111, and real
+// disagreements between the top two have been 0-6 points on every lead tonight.
+//
+// +10 settles those and cannot rescue a weak finding: George Plumbing's
+// after-hours finding leads long_form by 23, and a binding-layer bonus on
+// long_form would not and should not change that. The constraint decides close
+// calls; it does not overrule a dominant one.
+const BINDING_LAYER_BONUS = 10;
+
+// ══ HOW URGENT THE PURCHASE IS CHANGES WHICH FINDINGS MATTER ═══════════════
+// The harm ladder is calibrated for a CONSIDERED purchase. Read the cost lines
+// and it is obvious: "someone comparing three companies has to ask them to find
+// out", "everyone not ready to commit today leaves with nothing", "a stranger
+// comparing three companies will find". That is a kitchen remodel.
+//
+// It is not a burst pipe. Midwest Remediation does water damage, fire and mold —
+// and the ladder ranked "no way to reach them outside office hours" THIRD,
+// behind a search-ranking finding and a billing complaint in 2 of 413 reviews.
+// For an emergency trade that is backwards. The 2026 restoration data is blunt:
+// "a plumber can return a call in an hour and still book the job; a restoration
+// company that returns a call in an hour has already lost it", and companies
+// with sub-60-minute response close 40% more emergency jobs.
+//
+// Meanwhile three of Dave's seven findings — no pricing, no named offer, nothing
+// to take away — describe somebody comparing quotes at leisure. Nobody price-
+// shops a flooded basement at 11pm.
+//
+// WHY THIS IS DERIVED FROM THE TRADE, NOT ASKED OF THE BRAIN:
+// customerTrade is read off their own homepage during domain confirmation. It is
+// a measurement, so urgency computed from it is a measurement too — it cannot be
+// fabricated, and it needs no verification pass. The brain is not involved.
+// Trailing \\b broke on suffixes — "orthodont\\b" cannot match "orthodontist".
+// Prefixes are left open so the stem matches whatever follows.
+const EMERGENCY_TRADES = /\b(restoration|remediation|water damage|fire damage|flood|mold|storm damage|disaster|biohazard|trauma clean|sewage|septic|plumb|drain|rooter|hvac|heating|cooling|air condition|furnace|boiler|water heater|electric|locksmith|tow|wrecker|emergency|24.?hour|garage door|appliance repair|well pump|board.?up|tree (removal|service)|pest control|glass repair|windshield|urgent care)/i;
+const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|cpa|accountant|accounting|tax|attorney|lawyer|law firm|financial advis|wealth|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|siding|general contractor|home builder|pool service)/i;
+
+const purchaseUrgency = (trade) => {
+  const t = String(trade || '').toLowerCase();
+  if (!t) return 'UNKNOWN';
+  // Emergency wins on a tie: "emergency plumbing and bathroom remodels" is a
+  // business whose phone must be answered at 2am regardless of the other half.
+  if (EMERGENCY_TRADES.test(t)) return 'EMERGENCY';
+  if (CONSIDERED_TRADES.test(t)) return 'CONSIDERED';
+  return 'UNKNOWN';
+};
+
+// How much each rung moves when the purchase is an emergency. Positive means it
+// matters more than the default ladder assumes; negative means it describes a
+// shopper who does not exist in this context.
+//
+// Deliberately NOT suppression — every finding still appears in the audit and on
+// the call sheet. Only the ORDER changes, because the order decides what the
+// email opens on and that is the only sentence most owners will read.
+const URGENCY_ADJUST = {
+  EMERGENCY: {
+    no_after_hours: +26,        // the business is shut when the pipe bursts
+    form_only_no_booking: +14,  // a form is not a route during a crisis
+    tap_to_call_broken: +14,    // he is on a phone, standing in water
+    phone_mismatch: +10,        // dialling the wrong number at 2am is fatal
+    site_empty: +8,             // no time to find them another way
+    no_published_pricing: -22,  // nobody price-shops a flood
+    no_lead_magnet: -26,        // nobody downloads a guide mid-emergency
+    no_offer: -16,              // nobody weighs a guarantee against a rival
+    not_compounding: -8,        // reviews matter, but not in the moment
+  },
+  CONSIDERED: {},               // the ladder is already built for this
+  UNKNOWN: {},                  // no evidence, no adjustment
+};
+
 // ══ WHICH FINDINGS EVEN APPLY TO THIS BUSINESS ═════════════════════════════
 // Every rung in the harm ladder assumes one shape of company: a local business
 // whose customers find it by searching. That is the ICP and it is right for most
@@ -8559,7 +8770,7 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
 - The FINDING must still be recognisable and its numbers must appear exactly.
 - No marketing words: funnel, CRM, pixel, SEO, conversion rate, landing page,
   optimisation, leverage, unlock.
-${first ? `- Open "${first} — " and then go straight into it.` : '- No greeting; open on the fact.'}
+${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and go straight into it.` : '- No greeting; open on the fact.'}
 
 VOICE: a colleague who noticed something, not a vendor. Short sentences.
 Contractions. Say it the way you would standing in his shop. 55-85 words.
@@ -8642,6 +8853,20 @@ const verifyBrainEmail = (body, opts = {}) => {
     [/\byour (revenue|turnover|margin|profit|conversion rate|close rate|ad spend)\b/i, 'states a business figure we have never seen'],
     [/\bat \d{1,2}\s*(am|pm)\b/i, 'states a specific hour — we never measured their hours'],
     [/\b(I|we) audited your business\b|\ba (full|complete) audit\b/i, 'overclaims scope — we read a digital front door, not a business'],
+    // ══ WHAT HE SPENDS, HIRES OR RUNS IS NOT SOMETHING WE MEASURED ═══════
+    // Live on Midwest Remediation: "and when you're buying more leads before
+    // that's fixed" — we never measured that Dave buys leads. It passed every
+    // check because it contains no figure and makes no post-contact claim.
+    // Dave's own read caught it: "I'm not buying leads, my problem is my office
+    // manager is drowning."
+    //
+    // A confident wrong guess about how he runs his business is worse than a
+    // generic email: it proves we do not know him, in a sentence that claims we
+    // do. These are the operational assumptions the model reaches for.
+    [/\byou(?:'?re| are) (buying|running|spending on|paying for) (more )?(leads|ads|traffic|ppc|adwords)\b/i, 'assumes he buys leads or ads — never measured'],
+    [/\byour (team|staff|crew|office|front desk|receptionist|admin)\b[^.]{0,40}\b(cannot|can't|struggles|is overwhelmed|is drowning|misses)\b/i, 'describes how his team is coping — never observed'],
+    [/\b(demand|volume|work) is outpacing\b|\bgrowing faster than you can\b/i, 'claims his growth outpaced his capacity — never measured'],
+    [/\byou (are|'re) (hiring|understaffed|short[- ]staffed|at capacity)\b/i, 'claims his staffing position — never measured'],
   ];
   for (const [re, why] of FABRICATION) {
     const m = text.match(re);
@@ -8823,32 +9048,32 @@ const EMAIL_SKELETONS = [
   {
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
       // ══ INSIGHT, RECOGNITION, THEN THE PROOF ═══════════════════════════
       // Order matters and it is the whole argument. The insight names what is
       // going on — the thing he feels and has never said out loud. The
       // recognition proves we looked. The finding is the evidence underneath
       // both. Leading on the finding, which is what this did, gives him a
       // scanner output and makes him supply the meaning himself.
-      `${first ? first + ' — ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.\n\n${endSentence([upper1(reframe), costs ? upper1(costs) : '', pattern ? upper1(pattern) : ''].filter(Boolean).join(' '))}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+      `${first ? first + ', ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${endSentence([upper1(reframe), costs ? upper1(costs) : '', pattern ? upper1(pattern) : ''].filter(Boolean).join(' '))}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
     needsReframe: true,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
-      `${first ? first + ' — ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}, so ${lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
+      `${first ? first + ', ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}${costs ? ', so ' + lower1(costs) : ''}.${second ? ' ' + upper1(second) + '.' : ''}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
       `${first ? first + ' — right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
     needsReframe: false,
-    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern }) =>
-      `${first ? first + ' — ' + lower1(fact) : upper1(fact)}.\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
+    render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
+      `${first ? first + ', ' + lower1(fact) : upper1(fact)}.${second ? ' ' + upper1(second) + '.' : ''}\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
   },
 ];
 
@@ -8907,6 +9132,8 @@ const composeEmail = (spine, opts = {}) => {
   // on the fact, capitalised.
   const first = greetingName(opts.founderName);
   const fact = toSecondPerson(spine.claim);
+  // The second finding, converted like the first. Empty on most leads.
+  const second = toSecondPerson(String(spine.secondClaim || '').trim());
   let costs = toSecondPerson(spine.costs || '');
   // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
   // The reframes are written as clauses and stored without a full stop —
@@ -8950,9 +9177,37 @@ const composeEmail = (spine, opts = {}) => {
     // The count is the one thing he cannot resolve on his own and it earns its
     // place. It just has to be stated as a fact about his business rather than
     // as a report on our afternoon. "That we found it is implied."
-    `There are ${n} of these.`,
-    `That's one of ${n}.`,
-    `${n} things, and that's the one you can check fastest.`,
+    // ══ THE COUNT HAS TO NAME WHAT IT COUNTS ═══════════════════════════════
+    // "That's one of 8." — one of eight what? Live on Daniel Builders and read
+    // as confusing by the person sending it, which means it is worse for the
+    // person receiving it. The rule against describing our work is right and it
+    // does not require the sentence to be cryptic: naming the noun is a fact
+    // about his business, not a report on our afternoon.
+    // ══ THE COUNT MUST NOT RE-COUNT WHAT WE JUST NAMED ═══════════════════
+    // With two findings in the email, "there are 5 of these" reads as five MORE.
+    // The remaining count is the honest number and it is also the better one —
+    // it says the pattern continues past what he has just read.
+    // Singular matters: "There are 1 more like these" is the kind of sentence
+    // that tells a reader a machine wrote it, which undoes the whole email.
+    ...(second ? (() => {
+      // ══ THE COUNT LINE HAS TO EARN ITS PLACE ═══════════════════════════
+      // "There is one more like these" is filler in the position where the
+      // email should be tightening. Under 80 words is where first touches
+      // perform best, so a sentence that only restates arithmetic is costing
+      // more than it returns.
+      //
+      // These say the same thing and do work: they frame the two he has read as
+      // a sample rather than a list, which is what makes it a management
+      // question instead of a to-do.
+      const r = Math.max(1, n - 2);
+      return r === 1
+        ? [`There's one more.`, `Those are 2 of ${n}.`, `And one more after that.`]
+        : [`There are ${r} more.`, `Those are 2 of ${n}.`, `${r} more after those.`];
+    })() : [
+      `There are ${n} of these on your site.`,
+      `That's one of ${n} things costing you work.`,
+      `${n} of these, and that's the one you can check fastest.`,
+    ]),
   ];
   const count = n > 1 ? countForms[(opts.variantIndex || 0) % countForms.length] : '';
 
@@ -9000,6 +9255,13 @@ const composeEmail = (spine, opts = {}) => {
   // weaker version of the same job, so it goes — the word-overlap test was too
   // conservative and left both in on the very lead it was written for.
   if (insight && costs) costs = '';
+  // ══ TWO FINDINGS AND A COST LINE IS ONE ELEMENT TOO MANY ════════════════
+  // With a second finding the email carries recognition, two facts, a reframe,
+  // a cost, the money and the count — 85 words, past the 80 where first touches
+  // perform best. The second finding IS the additional evidence; the cost line
+  // restates what the first one already implies. The finding is the stronger
+  // sentence because it is measured, so the cost goes.
+  if (second && costs) costs = '';
   // ══ THE INSIGHT MUST NOT BE THE GENERIC VERSION OF THE FINDING ═══════════
   // On Rose the headline read "businesses with less of it are sitting above you
   // in search" and the finding read "Overhead Door Company ranks above you with
@@ -9032,7 +9294,7 @@ const composeEmail = (spine, opts = {}) => {
   // reads as two interruptions in a row. The headline's dash becomes a comma
   // when a greeting is present.
   if (insight && first) insight = insight.replace(/\s+[—–]\s+/g, ', ');
-  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern })
+  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -9085,7 +9347,20 @@ const CTA_BY_FINDING = {
   // Reputation. The ask is about their PROCESS after a job — a question no
   // employee can answer for him and the exact conversation the call needs to
   // start on.
-  review_pain_pattern: 'process', not_compounding: 'process', no_owner_replies: 'process',
+  // ══ A REPEATING COMPLAINT IS NOT A REVIEW-COLLECTION PROBLEM ═══════════
+  // review_pain_pattern shared the 'process' ask — "when a job's finished, does
+  // anyone ask the customer for a review?" — with the review-COUNT findings.
+  // They are different problems and that ask converts the wrong one.
+  //
+  // Live on Deck Daddy's and Daniel Builders: the finding was "two of your
+  // reviews name quote accuracy and scope creep", which is about how the JOB
+  // runs, and the ask turned it into a conversation about collecting more
+  // reviews. He can do that himself, for free, this afternoon — and it reads as
+  // "your reviews are bad, go get better ones", which is the fastest way to make
+  // an owner defensive about work he is proud of.
+  //
+  // The mined pattern gets its own ask, about the thing the reviews describe.
+  review_pain_pattern: 'operations', not_compounding: 'process', no_owner_replies: 'process',
   partial_owner_replies: 'process', stale_reviews: 'process', review_deficit: 'process',
   low_rating: 'process',
   // Search. There is a concrete artefact to hand over, so hand it over.
@@ -9101,6 +9376,10 @@ const CTA_TEXT = {
   accountability: { text: "Who's handling the site for you at the moment?", kind: 'accountability' },
   listing: { text: 'Who looks after the Google listing?', kind: 'listing' },
   process: { text: "When a job's finished, does anyone ask the customer for a review?", kind: 'process' },
+  // Asks about the thing the reviews are describing, not about the reviews.
+  // It is also the question only he can answer — a foreman cannot tell you
+  // whether the estimate and the final invoice usually match.
+  operations: { text: 'Does that come up much on your end?', kind: 'operations' },
   // ══ NEVER ASK FOR SOMETHING HE CAN GET HIMSELF ═══════════════════════════
   // "Want the list of who's ranking above you?" offers him a Google search. He
   // can run it in ten seconds and does not need us, so the ask has no value and
@@ -9307,7 +9586,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
     (f) => `one more, then I'll stop: ${f}`,
   ];
   const opener = OPENERS[(ordinal - 1) % OPENERS.length] || OPENERS[0];
-  const open = first ? `${first} — ${opener(lower1(fact))}` : upper1(fact);
+  const open = first ? `${first}, ${opener(lower1(fact))}` : upper1(fact);
   const body = [
     open,
     `${reframe ? upper1(reframe) + ' ' : ''}${costsToUse ? upper1(costsToUse) : ''}${money ? ' ' + upper1(money) : ''}`.trim(),
@@ -9323,7 +9602,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
 const composeBreakup = (spine, opts) => {
   const first = greetingName(opts.founderName);
   const open = first
-    ? `${first} — I'll leave this here.`
+    ? `${first}, I'll leave this here.`
     : `I'll leave this here.`;
   return {
     subject: 'closing the loop',
@@ -9593,10 +9872,37 @@ const buildFactualSpine = (harms, m = {}) => {
   }
   add('our reviews on the ranked query', m.ourReviews);
 
+  // ══ ONE FINDING IS A TIP; TWO IS A PATTERN ═══════════════════════════════
+  // A single finding is forwardable — the system's own FORWARDABLE warning says
+  // so: "he can hand this to whoever runs his site and consider it handled."
+  // He fixes it, feels fine, and never replies. Two findings from DIFFERENT parts
+  // of the business cannot be handed to one person, which turns a task into a
+  // management question — and that is the conversation Mike needs.
+  //
+  // The second must be:
+  //   · from a different category, or it reads as one problem restated
+  //   · a real finding in its own right (harm floor), not filler
+  //   · not the self-fixable one we deliberately declined to lead on
+  //
+  // If nothing clears those bars there is no second claim and the email runs as
+  // it did. A weak second finding costs more than it earns: it dilutes the first
+  // and gives him something easy to dismiss the whole email on.
+  const _band = (h) => String(h && h.band || '');
+  const _second = (harms && Array.isArray(harms.byHarm) ? harms.byHarm : [])
+    .filter(h => h && h.id !== lead.id)
+    .filter(h => (h.selfFix || 0) < 4)              // not the one he can fix alone
+    .filter(h => Number(h.harm) >= 54)              // a real finding, not a tidy-up
+    .filter(h => _band(h) !== _band(lead))          // a different part of the business
+    [0] || null;
+
   return {
     claim,
     claimId: lead.id,
     costs: String(lead.costs || '').trim(),
+    // The second finding, when one clears the bar. Null is the common case and
+    // the composer renders exactly as before.
+    secondClaim: _second ? String(_second.finding || '').trim() : '',
+    secondClaimId: _second ? _second.id : '',
     figures,
     // The finding's own reframe, and what one job in this trade is worth. These
     // are the second and third of the three elements the pitch must carry; the
@@ -9876,8 +10182,25 @@ const rankHarms = (m = {}) => {
     // novel contributes at most 7 points, which was never enough to carry it.
     const _isMinedPattern = h.id === 'review_pain_pattern';
     const _minedBonus = _isMinedPattern ? 10 : 0;
+    // ══ AN EMERGENCY TRADE HAS A DIFFERENT WORST PROBLEM ══════════════════
+    // The ladder's cost lines describe someone comparing three companies at
+    // leisure. Midwest Remediation does water damage, and it ranked "no way to
+    // reach them outside office hours" third. A flooded basement at 11pm does
+    // not compare quotes; it calls whoever answers.
+    //
+    // Derived from the trade we read off their own homepage, so it is a
+    // measurement rather than a judgement. Adjusts ORDER only — every finding
+    // still appears in the audit and on the call sheet.
+    const _urgAdj = (URGENCY_ADJUST[m.purchaseUrgency || 'UNKNOWN'] || {})[h.id] || 0;
+    // ══ THE CONSTRAINT WE ALREADY DIAGNOSED DECIDES CLOSE CALLS ═══════════
+    // measureGrowthConstraint names the binding layer on every lead and the
+    // email has been ignoring it — then printing its own disagreement. This is
+    // the link between the two, and it only applies when the constraint was
+    // actually MEASURED. An unmeasured constraint adds nothing.
+    const _bindingBonus = (m.bindingLayer && HARM_LADDER_LAYER[h.id] === m.bindingLayer)
+      ? BINDING_LAYER_BONUS : 0;
     const openerScore = _disqualified ? 0
-      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus - _selfFixPenalty));
+      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _urgAdj + _bindingBonus - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -19104,6 +19427,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Assembled here because every input is already in scope. This does not ask
       // the Brain what is wrong; it tells it, in rank order, from what we measured.
       try {
+        // ══ THE CONSTRAINT HAS TO BE KNOWN BEFORE THE LADDER RANKS ═══════════
+        // measureGrowthConstraint used to run ~400 lines below this, AFTER the
+        // ladder had already chosen what the email opens on. So the system
+        // diagnosed the binding layer and then printed its disagreement with
+        // itself: "the winner sits in the LEADS layer while the MEASURED binding
+        // constraint is OFFER".
+        //
+        // The honest fix is not to re-rank afterwards — it is to compute the
+        // diagnosis before the thing that depends on it. Every input it needs
+        // (localRank, offerStrength, valueEquation, marketClarity,
+        // publicPainSignals, customerTrade) is already assigned above this line,
+        // verified individually, so moving it up changes nothing about what it
+        // measures. The later assignment is left in place and simply reuses this
+        // value, so no downstream reader can observe a different constraint than
+        // the ladder did.
+        growthConstraint = measureGrowthConstraint({
+          rank: localRank && localRank.found ? localRank.rank : undefined,
+          rankScanned: localRank ? localRank.scanned : undefined,
+          reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
+          reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+          weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
+          offerStrength, valueEquation, marketClarity,
+          opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
+          city: localRank ? localRank.city : '',
+          trade: customerTrade || verifiedIndustry || req.body.industry || '',
+        });
+
         // Named, so the finding scorers downstream consult the SAME measurements
         // instead of re-deriving them from whatever words the model chose.
         // Every number below comes from here, so the ladder and the client can
@@ -19111,6 +19461,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const _measured = resolveMeasurements({
           localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
           sitePagesArg: sitePages,
+          tradeWordArg: customerTrade || verifiedIndustry || '',
+          growthConstraintArg: growthConstraint,
         });
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
@@ -19515,17 +19867,27 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // ═══ GROWTH CONSTRAINT ═══════════════════════════════════════════════
     // The altitude layer. Which part of the revenue chain is actually binding,
     // stated as a condition of the BUSINESS rather than of a page element.
-    growthConstraint = measureGrowthConstraint({
-      rank: localRank && localRank.found ? localRank.rank : undefined,
-      rankScanned: localRank ? localRank.scanned : undefined,
-      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
-      reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
-      weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
-      offerStrength, valueEquation, marketClarity,
-      opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
-      city: localRank ? localRank.city : '',
-      trade: customerTrade || verifiedIndustry || req.body.industry || '',
-    });
+    // ══ ONE CONSTRAINT PER LEAD, MEASURED ONCE ═══════════════════════════════
+    // This is now computed earlier, before the harm ladder ranks, so the email
+    // can open in the binding layer. Recomputing it here would create a second
+    // answer that nothing guarantees matches the first — and a lead whose ladder
+    // ranked against OFFER while the audit narrates THROUGHPUT sends Mike into a
+    // call on the wrong constraint. Only compute if the earlier pass did not run
+    // (the ladder sits inside a try, and a throw there must not silently leave
+    // the audit with no constraint at all).
+    if (!growthConstraint || !growthConstraint.checked) {
+      growthConstraint = measureGrowthConstraint({
+        rank: localRank && localRank.found ? localRank.rank : undefined,
+        rankScanned: localRank ? localRank.scanned : undefined,
+        reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
+        reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+        weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
+        offerStrength, valueEquation, marketClarity,
+        opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
+        city: localRank ? localRank.city : '',
+        trade: customerTrade || verifiedIndustry || req.body.industry || '',
+      });
+    }
     // Supply the SAFE behavioural reframes. The prompt bans post-submission
     // claims 19 times and every audit produced one anyway, because element (ii)
     // requires a consequence and we never supplied a legal one.
@@ -21234,6 +21596,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             const _mm = resolveMeasurements({
               localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
               sitePagesArg: sitePages,
+              tradeWordArg: customerTrade || verifiedIndustry || '',
             });
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
@@ -23015,8 +23378,21 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       ownerEmailMatch,
       ownerEmailMatchReason,
       email: email.email||'',
-      founderName: email.founderName||'',
-      founderTitle: email.title||'',
+      // ══ THE ADDRESS WAS RESOLVED AND THE NAME WAS NOT ═══════════════════
+      // email.founderName is whatever the address engine last held, which on a
+      // swap is HUNTER'S contact, not the person we decided to write to.
+      //
+      // Live on Daniel Builders: the server logged "Hunter had Tim Cutliff, but
+      // decision-maker is Daniel Jachens. Built daniel.jachens@" — then returned
+      // founderName "Tim Cutliff". The address was right, the name was wrong, and
+      // the recipient guard I built fired on our own correct resolution:
+      // "daniel.jachens@ does not belong to Tim Cutliff". The prospect simulator
+      // then read the email as Tim.
+      //
+      // decisionMaker is the person we actually resolved. It wins; the address
+      // engine's name is the fallback for when no owner was found at all.
+      founderName: (decisionMaker && decisionMaker.name) || email.founderName || '',
+      founderTitle: (decisionMaker && decisionMaker.title) || email.title || '',
       buckets, flaws, topPain, positioningScore, recommendedProduct, researchBonus, brainAudit,
       visualAnalysis,
       screenshotUrl,
@@ -23673,6 +24049,132 @@ app.listen(PORT, () => {
     console.log(`\u26d4 INSIGHT LINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE EMAIL MUST OPEN IN THE LAYER WE DIAGNOSED ════════════════════════
+  // measureGrowthConstraint names the binding layer on every lead, in Hormozi's
+  // order, and the email opened wherever the ladder landed — then printed the
+  // disagreement: "the winner sits in the LEADS layer while the MEASURED binding
+  // constraint is OFFER". A system that diagnoses the constraint and then argues
+  // somewhere else is the exact failure Hormozi describes.
+  //
+  // Three things must hold, and the third is what stops this doing harm:
+  //   · every rung has a layer (an unmapped rung silently never gets the bonus)
+  //   · a finding in the binding layer wins a near-tie
+  //   · the bonus CANNOT rescue a weak finding over a dominant one
+  try {
+    const _rungIds = HARM_LADDER.map(h => h.id);
+    const _unmapped = _rungIds.filter(id => !HARM_LADDER_LAYER[id]);
+    const _phantom = Object.keys(HARM_LADDER_LAYER).filter(id => !_rungIds.includes(id));
+    const _score = (h, binding) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+      + (HARM_LADDER_LAYER[h.id] === binding ? BINDING_LAYER_BONUS : 0));
+    // A genuine near-tie: 2 points apart, one of them in the binding layer.
+    const _tieA = { id: 'not_compounding', harm: 56, novel: 50 };        // LEADS
+    const _tieB = { id: 'no_published_pricing', harm: 54, novel: 50 };   // OFFER
+    const _tieWinner = _score(_tieB, 'OFFER') > _score(_tieA, 'OFFER') ? 'no_published_pricing' : 'not_compounding';
+    // A dominant finding the bonus must NOT overturn: 23 points clear.
+    const _domA = { id: 'no_after_hours', harm: 81, novel: 60 };         // CONVERSION
+    const _domB = { id: 'no_lead_magnet', harm: 50, novel: 25 };         // OFFER
+    const _domWinner = _score(_domA, 'OFFER') >= _score(_domB, 'OFFER') ? 'no_after_hours' : 'no_lead_magnet';
+    if (_unmapped.length) {
+      console.log(`\u26d4 BINDING LAYER CHECK: ${_unmapped.length} rung(s) have no layer \u2014 ${_unmapped.slice(0, 3).join(', ')}. They can never win the binding-layer tiebreak, and nothing would report it.`);
+    } else if (_phantom.length) {
+      console.log(`\u26d4 BINDING LAYER CHECK: ${_phantom.join(', ')} are mapped but are not real rungs. A mapping that matches nothing is the failure that already cost this system a working filter once.`);
+    } else if (_tieWinner !== 'no_published_pricing') {
+      console.log(`\u26d4 BINDING LAYER CHECK: a near-tie was won by a finding OUTSIDE the binding layer. The constraint we measured has to settle close calls or the email keeps arguing the wrong layer.`);
+    } else if (_domWinner !== 'no_after_hours') {
+      console.log(`\u26d4 BINDING LAYER CHECK: the bonus overturned a finding leading by 23 points. The constraint decides close calls; it must never rescue a weak finding over a dominant one.`);
+    } else {
+      console.log(`\u2713 BINDING LAYER CHECK: all ${_rungIds.length} rungs carry a Hormozi layer, a finding inside the measured binding layer wins a near-tie, and a dominant finding outside it still leads. The email now opens where the diagnosis says the business is stuck.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BINDING LAYER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ AN EMERGENCY TRADE HAS A DIFFERENT WORST PROBLEM ═════════════════════
+  // The ladder's cost lines describe a shopper: "someone comparing three
+  // companies has to ask them to find out", "everyone not ready to commit today
+  // leaves with nothing". That is a kitchen remodel, not a burst pipe.
+  //
+  // Midwest Remediation does water damage, fire and mold. The ladder ranked "no
+  // way to reach them outside office hours" THIRD, behind a search-rank finding
+  // and a billing complaint in 2 of 413 reviews — while three of its seven
+  // findings described someone comparing quotes at leisure. The 2026 restoration
+  // data: "a plumber can return a call in an hour and still book the job; a
+  // restoration company that returns a call in an hour has already lost it."
+  //
+  // Derived from the trade we read off their homepage, so it is a measurement.
+  // Order only — nothing is suppressed from the audit or the call sheet.
+  try {
+    const _score = (h, urg) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+      + (h.id === 'review_pain_pattern' ? 10 : 0)
+      + ((URGENCY_ADJUST[urg] || {})[h.id] || 0));
+    const _midwest = [
+      { id: 'outranked_by_weaker', harm: 92, novel: 92 },
+      { id: 'review_pain_pattern', harm: 86, novel: 72 },
+      { id: 'no_after_hours', harm: 81, novel: 60 },
+      { id: 'no_published_pricing', harm: 54, novel: 40 },
+      { id: 'no_lead_magnet', harm: 50, novel: 25 },
+    ];
+    const _top = (urg) => [..._midwest].sort((a, b) => _score(b, urg) - _score(a, urg))[0].id;
+    const _emergencyTop = _top('EMERGENCY');
+    const _consideredTop = _top('CONSIDERED');
+    // Classification must land on the trades we actually work.
+    const _cls = [
+      ['water damage restoration', 'EMERGENCY'], ['plumber', 'EMERGENCY'],
+      ['hvac contractor', 'EMERGENCY'], ['garage door repair', 'EMERGENCY'],
+      ['kitchen remodeling contractor', 'CONSIDERED'], ['orthodontist', 'CONSIDERED'],
+      ['CPA', 'CONSIDERED'], ['deck builder', 'CONSIDERED'],
+    ];
+    const _wrong = _cls.filter(([t, want]) => purchaseUrgency(t) !== want).map(([t]) => t);
+    if (_emergencyTop !== 'no_after_hours') {
+      console.log(`\u26d4 URGENCY CHECK: an emergency trade still opens on ${_emergencyTop}. A flooded basement at 11pm does not compare quotes \u2014 it calls whoever answers, and being shut is the whole problem.`);
+    } else if (_consideredTop === 'no_after_hours') {
+      console.log(`\u26d4 URGENCY CHECK: a considered purchase now opens on after-hours access too. The adjustment is leaking into leads where the ladder was already right.`);
+    } else if (_wrong.length) {
+      console.log(`\u26d4 URGENCY CHECK: ${_wrong.length} trade(s) classified wrongly \u2014 ${_wrong.slice(0, 3).join(', ')}. A wrong class reorders the email on every lead in that trade.`);
+    } else {
+      console.log(`\u2713 URGENCY CHECK: an emergency trade opens on after-hours access while a considered purchase keeps its own order, and ${_cls.length} real trades classify correctly. Pricing and lead-magnet findings drop where nobody is shopping.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 URGENCY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ TWO FINDINGS, FROM DIFFERENT PARTS OF THE BUSINESS ═══════════════════
+  // One finding is forwardable — the FORWARDABLE warning says it outright: "he
+  // can hand this to whoever runs his site and consider it handled." He fixes
+  // it and never replies. Two findings from DIFFERENT categories cannot go to
+  // one person, which turns a task into a management question.
+  //
+  // The selection has to hold three lines or it makes the email worse: a second
+  // finding from the SAME category reads as one problem restated, a self-fixable
+  // one hands him something to do instead of someone to call, and a weak one
+  // gives him an easy reason to dismiss the whole email.
+  try {
+    const _pick = (lead, all) => (all || [])
+      .filter(h => h && h.id !== lead.id)
+      .filter(h => (h.selfFix || 0) < 4)
+      .filter(h => Number(h.harm) >= 54)
+      .filter(h => String(h.band || '') !== String(lead.band || ''))[0] || null;
+    const _lead = { id: 'no_after_hours', band: 'BLOCKS', harm: 81, selfFix: 1 };
+    const _all = [
+      _lead,
+      { id: 'long_form', band: 'BLOCKS', harm: 57, selfFix: 1 },              // same band — must be skipped
+      { id: 'not_compounding', band: 'OPINION', harm: 64, selfFix: 5 },        // self-fixable — must be skipped
+      { id: 'no_published_pricing', band: 'OPINION', harm: 54, selfFix: 1 },   // the correct pick
+      { id: 'phone_mismatch', band: 'CONTRADICTS', harm: 48, selfFix: 1 },     // below the floor
+    ];
+    const _got = _pick(_lead, _all);
+    const _none = _pick(_lead, [_lead, { id: 'long_form', band: 'BLOCKS', harm: 57, selfFix: 1 }]);
+    if (!_got || _got.id !== 'no_published_pricing') {
+      console.log(`\u26d4 SECOND FINDING CHECK: picked ${_got ? _got.id : 'nothing'} instead of no_published_pricing. A second finding from the same category reads as the first one restated, and a self-fixable one hands him a task instead of a reason to call.`);
+    } else if (_none) {
+      console.log(`\u26d4 SECOND FINDING CHECK: a lead with only same-category findings still produced a second claim (${_none.id}). One problem stated twice is worse than one problem stated once.`);
+    } else {
+      console.log(`\u2713 SECOND FINDING CHECK: the second finding comes from a different part of the business, is not one he can fix alone, and clears the harm floor \u2014 and when nothing qualifies the email runs on one finding as before.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SECOND FINDING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ A SUPPRESSION LIST THAT MATCHES NOTHING IS THE WORST KIND ════════════
   // The first LOCAL_ONLY_RUNGS was written from memory and four of its eleven
   // ids were not real rungs. Those entries silenced nothing, the findings fired
@@ -23865,6 +24367,11 @@ app.listen(PORT, () => {
       ['specific hour', _base + 'Someone searching at 8pm ends up somewhere else entirely that evening.'],
       ['agency jargon', _base + 'Your funnel is leaking badly at the top and nothing is catching them.'],
       ['drifted off finding', 'Tyler — your website looks dated and the branding feels tired next to the others working in your area right now honestly.'],
+      // Live on Midwest Remediation. Passed every check because it carries no
+      // figure and makes no post-contact claim — it is simply a confident guess
+      // about how he runs his business. Dave's own read: "I'm not buying leads,
+      // my problem is my office manager is drowning."
+      ['operational assumption', _base + 'And when you are buying more leads before that is fixed, the next customer sees the same problem.'],
       // Live on Deirdre Taylor: "We found six things like this on your listing."
       // Six findings is true; six ON HER LISTING is not — two were listing
       // issues, the rest her site and her review cadence. The number check
@@ -25005,7 +25512,24 @@ app.post('/api/send-to-hunter', async (req, res) => {
       const _local = String(lead.email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
       const _firstName = String(parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
       const _lastName = String(parts.slice(1).join('')).toLowerCase().replace(/[^a-z]/g, '');
-      const _looksPersonal = _local.length > 2 && !/^(info|office|hello|contact|admin|team|sales|support|help|enquir|inquir|mail|service)/.test(_local);
+      // ══ A MAILBOX NAMED AFTER THE BUSINESS IS NOT ANOTHER PERSON ═══════
+      // The guard exempted info@ and office@ but not a mailbox built from the
+      // COMPANY name. Live: deckdaddysrdu@gmail.com addressed to William Banks
+      // was refused — and the system's own OWNER/EMAIL MATCH had already said
+      // "the mailbox is the business's own name, at an owner-run shop this is
+      // William Banks's own desk."
+      //
+      // Blocking a correct send is the failure mode that matters here: a wrong
+      // recipient is caught by the name test, but a refused good lead is silent
+      // revenue loss. If the local part contains a significant chunk of the
+      // company name it is the business's own mailbox and the name test does not
+      // apply.
+      const _coWords = String(lead.name || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/)
+        .filter(w => w.length >= 4 && !/^(the|and|llc|inc|corp|company|group|services|service)$/.test(w));
+      const _isCompanyMailbox = _coWords.some(w => _local.includes(w))
+        || (_coWords.length >= 2 && _local.includes(_coWords.map(w => w[0]).join('')));
+      const _looksPersonal = _local.length > 2 && !_isCompanyMailbox
+        && !/^(info|office|hello|contact|admin|team|sales|support|help|enquir|inquir|mail|service)/.test(_local);
       if (_looksPersonal && _firstName && _lastName) {
         // ══ A SHARED SURNAME IS NOT A MATCH ═══════════════════════════════
         // The first version accepted any mailbox containing the surname, and
