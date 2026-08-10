@@ -8308,6 +8308,74 @@ const lower1 = (t) => {
 // states a number that is not in the measurements. It is converted to second
 // person like every other sentence, and it is refused if it is too long to be an
 // opening line or if it reads as a claim about their revenue.
+// ══ WITHDRAW ONLY WHAT THE PROSPECT WOULD ACTUALLY READ ════════════════════
+// A critical fact-check flag withdraws the composed email. That is right when
+// the contested claim is IN the email — an operator reading "Checks passed"
+// under a false statement is worse than no email at all.
+//
+// But the fact-checker reads the WHOLE audit: the internal notes, the product
+// reasoning, the call-sheet framing and the prospect-facing copy. A
+// contradiction between two internal notes endangers nobody, and withdrawing on
+// it destroys a sendable lead over a disagreement the owner cannot see.
+//
+// Live on Foundation Doctor. The flag said, in its own words: "The prospect-
+// facing pitch does not make this claim, SO IT DOES NOT APPEAR IN THE EMAIL,
+// but the internal reasoning is flagged as inconsistent." The checker told us
+// the email was clean and we withdrew it anyway. Brandon Powell — 252 reviews,
+// SMTP-verified address, reachability 100 — produced nothing.
+//
+// THE RULE, AND ITS DIRECTION OF FAILURE:
+// Withdraw unless we can show the claim is internal-only. Ambiguity withdraws,
+// because a false claim reaching an owner is unrecoverable while a withheld
+// email costs one re-run. Two things clear a flag, and both are evidence rather
+// than inference:
+//   1. the checker states the claim is not in the email
+//   2. every quoted fragment in the flag is absent from the email body
+const factCheckFlagReachesProspect = (flag, emailBody) => {
+  const f = String(flag || '');
+  const body = String(emailBody || '');
+  // No email means nothing to protect; treat as reaching, so the flag still
+  // blocks a later compose.
+  if (!body.trim()) return true;
+
+  // 1. The checker frequently says so outright. These are its own phrasings,
+  //    taken from live flags rather than invented.
+  const SAYS_INTERNAL = [
+    /does not appear in the email/i,
+    /(pitch|copy|email) does not (make|contain|include|state) th(is|at) claim/i,
+    /prospect[- ]facing (pitch|copy)[^.]{0,60}(does not|doesn't)/i,
+    /internal (note|reasoning|section)[^.]{0,80}(flagged|inconsistent|only)/i,
+    /no flag on the (pitch|email|copy) itself/i,
+    /internal[- ]only/i,
+  ];
+  if (SAYS_INTERNAL.some(re => re.test(f))) return false;
+
+  // 2. Otherwise, look at what the flag actually quotes. A flag about the email
+  //    quotes the email. Fragments are normalised so punctuation and casing
+  //    cannot hide a match.
+  const norm = (t) => String(t).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const hay = norm(body);
+  const quoted = [...f.matchAll(/['"\u2018\u2019\u201c\u201d]([^'"\u2018\u2019\u201c\u201d]{12,160})['"\u2018\u2019\u201c\u201d]/g)]
+    .map(m => norm(m[1])).filter(q => q.length >= 12);
+
+  // Nothing quoted at all — we cannot show it is internal, so it withdraws.
+  if (!quoted.length) return true;
+
+  // Any quoted fragment present in the email means the flag is about the email.
+  // Substring first, then a 6-word window, so a checker paraphrasing the tail of
+  // a sentence still matches.
+  for (const q of quoted) {
+    if (hay.includes(q)) return true;
+    const w = q.split(' ');
+    for (let n = Math.min(8, w.length); n >= 6; n--) {
+      if (hay.includes(w.slice(0, n).join(' '))) return true;
+    }
+  }
+  // Every quoted fragment is absent from the email: the flag is about text the
+  // prospect will never see.
+  return false;
+};
+
 // ══ THE EMAIL MUST OPEN IN THE LAYER THAT IS ACTUALLY BINDING ══════════════
 // measureGrowthConstraint already computes which part of the revenue chain is
 // stuck, in Hormozi's order: MARKET > OFFER > LEADS > CONVERSION > THROUGHPUT.
@@ -8418,7 +8486,12 @@ const BINDING_LAYER_BONUS = 10;
 // Trailing \\b broke on suffixes — "orthodont\\b" cannot match "orthodontist".
 // Prefixes are left open so the stem matches whatever follows.
 const EMERGENCY_TRADES = /\b(restoration|remediation|water damage|fire damage|flood|mold|storm damage|disaster|biohazard|trauma clean|sewage|septic|plumb|drain|rooter|hvac|heating|cooling|air condition|furnace|boiler|water heater|electric|locksmith|tow|wrecker|emergency|24.?hour|garage door|appliance repair|well pump|board.?up|tree (removal|service)|pest control|glass repair|windshield|urgent care)/i;
-const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|cpa|accountant|accounting|tax|attorney|lawyer|law firm|financial advis|wealth|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|siding|general contractor|home builder|pool service)/i;
+// ══ ELECTIVE SURGERY IS THE MOST CONSIDERED PURCHASE THERE IS ═════════════
+// "lasik surgery" returned UNKNOWN, so a business whose patients research for
+// weeks got the default after-hours harm of 81 and an email about booking
+// widgets. Elective medical, veterinary and legal work all belong here: the
+// buyer compares providers, reads reviews, and decides before making contact.
+const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|lasik|vision correction|ophthalmolog|optometr|eye (care|surgery|center)|dermatolog|chiropract|physical therapy|fertility|ivf|bariatric|hair (transplant|restoration)|weight loss|surgeon|surgery|clinic|practice|cpa|accountant|accounting|bookkeep|tax|attorney|lawyer|law firm|legal|financial advis|wealth|insurance agen|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|siding|general contractor|home builder|pool service|photograph|wedding|catering|event plan|private school|tutoring|driving school)/i;
 
 const purchaseUrgency = (trade) => {
   const t = String(trade || '').toLowerCase();
@@ -8449,7 +8522,39 @@ const URGENCY_ADJUST = {
     no_offer: -16,              // nobody weighs a guarantee against a rival
     not_compounding: -8,        // reviews matter, but not in the moment
   },
-  CONSIDERED: {},               // the ladder is already built for this
+  // ══ THE OTHER HALF OF THE TABLE, WHICH I LEFT EMPTY ══════════════════════
+  // I built the emergency adjustments and wrote "the ladder is already built
+  // for this" — which was half true. The ladder's COST LINES are written for a
+  // considered purchase; its HARM SCORES are not. no_after_hours carries harm
+  // 81 on every lead, and on a business nobody contacts at 11pm that is simply
+  // the wrong number.
+  //
+  // Live on Vision for Life, a LASIK surgeon: the email opened on "the only way
+  // to reach you is a phone call during office hours" and Dr Horn's read was
+  // "selling me a chatbot or booking widget I don't need because my phone rings
+  // constantly during hours that matter." His measured binding layer was OFFER,
+  // and the after-hours finding beat the offer findings by 18 points — far
+  // outside what the binding-layer tiebreak can or should overturn.
+  //
+  // A considered purchase inverts the emergency case exactly. LASIK, a kitchen
+  // remodel, a custom home: people research for weeks, compare three providers,
+  // and decide long before they call. So:
+  //   · what they can find out BEFORE calling matters more  (OFFER findings up)
+  //   · being reachable at 11pm matters much less           (after-hours down)
+  //
+  // This is also the layer Hormozi puts above everything below it: "most
+  // businesses do not have a traffic problem, they have an offer problem" —
+  // and for a considered purchase that is most literally true.
+  CONSIDERED: {
+    no_lead_magnet:       +18,  // weeks of research and nothing to take away
+    no_published_pricing: +16,  // the first question of a considered purchase
+    no_offer:             +14,  // three providers, nothing separating them
+    undifferentiated:     +12,  // comparison is the whole buying process
+    not_compounding:      +8,   // reviews ARE the research for a big decision
+    no_after_hours:       -24,  // nobody books elective surgery at 11pm
+    tap_to_call_broken:   -10,  // they are not calling in a panic
+    form_only_no_booking: -8,   // a form is a normal step in a long decision
+  },
   UNKNOWN: {},                  // no evidence, no adjustment
 };
 
@@ -8983,6 +9088,28 @@ const insightLine = (situationRead) => {
   for (const [re, why] of INSIGHT_FABRICATION) {
     if (re.test(h)) return '';
   }
+
+  // ══ NOTHING THAT LOOKS LIKE CODE MAY OPEN AN EMAIL ══════════════════════
+  // The fuzzer put "{{template}}", "${injection}" and "<script>alert(1)</script>"
+  // through this and all three came out as the email's first sentence. The
+  // fabrication battery reads for MEANING and none of these mean anything, so
+  // every rule passed them.
+  //
+  // In practice this is an unrendered template or a half-built string reaching
+  // the copy — the same shape as the "${n} of these" placeholders the composer
+  // guards against, arriving through a field nobody thought to check. An owner
+  // reading "{{template}}" as the opening words stops reading, and correctly.
+  if (/[<>{}]|\$\{|\\u00|&[a-z]+;|\bhttps?:\/\//i.test(h)) return '';
+  // A headline should be a sentence. The first version of this test demanded
+  // three consecutive words of 3+ letters and rejected "The work is real. The
+  // proof is almost invisible" — a real headline from tonight — because "is"
+  // kept breaking the run. Short words are what sentences are made of.
+  //
+  // Count words instead, and require the text to be mostly letters, which is
+  // what separates prose from a template fragment or an encoded blob.
+  const _words = h.split(/\s+/).filter(w => /^[A-Za-z'\u2019-]{2,}$/.test(w));
+  const _letters = (h.match(/[A-Za-z ]/g) || []).length / Math.max(1, h.length);
+  if (_words.length < 5 || _letters < 0.75) return '';
   return h.replace(/\s+/g, ' ').replace(/[.\s]+$/, '');
 };
 
@@ -9028,6 +9155,22 @@ const earnedLine = (m = {}) => {
   return '';
 };
 
+// ══ ONE PLACE WHERE WHITESPACE IS MADE CORRECT ═══════════════════════════════
+// Every skeleton and the follow-up composer join optional fields, and an empty
+// one leaves a double space behind. The fuzzer found 19 in 1,825 emails —
+// invisible in a log, visible to the owner, and exactly the small wrongness that
+// makes an email read as machine-written.
+//
+// Fixing it inside each template means fixing it again in the next one. Every
+// composed body passes through one of two exits, so the rule is stated once here
+// and applied at both.
+const _tidy = (t) => String(t || '')
+  .replace(/[ \t]{2,}/g, ' ')        // collapse runs of spaces
+  .replace(/[ \t]+\n/g, '\n')        // no trailing space before a break
+  .replace(/\n{3,}/g, '\n\n')        // never more than one blank line
+  .replace(/[ \t]+([.,!?])/g, '$1')  // no space before punctuation
+  .trim();
+
 const EMAIL_SKELETONS = [
   // ══ A SKELETON HAS TO SAY WHETHER IT NEEDS THE REFRAME ═══════════════════
   // The reframe is now dropped whenever none of them is about the finding the
@@ -9067,7 +9210,7 @@ const EMAIL_SKELETONS = [
     // Cost first. Opens on his money rather than his page.
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
-      `${first ? first + ' — right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+      `${first ? first + ', right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
@@ -9294,7 +9437,16 @@ const composeEmail = (spine, opts = {}) => {
   // reads as two interruptions in a row. The headline's dash becomes a comma
   // when a greeting is present.
   if (insight && first) insight = insight.replace(/\s+[—–]\s+/g, ', ');
-  const body = skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second })
+  // ══ ONE PLACE WHERE WHITESPACE IS MADE CORRECT ═══════════════════════════
+  // Every skeleton joins optional fields, and an empty one leaves a double space
+  // behind. The fuzzer found 19 in 1,825 emails — invisible in a log, visible to
+  // the owner, and exactly the kind of small wrongness that makes an email read
+  // as machine-written.
+  //
+  // Fixing it in each skeleton would mean fixing it again in the next one. This
+  // is the single exit every composed body passes through, so it is the only
+  // place the rule can be stated once.
+  const body = _tidy(skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }))
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -9592,7 +9744,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
     `${reframe ? upper1(reframe) + ' ' : ''}${costsToUse ? upper1(costsToUse) : ''}${money ? ' ' + upper1(money) : ''}`.trim(),
     cta.text,
   ].filter(Boolean).join('\n\n');
-  return { subject, body, ctaKind: cta.kind };
+  return { subject, body: _tidy(body), ctaKind: cta.kind };
 };
 
 // The break-up. The data is specific: it works ONLY when it is low-pressure and
@@ -17797,6 +17949,64 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   const head = await checkLocalRankStable({ companyName, placeId, website, industry, location, placesKey });
   if (head.checked) results.push({ ...head, kind: 'primary trade' });
 
+  // ══ THE MARKET THEY SELL INTO, NOT THE TOWN THEY ARE REGISTERED IN ═══════
+  // The rank query is built from their Google listing's city. For a business in
+  // a small town that serves a nearby metro, that measures a market nobody
+  // searches — and we then tell the owner he is invisible in it.
+  //
+  // Live on Bradley Construction: registered in Piedmont SC, population around
+  // five thousand. We reported "you do not appear in the first twenty results
+  // for remodeling contractor in Piedmont" and Dee Patel's read was "they don't
+  // know how I actually get work — Google Maps and local search bring me steady
+  // jobs." He is right. He sells into Greenville.
+  //
+  // Foundation Doctor is the clearest case: their sitemap publishes SEVEN
+  // markets — /areas-served/charlotte-nc, concord-nc, fort-mill-sc, gastonia-nc,
+  // matthews-nc, monroe-nc, rock-hill-sc — and we searched only Concord because
+  // that is the city on their listing. Charlotte is the market that matters and
+  // we never looked at it.
+  //
+  // These pages are the owner's own statement of where he sells. Reading them
+  // costs nothing — the sitemap is already in hand — and one extra rank query
+  // buys the difference between a finding he recognises and one he deletes.
+  const _serviceAreaCities = (() => {
+    if (!Array.isArray(sitemapUrls) || !sitemapUrls.length) return [];
+    const seen = new Set();
+    const out = [];
+    const homeCity = String(location || '').split(',')[0].trim().toLowerCase();
+    for (const u of sitemapUrls) {
+      const m = String(u || '').match(/\/(?:areas?[-_]served|service[-_]areas?|locations?|cities|we[-_]serve)\/([a-z0-9-]+)\/?$/i);
+      if (!m) continue;
+      // "charlotte-nc" -> "Charlotte". A trailing two-letter state is dropped so
+      // the query reads the way a customer would type it.
+      const parts = m[1].split('-').filter(Boolean);
+      if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) parts.pop();
+      const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      const key = city.toLowerCase();
+      if (!city || city.length < 3 || seen.has(key) || key === homeCity) continue;
+      seen.add(key);
+      out.push(city);
+    }
+    return out;
+  })();
+
+  // One extra query, not seven. The point is to test whether the invisibility
+  // story survives in a market they actually sell into — a second data point
+  // settles that, and paying for six more does not change what the email says.
+  if (_serviceAreaCities.length && head.checked) {
+    const _alt = _serviceAreaCities[0];
+    const _altRank = await checkLocalRankStable({
+      companyName, placeId, website, industry,
+      location: _alt, placesKey,
+    });
+    if (_altRank.checked) {
+      results.push({ ..._altRank, kind: 'published service area' });
+      console.log(`\u{1F5FA} SERVICE AREA [${companyName}]: their sitemap publishes ${_serviceAreaCities.length} market(s) beyond their registered city \u2014 ${_serviceAreaCities.slice(0, 5).join(', ')}. Checked "${industry} in ${_alt}" as well, because a rank in the town on their listing is not the market they sell into.`);
+    }
+  } else if (_serviceAreaCities.length) {
+    console.log(`\u{1F5FA} SERVICE AREA [${companyName}]: their sitemap publishes ${_serviceAreaCities.length} market(s) \u2014 ${_serviceAreaCities.slice(0, 5).join(', ')} \u2014 but the head-term rank did not run, so no comparison is possible.`);
+  }
+
   // 2. Their own service pages, shortest first. A shorter slug is usually the
   //    broader, higher-volume service and the one they most want to win.
   // ══ BUY SERVICE-PAGE RANKS ONLY WHEN THE HEAD TERM DID NOT ANSWER IT ══════
@@ -22679,7 +22889,11 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             const _CRITICAL = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bfactually backwards\b|\bthe opposite of the finding\b|\bcontradicts?\b|\bcontradiction\b|\bMISMATCH\b|\bMISALIGNMENT\b|\bdirectly contradict/i;
             const _criticalFlags = _realFlags.filter(f => _CRITICAL.test(f));
             if (_criticalFlags.length) {
-              parsed._criticalFactCheck = _criticalFlags;
+              // ══ THIS FIELD BLOCKS EVERY LATER COMPOSE ═══════════════════════
+              // Set below, after the reaching/internal split, so a flag about the
+              // audit's internal reasoning cannot block the compose forever.
+              // Foundation Doctor would otherwise stay blocked on every
+              // regenerate for a contradiction the owner cannot see.
               // ══ THE EMAIL IS WRITTEN BEFORE THIS RUNS ═══════════════════════
               // composeFullEmail fires at step 4 of Research; the fact-checker
               // finishes seventeen seconds later. So the compose-time gate could
@@ -22692,10 +22906,30 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
               // can display, store or send copy the checker has just contradicted.
               // Re-running Research rewrites both together; the on-demand gate
               // then keeps it from being recomposed while the flags stand.
-              if (parsed.composedEmail) {
+              // ══ ONLY WITHDRAW WHAT THE PROSPECT WOULD READ ═══════════════
+              // The checker reads the whole audit, and a contradiction between
+              // two internal notes endangers nobody. Foundation Doctor's flag
+              // said in its own words "it does not appear in the email" and we
+              // withdrew anyway — a verified owner, 252 reviews, produced
+              // nothing. Ambiguity still withdraws; only demonstrable
+              // internal-only flags are cleared.
+              const _emailBody = (parsed.composedEmail && (parsed.composedEmail.body
+                || (parsed.composedEmail.variantA && parsed.composedEmail.variantA.body))) || '';
+              const _reaching = _criticalFlags.filter(f => factCheckFlagReachesProspect(f, _emailBody));
+              const _internalOnly = _criticalFlags.length - _reaching.length;
+              if (parsed.composedEmail && !_reaching.length && _criticalFlags.length) {
+                console.log(`\u2713 EMAIL KEPT [${company}]: ${_internalOnly} critical flag(s) are about the audit's internal reasoning, not about anything in the email \u2014 the checker's own words place them outside the copy. The email stands and the flags stay on the audit where Mike can see them.`);
+              }
+              // Only flags that reach the prospect may block a compose. The rest
+              // are surfaced on the audit as claim risks, where Mike sees them.
+              if (_reaching.length) parsed._criticalFactCheck = _reaching;
+              if (_internalOnly) {
+                parsed._internalOnlyFactCheck = _criticalFlags.filter(f => !_reaching.includes(f));
+              }
+              if (parsed.composedEmail && _reaching.length) {
                 parsed._composedEmailWithdrawn = true;
                 parsed.composedEmail = null;
-                console.log(`\u26d4 EMAIL WITHDRAWN [${company}]: the email was composed before the fact-check finished, and the check contradicts it. Removed rather than shown \u2014 an operator reading "Checks passed" under a false claim is worse than no email at all.`);
+                console.log(`\u26d4 EMAIL WITHDRAWN [${company}]: ${_reaching.length} of ${_criticalFlags.length} critical flag(s) contradict something the email actually says. Removed rather than shown \u2014 an operator reading "Checks passed" under a false claim is worse than no email at all.`);
               }
               console.log(`\u26d4 FACT CHECK CRITICAL [${company}]: ${_criticalFlags.length} claim(s) the prospect could disprove on sight. This lead is NOT sendable as written \u2014 ${_criticalFlags.map(f => String(f).slice(0, 110)).join(' | ')}`);
             }
@@ -24027,14 +24261,29 @@ app.listen(PORT, () => {
       ['customer outcome', 'Callers who reach voicemail never call back'],
       ['revenue claim', 'You are leaving $40,000 a year on the table'],
       ['specific hour', 'A parent deciding at 9pm has nowhere to go'],
+      // Found by fuzzcore.js, not by any live lead. The fabrication battery
+      // reads for MEANING, and none of these mean anything, so every rule
+      // passed them straight into the email's opening words.
+      ['unrendered template', '{{template}}'],
+      ['string interpolation', '${injection}'],
+      ['markup', '<script>alert(1)</script>'],
+      ['a bare url', 'https://example.com/page'],
+      ['not a sentence', 'a b'],
     ];
     // Every headline the brain actually produced tonight, across six businesses.
+    // Every headline the brain actually produced across two days. "The work is
+    // real. The proof is almost invisible" is here because my first sentence
+    // test rejected it — it contains no run of three long words, since "is"
+    // keeps breaking it, and short words are what sentences are made of.
     const _good = [
       'The reputation is genuinely earned and the phone is the only door',
       'The reputation is perfect. The infrastructure around it is working against her',
       'The work is real. The proof is almost invisible',
       'The brand name opens the door and the digital infrastructure walks people back out',
       'The reputation is real. Almost none of it is reaching the next customer',
+      'The owner answers every review and no one can reach his website',
+      'The reputation is extraordinary. Getting through the door is harder than it needs to be',
+      'The reputation is genuine and the ranking is not keeping up with it',
     ];
     const _leaked = _bad.filter(([, h]) => insightLine({ headline: h })).map(([l]) => l);
     const _blocked = _good.filter(h => !insightLine({ headline: h }));
@@ -24047,6 +24296,93 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 INSIGHT LINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A FLAG ABOUT INTERNAL REASONING MUST NOT DESTROY THE EMAIL ═══════════
+  // A critical fact-check flag withdraws the composed email, which is right when
+  // the contested claim is IN the email. But the checker reads the whole audit,
+  // and Foundation Doctor's flag said in its own words "the prospect-facing pitch
+  // does not make this claim, so it does not appear in the email". We withdrew
+  // anyway: 252 reviews, SMTP-verified address, reachability 100, nothing sent.
+  //
+  // The direction of failure is what matters. A false claim reaching an owner is
+  // unrecoverable; a withheld email costs one re-run. So ambiguity WITHDRAWS,
+  // and only a flag we can demonstrate is internal-only is cleared.
+  try {
+    const _email = 'Brandon, a business with fewer reviews than yours is ranking above you for "foundation repair in Concord". No price and no range appears anywhere on the pages we read. There are 2 more. Who is handling the site for you at the moment?';
+    // Foundation Doctor's flag, verbatim from the live run.
+    const _internal = [
+      'Lead magnet claim: The measured facts state "Lead magnet: none" but the audit internal note says "They DO offer something before a sales conversation: educational buyer content." This is a direct contradiction. The prospect-facing pitch does not make this claim, so it does not appear in the email, but the internal reasoning is flagged as inconsistent with the measurement.',
+      'The measured evidence qualifies it correctly, so no flag on the pitch itself, but the internal note should have mirrored that qualifier.',
+      'CRITICAL: the audit claims "thirty years of finished renovations across four states" which contradicts the measurement.',
+    ];
+    const _reaching = [
+      'CRITICAL CONTRADICTION: the copy states "no price and no range appears anywhere on the pages we read" but we measured a published price list.',
+      'MISMATCH: "a business with fewer reviews than yours is ranking above you" contradicts the measured rank.',
+      'CRITICAL: the rank claim is backwards and the prospect can disprove it on sight.',
+      '',
+    ];
+    const _falseClears = _reaching.filter(f => !factCheckFlagReachesProspect(f, _email));
+    const _falseWithdraws = _internal.filter(f => factCheckFlagReachesProspect(f, _email));
+    const _noEmail = factCheckFlagReachesProspect('CRITICAL: something', '   ');
+    if (_falseClears.length) {
+      console.log(`\u26d4 WITHDRAWAL CHECK: ${_falseClears.length} flag(s) about text IN the email were cleared. A false claim reaching an owner cannot be taken back \u2014 this direction of failure is the one that must never happen.`);
+    } else if (_falseWithdraws.length) {
+      console.log(`\u26d4 WITHDRAWAL CHECK: ${_falseWithdraws.length} internal-only flag(s) still withdraw the email. That is the Foundation Doctor failure \u2014 a verified owner produced nothing over a contradiction he could not see.`);
+    } else if (!_noEmail) {
+      console.log(`\u26d4 WITHDRAWAL CHECK: an empty email body cleared the flag. With no email to inspect there is no evidence the claim is internal, so it must block a later compose.`);
+    } else {
+      console.log(`\u2713 WITHDRAWAL CHECK: ${_reaching.length} flag(s) about the email withdraw it, ${_internal.length} about internal reasoning do not, and ambiguity withdraws. Leads are no longer destroyed by a contradiction the prospect would never read.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 WITHDRAWAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ RANK THE MARKET THEY SELL INTO ═══════════════════════════════════════
+  // The rank query used their Google listing's city. Bradley Construction is
+  // registered in Piedmont SC, population about five thousand — we told Dee
+  // Patel he was invisible for "remodeling contractor in Piedmont" and his read
+  // was "they don't know how I actually get work". He sells into Greenville.
+  //
+  // Foundation Doctor publishes seven markets in its own sitemap and we searched
+  // one. Those pages are the owner's own statement of where he sells, they cost
+  // nothing to read, and they are the difference between a finding he recognises
+  // and one he deletes.
+  try {
+    const _harvest = (urls, loc) => {
+      const seen = new Set(); const out = [];
+      const home = String(loc || '').split(',')[0].trim().toLowerCase();
+      for (const u of urls || []) {
+        const m = String(u || '').match(/\/(?:areas?[-_]served|service[-_]areas?|locations?|cities|we[-_]serve)\/([a-z0-9-]+)\/?$/i);
+        if (!m) continue;
+        const parts = m[1].split('-').filter(Boolean);
+        if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) parts.pop();
+        const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        const k = city.toLowerCase();
+        if (!city || city.length < 3 || seen.has(k) || k === home) continue;
+        seen.add(k); out.push(city);
+      }
+      return out;
+    };
+    const _fd = _harvest(['/', '/contact-us', '/services/waterproofing',
+      '/areas-served/charlotte-nc', '/areas-served/concord-nc', '/areas-served/fort-mill-sc',
+      '/areas-served/rock-hill-sc'], 'Concord, NC');
+    const _none = _harvest(['/', '/about', '/contact', '/services/kitchen'], 'Piedmont, SC');
+    // A page about the business's own town must not become an extra query.
+    const _self = _harvest(['/areas-served/concord-nc'], 'Concord, NC');
+    if (!_fd.includes('Charlotte') || !_fd.includes('Rock Hill')) {
+      console.log(`\u26d4 SERVICE AREA CHECK: published markets are not being read from the sitemap (got ${_fd.length}). The rank query stays on the town from their Google listing, which for a small-town business measures a market nobody searches.`);
+    } else if (_fd.includes('Concord')) {
+      console.log(`\u26d4 SERVICE AREA CHECK: the business's own registered city came back as an extra market to search, which buys a second query that measures exactly what the first one did.`);
+    } else if (_none.length) {
+      console.log(`\u26d4 SERVICE AREA CHECK: a site with no service-area pages produced ${_none.length} market(s). Inventing a market to search is worse than checking only the one we know.`);
+    } else if (_self.length) {
+      console.log(`\u26d4 SERVICE AREA CHECK: a service-area page for their own city still produced a query.`);
+    } else {
+      console.log(`\u2713 SERVICE AREA CHECK: markets the business publishes in its own sitemap are read and searched alongside its registered city, their own town is never re-searched, and a site that publishes none behaves exactly as before.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SERVICE AREA CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE EMAIL MUST OPEN IN THE LAYER WE DIAGNOSED ════════════════════════
@@ -24117,22 +24453,42 @@ app.listen(PORT, () => {
     const _top = (urg) => [..._midwest].sort((a, b) => _score(b, urg) - _score(a, urg))[0].id;
     const _emergencyTop = _top('EMERGENCY');
     const _consideredTop = _top('CONSIDERED');
+    // ══ BOTH HALVES OF THE TABLE HAVE TO DO WORK ═══════════════════════════
+    // I shipped the EMERGENCY adjustments and left CONSIDERED as an empty
+    // object, reasoning that "the ladder is already built for this". Half true:
+    // its cost lines are, its harm scores are not. no_after_hours carries harm
+    // 81 on every lead, so a LASIK surgeon whose patients research for weeks
+    // got an email about being unreachable at night. Dr Horn's read: "selling
+    // me a chatbot or booking widget I don't need."
+    const _vision = [
+      { id: 'no_after_hours', harm: 81, novel: 60 },
+      { id: 'no_published_pricing', harm: 54, novel: 40 },
+      { id: 'no_lead_magnet', harm: 50, novel: 25 },
+    ];
+    const _visionTop = [..._vision].sort((a, b) => _score(b, 'CONSIDERED') - _score(a, 'CONSIDERED'))[0].id;
     // Classification must land on the trades we actually work.
     const _cls = [
       ['water damage restoration', 'EMERGENCY'], ['plumber', 'EMERGENCY'],
       ['hvac contractor', 'EMERGENCY'], ['garage door repair', 'EMERGENCY'],
       ['kitchen remodeling contractor', 'CONSIDERED'], ['orthodontist', 'CONSIDERED'],
       ['CPA', 'CONSIDERED'], ['deck builder', 'CONSIDERED'],
+      // Live miss: "lasik surgery" returned UNKNOWN, so the surgeon got the
+      // default after-hours harm and an email he deleted. Elective medical and
+      // legal work is the most considered purchase there is.
+      ['lasik surgery', 'CONSIDERED'], ['plastic surgeon', 'CONSIDERED'],
+      ['personal injury attorney', 'CONSIDERED'], ['chiropractor', 'CONSIDERED'],
     ];
     const _wrong = _cls.filter(([t, want]) => purchaseUrgency(t) !== want).map(([t]) => t);
     if (_emergencyTop !== 'no_after_hours') {
       console.log(`\u26d4 URGENCY CHECK: an emergency trade still opens on ${_emergencyTop}. A flooded basement at 11pm does not compare quotes \u2014 it calls whoever answers, and being shut is the whole problem.`);
     } else if (_consideredTop === 'no_after_hours') {
       console.log(`\u26d4 URGENCY CHECK: a considered purchase now opens on after-hours access too. The adjustment is leaking into leads where the ladder was already right.`);
+    } else if (_visionTop === 'no_after_hours') {
+      console.log(`\u26d4 URGENCY CHECK: a considered purchase still opens on after-hours access. Nobody books elective surgery at 11pm \u2014 what a buyer can find out BEFORE calling is the whole decision, and that is the offer layer.`);
     } else if (_wrong.length) {
       console.log(`\u26d4 URGENCY CHECK: ${_wrong.length} trade(s) classified wrongly \u2014 ${_wrong.slice(0, 3).join(', ')}. A wrong class reorders the email on every lead in that trade.`);
     } else {
-      console.log(`\u2713 URGENCY CHECK: an emergency trade opens on after-hours access while a considered purchase keeps its own order, and ${_cls.length} real trades classify correctly. Pricing and lead-magnet findings drop where nobody is shopping.`);
+      console.log(`\u2713 URGENCY CHECK: an emergency trade opens on after-hours access and a considered one opens on the offer instead, ${_cls.length} real trades classify correctly, and both halves of the table are doing work.`);
     }
   } catch (e) {
     console.log(`\u26d4 URGENCY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
@@ -24253,12 +24609,17 @@ app.listen(PORT, () => {
   // surname is NOT a match. The first version accepted any mailbox containing
   // the surname, so "pfreund" passed the very send it was written to stop.
   try {
-    const _addrOk = (email, name) => {
+    const _addrOk = (email, name, _coName) => {
       const parts = String(name || '').trim().split(/\s+/);
       const local = String(email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
       const f = String(parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
-      const l = String(parts.slice(1).join('')).toLowerCase().replace(/[^a-z]/g, '');
-      const personal = local.length > 2 && !/^(info|office|hello|contact|admin|team|sales|support|help|enquir|inquir|mail|service)/.test(local);
+      const l = parts.slice(1).map(w => String(w).replace(/[^A-Za-z]/g, ''))
+        .filter(w => w.length > 1 && !/^(jr|sr|ii|iii|iv|md|dds|dmd|do|phd|esq|cpa|pa|pc)$/i.test(w))
+        .join('').toLowerCase();
+      const co = String(_coName || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/)
+        .filter(w => w.length >= 4 && !/^(the|and|llc|inc|corp|company|group|services|service)$/.test(w));
+      const isCo = co.some(w => local.includes(w)) || (co.length >= 2 && local.includes(co.map(w => w[0]).join('')));
+      const personal = local.length > 2 && !isCo && !/^(info|office|hello|contact|admin|team|sales|support|help|enquir|inquir|mail|service)/.test(local);
       if (!personal || !f || !l) return true;
       const at = local.indexOf(l);
       if (at > 0) return f.startsWith(local.slice(0, at));
@@ -24266,9 +24627,14 @@ app.listen(PORT, () => {
       return local.includes(f) || local === (f[0] + l) || local === (f + l[0]) || local === (f[0] + '' + l[0]);
     };
     const _mustBlock = [['pfreund@comfort-air.com', 'Tom Freund'], ['kacie@hannahcustomhomes.com', 'Dusty Hannah'], ['jsmith@acme.com', 'Tom Smith']];
-    const _mustSend = [['tfreund@comfort-air.com', 'Tom Freund'], ['dusty@hannahcustomhomes.com', 'Dusty Hannah'], ['info@rosedoorsolutions.com', 'Tyler Rose'], ['deirdre@dtaylorcpa.com', 'Deirdre L Taylor'], ['aholley@ramjack.com', 'Alex Holley'], ['tomfreund@comfort-air.com', 'Tom Freund']];
-    const _leaked = _mustBlock.filter(([e, n]) => _addrOk(e, n));
-    const _blocked = _mustSend.filter(([e, n]) => !_addrOk(e, n));
+    // jeff.horn@ for "Jeffrey D. Horn" was REFUSED live: parts.slice(1).join('')
+    // glued the middle initial to the surname, yielding "dhorn", so nothing
+    // matched and an email to the owner at his own address never went. Blocking
+    // a good send is silent — nobody investigates a lead that simply did not go.
+    const _mustSend = [['tfreund@comfort-air.com', 'Tom Freund'], ['dusty@hannahcustomhomes.com', 'Dusty Hannah'], ['info@rosedoorsolutions.com', 'Tyler Rose'], ['deirdre@dtaylorcpa.com', 'Deirdre L Taylor'], ['aholley@ramjack.com', 'Alex Holley'], ['tomfreund@comfort-air.com', 'Tom Freund'], ['jeff.horn@visionforlife.com', 'Jeffrey D. Horn'], ['bsmith@acme.com', 'Bob Smith Jr'], ['deckdaddysrdu@gmail.com', 'William Banks']];
+    const _co = { 'deckdaddysrdu@gmail.com': "Deck Daddy's LLC" };
+    const _leaked = _mustBlock.filter(([e, n]) => _addrOk(e, n, _co[e]));
+    const _blocked = _mustSend.filter(([e, n]) => !_addrOk(e, n, _co[e]));
     if (_leaked.length) {
       console.log(`\u26d4 RECIPIENT CHECK: ${_leaked[0][0]} would still be sent an email addressed to ${_leaked[0][1]}. That is the Comfort-Air failure \u2014 the right research delivered to the wrong human, and no way to take it back.`);
     } else if (_blocked.length) {
@@ -25511,7 +25877,19 @@ app.post('/api/send-to-hunter', async (req, res) => {
       // shared inboxes (info@, office@) and initial-based addresses still pass.
       const _local = String(lead.email || '').split('@')[0].toLowerCase().replace(/[^a-z]/g, '');
       const _firstName = String(parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
-      const _lastName = String(parts.slice(1).join('')).toLowerCase().replace(/[^a-z]/g, '');
+      // ══ A MIDDLE INITIAL IS NOT PART OF THE SURNAME ══════════════════════
+      // parts.slice(1).join('') turned "Jeffrey D. Horn" into surname "dhorn",
+      // so "jeffhorn" matched nothing and the guard refused an email to the
+      // owner at his own correct address. Blocking a good send is silent
+      // revenue loss — it is the failure mode this guard must be most careful
+      // about, because nobody investigates a lead that simply did not go.
+      //
+      // Drop single-letter tokens (and "Jr", "Sr", "III") so the surname is the
+      // surname.
+      const _nameParts = parts.slice(1)
+        .map(w => String(w).replace(/[^A-Za-z]/g, ''))
+        .filter(w => w.length > 1 && !/^(jr|sr|ii|iii|iv|md|dds|dmd|do|phd|esq|cpa|pa|pc)$/i.test(w));
+      const _lastName = _nameParts.join('').toLowerCase();
       // ══ A MAILBOX NAMED AFTER THE BUSINESS IS NOT ANOTHER PERSON ═══════
       // The guard exempted info@ and office@ but not a mailbox built from the
       // COMPANY name. Live: deckdaddysrdu@gmail.com addressed to William Banks
@@ -26066,6 +26444,12 @@ app.post('/api/compose-email', async (req, res) => {
       .concat(audit._criticalFactCheck || [])
       .concat((audit._persisted && audit._persisted._criticalFactCheck) || [])
       .filter(Boolean);
+    // _internalOnlyFactCheck is deliberately NOT concatenated here. Those flags
+    // are real and they belong on the audit, but they contradict the audit's own
+    // internal reasoning rather than anything the prospect would read — blocking
+    // the compose on them destroys a sendable lead over a disagreement the owner
+    // cannot see. That is what happened to Foundation Doctor.
+
     if (_criticalFlags.length) {
       console.log(`\u26d4 COMPOSE BLOCKED [${company}]: ${_criticalFlags.length} claim(s) in this audit contradict what we measured, so no email is written. ${String(_criticalFlags[0]).slice(0, 180)}`);
       return res.json({
