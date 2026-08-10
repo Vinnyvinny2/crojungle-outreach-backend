@@ -7960,6 +7960,9 @@ const resolveMeasurements = ({
     // Derived from the trade read off their own homepage — a measurement, not a
     // judgement, so no verification pass is needed.
     purchaseUrgency: purchaseUrgency(tradeWordArg || ''),
+    // Whether the work arrives through relationships rather than search. Read
+    // from the trade on their own homepage, so it is measured, not judged.
+    acquisitionIsReferral: REFERRAL_TRADES.test(String(tradeWordArg || '')),
     // The measured binding layer, so the ladder can prefer findings that sit in
     // it. Null when the constraint was not measured — no constraint, no bonus.
     bindingLayer: (growthConstraintArg && growthConstraintArg.checked && growthConstraintArg.layer) || null,
@@ -8461,6 +8464,50 @@ const HARM_LADDER_LAYER = {
 // calls; it does not overrule a dominant one.
 const BINDING_LAYER_BONUS = 10;
 
+// ══ HOW THEY GET CUSTOMERS DECIDES WHETHER RANK MATTERS AT ALL ═════════════
+// Six of the eight prospect-simulator deletes are one sentence: you do not know
+// how I get customers.
+//
+//   Kelly Brooks   "my customers call me, they don't Google me"
+//   DuraMark       "nobody finds label manufacturers through search rankings"
+//   David Leon     "my referral network and existing relationships are where the
+//                   work comes from — this person has no idea how estate
+//                   planning actually works"
+//
+// businessModel was supposed to catch this, and it only fires when the BRAIN
+// quotes evidence for it — which on David's lead it did not. But the trade
+// already tells us: estate planning arrives through accountants and financial
+// advisors, not through a map pack. That is a MEASUREMENT, read off his own
+// homepage, so it needs no model and cannot be fabricated.
+//
+// WHY THIS ADJUSTS ORDER RATHER THAN SUPPRESSING:
+// businessModel WITHHOLDS local findings, which is right when their own copy
+// proves they sell to institutions. This is weaker evidence — a trade word — so
+// it only demotes. David IS ranked #3 with 225 reviews and somebody is searching;
+// he may be underrating the channel. But leading the email there, to a man whose
+// clients arrive by referral, guarantees the delete. The finding stays in the
+// audit and on the call sheet where Mike can raise it.
+const REFERRAL_TRADES = /\b(estate planning|estate attorney|probate|trust|wealth|financial advis|financial planner|wealth manage|cpa|accountant|accounting|bookkeep|tax (attorney|advis|prepar)|business (law|attorney)|corporate (law|attorney)|franchise (law|attorney)|contract (law|attorney)|patent|trademark|intellectual property|m&a|merger|private (equity|client)|fiduciar|actuar|consultan)/i;
+
+// How each rung moves when the work arrives through relationships rather than
+// search. Negative on everything that assumes a stranger typing into Google.
+const REFERRAL_ADJUST = {
+  outranked_by_weaker:  -30,  // he is not competing for a map-pack click
+  absent_from_search:   -26,
+  no_google_listing:    -18,  // still real: referrals do look you up
+  wrong_gbp_category:   -20,
+  thin_profile:         -14,
+  review_deficit:       -16,
+  stale_reviews:        -12,
+  not_compounding:      -10,
+  // What DOES decide it: whether the person your accountant sent can tell why
+  // you, and whether they can act once they have decided.
+  no_offer:             +16,
+  undifferentiated:     +16,
+  no_lead_magnet:       +10,
+  form_only_no_booking: +10,
+};
+
 // ══ HOW URGENT THE PURCHASE IS CHANGES WHICH FINDINGS MATTER ═══════════════
 // The harm ladder is calibrated for a CONSIDERED purchase. Read the cost lines
 // and it is obvious: "someone comparing three companies has to ask them to find
@@ -8841,9 +8888,41 @@ const parseProspectVerdict = (text) => {
 // The output is a CANDIDATE. verifyBrainEmail decides whether it ships, and if
 // anything fails the code composer runs instead. The floor is the email we would
 // have sent anyway, so this can improve the prose and can never damage the facts.
+// ══ THE WRITER WAS STARVED, NOT OVER-GUARDED ═════════════════════════════════
+// The emails read like a scanner and the instinct is to blame the guardrails.
+// They are not the problem. This prompt said "YOUR ONLY JOB IS TO CONNECT THESE
+// ... THAT IS THE ENTIRE TASK" and handed over seven disconnected strings.
+//
+// The model that wrote "The reputation is real and the path to the door is where
+// it breaks down" about David Leon is the SAME model, ten seconds earlier, with
+// 24,000 characters of his pages, forty of his reviews and Mike's framework in
+// front of it. Then the email writer opened with nothing: it did not know David
+// was an estate lawyer, that he had been solo for twenty years, or that we had
+// diagnosed his binding constraint as OFFER. It was asked to join fragments and
+// it produced exactly that.
+//
+// So: the writer now receives WHO this person is, WHAT WE CONCLUDED about the
+// business, and the same voice sample the audit gets — Mike writing, verbatim,
+// rather than adjectives about him. The prohibitions stay untouched and
+// verifyBrainEmail still judges the output, so the floor does not move. Only the
+// input changes, from seven strings to the reasoning that produced them.
+const MIKE_VOICE_FOR_EMAIL = `HOW MIKE ACTUALLY WRITES — match this, do not describe it:
+"If you want a low end economy level way to run ads on Google, Mike is happy to refer you elsewhere."
+"Many executives and business owners are in the cycle of performing highly themselves and being pushed to put out fires in areas they have handed to others."
+"Most agencies help a company do more marketing. CROJ helps leadership determine what the business actually needs to grow."
+
+WHAT TO TAKE FROM IT:
+- PLAIN DECLARATIVES. He states things. He does not build to them or save a reveal for the end.
+- ALMOST NO ADJECTIVES. Every noun does the work.
+- HE NAMES THE FEELING, NOT THE METRIC. "The cycle." "Putting out fires in areas they have handed to others."
+- Long sentences are fine. Ornamental ones are not. Construction is the tell, not length.
+THE TEST: could this sentence sit inside those paragraphs without standing out?`;
+
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
-  const { first, spine, earned, pattern, reframe, money, count, cta } = parts;
+  const { first, spine, earned, pattern, reframe, money, count, cta,
+    trade, tenure, situationRead, bindingLayer, bindingWhy, acquisitionIsReferral,
+    purchaseUrgency: urgency, second } = parts;
   const supplied = [
     earned ? `WHAT THEY HAVE EARNED (measured, true): ${earned}` : '',
     `THE FINDING (the one verified fact — this MUST survive): ${spine}`,
@@ -8854,16 +8933,48 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
     `THE ASK (use close to verbatim): ${cta}`,
   ].filter(Boolean).join('\n');
 
+  // WHO THIS PERSON IS. Without it the writer produced "I noticed a business with
+  // fewer reviews than yours is ranking above you" for a twenty-year estate
+  // lawyer — true, and the voice of a tool that has never met him.
+  const who = [
+    trade ? `${first || 'He'} runs a ${trade} business${tenure ? `, ${tenure} years in` : ''}.` : '',
+    acquisitionIsReferral
+      ? `HOW HE GETS WORK: through relationships and referrals, not people typing into Google. Do not frame this as a search or ranking problem — he will stop reading, and he will be right to.`
+      : '',
+    urgency === 'EMERGENCY'
+      ? `HOW HE GETS WORK: people contact him when something has already gone wrong. Speed and access decide who gets the job; nobody compares quotes.`
+      : urgency === 'CONSIDERED'
+        ? `HOW HE GETS WORK: people research for weeks and compare providers before making contact. What they can find out BEFORE calling is most of the decision.`
+        : '',
+  ].filter(Boolean).join('\n');
+
+  // WHAT WE CONCLUDED. The audit brain wrote these with the whole corpus in
+  // front of it and they were thrown away before the email was written.
+  const diagnosis = [
+    situationRead ? `WHAT IS ACTUALLY GOING ON HERE (your own read, from his pages and his reviews): ${situationRead}` : '',
+    bindingLayer ? `THE PART OF HIS BUSINESS THAT IS ACTUALLY STUCK: ${bindingLayer}${bindingWhy ? ` — ${bindingWhy}` : ''}` : '',
+  ].filter(Boolean).join('\n');
+
   const prompt = `You are writing one cold email to ${first || 'the owner'} at ${company}.
 
-Every fact you need is below. It has all been measured and verified.
+${who}
+
+${diagnosis}
+
+THE VERIFIED FACTS. Every one is measured. You may assert these and nothing else:
 
 ${supplied}
 
-YOUR ONLY JOB IS TO CONNECT THESE INTO SOMETHING A PERSON WOULD SEND.
-Right now they are being pasted in as separate sentences and it reads like a
-report. Write them as one short argument instead — "this, which means this, so
-this". That is the entire task.
+WHAT THIS EMAIL IS.
+You have read this man's website and his reviews and worked out what is actually
+holding his business back. You are writing to tell him ONE true thing he does not
+know, in a way that makes him feel seen rather than sold to. The facts above are
+your evidence; the read above is your argument. Use both.
+
+This is not a list of findings joined with commas. It is one point, made once,
+by someone who understands the business he is in.
+
+${MIKE_VOICE_FOR_EMAIL}
 
 ABSOLUTE RULES, and the email is discarded if any is broken:
 - Do NOT add any fact not listed above. No numbers, no times, no competitor
@@ -8877,8 +8988,8 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   optimisation, leverage, unlock.
 ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and go straight into it.` : '- No greeting; open on the fact.'}
 
-VOICE: a colleague who noticed something, not a vendor. Short sentences.
-Contractions. Say it the way you would standing in his shop. 55-85 words.
+55-85 words. Mike's voice sample above governs — it replaces every adjective a
+previous version of this prompt used to describe him.
 
 Return ONLY the email body. No subject, no signature, no preamble.`;
 
@@ -10344,6 +10455,17 @@ const rankHarms = (m = {}) => {
     // measurement rather than a judgement. Adjusts ORDER only — every finding
     // still appears in the audit and on the call sheet.
     const _urgAdj = (URGENCY_ADJUST[m.purchaseUrgency || 'UNKNOWN'] || {})[h.id] || 0;
+    // ══ A REFERRAL PRACTICE IS NOT COMPETING FOR A MAP-PACK CLICK ═════════
+    // Six of eight simulator deletes were "you do not know how I get
+    // customers." David Leon, estate planning, 20 years, 225 reviews: "my
+    // referral network and existing relationships are where the work comes
+    // from — this person has no idea how estate planning actually works."
+    // The email had opened on a map-pack ranking.
+    //
+    // Derived from the trade read off their own homepage. Demotes rather than
+    // suppresses, because the trade word is weaker evidence than the quoted
+    // copy businessModel requires — the finding stays in the audit.
+    const _refAdj = m.acquisitionIsReferral ? (REFERRAL_ADJUST[h.id] || 0) : 0;
     // ══ THE CONSTRAINT WE ALREADY DIAGNOSED DECIDES CLOSE CALLS ═══════════
     // measureGrowthConstraint names the binding layer on every lead and the
     // email has been ignoring it — then printing its own disagreement. This is
@@ -10352,7 +10474,7 @@ const rankHarms = (m = {}) => {
     const _bindingBonus = (m.bindingLayer && HARM_LADDER_LAYER[h.id] === m.bindingLayer)
       ? BINDING_LAYER_BONUS : 0;
     const openerScore = _disqualified ? 0
-      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _urgAdj + _bindingBonus - _selfFixPenalty));
+      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _urgAdj + _refAdj + _bindingBonus - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -22508,6 +22630,11 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // rediscover it. That is the "computed but not passed" shape this
             // system has lost fields to five separate times.
             businessModel: parsed.businessModel || null,
+            // The email writer argues FROM these. RESPONSE CHECK caught them
+            // being persisted but never delivered — the exact "computed but not
+            // passed" shape that has cost this system five fields.
+            growthConstraint: (brainAudit && brainAudit.growthConstraint) || null,
+            situationRead: (brainAudit && brainAudit.situationRead) || null,
             openerStrength: parsed.openerStrength || null,
             // Carry the fabrication flags through to the response so the review
             // checklist can show them. brainAudit is an explicit literal, so without
@@ -24425,6 +24552,52 @@ app.listen(PORT, () => {
     console.log(`\u26d4 BINDING LAYER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ A REFERRAL PRACTICE IS NOT COMPETING FOR A MAP-PACK CLICK ════════════
+  // Six of eight prospect-simulator deletes were one sentence: you do not know
+  // how I get customers. David Leon — estate planning, 20 years, 225 reviews —
+  // read our email and said "my referral network and existing relationships are
+  // where the work comes from; this person has no idea how estate planning
+  // actually works." We had opened on a map-pack ranking.
+  //
+  // Derived from the trade on their own homepage, so it is measured. It DEMOTES
+  // rather than suppresses: a trade word is weaker evidence than the quoted copy
+  // businessModel demands, and the finding stays in the audit either way.
+  //
+  // The classifier has to be precise in BOTH directions. Personal injury and
+  // criminal defence are legal work that genuinely competes in search — getting
+  // those wrong would bury a real finding on the leads it matters most for.
+  try {
+    const _sc = (h, ref) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+      + (ref ? (REFERRAL_ADJUST[h.id] || 0) : 0));
+    const _rank = { id: 'outranked_by_weaker', harm: 92, novel: 92 };
+    const _offer = { id: 'no_offer', harm: 56, novel: 45 };
+    const _refWins = _sc(_offer, true) > _sc(_rank, true);
+    const _normalWins = _sc(_rank, false) > _sc(_offer, false);
+    const _mustRefer = ['estate planning attorney', 'CPA', 'wealth management',
+      'business attorney', 'probate lawyer', 'bookkeeping services'];
+    const _mustNot = ['personal injury attorney', 'criminal defense attorney', 'plumber',
+      'lasik surgery', 'remodeling contractor', 'water damage restoration', 'roofing contractor',
+      'deck builder', 'orthodontist'];
+    const _missed = _mustRefer.filter(t => !REFERRAL_TRADES.test(t));
+    const _over = _mustNot.filter(t => REFERRAL_TRADES.test(t));
+    const _phantom = Object.keys(REFERRAL_ADJUST).filter(id => !HARM_LADDER.some(h => h.id === id));
+    if (_phantom.length) {
+      console.log(`\u26d4 REFERRAL CHECK: ${_phantom.join(', ')} are not real rungs, so those adjustments silently do nothing.`);
+    } else if (_missed.length) {
+      console.log(`\u26d4 REFERRAL CHECK: ${_missed.join(', ')} not recognised as referral work. Those owners get an email about map-pack rank and delete it \u2014 that is six of our eight simulator deletes.`);
+    } else if (_over.length) {
+      console.log(`\u26d4 REFERRAL CHECK: ${_over.join(', ')} wrongly treated as referral work. Personal injury and criminal defence compete hard in search \u2014 burying the rank finding there loses the strongest thing we have.`);
+    } else if (!_refWins) {
+      console.log(`\u26d4 REFERRAL CHECK: a referral practice still opens on its search ranking. That is the exact email David Leon deleted.`);
+    } else if (!_normalWins) {
+      console.log(`\u26d4 REFERRAL CHECK: the demotion is leaking onto ordinary local businesses, where being outranked is the strongest finding we have.`);
+    } else {
+      console.log(`\u2713 REFERRAL CHECK: work that arrives through relationships opens on the offer rather than the map pack, ${_mustNot.length} search-driven trades are untouched, and every adjusted id is a real rung.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 REFERRAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ AN EMERGENCY TRADE HAS A DIFFERENT WORST PROBLEM ═════════════════════
   // The ladder's cost lines describe a shopper: "someone comparing three
   // companies has to ask them to find out", "everyone not ready to commit today
@@ -25252,7 +25425,12 @@ app.listen(PORT, () => {
     const _i = _src.indexOf('brainAudit = {');
     const _lit = _i > -1 ? _src.slice(_i, _i + 6000) : '';
     const _required = ['composedEmail', 'factualSpine', 'harmsRanked', 'problemList',
-                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine', 'originalFindings', 'businessModel'];
+                       'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine', 'originalFindings', 'businessModel',
+                       // The email writer now argues FROM these. Without them
+                       // persisted, a Generate after a page reload falls back to
+                       // the seven-string version that reads like a scanner —
+                       // and nothing would say why the copy got worse.
+                       'growthConstraint', 'situationRead'];
     const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
     if (!_lit) {
       console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
@@ -26511,10 +26689,28 @@ app.post('/api/compose-email', async (req, res) => {
         const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
         const _parts = composed._parts || {};
         if (req.body.apiKey && _spineTxt) {
+          // ══ THE WRITER GETS WHAT THE AUDIT BRAIN KNEW ═══════════════════
+          // It used to receive seven strings and produce a scanner's sentence.
+          // These are the same conclusions the audit was built on, which were
+          // computed and then discarded before the email was written.
           const _written = await writeEmailWithBrain({
             first: _parts.first || '', spine: _spineTxt, earned: _parts.earned || '',
             pattern: _parts.pattern || '', reframe: _parts.reframe || '',
             money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
+            second: _parts.second || '',
+            // Who he is, so the email is not written to a generic owner.
+            trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+            tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
+            // How he gets work — the thing six of eight simulator deletes said
+            // we did not understand.
+            acquisitionIsReferral: !!(audit.measuredNumbers && audit.measuredNumbers.acquisitionIsReferral),
+            purchaseUrgency: (audit.measuredNumbers && audit.measuredNumbers.purchaseUrgency) || '',
+            // The brain's own read, and the constraint it diagnosed. Both were
+            // computed with the whole corpus in view and then thrown away.
+            situationRead: (audit.situationRead && audit.situationRead.headline) || '',
+            bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer)
+              || (audit._persisted && audit._persisted.growthConstraint && audit._persisted.growthConstraint.layer) || '',
+            bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
           }, req.body.apiKey, company);
           const _v = _written ? verifyBrainEmail(_written, {
             spine: _spineTxt, figures: _figs, money: _parts.money || '',
