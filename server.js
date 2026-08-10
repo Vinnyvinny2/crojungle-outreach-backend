@@ -8930,7 +8930,7 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
     pattern ? `WHAT THIS USUALLY MEANS in businesses of this kind (general, safe): ${pattern}` : '',
     money ? `WHAT THE WORK IS WORTH in their trade (public knowledge): ${money}` : '',
     count ? `HOW MANY THINGS WE FOUND IN TOTAL: ${count}` : '',
-    `THE ASK (use close to verbatim): ${cta}`,
+    `THE ASK (use close to verbatim, and it MUST BE THE LAST SENTENCE): ${cta}`,
   ].filter(Boolean).join('\n');
 
   // WHO THIS PERSON IS. Without it the writer produced "I noticed a business with
@@ -8984,6 +8984,9 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   never observed any of it.
 - Never state their revenue, their losses, their conversion rate or their hours.
 - The FINDING must still be recognisable and its numbers must appear exactly.
+- THE ASK IS THE LAST SENTENCE. Nothing follows it. A draft that puts the
+  question in the middle and keeps explaining afterwards is discarded — he reads
+  past it, finishes on a statement, and has nothing to reply to.
 - No marketing words: funnel, CRM, pixel, SEO, conversion rate, landing page,
   optimisation, leverage, unlock.
 ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and go straight into it.` : '- No greeting; open on the fact.'}
@@ -9021,6 +9024,34 @@ const verifyBrainEmail = (body, opts = {}) => {
   const words = text.split(/\s+/).length;
   if (words > 120) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
   if (words < 25) return { ok: false, why: `${words} words — too short to carry the finding and the ask` };
+
+  // ══ THE ASK MUST BE THE LAST THING HE READS ═══════════════════════════════
+  // The composer always put the CTA last, so nothing ever checked. Giving the
+  // writer the diagnosis and real freedom immediately produced this:
+  //
+  //   "David, a business with fewer reviews than yours is ranking above you for
+  //    estate planning attorney in Dallas. WANT TO KNOW WHY THEY ARE ABOVE YOU?
+  //    When someone needs an estate plan, they call the first person who picks
+  //    up... Speed in that first moment determines who gets the work."
+  //
+  // The question lands in sentence two and four more follow it. An ask buried
+  // mid-email is not an ask — the reader passes it, finishes on a statement, and
+  // has nothing to do. Every reply this system can earn depends on the last line
+  // being a question he can answer in four words.
+  const _sentences = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean);
+  const _questionAt = _sentences.map((x, i) => (/\?/.test(x) ? i : -1)).filter(i => i >= 0);
+  if (!_questionAt.length) {
+    return { ok: false, why: 'no question anywhere — the email finishes on a statement and gives him nothing to reply to' };
+  }
+  // The final sentence must be the question. One trailing fragment is tolerated
+  // only if it is very short, because a model occasionally ends "Worth a look?
+  // Either way." and that still reads as an ask.
+  const _last = _sentences.length - 1;
+  const _lastQ = _questionAt[_questionAt.length - 1];
+  const _tail = _sentences.slice(_lastQ + 1).join(' ').split(/\s+/).filter(Boolean).length;
+  if (_lastQ !== _last && _tail > 6) {
+    return { ok: false, why: `the ask sits ${_last - _lastQ} sentence(s) from the end with ${_tail} words after it — an ask he reads past is not an ask` };
+  }
 
   // ── EVERY NUMBER MUST BE ONE WE MEASURED ────────────────────────────────
   // The single most damaging thing an email can contain is a figure about his
@@ -24906,6 +24937,9 @@ app.listen(PORT, () => {
       ['specific hour', _base + 'Someone searching at 8pm ends up somewhere else entirely that evening.'],
       ['agency jargon', _base + 'Your funnel is leaking badly at the top and nothing is catching them.'],
       ['drifted off finding', 'Tyler — your website looks dated and the branding feels tired next to the others working in your area right now honestly.'],
+      // Live regression the moment the writer was given real freedom: the
+      // question landed in sentence two and four more followed it.
+      ['ask buried mid-email', _base + 'Want to know why they are above you? People searching pick from what is in front of them. A garage door replacement runs $1k-$4k. Speed in that first moment determines who gets the work.'],
       // Live on Midwest Remediation. Passed every check because it carries no
       // figure and makes no post-contact claim — it is simply a confident guess
       // about how he runs his business. Dave's own read: "I'm not buying leads,
