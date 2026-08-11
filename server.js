@@ -9661,8 +9661,25 @@ const CTA_BY_FINDING = {
   outranked_by_weaker: 'list', absent_from_search: 'list',
   // Everything about how they are bought from — offer, positioning, booking.
   // The write-up already exists; it is delivered, not proposed.
-  no_offer: 'writeup', undifferentiated: 'writeup', no_lead_magnet: 'writeup',
-  no_published_pricing: 'writeup', no_after_hours: 'writeup',
+  // ══ FIVE DIFFERENT FINDINGS SHARED ONE GENERIC ASK ═══════════════════════
+  // All five closed with "I've written up the rest — want me to send them over?"
+  // — which follows a pricing email without touching pricing, and reads as the
+  // fallback it is. The email argues one thing and then asks about something
+  // else, which is exactly what makes it feel automated.
+  //
+  // The write-up offer also has a cost the research is explicit about: Gong
+  // found that asking for thoughts or materials RAISES replies and LOWERS
+  // meetings booked by about 20%. Mike needs calls, not document requests. A
+  // question about the thing itself starts a conversation; an offer of a PDF
+  // starts a download.
+  //
+  // Each of these now closes on the one question only the owner can answer
+  // about the finding the email just made.
+  no_published_pricing: 'pricing',
+  no_offer: 'differentiator',
+  undifferentiated: 'differentiator',
+  no_lead_magnet: 'notready',
+  no_after_hours: 'afterhours',
   form_only_no_booking: 'writeup', long_form: 'writeup',
 };
 
@@ -9698,6 +9715,14 @@ const CTA_TEXT = {
   // The count is filled by the composer from the measured problem count, so the
   // sentence never claims a number we did not find.
   writeup: { text: "I've written up the rest — want me to send them over?", kind: 'writeup' },
+  // ══ ASKS THAT MATCH THE FINDING THEY FOLLOW ═══════════════════════════════
+  // Each is a question the owner can answer in one line from his own experience,
+  // and none can be answered by anyone else in his business. That is what makes
+  // a reply cheap for him and useful for Mike.
+  pricing: { text: 'Do people ask what it costs before they will book?', kind: 'pricing' },
+  differentiator: { text: 'When someone picks you over the firm down the road, what do they usually say made the difference?', kind: 'differentiator' },
+  notready: { text: 'What do you do with the ones who are not ready yet?', kind: 'notready' },
+  afterhours: { text: 'What happens to the ones who find you after hours?', kind: 'afterhours' },
 };
 
 const CTA_FOR = (finding, claimId) => {
