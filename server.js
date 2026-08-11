@@ -4,6 +4,76 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 
 const app = express();
+
+// ══ ONE PLACE TO READ EVERYTHING THAT HAPPENED ═══════════════════════════════
+// Reviewing a batch currently means pasting the Render log, then each audit,
+// then each email, from six different screens — and the interesting lines are
+// buried in a few hundred routine ones. So the server keeps them itself.
+//
+// Every log line matching a known diagnostic prefix is filed under the company
+// it names. GET /api/session-report then returns one compact block per lead,
+// with the problems already flagged rather than left to be spotted.
+//
+// It is a ring buffer in memory: no database, nothing persisted, and it resets
+// on deploy. Capture is a string match on lines already being printed, so it
+// cannot change behaviour or cost anything.
+const SESSION_LEADS = new Map();          // company -> { at, lines[], email, sim }
+const SESSION_MAX = 40;
+
+// The lines worth keeping. Everything else is routine progress.
+const SESSION_PREFIXES = [
+  'EMAIL OPENS ON', 'BUSINESS MODEL', 'SERVICE AREA', 'SECOND CLAIM',
+  'SPINE REBUILT', 'PATTERN', 'ORIGINAL FINDINGS', 'READ AS',
+  'CLAIM VERIFY', 'FACT CHECK', 'EMAIL WITHDRAWN', 'EMAIL KEPT',
+  'BRAIN WROTE IT', 'BRAIN DRAFT REJECTED', 'COMPOSED ON DEMAND',
+  'GROWTH CONSTRAINT', 'LADDER TIEBREAK', 'LADDER OVERRIDE', 'RANK UNSTABLE',
+  'EXISTS BUT UNREAD', 'SITE IS GENUINELY DOWN', 'HUNTER [', 'EMAIL SWAPPED',
+  'REVIEW MINE', 'DEEP PAIN', 'VISIBILITY GAP', 'SITUATION READ',
+  'PHONE MISMATCH', 'EMAIL RESULT', 'REACHABILITY',
+];
+
+const sessionRecord = (line) => {
+  try {
+    const t = String(line || '');
+    if (!SESSION_PREFIXES.some(p => t.includes(p))) return;
+    // Lines are formatted "PREFIX [Company Name]: detail" — the company is the
+    // only reliable key we have, and it is already in every one of them.
+    const m = t.match(/\[([^\]]{2,90})\]/);
+    if (!m) return;
+    const co = m[1].trim();
+    if (/^seq |^\d+$/.test(co)) return;   // sequence ids, not companies
+    if (!SESSION_LEADS.has(co)) {
+      if (SESSION_LEADS.size >= SESSION_MAX) {
+        SESSION_LEADS.delete(SESSION_LEADS.keys().next().value);
+      }
+      SESSION_LEADS.set(co, { at: new Date().toISOString(), lines: [], email: '', subject: '', sim: '' });
+    }
+    const rec = SESSION_LEADS.get(co);
+    if (rec.lines.length < 60) rec.lines.push(t.replace(/^\S+\s/, '').slice(0, 400));
+  } catch (e) { void e; }
+};
+
+// Tee console.log into the recorder. Wrapped once, always calls through, and
+// swallows its own errors — a diagnostic that can break a run is not worth it.
+{
+  const _log = console.log.bind(console);
+  console.log = (...args) => {
+    try { sessionRecord(args.map(a => (typeof a === 'string' ? a : '')).join(' ')); } catch (e) { void e; }
+    _log(...args);
+  };
+}
+
+// Attach the finished email so the report shows what the owner would read.
+const sessionAttachEmail = (company, subject, body, sim) => {
+  try {
+    const rec = SESSION_LEADS.get(String(company || '').trim());
+    if (!rec) return;
+    if (body) { rec.email = String(body).slice(0, 1200); rec.subject = String(subject || ''); }
+    if (sim) rec.sim = String(sim).slice(0, 400);
+  } catch (e) { void e; }
+};
+
+
 const PORT = process.env.PORT || 3001;
 
 // ═══ BULLETPROOF CORS ═══════════════════════════════════════════════════════
@@ -24210,6 +24280,70 @@ app.get('/api/research-job/:id', (req, res) => {
 // The list below is derived from the running code rather than hardcoded. If a
 // feature reports MISSING, that build does not have it, and no amount of
 // debugging the feature will help.
+// ══ THE BATCH REPORT ═════════════════════════════════════════════════════════
+// GET /api/session-report          the last 40 leads, newest first
+// GET /api/session-report?n=15     just the last 15
+// GET /api/session-report?flagged  only leads with something wrong
+//
+// The flags are the point. Reading fifteen audits to find the three with
+// problems is the work this removes.
+app.get('/api/session-report', (req, res) => {
+  const n = Math.max(1, Math.min(40, Number(req.query.n) || 40));
+  const onlyFlagged = req.query.flagged !== undefined;
+  const leads = [...SESSION_LEADS.entries()].slice(-n).reverse();
+
+  const flagsFor = (co, rec) => {
+    const all = rec.lines.join('\n');
+    const f = [];
+    // Ordered by how much each costs if it ships.
+    if (/READ AS[^|]*: DELETE/i.test(all)) f.push('SIM: DELETE — the owner would bin it');
+    if (/EMAIL WITHDRAWN/i.test(all)) f.push('EMAIL WITHDRAWN — nothing to send');
+    if (/HUNTER \[[^\]]*\]: NOT pushed/i.test(all)) f.push('SEND BLOCKED — recipient mismatch');
+    if (/CLAIM VERIFY[^\n]*unverifiable/i.test(all)) f.push('CLAIM VERIFY flagged unverifiable copy');
+    if (/BUSINESS MODEL/i.test(all) && /ranking above|not in the top|map pack/i.test(rec.email || '')) {
+      f.push('WITHHELD FINDING IN THE EMAIL — the model says search does not apply and the copy uses it anyway');
+    }
+    if (/ORIGINAL FINDINGS[^\n]*none survived/i.test(all)) f.push('no original finding — audit is the generic list');
+    if (/PATTERN[^\n]*discarded/i.test(all)) f.push('pattern line discarded — the expertise sentence is missing');
+    if (/LADDER TIEBREAK[^\n]*should have taken/i.test(all)) f.push('email opens outside the measured binding layer');
+    if (/RANK UNSTABLE/i.test(all)) f.push('rank unstable — position withheld');
+    if (/EXISTS BUT UNREAD/i.test(all)) f.push('pages in their sitemap we never opened');
+    const words = String(rec.email || '').split(/\s+/).filter(Boolean).length;
+    if (words > 90) f.push(`email is ${words} words — first touches perform under 80`);
+    if (rec.email && !/\?\s*$/.test(rec.email.trim())) f.push('email does not end on a question');
+    return f;
+  };
+
+  const blocks = [];
+  let flaggedCount = 0;
+  for (const [co, rec] of leads) {
+    const f = flagsFor(co, rec);
+    if (f.length) flaggedCount++;
+    if (onlyFlagged && !f.length) continue;
+    const words = String(rec.email || '').split(/\s+/).filter(Boolean).length;
+    blocks.push([
+      `${'='.repeat(70)}`,
+      `${co}${words ? `   (${words} words)` : ''}`,
+      f.length ? f.map(x => `  \u26a0 ${x}`).join('\n') : '  \u2713 nothing flagged',
+      '',
+      rec.subject ? `SUBJECT: ${rec.subject}` : '',
+      rec.email ? rec.email : '  (no email captured)',
+      '',
+      '  --- what the run said ---',
+      rec.lines.map(l => '  ' + l).join('\n'),
+    ].filter(Boolean).join('\n'));
+  }
+
+  const header = [
+    `CROJUNGLE BATCH REPORT  \u2014  ${new Date().toISOString()}`,
+    `${leads.length} lead(s) in this session, ${flaggedCount} with something flagged.`,
+    onlyFlagged ? 'Showing flagged leads only (drop ?flagged to see all).' : '',
+    'Resets on deploy. Paste this whole block into the build chat.',
+  ].filter(Boolean).join('\n');
+
+  res.type('text/plain').send([header, '', ...blocks].join('\n'));
+});
+
 app.listen(PORT, () => {
   const has = (ok) => (ok ? '\u2713' : '\u2717 MISSING');
   console.log(`CROJungle v6 — port ${PORT}`);
@@ -26933,6 +27067,7 @@ app.post('/api/compose-email', async (req, res) => {
           }) : { ok: false, why: 'model returned nothing' };
           if (_v.ok) {
             composed.variantA = { ...composed.variantA, body: _v.body, writtenBy: 'brain' };
+            sessionAttachEmail(company, composed.variantA.subject, _v.body, '');
             console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
           } else {
             console.log(`\u270d\ufe0f BRAIN DRAFT REJECTED [${company}]: ${_v.why}. Sending the composed version instead \u2014 the floor is the email we would have sent anyway.`);
@@ -26967,6 +27102,9 @@ app.post('/api/compose-email', async (req, res) => {
           }, req.body.apiKey);
           if (_sim) {
             composed.prospectSim = _sim;
+            // Into the batch report, so one paste carries the email, the verdict
+            // and the run's own diagnostics together.
+            sessionAttachEmail(company, _send.subject, _send.body, `${_sim.verdict}: ${_sim.reaction}`);
             const _mark = _sim.verdict === 'reply' ? '\u2713' : _sim.verdict === 'ignore' ? '\u25cb' : '\u26d4';
             console.log(`${_mark} READ AS ${(_founder || 'the owner').toUpperCase()} [${company}]: ${_sim.verdict.toUpperCase()} \u2014 "${_sim.reaction}"${_sim.wouldReply ? ` | what would have got a reply: ${_sim.wouldReply}` : ''}`);
           }
@@ -26974,6 +27112,10 @@ app.post('/api/compose-email', async (req, res) => {
       } catch (e) { console.log(`Prospect sim skipped: ${e && e.message}`); }
 
       const _byBrain = composed.variantA && composed.variantA.writtenBy === 'brain';
+      // The email exactly as it will send, into the batch report. Placed here
+      // because this is the one point every compose path passes through, brain-
+      // written or code-composed.
+      sessionAttachEmail(company, composed.variantA.subject, composed.variantA.body, '');
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words. ${_byBrain ? 'The brain connected the verified pieces into prose; every figure was traced back to a measurement before it was accepted.' : 'Assembled from measurements \u2014 no model call, no tokens.'}`);
     }
     return res.json({ composed });
