@@ -7966,7 +7966,20 @@ const HARM_LADDER = [
     // not on the page" is binary. He either appears or he does not, and no
     // amount of personalisation changes an absence.
     test: (m) => m.rankChecked === true && m.rankFound === false,
-    say: (m) => `They do not appear anywhere in the first twenty results for "${m.rankQuery || 'their main trade term'}"`,
+    // ══ IT IS THE MAP PACK, SO SAY THE MAP PACK ═══════════════════════════
+    // This rank comes from the Google Places API — the map results, the box of
+    // three businesses at the top of a phone screen. We described it as "the
+    // first twenty results", which reads as organic SEO. Contractors have been
+    // pitched organic SEO for twenty years and have learned to ignore it.
+    //
+    // Steve Barber deleted his email and said so precisely: "my customers find me
+    // on the map pack when they search nearby... if they'd said 'you're not
+    // showing up in the MAP PACK for custom home builder in Cincinnati' with
+    // actual proof, I'd have listened for ten seconds."
+    //
+    // Naming it correctly is both more accurate and more credible: it is the
+    // surface he already thinks about, and it is exactly what we measured.
+    say: (m) => `They do not come up in the Google map results for "${m.rankQuery || 'their main trade term'}" \u2014 we searched it and looked through the whole list`,
     costs: 'every person searching for exactly what they sell is choosing from a list they are not on' },
 
 
@@ -8041,8 +8054,8 @@ const HARM_LADDER = [
           + (more > 0 ? `, and ${more} other${more === 1 ? '' : 's'} above them also have fewer` : '');
       }
       return Number(m.weakerAbove) === 1
-        ? `A business with fewer reviews than theirs is ranking above them for "${m.rankQuery}"`
-        : `Businesses with fewer reviews than theirs are ranking above them for "${m.rankQuery}"`;
+        ? `A business with fewer reviews than theirs is ranking above them in the Google map results for "${m.rankQuery}"`
+        : `Businesses with fewer reviews than theirs are ranking above them in the Google map results for "${m.rankQuery}"`;
     },
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
@@ -8330,6 +8343,8 @@ const resolveMeasurements = ({
   sitePagesArg = null,
   // The trade, for purchase-urgency classification.
   tradeWordArg = '',
+  // The mined review complaint, for the subject line.
+  reviewPainArg = null,
   // The measured growth constraint, so the email can open in the binding layer.
   growthConstraintArg = null,
 } = {}) => {
@@ -8363,6 +8378,10 @@ const resolveMeasurements = ({
     // Derived from the trade read off their own homepage — a measurement, not a
     // judgement, so no verification pass is needed.
     purchaseUrgency: purchaseUrgency(tradeWordArg || ''),
+    // The complaint his own reviewers repeated, so the subject line can carry
+    // it. Three leads went out as "the same complaint twice" because the subject
+    // never saw the finding it was about.
+    painTheme: (reviewPainArg && reviewPainArg.pattern) || (reviewPainArg && reviewPainArg[0] && reviewPainArg[0].pattern) || '',
     // Whether the work arrives through relationships rather than search. Read
     // from the trade on their own homepage, so it is measured, not judged.
     acquisitionIsReferral: REFERRAL_TRADES.test(String(tradeWordArg || '')),
@@ -8546,7 +8565,19 @@ const SUBJECTS_FOR = {
   // options so two leads leading on the same rung do not get the same line.
   not_compounding:      ['your reviews are not adding up', 'your reviews stopped', "reviews don't match the work"],
   // Colleague voice, under 30 characters, nothing a consultant would type.
-  review_pain_pattern:  ['your reviews keep saying it', 'the same complaint twice'],
+  // ══ THREE LEADS, ONE SUBJECT LINE ═══════════════════════════════════════
+  // Grant Renne, Anthony & Sylvan and Dr Barnthouse all went out as "the same
+  // complaint twice" — three trades, three cities, one line. That is a template
+  // signature at campaign level, and repeated identical subjects across a
+  // sending domain is a spam signal in its own right.
+  //
+  // {pain} carries the complaint itself, so the subject is different on every
+  // lead BECAUSE the finding is: "crews not calling back", "timelines slipping",
+  // "long waits". The research is explicit that personalised subjects open at
+  // roughly 50% higher rates, and nothing is more personal than the thing his
+  // own customers wrote down. It falls back to the generic pair when the pain
+  // phrase is too long or missing.
+  review_pain_pattern:  ['{pain}', 'your reviews keep saying it', 'the same complaint twice', 'two reviews, same thing'],
   partial_owner_replies:['some reviews have no reply', 'your replies stopped'],
   no_published_pricing: ['no price anywhere on site', 'nobody can find your prices'],
   no_offer:             ['your site never says why you', 'nothing says why you'],
@@ -8564,6 +8595,16 @@ const buildSubjects = (lead, m = {}) => {
       .replace('{city}', city || '')
       .replace('{year}', String(m.copyrightYear || m.newestPostYear || ''))
       .replace('{rating}', String(m.rating || ''))
+      // The complaint his own reviewers repeated, as the subject. Clipped to a
+      // few words because a subject over ~40 characters is truncated on a phone,
+      // and left empty when there is nothing short enough to say — an empty
+      // template is dropped below rather than sent as a blank line.
+      .replace('{pain}', (() => {
+        const p = String(m.painTheme || '').toLowerCase().replace(/[^a-z0-9 ,'-]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!p) return '';
+        const short = p.split(/,| and | or /)[0].trim();
+        return (short && short.length >= 8 && short.length <= 38) ? short : '';
+      })())
       .replace('{cat}', String(m.gbpCategory || '').toLowerCase())
       .replace('{years}', String(m.tenureYears || ''))
       // ══ A PLACEHOLDER HAS TO NAME ITS MEASUREMENT ═══════════════════════
@@ -8660,8 +8701,17 @@ const upper1 = (t) => { const x = String(t || '').trim(); return x ? x.charAt(0)
 const lower1 = (t) => {
   const x = String(t || '').trim();
   if (!x) return x;
-  // Never lowercase a proper noun or an acronym.
-  if (/^(?:[A-Z]{2,}|Google|Your|You)\b/.test(x)) return x;
+  // ══ "YOU" AND "YOUR" ARE NOT PROPER NOUNS ══════════════════════════════
+  // This protected them alongside Google and acronyms, and it produced a live
+  // email opening "Steve, You don't appear anywhere in the first twenty
+  // results" — a capital Y directly after a comma, in the first four words, on
+  // every lead whose finding happens to start with "You" or "Your".
+  //
+  // The rule was written to stop "Google listing" becoming "google listing",
+  // which is right. A second-person pronoun mid-sentence is simply lowercase,
+  // and getting that wrong in the opening clause is the kind of small wrongness
+  // that tells a reader a machine wrote it.
+  if (/^(?:[A-Z]{2,}|Google)\b/.test(x)) return x;
   return x.charAt(0).toLowerCase() + x.slice(1);
 };
 
@@ -8950,7 +9000,22 @@ const SELLABLE_STEP = 11;
 // he may be underrating the channel. But leading the email there, to a man whose
 // clients arrive by referral, guarantees the delete. The finding stays in the
 // audit and on the call sheet where Mike can raise it.
-const REFERRAL_TRADES = /\b(estate planning|estate attorney|probate|trust|wealth|financial advis|financial planner|wealth manage|cpa|accountant|accounting|bookkeep|tax (attorney|advis|prepar)|business (law|attorney)|corporate (law|attorney)|franchise (law|attorney)|contract (law|attorney)|patent|trademark|intellectual property|m&a|merger|private (equity|client)|fiduciar|actuar|consultan)/i;
+// ══ SPECIALIST MEDICINE RUNS ON REFERRAL, NOT SEARCH ═════════════════════════
+// This covered professional services and had no specialist medicine in it, so
+// the map-pack demotion never fired on Dr Khan. He deleted his email and said
+// why: "I don't get patients from Google rankings — they come in because people
+// know me or GET REFERRED."
+//
+// He is an oral surgeon. General dentists refer to oral surgeons; that is how
+// the entire specialty works, the same as endodontics, periodontics and most
+// surgical sub-specialties. A patient does not shop for a maxillofacial surgeon
+// on a map — their dentist names one.
+//
+// Deliberately NOT included: plastic surgery, med spas, LASIK, dermatology.
+// Those are consumer-choice purchases where people genuinely do search, compare
+// and self-refer, and demoting the rank finding there would bury the strongest
+// thing we have on exactly the leads it matters for.
+const REFERRAL_TRADES = /\b(estate planning|estate attorney|probate|trust|wealth|financial advis|financial planner|wealth manage|cpa|accountant|accounting|bookkeep|tax (attorney|advis|prepar)|business (law|attorney)|corporate (law|attorney)|franchise (law|attorney)|contract (law|attorney)|patent|trademark|intellectual property|m&a|merger|private (equity|client)|fiduciar|actuar|consultan|oral (and )?maxillofacial|oral surg|endodont|periodont|prosthodont|neurosurg|orthopaedic surg|orthopedic surg|vascular surg|colorectal|nephrolog|rheumatolog|endocrinolog|oncolog|anesthesiolog|patholog|radiolog|reconstructive surg)/i;
 
 // How each rung moves when the work arrives through relationships rather than
 // search. Negative on everything that assumes a stranger typing into Google.
@@ -9450,6 +9515,13 @@ SO:
 
 THE SHAPE: observation \u2192 consequence \u2192 ask. Three or four sentences. 50-90 words.
 
+FORMAT IT FOR A PHONE. 67% of these are opened on mobile, and the 2026 formatting
+data is specific: "every 1-2 sentences should be its own paragraph \u2014 short,
+separated paragraphs create the visual lightness that encourages reading."
+Put a BLANK LINE between each of the three beats. Three short paragraphs, never
+one block. A four-sentence wall is a grey rectangle on a phone and it gets
+abandoned before the ask.
+
 WRITE IT LIKE A PERSON, NOT A DOCUMENT:
 - Contractions. "That's", "you're", "don't", "isn't".
 - Start a sentence with And or But when it reads better.
@@ -9460,6 +9532,16 @@ WRITE IT LIKE A PERSON, NOT A DOCUMENT:
   it is wrong.
 
 WHAT KILLS IT:
+- HEDGING A NUMBER WE MEASURED. "A couple of your reviews" when the measurement
+  is two of seventy-two. The precision IS the credibility \u2014 "two of your reviews"
+  is checkable in one click; "a couple" is a stranger guessing. Always the figure.
+- ONE FILLER SENTENCE. "I'm guessing that's not what you want happening."
+  "That kind of delay creates real friction at exactly the wrong moment." He
+  already knows. Every sentence must carry a fact, a consequence, or the ask \u2014
+  if it carries none of the three, delete it and the email gets better.
+- SAYING WHAT A CUSTOMER THEN DID. "By morning they've usually called the other
+  two practices on their list." We have never watched one customer do anything.
+  Say what the WALL is, never what somebody did at it.
 - Explaining the finding after stating it. "The gap between what you've built and
   what the search results show isn't a matter of volume \u2014 it's visibility in the
   place where your next patient is already looking." That is a consultant
@@ -9733,6 +9815,20 @@ const verifyBrainEmail = (body, opts = {}) => {
     }
   }
 
+  // ══ A WALL OF TEXT IS ABANDONED ON A PHONE ══════════════════════════════
+  // 67% of B2B email is opened on mobile, and the formatting data is specific:
+  // every one or two sentences should be its own paragraph. Grant's draft came
+  // back as a single four-sentence block — correct in every other respect and a
+  // grey rectangle on a phone. The composed fallback breaks properly, so a draft
+  // that does not is worse than the thing it replaces.
+  {
+    const _paras = text.split(/\n\s*\n/).filter(x => x.trim());
+    const _sents = text.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length;
+    if (_sents >= 4 && _paras.length < 2) {
+      return { ok: false, why: `${_sents} sentences in a single block — on a phone that is a grey rectangle. Every one or two sentences needs its own paragraph` };
+    }
+  }
+
   const _sentences = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean);
   const _questionAt = _sentences.map((x, i) => (/\?/.test(x) ? i : -1)).filter(i => i >= 0);
   if (!_questionAt.length) {
@@ -9798,7 +9894,32 @@ const verifyBrainEmail = (body, opts = {}) => {
     // second still requires SOMEONE ELSE as the object, so "he books the job"
     // and "customers call him" are untouched.
     [/\b(finds?|found|calls?|called|picks?|picked|chooses?|chose|books?|booked|goes? with|went with) (them|someone else|somebody else|the other|whoever)\b[^.]{0,40}\b(first|instead)\b/i, 'states which business the customer chose — never observed'],
-    [/\b(has|have|had|already|ends? up|ended up)\s+(?:\w+\s+){0,2}(?:called|picked|chosen|chose|booked|hired|gone|went)\s+(?:with\s+|to\s+)?(someone else|somebody else|the other|a competitor|another)\b/i, 'states which business the customer chose — never observed'],
+    // ══ CONTRACTIONS WALKED PAST THIS ═══════════════════════════════════════
+    // "by morning they've usually called the other two practices on their list"
+    // shipped live. "they've" is not \bhave\b, so every contracted form —
+    // they've, he's, she's, they'd — was invisible to the guard. And the writer
+    // is now TOLD to use contractions, because the research says polished copy
+    // reads as machine-written: I widened the hole while opening the door.
+    //
+    // The object list also needed "the other N practices/companies/firms" —
+    // naming the competitor category is the same unobserved claim as "someone
+    // else", just more specific.
+    [/\b(?:has|have|had|already|ends?\s+up|ended\s+up|(?:they|he|she|it)['\u2019](?:ve|s|d))\s+(?:\w+\s+){0,2}(?:called|picked|chosen|chose|booked|hired|gone|went)\s+(?:with\s+|to\s+)?(?:someone else|somebody else|a competitor|another|the other(?:\s+\w+){0,2})\b/i, 'states which business the customer chose — never observed'],
+    // ══ HEDGING ON A NUMBER WE MEASURED EXACTLY ════════════════════════════
+    // Live: "A COUPLE of your reviews mention timelines slipping" when the
+    // measurement is 2 of ~72. The precision is the whole point — "two of your
+    // reviews" is checkable in one click, "a couple" is a stranger guessing.
+    // Softening a figure we hold makes the email weaker AND less true.
+    [/\b(a couple of|a few|several|some|a number of|quite a few|multiple)\s+(?:of\s+)?(?:your|their|his|her|the)?\s*(?:google\s+)?reviews?\b/i, 'hedges a review count we measured exactly — say the number'],
+    // ══ EXPLAINING THE FINDING INSTEAD OF LANDING IT ═══════════════════════
+    // "That kind of delay creates real friction at exactly the wrong moment."
+    // "It's about the gap between wanting to move forward and actually being
+    // able to." Consultant narration: abstract nouns doing work a concrete
+    // sentence should do, and nobody is in it. The prompt bans this shape and
+    // nothing enforced it.
+    [/\b(creates?|causes?|introduces?|results? in|leads? to)\s+(?:real\s+|significant\s+|serious\s+)?(friction|drop[- ]?off|leakage|inefficienc\w+|misalignment)\b/i, 'narrates the finding in abstract nouns instead of saying what happens to a person'],
+    [/\bit'?s (not about|about the gap between|really about)\b/i, 'consultant framing — say the thing that happens rather than characterising it'],
+    [/\bI'?m guessing that'?s not what you\b/i, 'filler — tells him something he already knows and adds nothing'],
     [/\bends? up (calling|booking|hiring|choosing|going)\b/i, 'states what the customer ended up doing'],
     [/\bmoves? on to (the )?(next|another)\b/i, 'states the visitor moved on — unobserved'],
     [/\b(has|have) nowhere to go\b/i, 'states the outcome of a visit we did not track'],
@@ -15326,9 +15447,32 @@ const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, conta
           // donna@krummenplasticsurgery.com score 98/100 with the reason string
           // "verified personal mailbox" when nothing had verified it \u2014
           // identical to henry@henrygare.com, which WAS SMTP-confirmed.
+          // ══ INFERENCE IS NOT EVIDENCE, AND IT IS BOUNCING ══════════════
+          // sendable:true here put joseph@jbarnthousemd.com into the sequence
+          // and Office 365 answered "550 5.1.10 RESOLVER.ADR.RecipientNotFound".
+          // amaka@amakaaesthetics.com bounced the same way. Both were labelled
+          // honestly — "inferred, not SMTP-confirmed" — and sent anyway.
+          //
+          // The comment above already says this is weaker evidence than a mail
+          // server confirming the mailbox. The flag did not match the comment.
+          //
+          // A hard bounce is recorded against the SENDING domain, not the lead.
+          // Two on one mailbox at 25/day is a reputation problem long before it
+          // is a lead problem, and the reputation is the only asset here that
+          // cannot be rebuilt in an afternoon.
+          //
+          // So it is kept, scored and shown — Mike can still call the number,
+          // and one SMTP check promotes it to tier 2 and sends. It just does not
+          // go out on a guess.
+          // Sendable again, because the send boundary now VERIFIES a tier-3
+          // address instead of assuming it. Blocking here was the blunt version:
+          // it stopped joseph@jbarnthousemd.com and also stopped
+          // grantrenne@grantrenne.com, which delivered fine. The check answers
+          // the question rather than guessing at it.
           email: epEmail, tier: 3, score: 78, sendable: true, name,
+          needsVerification: true,
           pattern: '{first}', inferredEponymous: true,
-          label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
+          label: `The business is named after ${name}, so ${epEmail} on their own domain is a strong guess \u2014 but it is a GUESS. Verify it before sending: two of these bounced, and a hard bounce is charged to the sending domain.`,
         };
       }
     }
@@ -20676,6 +20820,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
           sitePagesArg: sitePages,
           tradeWordArg: customerTrade || verifiedIndustry || '',
+          reviewPainArg: (deepPain && deepPain.patterns && deepPain.patterns[0]) || null,
           growthConstraintArg: growthConstraint,
         });
         _harmInputs = {
@@ -22896,6 +23041,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
               sitePagesArg: sitePages,
               tradeWordArg: customerTrade || verifiedIndustry || '',
+          reviewPainArg: (deepPain && deepPain.patterns && deepPain.patterns[0]) || null,
             });
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
@@ -25853,6 +25999,125 @@ app.listen(PORT, () => {
     console.log(`\u26d4 ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THREE THINGS THREE OWNERS TOLD US ════════════════════════════════════
+  // Steve Barber: "my customers find me on the MAP PACK when they search nearby
+  // — if they'd said 'you're not showing up in the map pack' with actual proof
+  // I'd have listened." Our rank IS the map pack; we called it "the first twenty
+  // results", which reads as organic SEO, which contractors have learned to
+  // ignore.
+  //
+  // Dr Khan, oral surgeon: "I don't get patients from Google rankings — they
+  // come in because people know me or GET REFERRED." General dentists refer to
+  // oral surgeons; the specialty runs on it. REFERRAL_TRADES had no specialist
+  // medicine in it at all.
+  //
+  // And a live email opened "Steve, You don't appear anywhere" — a capital Y
+  // after a comma, because lower1 protected "You" alongside Google and acronyms.
+  try {
+    const _issues = [];
+    if (lower1('You do not appear anywhere in the results') !== 'you do not appear anywhere in the results') {
+      _issues.push('"You" is still capitalised mid-sentence — a live email opened "Steve, You don\'t appear"');
+    }
+    if (lower1('Google lists them as a Consultant') !== 'Google lists them as a Consultant') {
+      _issues.push('"Google" is being lowercased — the rule that protects proper nouns has gone too far the other way');
+    }
+    const _absence = HARM_LADDER.find(h => h.id === 'absent_from_search');
+    if (_absence && !/map result/i.test(String(_absence.say({ rankQuery: 'x' })))) {
+      _issues.push('the search-absence finding does not name the map results, so it reads as organic SEO');
+    }
+    if (!REFERRAL_TRADES.test('oral surgeon') || !REFERRAL_TRADES.test('endodontist')) {
+      _issues.push('specialist medicine is not treated as referral work, so a map-pack finding leads on a practice a dentist refers into');
+    }
+    // And the reverse: consumer-choice medicine must still compete in search.
+    const _over = ['plastic surgeon', 'med spa', 'lasik surgery', 'dermatologist'].filter(t => REFERRAL_TRADES.test(t));
+    if (_over.length) _issues.push(`${_over.join(', ')} wrongly treated as referral work — people genuinely do search for those`);
+    if (_issues.length) {
+      console.log(`\u26d4 OWNER FEEDBACK CHECK: ${_issues[0]}${_issues.length > 1 ? ` (and ${_issues.length - 1} more)` : ''}.`);
+    } else {
+      console.log(`\u2713 OWNER FEEDBACK CHECK: the search finding names the Google map results rather than "the first twenty", specialist medicine is treated as referral work while consumer-choice medicine is not, and a second-person pronoun is no longer capitalised mid-sentence.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 OWNER FEEDBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ ONLY A CONFIRMED MAILBOX ENTERS THE SEQUENCE ═════════════════════════
+  // Two hard bounces, both from addresses this system labelled unproven itself:
+  // joseph@jbarnthousemd.com came back "550 5.1.10 RESOLVER.ADR.RecipientNotFound"
+  // and amaka@amakaaesthetics.com the same. Both were shown as "Pattern-built,
+  // not confirmed" and both were marked sendable.
+  //
+  // A hard bounce is charged to the SENDING domain. On one mailbox at 25/day a
+  // handful of these is a reputation problem long before it is a lead problem,
+  // and reputation is the only asset here that cannot be rebuilt in an afternoon.
+  try {
+    // The send boundary VERIFIES rather than refuses. valid promotes and sends,
+    // invalid blocks, and unknown sends — because a catch-all domain cannot be
+    // verified at all and refusing every one would delete a large slice of the
+    // pipeline on no evidence.
+    const _ok = (lead, verdict) => {
+      const t = Number(lead.emailTier || 0);
+      if (!t || lead.smtpVerified === true || t === 1 || t === 2) return true;
+      if (verdict === 'invalid') return false;
+      return true;   // valid, unknown, catch-all, or no verifier configured
+    };
+    // Only a mailbox the server has REFUSED is blocked.
+    const _mustBlock = [
+      ['mail server says it does not exist', { emailTier: 3, email: 'joseph@jbarnthousemd.com' }, 'invalid'],
+    ];
+    // Everything else sends. These three are the live cases: two tier-3
+    // addresses that delivered fine, and a catch-all that cannot be proven.
+    const _mustSend = [
+      ['published on their site', { emailTier: 1, email: 'info@example.com' }, null],
+      ['SMTP-verified mailbox', { emailTier: 2, email: 'brandon@example.com' }, 'valid'],
+      ['tier 3, server confirms it', { emailTier: 3, email: 'grantrenne@grantrenne.com' }, 'valid'],
+      ['tier 3, catch-all so unprovable', { emailTier: 3, email: 'bchong@anthonysylvan.com' }, 'unknown'],
+      ['tier 3, no verifier configured', { emailTier: 3, email: 'x@example.com' }, null],
+    ];
+    const _leaked = _mustBlock.filter(([, l, v]) => _ok(l, v)).map(([n]) => n);
+    const _blocked = _mustSend.filter(([, l, v]) => !_ok(l, v)).map(([n]) => n);
+    if (_leaked.length) {
+      console.log(`\u26d4 SEND VERIFICATION CHECK: ${_leaked.join(', ')} would still enter the sequence. That is the joseph@jbarnthousemd.com case \u2014 the server told us the mailbox does not exist and we sent anyway.`);
+    } else if (_blocked.length) {
+      console.log(`\u26d4 SEND VERIFICATION CHECK: ${_blocked.join(', ')} would be blocked. Two tier-3 addresses delivered fine \u2014 refusing everything uncertain deletes real leads from a queue already paid for.`);
+    } else {
+      console.log(`\u2713 SEND VERIFICATION CHECK: an uncertain address is CHECKED rather than refused \u2014 the server's own answer decides. Only a mailbox it says does not exist is blocked; catch-alls and unverifiable domains still send, so volume is not paid for in leads.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SEND VERIFICATION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THREE LEADS MUST NOT GET ONE SUBJECT LINE ════════════════════════════
+  // Grant Renne, Anthony & Sylvan and Dr Barnthouse all went out as "the same
+  // complaint twice" — three trades, three cities, one line. That is a template
+  // signature at campaign level, and repeated identical subjects across a
+  // sending domain is a spam signal in its own right.
+  //
+  // {pain} carries the complaint itself, so the subject differs on every lead
+  // BECAUSE the finding does. Personalised subjects open at roughly 50% higher
+  // rates, and nothing is more personal than what his own customers wrote down.
+  try {
+    const _subs = (pain) => buildSubjects({ id: 'review_pain_pattern' }, { painTheme: pain });
+    const _a = _subs('crew scheduling delays and failure to contact after inspection')[0];
+    const _b = _subs('project timeline extended beyond original estimate')[0];
+    const _c = _subs('long wait times and scheduling delays')[0];
+    const _none = _subs('');
+    const _distinct = new Set([_a, _b, _c]).size;
+    // A pain phrase too long for a subject line must fall back, never truncate
+    // into nonsense or ship a blank.
+    const _long = _subs('a very long complaint about something that goes on well past any reasonable subject line length')[0];
+    if (_distinct < 2) {
+      console.log(`\u26d4 SUBJECT VARIETY CHECK: three different complaints produced ${_distinct} distinct subject(s). Identical subjects across a sending domain read as a campaign to both the owner and the spam filter.`);
+    } else if (!_none.length) {
+      console.log(`\u26d4 SUBJECT VARIETY CHECK: a lead with no mined complaint has no subject at all. The generic options must still be there when the pain phrase is missing.`);
+    } else if (!_long || /\{|\}/.test(_long) || _long.length > 30) {
+      console.log(`\u26d4 SUBJECT VARIETY CHECK: an over-long complaint produced "${_long}". A subject must fall back cleanly rather than truncate or ship a placeholder.`);
+    } else {
+      console.log(`\u2713 SUBJECT VARIETY CHECK: ${_distinct} different complaints give ${_distinct} different subject lines, in the reviewers' own terms, and a lead with no mined complaint still falls back to the generic set.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SUBJECT VARIETY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE WRITER MUST RECEIVE WHAT RESEARCH LEARNED ════════════════════════
   // It was getting eleven fields out of a research pass that produces dozens —
   // not by design, but because each time something turned out to be missing I
@@ -26510,7 +26775,7 @@ app.listen(PORT, () => {
     // twenty. "Reply rate is decided in the first 12 words", and Chuck Jenkins
     // said the same unprompted: leading with the review count almost lost him.
     // The recognition still earns a place — just after the finding, not before.
-    const _good = 'Tyler, Overhead Door Company of Indianapolis sits above you for "garage door repair in Carmel" with 41 reviews against your 260. People pick from what is in front of them, not from who is actually best. A garage door replacement runs $1k-$4k. Want to know why they are above you?';
+    const _good = 'Tyler, Overhead Door Company of Indianapolis sits above you for "garage door repair in Carmel" with 41 reviews against your 260.\n\nPeople pick from what is in front of them, not from who is actually best. A garage door replacement runs $1k-$4k.\n\nWant to know why they are above you?';
     const _base = 'Tyler — you have 260 reviews at 5 stars but Overhead Door Company outranks you for "garage door repair in Carmel" with 41. ';
     const _bad = [
       ['invented figure', _base + 'That gap is costing you roughly 15 calls every single month at the moment.'],
@@ -26524,6 +26789,12 @@ app.listen(PORT, () => {
       // "first"/"instead" was doing too much work — the same claim one word
       // short of the pattern walked through.
       ['customer chose someone else', _base + 'By the time you see it, the customer has already booked with someone else. Want to know why they are above you?'],
+      // All three shipped live in one batch, after the writer was told to use
+      // contractions — which is correct advice, and it widened a hole in the
+      // customer-outcome guard at the same time.
+      ['contracted customer outcome', _base + 'Someone looking at your site at night has nowhere to start, and by morning they\u2019ve usually called the other two shops on their list. Want to know why they are above you?'],
+      ['hedged a measured count', 'Tyler, a couple of your reviews mention the same thing about scheduling. That is in the middle of a four-figure decision. Want to know why they are above you?'],
+      ['abstract narration', _base + 'That kind of delay creates real friction at exactly the wrong moment. Want to know why they are above you?'],
       // Live regression: the finding arrived at word thirty, behind a compliment.
       // "Reply rate is decided in the first 12 words", and Chuck Jenkins said the
       // same unprompted — leading with the review count almost lost him.
@@ -27753,6 +28024,64 @@ app.post('/api/send-to-hunter', async (req, res) => {
             || _local === (_firstName[0] + _lastName)
             || _local === (_firstName + _lastName[0])
             || _local === (_firstName[0] + '' + _lastName[0]);
+        }
+        // ══ AN UNVERIFIED MAILBOX MUST NOT ENTER THE SEQUENCE ═════════════
+        // Two hard bounces, both from addresses this system itself labelled
+        // unproven. joseph@jbarnthousemd.com came back "550 5.1.10
+        // RESOLVER.ADR.RecipientNotFound"; amaka@amakaaesthetics.com the same.
+        //
+        // A hard bounce is charged to the SENDING domain, not the lead. On one
+        // mailbox at 25/day, a handful of these is a reputation problem long
+        // before it is a lead problem — and the reputation is the only asset
+        // here that cannot be rebuilt in an afternoon.
+        //
+        // The tier already records exactly what evidence we have. Tier 1 is
+        // published on their own site, tier 2 a mail server confirming the
+        // mailbox exists. Anything weaker is a pattern we believe in, and belief
+        // is what bounced. Verify it and it promotes itself; until then the lead
+        // stays workable by phone and Mike loses nothing.
+        // ══ VERIFY, DO NOT REFUSE ════════════════════════════════════════
+        // The first version of this blocked every tier-3 address. That is safe
+        // and it is too blunt: grantrenne@grantrenne.com and bchong@
+        // anthonysylvan.com are both tier 3 and both delivered fine. Only
+        // joseph@jbarnthousemd.com bounced. Blocking all three to stop one costs
+        // two real leads out of a queue already paid for.
+        //
+        // Verification resolves the uncertainty instead of assuming the worst.
+        // One check per uncertain address, half a Hunter credit, and the answer
+        // is a fact rather than a policy:
+        //
+        //   valid    → promote and send. It is now confirmed, not believed.
+        //   invalid  → block. This is the joseph@ case, caught before it lands.
+        //   unknown  → SEND. Catch-all domains cannot be verified at all, and
+        //              refusing every catch-all would silently delete a large
+        //              slice of the pipeline for no evidence.
+        //
+        // If no verifier key is configured the lead sends as it did before — the
+        // gate is an improvement on the default, never a new way to lose leads.
+        const _tier = Number(lead.emailTier || (lead.emailMeta && lead.emailMeta.tier) || 0);
+        let _verified = lead.smtpVerified === true || _tier === 1 || _tier === 2;
+        if (_tier > 2 && !_verified) {
+          const _vKey = req.body.verifierKey || process.env.MYEMAILVERIFIER_KEY || '';
+          if (_vKey) {
+            try {
+              const _v = await verifyEmailSMTP(lead.email, _vKey);
+              if (_v && _v.invalid) {
+                console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 the mail server says ${lead.email} does not exist. This is the joseph@jbarnthousemd.com case caught before it lands: that one came back 550 RecipientNotFound after we sent it, and a hard bounce is charged to the sending domain. The lead is still workable by phone.`);
+                results.failed.push({
+                  name: lead.name, email: lead.email,
+                  reason: `${lead.email} was checked and the mail server says the mailbox does not exist. Find another address or work it by phone.`,
+                });
+                continue;
+              }
+              if (_v && _v.valid) {
+                _verified = true;
+                console.log(`\u2713 HUNTER [${lead.name}]: ${lead.email} was inferred, and the mail server confirms it exists. Sending as a verified address rather than a believed one \u2014 half a credit to turn a guess into a fact.`);
+              } else {
+                console.log(`\u2139 HUNTER [${lead.name}]: ${lead.email} could not be verified either way${_v && _v.catchAll ? ' (catch-all domain \u2014 the server accepts everything, so nothing can be proven)' : ''}. Sending: refusing every unverifiable address would delete a large part of the pipeline on no evidence.`);
+              }
+            } catch (e) { void e; }
+          }
         }
         if (!_namedInMailbox) {
           console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 the email is addressed to "${parts.join(' ')}" but the mailbox is ${lead.email}, which is built from a different name. An audit written at owner altitude, delivered to someone else, is the one delivery error that cannot be undone. Re-run Research on this lead to resolve the decision-maker, then send.`);
