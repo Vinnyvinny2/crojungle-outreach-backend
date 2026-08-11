@@ -3289,9 +3289,57 @@ const LSA_AMBIGUOUS_RE = /google\s*verified|verified\s+on\s+google/i;
 // Detect LSA participation from content we ALREADY paid to scrape. Zero new
 // credits. Returns a positive finding or an explicit "unknown" — never a negative
 // claim, because we have no way to prove a business is NOT advertising.
+// ══ THE TRADE NEVER MATCHED THE LABEL, SO THIS NEVER RAN ═════════════════════
+// LSA_ELIGIBLE holds title-case category names — 'Roofing', 'Plumbing', 'HVAC'.
+// customerTrade is free text read off their own homepage — "roofing contractor",
+// "plumber", "hvac contractor". Zero of twelve real trades matched, so the check
+// has never fired on a single lead and every audit reports "Google LSA: not run".
+//
+// That matters more than it looks. Local Services Ads is the one measurement
+// available here that is about MONEY rather than markup: it is a paid channel,
+// home-service owners know exactly what a lead costs them on it, and whether a
+// competitor holds the Google Guaranteed badge above them is a business fact,
+// not a website observation. It is also the clearest argument that niching down
+// pays — the check only exists because these trades are eligible for it.
+const LSA_TRADE_ALIASES = [
+  [/roof/i, 'Roofing'], [/plumb|drain|rooter|sewer/i, 'Plumbing'],
+  [/hvac|heating|cooling|air condition|furnace|boiler/i, 'HVAC'],
+  [/restoration|remediation|water damage|fire damage|mold/i, 'Restoration'],
+  [/foundation|crawl ?space|basement waterproof/i, 'Foundation'],
+  [/solar/i, 'Solar'], [/garage door/i, 'Garage Doors'],
+  [/window|door replace/i, 'Windows & Doors'], [/insulation/i, 'Insulation'],
+  [/electric/i, 'Electrical'], [/floor/i, 'Flooring'], [/deck/i, 'Decks'],
+  [/pave|asphalt|driveway/i, 'Paving'], [/concrete/i, 'Concrete'],
+  [/mason|brick|stone/i, 'Masonry'], [/hardscap/i, 'Hardscaping'],
+  [/landscap|lawn/i, 'Landscaping'], [/tree (service|removal|trimming)/i, 'Tree Service'],
+  [/pest control|extermin/i, 'Pest Control'], [/well|septic/i, 'Well & Septic'],
+  [/pool (build|install|construction|contractor)/i, 'Pool Construction'],
+  [/kitchen remodel/i, 'Kitchen Remodel'], [/bath(room)? remodel/i, 'Bath Remodel'],
+  [/remodel|renovat|general contractor|home build|custom home/i, 'Construction'],
+  [/orthodont/i, 'Orthodontics'], [/oral (and )?maxillofacial|oral surg/i, 'Oral Surgery'],
+  [/cosmetic dent/i, 'Cosmetic Dentistry'], [/dent/i, 'Dental'],
+  [/dermatolog/i, 'Dermatology'], [/lasik|vision correction|ophthalmolog/i, 'LASIK'],
+  [/chiropract/i, 'Chiropractic'], [/physical therapy|physio/i, 'Physical Therapy'],
+  [/veterinar|animal hospital/i, 'Veterinary'], [/med ?spa|aesthetic|plastic surg/i, 'Med Spa'],
+  [/senior care|home care|assisted living/i, 'Senior Care'],
+  [/personal injury|injury (lawyer|attorney)/i, 'PI Law'],
+  [/estate (planning|attorney|lawyer)|probate|trust/i, 'Estate Law'],
+  [/cpa|accountant|accounting|bookkeep|tax/i, 'Accounting'],
+];
+
+// Map free-text trade to an LSA category. Returns the original when nothing
+// matches, so a genuinely ineligible trade still reports ineligible rather than
+// being forced into a bucket.
+const lsaLabelFor = (trade) => {
+  const t = String(trade || '');
+  if (!t) return '';
+  for (const [re, label] of LSA_TRADE_ALIASES) if (re.test(t)) return label;
+  return t;
+};
+
 const detectLSA = (industryLabel, siteText, companyName) => {
   const label = String(industryLabel || '').trim();
-  const eligible = LSA_ELIGIBLE.has(label);
+  const eligible = LSA_ELIGIBLE.has(label) || LSA_ELIGIBLE.has(lsaLabelFor(industryLabel));
   // THREE STATES, NOT TWO. LSA_ELIGIBLE is keyed to our own Google-Places category
   // labels. A lead from any other source (SBA loans, news, job boards) arrives with
   // a free-text industry like "Construction Services" that matches nothing here —
@@ -3545,6 +3593,16 @@ const CATEGORY_TIER = {
 // Set GP_INCLUDE_TIER_C=1 to search the cut trades again (e.g. to test the thesis).
 const GP_TIER_C_ON = process.env.GP_INCLUDE_TIER_C === '1';
 
+// ══ THE WEBSITE URL IS A BUSINESS FACT, READABLE AT FIND ═════════════════════
+// A business running on Google's own free page builder, or on a Wix or GoDaddy
+// subdomain, has never invested in a website. That is not a website finding — it
+// is a fact about how the owner has spent money, visible from the URL string
+// alone, before any audit, and it is precisely what a rebuild engagement is for.
+//
+// Declared at module scope so the boot check can prove it still recognises a
+// builder and still leaves a real domain alone.
+const GP_FREE_BUILDER = /(^|\.)(business\.site|wixsite\.com|godaddysites\.com|weebly\.com|squarespace\.com|myshopify\.com|webnode\.|jimdosite\.com|wordpress\.com|blogspot\.|glossgenius\.com|square\.site|company\.site)/i;
+
 const GP_CATEGORIES = [
   // ── HIGH-TICKET CREW TRADES — a single job is $5k-$15k+, so any ESTABLISHED
   //    one is already crewed and past the ~$800k affordability bar. Best fit. ──
@@ -3635,6 +3693,37 @@ const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math
 // raise GP_MAX_REVIEWS if the pipeline ever runs thin.
 const GP_MAX_REVIEWS = parseInt(process.env.GP_MAX_REVIEWS || '750', 10);
 
+// ══ COORDINATES, SO A COVERAGE CLAIM CANNOT BE ABSURD ════════════════════════
+// The grid is twenty unrelated national metros. Without distance, "you do not
+// come up in Phoenix" gets sent to a Charlotte roofer — nineteen markets he was
+// never trying to serve, and the most dismissible sentence we could write.
+//
+// Absence only means something inside a radius a business could plausibly work.
+// Charlotte to Greenville is 100 miles and worth asking about; Charlotte to
+// Phoenix is 1,800 and is not a finding, it is a map.
+const GP_CITY_COORDS = {
+  'Phoenix AZ': [33.45, -112.07], 'Dallas TX': [32.78, -96.80], 'Charlotte NC': [35.23, -80.84],
+  'Tampa FL': [27.95, -82.46], 'Denver CO': [39.74, -104.99], 'Nashville TN': [36.16, -86.78],
+  'Columbus OH': [39.96, -83.00], 'Austin TX': [30.27, -97.74], 'Kansas City MO': [39.10, -94.58],
+  'Indianapolis IN': [39.77, -86.16], 'Jacksonville FL': [30.33, -81.66], 'San Antonio TX': [29.42, -98.49],
+  'Raleigh NC': [35.78, -78.64], 'Salt Lake City UT': [40.76, -111.89], 'Oklahoma City OK': [35.47, -97.52],
+  'Louisville KY': [38.25, -85.76], 'Cincinnati OH': [39.10, -84.51], 'Richmond VA': [37.54, -77.44],
+  'Boise ID': [43.62, -116.20], 'Greenville SC': [34.85, -82.39],
+};
+
+// Miles between two points. Enough precision for "is this the same region".
+const milesBetween = (a, b) => {
+  if (!a || !b) return Infinity;
+  const R = 3959, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b[0] - a[0]), dLon = toRad(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+};
+
+// A home-service business can plausibly work a metro this far out. Beyond it,
+// absence says nothing about their marketing.
+const SERVICE_RADIUS_MILES = 120;
+
 const GP_CITIES = [
   'Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX',
   'Kansas City MO','Indianapolis IN','Jacksonville FL','San Antonio TX','Raleigh NC','Salt Lake City UT',
@@ -3645,7 +3734,43 @@ const GP_CITIES = [
 const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|joshua tree experts)\b/i;
 const searchGooglePlaces = async (placesKey) => {
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
-  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber';
+  // places.location added so a coverage claim can be distance-aware. Without it
+  // we would tell a roofer in north Charlotte he is "absent from Rock Hill" —
+  // forty-five miles away, where he was never trying to appear. It is in the
+  // same billing tier as the fields already requested.
+  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber,places.location,places.regularOpeningHours';
+
+  // ══ WHAT THE RATING TELLS US BEFORE WE SPEND A PENNY ══════════════════════
+  // Across fourteen audited leads in one evening, EVERY business at 4.9 stars
+  // returned "no pain repeating across 2+ reviews". Every business where the
+  // review mine found a repeating complaint sat between 4.3 and 4.8 — and both
+  // of the emails that earned a reply came from that band.
+  //
+  // The arithmetic is why: a 4.9 average across two hundred reviews means almost
+  // no negative reviews EXIST. There is nothing on record to find, which is
+  // exactly what those owners told us — "if my visibility was broken I'd know it
+  // from my schedule", "I'm already getting patients".
+  //
+  // Below 4.2 is a different business: a real quality problem, a harder sell, and
+  // often one that cannot fund a five-figure engagement. The band we want is a
+  // GOOD business with complaints on record.
+  //
+  // Rating comes back in the search response, so this costs nothing and happens
+  // before any audit. It is the only thing we can know about a business's pain
+  // without paying to look.
+  // ══ THE FLOOR WAS A GUESS; THE CEILING IS THE EVIDENCE ═══════════════════
+  // Every lead in the data sat at 4.3 or above, so there is NO observation below
+  // that — the original 4.2 floor was reasoning dressed as a finding. A 3.8-star
+  // business with two hundred reviews has complaints on record and feels them,
+  // and review count is a better affordability proxy than rating anyway.
+  //
+  // The CEILING is the part with evidence behind it: fourteen for fourteen, every
+  // business at 4.9 returned no repeating complaint, because at that average
+  // almost no negative reviews exist to find.
+  const PAIN_BAND_LOW = 3.8;
+  const PAIN_BAND_HIGH = 4.85;
+
+  // GP_FREE_BUILDER is declared at module scope so the boot check can assert it.
   const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
   const RUN_CAP = parseInt(process.env.GP_QUERY_CAP || '100', 10);
   // Cap how many leads any ONE category can contribute per run. Without this a
@@ -3700,10 +3825,27 @@ const searchGooglePlaces = async (placesKey) => {
       if (round < bucket.length) grid.push(bucket[round]);
     }
   }
-  const out = [], seen = new Set();
+  // A Map rather than a Set: the value is the lead itself, so a repeat sighting
+  // in another city can add a market to it instead of being discarded.
+  const out = [], seen = new Map();
   const perCat = new Map();
-  let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0;
+  // ══ THE MARKETS WE SEARCHED AND THEY DID NOT COME BACK IN ════════════════
+  // The grid runs each category across every city, so by the end of a run we
+  // know two things about every business: the markets it appeared in, and — for
+  // free, because we already paid for those queries — the markets it did NOT.
+  //
+  // That second list is the strongest thing Places gives us. "We looked for
+  // roofing companies in six metros around you. You came up in two." No owner
+  // expects a stranger to know the shape of his own coverage, it is measured
+  // rather than inferred, and the fix is a retainer rather than a page edit.
+  const citiesSearchedByCat = new Map();
+  let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
+    // Recorded before the request so a failed query does not silently become a
+    // market we claim not to have searched.
+    if (!citiesSearchedByCat.has(cat.label)) citiesSearchedByCat.set(cat.label, []);
+    const _searchedForCat = citiesSearchedByCat.get(cat.label);
+    if (!_searchedForCat.includes(city)) _searchedForCat.push(city);
     try {
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
@@ -3718,10 +3860,29 @@ const searchGooglePlaces = async (placesKey) => {
         const website = p.websiteUri || '';
         const reviews = p.userRatingCount || 0;
         const rating = p.rating || null;
-        if (!name || !website) continue;                          // must have a site to Research
+        if (!name) continue;
+        // ══ A BUSINESS WITH NO WEBSITE WAS THE ONE WE THREW AWAY ═══════════
+        // This dropped every business without a site, because Research needs a
+        // page to audit. But a plumber with two hundred reviews and no website
+        // is the most obvious problem in the entire pipeline — no audit needed,
+        // no ambiguity, and it is exactly what a rebuild is for.
+        //
+        // They cannot be emailed the usual way (no domain, usually no address),
+        // so they are kept and MARKED as call leads. Mike can dial a number we
+        // already hold from the same response, and the opening line writes
+        // itself. Discarding them was throwing away the clearest leads we find.
+        const _noWebsite = !website;
+        const _builderSite = !!website && GP_FREE_BUILDER.test(website);
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
         // Trade-aware floor, not one number for every vertical — see reviewFloorFor.
         if (reviews < reviewFloorFor(cat.label, MIN_REVIEWS)) continue;
+        // ══ THE RATING BAND ════════════════════════════════════════════════
+        // A rating we cannot read tells us nothing either way, so it passes —
+        // absence of a rating is not evidence of a clean record.
+        if (rating !== null && (rating < PAIN_BAND_LOW || rating > PAIN_BAND_HIGH)) {
+          skippedNoPain++;
+          continue;
+        }
         // Too big is as disqualifying as too small: at this volume they are
         // multi-location or already agency-managed, and the audit lands on someone
         // who will reply that they have a team for that.
@@ -3729,21 +3890,62 @@ const searchGooglePlaces = async (placesKey) => {
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
         const catCount = perCat.get(cat.label) || 0;
         if (catCount >= PER_CAT_CAP) { skippedCatCap++; continue; }    // one vertical must not flood the queue
-        const domainKey = website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
-        if (seen.has(domainKey)) continue; seen.add(domainKey);
+        // A lead with no website is keyed on its Place id instead, so two
+        // different businesses without sites do not collapse into one another.
+        const domainKey = website
+          ? website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase()
+          : `placeid:${p.id || name.toLowerCase()}`;
+        // ══ THE SECOND SIGHTING IS THE SIZE SIGNAL ═════════════════════════
+        // Find runs a grid — every category across every city — so a one-truck
+        // operator appears once and a real one appears in five metros. This
+        // dropped every sighting after the first, which is correct for the lead
+        // list and threw away the only measured size signal available here.
+        //
+        // Appearing across five markets means crews, trucks and a payroll: the
+        // affordability bar the ICP asks for, measured rather than inferred from
+        // a review count. It is also a finding in its own right — a business
+        // visible in two of the five markets it serves has a multi-market gap,
+        // and one big enough to fund fixing it.
+        if (seen.has(domainKey)) {
+          const _prev = seen.get(domainKey);
+          if (_prev && !_prev.marketsSeen.includes(city)) {
+            _prev.marketsSeen.push(city);
+            _prev.marketCount = _prev.marketsSeen.length;
+          }
+          continue;
+        }
         // A LOW review count at an established local business = they are NOT actively
         // managing their online presence = a marketing gap we can open the pitch on.
         const marketingGap = reviews >= MIN_REVIEWS && reviews < 60;
+        if (_noWebsite) keptNoWebsite++;
+        if (_builderSite) keptBuilder++;
         perCat.set(cat.label, catCount + 1);
-        out.push({
+        const _lead = {
           name, website, location: p.formattedAddress || '',
+          // Markets this business came back in. One means a local operator;
+          // several means crews and a payroll, measured rather than guessed.
+          marketsSeen: [city], marketCount: 1,
           source: 'google_places', icpProfile: 'local_owner_operated',
+          // ══ HOW THIS LEAD SHOULD BE WORKED ═══════════════════════════════
+          // Set here because it is knowable HERE — from the search response,
+          // before any audit and before a penny is spent.
+          //   call     no website at all. Nothing to audit and nothing to
+          //            argue with: two hundred reviews and no site. Mike dials
+          //            the number in this same response.
+          //   rebuild  running on a free page builder. Audits normally, but the
+          //            finding that matters is already known.
+          //   email    the usual path.
+          leadChannel: _noWebsite ? 'call' : (_builderSite ? 'rebuild' : 'email'),
+          noWebsite: _noWebsite,
+          builderSite: _builderSite ? (String(website).match(GP_FREE_BUILDER) || [''])[0].replace(/^\./, '') : null,
           placeId: p.id || null,
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
           jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \\u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
           signals: { local_owner_operated: true, ...(cat.ownerRisk ? { consolidation_risk: true } : {}), ...(marketingGap ? { under_marketed: true } : {}) },
-        });
+        };
+        seen.set(domainKey, _lead);
+        out.push(_lead);
       }
     } catch(e) { /* fail-safe per query */ }
   }
@@ -3763,6 +3965,49 @@ const searchGooglePlaces = async (placesKey) => {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
   console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig} too big, ${skippedCatCap} over per-category cap)`);
+  // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
+  // Printed separately because these three numbers are the whole experiment:
+  // whether filtering on what we can know BEFORE auditing changes the odds.
+  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) dropped for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.`);
+  if (keptNoWebsite) console.log(`\u260e CALL LEADS [Places]: ${keptNoWebsite} business(es) with real review counts and NO WEBSITE AT ALL. These used to be discarded because Research needs a page to audit. They need no audit \u2014 the finding is the absence, and Mike has the number.`);
+  if (keptBuilder) console.log(`\u{1F527} REBUILD LEADS [Places]: ${keptBuilder} business(es) running on a free page builder. They audit normally, but the fact that matters is already known before we spend anything.`);
+  // ══ THE OPERATORS BIG ENOUGH TO FUND A FIX ═══════════════════════════════
+  // A one-truck business comes back in one market. An operator with crews comes
+  // back in several, and until now every sighting after the first was discarded.
+  // This is the only measured size signal available before an audit — better
+  // than a review count, because it is about coverage rather than age.
+  // ══ ATTACH THE ABSENCE, NOW THAT EVERY QUERY HAS RUN ═════════════════════
+  // Only computable here: until the grid finishes we do not know the full set of
+  // markets searched for a category. Absent = searched minus appeared, so it can
+  // never claim a market we did not actually look in.
+  for (const l of out) {
+    const searched = citiesSearchedByCat.get(l.industry) || [];
+    // ══ ONLY MARKETS THEY COULD PLAUSIBLY BE WORKING ═══════════════════════
+    // Absence is only a finding inside a radius the business could serve.
+    // Anchored on the markets they DID come back in — the nearest of those is
+    // the best evidence of where they actually operate, better than their
+    // registered address, because a business can be registered in a small town
+    // and work the metro next door.
+    const _homes = (l.marketsSeen || []).map(c => GP_CITY_COORDS[c]).filter(Boolean);
+    const _near = (city) => {
+      const to = GP_CITY_COORDS[city];
+      if (!to || !_homes.length) return false;
+      return _homes.some(h => milesBetween(h, to) <= SERVICE_RADIUS_MILES);
+    };
+    l.marketsSearched = searched.filter(_near);
+    l.marketsAbsent = l.marketsSearched.filter(c => !(l.marketsSeen || []).includes(c));
+    l.marketCoverage = l.marketsSearched.length
+      ? `${(l.marketsSeen || []).length} of ${l.marketsSearched.length}` : null;
+  }
+  const _gaps = out.filter(l => (l.marketsAbsent || []).length > 0 && (l.marketsSearched || []).length > 1);
+  if (_gaps.length) {
+    const _worst = [...(_gaps)].sort((a, b) => b.marketsAbsent.length - a.marketsAbsent.length)[0];
+    console.log(`\u{1F573} COVERAGE GAP [Places]: ${_gaps.length} business(es) did not come back in every market we searched for their trade. Worst: ${_worst.name} \u2014 ${_worst.marketCoverage} markets, absent from ${_worst.marketsAbsent.slice(0, 4).join(', ')}. We already paid for those queries, so this costs nothing and no owner expects a stranger to know the shape of his own coverage.`);
+  }
+  const _multi = out.filter(l => (l.marketCount || 1) > 1).sort((a, b) => b.marketCount - a.marketCount);
+  if (_multi.length) {
+    console.log(`\u{1F5FA} MULTI-MARKET [Places]: ${_multi.length} operator(s) came back in more than one market \u2014 ${_multi.slice(0, 4).map(l => `${l.name} (${l.marketCount})`).join(', ')}. Coverage across metros means crews and a payroll, which is the affordability bar measured rather than inferred. Work these first.`);
+  }
   return interleaved;
 };
 
@@ -5083,7 +5328,45 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       console.log('🔴 FIRECRAWL OUT OF CREDITS — scrapes, searches, and maps will all fail until topped up.');
       return '';
     }
-    const _md = d.data?.markdown || d.markdown || '';
+    let _md = d.data?.markdown || d.markdown || '';
+
+    // ══ NEVER LOSE THE CORPUS TO A SCREENSHOT ═══════════════════════════════
+    // This request asks for markdown AND a full-page screenshot together, and on
+    // a homepage it comes back empty every time — 11 of 11 leads in one evening,
+    // twice each, while the SAME formats on inner pages via batch/scrape
+    // succeeded on the same leads and the same account.
+    //
+    // The variable is page weight. Homepages are the heaviest thing on a site
+    // (Daniel Builders: 1.6MB of HTML, George Plumbing: 534KB) and a full-page
+    // render of one with waitFor 4000 is the most expensive thing this API can
+    // be asked for. It is also the FIRST call we make on every lead.
+    //
+    // The cost of that failure is not the screenshot. It is that we fall back to
+    // plain-text salvage — roughly a third of the corpus, no markdown structure,
+    // form fields and tap-to-call unmeasured — which is what the audit has been
+    // running on all day, and almost certainly why original findings survive at
+    // 11%: they must quote text from the corpus, and we do not hold the page the
+    // quote came from.
+    //
+    // So the two are decoupled. The corpus is essential; the render is useful.
+    // If the combined request returns nothing, ask again for markdown ALONE —
+    // no render, shorter wait. Firecrawl does not bill a request that returned
+    // nothing, so this costs one extra call only on pages that already failed.
+    if (!_md) {
+      try {
+        const r2 = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge }),
+        }, Math.min(timeout, 30000));
+        const d2 = await r2.json();
+        const _md2 = d2.data?.markdown || d2.markdown || '';
+        if (_md2) {
+          _md = _md2;
+          console.log(`\u267b MARKDOWN RECOVERED [${String(url).slice(0, 60)}]: the combined markdown+screenshot request came back empty, markdown alone returned ${_md2.length} characters. The render is lost on this page; the corpus \u2014 which is what every quote and every positioning finding is checked against \u2014 is not.`);
+        }
+      } catch (e2) { void e2; }
+    }
     // Keep the render. Requesting a format and never reading it back is how the
     // inner-page screenshots were paid for and discarded for two rounds.
     rememberPageShot(_ck, d.data?.['screenshot@fullPage'] || d['screenshot@fullPage'] || d.data?.screenshot || null);
@@ -8843,11 +9126,25 @@ const verifyOriginalFinding = (item, corpus) => {
   // sentence rather than discarding the whole thing. Only reject when even that
   // is too long, which means there is no single observation in there.
   let _finding = finding;
-  if (_finding.split(/\s+/).length > 30) {
-    const _first = (_finding.match(/^[^.!?]+[.!?]/) || [_finding])[0].trim();
-    if (_first && _first.split(/\s+/).length <= 45 && _first.split(/\s+/).length >= 8) {
-      _finding = _first.replace(/[.!?]+$/, '');
+  const _wc = (t) => String(t).trim().split(/\s+/).filter(Boolean).length;
+  if (_wc(_finding) > 30) {
+    // First try a sentence boundary — usually the observation is sentence one
+    // and the rest is the explanation.
+    let _cut = (_finding.match(/^[^.!?]+[.!?]/) || [''])[0].trim().replace(/[.!?]+$/, '');
+    // ══ SOME FINDINGS ARE ONE LONG SENTENCE ═════════════════════════════
+    // The boot check caught this immediately: "The homepage names Green Diamond
+    // Service as what sets them apart but never explains what it is, WHICH
+    // MATTERS BECAUSE..." is fifty words with no full stop in it, so there was
+    // no sentence to take and the whole finding was still binned.
+    //
+    // The observation ends where the justification begins, and in English that
+    // join is almost always one of a handful of connectives. Cutting there
+    // leaves a complete clause rather than a fragment.
+    if (!_cut || _wc(_cut) > 45 || _wc(_cut) < 6) {
+      const _m = _finding.match(/^(.{20,}?)(?:,\s+(?:which|and|so|because|but)\b|\s+\u2014\s+|;\s+)/i);
+      if (_m && _wc(_m[1]) >= 6 && _wc(_m[1]) <= 45) _cut = _m[1].trim().replace(/[,;\s]+$/, '');
     }
+    if (_cut && _wc(_cut) >= 6 && _wc(_cut) <= 45) _finding = _cut;
   }
   if (_finding.split(/\s+/).length > 45) {
     return { ok: false, why: `${_finding.split(/\s+/).length} words with no single sentence inside it — that is several findings, not one` };
@@ -8883,11 +9180,27 @@ const verifyOriginalFinding = (item, corpus) => {
   const needle = norm(stripLabel(evidence));
   if (needle.length < 12) return { ok: false, why: 'quoted fragment too short to verify' };
   if (hay.includes(needle)) return { ok: true, finding: _finding, evidence };
-  // Allow a long quote to match on its first solid run of words — models often
-  // join two nearby sentences when quoting.
+  // ══ A REAL QUOTE MUST NOT FAIL ON WHERE IT WAS TRIMMED ══════════════════
+  // This only tried windows from the START of the quote, so a model that opened
+  // with a word we did not capture — an ellipsis, a heading, a line break the
+  // scraper collapsed differently — failed entirely even when eight of its ten
+  // words sat verbatim in the corpus. Roughly twelve drops in one evening read
+  // "the quoted text does not appear on any page we read", and the quotes were
+  // very likely real.
+  //
+  // Rejecting a true finding is the expensive direction here: when nothing
+  // survives, the audit falls back to the 33-rung list, which is the same list
+  // every lead gets and exactly what every prospect this evening detected.
+  //
+  // So slide the window across the whole quote instead of anchoring it at the
+  // front. Still six consecutive words of THEIR copy — a fabricated quote
+  // cannot produce that by accident — just no longer dependent on where the
+  // model chose to begin.
   const words = needle.split(' ');
-  for (let n = Math.min(10, words.length); n >= 6; n--) {
-    if (hay.includes(words.slice(0, n).join(' '))) return { ok: true, finding: _finding, evidence };
+  for (let n = Math.min(12, words.length); n >= 6; n--) {
+    for (let i = 0; i + n <= words.length; i++) {
+      if (hay.includes(words.slice(i, i + n).join(' '))) return { ok: true, finding: _finding, evidence };
+    }
   }
   return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}"` };
 };
@@ -9052,17 +9365,35 @@ const parseProspectVerdict = (text) => {
 // rather than adjectives about him. The prohibitions stay untouched and
 // verifyBrainEmail still judges the output, so the floor does not move. Only the
 // input changes, from seven strings to the reasoning that produced them.
-const MIKE_VOICE_FOR_EMAIL = `HOW MIKE ACTUALLY WRITES — match this, do not describe it:
-"If you want a low end economy level way to run ads on Google, Mike is happy to refer you elsewhere."
-"Many executives and business owners are in the cycle of performing highly themselves and being pushed to put out fires in areas they have handed to others."
-"Most agencies help a company do more marketing. CROJ helps leadership determine what the business actually needs to grow."
+const MIKE_VOICE_FOR_EMAIL = `HERE IS AN EMAIL THIS SYSTEM SENT THAT WORKED. MATCH ITS MOVES:
 
-WHAT TO TAKE FROM IT:
-- PLAIN DECLARATIVES. He states things. He does not build to them or save a reveal for the end.
-- ALMOST NO ADJECTIVES. Every noun does the work.
-- HE NAMES THE FEELING, NOT THE METRIC. "The cycle." "Putting out fires in areas they have handed to others."
-- Long sentences are fine. Ornamental ones are not. Construction is the tell, not length.
-THE TEST: could this sentence sit inside those paragraphs without standing out?`;
+"Michael, I noticed you've built something real here: 341 reviews at 4.9 stars, and you're actually responding to nearly all of them. That's rare. Here's what caught my attention though — the only way anyone can reach you is a phone call during office hours. With cases running several thousand dollars, that's a lot of friction for someone trying to take that first step. I've written up three things on this. Want me to send them over?"
+
+WHAT IT DOES, IN ORDER — DO ALL FIVE:
+1. A PERSON WHO LOOKED. "I noticed you've built something real here." Someone
+   went and read his page. Say so.
+2. ONE JUDGEMENT, GIVEN FREELY. "That's rare." Two words, no hedge, nothing
+   asked for in return. This is what makes the rest believable.
+3. THE TURN. "Here's what caught my attention though —". He leans in. The email
+   pivots from what is working to what is not, and the reader feels it happen.
+4. THE COST, IN HUMAN TERMS. "that's a lot of friction for someone trying to
+   take that first step." Not a metric. A person, mid-decision, stuck.
+5. THE ASK, SMALL AND EASY.
+
+WHAT KILLS IT:
+- Explaining the finding after stating it. "The gap between what you've built
+  and what the search results show isn't a matter of volume — it's visibility in
+  the place where your next patient is already looking." That is a consultant
+  narrating. Nobody is in it. Cut every sentence of this shape.
+- Stating the recognition instead of reacting to it. "648 reviews at 4.8 stars is
+  the work of someone who knows his trade" is a description. "I noticed you've
+  built something real here: 648 reviews at 4.8" is a person.
+- Abstract nouns doing the work: visibility, presence, positioning, the gap,
+  the path, the machine. Say the thing that happens to a person instead.
+
+VOICE: plain words, no marketing vocabulary, no flattery he did not earn. Warm
+because you actually looked, not because you are being nice.`;
+
 
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
@@ -9139,10 +9470,17 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   write "six places in total", "three different pages", or "everywhere we
   looked". We read a handful of pages and counted separate problems across them.
   Only ONE of those findings is the one this email is about.
-${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and go straight into it.` : '- No greeting; open on the fact.'}
+${first ? `- Open "${first}, " \u2014 a comma, never a dash. Then a person, not a
+  number: "I noticed...", "I was looking at...", "I read through...". The first
+  words after his name should be someone telling him what they did, exactly as
+  the example does. Opening straight onto a statistic is the flat version.` : '- No greeting; open on the fact.'}
 
-55-85 words. Mike's voice sample above governs — it replaces every adjective a
-previous version of this prompt used to describe him.
+55-85 words. The worked example above governs. Match its MOVES, not its facts.
+
+Before you return it, check it against the example: is there a person in it? Is
+there one judgement given freely? Is there a turn? Does the cost land on a human
+rather than a metric? If any answer is no, it reads like a report and it will be
+deleted.
 
 Return ONLY the email body. No subject, no signature, no preamble.`;
 
@@ -9861,9 +10199,23 @@ const CTA_BY_FINDING = {
 };
 
 const CTA_TEXT = {
+  // ══ THE ASK TELLS HIM WHAT WE SELL ═══════════════════════════════════════
+  // Dr Joseph deleted his email and named the reason: "they're pitching me a
+  // REVIEW-COLLECTION SERVICE like I'm some chain restaurant." The finding was
+  // about his review count. The CTA — "does anyone ask the customer for a
+  // review?" — is what told him the product was a $200 one.
+  //
+  // The sellable dimension stops a small FINDING from leading. The CTA was still
+  // announcing a small PRODUCT at the end of every email, and it is the last
+  // thing he reads.
+  //
+  // So each ask now points at whether anyone OWNS the problem, not at the
+  // mechanism that would fix it. "Has that ever been anyone's job?" opens the
+  // conversation Mike needs — capacity, ownership, what he has already tried —
+  // while "does anyone ask for a review?" closes it into a task.
   accountability: { text: "Who's handling the site for you at the moment?", kind: 'accountability' },
-  listing: { text: 'Who looks after the Google listing?', kind: 'listing' },
-  process: { text: "When a job's finished, does anyone ask the customer for a review?", kind: 'process' },
+  listing: { text: 'Is anyone actually watching that, or has it been on its own for a while?', kind: 'listing' },
+  process: { text: 'Has that ever been anyone\u2019s job, or has it just never come up?', kind: 'process' },
   // Asks about the thing the reviews are describing, not about the reviews.
   // It is also the question only he can answer — a foreman cannot tell you
   // whether the estimate and the final invoice usually match.
@@ -9896,9 +10248,9 @@ const CTA_TEXT = {
   // Each is a question the owner can answer in one line from his own experience,
   // and none can be answered by anyone else in his business. That is what makes
   // a reply cheap for him and useful for Mike.
-  pricing: { text: 'Do people ask what it costs before they will book?', kind: 'pricing' },
+  pricing: { text: 'Where do most of your enquiries stall \u2014 before the first call or after it?', kind: 'pricing' },
   differentiator: { text: 'When someone picks you over the firm down the road, what do they usually say made the difference?', kind: 'differentiator' },
-  notready: { text: 'What do you do with the ones who are not ready yet?', kind: 'notready' },
+  notready: { text: 'What happens to the ones who are interested but not ready this month?', kind: 'notready' },
   afterhours: { text: 'What happens to the ones who find you after hours?', kind: 'afterhours' },
 };
 
@@ -21000,7 +21352,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation' + (_exitSignal ? ' (they are preparing to exit — valuation is the emotional lever)' : ''));
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
 
-const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}${sitePages.ownerStory ? `\\n\\n\\u2550\\u2550\\u2550 THE OWNER WROTE THIS ABOUT HIMSELF \\u2550\\u2550\\u2550\\n${sitePages.ownerStory}${sitePages.storyQuote ? `\\nHis exact words: \\u201c${sitePages.storyQuote}\\u201d` : '\\n(No verifiable direct quote \\u2014 reference the story, do NOT put words in his mouth.)'}\\nUSE THIS. It is the strongest personalisation available and almost nobody cold-emailing him will have read it. ONE short specific line near the top that could only have been written by someone who actually read his About page \\u2014 the trade he learned, who taught him, the years in business, the licence he earned, why he started.\\nHOW: reference it plainly, then connect it to what is being lost. \\u2018You learned the trade from your father and you have been at it 23 years \\u2014 and the site is quietly handing that reputation to whoever answers the phone first.\\u2019\\nHARD RULES: never flatter for its own sake (\\u2018what an inspiring story\\u2019) \\u2014 that reads as fake and is worse than silence. Never quote a sentence he did not write. Never invent a detail the story does not contain. ONE reference only; twice makes it a tactic. If the About page is corporate boilerplate rather than his own voice, skip it entirely.` : ''}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
+const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}${sitePages.ownerStory ? `\\n\\n\\u2550\\u2550\\u2550 THE OWNER WROTE THIS ABOUT HIMSELF \\u2550\\u2550\\u2550\\n${sitePages.ownerStory}${sitePages.storyQuote ? `\\nHis exact words: \\u201c${sitePages.storyQuote}\\u201d` : '\\n(No verifiable direct quote \\u2014 reference the story, do NOT put words in his mouth.)'}\\nUSE THIS. It is the strongest personalisation available and almost nobody cold-emailing him will have read it. ONE short specific line near the top that could only have been written by someone who actually read his About page \\u2014 the trade he learned, who taught him, the years in business, the licence he earned, why he started.\\nHOW: reference it plainly, then connect it to what is being lost. \\u2018You learned the trade from your father and you have been at it 23 years \\u2014 and the site is quietly handing that reputation to whoever answers the phone first.\\u2019\\nHARD RULES: never flatter for its own sake (\\u2018what an inspiring story\\u2019) \\u2014 that reads as fake and is worse than silence. Never quote a sentence he did not write. Never invent a detail the story does not contain. ONE reference only; twice makes it a tactic. If the About page is corporate boilerplate rather than his own voice, skip it entirely.` : ''}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n${(() => {
+  // ══ WHAT DISCOVERY ALREADY KNEW AND NEVER TOLD THE BRAIN ════════════════
+  // Find learns real things before a penny is spent — which markets a business
+  // comes back in, which it does NOT, whether it has a website at all, whether
+  // it runs on a free page builder. None of it reached this prompt: Research
+  // read only placeId and industry off the lead.
+  //
+  // The coverage list is the strongest. Those queries were already paid for to
+  // build the lead list, and no owner expects a stranger to know the shape of
+  // his own coverage.
+  const _mk = Array.isArray(req.body.marketsSeen) ? req.body.marketsSeen : [];
+  const _abs = Array.isArray(req.body.marketsAbsent) ? req.body.marketsAbsent : [];
+  const _L = [];
+  if (_mk.length > 1) _L.push(`\u2550\u2550\u2550 THEIR FOOTPRINT, MEASURED \u2550\u2550\u2550\nTHEY COME BACK IN ${_mk.length} MARKETS: ${_mk.join(', ')}. We ran their trade as a search in each one. A business covering several metros has crews and a payroll \u2014 not a one-truck operation, and able to fund a real engagement.`);
+  if (_abs.length && _mk.length) _L.push(`AND THEY DID NOT COME BACK IN: ${_abs.join(', ')}. We ran the SAME search there and they were absent. \u26a0 MEASURED, not inferred. Say it as coverage, never as failure: "you come up in ${_mk.slice(0, 2).join(' and ')}, you don't come up in ${_abs.slice(0, 2).join(' or ')}." Never claim you know why.`);
+  if (req.body.noWebsite === true) _L.push(`THEY HAVE NO WEBSITE AT ALL \u2014 their Google listing carries no site link. Everything a stranger can learn about them lives on one Google page.`);
+  if (req.body.builderSite) _L.push(`THEIR SITE RUNS ON ${String(req.body.builderSite).toUpperCase()}, a free page builder. A fact about where the money went, not a design opinion. Never call it cheap or unprofessional \u2014 say what it means: the site was never the priority.`);
+  return _L.length ? _L.join('\n') + '\n' : '';
+})()}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
 ${_bottleneckWhy}
 
 Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
@@ -24950,6 +25320,239 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SELLABLE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A COVERAGE CLAIM MUST NOT BE A MAP OF THE UNITED STATES ══════════════
+  // The grid is twenty unrelated national metros. Without a distance gate, the
+  // absence list told a Charlotte roofer he does not come up in Phoenix, Dallas,
+  // Tampa, Denver and fifteen more — markets he was never trying to serve, and
+  // the most dismissible sentence we could possibly send.
+  //
+  // Absence is only a finding inside a radius the business could plausibly work.
+  // Charlotte to Greenville is 92 miles and worth asking about. Charlotte to
+  // Phoenix is 1,779 and is not a finding.
+  try {
+    const _searched = Object.keys(GP_CITY_COORDS);
+    const _cover = (seen) => {
+      const homes = seen.map(c => GP_CITY_COORDS[c]).filter(Boolean);
+      const near = _searched.filter(c => homes.some(h => milesBetween(h, GP_CITY_COORDS[c]) <= SERVICE_RADIUS_MILES));
+      return { near, absent: near.filter(c => !seen.includes(c)) };
+    };
+    const _clt = _cover(['Charlotte NC']);
+    const _cmh = _cover(['Columbus OH']);
+    const _absurd = _clt.absent.filter(c => milesBetween(GP_CITY_COORDS['Charlotte NC'], GP_CITY_COORDS[c]) > SERVICE_RADIUS_MILES);
+    // Charlotte to Greenville is 92 miles: a genuine neighbouring market that
+    // must survive, or the finding can never fire at all.
+    const _keepsReal = _clt.absent.includes('Greenville SC') || _cmh.absent.includes('Cincinnati OH');
+    if (_absurd.length) {
+      console.log(`\u26d4 COVERAGE RADIUS CHECK: ${_absurd.slice(0, 3).join(', ')} would be reported as markets a Charlotte business is absent from. They are hundreds of miles away and he was never trying to appear there.`);
+    } else if (!_keepsReal) {
+      console.log(`\u26d4 COVERAGE RADIUS CHECK: a genuine neighbouring market (Charlotte\u2013Greenville, 92 miles) is being filtered out too. The gate is so tight the finding can never fire.`);
+    } else if (milesBetween(GP_CITY_COORDS['Charlotte NC'], GP_CITY_COORDS['Phoenix AZ']) < 1000) {
+      console.log(`\u26d4 COVERAGE RADIUS CHECK: the distance calculation is wrong \u2014 Charlotte to Phoenix should be around 1,800 miles.`);
+    } else {
+      console.log(`\u2713 COVERAGE RADIUS CHECK: absence is only claimed for markets within ${SERVICE_RADIUS_MILES} miles of somewhere the business already appears \u2014 a neighbouring metro survives, a city across the country never becomes a finding.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 COVERAGE RADIUS CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SIZE SIGNAL WE WERE DISCARDING ═══════════════════════════════════
+  // Find runs a grid — every category across every city — so a one-truck
+  // operator comes back in one market and a real one comes back in five. Every
+  // sighting after the first was dropped by the dedupe, which is right for the
+  // lead list and threw away the only measured size signal available before an
+  // audit.
+  //
+  // It matters twice: coverage across metros means crews and a payroll, which is
+  // the affordability bar measured rather than inferred from a review count; and
+  // a business visible in two of the five markets it serves has a multi-market
+  // gap, which is a retainer conversation rather than a page edit.
+  //
+  // The dedupe must still hold. Two sightings of one business are one lead.
+  try {
+    const _seen = new Map(); const _out = [];
+    const _hits = [['acme.com', 'Charlotte'], ['acme.com', 'Concord'], ['acme.com', 'Gastonia'],
+      ['acme.com', 'Charlotte'], ['onetruck.com', 'Charlotte'], ['mid.com', 'Charlotte'], ['mid.com', 'Concord']];
+    for (const [d, city] of _hits) {
+      if (_seen.has(d)) {
+        const prev = _seen.get(d);
+        if (prev && !prev.marketsSeen.includes(city)) { prev.marketsSeen.push(city); prev.marketCount = prev.marketsSeen.length; }
+        continue;
+      }
+      const lead = { name: d, marketsSeen: [city], marketCount: 1 };
+      _seen.set(d, lead); _out.push(lead);
+    }
+    const _acme = _out.find(l => l.name === 'acme.com');
+    const _one = _out.find(l => l.name === 'onetruck.com');
+    if (_out.length !== 3) {
+      console.log(`\u26d4 MULTI-MARKET CHECK: the dedupe broke \u2014 ${_out.length} leads from three businesses. A business appearing in five cities must still be one lead.`);
+    } else if (!_acme || _acme.marketCount !== 3) {
+      console.log(`\u26d4 MULTI-MARKET CHECK: a business seen in three markets counted ${_acme ? _acme.marketCount : 0}. The repeat sighting is the size signal and it is being lost.`);
+    } else if (!_one || _one.marketCount !== 1) {
+      console.log(`\u26d4 MULTI-MARKET CHECK: a single-market business counted ${_one ? _one.marketCount : 0}. Inflating coverage would put one-truck operators at the top of the queue.`);
+    } else {
+      console.log(`\u2713 MULTI-MARKET CHECK: a business seen across three cities stays one lead and carries a coverage count of three, a repeat sighting in the same city does not inflate it, and a single-market operator still counts one.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MULTI-MARKET CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ONLY THING WE CAN KNOW BEFORE PAYING TO LOOK ═════════════════════
+  // Across fourteen audited leads, every business at 4.9 stars returned "no pain
+  // repeating across 2+ reviews", and every lead where the mine found a
+  // repeating complaint sat between 4.3 and 4.8. Both emails that earned a reply
+  // came from inside that band.
+  //
+  // The arithmetic is why: a 4.9 across two hundred reviews means almost no
+  // negative reviews exist, so there is nothing on record to find. Those owners
+  // said as much — "if my visibility was broken I'd know it from my schedule".
+  //
+  // Rating arrives in the Places search response, so this is the one thing we can
+  // know about a business's pain without spending anything. Everything else in
+  // this system costs $0.09 and two minutes to discover.
+  try {
+    const _band = (r) => r === null || (r >= 4.2 && r <= 4.85);
+    // Real leads, real outcomes.
+    const _repliedOrPained = [['Daniel Builders', 4.7], ['Deck Daddy\'s', 4.8],
+      ['Comfort-Air', 4.8], ['Midwest', 4.3], ['Bradley', 4.8]];
+    const _foundNothing = [['Southern Star', 4.9], ['Vision for Life', 4.9],
+      ['David Leon', 4.9], ['Karim Ali', 4.9]];
+    const _lost = _repliedOrPained.filter(([, r]) => !_band(r)).map(([n]) => n);
+    const _kept = _foundNothing.filter(([, r]) => _band(r)).map(([n]) => n);
+    // A business with no rating at all must still pass — no rating is not
+    // evidence of a clean record, and dropping it would discard a real pool.
+    const _unratedPasses = _band(null);
+    const _builders = ['https://x.business.site', 'https://a.wixsite.com/b', 'https://c.godaddysites.com'];
+    const _normal = ['https://comfort-air.com', 'https://leonlaw.com'];
+    const _missedBuilder = _builders.filter(u => !GP_FREE_BUILDER.test(u));
+    const _falseBuilder = _normal.filter(u => GP_FREE_BUILDER.test(u));
+    if (_lost.length) {
+      console.log(`\u26d4 PAIN BAND CHECK: ${_lost.join(', ')} would be dropped \u2014 those are leads that produced a repeating complaint or a reply. The band is cutting the thing it exists to keep.`);
+    } else if (!_unratedPasses) {
+      console.log(`\u26d4 PAIN BAND CHECK: a business with no rating is dropped. Absence of a rating is not evidence of a clean record, and it discards a real pool.`);
+    } else if (_missedBuilder.length) {
+      console.log(`\u26d4 PAIN BAND CHECK: ${_missedBuilder.join(', ')} not recognised as a free page builder. That is a business fact readable from the URL before any audit.`);
+    } else if (_falseBuilder.length) {
+      console.log(`\u26d4 PAIN BAND CHECK: ${_falseBuilder.join(', ')} wrongly flagged as a builder site. Telling an owner with a real site that he is on a free builder is a false claim he disproves instantly.`);
+    } else {
+      console.log(`\u2713 PAIN BAND CHECK: every lead that produced a repeating complaint or a reply survives the ${_kept.length ? '4.2-4.85' : '4.2-4.85'} band, unrated businesses still pass, and free page builders are read off the URL without touching a real domain.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PAIN BAND CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE LSA CHECK NEVER MATCHED A REAL TRADE ═════════════════════════════
+  // LSA_ELIGIBLE holds title-case categories ('Roofing', 'Plumbing'); the trade
+  // we measure is free text off their homepage ('roofing contractor', 'plumber').
+  // Zero of twelve real trades matched, so every audit has reported "Google LSA:
+  // not run" since the check was written.
+  //
+  // This is the measurement that most rewards knowing the niche: Local Services
+  // Ads is a PAID channel, a home-service owner knows exactly what a lead costs
+  // him on it, and whether a competitor holds the Google Guaranteed badge above
+  // him is a business fact rather than a website observation.
+  try {
+    const _real = ['roofing contractor', 'plumber', 'hvac contractor',
+      'water damage restoration', 'foundation repair', 'garage door repair',
+      'remodeling contractor', 'deck builder', 'general contractor',
+      'lasik surgery', 'estate planning attorney', 'CPA'];
+    const _unmapped = _real.filter(t => !LSA_ELIGIBLE.has(lsaLabelFor(t)));
+    // A trade that genuinely is not LSA-eligible must still say so rather than
+    // being forced into a bucket — a false eligibility claim is a false finding.
+    const _notEligible = ['label manufacturer', 'software company', 'wholesale distributor'];
+    const _forced = _notEligible.filter(t => LSA_ELIGIBLE.has(lsaLabelFor(t)));
+    if (_unmapped.length) {
+      console.log(`\u26d4 LSA TRADE CHECK: ${_unmapped.length} real trade(s) still map to nothing \u2014 ${_unmapped.slice(0, 3).join(', ')}. The check reports "not run" and the strongest money-side finding available never fires.`);
+    } else if (_forced.length) {
+      console.log(`\u26d4 LSA TRADE CHECK: ${_forced.join(', ')} forced into an eligible bucket. Claiming a business could run Local Services Ads when it cannot is a false finding.`);
+    } else {
+      console.log(`\u2713 LSA TRADE CHECK: all ${_real.length} trades we actually work map to a Local Services Ads category, and trades that are not eligible still report as not eligible.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 LSA TRADE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ASK MUST NOT NAME A $200 PRODUCT ═════════════════════════════════
+  // Dr Joseph deleted his email and named the reason himself: "they're pitching
+  // me a REVIEW-COLLECTION SERVICE like I'm some chain restaurant." The finding
+  // was his review count; the ASK is what told him the product was small.
+  //
+  // SELLABLE stops a small finding from leading. The CTA was still announcing a
+  // small product at the end of every email — and it is the last thing he reads,
+  // so it defines what the conversation would be about.
+  //
+  // An ask that names the mechanism ("does anyone ask for a review", "who looks
+  // after the listing") closes into a task he can price at a couple of hundred
+  // dollars. An ask about OWNERSHIP — has anyone got this, what have you tried —
+  // opens the conversation Mike actually needs.
+  try {
+    const _asks = Object.values(CTA_TEXT || {}).map(c => String((c && c.text) || '')).filter(Boolean);
+    // Phrasings that hand the owner a small, obvious, cheap product.
+    const _NAMES_A_TASK = [
+      [/ask (the |your )?(customer|client|patient)s? for a review/i, 'review collection'],
+      [/who (looks after|manages|runs|updates) (the|your) (listing|profile|page)/i, 'listing management'],
+      [/do people ask what it costs/i, 'a pricing page'],
+      [/add (a|your) (price|pricing|guarantee|offer)/i, 'a page edit'],
+      [/(set up|install|add) a (scheduler|booking|calendar|chatbot|widget)/i, 'a widget install'],
+    ];
+    const _named = [];
+    for (const a of _asks) {
+      for (const [re, what] of _NAMES_A_TASK) if (re.test(a)) _named.push(`"${a.slice(0, 46)}" \u2192 ${what}`);
+    }
+    // And every ask must still be a question he can answer in one line.
+    const _notQuestions = _asks.filter(a => !/\?\s*$/.test(a.trim()));
+    const _tooLong = _asks.filter(a => a.split(/\s+/).length > 18);
+    if (_named.length) {
+      console.log(`\u26d4 ASK CHECK: ${_named.length} ask(s) name the mechanism rather than the ownership \u2014 ${_named[0]}. That is the last line he reads, and it sets the price of the conversation.`);
+    } else if (_notQuestions.length) {
+      console.log(`\u26d4 ASK CHECK: ${_notQuestions.length} ask(s) do not end in a question mark. An email that finishes on a statement gives him nothing to reply to.`);
+    } else if (_tooLong.length) {
+      console.log(`\u26d4 ASK CHECK: ${_tooLong.length} ask(s) run past 18 words. A closing question he has to re-read is one he does not answer.`);
+    } else {
+      console.log(`\u2713 ASK CHECK: all ${_asks.length} asks are one-line questions about who owns the problem, and none names a task the owner could price at a couple of hundred dollars.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A REAL FINDING MUST SURVIVE ITS OWN SHAPE ════════════════════════════
+  // originalFindings survived 11% of the time — three across an evening against
+  // roughly fifteen dropped for exceeding our own 45-word cap and twelve for
+  // "the quoted text does not appear on any page we read".
+  //
+  // Both were our failures. The model writes the observation and its explanation
+  // into one field and lands at 50 words; we binned the lot. And the matcher only
+  // tried windows from the START of a quote, so a quote trimmed anywhere else
+  // failed even when eight of its ten words sat verbatim in the corpus.
+  //
+  // The cost is exact: when nothing survives, the audit falls back to the 33-rung
+  // list — "honest, but the same list every lead gets" — which is what every
+  // prospect this evening detected and named.
+  try {
+    const _corpus = 'Our Green Diamond Service sets us apart. Like the concierge at a five-star hotel, we are laser focused on understanding your ROI objectives and delivering on them every single time.';
+    const _shouldPass = [
+      // Long: observation plus explanation in one field, first sentence is the finding.
+      ['long with a real first sentence', { finding: 'The homepage names Green Diamond Service as what sets them apart but never explains what it is, which matters because a prospect comparing three firms has no way to tell them apart and the concierge metaphor does no work at all when somebody is deciding who to call first today.', evidence: 'Our Green Diamond Service sets us apart' }],
+      // Quote trimmed somewhere other than the front.
+      ['quote starting mid-sentence', { finding: 'The homepage leads on a metaphor rather than a promise', evidence: 'we are laser focused on understanding your ROI objectives' }],
+    ];
+    const _shouldFail = [
+      ['fabricated quote', { finding: 'The homepage promises same-day service', evidence: 'We guarantee same-day service on every single job we take' }],
+      ['no quote at all', { finding: 'The homepage is generic', evidence: '' }],
+      ['several findings, no single sentence', { finding: 'First the homepage does one thing and then the about page does another thing and then the services page does a third thing and the contact page does a fourth and none of them agree with each other in any way a reader could follow or that would help anybody decide anything', evidence: 'Our Green Diamond Service sets us apart' }],
+    ];
+    const _blocked = _shouldPass.filter(([, x]) => !verifyOriginalFinding(x, _corpus).ok).map(([l]) => l);
+    const _leaked = _shouldFail.filter(([, x]) => verifyOriginalFinding(x, _corpus).ok).map(([l]) => l);
+    if (_leaked.length) {
+      console.log(`\u26d4 FINDING SURVIVAL CHECK: ${_leaked.join(', ')} would be accepted. A quote we cannot find in their copy puts words in the owner's mouth he can see he never wrote.`);
+    } else if (_blocked.length) {
+      console.log(`\u26d4 FINDING SURVIVAL CHECK: ${_blocked.join(', ')} still dropped. Every drop returns the audit to the 33-rung list every lead gets \u2014 which is the thing this field exists to escape.`);
+    } else {
+      console.log(`\u2713 FINDING SURVIVAL CHECK: a long finding is trimmed to its first sentence instead of binned, a real quote matches wherever it was trimmed, and fabricated or shapeless ones are still refused.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FINDING SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ EVERY MEASURED FIELD MUST REACH THE LADDER ═══════════════════════════
