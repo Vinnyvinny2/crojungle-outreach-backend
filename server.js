@@ -244,6 +244,26 @@ const detectPostContactClaims = (prose) => {
     const owned = OWNED.test(sent);
     const clocked = CLOCKED.test(sent);
     if (!owned && !clocked) continue;   // a general truth about people - legal
+    // ══ REPORTING WHAT HIS REVIEWERS WROTE IS NOT A CLAIM ═════════════════
+    // This guard exists to stop us asserting what happens after somebody
+    // contacts the business, because we have never watched it. But when the
+    // sentence attributes the behaviour to HIS OWN REVIEWS, we are not claiming
+    // anything — his customers wrote it down and we measured it.
+    //
+    // Live: "Grant, seven of your 68 reviews say the same thing — crews not
+    // calling back, or long waits between the quote and the start date." That is
+    // the strongest finding this system produces, sourced from their own review
+    // text, and the guard was refusing it as an unobserved backend claim.
+    //
+    // The distinction is exactly the one this guard already draws elsewhere:
+    // asserting the behaviour is illegal, quoting the people who experienced it
+    // is the whole point. Attribution has to be IN THE SENTENCE — a bare claim
+    // in a later sentence gets no protection from a citation earlier in the email.
+    if (/\b(review(s|ers)?|customers?|clients?|patients?)\b[^.]{0,40}\b(say|says|said|write|writes|wrote|mention|mentions|mentioned|describe|describes|describ\w+|report|reports|reported|name|names|named|cite|cites|flag|flags)\b/i.test(sent)
+        || /\b(of|in) (your|their|his|her|the) (\d+ |~?\d+ )?(google )?reviews?\b/i.test(sent)
+        || /\breviewers?\b/i.test(sent)) {
+      continue;
+    }
     out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people; illegal attached to them${clocked && !owned ? ' (a specific time implies we watched it)' : ''} \u2014 "${sent.slice(0, 95)}"`);
   }
   return out;
@@ -9403,40 +9423,55 @@ const parseProspectVerdict = (text) => {
 // rather than adjectives about him. The prohibitions stay untouched and
 // verifyBrainEmail still judges the output, so the floor does not move. Only the
 // input changes, from seven strings to the reasoning that produced them.
-const MIKE_VOICE_FOR_EMAIL = `HERE IS AN EMAIL THIS SYSTEM SENT THAT WORKED. MATCH ITS MOVES:
+const MIKE_VOICE_FOR_EMAIL = `THE FINDING GOES IN THE FIRST TWELVE WORDS.
 
-"Michael, I noticed you've built something real here: 341 reviews at 4.9 stars, and you're actually responding to nearly all of them. That's rare. Here's what caught my attention though — the only way anyone can reach you is a phone call during office hours. With cases running several thousand dollars, that's a lot of friction for someone trying to take that first step. I've written up three things on this. Want me to send them over?"
+The 2026 benchmark data is blunt: "reply rate is decided in the first 12 words —
+subject line and opening sentence do 80% of the work." And: "the strongest first
+lines are SITUATIONAL, NOT COMPLIMENTARY."
 
-WHAT IT DOES, IN ORDER — DO ALL FIVE:
-1. A PERSON WHO LOOKED. "I noticed you've built something real here." Someone
-   went and read his page. Say so.
-   \u26a0 KEEP IT TO ONE CLAUSE, AND NEVER LET IT DELAY THE FINDING. Chuck Jenkins
-   replied to a live email and said: "if they'd led with 'a business with fewer
-   reviews outranking you for your exact local search term' INSTEAD OF THE REVIEW
-   COUNT, I'd have opened this in 30 seconds instead of almost deleting it."
-   He already knows his review count. The finding is the reason he keeps reading,
-   so it belongs in the first or second sentence \u2014 never the third.
-2. ONE JUDGEMENT, GIVEN FREELY. "That's rare." Two words, no hedge, nothing
-   asked for in return. This is what makes the rest believable.
-3. THE TURN. "Here's what caught my attention though —". He leans in. The email
-   pivots from what is working to what is not, and the reader feels it happen.
-4. THE COST, IN HUMAN TERMS. "that's a lot of friction for someone trying to
-   take that first step." Not a metric. A person, mid-decision, stuck.
-5. THE ASK, SMALL AND EASY.
+A real prospect told us the same thing unprompted. Chuck Jenkins replied to one
+of these and said: "if they'd led with 'a business with fewer reviews outranking
+you for your exact local search term' INSTEAD OF THE REVIEW COUNT, I'd have opened
+this in 30 seconds instead of almost deleting it."
+
+SO:
+\u2717 "Grant, I read through your reviews and your homepage \u2014 68 at 4.8 stars, and
+   you've got the pedigree to back it up. What stood out though is that seven of
+   those reviews mention the same thing..."
+   Twelve words about what WE did, then a compliment, and the finding arrives at
+   word thirty. He has already decided by then.
+
+\u2713 "Grant, seven of your 68 reviews say the same thing \u2014 crews not calling back,
+   or long waits between the quote and the start date. That's in the middle of a
+   five-figure decision, right when someone is trying to move forward. Does that
+   come up much on your end?"
+   The finding is the first thing he reads. The recognition, if it earns a place
+   at all, comes AFTER \u2014 and one clause is plenty.
+
+THE SHAPE: observation \u2192 consequence \u2192 ask. Three or four sentences. 50-90 words.
+
+WRITE IT LIKE A PERSON, NOT A DOCUMENT:
+- Contractions. "That's", "you're", "don't", "isn't".
+- Start a sentence with And or But when it reads better.
+- Slight imperfection is the point. "If it sounds like a press release, rewrite
+  it" \u2014 an email that is perfectly structured and overly polished is read as
+  machine-written and filtered, by people and by spam systems both.
+- Read it aloud in your head. If you would not say it standing in his yard,
+  it is wrong.
 
 WHAT KILLS IT:
-- Explaining the finding after stating it. "The gap between what you've built
-  and what the search results show isn't a matter of volume — it's visibility in
-  the place where your next patient is already looking." That is a consultant
-  narrating. Nobody is in it. Cut every sentence of this shape.
-- Stating the recognition instead of reacting to it. "648 reviews at 4.8 stars is
-  the work of someone who knows his trade" is a description. "I noticed you've
-  built something real here: 648 reviews at 4.8" is a person.
-- Abstract nouns doing the work: visibility, presence, positioning, the gap,
-  the path, the machine. Say the thing that happens to a person instead.
+- Explaining the finding after stating it. "The gap between what you've built and
+  what the search results show isn't a matter of volume \u2014 it's visibility in the
+  place where your next patient is already looking." That is a consultant
+  narrating. Nobody is in it. Cut every sentence of that shape.
+- Complimenting him to earn the right to speak. He did not ask for the compliment
+  and he can tell it is there to soften a pitch.
+- Abstract nouns doing the work: visibility, presence, positioning, the gap, the
+  path, the funnel. Say the thing that happens to a person.
 
 VOICE: plain words, no marketing vocabulary, no flattery he did not earn. Warm
-because you actually looked, not because you are being nice.`;
+because you actually looked \u2014 not because you are being nice.`;
+
 
 
 // ══ EVERYTHING WE LEARNED, IN ONE PLACE ══════════════════════════════════════
@@ -9623,10 +9658,11 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   write "six places in total", "three different pages", or "everywhere we
   looked". We read a handful of pages and counted separate problems across them.
   Only ONE of those findings is the one this email is about.
-${first ? `- Open "${first}, " \u2014 a comma, never a dash. Then a person, not a
-  number: "I noticed...", "I was looking at...", "I read through...". The first
-  words after his name should be someone telling him what they did, exactly as
-  the example does. Opening straight onto a statistic is the flat version.` : '- No greeting; open on the fact.'}
+${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and then THE FINDING. Not
+  what you did, not what he has built, not a compliment. The measured thing you
+  found, in his words where possible, inside the first twelve words. Recognition
+  is optional and belongs AFTER it; one clause at most, and only if it is a
+  measured number rather than praise.` : '- No greeting; open on the finding.'}
 
 55-85 words. The worked example above governs. Match its MOVES, not its facts.
 
@@ -9679,6 +9715,24 @@ const verifyBrainEmail = (body, opts = {}) => {
   // mid-email is not an ask — the reader passes it, finishes on a statement, and
   // has nothing to do. Every reply this system can earn depends on the last line
   // being a question he can answer in four words.
+  // ══ THE FINDING MUST BE IN THE FIRST TWELVE WORDS ═══════════════════════
+  // "Reply rate is decided in the first 12 words." Chuck Jenkins, a real
+  // prospect, said the same: leading with the review count instead of the
+  // finding almost lost him. A draft that spends its opening on what we did or
+  // on praise has spent the only part of the email that decides the outcome.
+  //
+  // Checked against the spine's own distinctive words, so it cannot be satisfied
+  // by a generic opener that happens to be short.
+  if (opts.spine) {
+    const _open = text.split(/\s+/).slice(0, 14).join(' ').toLowerCase();
+    const _key = String(opts.spine).toLowerCase().split(/\s+/)
+      .filter(w => w.length > 4 && !/^(their|there|business|company|website|appears|anywhere|reviews?)$/.test(w));
+    const _hit = _key.filter(w => _open.includes(w)).length;
+    if (_key.length >= 3 && _hit === 0) {
+      return { ok: false, why: 'the finding does not appear in the first dozen words — the opening is spent on what we did or on praise, and that is the part that decides whether he reads on' };
+    }
+  }
+
   const _sentences = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean);
   const _questionAt = _sentences.map((x, i) => (/\?/.test(x) ? i : -1)).filter(i => i >= 0);
   if (!_questionAt.length) {
@@ -9733,7 +9787,18 @@ const verifyBrainEmail = (body, opts = {}) => {
     [/\bnever (see|sees|saw) (them|you|him|her) again\b/i, 'states they never return — unknowable'],
     // A whole family of "what the customer did next" claims, which is the single
     // most common drift: we measure the wall, never what happened after it.
+    // ══ "FIRST" OR "INSTEAD" WAS DOING TOO MUCH WORK ═══════════════════════
+    // This required the sentence to end on "first" or "instead", so "the customer
+    // has already booked with someone else" walked straight through — the same
+    // claim, one word short of the pattern. We have never watched a single
+    // customer choose anybody, and asserting it is the most confident false
+    // statement an email can carry.
+    //
+    // Split in two: the original, plus a form that needs no trailing adverb. The
+    // second still requires SOMEONE ELSE as the object, so "he books the job"
+    // and "customers call him" are untouched.
     [/\b(finds?|found|calls?|called|picks?|picked|chooses?|chose|books?|booked|goes? with|went with) (them|someone else|somebody else|the other|whoever)\b[^.]{0,40}\b(first|instead)\b/i, 'states which business the customer chose — never observed'],
+    [/\b(has|have|had|already|ends? up|ended up)\s+(?:\w+\s+){0,2}(?:called|picked|chosen|chose|booked|hired|gone|went)\s+(?:with\s+|to\s+)?(someone else|somebody else|the other|a competitor|another)\b/i, 'states which business the customer chose — never observed'],
     [/\bends? up (calling|booking|hiring|choosing|going)\b/i, 'states what the customer ended up doing'],
     [/\bmoves? on to (the )?(next|another)\b/i, 'states the visitor moved on — unobserved'],
     [/\b(has|have) nowhere to go\b/i, 'states the outcome of a visit we did not track'],
@@ -26440,7 +26505,12 @@ app.listen(PORT, () => {
       figures: ['41', '260', '5', '2'], money: 'a garage door replacement runs $1k-$4k',
       earned: '260 reviews at 5 stars, and you have answered nearly every one we read', count: 2,
     };
-    const _good = 'Tyler — you have 260 reviews at 5 stars and you have answered nearly every one, which is what makes this odd: Overhead Door Company of Indianapolis sits above you for "garage door repair in Carmel" with 41. People pick from what is in front of them, not from who is actually best, and a garage door replacement runs $1k-$4k. There are 2 of these. Want to know why they are above you?';
+    // ══ THE REFERENCE DRAFT NOW LEADS ON THE FINDING ═══════════════════════
+    // The old version opened on the review count and reached the finding at word
+    // twenty. "Reply rate is decided in the first 12 words", and Chuck Jenkins
+    // said the same unprompted: leading with the review count almost lost him.
+    // The recognition still earns a place — just after the finding, not before.
+    const _good = 'Tyler, Overhead Door Company of Indianapolis sits above you for "garage door repair in Carmel" with 41 reviews against your 260. People pick from what is in front of them, not from who is actually best. A garage door replacement runs $1k-$4k. Want to know why they are above you?';
     const _base = 'Tyler — you have 260 reviews at 5 stars but Overhead Door Company outranks you for "garage door repair in Carmel" with 41. ';
     const _bad = [
       ['invented figure', _base + 'That gap is costing you roughly 15 calls every single month at the moment.'],
@@ -26451,6 +26521,13 @@ app.listen(PORT, () => {
       ['specific hour', _base + 'Someone searching at 8pm ends up somewhere else entirely that evening.'],
       ['agency jargon', _base + 'Your funnel is leaking badly at the top and nothing is catching them.'],
       ['drifted off finding', 'Tyler — your website looks dated and the branding feels tired next to the others working in your area right now honestly.'],
+      // "first"/"instead" was doing too much work — the same claim one word
+      // short of the pattern walked through.
+      ['customer chose someone else', _base + 'By the time you see it, the customer has already booked with someone else. Want to know why they are above you?'],
+      // Live regression: the finding arrived at word thirty, behind a compliment.
+      // "Reply rate is decided in the first 12 words", and Chuck Jenkins said the
+      // same unprompted — leading with the review count almost lost him.
+      ['finding buried behind a compliment', 'Tyler, I read through your reviews and your homepage — 260 at 5 stars, and you have got the pedigree to back it up. What stood out though is that Overhead Door Company outranks you with 41 reviews. A garage door replacement runs $1k-$4k. Want to know why they are above you?'],
       // Live regression the moment the writer was given real freedom: the
       // question landed in sentence two and four more followed it.
       ['ask buried mid-email', _base + 'Want to know why they are above you? People searching pick from what is in front of them. A garage door replacement runs $1k-$4k. Speed in that first moment determines who gets the work.'],
@@ -26473,6 +26550,8 @@ app.listen(PORT, () => {
       ['count attached to one surface', _base + 'We found six things like this on your listing and they are all costing you work.'],
     ];
     const _leaked = _bad.filter(([, t]) => verifyBrainEmail(t, _o).ok).map(([l]) => l);
+    // The good draft is checked with the spine present, because the
+    // first-twelve-words gate only applies when there is a spine to check against.
     const _goodV = verifyBrainEmail(_good, _o);
     if (_leaked.length) {
       console.log(`\u26d4 EMAIL WRITER CHECK: ${_leaked.length} fabrication(s) would reach a prospect \u2014 ${_leaked.join(', ')}. The model may only connect facts we handed it, and this is the only thing standing between a fluent sentence and a false one.`);
