@@ -13427,7 +13427,11 @@ const readApifyPlaceMeta = (items) => {
 };
 
 const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '', timeoutMs = APIFY_TIMEOUT_MS,
-                                   maxReviews = APIFY_MAX_REVIEWS }) => {
+                                   maxReviews = APIFY_MAX_REVIEWS,
+                                   // How many reviews Google says this place has. Used only to
+                                   // recognise a truncated dataset — a five-review answer for a
+                                   // 116-review place is a failure wearing an HTTP 200.
+                                   placeTotalHint = 0 }) => {
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
   if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}`;
@@ -13450,6 +13454,34 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   if (!Array.isArray(items)) return { checked: false, why: 'Apify response was not an array — actor output shape changed' };
   if (!items.length) return { checked: false, why: 'Apify returned no rows — cannot distinguish "no reviews" from a failed run' };
   const meta = readApifyPlaceMeta(items);
+
+  // ══ A SHORT DATASET IS NOT A SHORT PROFILE ══════════════════════════════
+  // Apify answered HTTP 200 with FIVE reviews for a place with 116, twice in one
+  // run, six seconds after the request. Twenty minutes earlier the same place
+  // returned all 116 in twenty-one seconds. There is no 402 to catch: an
+  // exhausted or throttled account looks exactly like a successful short answer.
+  //
+  // Read as real it is worse than a failure. Five reviews cannot hold a pattern
+  // repeating across two, so the mine reports "no pain found", the ladder falls
+  // back to map rank, and the email opens on the weakest finding we have. Both
+  // leads in that run got precisely that, and the simulator called the result
+  // "template garbage".
+  //
+  // Placed HERE, after items and meta exist — the first version read `items` six
+  // lines before its declaration, which the TDZ scanner caught before it shipped.
+  // meta.totalReviews is Apify's own count of the place, so the dataset tells us
+  // how much of itself is missing.
+  //
+  // The line it must not cross: a business that genuinely has nine reviews and
+  // returns five is fine. The signal is the RATIO against a large profile.
+  {
+    const _total = Number(meta.totalReviews || 0);
+    const _got = items.length;
+    if (_total >= 25 && _got > 0 && _got <= 8 && _got < _total * 0.25) {
+      return { checked: false, truncated: true,
+        why: `Apify returned only ${_got} review(s) for a place with about ${_total}. That is a truncated dataset rather than a short profile — usually an exhausted or throttled account, and it arrives as HTTP 200 so there is no error to catch. Reading it would report "no repeating complaint" about reviews we never actually saw.` };
+    }
+  }
   const reviews = items.map(normalizeApifyReview).filter(Boolean);
   if (!reviews.length) return { checked: false, why: `Apify returned ${items.length} row(s) but none parsed as reviews — output shape changed` };
   const withText = reviews.filter(r => r.text.length > 0);
@@ -13476,7 +13508,7 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
 // result-only cache would let both through and bill the actor twice. Sharing the
 // promise means the second caller awaits the first caller's run.
 const fetchApifyReviews = async (opts) => {
-  const { placeId, maxReviews = APIFY_MAX_REVIEWS, companyName = '' } = opts || {};
+  const { placeId, maxReviews = APIFY_MAX_REVIEWS, companyName = '', placeTotalHint = 0 } = opts || {};
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
   const key = `${placeId}::${maxReviews}`;
   const hit = _APIFY_CACHE.get(key);
@@ -26265,6 +26297,37 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 OWNER FEEDBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SHORT DATASET IS NOT A SHORT PROFILE ═══════════════════════════════
+  // Apify answered HTTP 200 with FIVE reviews for a place with 116, twice in one
+  // run, six seconds after the request. Twenty minutes earlier the same place
+  // returned all 116 in twenty-one seconds. There is no 402 to catch — an
+  // exhausted or throttled account looks like a successful short answer.
+  //
+  // Read as real it is worse than a failure: five reviews cannot hold a pattern
+  // repeating across two, so the mine reports "no pain found", the ladder falls
+  // back to map rank, and the email opens on the weakest finding we have. Both
+  // leads in that run got exactly that, and the simulator called it "template
+  // garbage".
+  //
+  // The line it must not cross: a business that genuinely has nine reviews and
+  // returns five is fine. The signal is the RATIO against a large profile.
+  try {
+    const _truncated = (got, total) => (total >= 25 && got > 0 && got <= 8 && got < total * 0.25);
+    const _mustFlag = [[5, 116, 'Hardy'], [5, 65, 'Justin Doyle'], [8, 40, 'partial pull']];
+    const _mustTrust = [[116, 116, 'full read'], [65, 65, 'full read'], [5, 9, 'genuinely nine reviews'], [3, 12, 'small profile']];
+    const _missed = _mustFlag.filter(([g, t]) => !_truncated(g, t)).map(([, , n]) => n);
+    const _falsePos = _mustTrust.filter(([g, t]) => _truncated(g, t)).map(([, , n]) => n);
+    if (_missed.length) {
+      console.log(`\u26d4 TRUNCATED PULL CHECK: ${_missed.join(', ')} would be read as a real answer. Five reviews from a 116-review profile becomes "no repeating complaint", and the email drops to the weakest finding we have.`);
+    } else if (_falsePos.length) {
+      console.log(`\u26d4 TRUNCATED PULL CHECK: ${_falsePos.join(', ')} wrongly treated as truncated. A business that really does have nine reviews must still be mined \u2014 discarding those loses real findings.`);
+    } else {
+      console.log(`\u2713 TRUNCATED PULL CHECK: a handful of reviews returned for a large profile is reported as NOT MEASURED rather than as "no complaints found", while a genuinely small profile is still read \u2014 the two must never look the same.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TRUNCATED PULL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ EVERY ARG THE RESOLVER TAKES MUST EXIST WHERE IT IS CALLED ═══════════
