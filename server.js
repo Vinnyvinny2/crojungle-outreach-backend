@@ -10004,6 +10004,54 @@ const verifyBrainEmail = (body, opts = {}) => {
   // mid-email is not an ask — the reader passes it, finishes on a statement, and
   // has nothing to do. Every reply this system can earn depends on the last line
   // being a question he can answer in four words.
+  // ══ "FIVE-STAR" WHEN WE NEVER MEASURED A FIVE ═══════════════════════════
+  // Live on Emily Taylor: "Your 152 five-star reviews are solid." We measured
+  // 152 reviews. We never measured that they are all five stars, and at any
+  // rating below 5.0 they demonstrably are not.
+  //
+  // A guard for this exists for the AUDIT, keyed on a known sub-5.0 rating. It
+  // does not fire when the rating was never measured at all — which is the more
+  // common case and the more dangerous one, because there is nothing to compare
+  // against and the claim goes out unchallenged.
+  //
+  // The rule is simple: the words "five-star" may only appear when a rating of
+  // exactly 5 is in the permitted figures. Anything else is a number we invented
+  // about his own reviews, which he checks in one click.
+  {
+    const _claimsFive = /\b(five[- ]star|5[- ]star|all five stars?)\b/i.test(text);
+    if (_claimsFive) {
+      const _figs = (opts.figures || []).map(String);
+      const _ratingIsFive = _figs.includes('5') || /\b5(\.0)? stars?\b/i.test(String(opts.earned || ''));
+      if (!_ratingIsFive) {
+        return { ok: false, why: 'says "five-star" when no rating of 5 was measured — we counted his reviews, we never established they are all five stars, and he can check that in one click' };
+      }
+    }
+  }
+
+  // ══ THE FINDING MUST BE ABOUT HIM, NOT HIS INDUSTRY ═════════════════════
+  // Live on Emily Taylor. The finding was "SHE does not come up in the map
+  // results". The email said "Estate planning attorneys in Phoenix aren't
+  // showing up in Google map results" — which claims her entire profession is
+  // invisible, is obviously false, and she disproves it in one search.
+  //
+  // The shift is easy for a writer to make and fatal when it happens: a finding
+  // about a category is not a finding, and stating one as fact is the fastest
+  // way to lose a reader who knows her own market.
+  //
+  // Detected by shape: a plural trade noun as the SUBJECT of a negative verb,
+  // where the measured finding was about this one business.
+  {
+    const _t = String(opts.trade || '').trim().toLowerCase();
+    const INDUSTRY_SUBJECT = new RegExp(
+      `\\b(?:most |many |some |all )?(?:${_t ? _t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 's?|' : ''}` +
+      `attorneys|lawyers|surgeons|dentists|contractors|builders|plumbers|roofers|practices|firms|businesses|companies|shops)` +
+      `\\s+(?:in\\s+[A-Z][a-z]+\\s+)?(?:aren'?t|are not|do not|don'?t|never|fail to|struggle to)\\b`, 'i');
+    const _m = text.match(INDUSTRY_SUBJECT);
+    if (_m) {
+      return { ok: false, why: `"${_m[0].trim()}" — this states something about his whole industry, and what we measured was about HIS business. A claim about every attorney in Phoenix is one he disproves with a single search, and it tells him we were never really looking at him` };
+    }
+  }
+
   // ══ THE FINDING MUST BE IN THE FIRST TWELVE WORDS ═══════════════════════
   // "Reply rate is decided in the first 12 words." Chuck Jenkins, a real
   // prospect, said the same: leading with the review count instead of the
@@ -27619,6 +27667,14 @@ app.listen(PORT, () => {
       // COPY VERIFY, which runs on the audit, so the email path never saw it.
       // The product guard was a word list and "scheduling system" was not on it.
       ['describes our own process', _base + 'I mapped exactly where the pattern shows up. Want to know why they are above you?'],
+      // Both live on Emily Taylor. The email claimed her whole profession was
+      // invisible — a claim she disproves in one search — and called her 152
+      // reviews "five-star" when no rating of 5 was ever measured.
+      ['industry as the subject', 'Tyler, garage door companies in Carmel are not showing up in the Google map results. That is where someone lands mid-decision. Want to know why they are above you?'],
+      // NOT in this list: Tyler's rating genuinely IS 5.0, so "260 five-star
+      // reviews" is true for him and the guard correctly allows it. The
+      // fabrication is claiming five stars when no 5 was measured, which needs a
+      // lead whose figures do not contain one — checked separately below.
       ['a product as the answer', _base + 'A scheduling system would fix that. Want to know why they are above you?'],
       ['states the fix outright', _base + 'The fix is a proper booking path. Want to know why they are above you?'],
       ['opener spent on what we did', 'Tyler, I went through your website and your Google reviews carefully this morning, and what stood out was that Overhead Door Company outranks you with 41 reviews against your 260. That matters. Want to know why they are above you?'],
@@ -27638,6 +27694,14 @@ app.listen(PORT, () => {
     // The good draft is checked with the spine present, because the
     // first-twelve-words gate only applies when there is a spine to check against.
     const _goodV = verifyBrainEmail(_good, _o);
+    // ══ "FIVE-STAR" WITH NO FIVE MEASURED ═══════════════════════════════
+    // Live on Emily Taylor: "Your 152 five-star reviews are solid." We counted
+    // 152 reviews and never established the rating at all. Needs its own option
+    // set, because the main one belongs to a lead that really is 5.0.
+    const _noFive = verifyBrainEmail(
+      'Emily, you do not come up in the Google map results for "lawyer in Phoenix". Your 152 five-star reviews say the work is good. How much of your work comes through referral?',
+      { spine: 'they do not come up in the Google map results', figures: ['152'], earned: '152 reviews', count: 1 });
+    if (_noFive.ok) _leaked.push('five-star when no rating of 5 was measured');
     if (_leaked.length) {
       console.log(`\u26d4 EMAIL WRITER CHECK: ${_leaked.length} fabrication(s) would reach a prospect \u2014 ${_leaked.join(', ')}. The model may only connect facts we handed it, and this is the only thing standing between a fluent sentence and a false one.`);
     } else if (!_goodV.ok) {
@@ -29583,7 +29647,10 @@ app.post('/api/compose-email', async (req, res) => {
       // blocks nothing, and produces no text that reaches anybody. If it fails
       // or times out the email stands exactly as composed.
       try {
-        const _send = (req.body.abVariant === 'B' && composed.variantB) ? composed.variantB : composed.variantA;
+        // Which variant is actually going out — needed so a sim-corrected
+        // rewrite writes back to the one that was read, not to the other one.
+        const _sendKey = (req.body.abVariant === 'B' && composed.variantB) ? 'variantB' : 'variantA';
+        const _send = composed[_sendKey];
         if (req.body.apiKey && _send && _send.body) {
           const _sim = await simulateProspect({
             email: _send.body, subject: _send.subject,
@@ -29601,6 +29668,46 @@ app.post('/api/compose-email', async (req, res) => {
             sessionAttachEmail(company, _send.subject, _send.body, `${_sim.verdict}: ${_sim.reaction}`);
             const _mark = _sim.verdict === 'reply' ? '\u2713' : _sim.verdict === 'ignore' ? '\u25cb' : '\u26d4';
             console.log(`${_mark} READ AS ${(_founder || 'the owner').toUpperCase()} [${company}]: ${_sim.verdict.toUpperCase()} \u2014 "${_sim.reaction}"${_sim.wouldReply ? ` | what would have got a reply: ${_sim.wouldReply}` : ''}`);
+            // ══ THE SIMULATOR SAYS DELETE AND WE SEND IT ANYWAY ═══════════
+            // The prospect reading is produced AFTER the email is finished and
+            // then only reported. On Emily Taylor it said DELETE and named the
+            // reason precisely — "most of my clients come through referrals,
+            // they're solving for the wrong constraint" — and the email went to
+            // the queue unchanged.
+            //
+            // That reading is the one check no rule can perform: it catches
+            // emails that are TRUE and BESIDE THE POINT. Discarding it is
+            // discarding the most useful signal in the whole compose path.
+            //
+            // So on a delete verdict the writer gets one corrected attempt with
+            // the objection in hand. The SAME verifier judges the result, so
+            // nothing about the factual floor changes — and if the rewrite
+            // cannot pass, the original email stands rather than being lost.
+            if (_sim.verdict === 'delete' && req.body.apiKey && _sendKey) {
+              try {
+                const _why = String(_sim.reaction || '').slice(0, 220);
+                const _want = String(_sim.wouldReply || '').slice(0, 220);
+                const _r3 = await rewriteEmailWithBrain(
+                  _parts, req.body.apiKey, company, _send.body,
+                  `The owner read this and deleted it. In his words: "${_why}"${_want ? ` He said what would have earned a reply: "${_want}"` : ''} Fix that objection using ONLY the facts you were already given — do not add a new claim, a new number or a new finding to answer it. If his objection is that the finding does not apply to how he gets customers, lead on a different measured finding you were given instead.`
+                );
+                if (_r3) {
+                  const _v3 = verifyBrainEmail(_r3, {
+                    spine: _spineTxt, figures: _figs, money: _parts.money || '',
+                    earned: _parts.earned || '', count: _parts.count || '',
+                    trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+                  });
+                  if (_v3.ok) {
+                    composed[_sendKey] = { ...composed[_sendKey], body: _v3.body, writtenBy: 'brain-sim-corrected' };
+                    sessionAttachEmail(company, _send.subject, _v3.body, `${_sim.verdict}: ${_sim.reaction}`);
+                    console.log(`\u21bb REWRITTEN AFTER SIM [${company}]: the owner's own objection was "${_why.slice(0, 80)}" and the email has been rewritten to answer it from the facts we already had. Every figure still traces to a measurement.`);
+                  } else {
+                    console.log(`\u21bb SIM REWRITE REFUSED [${company}]: the corrected draft broke a rule — ${String(_v3.why).slice(0, 80)}. Keeping the original, which at least passes every check.`);
+                  }
+                }
+              } catch (e) { void e; }
+            }
+
           }
         }
       } catch (e) { console.log(`Prospect sim skipped: ${e && e.message}`); }
