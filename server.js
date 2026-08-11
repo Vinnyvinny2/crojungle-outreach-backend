@@ -3732,7 +3732,21 @@ const GP_CITIES = [
 // National franchises / DSOs / chains — the local operator does NOT own the marketing,
 // so they are not our ICP no matter how reachable the branch is.
 const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|joshua tree experts)\b/i;
-const searchGooglePlaces = async (placesKey) => {
+// ══ FILTERS APPLIED AT THE PULL ══════════════════════════════════════════════
+// Filtering after the fact still spends the Places call. Narrowing the run means
+// only buying leads that match — which is the whole point of a narrow pull: one
+// niche, one region, one rating band.
+//
+// Every filter is optional and absent means no constraint, so a caller that
+// sends nothing gets exactly the behaviour that existed before.
+//   niches    ['Roofing','HVAC']   only these categories
+//   cities    ['Charlotte NC']     only these markets
+//   minRating / maxRating          overrides the default band
+//   onlyNoWebsite                  businesses with no site at all
+//   onlyBuilderSite                businesses on a free page builder
+//   minReviews                     raise the floor for bigger operators
+const searchGooglePlaces = async (placesKey, filters = {}) => {
+  const _flt = filters && typeof filters === 'object' ? filters : {};
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
   // places.location added so a coverage claim can be distance-aware. Without it
   // we would tell a roofer in north Charlotte he is "absent from Rock Hill" —
@@ -3767,8 +3781,8 @@ const searchGooglePlaces = async (placesKey) => {
   // The CEILING is the part with evidence behind it: fourteen for fourteen, every
   // business at 4.9 returned no repeating complaint, because at that average
   // almost no negative reviews exist to find.
-  const PAIN_BAND_LOW = 3.8;
-  const PAIN_BAND_HIGH = 4.85;
+  const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
+  const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
   // GP_FREE_BUILDER is declared at module scope so the boot check can assert it.
   const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
@@ -3793,7 +3807,11 @@ const searchGooglePlaces = async (placesKey) => {
   // sell. Every query we do not run is ~2 credits and a queue slot saved, and every
   // tier-C lead we would have researched is ~10 more credits spent on a business
   // that was never going to buy.
-  const _cats = GP_CATEGORIES.filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C');
+  const _wantNiche = Array.isArray(_flt.niches) && _flt.niches.length
+    ? new Set(_flt.niches.map(x => String(x).toLowerCase())) : null;
+  const _cats = GP_CATEGORIES
+    .filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C')
+    .filter(c => !_wantNiche || _wantNiche.has(String(c.label).toLowerCase()));
   const _cut = GP_CATEGORIES.length - _cats.length;
   if (_cut) console.log(`ICP FILTER: searching ${_cats.length} of ${GP_CATEGORIES.length} categories — ${_cut} cut for average job value too low to fund a $10k+/mo retainer`);
   // ── STRATIFIED, NOT RANDOM ────────────────────────────────────────────────
@@ -3809,7 +3827,11 @@ const searchGooglePlaces = async (placesKey) => {
   // RUN_CAP happens to be, coverage is now as even as the budget allows and no
   // vertical can be skipped while another gets seconds.
   const _byCat = _cats.map(cat => {
-    const cities = [...GP_CITIES];
+    // A city filter narrows the grid before any query runs, so a regional pull
+    // costs a fraction of a national one.
+    const cities = _flt.cities && Array.isArray(_flt.cities) && _flt.cities.length
+      ? GP_CITIES.filter(c => _flt.cities.some(w => String(c).toLowerCase() === String(w).toLowerCase()))
+      : [...GP_CITIES];
     for (let i = cities.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [cities[i], cities[j]] = [cities[j], cities[i]];
@@ -3875,7 +3897,15 @@ const searchGooglePlaces = async (placesKey) => {
         const _builderSite = !!website && GP_FREE_BUILDER.test(website);
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
         // Trade-aware floor, not one number for every vertical — see reviewFloorFor.
-        if (reviews < reviewFloorFor(cat.label, MIN_REVIEWS)) continue;
+        const _reviewFloor = Number.isFinite(Number(_flt.minReviews))
+          ? Math.max(Number(_flt.minReviews), reviewFloorFor(cat.label, MIN_REVIEWS))
+          : reviewFloorFor(cat.label, MIN_REVIEWS);
+        if (reviews < _reviewFloor) continue;
+        // Website-shape filters. Applied here rather than in the UI so a run
+        // looking only for call leads does not spend a query on anything else.
+        if (_flt.onlyNoWebsite && !_noWebsite) continue;
+        if (_flt.onlyBuilderSite && !_builderSite) continue;
+        if (_flt.excludeNoWebsite && _noWebsite) continue;
         // ══ THE RATING BAND ════════════════════════════════════════════════
         // A rating we cannot read tells us nothing either way, so it passes —
         // absence of a rating is not evidence of a clean record.
@@ -8850,11 +8880,19 @@ const SELLABLE = {
   review_deficit: 5, no_after_hours: 5,
 
   // ── 3: real work, inside an engagement ──────────────────────────────────
-  undifferentiated: 3, no_offer: 3, form_only_no_booking: 3, long_form: 3,
-  dated_credibility: 3, no_mobile_viewport: 3, wrong_gbp_category: 3,
-  no_owner_replies: 3, partial_owner_replies: 3, listing_closed: 3,
+  undifferentiated: 3, no_offer: 3, form_only_no_booking: 3,
+  dated_credibility: 3, wrong_gbp_category: 3, listing_closed: 3,
 
   // ── 1: a Saturday morning, and nothing to sell behind it ────────────────
+  // ══ THESE WERE SCORED AS REAL WORK AND THEY ARE NOT ═════════════════════
+  // "12 of the 40 reviews we read have a reply from the business" opened a live
+  // email at opener 31, and the system's own log said "at harm 54 it may not be
+  // enough for him to act on." An owner reads it and thinks: I should reply to
+  // more reviews. Twenty minutes, free, and no reason to answer us.
+  //
+  // Same for a seven-field form and a mobile viewport tag. Real, true, and a
+  // ten-minute job with nothing behind it worth buying.
+  no_owner_replies: 1, partial_owner_replies: 1, long_form: 1, no_mobile_viewport: 1,
   no_published_pricing: 1, no_lead_magnet: 1, stale_copyright: 1,
   placeholder_text: 1, dead_blog: 1, no_https: 1, expired_certificate: 1,
   thin_profile: 1, no_hours_on_profile: 1, no_website_on_profile: 1,
@@ -9372,6 +9410,12 @@ const MIKE_VOICE_FOR_EMAIL = `HERE IS AN EMAIL THIS SYSTEM SENT THAT WORKED. MAT
 WHAT IT DOES, IN ORDER — DO ALL FIVE:
 1. A PERSON WHO LOOKED. "I noticed you've built something real here." Someone
    went and read his page. Say so.
+   \u26a0 KEEP IT TO ONE CLAUSE, AND NEVER LET IT DELAY THE FINDING. Chuck Jenkins
+   replied to a live email and said: "if they'd led with 'a business with fewer
+   reviews outranking you for your exact local search term' INSTEAD OF THE REVIEW
+   COUNT, I'd have opened this in 30 seconds instead of almost deleting it."
+   He already knows his review count. The finding is the reason he keeps reading,
+   so it belongs in the first or second sentence \u2014 never the third.
 2. ONE JUDGEMENT, GIVEN FREELY. "That's rare." Two words, no hedge, nothing
    asked for in return. This is what makes the rest believable.
 3. THE TURN. "Here's what caught my attention though —". He leans in. The email
@@ -9670,8 +9714,48 @@ const verifyBrainEmail = (body, opts = {}) => {
 };
 
 const PATTERN_GENERALITY = /\b(usually|normally|nearly always|almost always|in most|most of the time|tends? to|typically|more often than not|nine times out of ten|generally)\b/i;
+// ══ REPAIR WHAT CAN BE REPAIRED, REJECT ONLY WHAT CANNOT ═════════════════════
+// Three pattern lines in one batch, three discards: "no generality marker",
+// "names the business", and "49 words" against a 48-word cap. Meanwhile the
+// email fell back to "12 of the 40 reviews we read have a reply."
+//
+// That is the whole complaint, and it is correct: the brain produced something
+// better every time and we binned it on a technicality, then blamed the rung.
+//
+// Two of those three are REPAIRABLE without touching what the sentence means.
+// A line one word over its cap has a first sentence inside it. A line naming the
+// business is a category truth with a proper noun in it — swap the noun. Only a
+// missing generality marker is a genuine semantic failure, because adding one
+// would change a claim about THEM into a claim we are pretending is general.
+const repairPatternLine = (raw, opts = {}) => {
+  let t = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!t) return t;
+  // Their own name makes a category truth specific. Replacing it keeps the
+  // sentence and removes the only thing wrong with it.
+  const co = String(opts.company || '').replace(/[^A-Za-z ]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 3 && !/^(the|and|inc|llc|group|company|services|service)$/i.test(w));
+  for (const w of co) {
+    const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:'s)?\\b`, 'gi');
+    if (re.test(t)) t = t.replace(re, 'a business like this');
+  }
+  t = t.replace(/\ba business like this(?:\s+a business like this)+/gi, 'a business like this');
+  // Over the cap: take the first sentence, then the first clause. Same repair as
+  // originalFindings, and for the same reason — the observation is at the front
+  // and the justification trails it.
+  const wc = (x) => x.trim().split(/\s+/).filter(Boolean).length;
+  if (wc(t) > 48) {
+    let cut = (t.match(/^[^.!?]+[.!?]/) || [''])[0].trim().replace(/[.!?]+$/, '');
+    if (!cut || wc(cut) > 48 || wc(cut) < 6) {
+      const m = t.match(/^(.{20,}?)(?:,\s+(?:which|and|so|because|but)\b|\s+\u2014\s+|;\s+)/i);
+      if (m && wc(m[1]) >= 6 && wc(m[1]) <= 48) cut = m[1].trim().replace(/[,;\s]+$/, '');
+    }
+    if (cut && wc(cut) >= 6 && wc(cut) <= 48) t = cut;
+  }
+  return t;
+};
+
 const patternLineSafe = (raw, opts = {}) => {
-  const t = String(raw || '').replace(/\s+/g, ' ').trim();
+  const t = repairPatternLine(raw, opts);
   if (!t) return { ok: false, why: 'none supplied' };
   // A pattern line is one sentence of judgement, not a paragraph of analysis.
   const words = t.split(/\s+/).length;
@@ -16988,7 +17072,15 @@ app.get('/api/cron/discover', async (req, res) => {
 });
 
 app.post('/api/discover', async (req, res) => {
-  const { keywords, keys, apiKey, knownDomains, knownNames } = req.body;
+  // ══ FILTERS AT THE PULL, NOT JUST THE DISPLAY ════════════════════════════
+  // Filtering after the fact still spends the Places call. Passing the filter
+  // down means the run only buys leads that match, which matters because a
+  // narrow pull is the whole point — one niche, one region, one rating band.
+  //
+  // Every one of these is optional. Absent means "no constraint", so the
+  // endpoint behaves exactly as before for any caller that does not send them.
+  const { keywords, keys, apiKey, knownDomains, knownNames, filters } = req.body;
+  const _f = (filters && typeof filters === 'object') ? filters : {};
   // ── DEDUPE ────────────────────────────────────────────────────────────────
   // Nothing previously stopped a company you have already researched from coming
   // back in a later scan, taking a queue slot and — if you did not recognise the
@@ -17108,7 +17200,7 @@ app.post('/api/discover', async (req, res) => {
       // ═══ GOOGLE PLACES — local owner-operated businesses (free tier) ═══════
       // The highest-reachability segment: the owner runs the shop and reads
       // their own email. No size data, so Research confirms owner + email.
-      searchGooglePlaces(placesKey),
+      searchGooglePlaces(placesKey, _f),
     ]);
 
     // Owner venting returns both identifiable leads AND the raw pain language
@@ -20662,12 +20754,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // Cleared the believability gate AND costly = send. Cleared it but
             // cheap = workable. Never cleared it = the phone.
             harm: top.harm,
+            // ══ A WEAK BEST FINDING IS NOT AN EMAIL ═══════════════════════
+            // "12 of the 40 reviews we read have a reply" opened a live email
+            // at opener 31, and the log beneath it said "at harm 54 it may not
+            // be enough for him to act on. Worth sending." It was not worth
+            // sending. The system knew and sent anyway.
+            //
+            // When the best thing we found is a twenty-minute free fix, there
+            // is no email here — and saying so is more useful than producing a
+            // weak one, because a weak email spends a lead and a send slot and
+            // trains the owner to ignore the domain.
+            //
+            // Opener, not harm: it already carries the commercial weight, the
+            // urgency class and the self-fix penalty, so it is the number that
+            // knows whether a real engagement sits behind the finding.
             verdict: !_harms.leadIsGated ? 'CALL_INSTEAD'
+                   : Number(top.opener) < 45 ? 'TOO_WEAK'
                    : top.harm >= 70 ? 'SEND'
                    : 'SENDABLE',
           };
           if (_harms.leadIsGated && top.harm >= 70) {
             console.log(`\u2705 STRONG OPENER [${company}]: ${top.band} \u2014 harm ${top.harm}, and he can verify it himself. Believable AND costly, which is the only combination that gets a reply. This is the email.`);
+          } else if (_harms.leadIsGated && Number(top.opener) < 45) {
+            console.log(`\u26d4 NOTHING WORTH SENDING [${company}]: the strongest finding is "${String(top.finding).slice(0, 70)}" at opener ${top.opener} \u2014 a free twenty-minute fix with no engagement behind it. He reads it, does it himself, and never answers. Better as a call, or left alone: a weak email spends a send slot and teaches him to ignore the domain.`);
           } else if (_harms.leadIsGated) {
             console.log(`\u25cb WORKABLE OPENER [${company}]: ${top.band} \u2014 he can check it, but at harm ${top.harm} it may not be enough for him to act on. Worth sending; do not expect it to carry itself.`);
           } else {
@@ -25516,6 +25625,46 @@ app.listen(PORT, () => {
     console.log(`\u26d4 ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ REPAIR WHAT CAN BE REPAIRED ══════════════════════════════════════════
+  // Three pattern lines in one batch, three discards: "no generality marker",
+  // "names the business", "49 words" against a 48-word cap. The email then fell
+  // back to "12 of the 40 reviews we read have a reply" — and the complaint that
+  // the findings are weak is exactly right, because the brain produced something
+  // better every time and we binned it on a technicality.
+  //
+  // Two of those three are repairable without touching meaning: a proper noun can
+  // be swapped for "a business like this", and a line one word over its cap has a
+  // first sentence inside it. The third cannot be — adding a generality marker to
+  // a claim about THEM would turn an unverified assertion into a fake pattern,
+  // which is worse than losing the line.
+  try {
+    const _repairable = [
+      ['names the business', 'Basile Plastic Surgery usually keeps a site like this because it worked when the practice was smaller', { company: 'Basile Plastic Surgery' }],
+      ['one word over the cap', 'A practice that has built its reputation on personal referrals usually leaves the website alone for years, because every new patient arrived through somebody who already knew the work, and nobody ever had a reason to ask whether a stranger could find it or understand it at all', { company: 'Basile' }],
+    ];
+    const _mustFail = [
+      ['second person', 'your phone-only setup usually survives because it worked when you were smaller'],
+      ['a measurement', 'a crew that size usually runs 3 jobs a week'],
+      ['no generality marker', 'the site was built once and never revisited'],
+    ];
+    const _stillLost = _repairable.filter(([, t, o]) => !patternLineSafe(t, o).ok).map(([l]) => l);
+    const _leaked = _mustFail.filter(([, t]) => patternLineSafe(t, { company: 'X' }).ok).map(([l]) => l);
+    // The repair must not leave the company name behind in the kept version.
+    const _kept = patternLineSafe(_repairable[0][1], _repairable[0][2]);
+    const _nameSurvived = _kept.ok && /basile/i.test(String(_kept.line || ''));
+    if (_leaked.length) {
+      console.log(`\u26d4 PATTERN REPAIR CHECK: ${_leaked.join(', ')} would now pass. Repairing a claim about THEM into something that looks like a pattern is worse than losing the line.`);
+    } else if (_nameSurvived) {
+      console.log(`\u26d4 PATTERN REPAIR CHECK: the business name survived the repair, so the line still reads as a claim about them specifically.`);
+    } else if (_stillLost.length) {
+      console.log(`\u26d4 PATTERN REPAIR CHECK: ${_stillLost.join(', ')} still discarded. Every discard drops the email back to a ladder rung, which is what makes the findings read as weak.`);
+    } else {
+      console.log(`\u2713 PATTERN REPAIR CHECK: a line naming the business is rewritten to the category, a line over the cap is trimmed to its first sentence, and a claim about them is still refused rather than dressed up as a pattern.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PATTERN REPAIR CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ A REAL FINDING MUST SURVIVE ITS OWN SHAPE ════════════════════════════
   // originalFindings survived 11% of the time — three across an evening against
   // roughly fifteen dropped for exceeding our own 45-word cap and twelve for
@@ -26139,11 +26288,19 @@ app.listen(PORT, () => {
     const _mustFail = [
       ['second person', 'your crew usually loses the last hour of the job'],
       ['a number', 'businesses like this usually lose 3 jobs a month to it'],
-      ['names them', 'at Rose Garage Door this usually means nobody owns the handoff'],
+      // NOT here any more: a line naming the business is now REPAIRED rather
+      // than rejected — the proper noun is swapped for "a business like this",
+      // which removes the only thing wrong with it and keeps the sentence.
+      // Losing it entirely dropped the email back to a ladder rung, which is
+      // what made the findings read as weak. The assertion that matters is that
+      // the NAME does not survive, and that is checked below.
       ['no generality marker', 'the last hour of the job has no owner'],
       ['agency jargon', 'this usually means the funnel has no retargeting layer'],
     ];
     const _leaked = _mustFail.filter(([, t]) => patternLineSafe(t, { company: _co }).ok).map(([l]) => l);
+    // A repaired line must not still carry their name.
+    const _named = patternLineSafe('at Rose Garage Door this usually means nobody owns the handoff', { company: _co });
+    if (_named.ok && /rose|garage/i.test(String(_named.line || ''))) _leaked.push('the business name survived the repair');
     const _blocked = _mustPass.filter(t => !patternLineSafe(t, { company: _co }).ok);
     if (_leaked.length) {
       console.log(`\u26d4 PATTERN LINE CHECK: ${_leaked.length} unverifiable line(s) would reach an email \u2014 ${_leaked[0]}. A pattern that talks about THEM is an assertion we never measured, wearing the clothes of expertise.`);
