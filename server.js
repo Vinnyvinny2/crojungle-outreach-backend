@@ -20984,8 +20984,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // publicPainSignals is the outer variable that survives the block, and
           // painSummary carries the pattern text. Both are already assigned
           // above this line on every path.
-          reviewPainArg: (reviewPainFound && Array.isArray(publicPainSignals) && publicPainSignals.length)
-            ? { pattern: String(painSummary || publicPainSignals[0] || '').split(' — evidence:')[0] }
+          // ══ ONLY publicPainSignals SURVIVES THIS FAR ═════════════════════
+          // First attempt used `deepPain`, which exists nowhere. Second used
+          // `reviewPainFound`, which is declared INSIDE the review-mining block
+          // and is gone here — "harm ladder failed — reviewPainFound is not
+          // defined", the same crash with a different name.
+          //
+          // Line order is not scope, and I verified against line order twice.
+          // publicPainSignals is declared at the top of the route from
+          // req.body, so it exists on every path through this function whether
+          // the miner ran, failed, or was skipped. Its presence IS the signal:
+          // it is only populated when a repeating pattern was actually found.
+          reviewPainArg: (Array.isArray(publicPainSignals) && publicPainSignals.length)
+            ? { pattern: String(publicPainSignals[0] || '').split(' — evidence:')[0].trim() }
             : null,
           growthConstraintArg: growthConstraint,
         });
@@ -23244,8 +23255,19 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
           // publicPainSignals is the outer variable that survives the block, and
           // painSummary carries the pattern text. Both are already assigned
           // above this line on every path.
-          reviewPainArg: (reviewPainFound && Array.isArray(publicPainSignals) && publicPainSignals.length)
-            ? { pattern: String(painSummary || publicPainSignals[0] || '').split(' — evidence:')[0] }
+          // ══ ONLY publicPainSignals SURVIVES THIS FAR ═════════════════════
+          // First attempt used `deepPain`, which exists nowhere. Second used
+          // `reviewPainFound`, which is declared INSIDE the review-mining block
+          // and is gone here — "harm ladder failed — reviewPainFound is not
+          // defined", the same crash with a different name.
+          //
+          // Line order is not scope, and I verified against line order twice.
+          // publicPainSignals is declared at the top of the route from
+          // req.body, so it exists on every path through this function whether
+          // the miner ran, failed, or was skipped. Its presence IS the signal:
+          // it is only populated when a repeating pattern was actually found.
+          reviewPainArg: (Array.isArray(publicPainSignals) && publicPainSignals.length)
+            ? { pattern: String(publicPainSignals[0] || '').split(' — evidence:')[0].trim() }
             : null,
             });
             parsed.measuredNumbers = {
@@ -26273,9 +26295,34 @@ app.listen(PORT, () => {
     const _r = rankHarms({ ..._m, reviewPainCount: 2,
       reviewPainTop: 'poor communication during and after surgery',
       reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    // ══ AND THE REAL CALL SITES, NOT JUST A LITERAL ════════════════════════
+    // The check above passes a hand-built object, which is exactly how the
+    // fuzzers missed both crashes. What broke twice was the ARGUMENT LIST at the
+    // live call sites — `deepPain`, then `reviewPainFound`, neither in scope.
+    //
+    // A boot check cannot execute those sites without a request, but it CAN
+    // assert that the expression they use references only route-level state.
+    // publicPainSignals is declared from req.body at the top of the route, so it
+    // exists on every path; the two names that failed were declared inside
+    // blocks that had already closed.
+    const _srcHere = String(resolveMeasurements) + '';
+    const _liveArg = /reviewPainArg:\s*\(Array\.isArray\(publicPainSignals\)/;
+    const _stale = /reviewPainArg:[^,]*\b(deepPain|reviewPainFound|painSummary)\b/;
     const _ran = !!(_r && Array.isArray(_r.byHarm) && _r.byHarm.length);
     const _lead = _ran ? _r.byHarm[0].id : '';
-    if (!_ran) {
+    // Read the file itself: the argument list lives at the call sites, not in
+    // any function this check can call.
+    let _argOk = true, _argWhy = '';
+    try {
+      const _self = require('fs').readFileSync(__filename, 'utf8');
+      const _uses = (_self.match(/reviewPainArg:/g) || []).length;
+      const _bad = _self.match(_stale);
+      if (_bad) { _argOk = false; _argWhy = `a call site still passes ${_bad[1]}, which is declared inside a block that has closed by then`; }
+      else if (_uses && !_liveArg.test(_self)) { _argOk = false; _argWhy = 'no call site uses the route-level publicPainSignals guard'; }
+    } catch (e) { void e; }
+    if (!_argOk) {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: ${_argWhy}. That is the shape that produced "harm ladder failed \u2014 deepPain is not defined" and then the same crash with reviewPainFound: one out-of-scope name in an argument list takes the entire ladder down inside its try.`);
+    } else if (!_ran) {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the harm ladder produced nothing on a lead with a repeating review complaint. When it throws, the whole email falls back to the model writing unassisted and the log says only "harm ladder failed".`);
     } else if (_lead !== 'review_pain_pattern') {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: a lead whose own customers repeat a complaint opened on ${_lead} instead. The strongest finding this system produces is not leading.`);
