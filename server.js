@@ -21995,6 +21995,25 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               if (_kept.length) {
                 _ranked = _kept;
                 _pcount = _kept.length;
+                // ══ THE SECOND CLAIM IS IN THE EMAIL TOO ═══════════════════
+                // This checked only claimId. On David Leon the LEAD was pricing
+                // — not local-only, so nothing rebuilt — while secondClaim held
+                // "a business with fewer reviews than yours is ranking above
+                // you", and that withheld finding went out as sentence two of
+                // an email to a referral practice. His verdict: "talking about
+                // ranking and pricing like I'm running an e-commerce site,
+                // completely missing that my clients come through referrals."
+                //
+                // Withholding a finding from the audit while the email still
+                // asserts it is worse than not withholding at all: the log says
+                // we understood the business and the copy proves we did not.
+                if (_spine && LOCAL_ONLY_RUNGS.has(_spine.secondClaimId || '')) {
+                  const _alt = _kept.find(h => h.id !== _spine.claimId && !LOCAL_ONLY_RUNGS.has(h.id));
+                  _spine = { ...(_spine),
+                    secondClaim: _alt ? String(_alt.finding || '').trim() : '',
+                    secondClaimId: _alt ? _alt.id : '' };
+                  console.log(`\u{1F3E2} SECOND CLAIM REPLACED [${company}]: the email's second finding was a local-search one on a business that does not sell through search. ${_alt ? `Using "${String(_alt.finding).slice(0, 70)}" instead.` : 'Dropped — the email runs on one finding.'}`);
+                }
                 if (_spine && LOCAL_ONLY_RUNGS.has(_spine.claimId)) {
                   const _lead = _kept[0];
                   _spine = { ...(_spine), claim: _lead.finding, claimId: _lead.id, costs: _lead.costs, problemCount: _kept.length };
@@ -24822,6 +24841,36 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 URGENCY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A WITHHELD FINDING MUST NOT RIDE IN AS THE SECOND SENTENCE ═══════════
+  // businessModel withholds local-search findings when their own copy proves
+  // they do not sell through search. On David Leon it fired correctly and the
+  // email still opened its second sentence with "a business with fewer reviews
+  // than yours is ranking above you" — because the filter checked only the LEAD
+  // finding, and the second claim was never inspected.
+  //
+  // Withholding a finding from the audit while the email still asserts it is
+  // worse than not withholding at all: the log says we understood the business
+  // and the copy proves we did not. His verdict was "talking about ranking and
+  // pricing like I'm running an e-commerce site".
+  try {
+    const _kept = [
+      { id: 'no_published_pricing', finding: 'no price and no range appears anywhere' },
+      { id: 'no_offer', finding: 'There is no guarantee and no named offer anywhere on the site' },
+    ];
+    const _spine = { claimId: 'no_published_pricing', secondClaimId: 'outranked_by_weaker' };
+    const _needsSwap = LOCAL_ONLY_RUNGS.has(_spine.secondClaimId);
+    const _alt = _kept.find(h => h.id !== _spine.claimId && !LOCAL_ONLY_RUNGS.has(h.id));
+    if (!_needsSwap) {
+      console.log(`\u26d4 SECOND CLAIM CHECK: a withheld local-search finding is not being recognised in the second slot, so it reaches the email even when the business model says it does not apply.`);
+    } else if (!_alt || LOCAL_ONLY_RUNGS.has(_alt.id)) {
+      console.log(`\u26d4 SECOND CLAIM CHECK: the replacement second finding is itself a withheld one. Swapping one inapplicable finding for another changes nothing.`);
+    } else {
+      console.log(`\u2713 SECOND CLAIM CHECK: a withheld finding in the second slot is replaced with one that applies, or dropped \u2014 the email can no longer assert what the audit just withheld.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SECOND CLAIM CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ TWO FINDINGS, FROM DIFFERENT PARTS OF THE BUSINESS ═══════════════════
