@@ -9888,8 +9888,19 @@ const verifyBrainEmail = (body, opts = {}) => {
   // by a generic opener that happens to be short.
   if (opts.spine) {
     const _open = text.split(/\s+/).slice(0, 14).join(' ').toLowerCase();
-    const _key = String(opts.spine).toLowerCase().split(/\s+/)
-      .filter(w => w.length > 4 && !/^(their|there|business|company|website|appears|anywhere|reviews?)$/.test(w));
+    // ══ A GENERIC WORD MUST NOT COUNT AS THE FINDING ═══════════════════
+    // "reviews" was in the allowed set by accident of ordering, so an opener
+    // that spent fourteen words on what WE did — "I went through your website
+    // and your Google reviews carefully this morning" — satisfied the rule
+    // simply by containing the word "reviews". That is the exact shape this
+    // guard exists to stop.
+    //
+    // Stop-words are the words that appear in almost every finding. What is
+    // left is the distinctive part: "construction", "timelines", "outranking",
+    // "guarantee". If none of THOSE is in the opening, the finding is not.
+    const _STOP = /^(their|there|these|those|about|which|while|would|could|should|business|businesses|company|companies|website|websites|appears|anywhere|reviews?|reviewers?|google|customers?|clients?|people|owner|pages?|thing|things|same|names?|mention|mentions)$/;
+    const _key = String(opts.spine).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+      .filter(w => w.length > 4 && !_STOP.test(w));
     const _hit = _key.filter(w => _open.includes(w)).length;
     if (_key.length >= 3 && _hit === 0) {
       return { ok: false, why: 'the finding does not appear in the first dozen words — the opening is spent on what we did or on praise, and that is the part that decides whether he reads on' };
@@ -10087,7 +10098,10 @@ const verifyBrainEmail = (body, opts = {}) => {
   }
   // The same slip without a noun at all: "everywhere we looked", "across the
   // whole site" — an exhaustiveness claim about a read that covered seven pages.
-  const EXHAUSTIVE = /\b(everywhere we looked|anywhere we looked|across (the |your )?(whole|entire) (site|website)|nowhere on (the|your) (whole|entire) site|every page (of|on) (the|your) site)\b/i;
+  // "website" as well as "site" — the first version matched "nowhere on your
+  // entire site" and let "nowhere on your entire WEBSITE" straight through,
+  // which is the same false claim with two more letters.
+  const EXHAUSTIVE = /\b(everywhere we looked|anywhere we looked|(across|on|in) (the |your )?(whole|entire) (site|website)|nowhere (on|in) (the|your) (whole|entire) (site|website)|every page (of|on) (the|your) (site|website))\b/i;
   const _exh = text.match(EXHAUSTIVE);
   if (_exh) {
     return { ok: false, why: `"${_exh[0]}" — we read a handful of pages, not the whole site. An exhaustiveness claim is the one an owner disproves fastest, by naming the page we never opened.` };
@@ -19450,7 +19464,28 @@ const _runResearchInner = async (req, res) => {
   let verifiedRevenue = req.body.verifiedRevenue || null;
   let verifiedCEO = req.body.verifiedCEO || null;
   let verifiedCEOTitle = req.body.verifiedCEOTitle || null;
-  let publicPainSignals = req.body.publicPainSignals || [];
+  // ══ A RE-RUN MUST NOT INHERIT THE LAST RUN'S FINDINGS ════════════════════
+  // Seeding from req.body means the client posts back the pain signals from the
+  // PREVIOUS research, and if this run's review pull fails or comes back
+  // truncated, they survive into the brain prompt anyway.
+  //
+  // Live on Justin Doyle: the audit described three repeating complaints —
+  // timelines, unresolved defects, post-purchase service — while the ladder,
+  // built from this run's empty mine, had no review-pain finding at all. The
+  // override then correctly followed the ladder and the email opened on map
+  // rank, with the real finding sitting in the audit above it. The simulator
+  // called it "the same play on everyone".
+  //
+  // The stale seed is not a cache: it is last run's conclusion presented as this
+  // run's measurement. If the mine runs and finds nothing this time, that IS the
+  // answer, and carrying yesterday's answer forward is how an audit ends up
+  // describing evidence the ladder never saw.
+  //
+  // Kept only when this run cannot measure at all (no Apify token, no placeId),
+  // where an older reading is better than nothing and the audit says as much.
+  let publicPainSignals = (req.body.apifyToken && req.body.placeId)
+    ? []
+    : (req.body.publicPainSignals || []);
   // Declared HERE, not inside the deep-audit block, because the Brain prompt sits
   // outside that block — a lower declaration is invisible by the time the prompt is
   // built and the whole signal would silently never reach the audit.
@@ -23183,6 +23218,32 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             const _sameThing = _brainLead && _ladderLead.toLowerCase().split(/\s+/)
               .filter(w => w.length > 4)
               .some(w => _brainLead.toLowerCase().includes(w));
+            // ══ THE TWO HALVES MUST HAVE READ THE SAME DATA ═════════════════
+            // Live on Justin Doyle. The audit prose named three repeating review
+            // complaints — timelines, unresolved defects, post-purchase service —
+            // and the ladder held two findings with no review pain rung at all.
+            //
+            // The brain call was a CACHE HIT replaying a response written when the
+            // review mine had worked. The ladder was built fresh, seconds after
+            // Apify returned a truncated dataset, so it never saw the pattern.
+            // Two halves of one lead running on different data.
+            //
+            // The override then did exactly what it should — the ladder is
+            // measured and the brain's choice was not — and produced an email
+            // about map rank on a lead whose real finding was sitting in the audit
+            // above it. The prospect simulator called it "the same play on
+            // everyone", which is precisely what a map-rank email is.
+            //
+            // So when the brain is holding a review pattern the ladder does NOT
+            // have, that is a data mismatch and the run must say so. The email
+            // still follows the ladder — we never send an unmeasured claim — but
+            // the log stops making it look like a copy problem.
+            const _brainHasPain = /\breview(s|ers)?\b[^.]{0,60}\b(same|repeat|keep|again|mention)|customers keep writing/i.test(
+              String(parsed.pitchAngle || '') + ' ' + String(parsed.situationRead && parsed.situationRead.headline || ''));
+            const _ladderHasPain = ((_harmsForResponse.byHarm || []).some(h => h && h.id === 'review_pain_pattern'));
+            if (_brainHasPain && !_ladderHasPain) {
+              console.log(`\u26d4 DATA MISMATCH [${company}]: the audit is describing a repeating complaint in their reviews and the ladder has no review-pain finding at all. Those two were built from different review pulls \u2014 almost always a cached brain response replayed against a fresh mine that came back empty or truncated. The email will follow the ladder, which is correct, but it will open on the weakest finding available while the strongest one sits in the audit above it. RE-RUN RESEARCH once the review pull is healthy.`);
+            }
             if (_brainLead && !_sameThing) {
               console.log(`\u2696 LEAD OVERRIDDEN [${company}]: the audit was going to open on "${_brainLead}" and the measured ladder leads on "${_ladderLead.slice(0, 70)}". The ladder wins \u2014 it is measured and it is what the email will say. A narrative that leads somewhere the email does not go sends Mike into a call on the wrong finding.`);
             }
@@ -24035,6 +24096,21 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // passed" shape that has cost this system five fields.
             growthConstraint: (brainAudit && brainAudit.growthConstraint) || null,
             situationRead: (brainAudit && brainAudit.situationRead) || null,
+            // ══ THE THREE THE EMAIL WRITER NEEDS MOST ═══════════════════════
+            // buildEmailEvidence reads reviewPain, deepPain and localRank. None
+            // of the three was in the response, the persistence list, or the
+            // client's field mapping — so the handoff asked for them and always
+            // received empty. The complaint his own customers repeated, and the
+            // competitor above him by name, never reached the writer at all.
+            //
+            // That is why the emails read as map-rank boilerplate while the audit
+            // above them was full of specifics: the writer genuinely did not have
+            // the specifics.
+            reviewPain: Array.isArray(parsed.reviewPain) ? parsed.reviewPain
+              : (publicPainSignals || []).map(t => ({ pattern: String(t).split(' — evidence:')[0].trim(),
+                  quotes: [String(t).split(' — evidence:')[1] || ''].filter(Boolean) })),
+            deepPain: Array.isArray(parsed.deepPain) ? parsed.deepPain : [],
+            localRank: localRank || null,
             openerStrength: parsed.openerStrength || null,
             // Carry the fabrication flags through to the response so the review
             // checklist can show them. brainAudit is an explicit literal, so without
@@ -26299,6 +26375,34 @@ app.listen(PORT, () => {
     console.log(`\u26d4 OWNER FEEDBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE AUDIT AND THE LADDER MUST READ THE SAME RUN ══════════════════════
+  // Justin Doyle's audit described three repeating review complaints while the
+  // ladder held two findings and no review-pain rung. The email followed the
+  // ladder, which is right — it is the measured half — and opened on map rank
+  // while the real finding sat in the audit above it. The simulator called it
+  // "the same play on everyone".
+  //
+  // Cause: publicPainSignals was seeded from req.body, so a re-run inherited the
+  // PREVIOUS run's findings. When this run's review pull came back truncated,
+  // last night's conclusions survived into the brain prompt and nothing else.
+  // That is not a cache — it is one run's answer presented as another's
+  // measurement.
+  try {
+    const _seed = (hasToken, hasPlace, prior) => ((hasToken && hasPlace) ? [] : (prior || []));
+    const _canMeasure = _seed(true, true, ['stale pain from last run']);
+    const _cannot = _seed(false, false, ['older reading']);
+    const _noPlace = _seed(true, false, ['older reading']);
+    if (_canMeasure.length) {
+      console.log(`\u26d4 STALE FINDING CHECK: a re-run that CAN measure is still inheriting the previous run's pain signals. If this run's review pull fails, the audit will describe evidence the ladder never saw and the email will open on something weaker.`);
+    } else if (!_cannot.length || !_noPlace.length) {
+      console.log(`\u26d4 STALE FINDING CHECK: a lead we cannot measure at all is discarding its prior reading. An older measurement is better than none when there is no way to take a new one.`);
+    } else {
+      console.log(`\u2713 STALE FINDING CHECK: a re-run that can measure starts from nothing and measures again, while a lead with no token or no place id keeps its earlier reading \u2014 so the audit and the ladder always describe the same run.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 STALE FINDING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ A SHORT DATASET IS NOT A SHORT PROFILE ═══════════════════════════════
   // Apify answered HTTP 200 with FIVE reviews for a place with 116, twice in one
   // run, six seconds after the request. Twenty minutes earlier the same place
@@ -27266,6 +27370,12 @@ app.listen(PORT, () => {
       // of FINDINGS. We never counted places, and he disproves it in one look.
       ['count read as places searched', _base + 'Across your website, your reviews, everywhere we looked, six places in total, there is no price and no range. Want to know why they are above you?'],
       ['exhaustiveness claim', _base + 'No price appears anywhere across your entire website. Want to know why they are above you?'],
+      // Both found by attacking the shipped guardrails with the real email:
+      // "site" matched and "website" did not, and an opener spent entirely on
+      // what WE did satisfied the first-twelve-words rule because it happened to
+      // contain the word "reviews".
+      ['exhaustiveness on website', _base + 'Nowhere on your entire website does anything say why to choose you. Want to know why they are above you?'],
+      ['opener spent on what we did', 'Tyler, I went through your website and your Google reviews carefully this morning, and what stood out was that Overhead Door Company outranks you with 41 reviews against your 260. That matters. Want to know why they are above you?'],
       // Live on Midwest Remediation. Passed every check because it carries no
       // figure and makes no post-contact claim — it is simply a confident guess
       // about how he runs his business. Dave's own read: "I'm not buying leads,
@@ -27800,7 +27910,11 @@ app.listen(PORT, () => {
                        // persisted, a Generate after a page reload falls back to
                        // the seven-string version that reads like a scanner —
                        // and nothing would say why the copy got worse.
-                       'growthConstraint', 'situationRead'];
+                       'growthConstraint', 'situationRead',
+                       // The email writer reads these three directly. Without
+                       // them persisted, a Generate after a page reload hands the
+                       // writer nothing and it falls back to the ladder rung.
+                       'reviewPain', 'deepPain', 'localRank'];
     const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
     if (!_lit) {
       console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
