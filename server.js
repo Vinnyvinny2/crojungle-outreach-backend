@@ -128,10 +128,56 @@ const fetchViaProxy = async (url, ms=10000) => {
   const r = await fetchT(CF_WORKER + encodeURIComponent(url), {}, ms);
   return r.text ? await r.text() : '';
 };
-const fetchT = (url, opts={}, ms=10000) => Promise.race([
-  fetch(url, { ...opts, headers: { 'User-Agent': 'Mozilla/5.0 CROJungle/1.0', ...(opts.headers||{}) } }),
-  new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))
-]);
+// ══ A TIMEOUT THAT DOES NOT CANCEL ANYTHING IS NOT A TIMEOUT ═══════════════
+// The old body raced fetch() against a setTimeout and returned whichever came
+// first. Two things it never did, on any of the 60 call sites:
+//
+//   1. It never CANCELLED the request it had given up on. The socket stayed
+//      open, the response body was never read, and node-fetch held the
+//      connection. Every timeout leaked one. The verifier alone times out on
+//      every send attempt at 30s a go, and Render dynos are small — a pool
+//      filling with abandoned sockets makes every LATER call slower, which
+//      makes more of them time out, which leaks more sockets. That is the
+//      shape of "raising the cap 12s → 30s changed nothing": if the cap were
+//      the constraint, more time would have helped. A feedback loop explains
+//      the observation the cap cannot.
+//
+//   2. It never cleared the timer on the happy path. A call that answered in
+//      200ms still pinned a timer for the full ms. Sixty call sites, some at
+//      30s, on every lead.
+//
+// This is a MECHANISM, not a proven diagnosis — the verifier failing from a
+// Render network block would look identical from here, and it cannot be told
+// apart from this container. Both are fixed the same way regardless: cancel
+// what you abandon, and clear what you set.
+//
+// The rejection is deliberately still `new Error('timeout')`, byte for byte,
+// because call sites across this file branch on that exact message. The fix
+// changes what happens to the socket, not what the caller sees.
+const fetchT = (url, opts={}, ms=10000) => {
+  const ac = new AbortController();
+  let timer;
+  const expiry = new Promise((_, rej) => {
+    timer = setTimeout(() => {
+      // ORDER IS LOAD-BEARING, and the first version of this had it backwards.
+      // ac.abort() makes node-fetch reject the request promise SYNCHRONOUSLY,
+      // so aborting first let the AbortError win the race and every call site
+      // that branches on the word "timeout" would have started seeing "The
+      // user aborted a request." instead. Reject first to settle the race, and
+      // only then free the socket.
+      rej(new Error('timeout'));
+      try { ac.abort(); } catch (e) { void e; }
+    }, ms);
+  });
+  const req = fetch(url, {
+    ...opts,
+    signal: ac.signal,
+    headers: { 'User-Agent': 'Mozilla/5.0 CROJungle/1.0', ...(opts.headers||{}) },
+  });
+  // Both promises get a handler from race(), so the aborted request rejecting
+  // after we have already settled cannot surface as an unhandled rejection.
+  return Promise.race([req, expiry]).finally(() => clearTimeout(timer));
+};
 
 app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v9 — full-stack: stacking + combos + accuracy guards + reachability playbook', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
 
@@ -25390,7 +25436,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         prices: (sitePages.prices || []).slice(0, 8),
         pagesRead: sitePages.pagesRead || [],
       } : null,
-      htmlSignals: htmlSignals || null,
+      // `.checked` matters: an htmlSignals object that was never actually read
+      // must come back as null, not as an object full of falsy fields that the UI
+      // and the ladder would both read as "measured, found nothing". This guard
+      // used to live on a SECOND htmlSignals key further down this same object;
+      // the later key won, so this line was dead and the two disagreed in source
+      // for anyone reading it. One key, and it is the strict one.
+      htmlSignals: htmlSignals && htmlSignals.checked ? htmlSignals : null,
       gbpHealth: gbpHealth || null,
       socialPresence: socialPresence || null,
       marketClarity: marketClarity || null,
@@ -25439,12 +25491,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
       emailResult, decisionMaker,
       publicPainSignals, painSummary,
-      // Local search visibility — reached the Brain prompt already (it drives the
-      // pitch) but was never returned, so the UI could not show the evidence behind
-      // a claim the email was making. Now it renders as a clickable audit row.
-      localVisibility,
-      gbpHealth,
-      htmlSignals: htmlSignals && htmlSignals.checked ? htmlSignals : null,
+      // localVisibility, gbpHealth and htmlSignals are returned ABOVE, in the block
+      // with the rest of the audit measurements. They were declared a second time
+      // here and the later key silently won, which dropped the `|| null` off the
+      // first two: an undefined value disappears from JSON.stringify entirely, so
+      // the field arrived missing rather than explicitly empty, and "not measured"
+      // and "not sent" became indistinguishable at the client. Declared once now.
+      // (localVisibility drives the pitch and renders as a clickable audit row.)
       positioningRead: (brainAudit && brainAudit.positioningRead) || null,
       _claimRisks: (brainAudit && brainAudit._claimRisks) || undefined,
       // INTEGRITY STAMP: the exact website every finding was measured against.
