@@ -7950,7 +7950,26 @@ const HARM_LADDER = [
     // If their sitemap lists a booking page we never opened, we cannot say the
     // phone is the only route — we did not look at the page built to be the route.
     test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true,
-    say: () => 'The only way to reach them is a phone call during office hours',
+    // ══ FOUR AUDITS, THE SAME TWELVE WORDS ═══════════════════════════════
+    // Appeared in 4 of 20 audits with identical wording. What "closed" means
+    // depends entirely on the trade, and urgency is already measured: for an
+    // emergency trade this is the whole business being shut when the thing goes
+    // wrong; for a considered purchase it is a researcher hitting a wall at the
+    // moment they were ready to act.
+    //
+    // Same measurement, and the sentence a roofer reads should not be the
+    // sentence a surgeon reads.
+    say: (m) => {
+      const t = String(m.tradeWord || '').trim();
+      if (m.purchaseUrgency === 'EMERGENCY') {
+        return t
+          ? `When somebody needs a ${t} outside office hours, there is no published way to reach them at all`
+          : `Outside office hours there is no published way to reach them at all`;
+      }
+      return t
+        ? `Someone who decides at nine at night that they want a ${t} has nowhere to start until the office opens`
+        : `Someone who decides in the evening has nowhere to start until the office opens`;
+    },
     // ══ DESCRIBE THE WALL, NOT WHAT SOMEBODY DID AT IT ═══════════════════
     // "has nowhere to go" is an outcome — it says what a person did after
     // hitting the wall, which we have never observed. CLAIM VERIFY flagged this
@@ -7971,7 +7990,16 @@ const HARM_LADDER = [
   { harm: 58, specific: 80, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
   reframe: 'people comparing three options go with whichever one lets them start',
     test: (m) => m.booking === 'form' && m.bookingMeasured === true && m.unreadBooking !== true,
-    say: () => 'There is no way to book a time — the only option is a form and a wait',
+    // ══ SIX AUDITS, THE SAME SENTENCE ════════════════════════════════════
+    // The most frequent of the fixed-string rungs. The job value is measured, so
+    // the sentence can say what the person filling in the form was about to
+    // spend rather than describing a form.
+    say: (m) => {
+      const t = String(m.tradeWord || '').trim();
+      return t
+        ? `Someone ready to hire a ${t} cannot book a time — the only route is a form and a wait`
+        : `There is no way to book a time — the only option is a form and a wait`;
+    },
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
   { harm: 46, specific: 88, novel: 70, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'stale_reviews',
@@ -8105,7 +8133,18 @@ const HARM_LADDER = [
 
   { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
   reframe: 'the listing is what people see before they ever reach the site',
-    test: (m) => (m.photoCount || 0) < 5,
+    // ══ AN UNMEASURED COUNT IS NOT ZERO ══════════════════════════════════
+    // `(m.photoCount || 0) < 5` turns a missing measurement into 0, which is
+    // less than 5, so this fired on EVERY lead where the profile was never
+    // read — and then said "Their Google listing has 0 photos on it", which is
+    // a false claim about something the owner can check in one click.
+    //
+    // It appeared on all five leads in an overlap test, including businesses
+    // with complete profiles, which is a large part of why every audit carried
+    // the same finding.
+    //
+    // Require a real number. No measurement, no finding.
+    test: (m) => Number.isFinite(Number(m.photoCount)) && Number(m.photoCount) < 5,
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
@@ -8143,7 +8182,15 @@ const HARM_LADDER = [
     // The unread gate: if their sitemap lists a pricing page we did not open, we
     // cannot say a price appears nowhere. We did not look.
     test: (m) => m.pricingMeasured === true && m.pricesPublished === 0 && m.unreadPricing !== true,
-    say: () => 'no price and no range appears anywhere on the pages we read',
+    // Same fault as no_offer: an identical sentence on every lead, in 7 of 20
+    // audits. The trade and the job value are both measured, and naming them
+    // turns "no price appears" into a sentence about a custom home rather than
+    // about a website.
+    say: (m) => {
+      const t = String(m.tradeWord || '').trim();
+      const job = t ? ` before committing to a ${t}` : '';
+      return `Someone comparing three companies can find no price, no range and no starting point anywhere on the pages we read${job}`;
+    },
     // ══ NOT EVERY "THEM" IS THE BUSINESS ═══════════════════════════════════
     // toSecondPerson rewrites every "them" to "you", which is right for the
     // business and wrong for anyone else in the sentence. Live on Deck Daddy's:
@@ -8190,7 +8237,23 @@ const HARM_LADDER = [
   { harm: 56, specific: 45, novel: 20, delegable: 20, weFix: 95, band: 'OPINION', id: 'no_offer',
     reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.guarantee === false && m.namedOffer === false,
-    say: () => 'There is no guarantee and no named offer anywhere on the site',
+    // ══ A CATEGORY LABEL IS NOT A FINDING ═══════════════════════════════
+    // `say: () =>` takes no arguments, so this sentence is identical on every
+    // business that has no guarantee. It appeared in 9 of 20 audits in one
+    // session, word for word, and it says nothing about THIS company — not what
+    // they sell, not who to, not one word of their own copy.
+    //
+    // 21 of 33 rungs are built this way, which is why "what we found" reads the
+    // same on every lead while the section that quotes their pages reads sharp.
+    // Every rung already receives 16 measurements; these ones just ignore them.
+    //
+    // Name the trade and the money at stake, because both are measured, and the
+    // sentence becomes about a custom home builder rather than about websites.
+    say: (m) => {
+      const t = String(m.tradeWord || '').trim();
+      const who = t ? `a stranger choosing a ${t}` : 'a hesitant stranger';
+      return `Nothing on the site tells ${who} why to pick them over the next name — no guarantee, no named offer, no promise anyone else could not also make`;
+    },
     costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
 
   { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
@@ -8198,7 +8261,12 @@ const HARM_LADDER = [
     // "Nothing to take away" is a claim about every page. Any unopened page
     // could hold the guide, the checklist or the price sheet that disproves it.
     test: (m) => m.leadMagnet === false && m.unreadPricing !== true && m.unreadBooking !== true,
-    say: () => 'There is nothing to take away short of asking for a quote',
+    // Identical in 5 of 20 audits. The urgency class is measured, and it decides
+    // what "not ready yet" actually means for this business — weeks of research
+    // for a considered purchase, versus nothing at all for an emergency trade.
+    say: (m) => (m.purchaseUrgency === 'CONSIDERED'
+      ? `Someone weeks away from deciding has no reason to leave a name — there is nothing to take away short of asking for a quote`
+      : `There is nothing on the site to take away short of asking for a quote, so everyone not ready to call today leaves with nothing`),
     costs: 'everyone not ready to commit today leaves with nothing' },
 
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
@@ -9734,6 +9802,64 @@ const buildEmailEvidence = (ev = {}) => {
   };
 };
 
+// ══ A NEAR-MISS AND A DISASTER GOT THE SAME FALLBACK ═════════════════════════
+// The writer had exactly one attempt. If verifyBrainEmail refused the draft, the
+// reason was printed to a log and thrown away, and the lead dropped to the
+// composed template — which is the flat email that keeps appearing.
+//
+// Real rejections from tonight:
+//   "DESCRIBES OUR PROCESS — I mapped exactly where the pattern shows up"
+//   "states which business the customer chose — finds them first"
+//   "hedges a review count we measured exactly — a couple of your reviews"
+//
+// Every one is a one-sentence fix, and the verifier already explains it in plain
+// English. Handing that explanation back and asking for one corrected draft is
+// the difference between an excellent email and the template.
+//
+// THE FLOOR DOES NOT MOVE. The retry faces the SAME verifier with the same
+// rules; a second failure falls back exactly as before. This can only convert a
+// rejected draft into a passing one — it cannot lower the bar.
+const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
+  if (!apiKey || !draft || !why) return null;
+  const prompt = [
+    'You wrote this cold email:',
+    '',
+    draft,
+    '',
+    'It was rejected by the fact-checker for ONE reason:',
+    '',
+    '  ' + why,
+    '',
+    'Rewrite it, fixing ONLY that. Everything else was accepted — the finding, the',
+    'numbers, the structure, the ask. Change as little as possible.',
+    '',
+    'The rules that produced the rejection, restated so you do not trip a different one:',
+    '- Every number must be one we measured. Do not add, round or estimate any figure.',
+    '- Never say what happens AFTER someone contacts them — no callbacks, no waiting,',
+    '  no voicemail, no "by the time you see it". We have never watched that happen.',
+    '- Never describe our own work. Not "I mapped", not "I analysed", not "we found".',
+    '  State what is true about his business; that we found it is implied.',
+    '- Never name the fix or the product. This email exists to earn a reply, and the',
+    '  moment he knows what you sell he judges the offer instead of wanting the answer.',
+    '- The ask is the last sentence. Nothing follows it.',
+    '- 50-90 words, short paragraphs, the finding inside the first dozen words.',
+    '',
+    'Return ONLY the corrected email body. No preamble, no explanation, no quotes.',
+  ].join('\n');
+  try {
+    const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 600,
+        messages: [{ role: 'user', content: prompt }] }),
+    }, 25000, { label: 'email rewrite', company });
+    const d = await res.json();
+    const out = String((d.content && d.content[0] && d.content[0].text) || '').trim()
+      .replace(/^["'\u201c]+|["'\u201d]+$/g, '').trim();
+    return out || null;
+  } catch (e) { return null; }
+};
+
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
   const { first, spine, earned, pattern, reframe, money, count, cta,
@@ -9932,8 +10058,30 @@ const verifyBrainEmail = (body, opts = {}) => {
   // Nothing in that email mentioned a CRM. It described the problem so
   // completely that he filled in the product himself and rejected that.
   {
+    // ══ WORD LISTS ONLY CATCH THE WORDS ON THE LIST ══════════════════════
+    // "A scheduling system would fix it" walked through a guard containing
+    // "scheduler" and "booking system", because it used neither. Any list of
+    // product nouns will always be one synonym behind.
+    //
+    // The reliable signal is the SHAPE: something-would-fix-this. That is the
+    // sentence that closes the loop, whatever noun sits in it. The word list
+    // stays for the specific products we sell, but the structural rule is what
+    // actually holds.
     const NAMES_THE_FIX = [
+      [/\b(would|will|could|can)\s+(fix|solve|stop|prevent|handle|catch|sort)\s+(that|this|it|the problem|them)\b/i, 'prescribes a fix'],
+      [/\b(a|an|the|your)\s+[a-z-]{3,20}\s+(system|tool|widget|platform|software|app|layer|service)\b[^.]{0,30}\b(would|will|could|can|fixes|solves|handles)\b/i, 'names a product as the answer'],
+      [/\b(what you need is|the fix is|the answer is|the solution is)\b/i, 'states the fix outright'],
       [/\b(a|an|your) (scheduler|booking (system|widget|tool|page)|online booking|chatbot|CRM|automation|autoresponder|response layer|AI (brain|layer|system|assistant)|landing page|funnel)\b/i, 'names the product'],
+      // ══ NEVER DESCRIBE OUR OWN WORK ═════════════════════════════════════
+      // This guard existed in COPY VERIFY, which runs on the AUDIT — the email
+      // path never saw it, so "I mapped exactly where the pattern shows up"
+      // reached a live email tonight and only the audit checker caught it.
+      //
+      // Mike's rule: he does not care what we did, he cares what is true about
+      // his business. Every word about our method is a word not spent on his
+      // problem, and it also makes the email about us at the exact moment it
+      // should be about him.
+      [/\b(?:I|we)\s+(?:mapped|ran|pulled|audited|analy[sz]ed|dug into|compiled|put together|went through|walked through|traced|documented|reviewed|scanned|crawled|benchmarked)\b/i, 'describes our own process'],
       [/\b(we|I) (can |could |would )?(build|set up|install|implement|add|create|fix|handle|manage|run) (you |your |a |an |the )/i, 'offers to do the work'],
       [/\b(all you|you just|you only) (need|have to do)\b/i, 'prescribes the fix'],
       [/\bwhat (would|will) (fix|solve|change) (this|that|it)\b/i, 'prescribes the fix'],
@@ -26375,6 +26523,98 @@ app.listen(PORT, () => {
     console.log(`\u26d4 OWNER FEEDBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ A NEAR-MISS MUST NOT COST THE WHOLE EMAIL ════════════════════════════
+  // The writer had one attempt. A refused draft was logged and discarded, and
+  // the lead dropped to the composed template — the flat email that keeps
+  // appearing. But most refusals are one sentence: "describes our process",
+  // "hedges a count we measured", "states which business the customer chose".
+  // The verifier already explains each one in plain English.
+  //
+  // Now the reason goes back to the writer and it gets exactly one corrected
+  // attempt, against the SAME verifier. The floor cannot move: a second failure
+  // falls back exactly as before, so this can only convert a rejected draft into
+  // a passing one.
+  try {
+    const _o = { spine: 'two of the 65 reviews we read name construction timeline delays',
+      figures: ['65', '2'], money: 'a custom home runs several hundred thousand dollars',
+      earned: '65 reviews at 4.3 stars', count: 4 };
+    // A rewrite that fixes nothing must still be refused, or the retry becomes a
+    // way of wearing the verifier down.
+    const _stillBad = [
+      ['still describes our process', 'Justin, two of the 65 reviews I read name construction timeline delays.\n\nI mapped exactly where it shows up.\n\nDoes that come up much on your end?'],
+      ['still names a product', 'Justin, two of the 65 reviews I read name construction timeline delays.\n\nA scheduling system would fix it.\n\nDoes that come up much on your end?'],
+      ['still invents a figure', 'Justin, two of the 65 reviews I read name construction timeline delays.\n\nThat is costing you about 30% of enquiries.\n\nDoes that come up much on your end?'],
+    ];
+    const _corrected = 'Justin, two of the 65 reviews I read name the same thing \u2014 construction timelines running past what was promised.\n\nThat is in the middle of a several-hundred-thousand-dollar decision, when someone has already committed.\n\nDoes that come up much on your end?';
+    const _leaked = _stillBad.filter(([, b]) => verifyBrainEmail(b, _o).ok).map(([l]) => l);
+    const _correctedOk = verifyBrainEmail(_corrected, _o).ok;
+    const _hasRetry = typeof rewriteEmailWithBrain === 'function';
+    if (!_hasRetry) {
+      console.log(`\u26d4 EMAIL RETRY CHECK: there is no corrective rewrite, so a draft refused for a single sentence still costs the whole email and the lead falls to the composed template.`);
+    } else if (_leaked.length) {
+      console.log(`\u26d4 EMAIL RETRY CHECK: ${_leaked.join(', ')} would pass on a second attempt. The retry must face the same verifier \u2014 otherwise it is a way of wearing the guardrails down rather than fixing the draft.`);
+    } else if (!_correctedOk) {
+      console.log(`\u26d4 EMAIL RETRY CHECK: a genuinely corrected draft is still refused, so the retry can never succeed and every near-miss still drops to the template.`);
+    } else {
+      console.log(`\u2713 EMAIL RETRY CHECK: a draft refused for one fixable sentence gets one corrected attempt against the same verifier \u2014 a real correction passes, a rewrite that changes nothing is still refused, and a second failure falls back exactly as before.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 EMAIL RETRY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FINDINGS THAT APPEAR EVERYWHERE MUST NOT READ THE SAME ═══════════
+  // Across twenty audits in one session: outranked_by_weaker in 19, no_offer in
+  // 9, no_published_pricing in 7, no_lead_magnet in 5 — and the high-frequency
+  // ones were `say: () => 'fixed string'`, a function taking no arguments. Word
+  // for word identical on every business that had them.
+  //
+  // 21 of 33 rungs are built that way. That is why "what we found" reads the
+  // same on every lead while the section quoting their own pages reads sharp:
+  // the quoting section is the only part built from what the business says.
+  //
+  // These four are the ones that actually recur. Each now names something
+  // measured about THIS business — the trade, the urgency class — so the same
+  // finding produces a different sentence for a roofer and a surgeon.
+  try {
+    const _say = (id, m) => { const r = HARM_LADDER.find(h => h.id === id); return r && r.say ? String(r.say(m)) : ''; };
+    const _builder = { tradeWord: 'custom home builder', purchaseUrgency: 'CONSIDERED', formFieldCount: 12 };
+    const _resto = { tradeWord: 'water damage restoration', purchaseUrgency: 'EMERGENCY', formFieldCount: 12 };
+    // The full set that actually recurs across real audits. no_after_hours
+    // appeared in 4 of 20 and form_only_no_booking in 6 — the two most frequent
+    // fixed-string rungs after the offer trio.
+    const _recurring = ['no_offer', 'no_published_pricing', 'no_lead_magnet',
+      'no_after_hours', 'form_only_no_booking'];
+    const _identical = _recurring.filter(id => _say(id, _builder) === _say(id, _resto));
+    const _empty = _recurring.filter(id => !_say(id, _builder));
+    // And a rung must never invent: with no trade measured it has to fall back
+    // cleanly rather than emit "a stranger choosing a undefined".
+    const _bare = _recurring.map(id => _say(id, {})).join(' ');
+    const _leaked = /undefined|null|\bNaN\b|\ba a\b/.test(_bare);
+    // ══ AN UNMEASURED COUNT MUST NOT READ AS ZERO ═══════════════════════
+    // thin_profile tested `(m.photoCount || 0) < 5`, so a lead whose profile was
+    // never read became "Their Google listing has 0 photos on it" — a false
+    // claim he checks in one click. It fired on all five leads in an overlap
+    // test, including complete profiles, and was a large part of why every audit
+    // carried the same finding.
+    const _thin = HARM_LADDER.find(h => h.id === 'thin_profile');
+    const _firesUnmeasured = !!(_thin && _thin.test && _thin.test({}));
+    const _firesReal = !!(_thin && _thin.test && _thin.test({ photoCount: 2 }));
+    const _quietWhenFull = !(_thin && _thin.test && _thin.test({ photoCount: 10 }));
+    if (_empty.length) {
+      console.log(`\u26d4 FINDING VARIETY CHECK: ${_empty.join(', ')} produced no sentence at all.`);
+    } else if (_identical.length) {
+      console.log(`\u26d4 FINDING VARIETY CHECK: ${_identical.join(', ')} say exactly the same words for a custom home builder and a water damage company. These appear in a third to a half of all audits, so identical wording is what makes every audit read alike.`);
+    } else if (_firesUnmeasured || !_firesReal || !_quietWhenFull) {
+      console.log(`\u26d4 FINDING VARIETY CHECK: thin_profile ${_firesUnmeasured ? 'fires on a lead whose photo count was never measured, and then states a number we never counted' : (!_firesReal ? 'no longer fires on a genuinely thin profile' : 'fires on a complete profile')}. A finding that appears on every lead is what makes every audit read the same.`);
+    } else if (_leaked) {
+      console.log(`\u26d4 FINDING VARIETY CHECK: a rung emitted "undefined" or a broken article when no trade was measured. A finding that reads as a template failure is worse than one that reads as a template.`);
+    } else {
+      console.log(`\u2713 FINDING VARIETY CHECK: the findings that recur most \u2014 no offer, no pricing, nothing to take away \u2014 name the trade and the buying context, so the same finding reads differently for a builder and a surgeon, and falls back cleanly when the trade was never measured.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FINDING VARIETY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE AUDIT AND THE LADDER MUST READ THE SAME RUN ══════════════════════
   // Justin Doyle's audit described three repeating review complaints while the
   // ladder held two findings and no review-pain rung. The email followed the
@@ -27375,6 +27615,12 @@ app.listen(PORT, () => {
       // what WE did satisfied the first-twelve-words rule because it happened to
       // contain the word "reviews".
       ['exhaustiveness on website', _base + 'Nowhere on your entire website does anything say why to choose you. Want to know why they are above you?'],
+      // Both reached a LIVE email tonight. The process guard existed only in
+      // COPY VERIFY, which runs on the audit, so the email path never saw it.
+      // The product guard was a word list and "scheduling system" was not on it.
+      ['describes our own process', _base + 'I mapped exactly where the pattern shows up. Want to know why they are above you?'],
+      ['a product as the answer', _base + 'A scheduling system would fix that. Want to know why they are above you?'],
+      ['states the fix outright', _base + 'The fix is a proper booking path. Want to know why they are above you?'],
       ['opener spent on what we did', 'Tyler, I went through your website and your Google reviews carefully this morning, and what stood out was that Overhead Door Company outranks you with 41 reviews against your 260. That matters. Want to know why they are above you?'],
       // Live on Midwest Remediation. Passed every check because it carries no
       // figure and makes no post-contact claim — it is simply a confident guess
@@ -29290,7 +29536,35 @@ app.post('/api/compose-email', async (req, res) => {
             sessionAttachEmail(company, composed.variantA.subject, _v.body, '');
             console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
           } else {
+            // ══ TELL IT WHAT WAS WRONG AND ASK ONCE ═══════════════════════
+            // The verifier already explains the fault in plain English and we
+            // were printing it to a log and discarding the draft. Most
+            // rejections are a single sentence — "describes our process",
+            // "hedges a count we measured" — and the model corrects them
+            // instantly when told.
+            //
+            // The rewrite faces the SAME verifier. A second failure falls back
+            // exactly as before, so this can only turn a rejected draft into a
+            // passing one; it cannot lower the floor.
+            let _fixed = null;
+            try {
+              const _r2 = await rewriteEmailWithBrain(_parts, req.body.apiKey, company, _written, _v.why);
+              if (_r2) {
+                const _v2 = verifyBrainEmail(_r2, {
+                  spine: _spineTxt, figures: _figs, money: _parts.money || '',
+                  earned: _parts.earned || '', count: _parts.count || '',
+                });
+                if (_v2.ok) _fixed = _v2.body;
+                else console.log(`\u270d\ufe0f REWRITE ALSO REJECTED [${company}]: ${_v2.why}. Two attempts is enough — sending the composed version.`);
+              }
+            } catch (e) { void e; }
+            if (_fixed) {
+              composed.variantA = { ...composed.variantA, body: _fixed, writtenBy: 'brain' };
+              sessionAttachEmail(company, composed.variantA.subject, _fixed, '');
+              console.log(`\u270d\ufe0f REWRITTEN AND ACCEPTED [${company}]: the first draft was refused — ${String(_v.why).slice(0, 90)} — and the corrected version passes every check. This lead would previously have dropped to the composed template.`);
+            } else {
             console.log(`\u270d\ufe0f BRAIN DRAFT REJECTED [${company}]: ${_v.why}. Sending the composed version instead \u2014 the floor is the email we would have sent anyway.`);
+            }
           }
         }
       } catch (e) { console.log(`Email writer skipped: ${e && e.message}`); }
