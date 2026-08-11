@@ -20972,7 +20972,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
           sitePagesArg: sitePages,
           tradeWordArg: customerTrade || verifiedIndustry || '',
-          reviewPainArg: (deepPain && deepPain.patterns && deepPain.patterns[0]) || null,
+          // ══ THE MINE RESULT LIVES IN A BLOCK, NOT HERE ═══════════════════
+          // This referenced `deepPain`, which does not exist in any scope — the
+          // mine result is `deep`, declared inside the if-block that runs it and
+          // gone by the time we get here. The reference threw, and because the
+          // whole ladder sits in one try it took the ENTIRE harm ladder with it:
+          // "harm ladder failed — deepPain is not defined", then
+          // "_harmsForResponse=false", and the lead fell back to the model
+          // writing the email from scratch.
+          //
+          // publicPainSignals is the outer variable that survives the block, and
+          // painSummary carries the pattern text. Both are already assigned
+          // above this line on every path.
+          reviewPainArg: (reviewPainFound && Array.isArray(publicPainSignals) && publicPainSignals.length)
+            ? { pattern: String(painSummary || publicPainSignals[0] || '').split(' — evidence:')[0] }
+            : null,
           growthConstraintArg: growthConstraint,
         });
         _harmInputs = {
@@ -23218,7 +23232,21 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
               sitePagesArg: sitePages,
               tradeWordArg: customerTrade || verifiedIndustry || '',
-          reviewPainArg: (deepPain && deepPain.patterns && deepPain.patterns[0]) || null,
+          // ══ THE MINE RESULT LIVES IN A BLOCK, NOT HERE ═══════════════════
+          // This referenced `deepPain`, which does not exist in any scope — the
+          // mine result is `deep`, declared inside the if-block that runs it and
+          // gone by the time we get here. The reference threw, and because the
+          // whole ladder sits in one try it took the ENTIRE harm ladder with it:
+          // "harm ladder failed — deepPain is not defined", then
+          // "_harmsForResponse=false", and the lead fell back to the model
+          // writing the email from scratch.
+          //
+          // publicPainSignals is the outer variable that survives the block, and
+          // painSummary carries the pattern text. Both are already assigned
+          // above this line on every path.
+          reviewPainArg: (reviewPainFound && Array.isArray(publicPainSignals) && publicPainSignals.length)
+            ? { pattern: String(painSummary || publicPainSignals[0] || '').split(' — evidence:')[0] }
+            : null,
             });
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
@@ -26215,6 +26243,49 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 OWNER FEEDBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ EVERY ARG THE RESOLVER TAKES MUST EXIST WHERE IT IS CALLED ═══════════
+  // A live run logged "harm ladder failed — deepPain is not defined", then
+  // "_harmsForResponse=false", and the lead fell back to the model writing the
+  // email unassisted. One undefined variable in an argument list took the whole
+  // ladder down, because it all sits inside a single try.
+  //
+  // The variable was `deepPain`, which exists in no scope at all — the mine
+  // result is `deep`, declared inside the if-block that runs it and gone by the
+  // time resolveMeasurements is called. It threw on every lead with reviews.
+  //
+  // Nothing would have caught it. node --check passes, the fuzzers call the
+  // function directly with objects they build themselves, and the log line
+  // reads like a data problem rather than a typo. So this check calls the
+  // resolver the way the pipeline does and asserts the ladder survives.
+  try {
+    const _m = resolveMeasurements({
+      localRank: { checked: true, found: false, scanned: 20, unstable: true },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
+      reviewsRead: 116, ownerReplyCount: 4,
+      sitePagesArg: { booking: 'none_found', bookingMeasured: true, prices: [] },
+      tradeWordArg: 'plastic surgeon',
+      reviewPainArg: { pattern: 'poor communication during and after surgery' },
+      growthConstraintArg: { checked: true, layer: 'THROUGHPUT', condition: 'x' },
+    });
+    const _r = rankHarms({ ..._m, reviewPainCount: 2,
+      reviewPainTop: 'poor communication during and after surgery',
+      reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    const _ran = !!(_r && Array.isArray(_r.byHarm) && _r.byHarm.length);
+    const _lead = _ran ? _r.byHarm[0].id : '';
+    if (!_ran) {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: the harm ladder produced nothing on a lead with a repeating review complaint. When it throws, the whole email falls back to the model writing unassisted and the log says only "harm ladder failed".`);
+    } else if (_lead !== 'review_pain_pattern') {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: a lead whose own customers repeat a complaint opened on ${_lead} instead. The strongest finding this system produces is not leading.`);
+    } else if (!_m.painTheme) {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: the mined complaint did not reach the resolver as painTheme, so the subject line falls back to the generic set on exactly the leads with the best finding.`);
+    } else {
+      console.log(`\u2713 LADDER SURVIVAL CHECK: the resolver is called the way the pipeline calls it \u2014 every argument in scope \u2014 and a repeating review complaint reaches the ladder, leads it, and carries into the subject line.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
   }
 
   // ══ FIVE SIGNALS ARE MEASURED AND NEVER USED ═════════════════════════════
