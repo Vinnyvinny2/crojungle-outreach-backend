@@ -9439,6 +9439,103 @@ VOICE: plain words, no marketing vocabulary, no flattery he did not earn. Warm
 because you actually looked, not because you are being nice.`;
 
 
+// ══ EVERYTHING WE LEARNED, IN ONE PLACE ══════════════════════════════════════
+// The email writer was receiving eleven fields out of a research pass that
+// produces dozens. Not by design — by accretion. Each time something was missing
+// I added that one field, and the shape of the problem never changed: the audit
+// knows the business and the writer does not.
+//
+// Grant Renne is the clearest case. The audit found and VERIFIED "seven of your
+// 68 Google reviews mention the exact same problem", quoting three reviewers.
+// The writer never saw it, so the email said "more than one ... 2 of ~68".
+//
+// This assembles the whole picture once, and it is deliberately split in two,
+// because the split is the safety:
+//
+//   ASSERT  measured, verified, checkable. The email may state these.
+//   CONTEXT everything else. It shapes what the writer understands about the
+//           business and what it chooses to lead on. It may NEVER be asserted.
+//
+// Without that split, more information means more invention. With it, more
+// information means better judgement about which true thing to say.
+const buildEmailEvidence = (ev = {}) => {
+  const A = [];   // may be asserted
+  const C = [];   // context only
+  const line = (arr, t) => { if (t) arr.push(t); };
+  const n = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
+
+  // ── WHO HE IS ────────────────────────────────────────────────────────────
+  const m = ev.measured || {};
+  line(C, ev.trade ? `TRADE: ${ev.trade}${ev.tenure ? `, ${ev.tenure} years in business` : ''}.` : '');
+  if (ev.acquisitionIsReferral) line(C, `HOW HE GETS WORK: through relationships and referrals, not people typing into Google. Do not frame anything as a search or ranking problem.`);
+  else if (ev.purchaseUrgency === 'EMERGENCY') line(C, `HOW HE GETS WORK: people contact him when something has already gone wrong. Speed and access decide who gets the job; nobody compares quotes.`);
+  else if (ev.purchaseUrgency === 'CONSIDERED') line(C, `HOW HE GETS WORK: people research for weeks and compare providers before making contact. What they learn BEFORE calling is most of the decision.`);
+
+  // ── THE NUMBERS, EXACTLY AS MEASURED ─────────────────────────────────────
+  const rc = n(m.reviewCount), rt = n(m.rating);
+  if (rc) line(A, `${rc} Google reviews${rt ? ` at ${rt} stars` : ''}.`);
+  if (n(m.ownerReplies) !== null && n(m.reviewsRead)) line(A, `He has replied to ${m.ownerReplies} of the ${m.reviewsRead} reviews we read.`);
+  if (ev.tenure) line(A, `${ev.tenure} years in business, stated on their own site.`);
+
+  // ── WHAT HIS OWN CUSTOMERS SAID ──────────────────────────────────────────
+  // The single most valuable thing this system produces, and it was reaching the
+  // writer only as a one-line summary with the count already flattened.
+  const pains = Array.isArray(ev.reviewPain) ? ev.reviewPain : [];
+  for (const p of pains.slice(0, 3)) {
+    const q = Array.isArray(p.quotes) ? p.quotes.filter(Boolean).slice(0, 2) : [];
+    line(A, `HIS OWN REVIEWERS, REPEATED: ${p.pattern}${p.count ? ` — ${p.count} of the reviews we read say it` : ''}.${q.length ? ` Their words: ${q.map(x => `"${String(x).slice(0, 90)}"`).join(' / ')}` : ''}`);
+  }
+
+  // ── WHAT ONLY READING THEIR PAGES COULD FIND ─────────────────────────────
+  // Verified against the corpus before they get here, so they are assertable.
+  for (const o of (Array.isArray(ev.originalFindings) ? ev.originalFindings : []).slice(0, 3)) {
+    line(A, `FROM THEIR OWN PAGES: ${o.finding}${o.evidence ? ` — their words: "${String(o.evidence).slice(0, 110)}"` : ''}`);
+  }
+
+  // ── WHERE THEY SIT IN SEARCH ─────────────────────────────────────────────
+  const r = ev.localRank || {};
+  if (r.found && r.query) {
+    line(A, `Ranked #${r.rank} of ${r.scanned} for "${r.query}".${r.weakerAbove ? ` ${r.weakerAbove} of the ${Math.max(1, (r.rank || 1) - 1)} above them have FEWER reviews.` : ''}`);
+    const comps = Array.isArray(r.above) ? r.above.slice(0, 3) : [];
+    if (comps.length) line(A, `Above them: ${comps.map(c => `${c.name}${c.reviews ? ` (${c.reviews} reviews)` : ''}`).join(', ')}.`);
+  }
+
+  // ── THE FOOTPRINT, FROM DISCOVERY ────────────────────────────────────────
+  const mk = Array.isArray(ev.marketsSeen) ? ev.marketsSeen : [];
+  const ab = Array.isArray(ev.marketsAbsent) ? ev.marketsAbsent : [];
+  if (mk.length > 1) line(A, `They come back in ${mk.length} markets: ${mk.join(', ')}.`);
+  if (ab.length && mk.length) line(A, `We ran the same search in ${ab.join(', ')} and they were NOT in the results.`);
+  if (ev.noWebsite) line(A, `They have NO WEBSITE AT ALL — their Google listing carries no site link.`);
+  if (ev.builderSite) line(A, `Their site runs on ${String(ev.builderSite).toUpperCase()}, a free page builder.`);
+
+  // ── THE REST OF THE LADDER ───────────────────────────────────────────────
+  // The writer was seeing the lead finding and at most one more. The others are
+  // context: they tell it how deep the problem runs without being said out loud.
+  const rest = (Array.isArray(ev.harms) ? ev.harms : []).slice(0, 8)
+    .map(h => String(h.finding || '').trim()).filter(Boolean);
+  if (rest.length > 2) line(C, `EVERYTHING ELSE WE MEASURED (do NOT list these — they are here so you know how deep it goes):\n  \u2022 ${rest.slice(2).join('\n  \u2022 ')}`);
+
+  // ── WHAT WE READ, SO ABSENCE IS HONEST ───────────────────────────────────
+  const sp = ev.sitePages || {};
+  if (Array.isArray(sp.pagesRead) && sp.pagesRead.length) {
+    line(C, `PAGES WE ACTUALLY READ: ${sp.pagesRead.join(', ')}. Never claim something is missing from a page not on this list.`);
+  }
+  if (Array.isArray(sp.prices) && sp.prices.length) {
+    line(A, `THEIR OWN PUBLISHED PRICES: ${sp.prices.map(x => `${x.amount} (${x.what})`).join('; ')}. Printed on their site, so safe to use in arithmetic.`);
+  }
+  if (ev.bindingLayer) line(C, `THE PART OF THE BUSINESS THAT IS ACTUALLY STUCK: ${ev.bindingLayer}${ev.bindingWhy ? ` — ${ev.bindingWhy}` : ''}`);
+  if (ev.situationRead) line(C, `YOUR OWN READ OF THIS BUSINESS: ${ev.situationRead}`);
+
+  return {
+    assertable: A,
+    context: C,
+    block: [
+      A.length ? `\u2550\u2550\u2550 FACTS YOU MAY ASSERT \u2014 every one measured and verified \u2550\u2550\u2550\n${A.map(x => `\u2022 ${x}`).join('\n')}` : '',
+      C.length ? `\n\u2550\u2550\u2550 CONTEXT \u2014 to decide WHAT TO SAY. Never state these as facts \u2550\u2550\u2550\n${C.join('\n')}` : '',
+    ].filter(Boolean).join('\n'),
+  };
+};
+
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
   const { first, spine, earned, pattern, reframe, money, count, cta,
@@ -9476,13 +9573,25 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
     bindingLayer ? `THE PART OF HIS BUSINESS THAT IS ACTUALLY STUCK: ${bindingLayer}${bindingWhy ? ` — ${bindingWhy}` : ''}` : '',
   ].filter(Boolean).join('\n');
 
+  // ══ ONE ASSEMBLED PICTURE, NOT ELEVEN FIELDS ═══════════════════════════
+  // `who` and `diagnosis` were two of a growing pile of hand-built strings, each
+  // added the day something turned out to be missing. buildEmailEvidence does
+  // the whole job in one place and splits it into what may be ASSERTED and what
+  // is CONTEXT — which is the safety, because more information without that
+  // split is just more room to invent.
+  const _ev = buildEmailEvidence(parts.evidence || {});
+
   const prompt = `You are writing one cold email to ${first || 'the owner'} at ${company}.
 
 ${who}
 
 ${diagnosis}
 
-THE VERIFIED FACTS. Every one is measured. You may assert these and nothing else:
+${_ev.block}
+
+THE SENTENCE THIS EMAIL IS BUILT ON. It is measured, and it is what the composed
+version would have said. You may improve how it reads; you may not change what it
+claims:
 
 ${supplied}
 
@@ -10827,8 +10936,34 @@ const buildFactualSpine = (harms, m = {}) => {
     .filter(h => _band(h) !== _band(lead))          // a different part of the business
     [0] || null;
 
+  // ══ WHEN THE AUDIT FOUND SOMETHING SHARPER, USE IT ══════════════════════
+  // Live on Grant Renne. The audit's original finding, verified against his own
+  // pages, read: "Seven of your 68 Google reviews mention the exact same problem:
+  // crews not calling back, scheduling delays, or long waits between the quote
+  // and the work starting" — with three of his reviewers quoted verbatim.
+  //
+  // The email said: "more than one of your own Google reviews names the same
+  // thing — 2 of ~68 reviews mention this."
+  //
+  // Seven became two. Quotes became "names the same thing". A tenth of his
+  // reviews became "more than one". The original finding SURVIVED verification
+  // and the spine used the rung anyway, because the two never met.
+  //
+  // So: if a surviving original finding is about the same thing as the lead rung,
+  // it becomes the claim. It is strictly better evidence — it quotes their own
+  // words, which is the whole reason the field exists.
+  //
+  // THE SAFETY IS UNCHANGED AND IT IS THE EXISTING ONE. Every figure in the
+  // composed email is still checked against permittedFigures, so if the audit
+  // says "seven" and we only measured two, the composer rejects it and falls back
+  // exactly as before. This can improve the claim; it cannot smuggle a number.
+  // The swap to a sharper audit finding does NOT happen here: this function runs
+  // long before originalFindings have been verified against their pages, so at
+  // this point there is nothing to swap in. It happens where both exist, right
+  // after verification — see SHARPER CLAIM.
   return {
     claim,
+    claimSource: 'ladder_rung',
     claimId: lead.id,
     costs: String(lead.costs || '').trim(),
     // The second finding, when one clears the bar. Null is the common case and
@@ -22796,6 +22931,34 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               else console.log(`\u{1F50E} ORIGINAL FINDING [${company}]: dropped \u2014 ${_v.why}`);
             }
             parsed.originalFindings = _origOk;
+            // ══ THE SPINE IS BUILT BEFORE THESE ARE VERIFIED ══════════════
+            // buildFactualSpine runs ~2,000 lines above this, so it cannot see
+            // a finding that has not been checked yet. On Grant Renne the audit
+            // found "Seven of your 68 Google reviews mention the exact same
+            // problem" with three reviewers quoted, it passed verification here,
+            // and the email still opened on the rung's "2 of ~68".
+            //
+            // So the swap happens HERE, where both exist. The composer's figure
+            // check is unchanged and still runs afterwards: if the audit says
+            // seven and we measured two, "seven" is not in permittedFigures and
+            // the composed email falls back exactly as it does today. This can
+            // sharpen the claim; it cannot introduce a number.
+            try {
+              const _sp = _harmsForResponse && _harmsForResponse.factualSpine;
+              if (_sp && _sp.claim && _origOk.length) {
+                const _lw = String(_sp.claim).toLowerCase().split(/\s+/)
+                  .filter(w => w.length > 5 && !/^(their|there|business|company|website|reviews?)$/.test(w));
+                const _sharp = _origOk.find(o => {
+                  const t = String((o && o.finding) || '').toLowerCase();
+                  return t.length >= 25 && _lw.filter(w => t.includes(w)).length >= 2;
+                });
+                if (_sharp) {
+                  console.log(`\u{1F50E} SHARPER CLAIM [${company}]: the audit's own finding covers the same ground as the ladder rung and quotes their pages. Using "${String(_sharp.finding).slice(0, 76)}" instead of "${String(_sp.claim).slice(0, 46)}". Every figure in it is still checked against what we measured.`);
+                  _sp.claim = String(_sharp.finding).trim();
+                  _sp.claimSource = 'audit_original';
+                }
+              }
+            } catch (e) { void e; }
             if (_origOk.length) {
               console.log(`\u{1F50E} ORIGINAL FINDINGS [${company}]: ${_origOk.length} finding(s) the scanner could not have produced, each quoting their own pages \u2014 "${_origOk[0].finding.slice(0, 110)}"`);
             } else if (_origIn.length) {
@@ -25625,6 +25788,96 @@ app.listen(PORT, () => {
     console.log(`\u26d4 ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE WRITER MUST RECEIVE WHAT RESEARCH LEARNED ════════════════════════
+  // It was getting eleven fields out of a research pass that produces dozens —
+  // not by design, but because each time something turned out to be missing I
+  // added that one field. Grant Renne is the proof: the audit found and verified
+  // "seven of your 68 Google reviews mention the exact same problem", quoting
+  // three reviewers, and the email said "more than one ... 2 of ~68".
+  //
+  // buildEmailEvidence assembles it once and splits it in two. The split IS the
+  // safety: more information without it is more room to invent; with it, more
+  // information is better judgement about which true thing to say.
+  try {
+    const _e = buildEmailEvidence({
+      trade: 'foundation repair', tenure: 14,
+      measured: { reviewCount: 68, rating: 4.8, reviewsRead: 40, ownerReplies: 0 },
+      originalFindings: [{ finding: 'Seven of your 68 Google reviews mention the exact same problem', evidence: 'Crew never emailed or called' }],
+      reviewPain: [{ pattern: 'crew scheduling delays', count: 2, quotes: ['Crew never emailed or called'] }],
+      harms: [{ finding: 'ranked below a weaker business' }, { finding: 'no way to book a time' },
+              { finding: 'a 7-field form' }, { finding: 'no owner replies' }],
+      localRank: { found: true, rank: 3, scanned: 20, weakerAbove: 1, query: 'foundation repair in Kansas City', above: [{ name: 'KC Pier', reviews: 898 }] },
+      sitePages: { pagesRead: ['homepage', 'about'], prices: [] },
+      bindingLayer: 'THROUGHPUT', situationRead: 'A 143-year name a stranger will skip past.',
+    });
+    const _a = _e.assertable.join(' ');
+    const _c = _e.context.join(' ');
+    const _missing = [];
+    if (!/Seven of your 68/.test(_a)) _missing.push("the audit's own verified finding");
+    if (!/Crew never emailed/.test(_a)) _missing.push("his reviewers' actual words");
+    if (!/KC Pier/.test(_a)) _missing.push('the competitor by name');
+    if (!/68 Google reviews at 4.8/.test(_a)) _missing.push('the measured review numbers');
+    // The split must hold. A read or a diagnosis is judgement, not a fact, and
+    // an email that asserts one is asserting something we never measured.
+    const _leaked = [];
+    if (/143-year name/.test(_a)) _leaked.push('the situation read');
+    if (/THROUGHPUT/.test(_a)) _leaked.push('the binding layer');
+    if (!/PAGES WE ACTUALLY READ/.test(_c)) _leaked.push('the pages-read guard is missing from context');
+    if (_missing.length) {
+      console.log(`\u26d4 EVIDENCE CHECK: ${_missing.join(', ')} never reaches the email writer. That is the gap that made Grant Renne's email say "more than one" when the audit had counted seven.`);
+    } else if (_leaked.length) {
+      console.log(`\u26d4 EVIDENCE CHECK: ${_leaked.join(', ')} \u2014 judgement is sitting in the assertable list. A read is not a measurement and an email must never state one as fact.`);
+    } else {
+      console.log(`\u2713 EVIDENCE CHECK: the writer receives the verified findings, the reviewers' own words, the named competitor and every measured number as ASSERTABLE, with the read, the diagnosis and the rest of the ladder as CONTEXT it may use but never state.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 EVIDENCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE AUDIT'S OWN FINDING SHOULD BEAT THE RUNG ═════════════════════════
+  // Live on Grant Renne. The audit found, and verified against his own pages:
+  // "Seven of your 68 Google reviews mention the exact same problem: crews not
+  // calling back, scheduling delays, or long waits between the quote and the
+  // work starting" — with three reviewers quoted verbatim.
+  //
+  // The email opened on the ladder rung instead: "more than one of your own
+  // Google reviews names the same thing — 2 of ~68." Seven became two, quotes
+  // became "names the same thing", a tenth of his reviews became "more than one".
+  //
+  // The spine is built two thousand lines before originalFindings are verified,
+  // so the two never met. The swap now happens after verification, and the
+  // composer's figure check still runs afterwards — an audit number we never
+  // measured is still refused, exactly as before.
+  try {
+    const _rung = 'more than one of their own Google reviews names the same thing — crew scheduling delays and failure to contact after inspection';
+    const _origs = [
+      { finding: 'Seven of your 68 Google reviews mention the exact same problem: crews not calling back, scheduling delays, or long waits between the quote and the work starting' },
+      { finding: 'Your homepage opens with We are here to help you protect your biggest asset' },
+    ];
+    const _pick = (claim, origs) => {
+      const lw = String(claim).toLowerCase().split(/\s+/)
+        .filter(w => w.length > 5 && !/^(their|there|business|company|website|reviews?)$/.test(w));
+      return origs.find(o => {
+        const t = String((o && o.finding) || '').toLowerCase();
+        return t.length >= 25 && lw.filter(w => t.includes(w)).length >= 2;
+      }) || null;
+    };
+    const _got = _pick(_rung, _origs);
+    // An unrelated finding must NOT displace the rung — swapping in something
+    // about a different part of the business would change what the email argues.
+    const _unrelated = _pick('The only way to reach them is a phone call during office hours',
+      [{ finding: 'Your homepage opens with We are here to help you protect your biggest asset' }]);
+    if (!_got || !/Seven of your 68/.test(_got.finding)) {
+      console.log(`\u26d4 SHARPER CLAIM CHECK: the audit's own finding about the same subject is not replacing the rung. The email keeps saying "more than one" when the audit counted seven and quoted three reviewers.`);
+    } else if (_unrelated) {
+      console.log(`\u26d4 SHARPER CLAIM CHECK: an unrelated audit finding displaced the lead rung. Swapping in a finding about a different part of the business changes what the email argues.`);
+    } else {
+      console.log(`\u2713 SHARPER CLAIM CHECK: when the audit's verified finding covers the same ground as the ladder rung it becomes the claim, an unrelated one does not, and every figure in it still faces the composer's measured-figure check.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SHARPER CLAIM CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ REPAIR WHAT CAN BE REPAIRED ══════════════════════════════════════════
   // Three pattern lines in one batch, three discards: "no generality marker",
   // "names the business", "49 words" against a 48-word cap. The email then fell
@@ -28017,6 +28270,33 @@ app.post('/api/compose-email', async (req, res) => {
             // The brain's own read, and the constraint it diagnosed. Both were
             // computed with the whole corpus in view and then thrown away.
             situationRead: (audit.situationRead && audit.situationRead.headline) || '',
+            // ══ THE WHOLE PICTURE, ASSEMBLED ONCE ═══════════════════════════
+            // Everything Research learned, handed over in one object instead of
+            // the eleven fields that had accumulated one bug at a time. The
+            // assembler decides what is assertable and what is context.
+            evidence: {
+              trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+              tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
+              measured: audit.measuredNumbers || {},
+              acquisitionIsReferral: !!(audit.measuredNumbers && audit.measuredNumbers.acquisitionIsReferral),
+              purchaseUrgency: (audit.measuredNumbers && audit.measuredNumbers.purchaseUrgency) || '',
+              // The findings only reading their pages could produce — verified
+              // against the corpus, and the reason Grant's email said "more than
+              // one" when the audit had counted seven and quoted three reviewers.
+              originalFindings: Array.isArray(audit.originalFindings) ? audit.originalFindings : [],
+              reviewPain: Array.isArray(audit.reviewPain) ? audit.reviewPain
+                : (Array.isArray(audit.deepPain) ? audit.deepPain : []),
+              harms: Array.isArray(audit.harmsRanked) ? audit.harmsRanked : [],
+              localRank: audit.localRank || null,
+              sitePages: audit.sitePages || null,
+              marketsSeen: Array.isArray(req.body.marketsSeen) ? req.body.marketsSeen : [],
+              marketsAbsent: Array.isArray(req.body.marketsAbsent) ? req.body.marketsAbsent : [],
+              noWebsite: req.body.noWebsite === true,
+              builderSite: req.body.builderSite || null,
+              bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer) || '',
+              bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
+              situationRead: (audit.situationRead && audit.situationRead.headline) || '',
+            },
             bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer)
               || (audit._persisted && audit._persisted.growthConstraint && audit._persisted.growthConstraint.layer) || '',
             bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
