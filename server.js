@@ -19840,6 +19840,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
           booking: sitePages && sitePages.booking,
           bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          // ══ THE THREE ORDERING FIXES NEVER REACHED THE LADDER ══════════════
+          // rankHarms is called with _harmInputs, which is assembled field by
+          // field from _measured — and I added purchaseUrgency,
+          // acquisitionIsReferral and bindingLayer to resolveMeasurements
+          // without ever adding them here.
+          //
+          // So the urgency table, the referral demotion and the binding-layer
+          // bonus were dead code in production. Every simulation I ran passed
+          // because I called rankHarms directly with a hand-built object.
+          // David Leon's re-run is the proof: the referral demotion should have
+          // taken outranked_by_weaker from 98 to 68, and the log read
+          // "opener=97" — unchanged.
+          //
+          // This is the "computed but not passed" class, and it caught me even
+          // while I was building guards against it. The lesson stands: a value
+          // that is computed is not a value that is delivered.
+          purchaseUrgency: _measured.purchaseUrgency,
+          acquisitionIsReferral: _measured.acquisitionIsReferral,
+          bindingLayer: _measured.bindingLayer,
           formFieldCount: _measured.formFieldCount,
           formFieldCountIsSingleForm: _measured.formFieldCountIsSingleForm,
           reviewRecency: _measured.reviewRecency,
@@ -24581,6 +24600,57 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 BINDING LAYER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ORDERING MUST SURVIVE THE REAL PATH, NOT JUST THE FUNCTION ═══════
+  // Three ordering fixes — the urgency table, the referral demotion and the
+  // binding-layer bonus — shipped and never fired once. rankHarms is called with
+  // _harmInputs, which is assembled field by field from resolveMeasurements, and
+  // the three new fields were never added to that assembly.
+  //
+  // Every test passed. fuzzcore ran 240,000 cases and all held, because it calls
+  // rankHarms DIRECTLY with a hand-built object — so it proved the function was
+  // correct while production was handing it nothing. David Leon's re-run is the
+  // evidence: the referral demotion should have moved outranked_by_weaker from
+  // 98 to 68 and the log read "opener=97", unchanged.
+  //
+  // So this check walks the REAL path — resolveMeasurements, then rankHarms —
+  // and asserts the adjustment actually lands. A guard that tests a function in
+  // isolation cannot see a value that never arrives.
+  try {
+    const _base = {
+      localRank: { checked: true, found: true, rank: 3, scanned: 20, weakerAbove: 1,
+        ours: { reviews: 225, rating: 4.9 }, query: 'estate planning attorney in Dallas', city: 'Dallas' },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 68 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 5 },
+      reviewsRead: 40, ownerReplyCount: 29,
+      sitePagesArg: { booking: 'form', bookingMeasured: true, prices: [] },
+      growthConstraintArg: { checked: true, layer: 'OFFER', condition: 'no named offer' },
+    };
+    const _ref = resolveMeasurements({ ..._base, tradeWordArg: 'estate planning attorney' });
+    const _loc = resolveMeasurements({ ..._base, tradeWordArg: 'garage door repair' });
+    const _missing = [];
+    if (_ref.purchaseUrgency !== 'CONSIDERED') _missing.push('purchaseUrgency');
+    if (_ref.acquisitionIsReferral !== true) _missing.push('acquisitionIsReferral');
+    if (_ref.bindingLayer !== 'OFFER') _missing.push('bindingLayer');
+    if (_loc.purchaseUrgency !== 'EMERGENCY') _missing.push('purchaseUrgency(emergency)');
+    // And they must SURVIVE into the ladder, which is where they were lost.
+    const _openerFor = (m, id) => {
+      const r = rankHarms({ ...m, noAfterHours: true, noPublishedPricing: true, phoneMismatch: true, googlePhone: '(214) 368-7040' }) || {};
+      const h = (r.byHarm || []).find(x => x.id === id);
+      return h ? Number(h.opener) : null;
+    };
+    const _refRank = _openerFor(_ref, 'outranked_by_weaker');
+    const _locRank = _openerFor(_loc, 'outranked_by_weaker');
+    if (_missing.length) {
+      console.log(`\u26d4 ORDERING PATH CHECK: ${_missing.join(', ')} did not resolve. The ordering fixes cannot fire and every log line will look normal.`);
+    } else if (_refRank !== null && _locRank !== null && _refRank >= _locRank) {
+      console.log(`\u26d4 ORDERING PATH CHECK: a referral practice scores the search-rank finding at ${_refRank} against ${_locRank} for a local trade \u2014 the demotion is computed but is not reaching rankHarms. That is exactly how three fixes shipped dead.`);
+    } else {
+      console.log(`\u2713 ORDERING PATH CHECK: urgency, referral and binding layer resolve from the trade AND survive into the ladder \u2014 walked through resolveMeasurements to rankHarms, the path a real lead takes, not the function in isolation.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 ORDERING PATH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A REFERRAL PRACTICE IS NOT COMPETING FOR A MAP-PACK CLICK ════════════
