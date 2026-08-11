@@ -8989,6 +8989,10 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   past it, finishes on a statement, and has nothing to reply to.
 - No marketing words: funnel, CRM, pixel, SEO, conversion rate, landing page,
   optimisation, leverage, unlock.
+- THE COUNT IS A NUMBER OF FINDINGS, NOT A NUMBER OF PLACES WE SEARCHED. Never
+  write "six places in total", "three different pages", or "everywhere we
+  looked". We read a handful of pages and counted separate problems across them.
+  Only ONE of those findings is the one this email is about.
 ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and go straight into it.` : '- No greeting; open on the fact.'}
 
 55-85 words. Mike's voice sample above governs — it replaces every adjective a
@@ -9133,6 +9137,33 @@ const verifyBrainEmail = (body, opts = {}) => {
   // number bolted to the wrong noun is still a false statement, and it is the
   // kind an owner spots instantly.
   const COUNT_SCOPE = /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:more\s+)?(?:things?|issues?|problems?|items?|of these)\b[^.]{0,30}\b(on|with|in)\s+(?:your|the)\s+(listing|profile|site|website|page|reviews?|form)\b/i;
+  // ══ THE COUNT COUNTS FINDINGS, NOT PLACES WE SEARCHED ═══════════════════
+  // COUNT_SCOPE requires a named surface ("on your listing"), so a bare count
+  // of PLACES walks through it. Live on David Leon:
+  //
+  //   "Across your website, your reviews, everywhere we looked — SIX PLACES IN
+  //    TOTAL — there's no price and no range."
+  //
+  // The 6 is the number of FINDINGS. Only one of them is pricing. The email
+  // says we searched six places for a price and found none in any — a
+  // measurement we never took, stated with complete confidence.
+  //
+  // This is the most dangerous error this system makes: specific, checkable and
+  // false. He opens his own site, sees pricing missing in one place rather than
+  // six, and every true number in the email dies with it.
+  const COUNT_AS_PLACES = /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:different\s+|separate\s+)?(places?|spots?|locations?|pages?|sections?|areas?)\b/i;
+  const _places = text.match(COUNT_AS_PLACES);
+  if (_places) {
+    return { ok: false, why: `"${_places[0]}" — the count is the number of FINDINGS, not the number of places we searched. We never counted places, and he can check that in one look at his own site.` };
+  }
+  // The same slip without a noun at all: "everywhere we looked", "across the
+  // whole site" — an exhaustiveness claim about a read that covered seven pages.
+  const EXHAUSTIVE = /\b(everywhere we looked|anywhere we looked|across (the |your )?(whole|entire) (site|website)|nowhere on (the|your) (whole|entire) site|every page (of|on) (the|your) site)\b/i;
+  const _exh = text.match(EXHAUSTIVE);
+  if (_exh) {
+    return { ok: false, why: `"${_exh[0]}" — we read a handful of pages, not the whole site. An exhaustiveness claim is the one an owner disproves fastest, by naming the page we never opened.` };
+  }
+
   const scope = text.match(COUNT_SCOPE);
   if (scope) {
     return { ok: false, why: `the count is attached to one surface — "${scope[0].slice(0, 46)}" — but the findings span the site, the listing and the reviews` };
@@ -25035,6 +25066,12 @@ app.listen(PORT, () => {
       // Live regression the moment the writer was given real freedom: the
       // question landed in sentence two and four more followed it.
       ['ask buried mid-email', _base + 'Want to know why they are above you? People searching pick from what is in front of them. A garage door replacement runs $1k-$4k. Speed in that first moment determines who gets the work.'],
+      // Live on David Leon, and the count guard did not see it because there is
+      // no named surface: "across your website, your reviews, everywhere we
+      // looked — SIX PLACES IN TOTAL — there is no price". The 6 is the number
+      // of FINDINGS. We never counted places, and he disproves it in one look.
+      ['count read as places searched', _base + 'Across your website, your reviews, everywhere we looked, six places in total, there is no price and no range. Want to know why they are above you?'],
+      ['exhaustiveness claim', _base + 'No price appears anywhere across your entire website. Want to know why they are above you?'],
       // Live on Midwest Remediation. Passed every check because it carries no
       // figure and makes no post-contact claim — it is simply a confident guess
       // about how he runs his business. Dave's own read: "I'm not buying leads,
