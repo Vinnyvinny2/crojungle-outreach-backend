@@ -750,6 +750,21 @@ const computeSeverity = (signal) => {
 // view-source or read a SERP), which is a real difference in how hard the email
 // has to work.
 const VERIFIABILITY_RULES = [
+  // ══ A QUOTED SENTENCE IS A MEASUREMENT, WHATEVER IT IS ABOUT ══════════════
+  // FIRST in the list, because this array is scanned top-down and the subject
+  // rules below match on the same words. "Your homepage headline is 'Quality
+  // craftsmanship since 1976'" was scoring 3 — demoted by a rule about
+  // headlines, which is right for "your headline is generic" and wrong when the
+  // headline is reproduced verbatim.
+  //
+  // Positioning findings were mandated into every audit and then demoted here on
+  // every lead and dropped. The adjective was always the problem; the subject
+  // never was. A sentence he can find on his own site in ten seconds is the
+  // definition of a 5 in this scale, whatever it happens to be about.
+  //
+  // The quote must be substantial — fifteen characters — so a stray "generic"
+  // in quotation marks cannot promote a characterisation.
+  [5, /["'\u201c\u2018][^"'\u201d\u2019]{15,}["'\u201d\u2019]/, 'it quotes a sentence from their own page, which he can find in ten seconds'],
   // "Quote form is the only path in \u2014 no response layer" defaulted to 2 here,
   // which demoted it silently. He CAN check the first half in ten seconds by
   // opening his own contact page; he cannot check the second half at all,
@@ -814,6 +829,18 @@ const VERIFIABILITY_RULES = [
   [4, /\bphone[- ]only\b|\bno booking (tool|system|option)\b|\bonly a (contact |quote )?form\b|\bno way to (book|schedule|start)\b/i, 'he clicks through his own booking path'],
   [4, /\breview (recency|is about \d+ days)\b|\bnewest review\b|\b\d+ days old\b/i, 'he checks the date on his newest review'],
   [4, /\bno social (profiles?|links?)\b|\bnot linked on their site\b/i, 'he looks at his own footer'],
+  // ══ A QUOTED SENTENCE IS A MEASUREMENT, WHATEVER IT IS ABOUT ══════════════
+  // Positioning findings were mandated into every audit and then demoted here
+  // to 3 on every lead — "the owner reads their own copy, but 'generic' is a
+  // judgement" — and dropped. Correct for a characterisation; wrong for a QUOTE.
+  //
+  // "Your homepage headline is 'Quality craftsmanship since 1976'" is not a
+  // judgement about his positioning. It is a sentence he can find on his own
+  // site in ten seconds, which is the definition of a 5 in this scale. The
+  // adjective was the problem, never the subject.
+  //
+  // This must sit ABOVE the judgement rules or they match first and the quote
+  // is demoted anyway.
   // 3 — visible to him, but the CONCLUSION is a judgement he could dispute.
   [3, /\bno guarantee\b|\bno (named |real )?offer\b|\bno urgency\b|\brisk reversal\b/i, 'the owner reads their own copy, but "no offer" is a judgement'],
   [3, /\bgeneric\b|\btargets? (everyone|anyone)\b|\bpositioning\b|\bundifferentiated\b|\binterchangeable\b/i, 'the owner reads their own copy, but "generic" is a judgement'],
@@ -4521,7 +4548,24 @@ Return ONLY valid JSON, no markdown:
   "signalReads": "Array of {signal, says}, one per MEASURED signal you were given. 'signal' is a short label (Local search rank, Reputation, Booking path, Google profile, Positioning, Site technicals). 'says' is ONE sentence of INTERPRETATION for a colleague \u2014 what the fact MEANS for the business, never the fact itself, because the reader already has the fact. WRONG: 'Ranks #15 for plastic surgeon'. RIGHT: '#15 of 20 in Dallas and 10 of the 14 above him have fewer reviews \u2014 the position is not being earned on reputation.' WRONG: '1 profile gap'. RIGHT: 'His Google profile has no description \u2014 the one thing on this list he could fix himself this afternoon.' WRONG: 'Form only, 17 fields'. RIGHT: 'Seventeen fields is the only way in, and the people filling it in have just been in a car accident.' Where a signal is a STRENGTH say so plainly \u2014 a briefing that lists only problems misleads the reader about what kind of business this is.",
   \u2605 ORDER MATTERS AND IT IS DELIBERATE: you write situationRead and signalReads BEFORE candidateFindings. Reason about the whole business first, then choose the findings that EVIDENCE that read. Doing it the other way round \u2014 findings first, synthesis after \u2014 makes the synthesis a summary of choices already made, and it collapses back into a restatement of one finding. Decide what is going on here, then prove it.
   "originalFindings": "REQUIRED. Array of 0-3 findings YOU discovered by reading their actual pages, which the scanner could not produce. The measured list above is the same handful of checks on every lead — phone-only, no price, nothing to take away — and an owner who reads three of those knows he received a scan. THESE are what make him think somebody actually looked. \u2192 THE ONLY THREE KINDS THAT COUNT, and every one needs work he would never do himself: (1) A CONTRADICTION between two things he controls. He wrote the homepage, he wrote the service pages, he set the Google listing — he cannot hold them all in his head at once, so when they disagree he literally cannot see it. 'Your homepage promises same-day response; your contact page lists office hours' or 'the treatments page names six services and the homepage names three'. Quote both sides. (2) WHAT HIS OWN COPY SAYS, quoted, next to what it does not say. Not 'positioning is generic' — that is a category label and the scanner already produces those. Instead: 'Every service page opens with the same sentence about experience you can trust' with the phrase quoted exactly. The quote IS the finding. (3) WHAT HIS REVIEWERS SAY next to what his site sells. If the review text we read repeats something his pages never mention, that is the sharpest thing available on the lead: his customers have told you what they value and his website is silent on it. \u2192 RULES: every finding must QUOTE or NAME something specific from the pages, exact as written. If you cannot point to the words, it is not one of these — leave it out. NEVER a category label ('generic', 'weak', 'unclear', 'thin', 'lacks'). NEVER an absence claim about a page we did not read — the prompt above lists which pages were opened. Return an EMPTY ARRAY rather than padding: three real ones is exceptional, one is good, zero is honest. Each item: {finding: \"one sentence, containing the quoted words\", evidence: \"the exact text from their page that proves it\"}.",
-  "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions. (c) IF THE SITE IS VISIBLY OLD, THAT IS ITS OWN CANDIDATE \u2014 use signal \u2018dated_site\u2019. A copyright year years out of date, a layout from another decade, or a design a buyer would hesitate to hand a card to is not a technical leak and it is not positioning: it is a CREDIBILITY problem, and for a high-ticket local trade it is often the first thing a customer reacts to and the whole reason a rebuild is worth buying. It was invisible to this list before, so a contractor whose site had not changed since 2015 had no way for that to become the lead. Score it like anything else: VERIFIABLE is high (he can look at it), SURPRISE is usually LOW (he knows it is old), so it wins only when it is genuinely severe. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
+  "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions.
+
+HOW TO WRITE IT SO IT SURVIVES — this is where every positioning finding has been dying. Positioning findings get mandated into the list and then dropped downstream, because every natural way of describing weak positioning is a JUDGEMENT and the verifiers only accept measurements. "Generic targeting." "No clear offer." "The language of serving everyone." All true, all unusable: he can argue with every one, and so can our own guards.
+
+QUOTE THE SENTENCE AND LET IT INDICT ITSELF. Do not characterise their copy — REPRODUCE it, exactly, and put the comparison beside it.
+
+  DEAD:  "Your positioning is generic and doesn't differentiate you."
+  ALIVE: "Your homepage headline is 'Quality craftsmanship since 1976.' Two of the three builders ranking above you use almost the same line."
+
+  DEAD:  "Every service page opens with clinical explanation."
+  ALIVE: "Your wisdom teeth page opens 'Although most people develop and grow 32 permanent adult teeth...' — that is the sentence a patient reads first, and it is a definition."
+
+  DEAD:  "There is no named offer."
+  ALIVE: "The only ask on the page is 'Schedule Now'. It is the same ask on all six pages we read."
+
+The test: could the owner open his own site, find that exact sentence, and see for himself? If yes it survives every guard and he cannot argue with it. If it needs him to accept your adjective, it is dead on arrival.
+
+NEVER claim a sentence appears on a page you did not read, and never describe anything about layout or position — where something sits on the screen — unless a screenshot was captured. Those are the two things that have killed real positioning findings. (c) IF THE SITE IS VISIBLY OLD, THAT IS ITS OWN CANDIDATE \u2014 use signal \u2018dated_site\u2019. A copyright year years out of date, a layout from another decade, or a design a buyer would hesitate to hand a card to is not a technical leak and it is not positioning: it is a CREDIBILITY problem, and for a high-ticket local trade it is often the first thing a customer reacts to and the whole reason a rebuild is worth buying. It was invisible to this list before, so a contractor whose site had not changed since 2015 had no way for that to become the lead. Score it like anything else: VERIFIABLE is high (he can look at it), SURPRISE is usually LOW (he knows it is old), so it wins only when it is genuinely severe. Then pick the highest total as your lead. Ties go to the higher VERIFIABLE score, because undeniable beats important.",
   "leadSignal": "The winner from candidateFindings above \u2014 the ONE finding your pitch will be built on. Answer with EXACTLY ONE of: \"review_pattern\", \"search_absence\", \"gbp_gap\", \"conversion_leak\", \"technical_leak\", \"dated_site\", \"positioning_offer\". \u26a0 conversion_leak IS NEW AND IT IS THE ONE MOST OFTEN FILED WRONG. It covers the path from INTERESTED to CUSTOMER: no booking tool, a form that captures and then waits, no visible instant-response layer, an over-long form, no way to start outside business hours. Those are NOT technical_leak. technical_leak is page MECHANICS \u2014 no HTTPS, no mobile viewport, no tap-to-call link. Ask which question the finding answers: \"can this page function?\" is technical_leak; \"can a person who already wants to hire them actually do it?\" is conversion_leak. On live runs every conversion finding was filed as technical_leak, which put the highest-leverage layer on this kind of lead into the lowest-ranked bucket. This is a DECISION you are making now, before writing, not a description of something already written. The pitch that follows must be built on this finding. Answer with EXACTLY ONE of these strings and nothing else: \"review_pattern\" (a pain repeating across their own Google reviews), \"search_absence\" (a measured search-rank absence), \"gbp_gap\" (a measured Google Business Profile gap), \"technical_leak\" (a measured site/technical leak \u2014 no HTTPS, no mobile viewport, no tap-to-call link, slow mobile. NOT forms \u2014 an over-long form is conversion_leak, as stated above), \"positioning_offer\" (their market positioning, generic promise, or missing offer/guarantee). Be honest \u2014 name what the FIRST sentence of the pitch is actually about, not what you wish it led with. This is checked against what we measured.",
   "leadSignalReason": "ONLY fill this in if you deliberately did NOT lead with the highest-ranked signal available. Explain in one sentence why \u2014 for example the recurring review pain is about pricing or workmanship, which we do not fix, so leading with it would make us sound like a complaint tracker. Leave as null if you led with the highest-ranked signal.",
   "positioningRead": "An OBSERVATION about their market positioning and offer, drawn ONLY from their homepage copy printed above — never a score, never a dollar figure. Object {targetsSpecificCustomer: true/false, hasRealOffer: true/false, hasGuarantee: true/false (is any guarantee, warranty or risk reversal visible on the pages we read?), offerIsNamed: true/false (is the offer a named thing a buyer can hold in their head, or just 'Contact Us'?), repeatedGenericPromise: 'the exact interchangeable phrase that appears across multiple pages, or null if the pages genuinely differentiate', observation: 'one plain sentence quoting or closely paraphrasing what their site actually says about who it is for and what it offers, and why that is or is not differentiated'}. If the homepage copy was not captured, return null. Example: {targetsSpecificCustomer:false, hasRealOffer:false, observation:'The homepage leads with \"quality you can trust\" and a \"Contact Us\" button — the same promise and the same ask as every competitor, so nothing tells a buyer why to pick them.'} This must be TRUE to their page and checkable by the owner; do not invent copy they did not write.",
@@ -9488,7 +9532,44 @@ const parseProspectVerdict = (text) => {
 // rather than adjectives about him. The prohibitions stay untouched and
 // verifyBrainEmail still judges the output, so the floor does not move. Only the
 // input changes, from seven strings to the reasoning that produced them.
-const MIKE_VOICE_FOR_EMAIL = `THE FINDING GOES IN THE FIRST TWELVE WORDS.
+const MIKE_VOICE_FOR_EMAIL = `WHAT THIS EMAIL IS FOR — READ THIS FIRST.
+
+You are not selling anything. You are not booking a call. The ONLY job of this
+email is to make one busy owner think "how do they know that?" and reply.
+
+That is the whole goal, and naming it changes how you write. The 2026 outbound
+research calls it the first immutable law: "since you're not focused on booking a
+call anymore, you'll think more about what will motivate people to REPLY — and
+getting replies is way easier than you think. After that, it's up to you to build
+the relationship and eventually book the meeting."
+
+Mike takes the call. You just have to earn the reply.
+
+LEAVE THE LOOP OPEN. This is the mechanism, and it is the thing our emails have
+been missing. "Humans are wired for curiosity — when presented with an incomplete
+story, our brains push us to seek resolution." You have found something real
+about his business. Say it plainly and STOP. Do not explain what it means for
+him, do not name what would fix it, do not tell him what it is costing.
+- If you explain the consequence, he judges your reasoning instead of wanting the
+  answer. That is what happened with Jim Long: he saw the whole argument at once,
+  decided it was a pitch for software, and deleted it.
+- If you name the fix, he now knows what you sell, and the email becomes an ad.
+- Leave the gap and he has to write back to close it. That reply IS the win.
+
+THE SHAPE:
+  1. The finding, in the first twelve words. Specific enough that he cannot have
+     heard it from anyone else.
+  2. ONE line that makes it matter to him — the moment it happens, not the
+     mechanism, and not a conclusion.
+  3. A question he can answer in one line from his own experience.
+Three or four sentences. 50-90 words. Nothing else.
+
+WHAT "MAKES IT MATTER" MEANS. Not "that's costing you leads" — that is your
+conclusion and he can argue with it. Put him in the moment instead: "that's in
+the middle of a five-figure decision, when someone's trying to move forward."
+He finishes the thought himself, which is why it lands.
+
+THE FINDING GOES IN THE FIRST TWELVE WORDS.
 
 The 2026 benchmark data is blunt: "reply rate is decided in the first 12 words —
 subject line and opening sentence do 80% of the work." And: "the strongest first
@@ -9826,6 +9907,31 @@ const verifyBrainEmail = (body, opts = {}) => {
     const _sents = text.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length;
     if (_sents >= 4 && _paras.length < 2) {
       return { ok: false, why: `${_sents} sentences in a single block — on a phone that is a grey rectangle. Every one or two sentences needs its own paragraph` };
+    }
+  }
+
+  // ══ NAMING THE FIX TURNS THE EMAIL INTO AN AD ═══════════════════════════
+  // The only job of this email is to earn a reply. An open loop does that —
+  // "when presented with an incomplete story, our brains push us to seek
+  // resolution" — and naming the solution closes it. Once he knows what you
+  // sell, he judges the offer instead of wanting the answer.
+  //
+  // Jim Long, verbatim: "they pulled two reviews and actually read them... but
+  // they're selling me a CRM I don't need when my problem is just my guy."
+  // Nothing in that email mentioned a CRM. It described the problem so
+  // completely that he filled in the product himself and rejected that.
+  {
+    const NAMES_THE_FIX = [
+      [/\b(a|an|your) (scheduler|booking (system|widget|tool|page)|online booking|chatbot|CRM|automation|autoresponder|response layer|AI (brain|layer|system|assistant)|landing page|funnel)\b/i, 'names the product'],
+      [/\b(we|I) (can |could |would )?(build|set up|install|implement|add|create|fix|handle|manage|run) (you |your |a |an |the )/i, 'offers to do the work'],
+      [/\b(all you|you just|you only) (need|have to do)\b/i, 'prescribes the fix'],
+      [/\bwhat (would|will) (fix|solve|change) (this|that|it)\b/i, 'prescribes the fix'],
+    ];
+    for (const [re, why] of NAMES_THE_FIX) {
+      const m = text.match(re);
+      if (m) {
+        return { ok: false, why: `"${m[0].trim()}" — ${why}. The only job of this email is to earn a reply, and the moment he knows what you sell he judges the offer instead of wanting the answer. State the finding and stop; the gap is what makes him write back.` };
+      }
     }
   }
 
@@ -13279,7 +13385,23 @@ function extractHtmlSignals(rawHtml, pageUrl) {
 // EVERY unknown shape degrades to {checked:false}. There is no path from a failure
 // to "no complaints found".
 const APIFY_ACTOR = 'compass~google-maps-reviews-scraper';
-const APIFY_MAX_REVIEWS = 40;
+// ══ FORTY WAS A NUMBER, NOT A DECISION ═══════════════════════════════════════
+// Nothing here explained it, and it was quietly capping the strongest finding
+// this system produces. Reading 40 of 133 means a complaint appearing eight
+// times across the profile can only ever surface as "2 of the 40 we read" — and
+// an owner reading that number, correctly, shrugs.
+//
+// It is one request either way; the actor bills per review scraped, not per
+// call, and the run is already inside a 90-second window with the result cached
+// per place. 150 is roughly four times the evidence for roughly four times a
+// small unit cost, and it changes what the miner can SEE: a pattern needs to
+// repeat to be found at all, so a bigger sample does not just firm up the count,
+// it surfaces patterns that were invisible at forty.
+//
+// The timeout moves with it. A larger scrape takes longer, and a request that
+// times out returns {checked:false} — no claim, but also no finding.
+const APIFY_MAX_REVIEWS = 150;
+const APIFY_TIMEOUT_MS = 150000;
 
 const normalizeApifyReview = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -13304,7 +13426,7 @@ const readApifyPlaceMeta = (items) => {
   return { totalReviews: null, rating: null };
 };
 
-const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '', timeoutMs = 90000,
+const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '', timeoutMs = APIFY_TIMEOUT_MS,
                                    maxReviews = APIFY_MAX_REVIEWS }) => {
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
   if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
@@ -13407,7 +13529,13 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 700,
+        // ══ MORE REVIEWS IN MEANS MORE ROOM NEEDED OUT ═══════════════════
+        // 700 tokens was sized when this read forty reviews. At 150 the model
+        // has more patterns to report and more quotes to carry, and a response
+        // cut off mid-JSON parses to nothing — which returns "no pain found" on
+        // exactly the leads with the most evidence. That failure is silent and
+        // looks identical to a clean business.
+        max_tokens: 1400,
         messages: [{ role: 'user', content: `${FACT_DISCIPLINE}
 
 \u26d4 COUNT ONLY WHAT IS IN FRONT OF YOU. The text below is the reviews we actually
@@ -13420,7 +13548,10 @@ owner can check his own review page.
 
 This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md.slice(0, 22000)}` }]
       }),
-    }, 25000);
+      // A larger corpus takes longer to read. 25s suited forty reviews; at 150
+      // a timeout returns no pain at all, which is indistinguishable from a
+      // clean profile and is the worst way for this to fail.
+    }, 45000);
     const d = await res.json();
     let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -13429,6 +13560,10 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
     // The model's own totalReviews guess is NOT used — it produced the "~?"
     // in live logs. Use the place's real count from the actor, else what we read.
     const total = rv.totalReviews || rv.read;
+    // The number we ACTUALLY read. Reporting a complaint count against the full
+    // profile while only reading forty of it understates the rate by the ratio
+    // between them — on Jim Long, by more than threefold.
+    const readCount = Number(rv.read) || 0;
     // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
     // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
     // would be catastrophic. Verify a distinctive 4-word span; drop anything unproven.
@@ -13446,7 +13581,24 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
       .filter(sg => (sg.count || 0) >= 2)
       .filter(sg => { const ok = quoteExists(sg.evidence); if (!ok) dropped.push(sg.pain); return ok; })
       .map(sg => ({
-        pain: total ? `${sg.pain} — ${sg.count} of ~${total} reviews mention this` : `${sg.pain} — ${sg.count} reviews mention this`,
+        // ══ DIVIDE BY WHAT WE READ, NOT BY THE WHOLE PROFILE ══════════════
+        // This reported the count against the FULL review total while only ever
+        // reading forty of it. "2 of ~133 reviews mention this" is 1.5% and
+        // reads as trivia; the same measurement honestly stated is "2 of the 40
+        // I read" — 5%, three times the rate, and a sentence a person did work
+        // to produce.
+        //
+        // Jim Long's reply was exactly the invited one: "they want me to panic
+        // about a problem I'm not sure is actually costing me jobs." A comment
+        // at the top of this file already names the fault — "deepReviewMine: '2
+        // of ~501 reviews mention this' — we read 40, not 501" — and the line
+        // itself was never changed.
+        //
+        // The honest denominator is also the stronger one, which is usually how
+        // this goes.
+        pain: readCount
+          ? `${sg.pain} — ${sg.count} of the ${readCount} reviews we read say it`
+          : (total ? `${sg.pain} — ${sg.count} of ~${total} reviews mention this` : `${sg.pain} — ${sg.count} reviews mention this`),
         evidence: sg.evidence, count: sg.count, source: 'their Google reviews (pattern across multiple)',
       }));
     if (dropped.length) console.log(`DEEP PAIN [${companyName}]: dropped ${dropped.length} unverifiable quote(s) — anti-fabrication guard held`);
@@ -21214,6 +21366,31 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (sitePages && sitePages.services && sitePages.services.length) push(`What they sell: ${sitePages.services.slice(0,6).join(', ')}`);
       if (sitePages && sitePages.ownerStory) push(`The owner's own story: ${String(sitePages.ownerStory).slice(0,260)}`);
       if (offerStrength && offerStrength.checked) push(`Offer: guarantee=${!!offerStrength.hasGuarantee}, urgency=${!!offerStrength.hasUrgency}, only ask is generic=${!!offerStrength.genericAskOnly}`);
+      // ══ THE ONE UNWIRED SIGNAL WORTH WIRING ══════════════════════════════
+      // Five signals are measured, shown in the audit panel, and never reach the
+      // brain: CRM detection, analytics, social proof, CTA-above-fold and LSA.
+      //
+      // Four of them deserve to stay out. CRM detection admits in its own label
+      // that a server-side tool is invisible to it, so "no CRM detected" would
+      // tell an owner with HubSpot that he has none. Analytics and social proof
+      // are near-universal and binary — no email lives in "GA4 present". CTA
+      // above the fold is real but only when a screenshot exists, and a live
+      // audit already invented a button's destination on a lead where it did not.
+      //
+      // LSA is different, and it is the only measurement in this whole system
+      // that is about MONEY rather than markup. Local Services Ads is a paid
+      // channel: a home-service owner knows exactly what a lead costs him there,
+      // and Google Guaranteed is a badge his competitors carry ABOVE him in the
+      // map pack. That is a business fact, not a website observation.
+      //
+      // Stated as eligibility only. We cannot see whether he runs it — many
+      // advertisers never display the badge — so the finding is the eligibility
+      // and the question, never a claim about his spend.
+      if (lsa && lsa.checked && lsa.eligible) {
+        push(lsa.running
+          ? `Local Services Ads: they ARE running them \u2014 the Google Guaranteed badge appears on their own site. That is a paid channel they already spend on, so cost per lead is a number they watch.`
+          : `Local Services Ads: their trade is ELIGIBLE for Google Guaranteed and no badge appears on their site. \u26a0 Many advertisers never display the badge, so make NO claim about whether they run it \u2014 the finding is that the channel exists above the map pack in their category, and it is worth asking whether anyone owns it. This is the one measurement here about money rather than markup.`);
+      }
       if (marketClarity && marketClarity.checked) push(`Positioning read: ${marketClarity.verdict}${marketClarity.reasons && marketClarity.reasons.length ? ' \u2014 ' + marketClarity.reasons.join('; ') : ''}`);
       if (socialPresence && socialPresence.count) push(`Social channels linked: ${socialPresence.platforms.join(', ')}`);
       if (Number.isFinite(verifiedEmployees) && verifiedEmployees > 0) push(`${verifiedEmployees} employees`);
@@ -26040,6 +26217,100 @@ app.listen(PORT, () => {
     console.log(`\u26d4 OWNER FEEDBACK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ FIVE SIGNALS ARE MEASURED AND NEVER USED ═════════════════════════════
+  // CRM detection, analytics, social proof, CTA-above-fold and LSA are all
+  // measured, shown in the audit panel, and never reach the brain.
+  //
+  // Four of them SHOULD stay out, and that is the point of this check — it
+  // records the judgement so nobody wires them in later thinking they were
+  // forgotten. CRM detection admits a server-side tool is invisible to it, so
+  // "no CRM detected" would tell an owner with HubSpot he has none. Analytics
+  // and social proof are near-universal and binary. CTA-above-fold is real only
+  // when a screenshot exists, and a live audit already invented a button's
+  // destination on a lead where it did not.
+  //
+  // LSA is the exception and it is now wired: the only measurement in this
+  // system about MONEY rather than markup. A home-service owner knows exactly
+  // what a lead costs him on Local Services Ads, and Google Guaranteed is a
+  // badge his competitors carry above him in the map pack.
+  try {
+    const _lsaLine = (lsa) => (lsa && lsa.checked && lsa.eligible
+      ? (lsa.running ? 'running' : 'eligible-no-badge') : '');
+    const _eligible = _lsaLine({ checked: true, eligible: true, running: false });
+    const _running = _lsaLine({ checked: true, eligible: true, running: true });
+    const _notEligible = _lsaLine({ checked: true, eligible: false });
+    const _unchecked = _lsaLine({ checked: false });
+    if (!_eligible || !_running) {
+      console.log(`\u26d4 LSA WIRING CHECK: an eligible business produces no line for the brain, so the one money-side measurement in this system stays in the panel and never reaches an audit.`);
+    } else if (_notEligible || _unchecked) {
+      console.log(`\u26d4 LSA WIRING CHECK: a business that is not eligible, or was never checked, still produces a line. Claiming a channel exists for a trade that cannot use it is a false finding.`);
+    } else {
+      console.log(`\u2713 LSA WIRING CHECK: eligibility reaches the brain as eligibility \u2014 never as a claim about their spend \u2014 while CRM detection, analytics, social proof and CTA-above-fold stay out on purpose, being unreliable, universal or screenshot-dependent.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 LSA WIRING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A QUOTED POSITIONING FINDING MUST SURVIVE ═══════════════════════════
+  // Positioning is mandated into every audit and was then demoted here on every
+  // lead — "the owner reads their own copy, but 'generic' is a judgement" — and
+  // dropped. That is correct for a characterisation and wrong for a quote.
+  //
+  // Nobody has ever seen a good positioning takeaway come out of this system,
+  // and this is why: every natural way of describing weak positioning is an
+  // adjective, and the verifiers only accept measurements. Quoting their own
+  // sentence turns the same finding into something he can check in ten seconds.
+  try {
+    const _score = (t) => { for (const [n, re] of VERIFIABILITY_RULES) if (re.test(t)) return n; return 2; };
+    const _quoted = 'Your homepage headline is "Quality craftsmanship since 1976" and two of the three builders above you use almost the same line';
+    const _clinical = 'Your wisdom teeth page opens "Although most people develop and grow 32 permanent adult teeth" — a definition, not a reason to choose him';
+    const _characterised = 'Their positioning is generic and targets everyone';
+    const _fakeQuote = 'Their copy is "generic" throughout';
+    if (_score(_quoted) < 5 || _score(_clinical) < 5) {
+      console.log(`\u26d4 POSITIONING QUOTE CHECK: a finding quoting their own headline scores ${_score(_quoted)}, not 5. It gets demoted and dropped, which is why no audit has ever produced a positioning takeaway worth reading.`);
+    } else if (_score(_characterised) >= 5) {
+      console.log(`\u26d4 POSITIONING QUOTE CHECK: "${_characterised}" scores as checkable. That is an adjective he can argue with, and promoting it would put a judgement in front of an owner as though it were measured.`);
+    } else if (_score(_fakeQuote) >= 5) {
+      console.log(`\u26d4 POSITIONING QUOTE CHECK: a single quoted word promoted a characterisation to checkable. The quote has to be a real sentence from their page.`);
+    } else {
+      console.log(`\u2713 POSITIONING QUOTE CHECK: a positioning finding that QUOTES their own copy scores as checkable, while a characterisation still scores as judgement \u2014 the adjective was always the problem, not the subject.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 POSITIONING QUOTE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE DENOMINATOR MUST BE WHAT WE READ ═════════════════════════════════
+  // The complaint count was reported against the FULL review profile while the
+  // miner only ever reads forty of it. "2 of ~133 reviews mention this" is 1.5%
+  // and reads as trivia. The same measurement honestly stated is "2 of the 40 we
+  // read" — 5%, and on Comfort-Air the difference is 0.4% against 5%.
+  //
+  // Jim Long's reply was the invited one: "they want me to panic about a problem
+  // I'm not sure is actually costing me jobs." A comment at the top of this file
+  // named the fault long ago — "deepReviewMine: '2 of ~501 reviews mention this'
+  // — we read 40, not 501" — and the line itself was never changed.
+  //
+  // This is not softening a measurement toward the pitch. It is the opposite:
+  // dividing by a number we never looked at was the inaccuracy.
+  try {
+    const _phrase = (count, read, total) => (read
+      ? `${count} of the ${read} reviews we read say it`
+      : (total ? `${count} of ~${total} reviews mention this` : `${count} reviews mention this`));
+    const _jim = _phrase(2, 40, 133);
+    const _noRead = _phrase(2, 0, 133);
+    if (/~133|~68|~483/.test(_jim)) {
+      console.log(`\u26d4 REVIEW DENOMINATOR CHECK: the complaint count is still reported against the full profile. We read forty reviews, so quoting the total understates the rate \u2014 by more than threefold on a business with 133 of them.`);
+    } else if (!/40 reviews we read/.test(_jim)) {
+      console.log(`\u26d4 REVIEW DENOMINATOR CHECK: the phrase does not name how many reviews we actually read, so the owner cannot tell what the number is out of.`);
+    } else if (!/~133/.test(_noRead)) {
+      console.log(`\u26d4 REVIEW DENOMINATOR CHECK: with no read count available the phrase must still fall back to the old form rather than claiming a denominator of zero.`);
+    } else {
+      console.log(`\u2713 REVIEW DENOMINATOR CHECK: a repeating complaint is counted against the reviews we actually read, not against a profile total we never opened \u2014 the same measurement, stated accurately, and several times the apparent rate.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 REVIEW DENOMINATOR CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ ONLY A CONFIRMED MAILBOX ENTERS THE SEQUENCE ═════════════════════════
   // Two hard bounces, both from addresses this system labelled unproven itself:
   // joseph@jbarnthousemd.com came back "550 5.1.10 RESOLVER.ADR.RecipientNotFound"
@@ -26798,6 +27069,12 @@ app.listen(PORT, () => {
       // Live regression: the finding arrived at word thirty, behind a compliment.
       // "Reply rate is decided in the first 12 words", and Chuck Jenkins said the
       // same unprompted — leading with the review count almost lost him.
+      // The only job of this email is to earn a reply. Naming the fix closes
+      // the loop and turns it into an ad — Jim Long inferred a CRM from an
+      // email that never mentioned one, because it explained the problem so
+      // completely there was nothing left to want.
+      ['names the product', _base + 'A booking system would stop that happening. Want to know why they are above you?'],
+      ['offers to do the work', _base + 'We could set up a response layer for you. Want to know why they are above you?'],
       ['finding buried behind a compliment', 'Tyler, I read through your reviews and your homepage — 260 at 5 stars, and you have got the pedigree to back it up. What stood out though is that Overhead Door Company outranks you with 41 reviews. A garage door replacement runs $1k-$4k. Want to know why they are above you?'],
       // Live regression the moment the writer was given real freedom: the
       // question landed in sentence two and four more followed it.
