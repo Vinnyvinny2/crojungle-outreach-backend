@@ -8534,6 +8534,58 @@ const HARM_LADDER_LAYER = {
 // calls; it does not overrule a dominant one.
 const BINDING_LAYER_BONUS = 10;
 
+// ══ DOES FIXING THIS REQUIRE WHAT WE SELL ══════════════════════════════════
+// The ladder scores how much a finding COSTS him and how easily he can CHECK
+// it. It has never scored whether fixing it is worth buying — and every
+// CROJungle product is a five-figure engagement.
+//
+// Live on Mostafa Sabry, two log lines apart:
+//   "★ VISIBILITY GAP: invisible for 3 of 4 searches checked — including
+//     services they publish a dedicated page for. THIS IS THE RETAINER PITCH,
+//     IN THEIR OWN WORDS."
+//   "✉ EMAIL OPENS ON: no price and no range appears anywhere."
+//
+// The system found the retainer pitch, said so, and opened on a $200 page edit.
+// Two of three emails in that batch led on missing pricing. An owner reading
+// that either ignores it or fixes it himself on Saturday — and either way there
+// is no call, because nothing in it needs us.
+//
+// This is not about truth. A missing price IS missing. It is about whether the
+// sentence can become a conversation about a rebuild, a retainer or a software
+// build. Findings still appear in the audit and on the call sheet; they simply
+// stop leading the email.
+//
+//   5  only a real engagement fixes it — a dead site, invisibility in search,
+//      an operational pattern showing up in their own reviews
+//   3  meaningful work that sits inside an engagement — positioning, booking
+//      infrastructure, the path from interested to customer
+//   1  he does it himself this afternoon for nothing
+const SELLABLE = {
+  // ── 5: this is the pitch ────────────────────────────────────────────────
+  site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5,
+  no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
+  review_deficit: 5, no_after_hours: 5,
+
+  // ── 3: real work, inside an engagement ──────────────────────────────────
+  undifferentiated: 3, no_offer: 3, form_only_no_booking: 3, long_form: 3,
+  dated_credibility: 3, no_mobile_viewport: 3, wrong_gbp_category: 3,
+  no_owner_replies: 3, partial_owner_replies: 3, listing_closed: 3,
+
+  // ── 1: a Saturday morning, and nothing to sell behind it ────────────────
+  no_published_pricing: 1, no_lead_magnet: 1, stale_copyright: 1,
+  placeholder_text: 1, dead_blog: 1, no_https: 1, expired_certificate: 1,
+  thin_profile: 1, no_hours_on_profile: 1, no_website_on_profile: 1,
+  stale_reviews: 1, phone_mismatch: 1, tap_to_call_broken: 1,
+};
+
+// The penalty for opening on something he can fix himself for pocket money.
+// Deliberately large: a $200 fix at harm 54 was beating the retainer pitch, and
+// a few points would not have changed that. At 11 per step a sellable-1 finding
+// gives up 44 points, which is enough to move it behind anything that leads to
+// a real engagement — and not enough to bury it when it is genuinely the only
+// finding on the lead.
+const SELLABLE_STEP = 11;
+
 // ══ HOW THEY GET CUSTOMERS DECIDES WHETHER RANK MATTERS AT ALL ═════════════
 // Six of the eight prospect-simulator deletes are one sentence: you do not know
 // how I get customers.
@@ -8775,9 +8827,33 @@ const verifyOriginalFinding = (item, corpus) => {
   const finding = String((item && item.finding) || '').replace(/\s+/g, ' ').trim();
   const evidence = String((item && item.evidence) || '').replace(/\s+/g, ' ').trim();
   if (!finding) return { ok: false, why: 'no finding text' };
-  if (finding.split(/\s+/).length > 45) return { ok: false, why: 'too long to be one finding' };
+  // ══ DO NOT THROW AWAY A REAL FINDING FOR ARRIVING TOO LONG ══════════════
+  // This discarded any finding over 45 words, and it was the single largest
+  // cause of the 11% survival rate — roughly fifteen drops across one evening,
+  // against three survivors. The model writes the observation AND its
+  // explanation into one field, lands at 50-60 words, and we binned the lot.
+  //
+  // That is not the model failing. It is us rejecting good work because it came
+  // in the wrong shape, and the cost is exact: when nothing survives, the audit
+  // falls back to the 33-rung list — "honest, but the same list every lead
+  // gets" — which is what every prospect complaint tonight was detecting.
+  //
+  // A long finding IS worse than a short one; the first sentence is almost
+  // always the finding and the rest is the explanation. So take the first
+  // sentence rather than discarding the whole thing. Only reject when even that
+  // is too long, which means there is no single observation in there.
+  let _finding = finding;
+  if (_finding.split(/\s+/).length > 30) {
+    const _first = (_finding.match(/^[^.!?]+[.!?]/) || [_finding])[0].trim();
+    if (_first && _first.split(/\s+/).length <= 45 && _first.split(/\s+/).length >= 8) {
+      _finding = _first.replace(/[.!?]+$/, '');
+    }
+  }
+  if (_finding.split(/\s+/).length > 45) {
+    return { ok: false, why: `${_finding.split(/\s+/).length} words with no single sentence inside it — that is several findings, not one` };
+  }
   // A category label is what the scanner already produces, phrased as an opinion.
-  const lbl = finding.match(CATEGORY_LABEL);
+  const lbl = _finding.match(CATEGORY_LABEL);
   if (lbl) return { ok: false, why: `category label — "${lbl[0]}" is a judgement, not something read off their page` };
   if (!evidence || evidence.length < 12) {
     return { ok: false, why: 'no evidence quoted — if you cannot point to their words it is not one of these' };
@@ -8806,12 +8882,12 @@ const verifyOriginalFinding = (item, corpus) => {
   if (!hay) return { ok: false, why: 'no page corpus to verify the quote against' };
   const needle = norm(stripLabel(evidence));
   if (needle.length < 12) return { ok: false, why: 'quoted fragment too short to verify' };
-  if (hay.includes(needle)) return { ok: true, finding, evidence };
+  if (hay.includes(needle)) return { ok: true, finding: _finding, evidence };
   // Allow a long quote to match on its first solid run of words — models often
   // join two nearby sentences when quoting.
   const words = needle.split(' ');
   for (let n = Math.min(10, words.length); n >= 6; n--) {
-    if (hay.includes(words.slice(0, n).join(' '))) return { ok: true, finding, evidence };
+    if (hay.includes(words.slice(0, n).join(' '))) return { ok: true, finding: _finding, evidence };
   }
   return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}"` };
 };
@@ -10630,8 +10706,13 @@ const rankHarms = (m = {}) => {
     // actually MEASURED. An unmeasured constraint adds nothing.
     const _bindingBonus = (m.bindingLayer && HARM_LADDER_LAYER[h.id] === m.bindingLayer)
       ? BINDING_LAYER_BONUS : 0;
+    // ══ AN EMAIL THAT OPENS ON A $200 FIX CANNOT BECOME A CALL ════════════
+    // Two of three emails in one batch led on missing pricing while the log
+    // said "THIS IS THE RETAINER PITCH" about a different finding on the same
+    // lead. The finding was true; it just had nothing behind it worth buying.
+    const _sellPenalty = (5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP;
     const openerScore = _disqualified ? 0
-      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _urgAdj + _refAdj + _bindingBonus - _selfFixPenalty));
+      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -19985,6 +20066,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           purchaseUrgency: _measured.purchaseUrgency,
           acquisitionIsReferral: _measured.acquisitionIsReferral,
           bindingLayer: _measured.bindingLayer,
+          // ══ THE UNREAD GUARD FIRED AND THE EMAIL SAID IT ANYWAY ═══════════
+          // "EXISTS BUT UNREAD: their sitemap has PRICING page(s) we did not
+          // open. NO ABSENCE CLAIM MAY BE MADE ABOUT PRICING" — logged on both
+          // Mostafa Sabry and Karim Ali, and both emails opened with "no price
+          // and no range appears anywhere". They each have a pricing page. They
+          // click their own link and every other number in the email dies.
+          //
+          // resolveMeasurements computes these; _harmInputs never carried them.
+          // Third time tonight for this exact shape.
+          unreadPricing: _measured.unreadPricing,
+          unreadBooking: _measured.unreadBooking,
+          unreadReviews: _measured.unreadReviews,
           formFieldCount: _measured.formFieldCount,
           formFieldCountIsSingleForm: _measured.formFieldCountIsSingleForm,
           reviewRecency: _measured.reviewRecency,
@@ -24809,6 +24902,113 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 BINDING LAYER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE EMAIL MUST OPEN ON SOMETHING WORTH BUYING ════════════════════════
+  // Every CROJungle product is a five-figure engagement. Two of three emails in
+  // one batch opened on "no price and no range appears anywhere" — a Saturday
+  // morning's work — while the same lead's log read "★ VISIBILITY GAP: invisible
+  // for 3 of 4 searches checked. THIS IS THE RETAINER PITCH, IN THEIR OWN
+  // WORDS." The system found the pitch and led with the page edit.
+  //
+  // Not a truth problem. A missing price IS missing. It is that the sentence
+  // cannot become a conversation about a rebuild or a retainer, so the email
+  // cannot become a call.
+  //
+  // And the unread guard: both of those emails claimed no pricing on businesses
+  // whose sitemap HAS a pricing page we never opened. The guard fired, logged,
+  // and did not stop the finding — the third time tonight a value was computed
+  // and then not delivered.
+  try {
+    const _rungIds = HARM_LADDER.map(h => h.id);
+    const _unscored = _rungIds.filter(id => !SELLABLE[id]);
+    const _phantom = Object.keys(SELLABLE).filter(id => !_rungIds.includes(id));
+    const _sc = (h) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+      - ((5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP));
+    // Mostafa's real ladder: the retainer pitch against the page edit.
+    const _pitch = { id: 'absent_from_search', harm: 95, novel: 85 };
+    const _pageEdit = { id: 'no_published_pricing', harm: 54, novel: 30 };
+    // A $200 fix must never lead when a real engagement is on the same lead.
+    const _pitchWins = _sc(_pitch) > _sc(_pageEdit);
+    // But it must not be buried so far it cannot lead when it is all there is.
+    const _aloneStillFires = _sc(_pageEdit) > 0;
+    // And the unread guard must actually reach the rung.
+    const _guarded = rankHarms({ pricingMeasured: true, pricesPublished: 0, unreadPricing: true });
+    const _firedAnyway = ((_guarded && _guarded.byHarm) || []).some(h => h.id === 'no_published_pricing');
+    if (_unscored.length) {
+      console.log(`\u26d4 SELLABLE CHECK: ${_unscored.length} rung(s) have no commercial weight \u2014 ${_unscored.slice(0, 3).join(', ')}. They default to mid and can lead an email on work nobody would pay for.`);
+    } else if (_phantom.length) {
+      console.log(`\u26d4 SELLABLE CHECK: ${_phantom.join(', ')} are not real rungs.`);
+    } else if (!_pitchWins) {
+      console.log(`\u26d4 SELLABLE CHECK: a $200 page edit still outranks the retainer pitch on the same lead. That email cannot become a call no matter how true it is.`);
+    } else if (!_aloneStillFires) {
+      console.log(`\u26d4 SELLABLE CHECK: a small finding scores zero, so a lead whose only finding is small produces no email at all. It should lead last, not disappear.`);
+    } else if (_firedAnyway) {
+      console.log(`\u26d4 SELLABLE CHECK: the pricing finding fires on a business whose sitemap has a pricing page we never opened. That is a false statement they disprove by clicking their own link.`);
+    } else {
+      console.log(`\u2713 SELLABLE CHECK: all ${_rungIds.length} rungs carry a commercial weight, work that needs an engagement outranks a Saturday-morning fix, a small finding can still lead when it is the only one, and no absence claim survives an unread page.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SELLABLE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ EVERY MEASURED FIELD MUST REACH THE LADDER ═══════════════════════════
+  // Three times in one evening a value was computed and then not delivered:
+  // purchaseUrgency, acquisitionIsReferral and bindingLayer never reached
+  // _harmInputs, so three ordering fixes were dead code; then unreadPricing did
+  // the same, and two emails told CPAs they had no pricing page when their own
+  // sitemap listed one.
+  //
+  // Each time the fix was to add a line. Each time nothing would have said the
+  // line was missing. rankHarms reads m.<field>, _harmInputs is assembled by
+  // hand, and the gap between them is invisible in every log and every test —
+  // fuzzcore ran 240,000 green cases against a function production was starving.
+  //
+  // So this compares the two mechanically: every field rankHarms actually READS
+  // must be a field resolveMeasurements can PRODUCE, and anything produced but
+  // never read is dead weight worth knowing about. It cannot be satisfied by
+  // remembering.
+  try {
+    // Every rung reads m.<field> inside its OWN test() and say() closures, so
+    // scanning rankHarms alone finds almost nothing — the first version of this
+    // check flagged eight live fields as unread. The ladder is the union of
+    // rankHarms and all 33 rungs.
+    const _src = String(rankHarms) + HARM_LADDER.map(h =>
+      String(h.test || '') + String(h.say || '') + String(h.costs || '')).join(' ');
+    const _read = new Set([...String(_src).matchAll(/\bm\.([a-zA-Z][a-zA-Z0-9_]*)/g)].map(x => x[1]));
+    // Fields resolveMeasurements actually returns, taken from a real call rather
+    // than from parsing, so a renamed field cannot hide.
+    const _produced = new Set(Object.keys(resolveMeasurements({
+      localRank: { checked: true, found: true, rank: 3, scanned: 20, weakerAbove: 1, ours: { reviews: 100, rating: 4.8 }, query: 'q', city: 'Dallas' },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 30 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 5 },
+      reviewsRead: 40, ownerReplyCount: 20,
+      sitePagesArg: { booking: 'form', bookingMeasured: true, prices: [], existsButUnread: { pricing: true } },
+      tradeWordArg: 'plumber',
+      growthConstraintArg: { checked: true, layer: 'OFFER', condition: 'x' },
+    }) || {}));
+    // What the ladder reads that the resolver cannot supply. Some of these are
+    // legitimately set elsewhere in _harmInputs (brokenPages, scrapeTrustworthy
+    // and friends), so the check is on the fields the RESOLVER owns.
+    // Fields the LADDER is meant to consume. unreadReviews is deliberately not
+    // here: no rung claims reviews are absent from their SITE — the review rungs
+    // read the Google profile, which we always fetch — so it guards the audit
+    // prompt instead. Listing it would train the reader to ignore this check,
+    // which is how a real miss gets through.
+    const _resolverOwned = ['purchaseUrgency', 'acquisitionIsReferral', 'bindingLayer',
+      'unreadPricing', 'unreadBooking', 'formFieldCount', 'reviewRecency',
+      'photoCount', 'rankFound', 'rating', 'reviewCount'];
+    const _notProduced = _resolverOwned.filter(f => !_produced.has(f));
+    const _notRead = _resolverOwned.filter(f => _produced.has(f) && !_read.has(f));
+    if (_notProduced.length) {
+      console.log(`\u26d4 MEASUREMENT DELIVERY CHECK: ${_notProduced.join(', ')} \u2014 the ladder reads these but resolveMeasurements no longer produces them. The rung using them silently stops firing and no log says so.`);
+    } else if (_notRead.length) {
+      console.log(`\u26d4 MEASUREMENT DELIVERY CHECK: ${_notRead.join(', ')} are measured and never read by the ladder. Either the ordering fix they belong to is dead code, or they should be removed.`);
+    } else {
+      console.log(`\u2713 MEASUREMENT DELIVERY CHECK: every field the resolver owns is both produced and read by the ladder \u2014 compared mechanically, not from memory. This is the class that cost four separate fixes today.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MEASUREMENT DELIVERY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE ORDERING MUST SURVIVE THE REAL PATH, NOT JUST THE FUNCTION ═══════
