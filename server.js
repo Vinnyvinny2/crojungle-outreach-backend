@@ -2,6 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+// Optional by design. pngscale downscales a full-page render that exceeds the
+// vision API's 8000px ceiling, using node's own zlib and no new dependency. If
+// the file is not deployed alongside server.js the audit still runs and those
+// pages are skipped exactly as before - a missing picture, never a dead boot.
+let _pngscale = null;
+try { _pngscale = require('./pngscale'); } catch { _pngscale = null; }
 
 const app = express();
 
@@ -3895,6 +3901,37 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // The CEILING is the part with evidence behind it: fourteen for fourteen, every
   // business at 4.9 returned no repeating complaint, because at that average
   // almost no negative reviews exist to find.
+  // == THE CEILING WAS TESTED AGAINST 4.7 AND STAYS AT 4.85 ==================
+  // Two lines of evidence, and they answer different questions. The published
+  // one is the more famous and it is NOT the one that governs here.
+  //
+  // PUBLISHED (Northwestern Spiegel, 40+ categories): peak purchase likelihood
+  // sits at 4.2-4.5, the rate starts falling above 4.7 and clearly declines at
+  // 5.0, because buyers read a near-perfect average as implausible. That is a
+  // fact about THEIR customers' behaviour. It says a 4.9-star business has
+  // less to gain from us, which is a real argument for a ceiling somewhere.
+  //
+  // OURS is about whether there is anything to FIND, and it is the binding
+  // constraint: every business at 4.9 across fourteen audits returned no pain
+  // repeating across 2+ reviews, because at that average almost no negative
+  // reviews exist on record.
+  //
+  // A 4.7 ceiling was drafted and REVERTED, because the boot check below
+  // contains the answer: of the five leads recorded there as having produced a
+  // repeating complaint or an actual reply, THREE sit at 4.8 - Deck Daddy's,
+  // Comfort-Air and Bradley. Cutting at 4.7, or even 4.75, discards leads that
+  // have already produced the exact finding this system relies on, in exchange
+  // for a published result about a different question.
+  //
+  // 4.85 is not a rounding of 4.9. It is the line that keeps every 4.8 and
+  // excludes every 4.9 - drawn exactly where our own observation changes.
+  //
+  // THE FLOOR IS STILL NOT EVIDENCE. Every lead in the data sat at 4.3 or
+  // above, so nothing has ever been observed below it. 3.8 against 3.9 is a
+  // preference, not a finding, and moving it would only create an appearance
+  // of precision. Review COUNT stays the better affordability proxy: a
+  // 3.8-star business with two hundred reviews has complaints on record and
+  // the revenue to fix them.
   const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
@@ -3976,6 +4013,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // rather than inferred, and the fix is a retainer rather than a page edit.
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0;
+  let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     // Recorded before the request so a failed query does not silently become a
     // market we claim not to have searched.
@@ -4025,6 +4063,11 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // absence of a rating is not evidence of a clean record.
         if (rating !== null && (rating < PAIN_BAND_LOW || rating > PAIN_BAND_HIGH)) {
           skippedNoPain++;
+          // Counted separately: these are the near-perfect profiles the ceiling
+          // exists to exclude. Reported so the cost is a number rather than an
+          // assumption - fourteen audits said there is nothing to find up here,
+          // and if that ever stops being true this is where it will show.
+          if (rating > PAIN_BAND_HIGH) skippedNearPerfect++;
           continue;
         }
         // Too big is as disqualifying as too small: at this volume they are
@@ -4112,7 +4155,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
   // whether filtering on what we can know BEFORE auditing changes the odds.
-  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) dropped for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.`);
+  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) dropped for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.${skippedNearPerfect ? ` \u2014 ${skippedNearPerfect} of them were above the ceiling, where fourteen audits found nothing minable. A 4.7 ceiling was tested and reverted: three of the five leads that produced a complaint or a reply sit at 4.8.` : ''}`);
   if (keptNoWebsite) console.log(`\u260e CALL LEADS [Places]: ${keptNoWebsite} business(es) with real review counts and NO WEBSITE AT ALL. These used to be discarded because Research needs a page to audit. They need no audit \u2014 the finding is the absence, and Mike has the number.`);
   if (keptBuilder) console.log(`\u{1F527} REBUILD LEADS [Places]: ${keptBuilder} business(es) running on a free page builder. They audit normally, but the fact that matters is already known before we spend anything.`);
   // ══ THE OPERATORS BIG ENOUGH TO FUND A FIX ═══════════════════════════════
@@ -7978,6 +8021,41 @@ const HARM_LADDER = [
     say: (m) => `Google lists their business category as "${m.gbpCategory}" rather than ${m.tradeWord}`,
     costs: 'the map pack is ranked largely on category, so the wrong one keeps them out of searches for what they actually do' },
 
+  // == THE ONLY FINDING HERE WITH A CLOCK ON IT ==============================
+  // Everything else the ladder measures is a STANDING CONDITION: no pricing, no
+  // booking, a thin profile. All true, all true last year, and all true of most
+  // of the market - which is why an email built on one competes with the whole
+  // inbox. This is the only rung that describes something that CHANGED, and a
+  // change is the only thing that makes a message feel timely.
+  //
+  // It is also the closest thing measured here to what Mike actually sells. A
+  // review count is a marketing fact. A review count that has halved since the
+  // spring is an OPERATIONS fact - fewer jobs, or a process that quietly
+  // stopped, or someone who left. He cannot fix that by telling his crew to ask
+  // harder, because he does not yet know which of those it is. That is a
+  // conversation, not a task, and it is the conversation Mike wants.
+  //
+  // harm 72: above the review COUNT finding (68), below a wrong category (74).
+  // Being outranked costs more today; a business whose proof has stopped
+  // compounding is losing something that does not come back.
+  //
+  // novel 90 is the highest on the ladder and it is earned. He knows his review
+  // total. He has never once divided it by month and compared two quarters -
+  // Google does not show it, and nothing else he owns does either.
+  //
+  // delegable 20: nobody forwards "why did our reviews stop" to a web developer.
+  //
+  // The test requires reviewVelocityChecked, so the rung is silent on every lead
+  // where the two windows were not equally observed. It never infers from a
+  // count and it never fires on a business we simply read shallowly.
+  { harm: 72, specific: 96, novel: 90, delegable: 20, weFix: 80, band: 'INVISIBLE', id: 'review_velocity_drop',
+    reframe: 'proof of recent work is what a stranger checks first, and it goes stale faster than most owners expect',
+    test: (m) => m.reviewVelocityChecked === true && m.reviewVelocitySlowing === true
+      && Number.isFinite(Number(m.reviewsRecent90)) && Number.isFinite(Number(m.reviewsPrior90)),
+    say: (m) => Number(m.reviewsRecent90) === 0
+      ? `their Google reviews have stopped — none in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`
+      : `their Google reviews have slowed — ${m.reviewsRecent90} in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`,
+    costs: 'a stranger checking whether a business is still busy looks at the dates, not the total' },
   { harm: 68, specific: 94, novel: 70, delegable: 25, weFix: 95, band: 'INVISIBLE', id: 'review_deficit',
     // We already read their review count AND the counts of everyone ranking above
     // them. Saying "you have 22 and the three above you have 400+" requires having
@@ -8745,7 +8823,7 @@ const AREA_OF = {
   listing_closed: 'Google listing', thin_profile: 'Google listing',
   no_hours_on_profile: 'Google listing', stale_reviews: 'Google listing',
   low_rating: 'Reputation', no_owner_replies: 'Reputation',
-  review_deficit: 'Reputation', not_compounding: 'Reputation',
+  review_deficit: 'Reputation', not_compounding: 'Reputation', review_velocity_drop: 'Reputation',
   review_pain_pattern: 'Reputation', partial_owner_replies: 'Reputation',
   no_published_pricing: 'Why choose them',
   no_offer: 'Why choose them', no_lead_magnet: 'Why choose them',
@@ -8826,6 +8904,7 @@ const SUBJECTS_FOR = {
   // subject rules at once — numbers, and two clauses split for rhythm. Three
   // options so two leads leading on the same rung do not get the same line.
   not_compounding:      ['your reviews are not adding up', 'your reviews stopped', "reviews don't match the work"],
+  review_velocity_drop: ['your reviews slowed down', 'your reviews went quiet', 'something changed in the spring'],
   // Colleague voice, under 30 characters, nothing a consultant would type.
   // ══ THREE LEADS, ONE SUBJECT LINE ═══════════════════════════════════════
   // Grant Renne, Anthony & Sylvan and Dr Barnthouse all went out as "the same
@@ -9169,6 +9248,7 @@ const HARM_LADDER_LAYER = {
   no_website_on_profile: 'LEADS',
   stale_reviews:         'LEADS',
   review_deficit:        'LEADS',
+  review_velocity_drop:  'LEADS',
   not_compounding:       'LEADS',
 
   // CONVERSION — the path from interested to customer.
@@ -9239,7 +9319,7 @@ const SELLABLE = {
   // ── 5: this is the pitch ────────────────────────────────────────────────
   site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5,
   no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
-  review_deficit: 5, no_after_hours: 5,
+  review_deficit: 5, no_after_hours: 5, review_velocity_drop: 4,
 
   // ── 3: real work, inside an engagement ──────────────────────────────────
   undifferentiated: 3, no_offer: 3, form_only_no_booking: 3,
@@ -11276,6 +11356,7 @@ const CTA_BY_FINDING = {
   //
   // The mined pattern gets its own ask, about the thing the reviews describe.
   review_pain_pattern: 'operations', not_compounding: 'process', no_owner_replies: 'process',
+  review_velocity_drop: 'change',
   partial_owner_replies: 'process', stale_reviews: 'process', review_deficit: 'process',
   low_rating: 'process',
   // Search. There is a concrete artefact to hand over, so hand it over.
@@ -11326,6 +11407,15 @@ const CTA_TEXT = {
   // It is also the question only he can answer — a foreman cannot tell you
   // whether the estimate and the final invoice usually match.
   operations: { text: 'Does that come up much on your end?', kind: 'operations' },
+  // == THE ONLY ASK ABOUT A CHANGE RATHER THAN A CONDITION ==================
+  // Every other ask here is about who OWNS a standing problem. This finding is
+  // different in kind: something moved, and the whole value of it is that he
+  // almost certainly noticed the symptom without ever seeing the number.
+  //
+  // So the question hands him the diagnosis rather than asking for one. It is
+  // also the only question in this file he can answer from memory and cannot
+  // delegate - a foreman does not know what changed in the office in March.
+  change: { text: 'Did something change around then \u2014 a person, a process, the kind of work coming in?', kind: 'change' },
   // ══ NEVER ASK FOR SOMETHING HE CAN GET HIMSELF ═══════════════════════════
   // "Want the list of who's ranking above you?" offers him a Google search. He
   // can run it in ten seconds and does not need us, so the ask has no value and
@@ -14244,11 +14334,73 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     const d = r.when ? Date.parse(r.when) : NaN;
     return !isNaN(d) && d >= _yearAgo;
   }).length;
+  // == REVIEW VELOCITY - THE BUSINESS SIGNAL SITTING IN DATA WE ALREADY BUY ==
+  // Every review carries a publish date and nothing has ever looked at them.
+  // A review COUNT describes a business's whole life; the TREND describes the
+  // last six months, and it is the only thing measured here that can put a
+  // clock on anything. An owner knows roughly how many reviews he has. He has
+  // almost certainly never plotted them against time, and if the flow has
+  // halved he feels it as a quiet phone without connecting the two.
+  //
+  // TWO WINDOWS, NOT A RATE. "Eleven in the last ninety days against twenty-six
+  // in the ninety before" is a sentence he can check on his own profile in a
+  // minute. A rate per month is arithmetic he has to take on trust.
+  //
+  // -- THE GUARD THAT MAKES THIS HONEST, AND IT IS NOT OPTIONAL --------------
+  // Apify returns reviews NEWEST FIRST and the pull is capped. So on a profile
+  // with 500 reviews where we read 150, the recent window is complete and the
+  // EARLIER window is whatever happened to fit - truncated at an arbitrary
+  // date. Comparing a complete window against a truncated one manufactures a
+  // decline out of nothing but our own page size, and it would do it on
+  // exactly the biggest and healthiest businesses, which are the ones most
+  // worth writing to.
+  //
+  // So the comparison runs only when the OLDEST review we actually read is
+  // older than the far edge of the earlier window. If it is not, the two
+  // windows are not equally observed and NOTHING is claimed. That is the whole
+  // difference between a measurement and an artefact of pagination.
+  const velocity = (() => {
+    const DAY = 86400000, WINDOW = 90;
+    const dates = reviews
+      .map(r => (r && r.when ? Date.parse(r.when) : NaN))
+      .filter(t => Number.isFinite(t))
+      .sort((a, b) => b - a);
+    if (dates.length < 6) return { checked: false, why: `only ${dates.length} review(s) carry a readable date` };
+    const now = Date.now();
+    const edgeRecent = now - WINDOW * DAY;
+    const edgeEarlier = now - 2 * WINDOW * DAY;
+    const oldestRead = dates[dates.length - 1];
+    if (oldestRead > edgeEarlier) {
+      return { checked: false, truncated: true,
+        why: `the oldest review we read is only ${Math.round((now - oldestRead) / DAY)} days old, so the earlier ${WINDOW}-day window is cut off by our own page size rather than by their history - a comparison here would invent a decline` };
+    }
+    const recent = dates.filter(t => t >= edgeRecent).length;
+    const earlier = dates.filter(t => t < edgeRecent && t >= edgeEarlier).length;
+    // Noise floor. Two against one is not a trend, it is two customers. The
+    // earlier window has to carry enough for its absence to mean something.
+    if (earlier < 4) return { checked: false, why: `only ${earlier} review(s) in the earlier window - too few for a change to mean anything` };
+    const drop = (earlier - recent) / earlier;
+    return {
+      checked: true, recent, earlier, windowDays: WINDOW,
+      // A third down, and at least three fewer, is the point at which an owner
+      // would recognise it if he counted.
+      slowing: drop >= 0.34 && (earlier - recent) >= 3,
+      stopped: recent === 0,
+      growing: recent > earlier,
+      oldestReadDays: Math.round((now - oldestRead) / DAY),
+    };
+  })();
+  if (velocity.checked) {
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'}. Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
+  } else {
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
+  }
+
   const coverage = meta.totalReviews ? `${reviews.length} of ${meta.totalReviews} reviews`
                                      : `${reviews.length} reviews (total on the profile unknown)`;
   console.log(`APIFY REVIEWS [${companyName}]: read ${coverage} — ${withText.length} with text, ${negative.length} at 3 stars or below, ${ownerReplies.length} owner replies`);
   return { checked: true, reviews, read: reviews.length, totalReviews: meta.totalReviews,
-           rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage, recentCount,
+           rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage, recentCount, velocity,
            sampleComplete: meta.totalReviews ? reviews.length >= meta.totalReviews : false };
 };
 
@@ -14392,7 +14544,18 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
     // worth retrying. totalReviews travels out too, so the log can say how deep we read.
     return { signals, summary: parsed.summary || '', totalReviews: total,
              read: rv.read, coverage: rv.coverage, sampleComplete: rv.sampleComplete,
-             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount, recentCount: rv.recentCount };
+             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount, recentCount: rv.recentCount,
+             // WAS MISSING, AND IT KILLED THE FEATURE. _fetchApifyReviewsUncached
+             // computes `velocity` and returns it on rv; this literal did not
+             // forward it, so deep.velocity was undefined on every lead,
+             // reviewVelocity stayed null, reviewVelocityChecked was always
+             // false, and review_velocity_drop could not fire once.
+             //
+             // The unit test proved the RUNG works when handed
+             // reviewVelocityChecked:true. It never proved anything hands it
+             // that - the test did the delivery itself, which is the same way
+             // the duplicate-send test passed over a Map nothing wrote to.
+             velocity: rv.velocity };
   } catch(e) { console.log('deepReviewMine failed:', e.message); return { read: 0, why: e.message }; }
 };
 
@@ -18308,7 +18471,23 @@ app.get('/api/cron/discover', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        keywords: ['SaaS', 'e-commerce', 'B2B software', 'professional services'],
+        // == REMOVED: FOUR SOFTWARE KEYWORDS NOTHING EVER READ ==============
+        // `keywords` is destructured in /api/discover, logged as the first line
+        // of every run, and then never referenced again. Not one source takes
+        // it: searchGooglePlaces takes (placesKey, filters), searchTheirStack
+        // takes (theirstackKey), searchSECEdgar and scrapeGoogleNews take
+        // nothing. Every source runs hard-coded queries.
+        //
+        // So this was never routing anything. What it WAS doing is worse: it
+        // printed "Keywords: [ 'SaaS', 'e-commerce', 'B2B software',
+        // 'professional services' ]" at the top of every discovery run, which
+        // is the first thing anyone reads, and it states that a system built
+        // for home-services trades is hunting software companies. That cost
+        // real attention: the Find layer was blamed for a targeting problem it
+        // does not have.
+        //
+        // Same class as the SMTP verifier log line. A message that misdescribes
+        // its own system is not free just because the variable is inert.
         location: process.env.TARGET_LOCATION || '',
         keys: {
           adzunaId, adzunaKey, firecrawlKey, companiesApiKey, fbToken,
@@ -18357,7 +18536,7 @@ app.post('/api/discover', async (req, res) => {
   //
   // Every one of these is optional. Absent means "no constraint", so the
   // endpoint behaves exactly as before for any caller that does not send them.
-  const { keywords, keys, apiKey, knownDomains, knownNames, filters } = req.body;
+  const { keys, apiKey, knownDomains, knownNames, filters } = req.body;
   const _f = (filters && typeof filters === 'object') ? filters : {};
   // ── DEDUPE ────────────────────────────────────────────────────────────────
   // Nothing previously stopped a company you have already researched from coming
@@ -18413,7 +18592,11 @@ app.post('/api/discover', async (req, res) => {
   const placesKey = process.env.GOOGLE_PLACES_KEY || '';
 
   console.log('\n=== DISCOVERY START ===');
-  console.log('Keywords:', keywords);
+  // The headline of a discovery run now names what actually decides the leads:
+  // the category grid and the filters. `keywords` used to print here and was
+  // read by nothing - see the note at the cron caller.
+  const _tgt = filters && typeof filters === 'object' ? filters : {};
+  console.log(`Targeting: ${_tgt.onlyNoWebsite ? 'businesses with NO website only' : _tgt.onlyBuilderSite ? 'free page-builder sites only' : 'the full category grid'}${Number.isFinite(Number(_tgt.minRating)) ? `, rating ${_tgt.minRating}-${_tgt.maxRating ?? '4.85'}` : ', default rating band'}`);
   console.log('Adzuna keys present:', !!(adzunaId && adzunaKey));
   // DIAGNOSTIC: prove whether each key actually arrived from the frontend.
   console.log('Keys arrived →', JSON.stringify({
@@ -20343,6 +20526,11 @@ const _runResearchInner = async (req, res) => {
   // Can they actually fund the engagement? Internal only — never reaches copy.
   let affordability = { checked: false, band: 'unknown' };
   let recentReviewCount = null;
+  // The review TREND, measured from publish dates we already pay for. Null on
+  // every lead where the two windows were not equally observed - see the guard
+  // in the miner. Hoisted here so the ladder can read it, because a value that
+  // is computed and never delivered is the most expensive bug class in this file.
+  let reviewVelocity = null;
   // Which channel reaches this owner. Never a discard — always a route.
   // Observed owner engagement, hoisted because deepReviewMine is block-scoped
   // far above where reachability is finally scored.
@@ -21181,6 +21369,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             reviewsRead = deep.read;
             ownerReplyCount = Array.isArray(deep.ownerReplies) ? deep.ownerReplies.length : 0;
             if (typeof deep.recentCount === 'number') recentReviewCount = deep.recentCount;
+            if (deep.velocity && deep.velocity.checked) reviewVelocity = deep.velocity;
           }
           if (deep && deep.signals && deep.signals.length > 0) {
             _deepReadCount = deep.read || 0;
@@ -21854,7 +22043,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         tenure: _tenure,
         reviewCount: localRank && localRank.ours ? localRank.ours.reviews : (gbpHealth && gbpHealth.reviewCount),
         reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
-        reviewRecencyDays: gbpHealth && gbpHealth.reviewRecencyDays,
+        // gbpHealth returns reviewRecency: { checked, newestDays, stale, veryCold }.
+        // There is no reviewRecencyDays and never was - resolveMeasurements was
+        // corrected for this months ago and this call site was missed, so every
+        // history finding gated on recency has been unreachable.
+        reviewRecencyDays: (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked)
+          ? gbpHealth.reviewRecency.newestDays : null,
         trade: customerTrade || verifiedIndustry || req.body.industry || '',
         headcount: verifiedEmployees,
       });
@@ -22184,6 +22378,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           //
           // Published pricing and owner reply rate are the same story: measured,
           // logged, and unreachable by any rung.
+          // Three fields, not one object, because rankHarms reads m.<field> and a
+          // nested shape is how a measurement quietly stops arriving.
+          reviewVelocityChecked: !!(reviewVelocity && reviewVelocity.checked),
+          reviewsRecent90: reviewVelocity ? reviewVelocity.recent : null,
+          reviewsPrior90: reviewVelocity ? reviewVelocity.earlier : null,
+          reviewVelocitySlowing: !!(reviewVelocity && (reviewVelocity.slowing || reviewVelocity.stopped)),
           reviewPainCount: Array.isArray(publicPainSignals) ? publicPainSignals.length : 0,
           // \u2550\u2550 THE RATIO IS FOR THE CALL SHEET, NOT THE FIRST SENTENCE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
           // The miner bakes "\u2014 3 of the 39 reviews we read say it" into the pain
@@ -22434,7 +22634,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       } else if (localRank && localRank.checked) push(`NOT in the top ${Number.isFinite(Number(localRank.scanned)) ? localRank.scanned : 'twenty'} for their primary trade`);
       if (localRank && localRank.ours) push(`${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}\u2605`);
       if (gbpHealth && gbpHealth.checked) {
-        if (Number.isFinite(gbpHealth.reviewRecencyDays)) push(`Newest review is about ${gbpHealth.reviewRecencyDays} days old`);
+        // Same non-existent field. The situation read has never been told how
+        // stale their reviews are.
+        if (gbpHealth.reviewRecency && Number.isFinite(gbpHealth.reviewRecency.newestDays)) push(`Newest review is about ${gbpHealth.reviewRecency.newestDays} days old`);
         if (Number.isFinite(gbpHealth.photoCount)) push(`${gbpHealth.photoCount} photos on the Google profile`);
         if (gbpHealth.gaps && gbpHealth.gaps.length) push(`Google profile gaps: ${gbpHealth.gaps.join('; ')}`);
       }
@@ -22464,16 +22666,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Stated as eligibility only. We cannot see whether he runs it — many
       // advertisers never display the badge — so the finding is the eligibility
       // and the question, never a claim about his spend.
-      if (lsa && lsa.checked && lsa.eligible) {
-        push(lsa.running
+      // detectLSA returns { eligible, badgeFound, evidence, marker, status }.
+      // There is no `checked` field and no `running` field on it, so this test
+      // has been false on every lead since it was written - which means the one
+      // measurement in this system that is about MONEY rather than markup, by
+      // its own note directly above, never reached the situation read at all.
+      // The real signal is status === 'running_lsa', which is what the audit
+      // prompt already branches on.
+      if (lsa && lsa.eligible) {
+        push(lsa.status === 'running_lsa'
           ? `Local Services Ads: they ARE running them \u2014 the Google Guaranteed badge appears on their own site. That is a paid channel they already spend on, so cost per lead is a number they watch.`
           : `Local Services Ads: their trade is ELIGIBLE for Google Guaranteed and no badge appears on their site. \u26a0 Many advertisers never display the badge, so make NO claim about whether they run it \u2014 the finding is that the channel exists above the map pack in their category, and it is worth asking whether anyone owns it. This is the one measurement here about money rather than markup.`);
       }
       if (marketClarity && marketClarity.checked) push(`Positioning read: ${marketClarity.verdict}${marketClarity.reasons && marketClarity.reasons.length ? ' \u2014 ' + marketClarity.reasons.join('; ') : ''}`);
       if (socialPresence && socialPresence.count) push(`Social channels linked: ${socialPresence.platforms.join(', ')}`);
       if (Number.isFinite(verifiedEmployees) && verifiedEmployees > 0) push(`${verifiedEmployees} employees`);
-      if (htmlSignals && htmlSignals.checked) push(`Site: https=${htmlSignals.https}, mobile viewport=${htmlSignals.viewport}, title tag=${htmlSignals.title}`);
-      if (leadMagnet && leadMagnet.checked) push(`Lead magnet: ${leadMagnet.found ? leadMagnet.what : 'none \u2014 the only way to engage is to ask'}`);
+      // extractHtmlSignals returns isHttps / hasViewport / hasTitle. Reading
+      // .https / .viewport / .title printed "https=undefined, mobile
+      // viewport=undefined, title tag=undefined" into the evidence the
+      // situation read is built from, on every single lead.
+      if (htmlSignals && htmlSignals.checked) push(`Site: https=${htmlSignals.isHttps}, mobile viewport=${htmlSignals.hasViewport}, title tag=${htmlSignals.hasTitle}`);
+      // readLeadMagnet returns { checked, hasAny, assets, gaps, ... }. There is
+      // no `found` and no `what`, so this always took the else branch and told
+      // the situation read "none - the only way to engage is to ask" even on
+      // leads carrying a downloadable guide. The identical field-name bug is
+      // already documented a few hundred lines above for the ladder inputs and
+      // was never fixed here.
+      if (leadMagnet && leadMagnet.checked) push(`Lead magnet: ${leadMagnet.hasAny ? (leadMagnet.assets || []).slice(0, 3).join(', ') : 'none \u2014 the only way to engage is to ask'}`);
       // ── EVERYTHING ELSE WE ALREADY HOLD ───────────────────────────────────
       // These were all computed and none reached the synthesis. A read can only
       // be as rich as the facts handed to it, and the briefing was thin partly
@@ -22753,7 +22972,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           };
           const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
           let _sent = 0, _bytes = 0;
-          const _skipped = [], _sentKeys = [];
+          const _skipped = [], _sentKeys = [], _rescaled = [];
           // == THE HOMEPAGE MUST BE THE FIRST IMAGE, OR NONE OF THEM GO ========
           // The block this replaced was gated on `msgContent.length`, and that
           // term was load-bearing: it guaranteed no interior render was attached
@@ -22791,13 +23010,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // and was still sent as an image. Anything we cannot measure is
               // refused instead.
               if (!_d) { _skipped.push(`${pg.key} (not a readable PNG - refused rather than sent unmeasured)`); continue; }
-              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
-              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _b.toString('base64') } });
-              _sent++; _bytes += _b.length; _sentKeys.push(pg.key);
+              // == DOWNSCALE INSTEAD OF DISCARDING ==============================
+              // Over-tall pages used to be skipped outright, which is safe and is
+              // also why the brain never saw the bottom of a long page - where the
+              // reviews, the guarantee and the real offer usually sit. The note
+              // left here said what was needed: capture tall, resize under 8000px,
+              // then send. pngscale does that with node's own zlib and no new
+              // dependency, because a native image library that fails to build on
+              // Render takes the whole service down rather than one picture.
+              //
+              // It REFUSES anything it cannot decode exactly - interlaced, not
+              // 8-bit, not RGB/RGBA - rather than guessing, because a mangled
+              // image produces confident readings of pixels that mean nothing.
+              let _send = _b;
+              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) {
+                const _fit = _pngscale ? _pngscale.fitWithin(_b, MAX_EDGE) : { skip: 'pngscale.js not deployed' };
+                if (_fit.skip) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px — ${_fit.skip})`); continue; }
+                if (_fit.buffer.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (downscaled to ${_fit.width}x${_fit.height} but still ${Math.round(_fit.buffer.length / 104857.6) / 10}MB)`); continue; }
+                _send = _fit.buffer;
+                _rescaled.push(`${pg.key} ${_fit.from} → ${_fit.width}x${_fit.height}`);
+              }
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _send.toString('base64') } });
+              _sent++; _bytes += _send.length; _sentKeys.push(pg.key);
             } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
           }
           if (_sent) {
             console.log(`\u{1F441} PAGE RENDERS TO THE BRAIN [${company}]: ${_sent} interior page render(s) sent alongside the homepage — ${_sentKeys.join(', ')}. Already captured and already paid for; forwarding them costs nothing and is the difference between reading a site and looking at one.`);
+            if (_rescaled.length) console.log(`   \u00b7 downscaled to fit the vision ceiling: ${_rescaled.join('; ')} \u2014 these pages used to be dropped entirely, so the bottom of a long page reached the brain for the first time`);
             if (_skipped.length) console.log(`   · skipped: ${_skipped.join('; ')}`);
           } else if (_shots.length) {
             console.log(`⚠ PAGE RENDERS NOT SENT [${company}]: ${_shots.length} render(s) were captured but none could be forwarded${_skipped.length ? ` — ${_skipped.join('; ')}` : ''}. The interior pages reach the audit as text only.`);
@@ -25221,6 +25460,22 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // this line _claimRisks would silently never reach the UI.
             _claimRisks: parsed._claimRisks,
             positioningRead: parsed.positioningRead || null,
+            // == PAID FOR ON EVERY AUDIT AND THROWN AWAY ======================
+            // signalReads is requested in the schema with its own ordering
+            // rationale, and max_tokens was raised 3000 -> 4200 specifically to
+            // fit it - roughly 400-600 extra OUTPUT tokens per audit, on every
+            // lead. brainAudit is an explicit literal and this key was not in
+            // it, so the value was generated, billed, and dropped.
+            //
+            // The client asks for it on every render: `const reads =
+            // Array.isArray(ba.signalReads) ? ba.signalReads : []` and falls
+            // back to the terse mechanical status string when it is absent. So
+            // the briefing has been showing "Ranks #15" where it was meant to
+            // show what #15 MEANS, and we were paying for the sentence.
+            //
+            // Same class as _claimRisks directly above, which carries the same
+            // warning for the same reason.
+            signalReads: Array.isArray(parsed.signalReads) ? parsed.signalReads : null,
             realPain: parsed.realPain,
             embarrassingFinding: parsed.embarrassingFinding,
             recommendedProduct: parsed.recommendedProduct,
@@ -27392,7 +27647,25 @@ app.listen(PORT, () => {
   // know about a business's pain without spending anything. Everything else in
   // this system costs $0.09 and two minutes to discover.
   try {
-    const _band = (r) => r === null || (r >= 4.2 && r <= 4.85);
+    // == READ THE REAL BAND, DO NOT RESTATE IT =============================
+    // This hardcoded 4.2-4.85 while the filter itself defaulted to 3.8-4.85, so
+    // the check was validating a band production has not used for some time. A
+    // 4.75 ceiling was drafted today and this check would have passed it, while
+    // silently excluding three of the five leads listed below as known-good.
+    //
+    // The defaults are lifted out of this file's own source so the check can
+    // never drift from the filter again. If the constants are renamed or moved,
+    // this fails loudly rather than quietly testing nothing.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _num = (name) => {
+      const m = new RegExp(name + "[^;]*?:\\s*([0-9.]+);").exec(_src);
+      return m ? Number(m[1]) : NaN;
+    };
+    const _lo = _num('PAIN_BAND_LOW'), _hi = _num('PAIN_BAND_HIGH');
+    if (!Number.isFinite(_lo) || !Number.isFinite(_hi)) {
+      console.log('\u26d4 PAIN BAND CHECK: could not read PAIN_BAND_LOW/HIGH out of this file, so the band being tested is not the band being used.');
+    }
+    const _band = (r) => r === null || (r >= _lo && r <= _hi);
     // Real leads, real outcomes.
     const _repliedOrPained = [['Daniel Builders', 4.7], ['Deck Daddy\'s', 4.8],
       ['Comfort-Air', 4.8], ['Midwest', 4.3], ['Bradley', 4.8]];
@@ -27416,7 +27689,7 @@ app.listen(PORT, () => {
     } else if (_falseBuilder.length) {
       console.log(`\u26d4 PAIN BAND CHECK: ${_falseBuilder.join(', ')} wrongly flagged as a builder site. Telling an owner with a real site that he is on a free builder is a false claim he disproves instantly.`);
     } else {
-      console.log(`\u2713 PAIN BAND CHECK: every lead that produced a repeating complaint or a reply survives the ${_kept.length ? '4.2-4.85' : '4.2-4.85'} band, unrated businesses still pass, and free page builders are read off the URL without touching a real domain.`);
+      console.log(`\u2713 PAIN BAND CHECK: every lead that produced a repeating complaint or a reply survives the ${_lo}-${_hi} band it actually filters on, unrated businesses still pass, and free page builders are read off the URL without touching a real domain.`);
     }
   } catch (e) {
     console.log(`\u26d4 PAIN BAND CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
@@ -27756,38 +28029,150 @@ app.listen(PORT, () => {
     console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
   }
 
-  // ══ FIVE SIGNALS ARE MEASURED AND NEVER USED ═════════════════════════════
-  // CRM detection, analytics, social proof, CTA-above-fold and LSA are all
-  // measured, shown in the audit panel, and never reach the brain.
+  // ══ EVERY FIELD A RUNG READS MUST ACTUALLY ARRIVE ════════════════════════
+  // MEASUREMENT DELIVERY CHECK guards eleven hand-listed fields that
+  // resolveMeasurements owns. That leaves every OTHER field a rung reads
+  // unguarded — and review_velocity_drop was added today reading four of them,
+  // three of which were delivered and one of which was not, so the rung could
+  // never fire on any lead. Its unit test passed because the test handed
+  // rankHarms the field directly; the live path never did.
   //
-  // Four of them SHOULD stay out, and that is the point of this check — it
-  // records the judgement so nobody wires them in later thinking they were
-  // forgotten. CRM detection admits a server-side tool is invisible to it, so
-  // "no CRM detected" would tell an owner with HubSpot he has none. Analytics
-  // and social proof are near-universal and binary. CTA-above-fold is real only
-  // when a screenshot exists, and a live audit already invented a button's
-  // destination on a lead where it did not.
+  // That is the fourth instance of this class in one session, and the second
+  // where the test performed the delivery it was supposed to be verifying. A
+  // hand-written list of guarded fields cannot fix it, because the list is
+  // exactly what nobody updates.
   //
-  // LSA is the exception and it is now wired: the only measurement in this
-  // system about MONEY rather than markup. A home-service owner knows exactly
-  // what a lead costs him on Local Services Ads, and Google Guaranteed is a
-  // badge his competitors carry above him in the map pack.
+  // So this derives BOTH sides from the source instead. Every `m.<field>` any
+  // rung reads, against every key _harmInputs assigns plus everything
+  // resolveMeasurements returns. A rung reading a field nothing delivers is
+  // silent forever, and silence is the one failure no log reports.
   try {
-    const _lsaLine = (lsa) => (lsa && lsa.checked && lsa.eligible
-      ? (lsa.running ? 'running' : 'eligible-no-badge') : '');
-    const _eligible = _lsaLine({ checked: true, eligible: true, running: false });
-    const _running = _lsaLine({ checked: true, eligible: true, running: true });
-    const _notEligible = _lsaLine({ checked: true, eligible: false });
-    const _unchecked = _lsaLine({ checked: false });
-    if (!_eligible || !_running) {
-      console.log(`\u26d4 LSA WIRING CHECK: an eligible business produces no line for the brain, so the one money-side measurement in this system stays in the panel and never reaches an audit.`);
-    } else if (_notEligible || _unchecked) {
-      console.log(`\u26d4 LSA WIRING CHECK: a business that is not eligible, or was never checked, still produces a line. Claiming a channel exists for a trade that cannot use it is a false finding.`);
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.replace(/^\s*\/\/.*$/gm, '');
+
+    // What the rungs read. Sliced from the real ladder text so it cannot drift.
+    const _la = _code.indexOf('const HARM_LADDER');
+    let _d = 0, _le = _la;
+    for (let i = _code.indexOf('[', _la); i < _code.length; i++) {
+      if (_code[i] === '[') _d++;
+      if (_code[i] === ']') { _d--; if (!_d) { _le = i + 1; break; } }
+    }
+    const _ladderTxt = _code.slice(_la, _le);
+    const _wanted = new Set([..._ladderTxt.matchAll(/\bm\.([A-Za-z_$][\w$]*)/g)].map(x => x[1]));
+
+    // What _harmInputs assigns, plus what resolveMeasurements returns. Both are
+    // read from source, and resolveMeasurements is additionally CALLED so a
+    // spread of a real return value is covered rather than guessed at.
+    // NOT indexOf('_harmInputs = {') - that finds `let _harmInputs = {};`, the
+    // empty initialiser, and slicing from there yields a literal with no keys at
+    // all. The first version of this check did exactly that and reported 38
+    // fields missing, almost all of which are delivered. A check that cries wolf
+    // gets switched off, so this matches only the multi-line assignment.
+    const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_code);
+    const _hi = _hiM ? _hiM.index : -1;
+    if (_hi < 0) throw new Error('could not find the _harmInputs assignment');
+    let _d2 = 0, _hie = _hi;
+    for (let i = _code.indexOf('{', _hi); i < _code.length; i++) {
+      if (_code[i] === '{') _d2++;
+      if (_code[i] === '}') { _d2--; if (!_d2) { _hie = i + 1; break; } }
+    }
+    const _hiTxt = _code.slice(_hi, _hie);
+    const _given = new Set([..._hiTxt.matchAll(/^\s+([A-Za-z_$][\w$]*)\s*:/gm)].map(x => x[1]));
+    try {
+      for (const k of Object.keys(resolveMeasurements({}) || {})) _given.add(k);
+    } catch { /* resolver needs no args on this path; if it throws, the list below is just shorter */ }
+    // Spread helpers inside _harmInputs contribute keys too. Called for real
+    // rather than assumed, for the same reason.
+    // Called with text long enough to clear their own minimum. measureAbandonment
+    // returns {} for anything under 400 characters, so passing '' made it look as
+    // though it delivered nothing and reported four of its fields as dead.
+    const _fixture = 'lorem ipsum dolor sit amet copyright 2019 posted 2021 '.repeat(30);
+    for (const fn of ['measureAbandonment', 'measureHistory']) {
+      try {
+        const f = eval(fn);
+        if (typeof f === 'function') for (const k of Object.keys(f(_fixture) || {})) _given.add(k);
+      } catch { /* not spreadable on this input — skip */ }
+    }
+
+    const _missing = [...(_wanted)].filter(f => !_given.has(f)).sort();
+    if (_missing.length) {
+      console.log(`⛔ RUNG INPUT CHECK: ${_missing.length} field(s) are read by a rung and delivered by nothing — ${_missing.join(', ')}. Every rung reading one of those is silent on every lead, and no log says so. This is exactly how review_velocity_drop shipped dead.`);
     } else {
-      console.log(`\u2713 LSA WIRING CHECK: eligibility reaches the brain as eligibility \u2014 never as a claim about their spend \u2014 while CRM detection, analytics, social proof and CTA-above-fold stay out on purpose, being unreliable, universal or screenshot-dependent.`);
+      console.log(`✓ RUNG INPUT CHECK: all ${_wanted.size} field(s) any rung reads are actually assigned by _harmInputs or returned by the resolver — derived from the source on both sides, so a rung cannot be added that reads something nothing delivers.`);
     }
   } catch (e) {
-    console.log(`\u26d4 LSA WIRING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+    console.log(`⛔ RUNG INPUT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THIS CHECK TESTED A LAMBDA IT DECLARED ITSELF ════════════════════════
+  // The old version built `_lsaLine = (lsa) => lsa && lsa.checked && lsa.eligible
+  // ? (lsa.running ? ... : ...) : ''` inside its own try block and asserted THAT
+  // behaved correctly. It was not production code, nothing in the pipeline
+  // called it, and its shape did not match production: detectLSA returns
+  // { eligible, badgeFound, evidence, marker, status } and has NO `checked`
+  // field and NO `running` field. So the check printed a tick forever, and
+  // deleting the LSA block from the prompt entirely would not have made it
+  // fail. A check that cannot fail is not a check.
+  //
+  // Worse, its own comment was false. It claimed CRM detection, analytics,
+  // social proof and CTA-above-fold 'never reach the brain'. All four are
+  // interpolated into the audit prompt today, and two of them GATE A PRODUCT
+  // RECOMMENDATION. Anyone reading it would either wire them in again,
+  // creating duplicates, or reason about the prompt on a false premise.
+  //
+  // This version reads the REAL detectLSA and the REAL source text. It cannot
+  // pass by testing a copy of itself.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _fails = [];
+    // 1. The real function's shape. If a future edit reintroduces `checked` or
+    //    `running`, the readers below are fine; if it REMOVES `status`, they
+    //    break, and this is where that shows.
+    const _shape = detectLSA('plumber', 'we are Google Guaranteed', 'Test Co');
+    if (!_shape || typeof _shape.status !== 'string' || typeof _shape.eligible !== 'boolean') {
+      _fails.push('detectLSA no longer returns { eligible, status } — every consumer reads those two');
+    }
+    // 2. Nothing may read a field detectLSA does not return. This is the exact
+    //    bug that kept LSA out of the situation read for months: `lsa.checked`
+    //    and `lsa.running` were tested and neither exists.
+    // Scanning raw source made this check see ITSELF - its own comment and its
+    // own needle array both contain the strings it looks for, so it reported a
+    // ghost read that does not exist. Comments are stripped, and the needles are
+    // assembled at runtime so no literal in this file can match them.
+    const _code = _src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const _ghosts = ['ch' + 'ecked', 'ru' + 'nning']
+      .filter(f => new RegExp('lsa\\.' + f + '\\b').test(_code))
+      .map(f => 'lsa.' + f);
+    if (_ghosts.length) {
+      _fails.push(`${_ghosts.join(' and ')} read somewhere, and detectLSA returns neither — that test is always false and the block behind it never runs`);
+    }
+    // 3. Eligibility must actually reach the situation read, which is where it
+    //    was missing, and the audit prompt, where it already was.
+    if (!/if \(lsa && lsa\.eligible\) \{/.test(_src)) {
+      _fails.push('the situation read no longer gates on lsa.eligible, so the one money-side measurement here does not reach the briefing');
+    }
+    if (!/lsa\.status === 'running_lsa'/.test(_src)) {
+      _fails.push("nothing branches on status === 'running_lsa', so a business that demonstrably runs LSA reads the same as one that might not");
+    }
+    // 4. The four signals this check used to claim were unwired. They ARE wired,
+    //    and the point of naming them is that the claim stays true either way:
+    //    each must appear in the prompt WITH its caveat, because none of them
+    //    can be stated as a fact about the business.
+    const _caveated = [
+      ['CRM', /None detected on page \(unverified\)/],
+      ['social proof', /review widgets load late, so do NOT claim/],
+    ];
+    const _bare = _caveated.filter(([, re]) => !re.test(_src)).map(([n]) => n);
+    if (_bare.length) {
+      _fails.push(`${_bare.join(', ')} reach the prompt without the caveat that makes them safe — "no CRM detected" would tell an owner with HubSpot he has none`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ LSA WIRING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LSA WIRING CHECK: detectLSA's real shape is honoured, nothing reads a field it does not return, eligibility reaches BOTH the audit prompt and the situation read, and the unreliable signals — CRM, analytics, social proof, CTA-above-fold — reach the prompt only with the caveat that stops them being stated as facts.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LSA WIRING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A QUOTED POSITIONING FINDING MUST SURVIVE ═══════════════════════════
@@ -29126,28 +29511,52 @@ app.listen(PORT, () => {
   // scopecheck.js walks the real scope chain and reports any name that resolves
   // to no binding. Running it HERE means both files are gated on every boot,
   // rather than only when someone remembers the command.
+  // "THE CHECKER IS MISSING" AND "THE CHECKER FOUND BUGS" ARE DIFFERENT
+  // ANSWERS, and the first version of this could not tell them apart. Any throw
+  // from execFileSync was reported as unresolved identifiers, so a deploy where
+  // scopecheck.js had simply not been uploaded printed a full false alarm about
+  // ReferenceErrors in server.js. That is the failure this file already records
+  // about the SMTP log line: a message that overstates its own severity costs
+  // exactly as much as one that understates it.
+  //
+  // A spawn failure and a real finding now say different things, and the
+  // missing-file case says plainly what to do about it.
   try {
-    const { execFileSync } = require('child_process');
-    const _files = ['server.js', 'index.html'];
-    const _bad = [];
-    for (const f of _files) {
-      const _path = require('path').join(__dirname, f);
-      if (!require('fs').existsSync(_path)) continue;   // index.html is deployed separately
-      try {
-        execFileSync(process.execPath, [require('path').join(__dirname, 'scopecheck.js'), _path],
-          { stdio: 'pipe', timeout: 30000 });
-      } catch (err) {
-        const out = String((err && err.stdout) || '').trim().split('\n').slice(1, 4).join(' | ');
-        _bad.push(`${f}: ${out || 'unresolved identifier(s)'}`);
+    const fsx = require('fs'), pathx = require('path');
+    const _checker = pathx.join(__dirname, 'scopecheck.js');
+    if (!fsx.existsSync(_checker)) {
+      console.log('\u26a0 SCOPE CHECK SKIPPED: scopecheck.js is not deployed alongside server.js, so nothing was checked. This is NOT a finding about the code \u2014 upload scopecheck.js into the same folder as server.js and it runs on the next boot. It is the gate for the class that produced five silent ReferenceErrors in one session.');
+    } else {
+      const { execFileSync } = require('child_process');
+      const _files = ['server.js', 'index.html'];
+      const _found = [], _brokeTool = [];
+      for (const f of _files) {
+        const _path = pathx.join(__dirname, f);
+        if (!fsx.existsSync(_path)) continue;   // index.html deploys separately
+        try {
+          execFileSync(process.execPath, [_checker, _path], { stdio: 'pipe', timeout: 30000 });
+        } catch (err) {
+          // Exit 1 is the checker REPORTING findings. Anything else - a spawn
+          // failure, a timeout, a crash inside the checker - is the TOOL being
+          // broken, and must never be read as a verdict on the code.
+          const out = String((err && err.stdout) || '').trim();
+          if (err && err.status === 1 && out) {
+            _found.push(`${f}: ${out.split('\n').slice(1, 4).join(' | ')}`);
+          } else {
+            _brokeTool.push(`${f}: the checker itself failed (${(err && (err.code || err.message)) || 'unknown'})`);
+          }
+        }
+      }
+      if (_found.length) {
+        console.log(`\u26d4 SCOPE CHECK: ${_found.join('  //  ')}. Each of these throws ReferenceError the moment its branch runs, and several live ones were swallowed by a surrounding catch, so the feature simply never worked.`);
+      } else if (_brokeTool.length) {
+        console.log(`\u26a0 SCOPE CHECK DID NOT COMPLETE: ${_brokeTool.join('  //  ')}. Nothing is being claimed about the code - the tool did not run.`);
+      } else {
+        console.log(`\u2713 SCOPE CHECK: every identifier resolves to a real binding \u2014 no name copied out of a scope it belonged to, and no declaration stranded inside a block that closed before its use.`);
       }
     }
-    if (_bad.length) {
-      console.log(`⛔ SCOPE CHECK: ${_bad.join('  //  ')}. Each of these throws ReferenceError the moment its branch runs, and several of the live ones were swallowed by a surrounding catch, so the feature simply never worked.`);
-    } else {
-      console.log(`✓ SCOPE CHECK: every identifier in ${_files.length} file(s) resolves to a real binding — no name copied out of a scope it belonged to, and no declaration stranded inside a block that closed before its use.`);
-    }
   } catch (e) {
-    console.log(`⛔ SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+    console.log(`\u26a0 SCOPE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. Nothing is being claimed about the code.`);
   }
 
   // ══ A GUARD IS ONLY REAL IF ITS INPUTS ARRIVE ════════════════════════════
