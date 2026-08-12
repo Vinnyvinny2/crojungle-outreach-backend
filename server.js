@@ -3395,7 +3395,14 @@ const LSA_AMBIGUOUS_RE = /google\s*verified|verified\s+on\s+google/i;
 // not a website observation. It is also the clearest argument that niching down
 // pays — the check only exists because these trades are eligible for it.
 const LSA_TRADE_ALIASES = [
-  [/roof/i, 'Roofing'], [/plumb|drain|rooter|sewer/i, 'Plumbing'],
+  // Structural FIRST, and /roof/ bounded. Identical defect to TRADE_JOB_VALUE:
+  // a bare /roof/ matched wate-ROOF-ing, so a basement waterproofing contractor
+  // was classified Roofing here too — even though the Foundation row three lines
+  // down names `basement waterproof` explicitly, which is the author saying in
+  // writing where waterproofing was meant to land. First match wins, so it never
+  // got there. Two tables, one loose regex, same lead wrong in both.
+  [/waterproof|foundation|crawl ?space|piering|slabjack|underpinning/i, 'Foundation'],
+  [/\broof(?:ing|er)?\b|re-?roof/i, 'Roofing'], [/plumb|drain|rooter|sewer/i, 'Plumbing'],
   [/hvac|heating|cooling|air condition|furnace|boiler/i, 'HVAC'],
   [/restoration|remediation|water damage|fire damage|mold/i, 'Restoration'],
   [/foundation|crawl ?space|basement waterproof/i, 'Foundation'],
@@ -3405,7 +3412,7 @@ const LSA_TRADE_ALIASES = [
   [/pave|asphalt|driveway/i, 'Paving'], [/concrete/i, 'Concrete'],
   [/mason|brick|stone/i, 'Masonry'], [/hardscap/i, 'Hardscaping'],
   [/landscap|lawn/i, 'Landscaping'], [/tree (service|removal|trimming)/i, 'Tree Service'],
-  [/pest control|extermin/i, 'Pest Control'], [/well|septic/i, 'Well & Septic'],
+  [/pest control|extermin/i, 'Pest Control'], [/\bwell (?:drilling|pump|water)|water well|septic/i, 'Well & Septic'],
   [/pool (build|install|construction|contractor)/i, 'Pool Construction'],
   [/kitchen remodel/i, 'Kitchen Remodel'], [/bath(room)? remodel/i, 'Bath Remodel'],
   [/remodel|renovat|general contractor|home build|custom home/i, 'Construction'],
@@ -11379,20 +11386,74 @@ const composeFullEmail = (spine, opts = {}) => {
 };
 
 
-const buildProblemList = (harms) => {
+// == WHY EVERY AUDIT LOOKED THE SAME =========================================
+// This sorted by `harm`, and harm is a CONSTANT written on the rung - 54 for no
+// published pricing on every business that ever existed. So the list carried no
+// information about THIS lead: the same rungs, in the same order, every time.
+//
+// Two separate faults, and they compound:
+//
+//   ORDER. Every other signal the ladder computes - urgency from their trade,
+//   referral acquisition, the measured binding constraint, how sellable it is,
+//   whether he can fix it alone - lands in `opener`, and the audit was throwing
+//   all of it away to sort on a constant. Ordering by opener costs nothing and
+//   differs for every lead, because it is built from their own measurements.
+//
+//   AMBIENT CONDITIONS. "No published pricing", "no lead magnet", "no named
+//   offer", "undifferentiated copy", "the site looks dated" are true of nearly
+//   every owner-operated local business. The ladder ALREADY says so - `novel` is
+//   30, 25, 20, 15 and 30 on exactly those five rungs, hand-set and correct. A
+//   condition shared by ninety percent of the market cannot explain why THIS
+//   business is behind, and this file's own rule says it plainly: a finding
+//   lands when it contradicts something the owner did ON PURPOSE, and fails
+//   when it is merely suboptimal.
+//
+//   So they stop counting as findings. They are still measured, still returned,
+//   still on the call sheet - where agreement is the point and Mike can raise
+//   them himself. They just no longer pad the list to five and make a real
+//   finding look like one of a crowd.
+//
+// The exception is deliberate: when an ambient condition sits INSIDE the
+// measured binding constraint it is not filler, it is the diagnosis. A business
+// whose constraint measured OFFER has "no named offer" as its actual problem.
+//
+// NOT changed: `opener` scoring itself. The 7-point cap on novel is deliberate
+// and documented - four live ranking failures came from a modifier outweighing
+// harm, and the fix was to make modifiers gates rather than multipliers. That
+// reasoning still holds. This changes what the AUDIT SHOWS, not what the email
+// opens on.
+const AMBIENT_NOVEL_MAX = 35;
+const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
-  return harms.byHarm
-    // Under this heading, everything must actually be a problem. The ladder only
-    // contains problems, so nothing needs filtering \u2014 which is the point.
-    .map(h => ({
+  const bindingLayer = opts.bindingLayer || null;
+  const rows = harms.byHarm.map(h => {
+    const novel = Number(h.novel);
+    // Unknown novelty is NOT treated as ambient. Requiring a real number stops
+    // a rung that never got one from being silently deleted from the audit -
+    // the "unmeasured treated as zero" failure, pointed the other way.
+    const ambient = Number.isFinite(novel) && novel <= AMBIENT_NOVEL_MAX
+      && !(bindingLayer && HARM_LADDER_LAYER[h.id] === bindingLayer);
+    return {
       area: AREA_OF[h.id] || 'Other',
       problem: h.finding,       // measured sentence, written by code
       costs: h.costs,           // what it does to his business
       harm: h.harm,
+      opener: Number.isFinite(Number(h.opener)) ? Number(h.opener) : (Number(h.harm) || 0),
+      novel: Number.isFinite(novel) ? novel : null,
+      ambient,
       id: h.id,
-    }))
-    // Costliest first, so the reader meets the worst thing immediately.
-    .sort((a, b) => b.harm - a.harm);
+    };
+  });
+  const real = rows.filter(r => !r.ambient).sort((a, b) => b.opener - a.opener);
+  const amb  = rows.filter(r =>  r.ambient).sort((a, b) => b.opener - a.opener);
+  // A thin audit is worse than a padded one. When the measurements genuinely
+  // produced almost nothing, the ambient conditions are all there is to say, so
+  // they are let back in rather than showing a near-empty page.
+  const out = real.length >= 3 ? real : real.concat(amb.slice(0, 3 - real.length));
+  if (amb.length && real.length >= 3) {
+    console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
+  }
+  return out;
 };
 
 // ══ WHAT ONE JOB IS WORTH IN THEIR TRADE ═════════════════════════════════════
@@ -11424,6 +11485,12 @@ const buildProblemList = (harms) => {
 const TRADE_JOB_VALUE = [
   // Home exterior / structural
   { re: /custom home|home build|new construction|luxury home/i, say: 'a custom home runs several hundred thousand dollars' },
+  { re: /waterproof|foundation|crawl ?space|piering|slabjack|underpinning|structural repair/i, say: 'a foundation or waterproofing job runs five figures' },
+  // A basement REMODEL is a finish-out, not foundation work and not a kitchen.
+  // Bare `basement` is deliberately matched by none of these — a "basement
+  // contractor" could be either trade, and no figure is always safe where a
+  // wrong one never is.
+  { re: /basement (?:remodel|refinish|finish|conversion)|finished basement/i, say: 'a basement finish-out runs $20k-$70k' },
   { re: /kitchen (?:and|&) bath|kitchen remodel|bath(?:room)? remodel|remodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
   // ══ A GARAGE DOOR IS NOT A WINDOW ═════════════════════════════════════════
   // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k"
@@ -11439,8 +11506,21 @@ const TRADE_JOB_VALUE = [
   // is no longer a bare alternative.
   { re: /garage door|overhead door|dock door|roll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
   { re: /window|siding|exterior|entry door|patio door|replacement door/i, say: 'a window or siding job runs $8k-$40k' },
-  { re: /roof/i, say: 'a roof replacement runs $8k-$30k' },
-  { re: /foundation|basement|crawlspace|structural/i, say: 'a foundation repair runs five figures' },
+  // ══ AND WATERPROOFING IS NOT ROOFING ══════════════════════════════════════
+  // The note directly above diagnosed this exact class for `door`, fixed that
+  // one instance, and never searched for the next. `/roof/i` is a bare
+  // unanchored substring, and the letters roof sit inside wate-ROOF-ing.
+  //
+  // Live on Sohan & Son's Waterproofing, 2026-08-12: "A roof replacement runs
+  // $8k-$30k" went out to a basement waterproofing contractor, in the first
+  // email and again in follow-up two. The foundation row that should have won
+  // is on the very next line and never got the chance, because .find() stops
+  // at the first hit.
+  //
+  // Structural is matched FIRST now, and roof carries a boundary so it can
+  // only match the word itself. Same for fireproofing and soundproofing, which
+  // were reachable the moment a Places category used either word.
+  { re: /\broof(?:ing|er)?\b|re-?roof/i, say: 'a roof replacement runs $8k-$30k' },
   // Same trap as the garage door: a pool SERVICE company maintains pools, it does
   // not build them, and quoting a build price at a maintenance business is the
   // same ten-times error. Service is matched first.
@@ -11456,7 +11536,10 @@ const TRADE_JOB_VALUE = [
   { re: /electric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
   { re: /restoration|water damage|mold|disaster|cleanup/i, say: 'a restoration job runs five figures' },
   { re: /pest|exterminat/i, say: 'an annual pest contract runs several hundred dollars' },
-  { re: /garage door|overhead door/i, say: 'a garage door replacement runs $2k-$6k' },
+  // (the second garage-door row lived here and was unreachable — the row near
+  //  the top catches every one of its alternatives — while quoting a DIFFERENT
+  //  price, $2k-$6k against $1k-$4k. Two prices for one trade in one table is
+  //  a coin toss waiting to be re-ordered into an email. Removed.)
   { re: /paint/i, say: 'a whole-home paint job runs $4k-$12k' },
   { re: /floor/i, say: 'a flooring job runs $5k-$20k' },
   // Medical / dental / aesthetic
@@ -11470,10 +11553,13 @@ const TRADE_JOB_VALUE = [
   { re: /attorney|law (?:firm|office)|legal|esq\b/i, say: 'a single matter runs several thousand dollars' },
   { re: /cpa|account(?:ant|ing)|bookkeep|tax/i, say: 'an annual engagement runs several thousand dollars' },
   { re: /insurance/i, say: 'one policy is years of renewal commission' },
-  { re: /real estate|realtor|broker/i, say: 'one closing is a full commission' },
-  { re: /mortgage|lending|loan/i, say: 'one funded loan is a full commission' },
+  // `broker` is a job title, not an industry. A bare alternative here caught
+  // `mortgage broker` and `freight broker` and told a trucking company its
+  // revenue was a real-estate closing commission. Specific brokers first.
+  { re: /mortgage|lending|loan officer|loan origin/i, say: 'one funded loan is a full commission' },
+  { re: /freight|logistics|truck|transport|hauling|dispatch/i, say: 'one contracted lane is recurring revenue' },
+  { re: /real estate|realtor|realty|broker/i, say: 'one closing is a full commission' },
   // Commercial / logistics
-  { re: /truck|freight|logistics|transport|hauling/i, say: 'one contracted lane is recurring revenue' },
   { re: /commercial clean|janitorial|facility/i, say: 'one building contract is recurring monthly revenue' },
   { re: /security|alarm|surveillance/i, say: 'one monitored account is recurring monthly revenue' },
 ];
@@ -11623,7 +11709,7 @@ const buildFactualSpine = (harms, m = {}) => {
     //
     // Both now count the same list, so the number in the email is the number of
     // rows he will be walked through.
-    problemCount: buildProblemList(harms).length,
+    problemCount: buildProblemList(harms, { bindingLayer: (m || {}).bindingLayer }).length,
     // Everything else we found, worst first \u2014 for the call sheet, not the email.
     rest: (harms.byHarm || []).filter(x => x.id !== lead.id).map(x => x.finding),
     // ══ THE FOLLOW-UPS ARE FULL EMAILS, SO THEY NEED FULL RUNGS ════════════
@@ -21772,11 +21858,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // The problems section, built from the ladder instead of written by a
             // model. Every entry is measured, every entry is genuinely a problem,
             // and each carries what it costs and which area it belongs to.
-            problemList: buildProblemList(_harms),
+            problemList: buildProblemList(_harms, { bindingLayer: (_harmInputs || {}).bindingLayer, company }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
             subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
-            problemCount: _harms.all.length,
+            // Counts the findings the audit actually stands behind. It used to
+            // count every rung that fired, so "those are 2 of 5" was padded with
+            // conditions true of the whole market. Overstating the count is the
+            // same defect as overstating a figure.
+            problemCount: buildProblemList(_harms, { bindingLayer: (_harmInputs || {}).bindingLayer }).length,
             // ══ THE ID IS NOT COSMETIC ══════════════════════════════════════
             // Subjects are looked up by ladder id (SUBJECTS_FOR[id]), so a
             // ranked list stored without ids can be rebuilt into an email with
@@ -22192,18 +22282,72 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // then a service page. Capped the same way as the homepage shot, and any
         // failure is silent — a missing second image costs nothing, and a stalled
         // vision call costs the whole audit.
+        // ══ WE PAY FOR SIX RENDERS AND SHOW THE MODEL ONE ═════════════════════
+        // auditSitePages captures a full-page render of EVERY page it reads, in
+        // the same request that fetched the text, for the same credit — the log
+        // says so on every lead: "6 full-page screenshot(s) kept ... Same
+        // requests, no extra credit". Then exactly one of them was forwarded.
+        //
+        // So the audit has been reasoning about layout, positioning and the
+        // booking path from markdown, on sites that are mostly image and script.
+        // That is why positioning findings read as category labels, and how a
+        // "coming soon" placeholder can be asserted from text we never matched.
+        // Sending the rest costs NOTHING — already bought, already in memory.
+        //
+        // Two real constraints, and the second is what kept this at one image:
+        //
+        //  · Total payload. Render's free tier uploads slowly, so the count and
+        //    the total bytes are capped rather than sending all six blindly.
+        //
+        //  · The 8000px ceiling. A tall marketing page renders past it and the
+        //    vision API rejects the WHOLE request — "image dimensions exceed max
+        //    allowed size: 8000 pixels" — which previously killed the audit and
+        //    returned a null pitch angle. That is a real hazard and the reason
+        //    the homepage sends a viewport crop.
+        //
+        //    But it does not need a guess. A PNG states its own dimensions in
+        //    the IHDR chunk at a fixed offset in the first 24 bytes, so the size
+        //    is READ rather than assumed: an over-tall page is skipped on its
+        //    own and the rest still go. The failure that killed an audit is now
+        //    impossible rather than merely avoided.
+        //
+        // Ordered by what decides revenue, not by what the sitemap listed:
+        // booking (where the money is won or lost), contact, about/team (who the
+        // buyer is), services, proof, pricing.
         try {
           const _shots = (sitePages && Array.isArray(sitePages.pageShots)) ? sitePages.pageShots : [];
-          const _second = _shots.find(x => x.key === 'booking') || _shots.find(x => x.key === 'services');
-          if (_second && _second.shot && msgContent.length) {
-            const _r = await fetchT(_second.shot, {}, 8000);
-            const _b = await _r.buffer();
-            if (_b.length < 3 * 1024 * 1024) {
+          const _ORDER = ['booking', 'contact', 'about', 'services', 'proof', 'pricing'];
+          const _ranked = [..._shots].sort((a, b) => {
+            const ia = _ORDER.indexOf(a.key), ib = _ORDER.indexOf(b.key);
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+          });
+          const _png = (buf) => {
+            if (!buf || buf.length < 24 || buf.readUInt32BE(12) !== 0x49484452) return null;
+            return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+          };
+          const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
+          let _sent = 0, _bytes = 0;
+          const _skipped = [], _sentKeys = [];
+          for (const pg of _ranked) {
+            if (_sent >= MAX_IMAGES || _bytes >= MAX_TOTAL) break;
+            if (!pg || !pg.shot) continue;
+            try {
+              const _r = await fetchT(pg.shot, {}, 8000);
+              const _b = await _r.buffer();
+              if (_b.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (${Math.round(_b.length / 104857.6) / 10}MB)`); continue; }
+              const _d = _png(_b);
+              if (_d && (_d.h > MAX_EDGE || _d.w > MAX_EDGE)) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _b.toString('base64') } });
-              console.log(`\ud83d\udc41 SECOND RENDER [${company}]: the ${_second.key} page is in front of the model as well as the homepage \u2014 that is the page where someone actually tries to get in touch, and it has never been looked at before.`);
-            }
+              _sent++; _bytes += _b.length; _sentKeys.push(pg.key);
+            } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
           }
-        } catch (e) { console.log(`Second render skipped: ${e && e.message}`); }
+          if (_sent) {
+            console.log(`\u{1F441} PAGE RENDERS TO THE BRAIN [${company}]: ${_sent} interior page render(s) sent alongside the homepage — ${_sentKeys.join(', ')}. Already captured and already paid for; forwarding them costs nothing and is the difference between reading a site and looking at one.`);
+            if (_skipped.length) console.log(`   · skipped: ${_skipped.join('; ')}`);
+          } else if (_shots.length) {
+            console.log(`⚠ PAGE RENDERS NOT SENT [${company}]: ${_shots.length} render(s) were captured but none could be forwarded${_skipped.length ? ` — ${_skipped.join('; ')}` : ''}. The interior pages reach the audit as text only.`);
+          }
+        } catch (e) { console.log(`Interior renders skipped: ${e && e.message}`); }
 
         // ═══ VISION AUDIT — the eyes of the operation ════════════════════════
         // Look at the ACTUAL rendered page instead of grepping HTML. These
@@ -28479,6 +28623,73 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A TRADE MUST NEVER BE QUOTED ANOTHER TRADE'S MONEY ═══════════════════
+  // The money sentence is deliberately exempt from the permittedFigures trace
+  // rule — the figure is "the typical value of a job in their trade", so it is a
+  // LOOKUP rather than a measurement, and the table was trusted on the grounds
+  // that it "can only be right or absent". That guarantee holds only while the
+  // lookup is correct, and a loose regex quietly converts the exempt path into
+  // an unchecked one. verifyBrainEmail has no trade-consistency family, so
+  // nothing downstream can catch it.
+  //
+  // It has now gone wrong three times, always the same way: an unanchored
+  // substring in a first-match-wins list. `door` sent a garage-door company a
+  // window price. `roof` sent a basement WATERPROOFING company a roof price,
+  // live, twice in one sequence. `broker` told a freight company its revenue was
+  // a real-estate closing commission. Each was fixed where it was found and the
+  // next instance was never searched for.
+  //
+  // So the fix is not another careful row. It is this: resolve every trade the
+  // system can actually produce and fail the boot when one lands in an unrelated
+  // industry. A wrong figure is worse than no figure — the whole email argues we
+  // measured his business carefully, and one number he knows is ten times off
+  // proves we did not, taking every true sentence around it with it.
+  try {
+    const _CROSS = [
+      ['waterproofing contractor', /roof replacement/i], ['basement waterproofing', /roof replacement/i],
+      ['fireproofing', /roof replacement/i], ['soundproofing contractor', /roof replacement/i],
+      ['freight broker', /closing|commission/i], ['mortgage broker', /closing is a full/i],
+      ['trucking company', /closing|commission/i],
+      ['pool service', /pool build/i], ['garage door repair', /window|siding/i],
+      ['basement remodeling', /kitchen or bathroom/i], ['basement waterproofing', /kitchen or bathroom/i],
+      ['wellness center', /septic|well/i],
+    ];
+    const _bad = [];
+    for (const [trade, mustNotSay] of _CROSS) {
+      const got = tradeJobValue(trade);
+      if (got && mustNotSay.test(got)) _bad.push(`"${trade}" -> "${got}"`);
+    }
+    // Every trade in the live vocabulary must resolve to its own industry or to
+    // nothing at all. Silence is always safe; a neighbour's price never is.
+    const _mustPair = [
+      ['waterproofing contractor', /foundation or waterproofing/i],
+      ['roofing contractor', /roof replacement/i],
+      ['garage door repair', /garage door/i],
+      ['plumber', /plumbing/i],
+      ['cpa', /annual engagement/i],
+    ];
+    const _missed = _mustPair.filter(([t, re]) => { const g = tradeJobValue(t); return !g || !re.test(g); })
+                             .map(([t]) => `${t} -> ${tradeJobValue(t) || 'nothing'}`);
+    // A row that can never be reached is a price nobody will ever see and a
+    // second opinion waiting to be re-ordered into an email.
+    const _dead = TRADE_JOB_VALUE.filter((row, i) =>
+      TRADE_JOB_VALUE.slice(0, i).some(prev => {
+        const probe = String(row.re.source).split('|')[0].replace(/[\\^$?:()\[\]{}+*]/g, '').replace(/\s+/g, ' ').trim();
+        return probe.length > 3 && prev.re.test(probe);
+      })).map(r => r.say);
+    if (_bad.length) {
+      console.log(`⛔ TRADE CROSS-INDUSTRY CHECK: ${_bad.length} trade(s) are quoted ANOTHER INDUSTRY'S money — ${_bad.join(' | ')}. A figure the owner knows is ten times off proves we did not measure his business, and every true sentence in the email dies with it.`);
+    } else if (_missed.length) {
+      console.log(`⛔ TRADE CROSS-INDUSTRY CHECK: ${_missed.join(' | ')} — a live trade lost the job value it should have. Silence is safe, but this one used to resolve and no longer does.`);
+    } else if (_dead.length) {
+      console.log(`⚠ TRADE CROSS-INDUSTRY CHECK: ${_dead.length} unreachable row(s) — ${_dead.join(' | ')}. An earlier row catches everything they match, so they are a second price for a trade that already has one.`);
+    } else {
+      console.log(`✓ TRADE CROSS-INDUSTRY CHECK: no trade resolves to another industry's figure — waterproofing is not roofing, a freight broker is not a realtor, a garage door is not a window — and every live trade keeps its own. The one figure in the email exempt from the measurement trace is the one nothing downstream can check.`);
+    }
+  } catch (e) {
+    console.log(`⛔ TRADE CROSS-INDUSTRY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A PRONOUN INSIDE "SOMEONE WHO ..." IS NOT THE OWNER ══════════════════
