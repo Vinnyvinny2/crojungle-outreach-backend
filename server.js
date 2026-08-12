@@ -3415,30 +3415,30 @@ const LSA_TRADE_ALIASES = [
   // down names `basement waterproof` explicitly, which is the author saying in
   // writing where waterproofing was meant to land. First match wins, so it never
   // got there. Two tables, one loose regex, same lead wrong in both.
-  [/waterproof|foundation|crawl ?space|piering|slabjack|underpinning/i, 'Foundation'],
-  [/\broof(?:ing|er)?\b|re-?roof/i, 'Roofing'], [/plumb|drain|rooter|sewer/i, 'Plumbing'],
-  [/hvac|heating|cooling|air condition|furnace|boiler/i, 'HVAC'],
-  [/restoration|remediation|water damage|fire damage|mold/i, 'Restoration'],
-  [/foundation|crawl ?space|basement waterproof/i, 'Foundation'],
-  [/solar/i, 'Solar'], [/garage door/i, 'Garage Doors'],
-  [/window|door replace/i, 'Windows & Doors'], [/insulation/i, 'Insulation'],
-  [/electric/i, 'Electrical'], [/floor/i, 'Flooring'], [/deck/i, 'Decks'],
-  [/pave|asphalt|driveway/i, 'Paving'], [/concrete/i, 'Concrete'],
-  [/mason|brick|stone/i, 'Masonry'], [/hardscap/i, 'Hardscaping'],
-  [/landscap|lawn/i, 'Landscaping'], [/tree (service|removal|trimming)/i, 'Tree Service'],
-  [/pest control|extermin/i, 'Pest Control'], [/\bwell (?:drilling|pump|water)|water well|septic/i, 'Well & Septic'],
-  [/pool (build|install|construction|contractor)/i, 'Pool Construction'],
-  [/kitchen remodel/i, 'Kitchen Remodel'], [/bath(room)? remodel/i, 'Bath Remodel'],
-  [/remodel|renovat|general contractor|home build|custom home/i, 'Construction'],
-  [/orthodont/i, 'Orthodontics'], [/oral (and )?maxillofacial|oral surg/i, 'Oral Surgery'],
-  [/cosmetic dent/i, 'Cosmetic Dentistry'], [/dent/i, 'Dental'],
-  [/dermatolog/i, 'Dermatology'], [/lasik|vision correction|ophthalmolog/i, 'LASIK'],
-  [/chiropract/i, 'Chiropractic'], [/physical therapy|physio/i, 'Physical Therapy'],
-  [/veterinar|animal hospital/i, 'Veterinary'], [/med ?spa|aesthetic|plastic surg/i, 'Med Spa'],
-  [/senior care|home care|assisted living/i, 'Senior Care'],
-  [/personal injury|injury (lawyer|attorney)/i, 'PI Law'],
-  [/estate (planning|attorney|lawyer)|probate|trust/i, 'Estate Law'],
-  [/cpa|accountant|accounting|bookkeep|tax/i, 'Accounting'],
+  [/\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning/i, 'Foundation'],
+  [/\broof(?:ing|er)?\b|\bre-?roof/i, 'Roofing'], [/\bplumb|\bdrain|\brooter|\bsewer/i, 'Plumbing'],
+  [/\bhvac|\bheating|\bcooling|\bair condition|\bfurnace|\bboiler/i, 'HVAC'],
+  [/\brestoration|\bremediation|\bwater damage|\bfire damage|\bmold/i, 'Restoration'],
+  [/\bfoundation|\bcrawl ?space|\bbasement waterproof/i, 'Foundation'],
+  [/\bsolar/i, 'Solar'], [/\bgarage door/i, 'Garage Doors'],
+  [/\bwindow|\bdoor replace/i, 'Windows & Doors'], [/\binsulation/i, 'Insulation'],
+  [/\belectric/i, 'Electrical'], [/\bfloor/i, 'Flooring'], [/\bdeck/i, 'Decks'],
+  [/\bpave|\basphalt|\bdriveway/i, 'Paving'], [/\bconcrete/i, 'Concrete'],
+  [/\bmason|\bbrick|\bstone/i, 'Masonry'], [/\bhardscap/i, 'Hardscaping'],
+  [/\blandscap|\blawn/i, 'Landscaping'], [/\btree (service|removal|trimming)/i, 'Tree Service'],
+  [/\bpest control|\bextermin/i, 'Pest Control'], [/\bwell (?:drilling|pump|water)|\bwater well|\bseptic/i, 'Well & Septic'],
+  [/\bpool (build|install|construction|contractor)/i, 'Pool Construction'],
+  [/\bkitchen remodel/i, 'Kitchen Remodel'], [/\bbath(room)? remodel/i, 'Bath Remodel'],
+  [/\bremodel|\brenovat|\bgeneral contractor|\bhome build|\bcustom home/i, 'Construction'],
+  [/\borthodont/i, 'Orthodontics'], [/\boral (and )?maxillofacial|\boral surg/i, 'Oral Surgery'],
+  [/\bcosmetic dent/i, 'Cosmetic Dentistry'], [/\bdent/i, 'Dental'],
+  [/\bdermatolog/i, 'Dermatology'], [/\blasik|\bvision correction|\bophthalmolog/i, 'LASIK'],
+  [/\bchiropract/i, 'Chiropractic'], [/\bphysical therapy|\bphysio/i, 'Physical Therapy'],
+  [/\bveterinar|\banimal hospital/i, 'Veterinary'], [/\bmed ?spa|\baesthetic|\bplastic surg/i, 'Med Spa'],
+  [/\bsenior care|\bhome care|\bassisted living/i, 'Senior Care'],
+  [/\bpersonal injury|\binjury (lawyer|attorney)/i, 'PI Law'],
+  [/\bestate (planning|attorney|lawyer)|\bprobate|\btrust/i, 'Estate Law'],
+  [/\bcpa|\baccountant|\baccounting|\bbookkeep|\btax/i, 'Accounting'],
 ];
 
 // Map free-text trade to an LSA category. Returns the original when nothing
@@ -5968,6 +5968,41 @@ const verifyEmailSMTP = async (email, verifierKey) => {
 const catchAllCache = new Map();
 // Domains whose homepage came back empty, and when. Keyed by URL, one hour.
 const EMPTY_SCRAPE_MEMORY = new Map();
+
+// == EVERY ADDRESS THIS PROCESS HAS PUSHED TO HUNTER =========================
+// The send route has six guards - no email, no pitch, no subject, not sendable,
+// reachability, greeting/mailbox mismatch - and NOT ONE of them asks whether we
+// have written to this person before. The incoming array was not even deduped
+// against itself, so the same address twice in one request was pushed twice.
+//
+// Everything upstream of this is best-effort. Find-time dedupe is built from a
+// list the BROWSER sends up, assembled from an in-memory pipeline and a
+// localStorage queue capped at 200 - so Skip and Save-for-later delete the only
+// record of a company, an evicted queue entry comes straight back on the next
+// run, and research overwrites the stored domain so the strong key stops
+// matching. Each of those costs a credit. Only this point costs a reputation.
+//
+// A second email to an owner who already got one is the most expensive mistake
+// this system can make: he sees a machine, the domain takes the complaint, and
+// a hard bounce or a spam mark is charged to the sending DOMAIN, not the lead.
+//
+// HONEST LIMIT: this is process memory. It holds until Render restarts or
+// redeploys, and it does not know about sends made before this build. It closes
+// the same-request and same-session hole completely, which is where the
+// observed duplicates come from. The durable fix is a sent_recipients table
+// keyed on the address, written after Hunter accepts - that is a schema change
+// and is deliberately not being guessed at here.
+const SENT_RECIPIENTS = new Map();   // normalised email -> { at, name }
+const SENT_DOMAINS = new Map();      // domain -> { at, name, email }
+const normaliseRecipient = (e) => {
+  const x = String(e || '').trim().toLowerCase();
+  if (!x || !x.includes('@')) return '';
+  const [localRaw, domain] = x.split('@');
+  // Gmail-style dots and +tags address the same mailbox. A prospect who gave us
+  // john.smith+quote@ and john.smith@ is one person and one inbox.
+  const local = localRaw.split('+')[0].replace(/\./g, '');
+  return `${local}@${domain}`;
+};
 const isCatchAllDomain = async (domain, verifierKey) => {
   if (!verifierKey || !domain) return null;
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
@@ -7270,6 +7305,11 @@ const fetchGBPHealth = async (placeId, placesKey) => {
     const mask = [
       'rating','userRatingCount','businessStatus','primaryTypeDisplayName',
       'regularOpeningHours','websiteUri','nationalPhoneNumber','photos',
+      // WHERE THEY ACTUALLY ARE. Free on a call we already make, and the only
+      // authoritative answer: it comes from their own Place record rather than
+      // from geocoding a town name. The local-rank check needs it to prove a
+      // search landed in their market - see the WRONG TOWN guard.
+      'location',
       'editorialSummary','googleMapsUri','reviewSummary','reviews'
     ].join(',');
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
@@ -7344,6 +7384,10 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       // the most authoritative one that exists, and free with a call we already
       // make.
       phone: d.nationalPhoneNumber || d.internationalPhoneNumber || '',
+      // Their real coordinates, straight off their listing. Carried so the rank
+      // search can be checked against where the business actually is.
+      lat: (d.location && Number.isFinite(Number(d.location.latitude))) ? Number(d.location.latitude) : null,
+      lng: (d.location && Number.isFinite(Number(d.location.longitude))) ? Number(d.location.longitude) : null,
       reviewRecency,          // {checked, newestDays, stale, veryCold} — never claim if unchecked
       primaryCategory,        // their listing's primary category, or null
       gaps,           // only real, observed gaps — safe to state as fact
@@ -8265,7 +8309,9 @@ const HARM_LADDER = [
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
     reframe: 'a stranger comparing three companies reads the reviews before anything else',
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
-    say: (m) => `more than one of their own Google reviews names the same thing — ${String(m.reviewPainTop).toLowerCase()}`,
+    // The mined complaint is the reviewers' words, not ours. PROTECT keeps the
+    // second-person rewrite off it - see the note above toSecondPerson.
+    say: (m) => `more than one of their own Google reviews names the same thing — ${PROTECT(String(m.reviewPainTop).toLowerCase())}`,
     costs: 'a complaint that repeats is the one a stranger comparing three companies will find' },
 
   // ══ NO PRICE ANYWHERE ON THE SITE ════════════════════════════════════════
@@ -8921,6 +8967,23 @@ const endSentence = (t) => {
 // dismiss the strongest finding we have — two out of a hundred and seven reads
 // as nothing — and it tells him we only skimmed. This removes the clause and
 // leaves the complaint. See the note at reviewPainTop for why.
+// The same rule as stripReviewRatio, but as a TEST rather than a rewrite, and
+// for text we did not write. stripReviewRatio only ever matched the miner's own
+// trailing clause; an audit finding states the ratio in its own words and
+// anywhere in the sentence — "Three of your 39 reviews name it", "2 of ~133
+// reviews mention this" — so the strip could not fire even if it were called.
+//
+// Rewriting a model's sentence to remove a clause is how the pattern-line repair
+// produced "A a business like this business". A claim carrying the arithmetic is
+// REFUSED instead, and the ladder's own sentence stands — already stripped, and
+// the floor we would have sent anyway.
+// NOT "not one of the 150". A ZERO numerator is the strongest form this system
+// has - "not one of the 150 reviews we read has a reply" is unarguable, and the
+// count is what makes it land. What must not reach the opening line is a SMALL
+// numerator over a large denominator, because that is the sentence that hands
+// the owner his dismissal.
+const containsReviewRatio = (t) => /(?<!\bnot\s)(?<!\bnone\s)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+of\s+(?:the\s+|your\s+|his\s+|their\s+|those\s+)?(?:~\s*)?\d+\s+(?:google\s+)?reviews?\b/i.test(String(t || ''));
+
 const stripReviewRatio = (t) => String(t || '')
   .replace(/\s*[—–-]\s*\d+\s+of\s+(?:the\s+)?~?\d+\s+reviews?\s+(?:we\s+read\s+say\s+it|mention\s+this)\s*$/i, '')
   .replace(/\s*[—–-]\s*\d+\s+reviews?\s+mention\s+this\s*$/i, '')
@@ -9877,8 +9940,34 @@ const buildEmailEvidence = (ev = {}) => {
 
   // ── WHERE THEY SIT IN SEARCH ─────────────────────────────────────────────
   const r = ev.localRank || {};
+  // ── THE THIRD READER OF A SUPPRESSED RANK ────────────────────────────────
+  // When two rank samples disagree by more than two places, the reconciler
+  // DELETES rank and scanned off the object and sets rankSuppressed — but it
+  // leaves `found: true`, and localRank is selected on r.found. So every reader
+  // that gates on `found` and then interpolates `rank` prints undefined.
+  //
+  // Two of the three readers were fixed earlier today. This one was missed, and
+  // it is the worst of the three: A is the ASSERTABLE block — the list of things
+  // the writer is explicitly permitted to state — so "Ranked #undefined of
+  // undefined" was handed to the model as a fact it may use.
+  //
+  // Math.max(1, (r.rank || 1) - 1) reads like a guard and is not one: with rank
+  // undefined it silently becomes 1 and the ratio reads "2 of the 1 above them",
+  // which is arithmetic nobody can make true.
+  //
+  // The durable claim survives the drift and is what the email says anyway, so
+  // it is stated without the digits.
+  const _rk = Number(r.rank), _sc = Number(r.scanned);
+  const _rankSayable = Number.isFinite(_rk) && _rk > 0 && !r.rankSuppressed;
+  if (r.found && r.query && _rankSayable) {
+    line(A, `Ranked #${_rk} of ${Number.isFinite(_sc) ? _sc : '?'} for "${r.query}".${r.weakerAbove ? ` ${r.weakerAbove} of the ${Math.max(1, _rk - 1)} above them have FEWER reviews.` : ''}`);
+  } else if (r.found && r.query) {
+    // Position withheld, but the durable fact is not. "Businesses with fewer
+    // reviews than yours are ranking above you" is true at #4 and at #1 alike,
+    // which is precisely why the digit was dropped and this was kept.
+    line(A, `They DO appear for "${r.query}" but the position is NOT sayable — two checks disagreed, so state NO rank, NO band and NO denominator.${r.weakerAbove ? ` What survives: ${r.weakerAbove} business(es) above them have FEWER reviews.` : ''}`);
+  }
   if (r.found && r.query) {
-    line(A, `Ranked #${r.rank} of ${r.scanned} for "${r.query}".${r.weakerAbove ? ` ${r.weakerAbove} of the ${Math.max(1, (r.rank || 1) - 1)} above them have FEWER reviews.` : ''}`);
     const comps = Array.isArray(r.above) ? r.above.slice(0, 3) : [];
     if (comps.length) line(A, `Above them: ${comps.map(c => `${c.name}${c.reviews ? ` (${c.reviews} reviews)` : ''}`).join(', ')}.`);
   }
@@ -10668,7 +10757,7 @@ const earnedLine = (m = {}) => {
 // Fixing it inside each template means fixing it again in the next one. Every
 // composed body passes through one of two exits, so the rule is stated once here
 // and applied at both.
-const _tidy = (t) => String(t || '')
+const _tidy = (t) => stripProtect(String(t || ''))
   .replace(/[ \t]{2,}/g, ' ')        // collapse runs of spaces
   .replace(/[ \t]+\n/g, '\n')        // no trailing space before a break
   .replace(/\n{3,}/g, '\n\n')        // never more than one blank line
@@ -10717,12 +10806,29 @@ const EMAIL_SKELETONS = [
   },
   {
     // Cost first. Opens on his money rather than his page.
+    // == THIS SKELETON CANNOT RUN WITHOUT costs =============================
+    // It opens `${first}, right now ${lower1(costs)}.` — unconditional. And
+    // composeEmail BLANKS costs whenever an insight line or a second finding
+    // is present, so the opening sentence became the two words "Chris, right
+    // now." That is the first thing the owner reads and the whole of the
+    // preview text.
+    //
+    // Identical to the failure already documented at the top of this array
+    // ("The greeting, a dash, and nothing") — the fix there was needsReframe,
+    // and it was applied to the reframe dependency only. A skeleton has to
+    // declare every element it cannot render without, not just the one that
+    // broke first.
+    needsCosts: true,
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
       `${first ? first + ', right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
+    // needsCosts, for the same reason as needsReframe directly above. This
+    // one renders `${upper1(costs)}.` as a paragraph of its own, so a blanked
+    // costs produced a lone full stop sitting on its own line.
+    needsCosts: true,
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
       `${first ? first + ', ' + lower1(fact) : upper1(fact)}.${second ? ' ' + upper1(second) + '.' : ''}\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
@@ -10733,7 +10839,64 @@ const EMAIL_SKELETONS = [
 // business in the third person because the audit is read by us; the email is
 // read by him. This is mechanical substitution, not rewriting \u2014 the claim is
 // unchanged and no new words enter.
-const toSecondPerson = (t) => String(t || '')
+// == WORDS WE WROTE vs WORDS A MODEL WROTE ===================================
+// toSecondPerson is a blind whole-word substitution, and that is correct for
+// LADDER text: every rung sentence is written by hand and audited by RUNG
+// PRONOUN CHECK. It is NOT safe on text that arrives at runtime.
+//
+// review_pain_pattern interpolates the mined complaint - model-written, drawn
+// from their reviewers' words - straight into its claim. Inside a complaint,
+// "he", "them" and "his" refer to the REVIEWER, the technician or the crew.
+// Never to the owner. The rewriter flipped them anyway:
+//
+//   "the technician said he would call back and never did"
+//     -> "...the technician said YOU would call back and never did"
+//   "the crew left the site dirty and he had to clean up himself"
+//     -> "The crew left YOUR site dirty and YOU had to clean up YOURSELF."
+//
+// Each is a fabricated statement about the prospect, sitting inside a sentence
+// that claims to be quoting his own Google reviews. That is the one rule this
+// system does not bend, and the boot check could not see it: it evaluates each
+// rung against a fixed fixture and only ever inspects the STATIC template.
+//
+// So the boundary is marked. PROTECT() wraps a span the converter must leave
+// exactly as written; everything around it converts as before. Any rung that
+// interpolates runtime text should wrap it.
+//
+// The markers are ordinary visible ASCII on purpose. An invisible sentinel that
+// escapes is a mystery; a visible one that escapes is a bug report. They are
+// stripped on the way out of the converter AND again in _tidy, so a leak needs
+// two independent failures.
+const _PROT_A = '[[keep:', _PROT_B = ':keep]]';
+const PROTECT = (t) => `${_PROT_A}${String(t == null ? '' : t)}${_PROT_B}`;
+const stripProtect = (t) => String(t || '').split(_PROT_A).join('').split(_PROT_B).join('');
+
+const toSecondPerson = (raw) => {
+  const src = String(raw || '');
+  if (!src.includes(_PROT_A)) return _convertPerson(src);
+  // Convert only the unprotected segments and reassemble, so the protected text
+  // survives byte for byte.
+  // _convertPerson collapses whitespace and trims, which is right for a whole
+  // sentence and wrong for a fragment: converting the half before a protected
+  // span ate the space after the em-dash and produced "same thing —the
+  // technician". Each segment's edge whitespace is captured and restored, so
+  // only the words are touched.
+  const edges = (chunk) => {
+    const lead = (chunk.match(/^\s*/) || [''])[0];
+    const tail = (chunk.match(/\s*$/) || [''])[0];
+    const core = chunk.slice(lead.length, chunk.length - tail.length);
+    return core ? lead + _convertPerson(core) + tail : chunk;
+  };
+  const out = src.split(_PROT_A).map((chunk, i) => {
+    if (i === 0) return edges(chunk);
+    const end = chunk.indexOf(_PROT_B);
+    if (end < 0) return chunk;                    // unbalanced - keep as written
+    return chunk.slice(0, end) + edges(chunk.slice(end + _PROT_B.length));
+  }).join('');
+  return stripProtect(out);
+};
+
+const _convertPerson = (t) => String(t || '')
   .replace(/\bTheir\b/g, 'Your').replace(/\btheir\b/g, 'your')
   .replace(/\bThey have\b/g, 'You have').replace(/\bthey have\b/g, 'you have')
   .replace(/\bThey are\b/g, "You're").replace(/\bthey are\b/g, "you're")
@@ -10867,8 +11030,6 @@ const composeEmail = (spine, opts = {}) => {
   // Only skeletons that can stand up without a reframe are eligible when we do
   // not have one. Rotating within the eligible set keeps the two variants from
   // coming out identical.
-  const eligible = EMAIL_SKELETONS.filter(sk => reframe || !sk.needsReframe);
-  const skeleton = (eligible.length ? eligible : EMAIL_SKELETONS)[(opts.variantIndex || 0) % Math.max(1, eligible.length || EMAIL_SKELETONS.length)];
   // The recognition line, when the record is genuinely unusual. Passed to every
   // skeleton; only the fact-first one uses it today, and the rest ignore it
   // harmlessly rather than needing a separate code path.
@@ -10914,6 +11075,26 @@ const composeEmail = (spine, opts = {}) => {
   // restates what the first one already implies. The finding is the stronger
   // sentence because it is measured, so the cost goes.
   if (second && costs) costs = '';
+  // == CHOSEN AFTER costs IS FINAL, NOT BEFORE ==============================
+  // This block used to sit ~50 lines earlier, so it tested `costs` while it was
+  // still populated and then the two lines above blanked it. The skeleton that
+  // opens "right now ${costs}" was therefore still selected, and rendered
+  // "Chris, right now." as the entire first sentence and the whole preview.
+  // Eligibility has to be decided on the values that will actually be rendered.
+  // A skeleton is eligible only when every element it cannot render without is
+  // actually present. `costs` is blanked above whenever an insight line or a
+  // second finding is carrying that job, which is why this needs checking at
+  // all — the value is not merely sometimes missing, it is deliberately removed.
+  const eligible = EMAIL_SKELETONS.filter(sk =>
+    (reframe || !sk.needsReframe) && (costs || !sk.needsCosts));
+  // Never leave the composer with nothing to render. Skeleton 0 is the only
+  // one that requires neither, so it is the floor rather than a crash.
+  const _usable = eligible.length ? eligible : [EMAIL_SKELETONS[0]];
+  // Selects from the GUARDED list. The old line fell back to EMAIL_SKELETONS
+  // when nothing was eligible, which handed the composer the very skeletons
+  // that had just been ruled out — so the fallback for 'no skeleton fits'
+  // was to use one that does not fit.
+  const skeleton = _usable[(opts.variantIndex || 0) % _usable.length];
   // ══ THE INSIGHT MUST NOT BE THE GENERIC VERSION OF THE FINDING ═══════════
   // On Rose the headline read "businesses with less of it are sitting above you
   // in search" and the finding read "Overhead Door Company ranks above you with
@@ -10955,7 +11136,19 @@ const composeEmail = (spine, opts = {}) => {
   // Fixing it in each skeleton would mean fixing it again in the next one. This
   // is the single exit every composed body passes through, so it is the only
   // place the rule can be stated once.
-  const body = _tidy(skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }))
+  // ══ ONE PLACE WHERE WHITESPACE IS MADE CORRECT ═══════════════════════════
+  // Every skeleton joins optional fields, and an empty one leaves a double space
+  // behind. The fuzzer found 19 in 1,825 emails — invisible in a log, visible to
+  // the owner, and exactly the kind of small wrongness that makes an email read
+  // as machine-written.
+  //
+  // Fixing it in each skeleton would mean fixing it again in the next one. This
+  // is the single exit every composed body passes through, so it is the only
+  // place the rule can be stated once.
+  const _render = (parts) => _tidy(skeleton.render({
+    first, fact, costs, reframe, count, cta, earned, insight,
+    money: parts.money, pattern: parts.pattern, second: parts.second,
+  }))
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -10964,44 +11157,68 @@ const composeEmail = (spine, opts = {}) => {
     .replace(/^ +/, '')
     .replace(/\s+([.,])/g, '$1')
     .trim();
-  // == LENGTH IS A CEILING, NOT A WARNING ==================================
-  // The 125-word limit existed only as red text in the browser. Sohan & Sons
-  // shipped at 131 words with the warning showing, because nothing ever refused
-  // it. A number nobody enforces is a number that gets ignored, which is the
-  // same lesson as the duplicate-key baseline.
+
+  // ══ LENGTH IS A CEILING, AND IT IS ENFORCED BY NOT WRITING THE SENTENCE ══
+  // The 125-word limit was red text in the browser and nothing else, so Sohan &
+  // Sons shipped at 131 with the warning showing. A number nobody enforces is a
+  // number that gets ignored — the same lesson as the duplicate-key baseline.
   //
-  // The published data is consistent and one-directional: 50-125 words replies
-  // at roughly 2.4x the rate of 200+, the measured sweet spot is 75-100, and an
-  // 80-word email beats a 120-word one by about 15%. So 125 is the ceiling and
-  // ~80 is the target, not the other way round.
+  // The published data is one-directional: 50-125 words replies at roughly 2.4x
+  // the rate of 200+, the measured sweet spot is 75-100, and an 80-word email
+  // beats a 120-word one by about 15%. So 125 is the ceiling and ~80 is the
+  // target, not the reverse.
   //
-  // It TRIMS rather than rejects. Every element here is true and measured, so
-  // refusing the email would throw away a good lead over a word count; dropping
-  // the least load-bearing sentence keeps it sendable. The order is the reverse
-  // of what earns a reply — the pattern line is category wisdom, the money is
-  // context, the second finding is a bonus. The finding, the cost and the ask
-  // are never touched, because those three ARE the email.
-  const _fit = (b) => {
-    const wc = (x) => String(x).trim().split(/\s+/).filter(Boolean).length;
-    if (wc(b) <= 125) return { body: b, dropped: [] };
-    const dropped = [];
-    for (const [name, part] of [['the pattern line', pattern], ['the job value', money], ['the second finding', second]]) {
-      if (!part || wc(b) <= 125) continue;
-      // Remove the sentence carrying that element, not the raw fragment — the
-      // skeletons capitalise and punctuate it on the way in, so a substring
-      // match would leave the stub behind.
-      const key = String(part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 40);
-      const re = new RegExp(`(?:^|(?<=[.!?])\\s*)[^.!?\\n]*${key}[^.!?\\n]*[.!?]\\s*`, 'i');
-      const next = b.replace(re, ' ');
-      if (next !== b) { b = next.replace(/ {2,}/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/\s+([.,])/g, '$1').trim(); dropped.push(name); }
-    }
-    return { body: b, dropped };
-  };
-  const _fitted = _fit(body);
-  if (_fitted.dropped.length) {
-    console.log(`✂ LENGTH [${opts.company || 'lead'}]: trimmed to ${String(_fitted.body).trim().split(/\s+/).filter(Boolean).length} words by dropping ${_fitted.dropped.join(' and ')}. The ceiling is 125 and the target is 80 — 50-125 replies at about 2.4x the rate of 200+, and an 80-word email beats a 120-word one by roughly 15%. The finding, what it costs and the ask are never trimmed.`);
+  // THE FIRST VERSION OF THIS CUT SENTENCES OUT OF THE RENDERED BODY WITH A
+  // REGEX, AND HAD THREE DEFECTS, ALL OF WHICH SHIPPED:
+  //
+  //   · It could never remove the job value. `money` already ends in a full
+  //     stop, so the escaped key carried a trailing "\." and the pattern then
+  //     demanded a SECOND terminator after it. The match could not succeed, so
+  //     the loop fell through and dropped the SECOND FINDING instead — the one
+  //     element the comment ranks last to go.
+  //
+  //   · It welded paragraphs together. The pattern's `\s*` on both sides eats
+  //     newlines, and the replacement was a single space, so removing the last
+  //     sentence of a paragraph deleted the blank line after it. Nothing
+  //     downstream can restore a break that was deleted.
+  //
+  //   · It reported failure as success. With all three elements gone and the
+  //     body still long it returned the over-length text anyway, and logged the
+  //     post-trim count without ever comparing it to the ceiling it claimed to
+  //     enforce.
+  //
+  // All three come from the same mistake: editing prose after it was written.
+  // The elements are optional INPUTS and every skeleton already renders cleanly
+  // without them, so the fix is to decide what goes in and render again.
+  // Paragraphs are then correct by construction rather than by repair.
+  const _wc = (x) => String(x || '').trim().split(/\s+/).filter(Boolean).length;
+  const CEILING = 125;
+  // Reverse order of what earns a reply: the pattern line is category wisdom,
+  // the job value is context, the second finding is a bonus. The finding, what
+  // it costs and the ask are never candidates — those three ARE the email.
+  const _LADDER = [
+    { name: 'the pattern line', drop: { pattern: '' } },
+    { name: 'the job value', drop: { money: '' } },
+    { name: 'the second finding', drop: { second: '' } },
+  ];
+  let _parts = { money, pattern, second };
+  let body = _render(_parts);
+  const _dropped = [];
+  for (const step of _LADDER) {
+    if (_wc(body) <= CEILING) break;
+    const key = Object.keys(step.drop)[0];
+    if (!_parts[key]) continue;                 // nothing there to remove
+    _parts = { ..._parts, ...step.drop };
+    body = _render(_parts);
+    _dropped.push(step.name);
   }
-  return { body: _fitted.body, composedBy: 'code' };
+  if (_dropped.length) {
+    const _over = _wc(body) > CEILING;
+    console.log(_over
+      ? `⚠ LENGTH [${opts.company || 'lead'}]: still ${_wc(body)} words after dropping ${_dropped.join(' and ')} — every optional element is gone and the finding, the cost and the ask alone exceed the ${CEILING}-word ceiling. Sending it rather than refusing a measured lead, but the rung sentences on this lead are too long and that is where to fix it.`
+      : `✂ LENGTH [${opts.company || 'lead'}]: ${_wc(body)} words after dropping ${_dropped.join(' and ')}. Ceiling ${CEILING}, target 80 — 50-125 replies at about 2.4x the rate of 200+, and an 80-word email beats a 120-word one by roughly 15%. The finding, what it costs and the ask are never trimmed.`);
+  }
+  return { body, composedBy: 'code' };
 };
 
 // ══ THE CTA, DECIDED WHERE THE FINDING LIVES ═════════════════════════════════
@@ -11341,11 +11558,49 @@ const composeBreakup = (spine, opts) => {
   const open = first
     ? `${first}, I'll leave this here.`
     : `I'll leave this here.`;
+  // == THE LAST TOUCH WAS THE SAME EMAIL FOR EVERY PROSPECT ==================
+  // Measured across 40 composed leads spanning 20 trades: ONE distinct break-up
+  // body and ONE distinct subject, 40 times each. It receives `spine` and used
+  // nothing from it, so a quarter of every sequence - and the final impression
+  // anyone forms - carried no information about their business. Two owners in
+  // the same trade comparing notes see the identical letter.
+  //
+  // The constraint above is real and stays: this works ONLY when it is
+  // low-pressure and leaves the door open, and the named anti-patterns are "I
+  // never heard back" and "there were N things you're leaving on the table". So
+  // this adds NO count, NO urgency and NO new claim.
+  //
+  // What it names is spine.claim - the single sentence the email is already
+  // permitted to assert, verified upstream. Reusing it cannot introduce a
+  // fabrication, because nothing new is said; the same fact is simply what the
+  // door is left open on.
+  const _claim = toSecondPerson(String((spine && spine.claim) || '').trim());
+  // Prefer the WHOLE claim, and only shorten when it will not fit. Splitting
+  // first threw away the half that carries the meaning: "more than one of your
+  // own Google reviews names the same thing" — the same thing being WHAT? The
+  // complaint itself lives after the dash.
+  const _wc = (x) => (x ? String(x).trim().split(/\s+/).filter(Boolean).length : 0);
+  const _full = _claim.replace(/[.\s]+$/, '');
+  const _first = _claim.split(/\s+[—–-]\s+|,\s+(?:so|which|and)\b/)[0].trim().replace(/[.\s]+$/, '');
+  const _short = _wc(_full) <= 24 ? _full : _first;
+  const _w = _wc(_short);
+  const _usable = _w >= 4 && _w <= 24 ? _short : '';
   return {
-    subject: 'closing the loop',
+    // The subject followed the body - "closing the loop" on all 40. It stays
+    // soft, because a break-up subject that shouts is exactly what the research
+    // warns against, but it no longer has to be the same four words every time.
+    subject: _usable ? 'last note on this' : 'closing the loop',
     body: [
       open,
-      `If the timing isn't right, no problem at all — I won't keep filling your inbox. If it ever is, the write-up is yours and one reply gets it to you.`,
+      // The claim is a COMPLETE SENTENCE, so it cannot be used as the subject of
+      // another one. Appending a predicate produced "more than one of your own
+      // Google reviews names the same thing IS STILL THERE whenever you want to
+      // look at it" - two verbs, and the same shape of wreck as the pattern-line
+      // name swap. It stands as its own sentence and the next one refers back to
+      // it, which is grammatical whatever the claim happens to be.
+      _usable
+        ? `If the timing isn't right, no problem at all — I won't keep filling your inbox. ${endSentence(upper1(_usable))} That is still true whenever you want to look at it, and one reply gets you the write-up.`
+        : `If the timing isn't right, no problem at all — I won't keep filling your inbox. If it ever is, the write-up is yours and one reply gets it to you.`,
     ].join('\n\n'),
     ctaKind: 'breakup',
   };
@@ -11500,8 +11755,12 @@ const buildProblemList = (harms, opts = {}) => {
   // A thin audit is worse than a padded one. When the measurements genuinely
   // produced almost nothing, the ambient conditions are all there is to say, so
   // they are let back in rather than showing a near-empty page.
+  // The log fires only on the call that names the company. This runs three
+  // times per lead — the list, the count, and the spine's count — and printed
+  // the same paragraph three times, twice as "[lead]" because those callers
+  // pass no company. Same information, one line.
   const out = real.length >= 3 ? real : real.concat(amb.slice(0, 3 - real.length));
-  if (amb.length && real.length >= 3) {
+  if (amb.length && real.length >= 3 && opts.company) {
     console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
   }
   return out;
@@ -11535,14 +11794,14 @@ const buildProblemList = (harms, opts = {}) => {
 // figures. The claim is "a job in this trade runs about this", never "your job".
 const TRADE_JOB_VALUE = [
   // Home exterior / structural
-  { re: /custom home|home build|new construction|luxury home/i, say: 'a custom home runs several hundred thousand dollars' },
-  { re: /waterproof|foundation|crawl ?space|piering|slabjack|underpinning|structural repair/i, say: 'a foundation or waterproofing job runs five figures' },
+  { re: /\bcustom home|\bhome build|\bnew construction|\bluxury home/i, say: 'a custom home runs several hundred thousand dollars' },
+  { re: /\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning|\bstructural repair/i, say: 'a foundation or waterproofing job runs five figures' },
   // A basement REMODEL is a finish-out, not foundation work and not a kitchen.
   // Bare `basement` is deliberately matched by none of these — a "basement
   // contractor" could be either trade, and no figure is always safe where a
   // wrong one never is.
-  { re: /basement (?:remodel|refinish|finish|conversion)|finished basement/i, say: 'a basement finish-out runs $20k-$70k' },
-  { re: /kitchen (?:and|&) bath|kitchen remodel|bath(?:room)? remodel|remodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
+  { re: /\bbasement (?:remodel|refinish|finish|conversion)|\bfinished basement/i, say: 'a basement finish-out runs $20k-$70k' },
+  { re: /\bkitchen (?:and|&) bath|\bkitchen remodel|\bbath(?:room)? remodel|\bremodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
   // ══ A GARAGE DOOR IS NOT A WINDOW ═════════════════════════════════════════
   // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k"
   // in email one and again in follow-up one. The bare word `door` in the exterior
@@ -11555,11 +11814,11 @@ const TRADE_JOB_VALUE = [
   // ten times off proves we did not, and every true sentence around it dies with
   // it. Specific trades are matched BEFORE the broad exterior bucket, and `door`
   // is no longer a bare alternative.
-  { re: /garage door|overhead door|dock door|roll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
-  { re: /window|siding|exterior|entry door|patio door|replacement door/i, say: 'a window or siding job runs $8k-$40k' },
+  { re: /\bgarage door|\boverhead door|\bdock door|\broll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
+  { re: /\bwindow|\bsiding|\bexterior|\bentry door|\bpatio door|\breplacement door/i, say: 'a window or siding job runs $8k-$40k' },
   // ══ AND WATERPROOFING IS NOT ROOFING ══════════════════════════════════════
   // The note directly above diagnosed this exact class for `door`, fixed that
-  // one instance, and never searched for the next. `/roof/i` is a bare
+  // one instance, and never searched for the next. `/\broof/i` is a bare
   // unanchored substring, and the letters roof sit inside wate-ROOF-ing.
   //
   // Live on Sohan & Son's Waterproofing, 2026-08-12: "A roof replacement runs
@@ -11571,48 +11830,48 @@ const TRADE_JOB_VALUE = [
   // Structural is matched FIRST now, and roof carries a boundary so it can
   // only match the word itself. Same for fireproofing and soundproofing, which
   // were reachable the moment a Places category used either word.
-  { re: /\broof(?:ing|er)?\b|re-?roof/i, say: 'a roof replacement runs $8k-$30k' },
+  { re: /\broof(?:ing|er)?\b|\bre-?roof/i, say: 'a roof replacement runs $8k-$30k' },
   // Same trap as the garage door: a pool SERVICE company maintains pools, it does
   // not build them, and quoting a build price at a maintenance business is the
   // same ten-times error. Service is matched first.
-  { re: /pool (?:service|cleaning|maintenance)|pool tech/i, say: 'a season of pool service runs several hundred dollars' },
-  { re: /pool build|pool install|pool construction|spa install|pool/i, say: 'a pool build runs $40k-$100k' },
-  { re: /concrete|paving|asphalt|driveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
-  { re: /landscap|hardscape|lawn care/i, say: 'a landscaping project runs $5k-$30k' },
-  { re: /solar/i, say: 'a solar install runs $15k-$40k' },
-  { re: /fence|deck|patio/i, say: 'a deck or fence job runs $5k-$25k' },
+  { re: /\bpool (?:service|cleaning|maintenance)|\bpool tech/i, say: 'a season of pool service runs several hundred dollars' },
+  { re: /\bpool build|\bpool install|\bpool construction|\bspa install|\bpool/i, say: 'a pool build runs $40k-$100k' },
+  { re: /\bconcrete|\bpaving|\basphalt|\bdriveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
+  { re: /\blandscap|\bhardscape|\blawn care/i, say: 'a landscaping project runs $5k-$30k' },
+  { re: /\bsolar/i, say: 'a solar install runs $15k-$40k' },
+  { re: /\bfence|\bdeck|\bpatio/i, say: 'a deck or fence job runs $5k-$25k' },
   // Home services / trades
-  { re: /hvac|heating|air condition|furnace/i, say: 'a system replacement runs $6k-$15k' },
-  { re: /plumb/i, say: 'a repipe or major plumbing job runs $4k-$15k' },
-  { re: /electric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
-  { re: /restoration|water damage|mold|disaster|cleanup/i, say: 'a restoration job runs five figures' },
-  { re: /pest|exterminat/i, say: 'an annual pest contract runs several hundred dollars' },
+  { re: /\bhvac|\bheating|\bair condition|\bfurnace/i, say: 'a system replacement runs $6k-$15k' },
+  { re: /\bplumb/i, say: 'a repipe or major plumbing job runs $4k-$15k' },
+  { re: /\belectric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
+  { re: /\brestoration|\bwater damage|\bmold|\bdisaster|\bcleanup/i, say: 'a restoration job runs five figures' },
+  { re: /\bpest|\bexterminat/i, say: 'an annual pest contract runs several hundred dollars' },
   // (the second garage-door row lived here and was unreachable — the row near
   //  the top catches every one of its alternatives — while quoting a DIFFERENT
   //  price, $2k-$6k against $1k-$4k. Two prices for one trade in one table is
   //  a coin toss waiting to be re-ordered into an email. Removed.)
-  { re: /paint/i, say: 'a whole-home paint job runs $4k-$12k' },
-  { re: /floor/i, say: 'a flooring job runs $5k-$20k' },
+  { re: /\bpaint/i, say: 'a whole-home paint job runs $4k-$12k' },
+  { re: /\bfloor/i, say: 'a flooring job runs $5k-$20k' },
   // Medical / dental / aesthetic
-  { re: /dentist|dental|dds|dmd|orthodon/i, say: 'a single implant or ortho case runs several thousand dollars' },
-  { re: /plastic surg|cosmetic surg|aesthetic|med ?spa|dermatolog/i, say: 'a single procedure runs several thousand dollars' },
-  { re: /lasik|ophthalm|eye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
-  { re: /chiropract/i, say: 'a care plan runs $1k-$3k' },
-  { re: /veterinar|animal hospital/i, say: 'a surgical case runs $1k-$5k' },
-  { re: /assisted living|senior (?:living|care)|memory care/i, say: 'one resident is several thousand dollars a month' },
+  { re: /\bdentist|\bdental|\bdds|\bdmd|\borthodon/i, say: 'a single implant or ortho case runs several thousand dollars' },
+  { re: /\bplastic surg|\bcosmetic surg|\baesthetic|\bmed ?spa|\bdermatolog/i, say: 'a single procedure runs several thousand dollars' },
+  { re: /\blasik|\bophthalm|\beye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
+  { re: /\bchiropract/i, say: 'a care plan runs $1k-$3k' },
+  { re: /\bveterinar|\banimal hospital/i, say: 'a surgical case runs $1k-$5k' },
+  { re: /\bassisted living|\bsenior (?:living|care)|\bmemory care/i, say: 'one resident is several thousand dollars a month' },
   // Professional services
-  { re: /attorney|law (?:firm|office)|legal|esq\b/i, say: 'a single matter runs several thousand dollars' },
-  { re: /cpa|account(?:ant|ing)|bookkeep|tax/i, say: 'an annual engagement runs several thousand dollars' },
-  { re: /insurance/i, say: 'one policy is years of renewal commission' },
+  { re: /\battorney|\blaw (?:firm|office)|\blegal|\besq\b/i, say: 'a single matter runs several thousand dollars' },
+  { re: /\bcpa|\baccount(?:ant|ing)|\bbookkeep|\btax/i, say: 'an annual engagement runs several thousand dollars' },
+  { re: /\binsurance/i, say: 'one policy is years of renewal commission' },
   // `broker` is a job title, not an industry. A bare alternative here caught
   // `mortgage broker` and `freight broker` and told a trucking company its
   // revenue was a real-estate closing commission. Specific brokers first.
-  { re: /mortgage|lending|loan officer|loan origin/i, say: 'one funded loan is a full commission' },
-  { re: /freight|logistics|truck|transport|hauling|dispatch/i, say: 'one contracted lane is recurring revenue' },
-  { re: /real estate|realtor|realty|broker/i, say: 'one closing is a full commission' },
+  { re: /\bmortgage|\blending|\bloan officer|\bloan origin/i, say: 'one funded loan is a full commission' },
+  { re: /\bfreight|\blogistics|\btruck|\btransport|\bhauling|\bdispatch/i, say: 'one contracted lane is recurring revenue' },
+  { re: /\breal estate|\brealtor|\brealty|\bbroker/i, say: 'one closing is a full commission' },
   // Commercial / logistics
-  { re: /commercial clean|janitorial|facility/i, say: 'one building contract is recurring monthly revenue' },
-  { re: /security|alarm|surveillance/i, say: 'one monitored account is recurring monthly revenue' },
+  { re: /\bcommercial clean|\bjanitorial|\bfacility/i, say: 'one building contract is recurring monthly revenue' },
+  { re: /\bsecurity|\balarm|\bsurveillance/i, say: 'one monitored account is recurring monthly revenue' },
 ];
 
 const tradeJobValue = (tradeWord) => {
@@ -19515,7 +19774,7 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
-                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.userRatingCount' },
+                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.userRatingCount,places.location' },
       body: JSON.stringify({ textQuery: query, includePureServiceAreaBusinesses: true }),
     }, 12000);
     const d = await r.json();
@@ -19527,7 +19786,9 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
       } catch { return false; }
     });
     if (!hit || !hit.id) return null;
-    return { id: hit.id, name: (hit.displayName && hit.displayName.text) || '', reviews: hit.userRatingCount || 0 };
+    return { id: hit.id, name: (hit.displayName && hit.displayName.text) || '', reviews: hit.userRatingCount || 0,
+             lat: (hit.location && Number.isFinite(Number(hit.location.latitude))) ? Number(hit.location.latitude) : null,
+             lng: (hit.location && Number.isFinite(Number(hit.location.longitude))) ? Number(hit.location.longitude) : null };
   } catch { return null; }
 };
 
@@ -19634,12 +19895,39 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
 
   // City only. A state or ZIP makes the query national or absurdly narrow, and
   // "foundation repair company in NC 28025" is not a search any human performs.
+  // == THE STATE IS NOT OPTIONAL, AND DROPPING IT SENT US TO WYOMING =========
+  // This returned the city ALONE and threw the state away, so the query was
+  // "window replacement in Sheridan". There is a Sheridan in Colorado, Wyoming,
+  // Arkansas, Indiana, Montana and Oregon, and Google geocodes the bare word to
+  // the most prominent one.
+  //
+  // Live on Window Doctor of Colorado, 2026-08-12. They are in Sheridan, CO.
+  // The list that came back was "Pella Windows and Doors Showroom of Sheridan,
+  // WY", "Moore Glass LLC", "Parker's Glass Shop" — a Wyoming town 350 miles
+  // away. They were then reported as NOT IN THE TOP 12, and that sentence went
+  // into a live email as a finding. It is false, and it is false in the most
+  // damaging way available: he can search his own trade in his own town, find
+  // himself, and know instantly that we never looked.
+  //
+  // The locationBias circle below was added for exactly this failure and is not
+  // enough on its own — a bias is a preference, not a filter, and a text query
+  // that geocodes hard to another state overrides it. The fix has to be in the
+  // words, because those are what Google resolves first. A human searching for
+  // a contractor in an ambiguous town types the state; so do we now.
   const city = (() => {
     const parts = String(location || '').split(',').map(x => x.trim()).filter(Boolean)
       .filter(x => !/^(usa|united states|us)$/i.test(x));
     if (!parts.length) return '';
     const stIdx = parts.findIndex(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x) || /^[A-Z]{2}$/.test(x));
-    return stIdx > 0 ? parts[stIdx - 1] : parts[0];
+    if (stIdx > 0) {
+      const town = parts[stIdx - 1];
+      // "CO 80110" -> "CO". The ZIP is deliberately NOT kept: "foundation repair
+      // in NC 28025" is not a search any human performs, which is the note this
+      // parser already carried and got right.
+      const st = (String(parts[stIdx]).match(/\b([A-Z]{2})\b/) || [])[1] || '';
+      return st ? `${town}, ${st}` : town;
+    }
+    return parts[0];
   })();
   if (!city) return { checked: false, why: 'no city could be parsed from the location' };
 
@@ -19679,6 +19967,47 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     if (d.error) return { checked: false, why: `Places error: ${d.error.message || d.error.status}` };
     const places = d.places || [];
     if (!places.length) return { checked: false, why: `no results at all for "${query}"` };
+
+    // == PROVE THE SEARCH LANDED IN THEIR TOWN BEFORE BELIEVING IT ===========
+    // Naming the state in the query fixes the case we found. It cannot fix the
+    // case we have not found yet: locationBias is a preference, and any query
+    // that geocodes hard somewhere else still wins. The consequence is not a
+    // weak finding, it is a FALSE one — "you do not come up for your own trade
+    // in your own town", measured against a different town's businesses, in an
+    // email to a man who can disprove it in one search.
+    //
+    // We already hold both coordinates: theirs from their resolved Place, and
+    // every result's from the FieldMask. So this stops being a matter of trust.
+    // If the results cluster somewhere they are not, the search answered a
+    // different question and NO claim is permitted from it.
+    //
+    // The median is used rather than the mean because one genuinely distant
+    // service-area business should not condemn a correct list, while a whole
+    // list in the wrong state cannot hide behind one nearby result.
+    if (Number.isFinite(Number(bizLat)) && Number.isFinite(Number(bizLng))) {
+      const R = 6371; // km
+      const rad = (x) => (Number(x) * Math.PI) / 180;
+      const km = (la, lo) => {
+        const dLa = rad(la - Number(bizLat)), dLo = rad(lo - Number(bizLng));
+        const a = Math.sin(dLa / 2) ** 2 + Math.cos(rad(bizLat)) * Math.cos(rad(la)) * Math.sin(dLo / 2) ** 2;
+        return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+      };
+      const dists = places
+        .map(p => p && p.location)
+        .filter(l => l && Number.isFinite(Number(l.latitude)) && Number.isFinite(Number(l.longitude)))
+        .map(l => km(Number(l.latitude), Number(l.longitude)))
+        .sort((a, b) => a - b);
+      if (dists.length >= 3) {
+        const median = dists[Math.floor(dists.length / 2)];
+        // 120km is the same radius the coverage check already uses for "is this
+        // plausibly their market", so the two agree rather than each inventing
+        // a number. Sheridan CO to Sheridan WY is roughly 560km.
+        if (median > 120) {
+          console.log(`⛔ WRONG TOWN [${companyName}]: "${query}" returned businesses a median of ${Math.round(median)}km away — that is not their market, so the search resolved to a different place with the same name. NO rank or absence claim is permitted from it. This is the Sheridan CO / Sheridan WY failure, caught by measurement rather than by noticing.`);
+          return { checked: false, why: `"${query}" resolved to a different place — results sit a median of ${Math.round(median)}km from the business, so nothing about their local rank was actually measured` };
+        }
+      }
+    }
 
     const ourDomain = (() => { try { return new URL(website).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } })();
     const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -19762,14 +20091,31 @@ const serviceKeywordsFromSitemap = (urls) => {
   return out;
 };
 
-const auditLocalVisibility = async ({ companyName, placeId, website, industry, location, placesKey, sitemapUrls, maxServices = 3 }) => {
+// == THE GUARDS INSIDE checkLocalRank WERE UNREACHABLE ======================
+// checkLocalRank carries two protections that both read bizLat/bizLng: a 30km
+// locationBias on the query, and the WRONG TOWN median-distance check that
+// refuses a rank claim when the results are not in their market.
+//
+// Neither ever ran. This function did not accept coordinates at all, so every
+// entry point passed an object literal without them. The ONLY producer was
+// checkLocalRank's own return value on a SUCCESSFUL lookup, fed back by
+// checkLocalRankStable for the second sample - and that path returns early
+// when the business was not found, which is precisely the wrong-town case.
+// So the guard written to stop a false absence claim could only ever run on a
+// lead that had already been found correctly.
+//
+// The coordinates were always available from a different place: their own
+// Google Place record, which fetchGBPHealth and resolvePlaceId both already
+// read. Asking for `location` there costs nothing and is authoritative, where
+// geocoding a town name is a guess.
+const auditLocalVisibility = async ({ companyName, placeId, website, industry, location, placesKey, sitemapUrls, maxServices = 3, bizLat = null, bizLng = null }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   const results = [];
 
   // 1. The head term for their trade — the query with the most volume behind it.
   // Two samples. The head term is the only rank that reaches an email, so it is
   // the only one worth paying twice for.
-  const head = await checkLocalRankStable({ companyName, placeId, website, industry, location, placesKey });
+  const head = await checkLocalRankStable({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng });
   if (head.checked) results.push({ ...head, kind: 'primary trade' });
 
   // ══ THE MARKET THEY SELL INTO, NOT THE TOWN THEY ARE REGISTERED IN ═══════
@@ -19818,6 +20164,13 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   // settles that, and paying for six more does not change what the email says.
   if (_serviceAreaCities.length && head.checked) {
     const _alt = _serviceAreaCities[0];
+    // DELIBERATELY NO bizLat/bizLng HERE. This search is aimed at a market the
+    // business publishes BEYOND its registered city, so its results are supposed
+    // to sit far from their own coordinates. Anchoring it would make the WRONG
+    // TOWN guard reject exactly the case it was asked to measure, and a 30km
+    // locationBias on their home town would bias the query away from the market
+    // being checked. The two paths that describe their OWN town - the head term
+    // and the service pages - are anchored; this one cannot be.
     const _altRank = await checkLocalRankStable({
       companyName, placeId, website, industry,
       location: _alt, placesKey,
@@ -19854,7 +20207,7 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   } else {
     const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
     for (const svc of services) {
-      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey });
+      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng });
       if (r.checked) results.push({ ...r, kind: 'their own service page' });
     }
   }
@@ -20263,7 +20616,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           const resS = rS && rS.ok ? await rS.json() : null;
           if (resS && !looksEmpty(resS)) {
             console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
-            return resS;
+            // _withShot, like the timeout and empty-content paths above. This one
+            // returned resS raw, so a lead recovered over https reached the brain
+            // with the corpus and NO screenshot - the render was dropped for the
+            // scheme change and never asked for again.
+            return await _withShot(resS);
           }
         } catch (e) { void e; }
       }
@@ -20918,6 +21275,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           industry: customerTrade || verifiedIndustry || '',
           location: req.body.location || '',
           placesKey, sitemapUrls: _siteUrls,
+          // Their OWN coordinates, read off their Google Place record by
+          // fetchGBPHealth on this same lead. Without these, both protections
+          // inside checkLocalRank - the locationBias and the WRONG TOWN check -
+          // are unreachable, which is how a Colorado business came to be
+          // measured against a town in Wyoming and told it did not rank.
+          bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
+          bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null,
         });
         if (lv.checked) {
           localVisibility = lv;
@@ -21053,6 +21417,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           industry: _trade,
           location: req.body.location || '',
           placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: [],
+          bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
+          bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null,
         });
         if (lv2.checked) {
           localVisibility = lv2;
@@ -22372,22 +22738,60 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             const ia = _ORDER.indexOf(a.key), ib = _ORDER.indexOf(b.key);
             return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
           });
+          // Reads width and height out of the IHDR chunk. The 8-byte signature is
+          // checked too: without it, ANY buffer whose bytes 12-15 happen to spell
+          // IHDR would pass, and more importantly a non-PNG returns null - which
+          // the caller must treat as "refuse", not as "no ceiling applies".
           const _png = (buf) => {
-            if (!buf || buf.length < 24 || buf.readUInt32BE(12) !== 0x49484452) return null;
-            return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+            if (!buf || buf.length < 24) return null;
+            const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+            for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return null;
+            if (buf.readUInt32BE(12) !== 0x49484452) return null;
+            const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+            if (!w || !h) return null;
+            return { w, h };
           };
           const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
           let _sent = 0, _bytes = 0;
           const _skipped = [], _sentKeys = [];
+          // == THE HOMEPAGE MUST BE THE FIRST IMAGE, OR NONE OF THEM GO ========
+          // The block this replaced was gated on `msgContent.length`, and that
+          // term was load-bearing: it guaranteed no interior render was attached
+          // unless the homepage viewport shot had already been pushed. Dropping
+          // it meant that when the homepage scrape produced no screenshot - the
+          // exact failure the rest of this function exists to handle - up to five
+          // FULL-PAGE interior renders became images 0 through 4.
+          //
+          // The prompt in that case tells the model it is auditing WITHOUT the
+          // site, and the vision read is written to describe the homepage. So the
+          // model would have been shown a booking page, told nothing rendered,
+          // and asked what the homepage looks like.
+          //
+          // Interiors supplement the homepage; they never stand in for it.
+          if (!msgContent.some(m => m && m.type === 'image')) {
+            if (_shots.length) console.log(`\u26a0 PAGE RENDERS HELD [${company}]: ${_shots.length} interior render(s) were captured but the homepage produced no screenshot, so none are sent. The first image the model sees has to be the homepage - the prompt and the vision read both describe it - and an interior page in that slot is worse than no picture.`);
+            throw new Error('no homepage render');
+          }
           for (const pg of _ranked) {
             if (_sent >= MAX_IMAGES || _bytes >= MAX_TOTAL) break;
             if (!pg || !pg.shot) continue;
             try {
               const _r = await fetchT(pg.shot, {}, 8000);
+              // A signed screenshot URL expires. Without this, a 403 or 404 HTML
+              // error body became the buffer, failed the IHDR test, skipped the
+              // ceiling because the check only fired when _d was truthy, and was
+              // base64'd into the audit request labelled image/png.
+              if (!_r || !_r.ok) { _skipped.push(`${pg.key} (HTTP ${_r ? _r.status : 'no response'})`); continue; }
               const _b = await _r.buffer();
               if (_b.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (${Math.round(_b.length / 104857.6) / 10}MB)`); continue; }
               const _d = _png(_b);
-              if (_d && (_d.h > MAX_EDGE || _d.w > MAX_EDGE)) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
+              // FAIL CLOSED. `if (_d && oversize)` skipped the ceiling entirely
+              // whenever the buffer was not a readable PNG - so the one payload
+              // we could say nothing about was the one that bypassed the guard
+              // and was still sent as an image. Anything we cannot measure is
+              // refused instead.
+              if (!_d) { _skipped.push(`${pg.key} (not a readable PNG - refused rather than sent unmeasured)`); continue; }
+              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _b.toString('base64') } });
               _sent++; _bytes += _b.length; _sentKeys.push(pg.key);
             } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
@@ -23950,7 +24354,21 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               const _dropped = _ranked.length - _kept.length;
               if (_kept.length) {
                 _ranked = _kept;
-                _pcount = _kept.length;
+                // == COUNT WHAT THE AUDIT SHOWS, NOT EVERY RUNG THAT FIRED ==
+                // _kept is harmsRanked minus the local-only rungs, i.e. every
+                // rung that fired including the AMBIENT ones the audit now
+                // holds back. problemList is the filtered list. So the email
+                // said "those are 2 of 5" while the audit showed 3.
+                //
+                // Before ambient filtering existed the two were the same list
+                // and this could only ever UNDERSTATE. It can now overstate,
+                // which is the same defect as overstating a figure: the owner
+                // opens the write-up and counts.
+                //
+                // buildProblemList is the single definition of what counts as a
+                // finding, so it decides here too rather than a second rule
+                // drifting alongside it.
+                _pcount = buildProblemList({ byHarm: _kept }, { bindingLayer: (_harmInputs || {}).bindingLayer }).length;
                 // ══ THE SECOND CLAIM IS IN THE EMAIL TOO ═══════════════════
                 // This checked only claimId. On David Leon the LEAD was pricing
                 // — not local-only, so nothing rebuilt — while secondClaim held
@@ -23972,7 +24390,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 }
                 if (_spine && LOCAL_ONLY_RUNGS.has(_spine.claimId)) {
                   const _lead = _kept[0];
-                  _spine = { ...(_spine), claim: _lead.finding, claimId: _lead.id, costs: _lead.costs, problemCount: _kept.length };
+                  _spine = { ...(_spine), claim: _lead.finding, claimId: _lead.id, costs: _lead.costs, problemCount: _pcount };
                   console.log(`\u{1F3E2} SPINE REBUILT [${company}]: the email was going to open on a local-search finding. It now opens on "${String(_lead.finding).slice(0, 90)}".`);
                 }
                 console.log(`\u{1F3E2} BUSINESS MODEL [${company}]: ${_bm.model} \u2014 ${_bm.why} Their own page says: "${String(_bm.evidence || '').slice(0, 110)}". ${_dropped} local-search finding(s) withheld: they are measured and true, and they are about a market this business does not sell into.`);
@@ -24157,7 +24575,19 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                   const t = String((o && o.finding) || '').toLowerCase();
                   return t.length >= 25 && _lw.filter(w => t.includes(w)).length >= 2;
                 });
-                if (_sharp) {
+                // == THE SWAP MUST NOT UNDO THE STRIP ======================
+                // reviewPainTop is stripped of its ratio before it reaches the
+                // ladder, precisely so "2 of the 107 reviews we read say it"
+                // cannot open an email — it hands the owner the dismissal and
+                // advertises how shallow the read was. This path then replaced
+                // that stripped sentence with the audit's own finding, raw, and
+                // audit findings state the ratio in their own words.
+                //
+                // So the arithmetic came back in the FIRST sentence, by a route
+                // that bypassed the only place the strip was applied.
+                if (_sharp && containsReviewRatio(_sharp.finding)) {
+                  console.log(`\u{1F50E} SHARPER CLAIM REFUSED [${company}]: the audit's finding is sharper but states the review arithmetic — "${String(_sharp.finding).slice(0, 70)}". That number is for the call sheet, not the opening line. Keeping the ladder sentence, which is the floor we would have sent anyway.`);
+                } else if (_sharp) {
                   console.log(`\u{1F50E} SHARPER CLAIM [${company}]: the audit's own finding covers the same ground as the ladder rung and quotes their pages. Using "${String(_sharp.finding).slice(0, 76)}" instead of "${String(_sp.claim).slice(0, 46)}". Every figure in it is still checked against what we measured.`);
                   _sp.claim = String(_sharp.finding).trim();
                   _sp.claimSource = 'audit_original';
@@ -28676,6 +29106,168 @@ app.listen(PORT, () => {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ AN IDENTIFIER THAT RESOLVES TO NOTHING ═══════════════════════════════
+  // Five occurrences in one session, every one of them silent:
+  //
+  //   l.fullPageUrl    crashed the audit view, so a lead looked deleted
+  //   lead.brainAudit  threw AFTER Hunter accepted the mail — nothing marked
+  //                    sent, "failed" shown, and the next click double-emailed
+  //   setResearchError the fact-check refusal crashed instead of warning
+  //   prettyPhone      a call-sheet branch that has never once executed
+  //   _spineTxt/_figs/_parts
+  //                    declared inside a try that closes 90 lines above their
+  //                    use, so the prospect-simulator correction path threw on
+  //                    its first line every time and its own catch swallowed it.
+  //                    That feature has never run.
+  //
+  // `node --check` cannot see any of them: all are valid syntax. They fail only
+  // when that exact branch executes, which is why several sat live for weeks.
+  //
+  // scopecheck.js walks the real scope chain and reports any name that resolves
+  // to no binding. Running it HERE means both files are gated on every boot,
+  // rather than only when someone remembers the command.
+  try {
+    const { execFileSync } = require('child_process');
+    const _files = ['server.js', 'index.html'];
+    const _bad = [];
+    for (const f of _files) {
+      const _path = require('path').join(__dirname, f);
+      if (!require('fs').existsSync(_path)) continue;   // index.html is deployed separately
+      try {
+        execFileSync(process.execPath, [require('path').join(__dirname, 'scopecheck.js'), _path],
+          { stdio: 'pipe', timeout: 30000 });
+      } catch (err) {
+        const out = String((err && err.stdout) || '').trim().split('\n').slice(1, 4).join(' | ');
+        _bad.push(`${f}: ${out || 'unresolved identifier(s)'}`);
+      }
+    }
+    if (_bad.length) {
+      console.log(`⛔ SCOPE CHECK: ${_bad.join('  //  ')}. Each of these throws ReferenceError the moment its branch runs, and several of the live ones were swallowed by a surrounding catch, so the feature simply never worked.`);
+    } else {
+      console.log(`✓ SCOPE CHECK: every identifier in ${_files.length} file(s) resolves to a real binding — no name copied out of a scope it belonged to, and no declaration stranded inside a block that closed before its use.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A GUARD IS ONLY REAL IF ITS INPUTS ARRIVE ════════════════════════════
+  // checkLocalRank holds two protections that both read bizLat/bizLng — the
+  // 30km locationBias, and the WRONG TOWN median-distance check that refuses a
+  // rank claim when the results are not in their market. Both were unreachable:
+  // auditLocalVisibility did not accept coordinates, so no entry point could
+  // pass them, and the only producer was a SUCCESSFUL lookup fed back for the
+  // second sample. On an absent business — the exact wrong-town case — there is
+  // no successful lookup, and checkLocalRankStable returns before the second
+  // sample is taken.
+  //
+  // So the guard written to stop a false absence claim could only run on a lead
+  // that had already been found correctly. Correct code behind a condition
+  // nothing could satisfy. Same disease as the duplicate-send Map that was read
+  // and never written, three hours earlier.
+  //
+  // This asserts the WIRING, not the logic: the parameter exists, every caller
+  // that describes their own town supplies it, and the two sources that read
+  // their Place record actually request the field.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _fails = [];
+    if (!/const auditLocalVisibility = async \(\{[^}]*bizLat/.test(_src)) {
+      _fails.push('auditLocalVisibility does not accept bizLat/bizLng, so no caller can supply them');
+    }
+    // The head-term and service-page searches describe THEIR town and must be
+    // anchored. The service-area search deliberately must not be — it is aimed
+    // at another market on purpose.
+    if (!/checkLocalRankStable\(\{ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng \}\)/.test(_src)) {
+      _fails.push('the head-term rank search is not anchored to the business');
+    }
+    if (!/checkLocalRank\(\{ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng \}\)/.test(_src)) {
+      _fails.push('the service-page rank searches are not anchored to the business');
+    }
+    if (!/'location',/.test(_src) || !/lat: \(d\.location/.test(_src)) {
+      _fails.push('fetchGBPHealth does not read location off their Place record, so no coordinates exist to pass');
+    }
+    if (!/bizLat: gbpHealth && Number\.isFinite\(gbpHealth\.lat\)/.test(_src)) {
+      _fails.push('no call site forwards the coordinates into auditLocalVisibility');
+    }
+    if (_fails.length) {
+      console.log(`⛔ RANK ANCHOR CHECK: ${_fails.join(' | ')}. Both protections inside checkLocalRank read bizLat/bizLng, so without this wiring they are dead code and a search that resolves to another town becomes a finding.`);
+    } else {
+      console.log(`✓ RANK ANCHOR CHECK: the business's own coordinates are read off their Google Place record and reach every rank search that describes their own town, so the locationBias and the WRONG TOWN guard can actually fire. The service-area search is deliberately left unanchored — it is aimed at another market.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A RUNG THAT INTERPOLATES RUNTIME TEXT IS NOT A TEMPLATE ══════════════
+  // RUNG PRONOUN CHECK evaluates each rung against ONE fixture and inspects the
+  // sentence that comes back. That covers every word we wrote and none of the
+  // words a model wrote, so it passed while review_pain_pattern was turning a
+  // reviewer's pronoun into a claim about the owner:
+  //
+  //   "the technician said he would call back"
+  //     -> "the technician said YOU would call back"
+  //
+  // This feeds the ladder a complaint that is FULL of third-person pronouns and
+  // asserts they come out the other side untouched. A rung that interpolates
+  // model text without PROTECT() fails here rather than in an inbox.
+  try {
+    const _mined = 'the technician said he would call back and never did, and his crew left them waiting';
+    const _m = { hasPlace: true, hoursListed: false, tradeWord: 'plumber', reviewCount: 80,
+      rating: 4.4, reviewsRead: 40, ownerReplies: 0, reviewPainCount: 2, reviewPainTop: _mined,
+      formFieldCount: 5, photoCount: 3 };
+    const _bad = [];
+    for (const h of HARM_LADDER) {
+      let said = '';
+      try { said = typeof h.say === 'function' ? String(h.say(_m) || '') : String(h.say || ''); } catch { continue; }
+      if (!said.toLowerCase().includes('technician')) continue;   // this rung did not use it
+      const _after = toSecondPerson(said);
+      if (!_after.includes(_mined)) {
+        _bad.push(`${h.id}: "${_after.slice(0, 110)}"`);
+      }
+    }
+    // And the marker must never survive into anything a prospect could read.
+    const _leaks = /\[\[keep:|:keep\]\]/.test(toSecondPerson(PROTECT('x')) + _tidy(PROTECT('y')));
+    if (_bad.length) {
+      console.log(`⛔ MINED TEXT CHECK: ${_bad.join(' | ')} — the second-person rewrite altered a complaint written by a model from THEIR reviewers' words. Those pronouns are the reviewer, the technician or the crew, never the owner, so converting them invents a statement about him inside a sentence that claims to quote his reviews. Wrap runtime text in PROTECT().`);
+    } else if (_leaks) {
+      console.log(`⛔ MINED TEXT CHECK: a PROTECT marker survived into output text. It is visible ASCII precisely so this is caught, but it must never reach a body.`);
+    } else {
+      console.log(`✓ MINED TEXT CHECK: a mined complaint full of third-person pronouns survives the second-person rewrite byte for byte, while our own half of the sentence still converts — and no PROTECT marker escapes into the copy.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MINED TEXT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A GUARD THAT IS READ AND NEVER WRITTEN IS DECORATION ═════════════════
+  // Shipped exactly this, today: the send-time duplicate guard read
+  // SENT_RECIPIENTS on every lead and NOTHING ever wrote to it, so it could
+  // never fire across two sends. The commit message said it worked.
+  //
+  // The unit test missed it for the worst possible reason — the test performed
+  // the recording itself instead of exercising the real path, so it proved its
+  // own scaffolding worked. That is the "computed but not passed" class, and a
+  // hand-built harness is how it survives review.
+  //
+  // This reads the source of THIS FILE and asserts that every store the system
+  // depends on is written somewhere as well as read. It cannot be satisfied by
+  // a test that lies, because it is not looking at a test.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _stores = ['SENT_RECIPIENTS', 'SENT_DOMAINS', '_SCRAPE_CACHE', '_MAP_CACHE', 'EMPTY_SCRAPE_MEMORY'];
+    const _dead = _stores.filter((n) => {
+      const reads = new RegExp(`\\b${n}\\.(?:has|get)\\s*\\(`).test(_src);
+      const writes = new RegExp(`\\b${n}\\.(?:set|add)\\s*\\(`).test(_src);
+      return reads && !writes;
+    });
+    if (_dead.length) {
+      console.log(`⛔ LIVE STORE CHECK: ${_dead.join(', ')} is READ but never WRITTEN, so every lookup against it returns nothing and the guard it protects is decoration. This is how the duplicate-send guard shipped dead.`);
+    } else {
+      console.log(`✓ LIVE STORE CHECK: all ${_stores.length} runtime stores are written as well as read — a guard cannot pass review by being consulted and never populated, which is exactly how the duplicate-send guard shipped dead earlier today.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LIVE STORE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A TRADE MUST NEVER BE QUOTED ANOTHER TRADE'S MONEY ═══════════════════
   // The money sentence is deliberately exempt from the permittedFigures trace
   // rule — the figure is "the typical value of a job in their trade", so it is a
@@ -28707,6 +29299,55 @@ app.listen(PORT, () => {
       ['basement remodeling', /kitchen or bathroom/i], ['basement waterproofing', /kitchen or bathroom/i],
       ['wellness center', /septic|well/i],
     ];
+    // == THE ENUMERATION COULD NEVER BE COMPLETE ==========================
+    // The list above is the three bugs already found, and it cannot be more
+    // than that: the input is not a closed vocabulary. tradeWord comes from
+    // customerTrade, which is free text parsed out of a model reading their
+    // homepage. A check that enumerates its own input can only confirm the bugs
+    // we already fixed - a regression test wearing a guard's clothes, which is
+    // why it printed a tick while the same class was still live in the table.
+    //
+    // So the real guarantee is STRUCTURAL and is tested first: every alternative
+    // in both trade tables must only be able to match at the START of a word.
+    // `roof` matching inside wate-ROOF-ing is the entire class, and a leading \b
+    // makes it impossible for every trade that exists, including the ones nobody
+    // has typed yet. Prefix matching is untouched, so `plumb` still catches
+    // plumbing - verified across 54 live trades with zero change to what any of
+    // them resolves to.
+    const _unanchored = [];
+    try {
+      const _tsrc = require('fs').readFileSync(__filename, 'utf8');
+      for (const _marker of ['const TRADE_JOB_VALUE = [', 'const LSA_TRADE_ALIASES = [']) {
+        const _a = _tsrc.indexOf(_marker);
+        if (_a < 0) { _unanchored.push(`${_marker} missing`); continue; }
+        let _d = 0, _e = _a;
+        for (let i = _tsrc.indexOf('[', _a); i < _tsrc.length; i++) {
+          if (_tsrc[i] === '[') _d++;
+          if (_tsrc[i] === ']') { _d--; if (!_d) { _e = i + 1; break; } }
+        }
+        for (const _m of _tsrc.slice(_a, _e).matchAll(/\/((?:[^\/\\\n]|\\.)+)\/i/g)) {
+          // Split on top-level | only, so alternatives inside a group are not
+          // mistaken for table entries.
+          const _body = _m[1];
+          let _depth = 0, _cur = '';
+          const _alts = [];
+          for (let i = 0; i < _body.length; i++) {
+            const c = _body[i];
+            if (c === '\\') { _cur += c + _body[++i]; continue; }
+            if (c === '(') _depth++;
+            if (c === ')') _depth--;
+            if (c === '|' && _depth === 0) { _alts.push(_cur); _cur = ''; continue; }
+            _cur += c;
+          }
+          _alts.push(_cur);
+          for (const _alt of _alts) {
+            const t = _alt.trim();
+            if (!t || !/^[a-zA-Z]/.test(t)) continue;   // anchored, or a class
+            _unanchored.push(t.slice(0, 24));
+          }
+        }
+      }
+    } catch (e) { _unanchored.push(`tables unreadable: ${(e && e.message) || e}`); }
     const _bad = [];
     for (const [trade, mustNotSay] of _CROSS) {
       const got = tradeJobValue(trade);
@@ -28730,14 +29371,16 @@ app.listen(PORT, () => {
         const probe = String(row.re.source).split('|')[0].replace(/[\\^$?:()\[\]{}+*]/g, '').replace(/\s+/g, ' ').trim();
         return probe.length > 3 && prev.re.test(probe);
       })).map(r => r.say);
-    if (_bad.length) {
+    if (_unanchored.length) {
+      console.log(`⛔ TRADE ANCHOR CHECK: ${_unanchored.length} alternative(s) in the trade tables can match INSIDE another word — ${_unanchored.slice(0, 8).join(', ')}. That is exactly how `+"`roof`"+` matched wate-roof-ing and a waterproofing contractor was quoted a roof replacement price in a live email. Prefix every alternative with a word boundary; prefix matching is unaffected.`);
+    } else if (_bad.length) {
       console.log(`⛔ TRADE CROSS-INDUSTRY CHECK: ${_bad.length} trade(s) are quoted ANOTHER INDUSTRY'S money — ${_bad.join(' | ')}. A figure the owner knows is ten times off proves we did not measure his business, and every true sentence in the email dies with it.`);
     } else if (_missed.length) {
       console.log(`⛔ TRADE CROSS-INDUSTRY CHECK: ${_missed.join(' | ')} — a live trade lost the job value it should have. Silence is safe, but this one used to resolve and no longer does.`);
     } else if (_dead.length) {
       console.log(`⚠ TRADE CROSS-INDUSTRY CHECK: ${_dead.length} unreachable row(s) — ${_dead.join(' | ')}. An earlier row catches everything they match, so they are a second price for a trade that already has one.`);
     } else {
-      console.log(`✓ TRADE CROSS-INDUSTRY CHECK: no trade resolves to another industry's figure — waterproofing is not roofing, a freight broker is not a realtor, a garage door is not a window — and every live trade keeps its own. The one figure in the email exempt from the measurement trace is the one nothing downstream can check.`);
+      console.log(`✓ TRADE ANCHOR CHECK: every alternative in both trade tables is anchored to a word start, so no trade can inherit another industry's figure by matching inside a longer word — that holds for trades nobody has typed yet, not only the three we found. Spot-checks pass too: no trade resolves to another industry's figure — waterproofing is not roofing, a freight broker is not a realtor, a garage door is not a window — and every live trade keeps its own. The one figure in the email exempt from the measurement trace is the one nothing downstream can check.`);
     }
   } catch (e) {
     console.log(`⛔ TRADE CROSS-INDUSTRY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -29388,8 +30031,45 @@ app.post('/api/send-to-hunter', async (req, res) => {
     console.log('HUNTER: could not create all four follow-up attributes — steps 2 and 3 will fall back to whatever static text is in the sequence. Check the Hunter key\'s permissions.');
   }
 
+  // Seen inside THIS request. The array arrives from the browser and was never
+  // checked against itself, so two lead records for one business - which the
+  // find-time name matching produces routinely, because it is exact-match after
+  // normalisation and misses "Bob's Plumbing" vs "Bobs Plumbing" - both pushed.
+  const _seenThisRequest = new Set();
   for (const lead of leads) {
     if (!lead.email) { results.failed.push({ name: lead.name, reason: 'no email' }); continue; }
+    // == HAVE WE ALREADY WRITTEN TO THIS PERSON? =============================
+    // Placed FIRST, ahead of every other guard, because it is the only one
+    // whose failure reaches a human being twice. The others protect a lead;
+    // this one protects the domain everything else depends on.
+    const _norm = normaliseRecipient(lead.email);
+    const _dom = _norm.split('@')[1] || '';
+    if (_norm && _seenThisRequest.has(_norm)) {
+      results.failed.push({
+        name: lead.name, email: lead.email,
+        reason: 'duplicate inside this same send — this address appears more than once in the batch. Two lead records, one owner. Sent once.',
+      });
+      console.log(`⛔ DUPLICATE IN BATCH [${lead.name}]: ${lead.email} appears more than once in this send. Pushed once. Two records for one business is what the find-time name matching lets through — "Bob's Plumbing" and "Bobs Plumbing" normalise differently.`);
+      continue;
+    }
+    if (_norm && SENT_RECIPIENTS.has(_norm)) {
+      const prior = SENT_RECIPIENTS.get(_norm);
+      results.failed.push({
+        name: lead.name, email: lead.email,
+        reason: `already emailed — this address was pushed to Hunter earlier as "${prior.name}". Blocked so the owner does not receive a second sequence.`,
+      });
+      console.log(`⛔ ALREADY EMAILED [${lead.name}]: ${lead.email} was pushed earlier in this session as "${prior.name}". BLOCKED. A second sequence to an owner who already had one is the most expensive mistake here — he sees a machine, and the complaint is charged to the sending domain, not to the lead.`);
+      continue;
+    }
+    // A different mailbox at a domain we have already worked is NOT blocked —
+    // info@ and the owner's personal address are legitimately two attempts at
+    // one business, and refusing the second would throw away the better one.
+    // It is surfaced instead, because two people at one small company reading
+    // near-identical emails is how a sender gets marked as spam.
+    if (_dom && SENT_DOMAINS.has(_dom) && SENT_DOMAINS.get(_dom).email !== _norm) {
+      const prior = SENT_DOMAINS.get(_dom);
+      console.log(`⚠ SAME DOMAIN [${lead.name}]: we already wrote to ${prior.email} at ${_dom}. Sending anyway — a different mailbox at one business is usually a better route to the owner, not a duplicate — but two people at one small company reading near-identical emails is how a domain gets marked. Worth a human glance.`);
+    }
     // HARD GUARD: never push a lead without real content. A missing pitch or
     // subject would send a broken/fallback email to a real founder — worse than
     // not sending at all. Fail here, before it ever reaches Hunter's queue.
@@ -29672,6 +30352,23 @@ app.post('/api/send-to-hunter', async (req, res) => {
       }, 10000);
       if (addRes.ok) {
         results.sent.push({ id: lead.id, name: lead.name, email: lead.email });
+        // == RECORD IT, OR THE GUARD ABOVE IS DECORATION =====================
+        // The duplicate guard at the top of this loop READ these two maps and
+        // nothing ever WROTE to them, so it could never fire across sends. That
+        // is the "computed but not passed" class this file warns about, and the
+        // unit test missed it for the worst possible reason: the test did the
+        // recording itself instead of exercising this path, so it proved its own
+        // scaffolding worked rather than the code.
+        //
+        // Recorded HERE and nowhere earlier, because this is the only line at
+        // which Hunter has actually accepted the recipient. Recording at the top
+        // of the loop would blacklist an address whose send then failed, and the
+        // owner would never be contacted at all.
+        if (_norm) {
+          _seenThisRequest.add(_norm);
+          SENT_RECIPIENTS.set(_norm, { at: Date.now(), name: lead.name });
+          if (_dom) SENT_DOMAINS.set(_dom, { at: Date.now(), name: lead.name, email: _norm });
+        }
       } else {
         const errText = await safeText(addRes);
         results.failed.push({ name: lead.name, email: lead.email, reason: `Sequence add failed: HTTP ${addRes.status}: ${errText.slice(0,200)}` });
@@ -30204,10 +30901,27 @@ app.post('/api/compose-email', async (req, res) => {
       //
       // So the floor is exactly the email we would have sent anyway. This can
       // improve the prose; it cannot damage the facts.
+      // == DECLARED OUT HERE BECAUSE TWO BLOCKS NEED THEM =====================
+      // These three lived inside the try below, which closes ~90 lines further
+      // down. The prospect-simulator correction path — the block that hands the
+      // writer the owner's own objection after a DELETE verdict — sits AFTER
+      // that close and read all three anyway.
+      //
+      // It threw ReferenceError on its first line, every time, and its own
+      // `catch (e) { void e; }` swallowed it. So the feature never ran once.
+      // Every simulator DELETE in the logs should have produced a corrected
+      // rewrite and none did, silently — the comment above that block calls the
+      // simulator's objection "the most useful signal in the whole compose
+      // path", and it was being discarded by a scoping accident.
+      //
+      // This is the failure CLAUDE.md names as "line order is not scope": the
+      // declaration DOES appear earlier in the file, inside a block that had
+      // already closed. Found by scopecheck.js, which was written this session
+      // for index.html and now runs on this file too.
+      const _spineTxt = String(useSpine.claim || '');
+      const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
+      const _parts = composed._parts || {};
       try {
-        const _spineTxt = String(useSpine.claim || '');
-        const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
-        const _parts = composed._parts || {};
         if (req.body.apiKey && _spineTxt) {
           // ══ THE WRITER GETS WHAT THE AUDIT BRAIN KNEW ═══════════════════
           // It used to receive seven strings and produce a scanner's sentence.
@@ -30264,8 +30978,19 @@ app.post('/api/compose-email', async (req, res) => {
             earned: _parts.earned || '', count: _parts.count || '',
           }) : { ok: false, why: 'model returned nothing' };
           if (_v.ok) {
-            composed.variantA = { ...composed.variantA, body: _v.body, writtenBy: 'brain' };
-            sessionAttachEmail(company, composed.variantA.subject, _v.body, '');
+            // == THE THIRD EXIT ==========================================
+            // _tidy's own comment says "every composed body passes through one
+            // of two exits, so the rule is stated once here and applied at
+            // both". That stopped being true when the brain path was added:
+            // verifyBrainEmail returns String(body||'').trim() and it is
+            // assigned straight onto variantA, so a model-written email got no
+            // whitespace normalisation at all - the double spaces, the space
+            // before a full stop and the triple newline that _tidy exists to
+            // remove all shipped, on the ONE path where the text was not
+            // assembled by us and is therefore least predictable.
+            const _brainBody = _tidy(_v.body);
+            composed.variantA = { ...composed.variantA, body: _brainBody, writtenBy: 'brain' };
+            sessionAttachEmail(company, composed.variantA.subject, _brainBody, '');
             console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
           } else {
             // ══ TELL IT WHAT WAS WRONG AND ASK ONCE ═══════════════════════
@@ -30291,7 +31016,7 @@ app.post('/api/compose-email', async (req, res) => {
               }
             } catch (e) { void e; }
             if (_fixed) {
-              composed.variantA = { ...composed.variantA, body: _fixed, writtenBy: 'brain' };
+              composed.variantA = { ...composed.variantA, body: _tidy(_fixed), writtenBy: 'brain' };
               sessionAttachEmail(company, composed.variantA.subject, _fixed, '');
               console.log(`\u270d\ufe0f REWRITTEN AND ACCEPTED [${company}]: the first draft was refused — ${String(_v.why).slice(0, 90)} — and the corrected version passes every check. This lead would previously have dropped to the composed template.`);
             } else {
@@ -30366,7 +31091,7 @@ app.post('/api/compose-email', async (req, res) => {
                     trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
                   });
                   if (_v3.ok) {
-                    composed[_sendKey] = { ...composed[_sendKey], body: _v3.body, writtenBy: 'brain-sim-corrected' };
+                    composed[_sendKey] = { ...composed[_sendKey], body: _tidy(_v3.body), writtenBy: 'brain-sim-corrected' };
                     sessionAttachEmail(company, _send.subject, _v3.body, `${_sim.verdict}: ${_sim.reaction}`);
                     console.log(`\u21bb REWRITTEN AFTER SIM [${company}]: the owner's own objection was "${_why.slice(0, 80)}" and the email has been rewritten to answer it from the facts we already had. Every figure still traces to a measurement.`);
                   } else {
