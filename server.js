@@ -1817,7 +1817,21 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
     'HEDGE LEAK: our internal caveat language in prospect-facing copy. It reads as a report rather than a colleague, and invites "confirmed by whom?". Say the measured thing plainly or leave it out');
   // And the structural detector, which catches the wordings no list contains.
   for (const _f of detectPostContactClaims(allCopy)) flags.push(_f);
-  flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'MARKETING JARGON banned in the email voice');
+  // == THE PLAIN-SPEECH RULE ================================================
+  // The test is not "is this a marketing term". It is: would a tradesman say
+  // this word standing on a job site? He has to be able to read the email at a
+  // glance whether he has an MBA or left school at sixteen, and a word he has
+  // to decode is a word that costs him the sentence.
+  //
+  // Live offenders this list did not catch: "your site has dummy text on it"
+  // (subject line — the owner does not know what dummy text is), "usually stays
+  // supply-constrained", "risk reversal", "lead magnet", "value proposition".
+  // Every one is a word WE use to each other, written into an email meant for
+  // him.
+  //
+  // Two-word phrases are included deliberately: the bare words are innocent —
+  // "value", "friction", "path" — and only the pairing is jargon.
+  flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions|dummy text|lorem ipsum|supply.?constrain\w*|demand.?gen\w*|risk reversal|lead magnet|value prop\w*|conversion path|conversion rate|user journey|customer journey|touchpoint\w*|top of funnel|bottom of funnel|CTA|call.to.action|landing page|A\/B test\w*|split test\w*|nurture sequence|drip campaign|omni.?channel|brand equity|market position\w*|unique selling|USP|KPI\w*|ROAS|CAC|LTV|churn rate|engagement rate|click.through|bounce rate|organic traffic|domain authority|backlink\w*|keyword density|long.tail|serp|rich snippet\w*|core web vital\w*|first.party data|retarget\w*|remarketing|lookalike audience|sales enablement|content strategy|thought leadership|growth lever|north star metric)\b/i, 'MARKETING JARGON banned in the email voice — he has to read this at a glance on a phone, and a word he has to decode costs him the sentence');
   flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bviewport\b|\bpage source\b|\bmarkup\b/i, 'DEVELOPER REGISTER: this is the sentence he forwards to his web person');
   flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'INVENTED LOSS TOTAL about their business');
   flag(/\bjust (following up|checking in)\b/i, 'BUMP LANGUAGE: a follow-up with no new fact announces itself as an automated sequence');
@@ -10950,7 +10964,44 @@ const composeEmail = (spine, opts = {}) => {
     .replace(/^ +/, '')
     .replace(/\s+([.,])/g, '$1')
     .trim();
-  return { body, composedBy: 'code' };
+  // == LENGTH IS A CEILING, NOT A WARNING ==================================
+  // The 125-word limit existed only as red text in the browser. Sohan & Sons
+  // shipped at 131 words with the warning showing, because nothing ever refused
+  // it. A number nobody enforces is a number that gets ignored, which is the
+  // same lesson as the duplicate-key baseline.
+  //
+  // The published data is consistent and one-directional: 50-125 words replies
+  // at roughly 2.4x the rate of 200+, the measured sweet spot is 75-100, and an
+  // 80-word email beats a 120-word one by about 15%. So 125 is the ceiling and
+  // ~80 is the target, not the other way round.
+  //
+  // It TRIMS rather than rejects. Every element here is true and measured, so
+  // refusing the email would throw away a good lead over a word count; dropping
+  // the least load-bearing sentence keeps it sendable. The order is the reverse
+  // of what earns a reply — the pattern line is category wisdom, the money is
+  // context, the second finding is a bonus. The finding, the cost and the ask
+  // are never touched, because those three ARE the email.
+  const _fit = (b) => {
+    const wc = (x) => String(x).trim().split(/\s+/).filter(Boolean).length;
+    if (wc(b) <= 125) return { body: b, dropped: [] };
+    const dropped = [];
+    for (const [name, part] of [['the pattern line', pattern], ['the job value', money], ['the second finding', second]]) {
+      if (!part || wc(b) <= 125) continue;
+      // Remove the sentence carrying that element, not the raw fragment — the
+      // skeletons capitalise and punctuate it on the way in, so a substring
+      // match would leave the stub behind.
+      const key = String(part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 40);
+      const re = new RegExp(`(?:^|(?<=[.!?])\\s*)[^.!?\\n]*${key}[^.!?\\n]*[.!?]\\s*`, 'i');
+      const next = b.replace(re, ' ');
+      if (next !== b) { b = next.replace(/ {2,}/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/\s+([.,])/g, '$1').trim(); dropped.push(name); }
+    }
+    return { body: b, dropped };
+  };
+  const _fitted = _fit(body);
+  if (_fitted.dropped.length) {
+    console.log(`✂ LENGTH [${opts.company || 'lead'}]: trimmed to ${String(_fitted.body).trim().split(/\s+/).filter(Boolean).length} words by dropping ${_fitted.dropped.join(' and ')}. The ceiling is 125 and the target is 80 — 50-125 replies at about 2.4x the rate of 200+, and an 80-word email beats a 120-word one by roughly 15%. The finding, what it costs and the ask are never trimmed.`);
+  }
+  return { body: _fitted.body, composedBy: 'code' };
 };
 
 // ══ THE CTA, DECIDED WHERE THE FINDING LIVES ═════════════════════════════════
