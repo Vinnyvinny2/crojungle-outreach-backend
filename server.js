@@ -29302,28 +29302,52 @@ app.listen(PORT, () => {
   // scopecheck.js walks the real scope chain and reports any name that resolves
   // to no binding. Running it HERE means both files are gated on every boot,
   // rather than only when someone remembers the command.
+  // "THE CHECKER IS MISSING" AND "THE CHECKER FOUND BUGS" ARE DIFFERENT
+  // ANSWERS, and the first version of this could not tell them apart. Any throw
+  // from execFileSync was reported as unresolved identifiers, so a deploy where
+  // scopecheck.js had simply not been uploaded printed a full false alarm about
+  // ReferenceErrors in server.js. That is the failure this file already records
+  // about the SMTP log line: a message that overstates its own severity costs
+  // exactly as much as one that understates it.
+  //
+  // A spawn failure and a real finding now say different things, and the
+  // missing-file case says plainly what to do about it.
   try {
-    const { execFileSync } = require('child_process');
-    const _files = ['server.js', 'index.html'];
-    const _bad = [];
-    for (const f of _files) {
-      const _path = require('path').join(__dirname, f);
-      if (!require('fs').existsSync(_path)) continue;   // index.html is deployed separately
-      try {
-        execFileSync(process.execPath, [require('path').join(__dirname, 'scopecheck.js'), _path],
-          { stdio: 'pipe', timeout: 30000 });
-      } catch (err) {
-        const out = String((err && err.stdout) || '').trim().split('\n').slice(1, 4).join(' | ');
-        _bad.push(`${f}: ${out || 'unresolved identifier(s)'}`);
+    const fsx = require('fs'), pathx = require('path');
+    const _checker = pathx.join(__dirname, 'scopecheck.js');
+    if (!fsx.existsSync(_checker)) {
+      console.log('\u26a0 SCOPE CHECK SKIPPED: scopecheck.js is not deployed alongside server.js, so nothing was checked. This is NOT a finding about the code \u2014 upload scopecheck.js into the same folder as server.js and it runs on the next boot. It is the gate for the class that produced five silent ReferenceErrors in one session.');
+    } else {
+      const { execFileSync } = require('child_process');
+      const _files = ['server.js', 'index.html'];
+      const _found = [], _brokeTool = [];
+      for (const f of _files) {
+        const _path = pathx.join(__dirname, f);
+        if (!fsx.existsSync(_path)) continue;   // index.html deploys separately
+        try {
+          execFileSync(process.execPath, [_checker, _path], { stdio: 'pipe', timeout: 30000 });
+        } catch (err) {
+          // Exit 1 is the checker REPORTING findings. Anything else - a spawn
+          // failure, a timeout, a crash inside the checker - is the TOOL being
+          // broken, and must never be read as a verdict on the code.
+          const out = String((err && err.stdout) || '').trim();
+          if (err && err.status === 1 && out) {
+            _found.push(`${f}: ${out.split('\n').slice(1, 4).join(' | ')}`);
+          } else {
+            _brokeTool.push(`${f}: the checker itself failed (${(err && (err.code || err.message)) || 'unknown'})`);
+          }
+        }
+      }
+      if (_found.length) {
+        console.log(`\u26d4 SCOPE CHECK: ${_found.join('  //  ')}. Each of these throws ReferenceError the moment its branch runs, and several live ones were swallowed by a surrounding catch, so the feature simply never worked.`);
+      } else if (_brokeTool.length) {
+        console.log(`\u26a0 SCOPE CHECK DID NOT COMPLETE: ${_brokeTool.join('  //  ')}. Nothing is being claimed about the code - the tool did not run.`);
+      } else {
+        console.log(`\u2713 SCOPE CHECK: every identifier resolves to a real binding \u2014 no name copied out of a scope it belonged to, and no declaration stranded inside a block that closed before its use.`);
       }
     }
-    if (_bad.length) {
-      console.log(`⛔ SCOPE CHECK: ${_bad.join('  //  ')}. Each of these throws ReferenceError the moment its branch runs, and several of the live ones were swallowed by a surrounding catch, so the feature simply never worked.`);
-    } else {
-      console.log(`✓ SCOPE CHECK: every identifier in ${_files.length} file(s) resolves to a real binding — no name copied out of a scope it belonged to, and no declaration stranded inside a block that closed before its use.`);
-    }
   } catch (e) {
-    console.log(`⛔ SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+    console.log(`\u26a0 SCOPE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. Nothing is being claimed about the code.`);
   }
 
   // ══ A GUARD IS ONLY REAL IF ITS INPUTS ARRIVE ════════════════════════════
