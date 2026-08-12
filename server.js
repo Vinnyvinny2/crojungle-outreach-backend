@@ -10763,12 +10763,29 @@ const EMAIL_SKELETONS = [
   },
   {
     // Cost first. Opens on his money rather than his page.
+    // == THIS SKELETON CANNOT RUN WITHOUT costs =============================
+    // It opens `${first}, right now ${lower1(costs)}.` — unconditional. And
+    // composeEmail BLANKS costs whenever an insight line or a second finding
+    // is present, so the opening sentence became the two words "Chris, right
+    // now." That is the first thing the owner reads and the whole of the
+    // preview text.
+    //
+    // Identical to the failure already documented at the top of this array
+    // ("The greeting, a dash, and nothing") — the fix there was needsReframe,
+    // and it was applied to the reframe dependency only. A skeleton has to
+    // declare every element it cannot render without, not just the one that
+    // broke first.
+    needsCosts: true,
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
       `${first ? first + ', right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
+    // needsCosts, for the same reason as needsReframe directly above. This
+    // one renders `${upper1(costs)}.` as a paragraph of its own, so a blanked
+    // costs produced a lone full stop sitting on its own line.
+    needsCosts: true,
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
       `${first ? first + ', ' + lower1(fact) : upper1(fact)}.${second ? ' ' + upper1(second) + '.' : ''}\n\n${upper1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(reframe)}\n\n${count} ${cta}`,
@@ -10970,8 +10987,6 @@ const composeEmail = (spine, opts = {}) => {
   // Only skeletons that can stand up without a reframe are eligible when we do
   // not have one. Rotating within the eligible set keeps the two variants from
   // coming out identical.
-  const eligible = EMAIL_SKELETONS.filter(sk => reframe || !sk.needsReframe);
-  const skeleton = (eligible.length ? eligible : EMAIL_SKELETONS)[(opts.variantIndex || 0) % Math.max(1, eligible.length || EMAIL_SKELETONS.length)];
   // The recognition line, when the record is genuinely unusual. Passed to every
   // skeleton; only the fact-first one uses it today, and the rest ignore it
   // harmlessly rather than needing a separate code path.
@@ -11017,6 +11032,26 @@ const composeEmail = (spine, opts = {}) => {
   // restates what the first one already implies. The finding is the stronger
   // sentence because it is measured, so the cost goes.
   if (second && costs) costs = '';
+  // == CHOSEN AFTER costs IS FINAL, NOT BEFORE ==============================
+  // This block used to sit ~50 lines earlier, so it tested `costs` while it was
+  // still populated and then the two lines above blanked it. The skeleton that
+  // opens "right now ${costs}" was therefore still selected, and rendered
+  // "Chris, right now." as the entire first sentence and the whole preview.
+  // Eligibility has to be decided on the values that will actually be rendered.
+  // A skeleton is eligible only when every element it cannot render without is
+  // actually present. `costs` is blanked above whenever an insight line or a
+  // second finding is carrying that job, which is why this needs checking at
+  // all — the value is not merely sometimes missing, it is deliberately removed.
+  const eligible = EMAIL_SKELETONS.filter(sk =>
+    (reframe || !sk.needsReframe) && (costs || !sk.needsCosts));
+  // Never leave the composer with nothing to render. Skeleton 0 is the only
+  // one that requires neither, so it is the floor rather than a crash.
+  const _usable = eligible.length ? eligible : [EMAIL_SKELETONS[0]];
+  // Selects from the GUARDED list. The old line fell back to EMAIL_SKELETONS
+  // when nothing was eligible, which handed the composer the very skeletons
+  // that had just been ruled out — so the fallback for 'no skeleton fits'
+  // was to use one that does not fit.
+  const skeleton = _usable[(opts.variantIndex || 0) % _usable.length];
   // ══ THE INSIGHT MUST NOT BE THE GENERIC VERSION OF THE FINDING ═══════════
   // On Rose the headline read "businesses with less of it are sitting above you
   // in search" and the finding read "Overhead Door Company ranks above you with

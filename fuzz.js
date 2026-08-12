@@ -87,6 +87,18 @@ const INVARIANTS = [
   ['pronoun collision', b => /\b(people|customers|visitors|strangers)\b[^.]{0,40}\bwhoever tells you\b/i.test(b),
     'live: "people generally ask whoever tells you first"'],
   ['double space or ragged newline', b => /  +/.test(b.replace(/\n/g, '')) || /\n\n\n/.test(b)],
+  // A skeleton that renders an element it was not given. Live: composeEmail
+  // blanks `costs` when an insight line or a second finding is present, and the
+  // cost-first skeleton opens "${first}, right now ${costs}." unconditionally —
+  // so the entire first sentence, and the whole preview text, was "Chris, right
+  // now." The same shape produces a lone full stop as its own paragraph.
+  ['opening line is a fragment', b => {
+    const first = String(b).split('\n')[0].trim();
+    return /^[A-Za-z][A-Za-z'\-]*,\s*(right now|so|and|but|because|which)\.?$/i.test(first)
+        || (first.length > 0 && first.split(/\s+/).length <= 3 && /[.!?]$/.test(first));
+  }, 'a skeleton rendered a sentence around an element that was blanked'],
+  ['orphan full stop on its own line', b => /(^|\n)\s*[.!?]\s*(\n|$)/.test(b),
+    'an unconditional ${upper1(x)}. rendered with x empty'],
   // Two sentences joined with a space and no full stop. endSentence terminates
   // the END of a string, so a skeleton that joined reframe + costs + pattern and
   // called it once punctuated only the last of the three. Live on Dr Craig
