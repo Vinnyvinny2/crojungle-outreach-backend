@@ -19673,12 +19673,39 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
 
   // City only. A state or ZIP makes the query national or absurdly narrow, and
   // "foundation repair company in NC 28025" is not a search any human performs.
+  // == THE STATE IS NOT OPTIONAL, AND DROPPING IT SENT US TO WYOMING =========
+  // This returned the city ALONE and threw the state away, so the query was
+  // "window replacement in Sheridan". There is a Sheridan in Colorado, Wyoming,
+  // Arkansas, Indiana, Montana and Oregon, and Google geocodes the bare word to
+  // the most prominent one.
+  //
+  // Live on Window Doctor of Colorado, 2026-08-12. They are in Sheridan, CO.
+  // The list that came back was "Pella Windows and Doors Showroom of Sheridan,
+  // WY", "Moore Glass LLC", "Parker's Glass Shop" — a Wyoming town 350 miles
+  // away. They were then reported as NOT IN THE TOP 12, and that sentence went
+  // into a live email as a finding. It is false, and it is false in the most
+  // damaging way available: he can search his own trade in his own town, find
+  // himself, and know instantly that we never looked.
+  //
+  // The locationBias circle below was added for exactly this failure and is not
+  // enough on its own — a bias is a preference, not a filter, and a text query
+  // that geocodes hard to another state overrides it. The fix has to be in the
+  // words, because those are what Google resolves first. A human searching for
+  // a contractor in an ambiguous town types the state; so do we now.
   const city = (() => {
     const parts = String(location || '').split(',').map(x => x.trim()).filter(Boolean)
       .filter(x => !/^(usa|united states|us)$/i.test(x));
     if (!parts.length) return '';
     const stIdx = parts.findIndex(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x) || /^[A-Z]{2}$/.test(x));
-    return stIdx > 0 ? parts[stIdx - 1] : parts[0];
+    if (stIdx > 0) {
+      const town = parts[stIdx - 1];
+      // "CO 80110" -> "CO". The ZIP is deliberately NOT kept: "foundation repair
+      // in NC 28025" is not a search any human performs, which is the note this
+      // parser already carried and got right.
+      const st = (String(parts[stIdx]).match(/\b([A-Z]{2})\b/) || [])[1] || '';
+      return st ? `${town}, ${st}` : town;
+    }
+    return parts[0];
   })();
   if (!city) return { checked: false, why: 'no city could be parsed from the location' };
 
@@ -19718,6 +19745,47 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     if (d.error) return { checked: false, why: `Places error: ${d.error.message || d.error.status}` };
     const places = d.places || [];
     if (!places.length) return { checked: false, why: `no results at all for "${query}"` };
+
+    // == PROVE THE SEARCH LANDED IN THEIR TOWN BEFORE BELIEVING IT ===========
+    // Naming the state in the query fixes the case we found. It cannot fix the
+    // case we have not found yet: locationBias is a preference, and any query
+    // that geocodes hard somewhere else still wins. The consequence is not a
+    // weak finding, it is a FALSE one — "you do not come up for your own trade
+    // in your own town", measured against a different town's businesses, in an
+    // email to a man who can disprove it in one search.
+    //
+    // We already hold both coordinates: theirs from their resolved Place, and
+    // every result's from the FieldMask. So this stops being a matter of trust.
+    // If the results cluster somewhere they are not, the search answered a
+    // different question and NO claim is permitted from it.
+    //
+    // The median is used rather than the mean because one genuinely distant
+    // service-area business should not condemn a correct list, while a whole
+    // list in the wrong state cannot hide behind one nearby result.
+    if (Number.isFinite(Number(bizLat)) && Number.isFinite(Number(bizLng))) {
+      const R = 6371; // km
+      const rad = (x) => (Number(x) * Math.PI) / 180;
+      const km = (la, lo) => {
+        const dLa = rad(la - Number(bizLat)), dLo = rad(lo - Number(bizLng));
+        const a = Math.sin(dLa / 2) ** 2 + Math.cos(rad(bizLat)) * Math.cos(rad(la)) * Math.sin(dLo / 2) ** 2;
+        return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+      };
+      const dists = places
+        .map(p => p && p.location)
+        .filter(l => l && Number.isFinite(Number(l.latitude)) && Number.isFinite(Number(l.longitude)))
+        .map(l => km(Number(l.latitude), Number(l.longitude)))
+        .sort((a, b) => a - b);
+      if (dists.length >= 3) {
+        const median = dists[Math.floor(dists.length / 2)];
+        // 120km is the same radius the coverage check already uses for "is this
+        // plausibly their market", so the two agree rather than each inventing
+        // a number. Sheridan CO to Sheridan WY is roughly 560km.
+        if (median > 120) {
+          console.log(`⛔ WRONG TOWN [${companyName}]: "${query}" returned businesses a median of ${Math.round(median)}km away — that is not their market, so the search resolved to a different place with the same name. NO rank or absence claim is permitted from it. This is the Sheridan CO / Sheridan WY failure, caught by measurement rather than by noticing.`);
+          return { checked: false, why: `"${query}" resolved to a different place — results sit a median of ${Math.round(median)}km from the business, so nothing about their local rank was actually measured` };
+        }
+      }
+    }
 
     const ourDomain = (() => { try { return new URL(website).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } })();
     const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -28715,6 +28783,36 @@ app.listen(PORT, () => {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ A GUARD THAT IS READ AND NEVER WRITTEN IS DECORATION ═════════════════
+  // Shipped exactly this, today: the send-time duplicate guard read
+  // SENT_RECIPIENTS on every lead and NOTHING ever wrote to it, so it could
+  // never fire across two sends. The commit message said it worked.
+  //
+  // The unit test missed it for the worst possible reason — the test performed
+  // the recording itself instead of exercising the real path, so it proved its
+  // own scaffolding worked. That is the "computed but not passed" class, and a
+  // hand-built harness is how it survives review.
+  //
+  // This reads the source of THIS FILE and asserts that every store the system
+  // depends on is written somewhere as well as read. It cannot be satisfied by
+  // a test that lies, because it is not looking at a test.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _stores = ['SENT_RECIPIENTS', 'SENT_DOMAINS', '_SCRAPE_CACHE', '_MAP_CACHE', 'EMPTY_SCRAPE_MEMORY'];
+    const _dead = _stores.filter((n) => {
+      const reads = new RegExp(`\\b${n}\\.(?:has|get)\\s*\\(`).test(_src);
+      const writes = new RegExp(`\\b${n}\\.(?:set|add)\\s*\\(`).test(_src);
+      return reads && !writes;
+    });
+    if (_dead.length) {
+      console.log(`⛔ LIVE STORE CHECK: ${_dead.join(', ')} is READ but never WRITTEN, so every lookup against it returns nothing and the guard it protects is decoration. This is how the duplicate-send guard shipped dead.`);
+    } else {
+      console.log(`✓ LIVE STORE CHECK: all ${_stores.length} runtime stores are written as well as read — a guard cannot pass review by being consulted and never populated, which is exactly how the duplicate-send guard shipped dead earlier today.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LIVE STORE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A TRADE MUST NEVER BE QUOTED ANOTHER TRADE'S MONEY ═══════════════════
   // The money sentence is deliberately exempt from the permittedFigures trace
   // rule — the figure is "the typical value of a job in their trade", so it is a
@@ -29748,6 +29846,23 @@ app.post('/api/send-to-hunter', async (req, res) => {
       }, 10000);
       if (addRes.ok) {
         results.sent.push({ id: lead.id, name: lead.name, email: lead.email });
+        // == RECORD IT, OR THE GUARD ABOVE IS DECORATION =====================
+        // The duplicate guard at the top of this loop READ these two maps and
+        // nothing ever WROTE to them, so it could never fire across sends. That
+        // is the "computed but not passed" class this file warns about, and the
+        // unit test missed it for the worst possible reason: the test did the
+        // recording itself instead of exercising this path, so it proved its own
+        // scaffolding worked rather than the code.
+        //
+        // Recorded HERE and nowhere earlier, because this is the only line at
+        // which Hunter has actually accepted the recipient. Recording at the top
+        // of the loop would blacklist an address whose send then failed, and the
+        // owner would never be contacted at all.
+        if (_norm) {
+          _seenThisRequest.add(_norm);
+          SENT_RECIPIENTS.set(_norm, { at: Date.now(), name: lead.name });
+          if (_dom) SENT_DOMAINS.set(_dom, { at: Date.now(), name: lead.name, email: _norm });
+        }
       } else {
         const errText = await safeText(addRes);
         results.failed.push({ name: lead.name, email: lead.email, reason: `Sequence add failed: HTTP ${addRes.status}: ${errText.slice(0,200)}` });
