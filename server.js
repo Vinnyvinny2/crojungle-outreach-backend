@@ -8012,9 +8012,24 @@ const HARM_LADDER = [
           ? `When somebody needs a ${t} outside office hours, there is no published way to reach them at all`
           : `Outside office hours there is no published way to reach them at all`;
       }
+      // ══ NOT EVERY "THEY" IN A RUNG IS THE OWNER ══════════════════════════
+      // This read "...that THEY want a ${t}...", where "they" is the customer
+      // standing in their kitchen at 9pm — not the business. toSecondPerson
+      // rewrites every third-person pronoun to "you" because most rungs are
+      // about the owner, so this shipped as "someone who decides at nine at
+      // night that YOU want a masonry contractor" — the first sentence of a
+      // live email to Toby Oberer, 2026-08-12, telling him he wants to hire
+      // himself.
+      //
+      // The converter cannot be taught the difference: "there is no published
+      // way to reach them" two lines above IS the business and must flip. The
+      // referent is only knowable here, so the pronoun is removed at the source
+      // instead. RUNG PRONOUN CHECK at the bottom of this file now fails the
+      // boot on any rung that puts a pronoun inside a "Someone who ..." clause,
+      // so the next one cannot reach an inbox the way this one did.
       return t
-        ? `Someone who decides at nine at night that they want a ${t} has nowhere to start until the office opens`
-        : `Someone who decides in the evening has nowhere to start until the office opens`;
+        ? `Someone deciding at nine at night to hire a ${t} has nowhere to start until the office opens`
+        : `Someone deciding in the evening has nowhere to start until the office opens`;
     },
     // ══ DESCRIBE THE WALL, NOT WHAT SOMEBODY DID AT IT ═══════════════════
     // "has nowhere to go" is an outcome — it says what a person did after
@@ -8319,7 +8334,11 @@ const HARM_LADDER = [
     reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
     say: () => 'The copy does not name who the business is for',
-    costs: 'a stranger has to work out on their own whether it applies to them' },
+    // "on their own ... applies to them" is the STRANGER, not the owner, so the
+    // second-person rewrite turned it into "a stranger has to work out on YOUR
+    // own whether it applies to YOU". Named rather than pronounced — see RUNG
+    // PRONOUN CHECK at the bottom of this file.
+    costs: 'a stranger is left to work out unaided whether the business is a fit' },
 ];
 
 // Runs against measurements, not prose. Returns everything true, worst first.
@@ -10396,6 +10415,30 @@ const repairPatternLine = (raw, opts = {}) => {
     if (re.test(t)) t = t.replace(re, 'a business like this');
   }
   t = t.replace(/\ba business like this(?:\s+a business like this)+/gi, 'a business like this');
+  // ══ THE SWAP MUST LEAVE ENGLISH BEHIND ═══════════════════════════════════
+  // Live on Toby Oberer Masonry, 2026-08-12, in the first paragraph of a
+  // prospect-facing email: "A a business like this business built on phone-only
+  // intake nearly always survives that way".
+  //
+  // Two collisions, both structural rather than unlucky. The company's name is
+  // "Toby Oberer MASONRY", so "masonry" is harvested as a name token — but in
+  // this sentence it was not the name, it was the CATEGORY the line is about
+  // ("a masonry business built on phone-only intake"). Swapping a common noun
+  // for a noun phrase leaves the article that introduced it stranded ("A" + "a
+  // business like this") and the noun it modified orphaned ("...this business").
+  //
+  // Every trade named after its trade hits this — masonry, roofing, plumbing,
+  // remodeling — which is most of the target list, not an edge case.
+  //
+  // The name still has to go; that is the safety property and it is not
+  // negotiable. So repair the two collision shapes, then let the caller's
+  // grammaticality gate reject anything still mangled. A sentence short is the
+  // right failure; broken English in the first paragraph is not.
+  t = t.replace(/\b(?:an?|the)\s+(a business like this)\b/gi, '$1')
+       .replace(/\b(a business like this)\s+(?:business|businesses|company|companies|firm|shop|practice|contractor|operation)\b/gi, '$1')
+       .replace(/\ba business like this(?:\s+a business like this)+/gi, 'a business like this')
+       .replace(/\s+/g, ' ').trim();
+  t = upper1(t);
   // Over the cap: take the first sentence, then the first clause. Same repair as
   // originalFindings, and for the same reason — the observation is at the front
   // and the justification trails it.
@@ -10446,6 +10489,17 @@ const patternLineSafe = (raw, opts = {}) => {
   // the owner directly.
   if (/\b(pixel|retargeting|schema|SEO|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|above the fold)\b/i.test(t)) {
     return { ok: false, why: 'contains agency vocabulary, which files the email with every other agency email' };
+  }
+  // ── THE REPAIR IS NOT ALLOWED TO SHIP A WRECK ────────────────────────────
+  // Every check above asks whether the sentence is TRUE. None asks whether it
+  // is still English, so "A a business like this business built on phone-only
+  // intake" passed all of them and went out in a live email. The name-swap
+  // above repairs the shapes we have seen; this refuses the ones we have not.
+  // Silent nonsense in the first paragraph costs more than a missing sentence.
+  if (/\b(?:an?|the)\s+a business like this\b/i.test(t)
+      || /\ba business like this\s+(?:business|businesses|company|companies|firm|shop|practice|contractor|operation)\b/i.test(t)
+      || /\ba business like this\s+a business like this\b/i.test(t)) {
+    return { ok: false, why: 'the business name was swapped out mid-sentence and left it ungrammatical — the name is gone but so is the English, and this reads as a broken merge field' };
   }
   return { ok: true, line: t.replace(/[.\s]+$/, '') };
 };
@@ -13437,11 +13491,19 @@ const measureGrowthConstraint = ({
 \u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} with ${_above} above them, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
       : (weakerAbove > 0)
-        ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
+        // Same NaN as the evidence block: when the position was suppressed for
+        // drifting, Number(undefined) - 1 is NaN and Math.max does not clamp it.
+        // Worse than the digit, this branch also asserts "they rank well, but
+        // not first" \u2014 a positional claim about a position we just declared
+        // unsayable. With no rank there is no ratio and no standing, only the
+        // durable fact.
+        ? (_rankKnown
+            ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
+            : `${weakerAbove} business(es) ranking above them have FEWER reviews. \u26a0 Their own position was NOT stable enough to measure, so say NOTHING about where they rank \u2014 no digit, no band, no "they rank well". The only claim available is that businesses with fewer reviews are above them.`)
         : `Customers searching for exactly what they sell, in their own city, do not find them in the results.`;
     why = rankNotFound
       ? `The reputation is already built and it is not being shown to anyone. That is a visibility problem, not a quality problem, and it gates everything below it.`
-      : `The reputation is already built and it is not being shown to enough people. That is a visibility problem, not a quality problem, and it gates everything below it. Do NOT say they are invisible \u2014 we measured them at #${rank} and they can check that.`;
+      : `The reputation is already built and it is not being shown to enough people. That is a visibility problem, not a quality problem, and it gates everything below it. Do NOT say they are invisible \u2014 ${_rankKnown ? `we measured them at #${rank} and they can check that` : 'they DO appear in the results, we simply could not pin the position down well enough to state it'}.`;
     product = 'marketing and search ownership';
   }
   // ── CONVERSION — only when the friction is genuinely severe ────────────────
@@ -21684,10 +21746,41 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // the ratio from "2 of the 8 above" to "2 of the 7 above". Local results
         // shift with the searcher, the moment and the index. Below the top few the
         // digit is not stable enough to put in front of someone who will check it.
-        push(`Ranked #${localRank.rank} of ${localRank.scanned} for "${localRank.query}"${localRank.rank > 3 ? ' \u2014 \u2605 this exact position drifts by one or two between runs, so describe the BAND ("near the bottom of the first twenty", "on the list but not near the top"), never the digit' : ''}`);
-        if (localRank.weakerAbove > 0) push(`${localRank.weakerAbove} of the ${Math.max(1, localRank.rank - 1)} businesses ranked above them have FEWER reviews`);
+        // \u2550\u2550 THE SUPPRESSED RANK IS NOT A ZERO, IT IS AN ABSENCE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+        // When two samples disagree by more than two places, the reconciler
+        // DELETES rank and scanned off this object and sets rankSuppressed \u2014
+        // deliberately, so that no instruction has to be trusted to keep the
+        // digit out of the copy. Nothing ever read that flag. These two lines
+        // still read `rank`, and undefined does not announce itself:
+        //
+        //   `Ranked #${undefined} of ${undefined}` -> "Ranked #undefined of undefined"
+        //   Math.max(1, undefined - 1)             -> NaN, because NaN wins Math.max
+        //
+        // Live on Richard Rust CPA, 2026-08-12: the fact-checker was handed
+        // "2 of the NaN businesses ranked above them have FEWER reviews" and
+        // spent its budget arguing with our own arithmetic. Math.max(1, x)
+        // LOOKS like the floor that stops this and is not one \u2014 it propagates
+        // NaN rather than clamping it, which is why this survived review.
+        //
+        // The durable claim survives the drift and is what the email says
+        // anyway: businesses with fewer reviews rank above them, true at every
+        // position measured. So say that, and drop the denominator with the
+        // position it came from.
+        const _pos = Number(localRank.rank);
+        const _hasPos = Number.isFinite(_pos) && _pos > 0;
+        const _scanned = Number(localRank.scanned);
+        if (_hasPos) {
+          push(`Ranked #${_pos} of ${Number.isFinite(_scanned) ? _scanned : '?'} for "${localRank.query}"${_pos > 3 ? ' \u2014 \u2605 this exact position drifts by one or two between runs, so describe the BAND ("near the bottom of the first twenty", "on the list but not near the top"), never the digit' : ''}`);
+        } else if (localRank.rankSuppressed) {
+          push(`Position NOT sayable for "${localRank.query}" \u2014 two checks disagreed by ${localRank.rankDrift || '?'} places, so the digit has been withheld on purpose. State NO position, no band and no denominator for this lead; there is no number here to round or soften.`);
+        }
+        if (localRank.weakerAbove > 0) {
+          push(_hasPos
+            ? `${localRank.weakerAbove} of the ${Math.max(1, _pos - 1)} businesses ranked above them have FEWER reviews`
+            : `${localRank.weakerAbove} business(es) ranking above them have FEWER reviews \u2014 the count above them is NOT known on this lead, so say the durable form ("businesses with fewer reviews than yours are ranking above you") and never a ratio.`);
+        }
         if (localRank.topRivals && localRank.topRivals.length) push(`Ranking above them: ${localRank.topRivals.slice(0,3).map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}`);
-      } else if (localRank && localRank.checked) push(`NOT in the top ${localRank.scanned} for their primary trade`);
+      } else if (localRank && localRank.checked) push(`NOT in the top ${Number.isFinite(Number(localRank.scanned)) ? localRank.scanned : 'twenty'} for their primary trade`);
       if (localRank && localRank.ours) push(`${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}\u2605`);
       if (gbpHealth && gbpHealth.checked) {
         if (Number.isFinite(gbpHealth.reviewRecencyDays)) push(`Newest review is about ${gbpHealth.reviewRecencyDays} days old`);
@@ -28191,6 +28284,71 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A PRONOUN INSIDE "SOMEONE WHO ..." IS NOT THE OWNER ══════════════════
+  // toSecondPerson rewrites every third-person pronoun in a rung to "you",
+  // because nearly every rung is written about the owner and the email is read
+  // by him. But some rungs describe a HYPOTHETICAL CUSTOMER, and those pronouns
+  // belong to that customer.
+  //
+  // Live on Toby Oberer Masonry, 2026-08-12, as the opening sentence of the
+  // email and of the preview text: "someone who decides at nine at night that
+  // YOU want a masonry contractor has nowhere to start". It reads as a broken
+  // merge field, which is worse than no personalisation — it proves the
+  // sentence was written about somebody else.
+  //
+  // The converter cannot be fixed. Two lines apart in the same rung, "reach
+  // them" is the business (must flip) and "they want" is the customer (must
+  // not), and nothing at the converter can tell them apart. What IS mechanical
+  // is the shape: a pronoun inside a clause opened by "Someone who / A stranger
+  // who / Anyone who" refers to that someone. So the ladder is scanned for that
+  // shape at boot, on the rendered strings rather than the source, and a new
+  // rung carrying it fails here instead of in an inbox.
+  try {
+    const _m = { hasPlace: true, hoursListed: false, tradeWord: 'masonry contractor', reviewCount: 54,
+      rating: 4.6, reviewsRead: 20, ownerReplies: 5, formFieldCount: 5, photoCount: 3 };
+    const _SUBJ = /\b(someone|somebody|a stranger|anyone|a customer|a buyer|a homeowner|a visitor|a searcher|a caller|a person)\b/i;
+    // ── WHICH PRONOUNS ACTUALLY BELONG TO THE CUSTOMER ──────────────────────
+    // The first cut of this check flagged five rungs and four were fine, which
+    // is a check that teaches you to read past it. The four all put the pronoun
+    // in OBJECT position, where it refers to the business and SHOULD flip:
+    // "anyone who finds them online", "has to ask them to find out", "why to
+    // pick them over the next name", "cannot tell if they are open". Those are
+    // correct today and rewriting them would only make the copy longer.
+    //
+    // The two real ones bind the pronoun to the customer instead — as the
+    // subject of the customer's own verb straight after the relative pronoun
+    // ("someone who decides ... that THEY want a mason"), or as a possessive of
+    // the customer's own agency ("a stranger has to work out on THEIR own").
+    // Those are the shapes that turn into "you" and address the wrong person.
+    const _OWNS = [
+      [/\b(?:who|that)\s+(?:they|he|she)\b/i, 'pronoun is the subject of the customer\'s own verb'],
+      [/\b(?:their|his|her)\s+own\b/i, "possessive attached to the customer's own agency"],
+    ];
+    const _bad = [];
+    for (const h of HARM_LADDER) {
+      for (const field of ['say', 'costs', 'reframe']) {
+        let s = '';
+        try { s = typeof h[field] === 'function' ? String(h[field](_m) || '') : String(h[field] || ''); }
+        catch { continue; }
+        if (!s) continue;
+        // Only the span AFTER the customer noun can belong to the customer.
+        const at = s.search(_SUBJ);
+        if (at < 0) continue;
+        const tail = s.slice(at).split(/[.;]/)[0];
+        for (const [re, why] of _OWNS) {
+          if (re.test(tail)) { _bad.push(`${h.id}.${field} (${why}): "${tail.trim().slice(0, 88)}"`); break; }
+        }
+      }
+    }
+    if (_bad.length) {
+      console.log(`⛔ RUNG PRONOUN CHECK: ${_bad.length} rung string(s) put a pronoun inside a "someone who ..." clause — ${_bad.join(' | ')}. toSecondPerson will rewrite that pronoun to "you" and tell the owner he is the customer. Name the person instead of pronouncing them.`);
+    } else {
+      console.log(`✓ RUNG PRONOUN CHECK: no rung puts a pronoun inside a hypothetical-customer clause, so the second-person rewrite cannot tell an owner that HE is the one shopping at nine at night.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RUNG PRONOUN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE ASK MUST MATCH THE FINDING ═══════════════════════════════════════
