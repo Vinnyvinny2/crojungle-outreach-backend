@@ -17,7 +17,7 @@ const PORT = 4900;
 const rand = (a) => a[Math.floor(Math.random() * a.length)];
 const maybe = (p, v, d = null) => (Math.random() < p ? v : d);
 
-// Every rung id, harvested from the live ladder so the fuzzer can never drift
+// Every rung id, harvested from the live ladder so the fuzzer can never drift 
 // from what the system actually has.
 const fs = require('fs');
 const src = fs.readFileSync('server.js', 'utf8');
