@@ -3895,6 +3895,37 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // The CEILING is the part with evidence behind it: fourteen for fourteen, every
   // business at 4.9 returned no repeating complaint, because at that average
   // almost no negative reviews exist to find.
+  // == THE CEILING WAS TESTED AGAINST 4.7 AND STAYS AT 4.85 ==================
+  // Two lines of evidence, and they answer different questions. The published
+  // one is the more famous and it is NOT the one that governs here.
+  //
+  // PUBLISHED (Northwestern Spiegel, 40+ categories): peak purchase likelihood
+  // sits at 4.2-4.5, the rate starts falling above 4.7 and clearly declines at
+  // 5.0, because buyers read a near-perfect average as implausible. That is a
+  // fact about THEIR customers' behaviour. It says a 4.9-star business has
+  // less to gain from us, which is a real argument for a ceiling somewhere.
+  //
+  // OURS is about whether there is anything to FIND, and it is the binding
+  // constraint: every business at 4.9 across fourteen audits returned no pain
+  // repeating across 2+ reviews, because at that average almost no negative
+  // reviews exist on record.
+  //
+  // A 4.7 ceiling was drafted and REVERTED, because the boot check below
+  // contains the answer: of the five leads recorded there as having produced a
+  // repeating complaint or an actual reply, THREE sit at 4.8 - Deck Daddy's,
+  // Comfort-Air and Bradley. Cutting at 4.7, or even 4.75, discards leads that
+  // have already produced the exact finding this system relies on, in exchange
+  // for a published result about a different question.
+  //
+  // 4.85 is not a rounding of 4.9. It is the line that keeps every 4.8 and
+  // excludes every 4.9 - drawn exactly where our own observation changes.
+  //
+  // THE FLOOR IS STILL NOT EVIDENCE. Every lead in the data sat at 4.3 or
+  // above, so nothing has ever been observed below it. 3.8 against 3.9 is a
+  // preference, not a finding, and moving it would only create an appearance
+  // of precision. Review COUNT stays the better affordability proxy: a
+  // 3.8-star business with two hundred reviews has complaints on record and
+  // the revenue to fix them.
   const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
@@ -3976,6 +4007,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // rather than inferred, and the fix is a retainer rather than a page edit.
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0;
+  let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     // Recorded before the request so a failed query does not silently become a
     // market we claim not to have searched.
@@ -4025,6 +4057,11 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // absence of a rating is not evidence of a clean record.
         if (rating !== null && (rating < PAIN_BAND_LOW || rating > PAIN_BAND_HIGH)) {
           skippedNoPain++;
+          // Counted separately: these are the near-perfect profiles the ceiling
+          // exists to exclude. Reported so the cost is a number rather than an
+          // assumption - fourteen audits said there is nothing to find up here,
+          // and if that ever stops being true this is where it will show.
+          if (rating > PAIN_BAND_HIGH) skippedNearPerfect++;
           continue;
         }
         // Too big is as disqualifying as too small: at this volume they are
@@ -4112,7 +4149,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
   // whether filtering on what we can know BEFORE auditing changes the odds.
-  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) dropped for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.`);
+  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) dropped for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.${skippedNearPerfect ? ` \u2014 ${skippedNearPerfect} of them were above the ceiling, where fourteen audits found nothing minable. A 4.7 ceiling was tested and reverted: three of the five leads that produced a complaint or a reply sit at 4.8.` : ''}`);
   if (keptNoWebsite) console.log(`\u260e CALL LEADS [Places]: ${keptNoWebsite} business(es) with real review counts and NO WEBSITE AT ALL. These used to be discarded because Research needs a page to audit. They need no audit \u2014 the finding is the absence, and Mike has the number.`);
   if (keptBuilder) console.log(`\u{1F527} REBUILD LEADS [Places]: ${keptBuilder} business(es) running on a free page builder. They audit normally, but the fact that matters is already known before we spend anything.`);
   // ══ THE OPERATORS BIG ENOUGH TO FUND A FIX ═══════════════════════════════
@@ -27513,7 +27550,25 @@ app.listen(PORT, () => {
   // know about a business's pain without spending anything. Everything else in
   // this system costs $0.09 and two minutes to discover.
   try {
-    const _band = (r) => r === null || (r >= 4.2 && r <= 4.85);
+    // == READ THE REAL BAND, DO NOT RESTATE IT =============================
+    // This hardcoded 4.2-4.85 while the filter itself defaulted to 3.8-4.85, so
+    // the check was validating a band production has not used for some time. A
+    // 4.75 ceiling was drafted today and this check would have passed it, while
+    // silently excluding three of the five leads listed below as known-good.
+    //
+    // The defaults are lifted out of this file's own source so the check can
+    // never drift from the filter again. If the constants are renamed or moved,
+    // this fails loudly rather than quietly testing nothing.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _num = (name) => {
+      const m = new RegExp(name + "[^;]*?:\\s*([0-9.]+);").exec(_src);
+      return m ? Number(m[1]) : NaN;
+    };
+    const _lo = _num('PAIN_BAND_LOW'), _hi = _num('PAIN_BAND_HIGH');
+    if (!Number.isFinite(_lo) || !Number.isFinite(_hi)) {
+      console.log('\u26d4 PAIN BAND CHECK: could not read PAIN_BAND_LOW/HIGH out of this file, so the band being tested is not the band being used.');
+    }
+    const _band = (r) => r === null || (r >= _lo && r <= _hi);
     // Real leads, real outcomes.
     const _repliedOrPained = [['Daniel Builders', 4.7], ['Deck Daddy\'s', 4.8],
       ['Comfort-Air', 4.8], ['Midwest', 4.3], ['Bradley', 4.8]];
@@ -27537,7 +27592,7 @@ app.listen(PORT, () => {
     } else if (_falseBuilder.length) {
       console.log(`\u26d4 PAIN BAND CHECK: ${_falseBuilder.join(', ')} wrongly flagged as a builder site. Telling an owner with a real site that he is on a free builder is a false claim he disproves instantly.`);
     } else {
-      console.log(`\u2713 PAIN BAND CHECK: every lead that produced a repeating complaint or a reply survives the ${_kept.length ? '4.2-4.85' : '4.2-4.85'} band, unrated businesses still pass, and free page builders are read off the URL without touching a real domain.`);
+      console.log(`\u2713 PAIN BAND CHECK: every lead that produced a repeating complaint or a reply survives the ${_lo}-${_hi} band it actually filters on, unrated businesses still pass, and free page builders are read off the URL without touching a real domain.`);
     }
   } catch (e) {
     console.log(`\u26d4 PAIN BAND CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
