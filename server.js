@@ -5968,6 +5968,41 @@ const verifyEmailSMTP = async (email, verifierKey) => {
 const catchAllCache = new Map();
 // Domains whose homepage came back empty, and when. Keyed by URL, one hour.
 const EMPTY_SCRAPE_MEMORY = new Map();
+
+// == EVERY ADDRESS THIS PROCESS HAS PUSHED TO HUNTER =========================
+// The send route has six guards - no email, no pitch, no subject, not sendable,
+// reachability, greeting/mailbox mismatch - and NOT ONE of them asks whether we
+// have written to this person before. The incoming array was not even deduped
+// against itself, so the same address twice in one request was pushed twice.
+//
+// Everything upstream of this is best-effort. Find-time dedupe is built from a
+// list the BROWSER sends up, assembled from an in-memory pipeline and a
+// localStorage queue capped at 200 - so Skip and Save-for-later delete the only
+// record of a company, an evicted queue entry comes straight back on the next
+// run, and research overwrites the stored domain so the strong key stops
+// matching. Each of those costs a credit. Only this point costs a reputation.
+//
+// A second email to an owner who already got one is the most expensive mistake
+// this system can make: he sees a machine, the domain takes the complaint, and
+// a hard bounce or a spam mark is charged to the sending DOMAIN, not the lead.
+//
+// HONEST LIMIT: this is process memory. It holds until Render restarts or
+// redeploys, and it does not know about sends made before this build. It closes
+// the same-request and same-session hole completely, which is where the
+// observed duplicates come from. The durable fix is a sent_recipients table
+// keyed on the address, written after Hunter accepts - that is a schema change
+// and is deliberately not being guessed at here.
+const SENT_RECIPIENTS = new Map();   // normalised email -> { at, name }
+const SENT_DOMAINS = new Map();      // domain -> { at, name, email }
+const normaliseRecipient = (e) => {
+  const x = String(e || '').trim().toLowerCase();
+  if (!x || !x.includes('@')) return '';
+  const [localRaw, domain] = x.split('@');
+  // Gmail-style dots and +tags address the same mailbox. A prospect who gave us
+  // john.smith+quote@ and john.smith@ is one person and one inbox.
+  const local = localRaw.split('+')[0].replace(/\./g, '');
+  return `${local}@${domain}`;
+};
 const isCatchAllDomain = async (domain, verifierKey) => {
   if (!verifierKey || !domain) return null;
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
@@ -11500,8 +11535,12 @@ const buildProblemList = (harms, opts = {}) => {
   // A thin audit is worse than a padded one. When the measurements genuinely
   // produced almost nothing, the ambient conditions are all there is to say, so
   // they are let back in rather than showing a near-empty page.
+  // The log fires only on the call that names the company. This runs three
+  // times per lead — the list, the count, and the spine's count — and printed
+  // the same paragraph three times, twice as "[lead]" because those callers
+  // pass no company. Same information, one line.
   const out = real.length >= 3 ? real : real.concat(amb.slice(0, 3 - real.length));
-  if (amb.length && real.length >= 3) {
+  if (amb.length && real.length >= 3 && opts.company) {
     console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
   }
   return out;
@@ -29388,8 +29427,45 @@ app.post('/api/send-to-hunter', async (req, res) => {
     console.log('HUNTER: could not create all four follow-up attributes — steps 2 and 3 will fall back to whatever static text is in the sequence. Check the Hunter key\'s permissions.');
   }
 
+  // Seen inside THIS request. The array arrives from the browser and was never
+  // checked against itself, so two lead records for one business - which the
+  // find-time name matching produces routinely, because it is exact-match after
+  // normalisation and misses "Bob's Plumbing" vs "Bobs Plumbing" - both pushed.
+  const _seenThisRequest = new Set();
   for (const lead of leads) {
     if (!lead.email) { results.failed.push({ name: lead.name, reason: 'no email' }); continue; }
+    // == HAVE WE ALREADY WRITTEN TO THIS PERSON? =============================
+    // Placed FIRST, ahead of every other guard, because it is the only one
+    // whose failure reaches a human being twice. The others protect a lead;
+    // this one protects the domain everything else depends on.
+    const _norm = normaliseRecipient(lead.email);
+    const _dom = _norm.split('@')[1] || '';
+    if (_norm && _seenThisRequest.has(_norm)) {
+      results.failed.push({
+        name: lead.name, email: lead.email,
+        reason: 'duplicate inside this same send — this address appears more than once in the batch. Two lead records, one owner. Sent once.',
+      });
+      console.log(`⛔ DUPLICATE IN BATCH [${lead.name}]: ${lead.email} appears more than once in this send. Pushed once. Two records for one business is what the find-time name matching lets through — "Bob's Plumbing" and "Bobs Plumbing" normalise differently.`);
+      continue;
+    }
+    if (_norm && SENT_RECIPIENTS.has(_norm)) {
+      const prior = SENT_RECIPIENTS.get(_norm);
+      results.failed.push({
+        name: lead.name, email: lead.email,
+        reason: `already emailed — this address was pushed to Hunter earlier as "${prior.name}". Blocked so the owner does not receive a second sequence.`,
+      });
+      console.log(`⛔ ALREADY EMAILED [${lead.name}]: ${lead.email} was pushed earlier in this session as "${prior.name}". BLOCKED. A second sequence to an owner who already had one is the most expensive mistake here — he sees a machine, and the complaint is charged to the sending domain, not to the lead.`);
+      continue;
+    }
+    // A different mailbox at a domain we have already worked is NOT blocked —
+    // info@ and the owner's personal address are legitimately two attempts at
+    // one business, and refusing the second would throw away the better one.
+    // It is surfaced instead, because two people at one small company reading
+    // near-identical emails is how a sender gets marked as spam.
+    if (_dom && SENT_DOMAINS.has(_dom) && SENT_DOMAINS.get(_dom).email !== _norm) {
+      const prior = SENT_DOMAINS.get(_dom);
+      console.log(`⚠ SAME DOMAIN [${lead.name}]: we already wrote to ${prior.email} at ${_dom}. Sending anyway — a different mailbox at one business is usually a better route to the owner, not a duplicate — but two people at one small company reading near-identical emails is how a domain gets marked. Worth a human glance.`);
+    }
     // HARD GUARD: never push a lead without real content. A missing pitch or
     // subject would send a broken/fallback email to a real founder — worse than
     // not sending at all. Fail here, before it ever reaches Hunter's queue.
