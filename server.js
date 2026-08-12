@@ -2,6 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+// Optional by design. pngscale downscales a full-page render that exceeds the
+// vision API's 8000px ceiling, using node's own zlib and no new dependency. If
+// the file is not deployed alongside server.js the audit still runs and those
+// pages are skipped exactly as before - a missing picture, never a dead boot.
+let _pngscale = null;
+try { _pngscale = require('./pngscale'); } catch { _pngscale = null; }
 
 const app = express();
 
@@ -22966,7 +22972,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           };
           const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
           let _sent = 0, _bytes = 0;
-          const _skipped = [], _sentKeys = [];
+          const _skipped = [], _sentKeys = [], _rescaled = [];
           // == THE HOMEPAGE MUST BE THE FIRST IMAGE, OR NONE OF THEM GO ========
           // The block this replaced was gated on `msgContent.length`, and that
           // term was load-bearing: it guaranteed no interior render was attached
@@ -23004,13 +23010,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // and was still sent as an image. Anything we cannot measure is
               // refused instead.
               if (!_d) { _skipped.push(`${pg.key} (not a readable PNG - refused rather than sent unmeasured)`); continue; }
-              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
-              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _b.toString('base64') } });
-              _sent++; _bytes += _b.length; _sentKeys.push(pg.key);
+              // == DOWNSCALE INSTEAD OF DISCARDING ==============================
+              // Over-tall pages used to be skipped outright, which is safe and is
+              // also why the brain never saw the bottom of a long page - where the
+              // reviews, the guarantee and the real offer usually sit. The note
+              // left here said what was needed: capture tall, resize under 8000px,
+              // then send. pngscale does that with node's own zlib and no new
+              // dependency, because a native image library that fails to build on
+              // Render takes the whole service down rather than one picture.
+              //
+              // It REFUSES anything it cannot decode exactly - interlaced, not
+              // 8-bit, not RGB/RGBA - rather than guessing, because a mangled
+              // image produces confident readings of pixels that mean nothing.
+              let _send = _b;
+              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) {
+                const _fit = _pngscale ? _pngscale.fitWithin(_b, MAX_EDGE) : { skip: 'pngscale.js not deployed' };
+                if (_fit.skip) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px — ${_fit.skip})`); continue; }
+                if (_fit.buffer.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (downscaled to ${_fit.width}x${_fit.height} but still ${Math.round(_fit.buffer.length / 104857.6) / 10}MB)`); continue; }
+                _send = _fit.buffer;
+                _rescaled.push(`${pg.key} ${_fit.from} → ${_fit.width}x${_fit.height}`);
+              }
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _send.toString('base64') } });
+              _sent++; _bytes += _send.length; _sentKeys.push(pg.key);
             } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
           }
           if (_sent) {
             console.log(`\u{1F441} PAGE RENDERS TO THE BRAIN [${company}]: ${_sent} interior page render(s) sent alongside the homepage — ${_sentKeys.join(', ')}. Already captured and already paid for; forwarding them costs nothing and is the difference between reading a site and looking at one.`);
+            if (_rescaled.length) console.log(`   \u00b7 downscaled to fit the vision ceiling: ${_rescaled.join('; ')} \u2014 these pages used to be dropped entirely, so the bottom of a long page reached the brain for the first time`);
             if (_skipped.length) console.log(`   · skipped: ${_skipped.join('; ')}`);
           } else if (_shots.length) {
             console.log(`⚠ PAGE RENDERS NOT SENT [${company}]: ${_shots.length} render(s) were captured but none could be forwarded${_skipped.length ? ` — ${_skipped.join('; ')}` : ''}. The interior pages reach the audit as text only.`);
