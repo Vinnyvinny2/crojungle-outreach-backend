@@ -8321,7 +8321,11 @@ const HARM_LADDER = [
   { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
     reframe: 'people abandon a long form and go back to the results page',
     test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
-    say: (m) => `Their enquiry form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
+    // "enquiry" is British. Every recipient of this system is American, and an
+    // owner in Kansas reading a spelling nobody around him uses is being told the
+    // sentence came out of a machine — which is the one impression the whole
+    // pipeline exists to avoid. Same for "enquiries" in the pricing ask below.
+    say: (m) => `Their contact form asks a stranger for ${m.formFieldCount} pieces of information before anything happens`,
     costs: 'each extra field costs completions, and this is the only way in' },
 
   { harm: 58, specific: 80, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
@@ -11111,7 +11115,7 @@ const EMAIL_SKELETONS = [
       // recognition proves we looked. The finding is the evidence underneath
       // both. Leading on the finding, which is what this did, gives him a
       // scanner output and makes him supply the meaning himself.
-      `${first ? first + ', ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
+      `${first ? first + ', ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? lower1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
       a space and calling it ONCE punctuated only the last one. Live on Dr Craig
       Wooten: "...is the one a stranger comparing three companies will find A
       practice that asks for a quote before a patient is ready usually stays..."
@@ -11119,10 +11123,45 @@ const EMAIL_SKELETONS = [
    }${[upper1(reframe), costs ? upper1(costs) : '', pattern ? upper1(pattern) : ''].filter(Boolean).map(endSentence).join(' ')}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
-    // Reframe first. Right when the fact needs a reason to matter before it lands.
+    // ══ THIS SKELETON OPENED ON A SENTENCE ABOUT NOBODY ══════════════════
+    // It rendered `${first}, ${lower1(reframe)}` — and the reframe is a
+    // category-level truth about how buyers behave, identical on every lead that
+    // fires the same rung. Both live emails were variant B, which is this
+    // skeleton, so both opened:
+    //
+    //   "Levi, a stranger comparing three companies reads the reviews before
+    //    anything else."
+    //   "Victor, a stranger comparing three companies reads the reviews before
+    //    anything else."
+    //
+    // Same eleven words to a cosmetic surgeon and a facial plastic surgeon on the
+    // same day. Every independent read of those emails stopped in that clause and
+    // named the same reason: it is a marketing sentence, it is about a
+    // hypothetical stranger rather than about him, and it could be pasted onto any
+    // business in America. The owner's own words: "I stopped at word eight."
+    //
+    // The inbox shows the subject and about forty characters of the first line
+    // together, and that pair is the whole opening decision. Spending it on a
+    // maxim spends it on nothing. So the fact goes first — it is the only element
+    // in the render that is a measurement of HIS business — and the reframe moves
+    // to where it does its actual job, which is explaining why the fact matters
+    // AFTER the fact has landed.
+    //
+    // needsReframe stays true: this skeleton still renders one, so it must not be
+    // chosen when there is none.
     needsReframe: true,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
-      `${first ? first + ', ' + lower1(reframe) : upper1(reframe)}\n\n${upper1(fact)}${costs ? ', so ' + lower1(costs) : ''}.${second ? ' ' + upper1(second) + '.' : ''}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+      // reframe arrives ALREADY TERMINATED - it is endSentence'd where it is
+      // built - while costs is not. The first version of this reorder appended a
+      // full stop after both and produced "...whichever one lets them start.."
+      // 318 times in a 500-lead fuzz run. In its old position the reframe was
+      // followed by a paragraph break, so its own terminator was invisible; move
+      // it into a position that punctuates and the doubling appears immediately.
+      //
+      // Both can no longer be present at once (see the variety rule), but all
+      // four combinations still have to render cleanly, because that rule is one
+      // line of code and a skeleton must not depend on it holding.
+      `${first ? first + ', ' + lower1(fact) : upper1(fact)}.${second ? ' ' + upper1(second) + '.' : ''}\n\n${reframe ? upper1(reframe) : ''}${costs ? (reframe ? ' ' : '') + endSentence(upper1(costs)) : ''}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Cost first. Opens on his money rather than his page.
@@ -11342,7 +11381,9 @@ const composeEmail = (spine, opts = {}) => {
   // The finding's own reframe wins. The model-written list is a fallback for any
   // rung that does not carry one, and it is still matched against the claim
   // rather than taken positionally.
-  const reframe = endSentence(spine.reframe || opts.reframe);
+  // let, not const: the variety rule below blanks one of reframe/costs so that a
+  // single email never carries two category-level sentences.
+  let reframe = endSentence(spine.reframe || opts.reframe);
   // ══ THE MONEY ═════════════════════════════════════════════════════════════
   // The value of ONE job in their trade, and nothing else. Never his revenue,
   // never his volume, never a total — those are claims about a business we have
@@ -11411,7 +11452,22 @@ const composeEmail = (spine, opts = {}) => {
       `${n} of these, and that's the one you can check fastest.`,
     ]),
   ];
-  const count = n > 1 ? countForms[(opts.variantIndex || 0) % countForms.length] : '';
+  // ══ THE INDEX MADE THIS CONSTANT ACROSS LEADS ═══════════════════════════
+  // variantIndex is 0 or 1, so of the three forms only the first two were ever
+  // used, and every lead got form 0 in variant A and form 1 in variant B. Across
+  // twelve businesses in twelve trades the sentence came out identical twelve
+  // times out of twelve. Seeding on the company instead uses all three and makes
+  // the choice differ BETWEEN leads, which is where it needed to differ.
+  //
+  // And a floor on the number. "That's one of 2 things like it" is arithmetic
+  // doing no work — Mike's own note on this line says a sentence that only
+  // restates arithmetic costs more than it returns, and that reasoning was
+  // applied to the two-finding branch and not to this one. Below four, the count
+  // is not a pattern and the sentence is dropped.
+  const _cSeed = Math.abs(String(opts.company || opts.founderName || '')
+    .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0));
+  const count = (n > 1 && (second || n >= 4))
+    ? countForms[(_cSeed + (opts.variantIndex || 0)) % countForms.length] : '';
 
   const cta = String(opts.cta || 'The write-up is yours whenever you want it.').trim();
   // Only skeletons that can stand up without a reframe are eligible when we do
@@ -11454,6 +11510,37 @@ const composeEmail = (spine, opts = {}) => {
   // rather than about one finding. Whenever it is present the cost line is the
   // weaker version of the same job, so it goes — the word-overlap test was too
   // conservative and left both in on the very lead it was written for.
+  // ══ MEASURED: 67% OF THE EMAIL WAS THE SAME ON EVERY LEAD ═══════════════
+  // Twelve synthetic leads in twelve different trades, all opening on the same
+  // rung — which is exactly what one week of sends into one niche looks like.
+  // Strip the names and every numeral, and 48 of 72 sentence instances were
+  // byte-identical across at least half of them:
+  //
+  //   12/12  "a stranger comparing three companies reads the reviews before anything else."
+  //   12/12  "it is on your record, in public, in front of everybody still deciding."
+  //   12/12  "that's one of # things like it."
+  //   12/12  "does that come up much on your end?"
+  //
+  // Four of the six sentences. That is not a copy problem, it is arithmetic: an
+  // email built from one rung is mostly that rung's three constants, and only the
+  // finding itself is a measurement of his business. It is the whole answer to
+  // "these emails read like a template" — they ARE one, structurally, and no
+  // amount of rewriting the constants changes the ratio.
+  //
+  // The reframe and the cost line are BOTH category-level statements. Carrying
+  // both spends two of six sentences on things true of every business in the
+  // trade. One of them is enough to make the finding matter, and which one is
+  // chosen deterministically by the company name — so two businesses on the same
+  // rung in the same week get different bodies rather than the same body twice.
+  //
+  // Deterministic, not random: regenerating a lead must never change what was
+  // already assigned to it. Skeleton eligibility handles the blank, because every
+  // skeleton already declares which elements it cannot render without.
+  const _vary = Math.abs(String(opts.company || opts.founderName || '')
+    .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0));
+  if (reframe && costs) {
+    if (_vary % 2 === 0) costs = ''; else reframe = '';
+  }
   if (insight && costs) costs = '';
   // ══ TWO FINDINGS AND A COST LINE IS ONE ELEMENT TOO MANY ════════════════
   // With a second finding the email carries recognition, two facts, a reframe,
@@ -11481,6 +11568,18 @@ const composeEmail = (spine, opts = {}) => {
   // when nothing was eligible, which handed the composer the very skeletons
   // that had just been ruled out — so the fallback for 'no skeleton fits'
   // was to use one that does not fit.
+  // ══ ONE ELIGIBLE SHAPE MEANS BOTH VARIANTS ARE THE SAME EMAIL ═══════════
+  // The modulo wraps, so with a single eligible skeleton variant A and variant B
+  // come out byte-identical — and the send screen presents them as an A/B test
+  // with the note "changing it by hand breaks the test". There is no test: both
+  // arms are the same copy, so whatever it measures is noise.
+  //
+  // Nothing is invented to force a difference. It is reported, because a split
+  // test that cannot split is worth knowing about before 40 sends are attributed
+  // to it.
+  if (_usable.length < 2 && (opts.variantIndex || 0) === 1) {
+    console.log(`\u26a0 ONE SHAPE ONLY [${opts.company || 'lead'}]: only one skeleton can render this lead${!reframe ? ' (no reframe)' : ''}${!costs ? ' (no cost line)' : ''}, so variant A and variant B are the same email. Whatever the A/B split measures on this lead is noise \u2014 it is not two versions.`);
+  }
   const skeleton = _usable[(opts.variantIndex || 0) % _usable.length];
   // ══ THE INSIGHT MUST NOT BE THE GENERIC VERSION OF THE FINDING ═══════════
   // On Rose the headline read "businesses with less of it are sitting above you
@@ -11620,14 +11719,36 @@ const composeEmail = (spine, opts = {}) => {
   // Nothing is invented to pad it. The count travels out on the return so the
   // caller can refuse it, and the log says which element was missing, because
   // that is the part worth fixing upstream.
-  const FLOOR = 45;
+  // ══ THE FLOOR WAS COUNTING WORDS, AND WORDS WERE THE PROXY ══════════════
+  // A 45-word floor was set against the old six-sentence shape. Carrying one
+  // category sentence instead of two, and dropping a count that was only
+  // arithmetic, takes a healthy single-finding email to about 41 words — and the
+  // floor then called it a broken mail-merge. It is not: it carries the finding,
+  // the reason it matters, what one job is worth and the ask. That is all three
+  // of the mandatory elements and nothing padding them out.
+  //
+  // Moving the number to make a change pass is how a baseline gets set, so the
+  // number is not what moved. The floor now asks the question it always meant:
+  // does this email carry the three things that earn a reply — an unexpected fact
+  // about his business, a reason it matters, and something to answer? Ram Jack's
+  // 25 words failed because it had ONE of them, not because it was short.
+  //
+  // The word count survives as a last-resort backstop only, far below anything a
+  // real composition produces, for a body so degenerate that the element test
+  // cannot describe it.
+  const HARD_FLOOR = 28;
   const _words = _wc(body);
-  if (_words < FLOOR) {
-    const _absent = [!costs && 'what it costs him', !reframe && 'the reframe',
-      !money && 'what one job is worth', !second && 'a second finding'].filter(Boolean);
-    console.log(`\u26a0 TOO SHORT [${opts.company || 'lead'}]: the composed body is ${_words} words against a ${FLOOR}-word floor${_absent.length ? ` \u2014 missing ${_absent.join(', ')}` : ''}. Nothing was trimmed; that is everything this lead gave us. A body this short reads as a broken mail-merge, and padding it would mean inventing something, so it is returned marked thin instead. The fix is upstream: this lead did not produce enough measured material to write to.`);
+  // The reason-to-care sentence. Either survives; both is now deliberately never.
+  const _hasWhy = !!(costs || reframe || pattern || money);
+  const _hasAsk = /[?]/.test(body) || !!cta;
+  const _thin = !fact || !_hasWhy || !_hasAsk || _words < HARD_FLOOR;
+  if (_thin) {
+    const _absent = [!fact && 'a measured finding', !_hasWhy && 'any reason it matters to him',
+      !_hasAsk && 'anything to answer',
+      _words < HARD_FLOOR && `only ${_words} words`].filter(Boolean);
+    console.log(`\u26a0 TOO THIN [${opts.company || 'lead'}]: the composed body is missing ${_absent.join(' and ')}. Nothing was trimmed \u2014 that is everything this lead gave us. An email carrying only one of the three things that earn a reply reads as a mail-merge that failed, and padding it would mean inventing something, so it is returned marked thin instead. The fix is upstream: this lead did not produce enough measured material to write to.`);
   }
-  return { body, composedBy: 'code', words: _words, tooThin: _words < FLOOR };
+  return { body, composedBy: 'code', words: _words, tooThin: _thin };
 };
 
 // ══ THE CTA, DECIDED WHERE THE FINDING LIVES ═════════════════════════════════
@@ -11730,13 +11851,19 @@ const CTA_TEXT = {
   // mechanism that would fix it. "Has that ever been anyone's job?" opens the
   // conversation Mike needs — capacity, ownership, what he has already tried —
   // while "does anyone ask for a review?" closes it into a task.
-  accountability: { text: "Who's handling the site for you at the moment?", kind: 'accountability' },
+  accountability: { text: "Who's handling the site for you at the moment?", kind: 'accountability',
+    alts: ['Who looks after the site for you these days?',
+           'Is anyone on the site at the moment, or has it been left alone?'] },
   listing: { text: 'Is anyone actually watching that, or has it been on its own for a while?', kind: 'listing' },
-  process: { text: 'Has that ever been anyone\u2019s job, or has it just never come up?', kind: 'process' },
+  process: { text: 'Has that ever been anyone\u2019s job, or has it just never come up?', kind: 'process',
+    alts: ['Is that anybody\u2019s job at the moment?',
+           'Has anyone ever owned that, or has it just never come up?'] },
   // Asks about the thing the reviews are describing, not about the reviews.
   // It is also the question only he can answer — a foreman cannot tell you
   // whether the estimate and the final invoice usually match.
-  operations: { text: 'Does that come up much on your end?', kind: 'operations' },
+  operations: { text: 'Does that come up much on your end?', kind: 'operations',
+    alts: ['Is that something you already know about?',
+           'Does that match what you hear from your side?'] },
   // == THE ONLY ASK ABOUT A CHANGE RATHER THAN A CONDITION ==================
   // Every other ask here is about who OWNS a standing problem. This finding is
   // different in kind: something moved, and the whole value of it is that he
@@ -11745,7 +11872,9 @@ const CTA_TEXT = {
   // So the question hands him the diagnosis rather than asking for one. It is
   // also the only question in this file he can answer from memory and cannot
   // delegate - a foreman does not know what changed in the office in March.
-  change: { text: 'Did something change around then \u2014 a person, a process, the kind of work coming in?', kind: 'change' },
+  change: { text: 'Did something change around then \u2014 a person, a process, the kind of work coming in?', kind: 'change',
+    alts: ['Do you know what changed around then?',
+           'Was there something around then \u2014 a person leaving, a process, the kind of work coming in?'] },
   // ══ NEVER ASK FOR SOMETHING HE CAN GET HIMSELF ═══════════════════════════
   // "Want the list of who's ranking above you?" offers him a Google search. He
   // can run it in ten seconds and does not need us, so the ask has no value and
@@ -11755,7 +11884,9 @@ const CTA_TEXT = {
   // The thing he cannot get himself is WHY. Position is public; the reason a
   // business with a fifth of his reviews sits above him is not, and it is the
   // question he has actually been wondering about.
-  list: { text: 'Want to know why they are above you?', kind: 'list' },
+  list: { text: 'Want to know why they are above you?', kind: 'list',
+    alts: ['Do you know why they are ahead of you?',
+           'Any idea what is putting them above you?'] },
   // ══ THE ASK THAT NAMES THE SET HE CANNOT BUILD ═══════════════════════════
   // Everything else in this table asks who owns a problem. This one names an
   // artifact, because the artifact is the point: he can check the one market we
@@ -11784,15 +11915,33 @@ const CTA_TEXT = {
   // Each is a question the owner can answer in one line from his own experience,
   // and none can be answered by anyone else in his business. That is what makes
   // a reply cheap for him and useful for Mike.
-  pricing: { text: 'Where do most of your enquiries stall \u2014 before the first call or after it?', kind: 'pricing' },
+  pricing: { text: 'Where do most of your leads stall \u2014 before the first call or after it?', kind: 'pricing' },
   differentiator: { text: 'When someone picks you over the firm down the road, what do they usually say made the difference?', kind: 'differentiator' },
   notready: { text: 'What happens to the ones who are interested but not ready this month?', kind: 'notready' },
   afterhours: { text: 'What happens to the ones who find you after hours?', kind: 'afterhours' },
 };
 
-const CTA_FOR = (finding, claimId) => {
+// ══ ONE ASK PER KIND MEANT ONE ASK PER BATCH ═══════════════════════════════
+// The closing question is the last thing he reads and it was byte-identical on
+// every lead that fired the same rung — twelve out of twelve in a bench run
+// across twelve trades. "Does that come up much on your end?" is a good question
+// and it is still a template the moment it is the only one.
+//
+// So a kind may carry alternates. Same question, same register, same rule that
+// it asks who owns the problem rather than naming a task — one of them is chosen
+// by the company name, deterministically, so a regenerate never changes what was
+// already assigned and two leads in one batch close differently.
+const _ctaAlt = (entry, seed) => {
+  if (!entry) return entry;
+  const alts = [entry.text, ...(entry.alts || [])].filter(Boolean);
+  if (alts.length < 2) return entry;
+  return { ...entry, text: alts[Math.abs(seed) % alts.length] };
+};
+
+const CTA_FOR = (finding, claimId, company) => {
+  const _seed = String(company || '').split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
   const byId = claimId && CTA_BY_FINDING[claimId];
-  if (byId && CTA_TEXT[byId]) return CTA_TEXT[byId];
+  if (byId && CTA_TEXT[byId]) return _ctaAlt(CTA_TEXT[byId], _seed);
   // Fallback for a rung with no mapping: the original text test, so a new rung
   // added without touching this table still closes sensibly rather than oddly.
   const broken = /\bbroken\b|returns? (?:a )?(?:server )?error|does not load|is down|appears nowhere|do(?:es)? not appear|contradict|expired|closed|no longer|will not dial|does not dial/i
@@ -11915,7 +12064,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
   // and stays silent otherwise, letting the fact carry the touch.
   const MONEY_RUNGS = new Set(['no_published_pricing', 'no_offer', 'undifferentiated', 'outranked_by_weaker']);
   const money = (spine.jobValue && MONEY_RUNGS.has(rung.id)) ? endSentence(String(spine.jobValue)) : '';
-  let cta = CTA_FOR(rung.finding, rung.id);
+  let cta = CTA_FOR(rung.finding, rung.id, opts.company || opts.founderName);
   // ══ DON'T ASK THE IDENTICAL QUESTION TWICE IN A SEQUENCE ═════════════════
   // Two reputation findings both map to the review-process ask, so email 1 and
   // follow-up 1 could close on the same sentence. A sequence that repeats its
@@ -12040,7 +12189,7 @@ const composeFullEmail = (spine, opts = {}) => {
   if (!spine || !spine.claim) return null;
   const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
   const reframes = Array.isArray(opts.reframes) ? opts.reframes : [];
-  const cta = CTA_FOR(spine.claim, spine.claimId);
+  const cta = CTA_FOR(spine.claim, spine.claimId, opts.company || opts.founderName);
   const first = greetingName(opts.founderName);
 
   const variant = (i) => {
@@ -12287,8 +12436,26 @@ const TRADE_JOB_VALUE = [
   { re: /\bpaint/i, say: 'a whole-home paint job runs $4k-$12k' },
   { re: /\bfloor/i, say: 'a flooring job runs $5k-$20k' },
   // Medical / dental / aesthetic
-  { re: /\bdentist|\bdental|\bdds|\bdmd|\borthodon/i, say: 'a single implant or ortho case runs several thousand dollars' },
-  { re: /\bplastic surg|\bcosmetic surg|\baesthetic|\bmed ?spa|\bdermatolog/i, say: 'a single procedure runs several thousand dollars' },
+  // ══ "SEVERAL THOUSAND DOLLARS" TO A SURGEON IS A TELL ═══════════════════
+  // Read cold by an owner: "I know my prices to the dollar and 'several thousand'
+  // is not what I charge. The moment a stranger approximates the one number I
+  // know better than anything else, I stop believing everything else in the
+  // email." It went to Levi Young and Victor Perez on the same day, and a single
+  // cosmetic case at either practice is comfortably into five figures.
+  //
+  // The line exists because without it the email describes a feature and gets
+  // delegated. That is right. But a vague approximation of HIS economics is worse
+  // than no figure at all, so where a defensible public range exists it is stated
+  // as a range, and where one genuinely does not exist the line is dropped rather
+  // than fudged. A law firm matter spans a parking ticket to a wrongful-death
+  // suit; there is no honest single figure and pretending otherwise is the same
+  // failure in the other direction.
+  { re: /\bdentist|\bdental|\bdds|\bdmd|\borthodon/i, say: 'a single implant or ortho case runs $4k-$7k' },
+  // Split from med spa and dermatology, which are a different order of magnitude
+  // — the same cross-industry error the trade tables already record for roofing
+  // and waterproofing. A botox appointment is not a rhinoplasty.
+  { re: /\bplastic surg|\bcosmetic surg|\bfacial plastic|\breconstructive/i, say: 'a single surgical case runs $6k-$15k' },
+  { re: /\bmed ?spa|\baesthetic|\bdermatolog|\binjectable/i, say: 'a course of treatment runs $1k-$4k' },
   { re: /\blasik|\bophthalm|\beye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
   { re: /\bchiropract/i, say: 'a care plan runs $1k-$3k' },
   { re: /\bveterinar|\banimal hospital/i, say: 'a surgical case runs $1k-$5k' },
@@ -12641,6 +12808,32 @@ const rankHarms = (m = {}) => {
       const traffic = Math.max(0.65, 1.15 - (Number(m.rank) / 20) * 0.5);
       harmAdj = Math.min(99, Math.round(h.harm * traffic));
     }
+    // ══ A COLLAPSE AND A DIP CANNOT SCORE THE SAME ═══════════════════════
+    // review_velocity_drop carries one constant harm, so "9 in the last quarter
+    // against 14" and "1 against 10" ranked identically, and both lost to
+    // review_pain_pattern at 86. On Victor Perez that is exactly what happened:
+    // 1 review in 90 days against 10 in the 90 before — a business whose review
+    // flow has all but stopped — and the email that went out instead opened on
+    // two complaints out of the 150 we read.
+    //
+    // Every independent read of that email said the same thing. This is the only
+    // measurement in the whole palette that puts a CLOCK on anything; it is the
+    // one number he cannot produce himself, because it needs two time windows
+    // bucketed and compared; and it is the one he has already FELT without ever
+    // counting. The matching ask was written months ago and never used: "Did
+    // something change around then — a person, a process, the kind of work
+    // coming in?"
+    //
+    // So the size of the collapse decides the rank. 34% (the floor for slowing at
+    // all) scores 81; a halving scores 86 and ties review pain; a 90% collapse
+    // scores 97 and beats everything except a dead site. Proportional to what was
+    // measured, and it cannot inflate a mild dip.
+    if (h.id === 'review_velocity_drop') {
+      const _rec = Number(m.reviewsRecent90), _pri = Number(m.reviewsPrior90);
+      if (Number.isFinite(_rec) && Number.isFinite(_pri) && _pri > 0 && _rec < _pri) {
+        harmAdj = Math.min(99, Math.round(h.harm + 28 * ((_pri - _rec) / _pri)));
+      }
+    }
     // Fixability multiplies in. A finding we cannot fix scores near zero as an
     // opener however costly, checkable and novel it is \u2014 because opening on it
     // is either an insult or an offer we cannot honour.
@@ -12787,7 +12980,32 @@ const rankHarms = (m = {}) => {
     // carry both. That is Vin's own CTA doing exactly this job.
     const forwardable = (h.delegable || 0) >= 70;
 
+    // ══ TWO OUT OF A HUNDRED AND FIFTY IS HIM WINNING ═══════════════════
+    // review_pain_pattern fires at one repeating complaint and says "more than
+    // one of your own Google reviews names the same thing". At 2 mentions across
+    // 150 reviews read, on a 4.8-star business, the owner does that division
+    // before he finishes the sentence — 148 people were happy — and what he takes
+    // from it is that a hostile stranger went looking for his two worst reviews.
+    // Both live emails opened exactly there, and every independent read of them
+    // stopped at that sentence.
+    //
+    // The finding is still TRUE and still belongs on the call sheet, so it is not
+    // silenced. It is barred from LEADING, which is a different thing: the rung
+    // stays in the audit, in the ranked list and available as a second finding,
+    // and something he cannot dismiss with arithmetic opens the email instead.
+    //
+    // Unmeasured is not zero. When the miner stated no count at all, the rung
+    // behaves exactly as it always has.
+    const _dismissible = h.id === 'review_pain_pattern'
+      && Number.isFinite(Number(m.reviewPainMentions)) && Number(m.reviewPainMentions) < 3;
+
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
+      // Read by the lead selection below. A blocked rung keeps its harm, its
+      // place in the list and its row in the audit; it simply cannot be first.
+      leadBlocked: _dismissible,
+      leadBlockedWhy: _dismissible
+        ? `only ${m.reviewPainMentions} of the ${m.reviewsRead || '?'} reviews we read name it, and he will do that division before he finishes the sentence`
+        : '',
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
       selfFix: _selfFix.score, selfFixWhy: _selfFix.why,
       opener: openerScore, finding: sentence, costs: h.costs,
@@ -12877,7 +13095,21 @@ const rankHarms = (m = {}) => {
   const eligible = hits.filter(h => h.opener >= OPENER_GATE && h.harm >= HARM_FLOOR).sort((a, b) => b.opener - a.opener);
   // Nothing clears the gate: fall back to the most checkable thing we have, and
   // the caller is warned separately that this lead is weak for email.
-  const lead = eligible[0] || byOpener[0] || null;
+  // ══ BLOCKED FROM LEADING IS NOT THE SAME AS SILENCED ══════════════════
+  // A blocked rung keeps its harm, its rank in byHarm, its row in the audit and
+  // its eligibility as the SECOND finding. It only loses the first sentence.
+  // Suppressing it entirely would throw away a true finding, which is the damage
+  // this whole mechanism exists to avoid.
+  //
+  // If EVERY eligible finding is blocked the block is ignored, because a weaker
+  // opener still beats no email at all, and the weak-opener warning already tells
+  // the operator exactly what he is looking at.
+  const _openable = eligible.filter(h => !h.leadBlocked);
+  const _blocked = eligible.filter(h => h.leadBlocked);
+  if (_blocked.length && _openable.length) {
+    console.log(`\u21a9 NOT THE OPENER [${_blocked[0].id}]: ${_blocked[0].leadBlockedWhy}. It stays in the audit and can still be the second finding; the email opens on "${String(_openable[0].finding).slice(0, 60)}" instead.`);
+  }
+  const lead = _openable[0] || eligible[0] || byOpener[0] || null;
   return { all: hits, byHarm, byOpener, eligible,
     lead,                           // what the EMAIL opens with
     leadIsGated: !!eligible.length, // did it clear the believability gate
@@ -30008,6 +30240,83 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ONE THING NO REVIEW OF A SINGLE EMAIL CAN SEE ══════════════
+  // Every gate in this file reads ONE email. "These emails are flat" is not a
+  // property of one email — it is a property of the BATCH, and it is invisible
+  // until you put twelve of them side by side. Two live sends were rejected for
+  // reading like a template, and every individual check on both of them was green.
+  //
+  // Measured on twelve synthetic leads in twelve different trades, all firing the
+  // same rung, which is exactly what one week into one niche looks like. Strip
+  // the names and every numeral — because an email that differs only by a merge
+  // field is the same email — and count how many sentences appear in at least
+  // half of them. It was 48 of 72, 67%:
+  //
+  //   12/12  "a stranger comparing three companies reads the reviews before anything else."
+  //   12/12  "it is on your record, in public, in front of everybody still deciding."
+  //   12/12  "that's one of # things like it."
+  //   12/12  "does that come up much on your end?"
+  //
+  // Four of six sentences, identical to a plumber and to a cosmetic surgeon. That
+  // is not a wording problem and no amount of rewriting those four sentences
+  // fixes it: an email assembled from one rung is mostly that rung's constants.
+  // It came down to 17% by carrying only ONE category sentence per email instead
+  // of two, rotating the ask within its kind, and dropping a count that was doing
+  // no work — all seeded on the company so the choice differs between leads and
+  // never changes for the same lead.
+  //
+  // 35% is the ceiling. Above that the batch reads as one letter with the names
+  // swapped, which is the single thing every cold-read of these emails named.
+  try {
+    const _N = ['Ray', 'Dale', 'Victor', 'Levi', 'Marcus', 'Tony', 'Bill', 'Steve', 'Frank', 'Carl', 'Dean', 'Hugh'];
+    const _T = ['plumber', 'roofer', 'dentist', 'cosmetic surgeon', 'electrician', 'hvac',
+      'foundation repair', 'landscaper', 'chiropractor', 'med spa', 'remodeler', 'garage door'];
+    const _PN = ['scheduling delays', 'billing surprises', 'callbacks not returned',
+      'wait times exceeding estimates', 'crew left a mess behind', 'estimate changed midway',
+      'hard to reach by phone', 'rescheduled appointments', 'slow follow-up after consults',
+      'communication gaps', 'parts delays on orders', 'no confirmation sent'];
+    const _bodies = [];
+    for (let k = 0; k < 12; k++) {
+      const _mm = { hasPlace: true, tradeWord: _T[k], reviewCount: 120 + k * 7, rating: 4.3 + (k % 5) / 10,
+        reviewsRead: 100 + k * 4, ownerReplies: 20 + k, reviewPainCount: 2, reviewPainTop: _PN[k],
+        reviewPainMentions: 3 + (k % 6), formFieldCount: 6 + (k % 4), photoCount: 2 + (k % 7),
+        businessModel: 'LOCAL_CONSUMER', tenureYears: 8 + k, reviewsPerYear: 4 + k };
+      const _hh = rankHarms(_mm);
+      const _ss = buildFactualSpine(_hh, _mm);
+      if (!_ss) continue;
+      const _ff = composeFullEmail(_ss, { founderName: _N[k], company: `Co ${_N[k]}`, subjects: ['x'], measured: _mm });
+      if (_ff && _ff.variantA && _ff.variantA.body) _bodies.push(_ff.variantA.body);
+    }
+    if (_bodies.length < 8) {
+      console.log(`\u26a0 BATCH VARIETY CHECK DID NOT RUN: only ${_bodies.length} of 12 fixtures composed, which is too few to measure a batch. Nothing is being claimed about the copy.`);
+    } else {
+      const _norm = (x) => x.replace(/\d+/g, '#')
+        .replace(new RegExp(`\\b(${_N.join('|')})\\b`, 'g'), 'NAME')
+        .replace(/\$[#\w.,-]+/g, '$#').toLowerCase().trim();
+      const _tally = {};
+      for (const b of _bodies) {
+        for (const p of b.split(/\n+/)) {
+          for (const sen of p.split(/(?<=[.?!])\s+/)) {
+            const t = _norm(sen);
+            if (t) _tally[t] = (_tally[t] || 0) + 1;
+          }
+        }
+      }
+      const _half = Math.ceil(_bodies.length / 2);
+      const _shared = Object.entries(_tally).filter(([, n]) => n >= _half).sort((a, b) => b[1] - a[1]);
+      const _total = Object.values(_tally).reduce((a, b) => a + b, 0);
+      const _dupe = _shared.reduce((a, [, n]) => a + n, 0);
+      const _pct = Math.round((100 * _dupe) / Math.max(1, _total));
+      if (_pct > 35) {
+        console.log(`\u26d4 BATCH VARIETY CHECK: ${_pct}% of the sentences in a twelve-lead batch are identical once names and numerals are stripped (ceiling 35%). Worst: ${_shared.slice(0, 3).map(([t, n]) => `${n}/${_bodies.length} "${t.slice(0, 60)}"`).join(' | ')}. Every per-email check passes on copy like this and the batch still reads as one letter with the names swapped, which is what got two live sends rejected.`);
+      } else {
+        console.log(`\u2713 BATCH VARIETY CHECK: ${_pct}% sentence overlap across twelve leads in twelve trades all firing the same rung, names and numerals stripped (ceiling 35%, was 67%). One category sentence per email instead of two, the ask rotated within its kind, and the count dropped where it was only arithmetic \u2014 all seeded on the company, so two leads in a batch differ and a regenerate of one lead does not.`);
+      }
+    }
+  } catch (e) {
+    console.log(`\u26d4 BATCH VARIETY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A RUNG MUST NOT SAY THE SAME THING TWICE ═══════════════════════
