@@ -62,8 +62,36 @@ const synth = () => {
         id, band: rand(BANDS),
         harm: 90 - i * 7,
         selfFix: 1 + Math.floor(Math.random() * 5),
-        finding: `Synthetic finding for ${id} number ${i}`,
-        costs: maybe(0.75, `it costs them something measurable in ${id}`, ''),
+        // ── A FIXTURE SHORTER THAN PRODUCTION CANNOT TEST LENGTH ────────────
+        // These used to read "Synthetic finding for site_empty number 2" (7
+        // words) and "it costs them something measurable in site_empty" (8).
+        // Real rung sentences run 12-25 words each, so every composed body in
+        // this fuzzer was roughly a third of its production length — which made
+        // the ceiling invariant untestable and the FLOOR invariant fail on ~35%
+        // of leads the moment it was added. That is the harness lying, not the
+        // composer breaking: CLAUDE.md records two earlier false failures from
+        // exactly this, hand-built objects that do not match production.
+        //
+        // Length varies deliberately across the range real rungs occupy, so both
+        // bounds are exercised rather than one fixed value sitting safely between.
+        // Indexed by position, not random: two rungs on the same lead drawing the
+        // same sentence tripped the "same long phrase repeated in one email"
+        // invariant 166 times, which was the fixture handing the composer a
+        // duplicate rather than the composer producing one.
+        finding: `${[
+          'more than one of their own Google reviews names the same thing',
+          'the only way anyone can reach them is a phone call during office hours',
+          'a business with fewer reviews than theirs is ranking above them for the exact search their customers use',
+          'no price or range appears anywhere on any page we read',
+          'their newest Google review is older than the last two quarters put together',
+          'the copyright line at the bottom of every page is three years behind',
+        ][i % 6]} — case ${id} ${i}`,
+        costs: maybe(0.75, [
+          'someone comparing three companies in the evening has nowhere to go and calls whoever answers first',
+          'the work is being done and almost none of it becomes proof a stranger can find',
+          'a prospect deciding between them and two others has to ask before he can compare',
+          'the people furthest along in deciding are the ones who leave without a way to start',
+        ][i % 4], ''),
         reframe: maybe(0.6, 'people comparing three options go with whichever one lets them start', ''),
       })),
       allowedReframes: [],
@@ -128,6 +156,32 @@ const INVARIANTS = [
   ['no closing question', (b, key) => key !== 'breakup' && !/[?]/.test(b),
     'every touch except the break-up must end on an ask'],
   ['runaway length', b => b.split(/\s+/).length > 140, 'first touches perform under 80 words'],
+  // ── THERE WAS A CEILING AND NO FLOOR ──────────────────────────────────────
+  // Ram Jack, live: Variant A came out at 25 words and every invariant here
+  // passed it, because the only length rule was an upper bound. A body that
+  // short cannot carry the five moves that earn a reply — somebody looked, one
+  // judgement, the turn, the cost, a small ask — and it reads as a mail-merge
+  // that failed.
+  //
+  // FIRST TOUCH ONLY. The follow-ups are a finding, its cost and an ask by
+  // design — structurally shorter — and the break-up is deliberately terse.
+  // Scoping this to variantA/variantB is not a softened rule: the first touch is
+  // the one that decides the reply rate, and it is the one that came out at 25.
+  // ── AND IT MUST BE MARKED, NOT MERELY SHORT ─────────────────────────────
+  // About 0.4% of synthetic leads genuinely produce a first touch this short:
+  // a finding with no cost line, no reframe and no job value behind it. There
+  // is nothing to pad it with that would not be invented, so the composer marks
+  // it tooThin, logs which element was missing, and the Generate screen refuses
+  // it the way it refuses a CALL_INSTEAD verdict.
+  //
+  // So the violation is a short body that arrives UNMARKED — the composer
+  // shipping a fragment while claiming it is fine. Written this way there is no
+  // tolerated baseline to match, which is the mistake the duplicate-key check
+  // made for its whole life.
+  ['unmarked stub', (b, key, e) => /^variant/.test(key)
+    && b.trim().split(/\s+/).filter(Boolean).length < 40
+    && !(e && e.tooThin === true),
+    'a 25-word cold email reads as a broken mail-merge, and one that is not flagged reaches the send screen looking normal'],
   ['empty body', b => !b || b.trim().length < 20],
 ];
 
@@ -160,7 +214,7 @@ const INVARIANTS = [
       composed++;
       for (const [name, test, note] of INVARIANTS) {
         let bad = false;
-        try { bad = test(body, key); } catch { bad = true; }
+        try { bad = test(body, key, e); } catch { bad = true; }
         if (!bad) continue;
         if (!fails.has(name)) fails.set(name, { count: 0, note, sample: null, where: key, lead: null });
         const f = fails.get(name);
