@@ -87,6 +87,29 @@ const INVARIANTS = [
   ['pronoun collision', b => /\b(people|customers|visitors|strangers)\b[^.]{0,40}\bwhoever tells you\b/i.test(b),
     'live: "people generally ask whoever tells you first"'],
   ['double space or ragged newline', b => /  +/.test(b.replace(/\n/g, '')) || /\n\n\n/.test(b)],
+  // Two sentences joined with a space and no full stop. endSentence terminates
+  // the END of a string, so a skeleton that joined reframe + costs + pattern and
+  // called it once punctuated only the last of the three. Live on Dr Craig
+  // Wooten: "...a stranger comparing three companies will find A practice that
+  // asks for a quote...". A lowercase word, a single space, then a capitalised
+  // article or determiner is not a shape English produces mid-sentence.
+  ['two sentences fused, no full stop', b => /[a-z] (?:A|An|The|That|This|There|These|Those|Nothing|Someone|Somebody|People|When|Their|Your|His|Her|Most|Every|Each|Anyone|And) [a-z]/.test(b),
+    'endSentence punctuates the end of a joined string, not the seams inside it'],
+  // The same clause twice in one email. reframe and costs are written
+  // independently and both reach for the comparison shopper, so they collide:
+  // "A stranger comparing three companies reads the reviews before anything
+  // else. A complaint that repeats is the one a stranger comparing three
+  // companies will find." Reads as a template talking to itself.
+  ['same long phrase repeated in one email', b => {
+    const words = b.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+    const seen = new Set();
+    for (let i = 0; i + 5 <= words.length; i++) {
+      const gram = words.slice(i, i + 5).join(' ');
+      if (seen.has(gram)) return true;
+      seen.add(gram);
+    }
+    return false;
+  }, 'two different fields reached for the same image and both shipped'],
   ['opens on lowercase', b => /^[a-z]/.test(b.trim())],
   // The break-up deliberately asks nothing — "asks nothing and counts nothing,
   // that is what makes it reply" — so this only applies to the other four.

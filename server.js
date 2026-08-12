@@ -5107,11 +5107,29 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       _MAP_CACHE.set(_mk, { urls: _harvested, at: Date.now() });
       return _harvested;
     }
-    console.log(`\u267b MAP EMPTY [${_mk}]: no URLs returned and no markup harvested from this host yet, so that answer is now cached \u2014 the other callers on this lead will not re-pay to learn the same thing.`);
+    // \u2550\u2550 THIS LINE PROMISED A CACHE IT NEVER WROTE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+    // It said "that answer is now cached \u2014 the other callers on this lead will
+    // not re-pay" and then returned without touching _MAP_CACHE. There are five
+    // firecrawlMap call sites per lead (owner finder, site audit, careers,
+    // pricing, and the primary pass), so a host whose sitemap will not answer
+    // was paying the full 20s cap on each one. Now it writes what it claims.
+    _MAP_CACHE.set(_mk, { urls: [], at: Date.now() });
+    console.log(`\u267b MAP EMPTY [${_mk}]: no URLs returned and no markup harvested from this host yet. Cached for real this time \u2014 the other four callers on this lead will not each re-pay the 20s cap to learn the same thing.`);
   }
     return out;
   } catch(e) {
-    console.log('firecrawlMap error:', e.message);
+    // \u2550\u2550 A TIMEOUT IS AN ANSWER TOO, FOR A LITTLE WHILE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+    // `firecrawlMap error: timeout` appeared twice inside a single run on
+    // 2026-08-12, and nothing was remembered between them, so every later
+    // caller queued up behind its own 20-second wait on a host that had
+    // already refused twice. Five call sites is up to 100 seconds of a job's
+    // eight-minute budget spent re-asking a question we had the answer to.
+    //
+    // Cached briefly, not permanently: a sitemap that times out now may well
+    // answer in ten minutes, and the harvested-links path below already covers
+    // the gap in the meantime, so nothing downstream is blocked by this.
+    _MAP_CACHE.set(_mk, { urls: [], at: Date.now() - Math.max(0, _MAP_TTL_MS - 300000) });
+    console.log(`firecrawlMap error: ${e.message} \u2014 remembering that for 5 minutes so the other callers on this lead do not each wait out the same cap. Their sitemap is unread; internal links harvested from their own markup are used instead.`);
     return [];
   }
 };
@@ -8874,6 +8892,19 @@ const endSentence = (t) => {
   if (!x) return '';
   return /[.!?]$/.test(x) ? x : x + '.';
 };
+// ══ THE COMPLAINT, WITHOUT THE ARITHMETIC ════════════════════════════════════
+// deepReviewMine stores a repeating complaint with its rate welded on:
+//   "non-responsiveness to phone calls and callbacks — 3 of the 39 reviews we read say it"
+// That denominator is right, and it belongs in the audit and on the call sheet
+// where precision is free. In the EMAIL it is the sentence that lets a busy man
+// dismiss the strongest finding we have — two out of a hundred and seven reads
+// as nothing — and it tells him we only skimmed. This removes the clause and
+// leaves the complaint. See the note at reviewPainTop for why.
+const stripReviewRatio = (t) => String(t || '')
+  .replace(/\s*[—–-]\s*\d+\s+of\s+(?:the\s+)?~?\d+\s+reviews?\s+(?:we\s+read\s+say\s+it|mention\s+this)\s*$/i, '')
+  .replace(/\s*[—–-]\s*\d+\s+reviews?\s+mention\s+this\s*$/i, '')
+  .trim();
+
 const upper1 = (t) => { const x = String(t || '').trim(); return x ? x.charAt(0).toUpperCase() + x.slice(1) : x; };
 const lower1 = (t) => {
   const x = String(t || '').trim();
@@ -10650,7 +10681,12 @@ const EMAIL_SKELETONS = [
       // recognition proves we looked. The finding is the evidence underneath
       // both. Leading on the finding, which is what this did, gives him a
       // scanner output and makes him supply the meaning himself.
-      `${first ? first + ', ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${endSentence([upper1(reframe), costs ? upper1(costs) : '', pattern ? upper1(pattern) : ''].filter(Boolean).join(' '))}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
+      `${first ? first + ', ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? upper1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
+      a space and calling it ONCE punctuated only the last one. Live on Dr Craig
+      Wooten: "...is the one a stranger comparing three companies will find A
+      practice that asks for a quote before a patient is ready usually stays..."
+      — two sentences fused mid-paragraph. Terminate each part, then join. */''
+   }${[upper1(reframe), costs ? upper1(costs) : '', pattern ? upper1(pattern) : ''].filter(Boolean).map(endSentence).join(' ')}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Reframe first. Right when the fact needs a reason to matter before it lands.
@@ -19936,7 +19972,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     const scrapeHomepage = async () => {
       if (!website || !firecrawlKey) return {};
-      const doScrape = (timeout) => fetchT('https://api.firecrawl.dev/v1/scrape', {
+      // ══ THE HOMEPAGE ASK IS THE HEAVIEST REQUEST WE MAKE, AND IT IS FIRST ══
+      // `light: true` drops both renders and asks for text only. firecrawlScrape
+      // already learned this lesson and carries the fix ("NEVER LOSE THE CORPUS
+      // TO A SCREENSHOT", ~line 5480); this function — the FIRST call on every
+      // lead — never got it, and asks for FOUR formats where that one asked for
+      // two. See the retry block below for what that cost.
+      const doScrape = (timeout, opts = {}) => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
         // ── VIEWPORT, NOT FULL PAGE \u2014 AND HERE IS WHY ──────────────────
@@ -19968,20 +20010,88 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // goes to vision where the size limit applies, and the full-page render goes
       // to the audit view, where a human can scroll it and no API rejects it for
       // being tall.
-      formats: ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-      }, timeout).then(r => { fcNote(true, 'scrape+screenshot', website); return r.json(); });
+      formats: opts.light ? ['markdown', 'rawHtml'] : ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'],
+      onlyMainContent: false, waitFor: opts.light ? 1500 : 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+      }, timeout).then(r => { fcNote(true, opts.light ? 'scrape (text only, recovery)' : 'scrape+screenshot', website); return r.json(); });
       const looksEmpty = (res) => {
         const md = (res?.data?.markdown || res?.markdown || '');
         return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
       };
+      // ══ A RETRY THAT CHANGES NOTHING IS A SECOND FAILURE, PAID FOR ═════════
+      // Live 2026-08-12: the homepage came back EMPTY on all three leads in the
+      // run, both attempts each, on an account with ~1000 credits. Inner pages
+      // on the same leads and the same key scraped fine. It was never credits.
+      //
+      // This request asks for markdown + viewport shot + FULL-PAGE shot + rawHtml
+      // with waitFor 4000, against the heaviest page on the site, as the first
+      // call of every lead. firecrawlScrape hit exactly this and its fix is
+      // already in the file: when the combined request comes back empty, ask
+      // again for TEXT ALONE. That function recovers; this one never learned,
+      // and re-sent the identical four-format payload instead — the same
+      // question, expecting a different answer.
+      //
+      // It also set the pace of the whole run. The old ladder was
+      // 50s + 60s + 30s(https) + 2.5s + 30s = up to 172 SECONDS on the homepage
+      // before the audit properly began, which is most of the "4-5 minutes per
+      // lead", and three concurrent leads contend for the same dyno on top.
+      //
+      // So: ask heavy once, then LIGHTEN rather than repeat. Text-only with
+      // waitFor 1500 is the cheapest thing this API can be asked for, and the
+      // corpus is what every quote, every positioning finding and every original
+      // finding is checked against. Losing the render costs a picture. Losing
+      // the corpus costs the audit.
+      // ══ AND THEN GO BACK FOR THE PICTURE, ON ITS OWN ═══════════════════════
+      // Dropping the render to save the corpus is the right trade, but taken
+      // alone it costs the audit its eyes. The brain gets the homepage shot and
+      // one interior page; if the homepage shot is missing, msgContent is empty
+      // and the SECOND RENDER is skipped too — so a failed homepage scrape means
+      // the model reads the whole site as text and sees NOTHING. Every lead in
+      // the 2026-08-12 run logged `screenshot: false`, which is why positioning
+      // and layout findings have been reading like a category label.
+      //
+      // A viewport screenshot ALONE is a fraction of the work of the four-format
+      // request that just failed: no full-page render, no markdown, no rawHtml.
+      // The vision call only ever uses the viewport image anyway — the full-page
+      // one goes to the audit view for a human. So ask for exactly that, once,
+      // and stay silent if it fails. A missing picture costs a picture; a
+      // missing corpus costs the audit.
+      const _withShot = async (result) => {
+        try {
+          if (result?.data?.screenshot || result?.screenshot) return result;
+          const rs = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: website, formats: ['screenshot'], onlyMainContent: false,
+              waitFor: 2500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+          }, 20000);
+          const ds = await rs.json();
+          const shot = ds?.data?.screenshot || ds?.screenshot || null;
+          if (!shot) return result;
+          console.log(`📷 RENDER RECOVERED [${website}]: the combined request could not produce a screenshot, a viewport-only request could. The brain gets to LOOK at the page instead of only reading it, which is what every layout and positioning finding depends on.`);
+          return { ...result, data: { ...(result?.data || {}), screenshot: shot } };
+        } catch (e) { void e; return result; }
+      };
+      const _merge = (base, light) => {
+        if (!light) return base;
+        const b = base || {}, l = light;
+        return { ...b, data: { ...(b.data || {}), ...(l.data || {}),
+          // keep any render attempt 1 did manage to return
+          screenshot: b.data?.screenshot || b.screenshot || l.data?.screenshot || null,
+          'screenshot@fullPage': b.data?.['screenshot@fullPage'] || b['screenshot@fullPage'] || null } };
+      };
       let res;
       try {
-        // Wait properly the FIRST time. The old 20s ceiling was below what a heavy
-        // site takes, so the common path was: pay, time out, discard, pay again.
-        res = await doScrape(50000);
+        res = await doScrape(45000);
       } catch(e) {
-        console.log('Firecrawl timeout even at 50s — retrying once (this DOES cost a second credit)');
-        try { res = await doScrape(60000); } catch(e2) { console.log('Firecrawl retry also failed:', e2.message); return {}; }
+        console.log(`Firecrawl did not answer the full markdown+screenshot request for ${website} within 45s. NOT re-sending it — the heavy render is what timed out, so asking again the same way buys the same timeout. Falling back to text only, which is what the audit actually runs on.`);
+        try {
+          const _l = await doScrape(20000, { light: true });
+          if (!looksEmpty(_l)) {
+            console.log(`♻ CORPUS RECOVERED [${website}]: the render timed out, text alone returned ${(String(_l?.data?.markdown || _l?.markdown || '')).length} characters. No screenshot on this lead; the corpus — which every quote and every positioning finding is checked against — is intact.`);
+            return await _withShot(_l);
+          }
+          res = _l;
+        } catch(e2) { console.log('Firecrawl text-only fallback also failed:', e2.message); return {}; }
       }
       // CONTENT-LEVEL RETRY: a "Connection Reset"/empty scrape is usually transient
       // on the free tier (A1 Restoration lost its whole audit to one). Pause and try
@@ -20003,12 +20113,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // while the log line above claimed it was being tried.
           //
           // This scope has `firecrawlKey` and does its own fetch. Use them.
+          // Text-only, like every other recovery on this path. Attempt 1 already
+          // demonstrated that the heavy render is what this page will not give
+          // us; changing the scheme AND keeping the payload that just failed
+          // tests two things at once and usually fails for the old reason.
           const rS = await fetchT('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: _https, formats: ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'],
-              onlyMainContent: false, waitFor: 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-          }, 30000);
+            body: JSON.stringify({ url: _https, formats: ['markdown', 'rawHtml'],
+              onlyMainContent: false, waitFor: 1500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+          }, 20000);
           const resS = rS && rS.ok ? await rS.json() : null;
           if (resS && !looksEmpty(resS)) {
             console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
@@ -20051,9 +20165,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         } else if (_deterministic) {
           console.log(`Firecrawl returned a hard failure for ${website} (the host refused the connection or the name does not resolve). NOT retrying \u2014 that answer will be identical in three seconds and the second fetch costs a credit to confirm what we already know.`);
         } else {
-          console.log(`Firecrawl returned empty/error content for ${website} — this looks transient, retrying once after a pause`);
-          await new Promise(r => setTimeout(r, 2500));
-          try { const res2 = await doScrape(30000); if (!looksEmpty(res2)) { console.log(`Firecrawl retry recovered content for ${website}`); return res2; } } catch {}
+          console.log(`Firecrawl returned empty/error content for ${website} — retrying once for TEXT ONLY. The four-format request is the heaviest thing this API can be asked for and it is what came back empty; re-sending it would buy the same empty response again, which is what this line used to do on every lead.`);
+          await new Promise(r => setTimeout(r, 1500));
+          try {
+            const res2 = await doScrape(20000, { light: true });
+            if (!looksEmpty(res2)) {
+              console.log(`♻ CORPUS RECOVERED [${website}]: markdown+screenshot came back empty, text alone returned ${(String(res2?.data?.markdown || res2?.markdown || '')).length} characters. The render is lost on this page; the corpus is not.`);
+              return await _withShot(_merge(res, res2));
+            }
+          } catch {}
         }
       }
       return res || {};
@@ -21562,8 +21682,32 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Published pricing and owner reply rate are the same story: measured,
           // logged, and unreachable by any rung.
           reviewPainCount: Array.isArray(publicPainSignals) ? publicPainSignals.length : 0,
+          // \u2550\u2550 THE RATIO IS FOR THE CALL SHEET, NOT THE FIRST SENTENCE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+          // The miner bakes "\u2014 3 of the 39 reviews we read say it" into the pain
+          // string, and reviewPainTop feeds the ladder, which feeds the spine,
+          // which is the one sentence the email may assert. So the arithmetic
+          // rode all the way into the opening line: "2 of the 107 reviews we
+          // read say it" (Dr Wooten), "Three of your 39 reviews name it"
+          // (Montgomery).
+          //
+          // Two costs, and they compound. It hands the owner the dismissal \u2014
+          // two out of a hundred and seven is nothing, and he is right to think
+          // so. And it advertises how shallow the read was, on the one finding
+          // whose whole power is "how do they know that?".
+          //
+          // The strength of this finding was never the ratio. It is that the
+          // same complaint appears twice INDEPENDENTLY, which is a pattern, and
+          // that he can go and read it himself. "More than one of your own
+          // reviews names the same thing" is true at 2 of 107 and at 30 of 40,
+          // survives him checking, and cannot be argued down.
+          //
+          // Exactly the treatment local rank already gets a few hundred lines
+          // up: "NEVER put the raw digit in an email as something he can count
+          // ... The digit stays here for the call sheet." Same rule, same
+          // reason. The brain's narrative and the call sheet read the full
+          // publicPainSignals string and keep every number.
           reviewPainTop: (Array.isArray(publicPainSignals) && publicPainSignals[0])
-            ? String(publicPainSignals[0]).split(' \u2014 evidence:')[0].trim() : null,
+            ? stripReviewRatio(String(publicPainSignals[0]).split(' \u2014 evidence:')[0].trim()) : null,
           // Array.isArray is the "did we look?" test. A null prices array means
           // the page audit never ran, and absence can only be claimed about
           // something we actually looked for.
@@ -25359,7 +25503,58 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         ownerEmailMatch = 'company_mailbox';
         ownerEmailMatchReason = `The mailbox is the business's own name (${emailLocalM}@\u2026), not another person — at an owner-run shop this is ${decisionMaker?.name || verifiedCEO}'s own desk. Open with their name.`;
       } else {
-        ownerEmailMatch = 'different_person'; ownerEmailMatchReason = `\u26a0 Owner identified as ${decisionMaker?.name || verifiedCEO}, but the email (${emailLocalM}@\u2026) appears to belong to a DIFFERENT person — verify before sending`;
+        // ══ "NOT IN MY LIST" IS NOT EVIDENCE OF ANOTHER HUMAN ═══════════════
+        // Live on Montgomery & Montgomery CPA: tax@mmcpaokc.com, published on
+        // their own site, flagged "appears to belong to a DIFFERENT person" and
+        // the lead marked do-not-send. There is no person called Tax. It is the
+        // department inbox at an accounting firm — exactly the schedule@ /
+        // dispatch@ / estimates@ class the list above was built for. The list
+        // simply never learned the professions.
+        //
+        // Adding 'tax' would fix Montgomery and lose the next one: intake@ at a
+        // law firm, claims@ at a restoration company, returns@, payroll@,
+        // conveyancing@. That is the "rule list drifts behind the vocabulary"
+        // failure, and it lands HERE every time, because DIFFERENT PERSON is
+        // the fallback. The most alarming verdict in the function is what you
+        // get for a word nobody has typed yet, and a warning that is wrong on
+        // the common case teaches you to ignore the one time it is right —
+        // which is the exact lesson written into the branch above this one.
+        //
+        // So it now requires evidence of an actual human. A different person
+        // LOOKS like one: daniel.jachens@, mcurrent@, j.horn@, lpalmer@ — a
+        // first.last, or an initial and a surname, or a name Hunter attributed
+        // to the address. A bare common noun is a function.
+        //
+        // The guard that actually protects a send is untouched: RECIPIENT CHECK
+        // still refuses any mailbox built from a DIFFERENT person's name, and it
+        // fires on name-shaped locals — precisely the set this branch keeps.
+        const _dotName = /^[a-z]{2,}\.[a-z]{2,}$/.test(emailLocalM);
+        // NOT /^[a-z]\.?[a-z]{4,}$/ — that was the first cut and it matches any
+        // word of five letters or more, so intake@, claims@ and payroll@ were
+        // all still 'another person'. Shape alone cannot separate mcurrent from
+        // intake without a name list, so this asks the question that is actually
+        // answerable and actually dangerous: an initial in front of THE OWNER'S
+        // OWN SURNAME. pfreund@ to Tom Freund is a brother or a son, and that is
+        // the one delivery error that cannot be taken back.
+        //
+        // The looser cases (mcurrent@ for Lori Palmer) are not lost — RECIPIENT
+        // CHECK blocks any mailbox that resolves to neither the owner's first
+        // name nor his surname, mechanically, on the send path. This flag is the
+        // advisory in front of it, and an advisory that cries wolf on every
+        // departmental inbox is worse than none.
+        const _ownerSur = ownerTokensM.length > 1 ? ownerTokensM[ownerTokensM.length - 1] : '';
+        const _initialSur = !!_ownerSur && new RegExp(`^[a-z]\\.?${_ownerSur}$`).test(emailLocalM)
+                            && !localMatchesName(emailLocalM, ownerTokensM);
+        const _attributed = String((email && email.name) || '').toLowerCase().trim();
+        const _namedOther = !!_attributed && !!ownerNameForMatch && _attributed !== ownerNameForMatch.trim();
+        if (_dotName || _initialSur || _namedOther) {
+          ownerEmailMatch = 'different_person';
+          ownerEmailMatchReason = `\u26a0 Owner identified as ${decisionMaker?.name || verifiedCEO}, but the email (${emailLocalM}@\u2026) ${_namedOther ? `is attributed to ${email.name}` : "is shaped like another person's name"} — verify before sending`;
+        } else {
+          const _ownerOperatedU = isPlacesLead && !(typeof verifiedEmployees === 'number' && verifiedEmployees > 25);
+          ownerEmailMatch = _ownerOperatedU ? 'owner_reads_shared' : 'shared_inbox';
+          ownerEmailMatchReason = `The mailbox (${emailLocalM}@\u2026) is a FUNCTION, not a person — no first name, no surname, no initial-and-surname shape, and nothing attributes it to a human. It is a departmental inbox we have no word for yet, the same class as schedule@ or dispatch@. ${_ownerOperatedU ? `At an owner-run business ${decisionMaker?.name || verifiedCEO} reads it themselves. Open with their name.` : 'Treated as a shared inbox rather than as another person.'}`;
+        }
       }
       console.log(`OWNER/EMAIL MATCH [${company}]: ${ownerEmailMatch} — ${ownerEmailMatchReason}`);
     }
