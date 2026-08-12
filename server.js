@@ -18454,7 +18454,23 @@ app.get('/api/cron/discover', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        keywords: ['SaaS', 'e-commerce', 'B2B software', 'professional services'],
+        // == REMOVED: FOUR SOFTWARE KEYWORDS NOTHING EVER READ ==============
+        // `keywords` is destructured in /api/discover, logged as the first line
+        // of every run, and then never referenced again. Not one source takes
+        // it: searchGooglePlaces takes (placesKey, filters), searchTheirStack
+        // takes (theirstackKey), searchSECEdgar and scrapeGoogleNews take
+        // nothing. Every source runs hard-coded queries.
+        //
+        // So this was never routing anything. What it WAS doing is worse: it
+        // printed "Keywords: [ 'SaaS', 'e-commerce', 'B2B software',
+        // 'professional services' ]" at the top of every discovery run, which
+        // is the first thing anyone reads, and it states that a system built
+        // for home-services trades is hunting software companies. That cost
+        // real attention: the Find layer was blamed for a targeting problem it
+        // does not have.
+        //
+        // Same class as the SMTP verifier log line. A message that misdescribes
+        // its own system is not free just because the variable is inert.
         location: process.env.TARGET_LOCATION || '',
         keys: {
           adzunaId, adzunaKey, firecrawlKey, companiesApiKey, fbToken,
@@ -18503,7 +18519,7 @@ app.post('/api/discover', async (req, res) => {
   //
   // Every one of these is optional. Absent means "no constraint", so the
   // endpoint behaves exactly as before for any caller that does not send them.
-  const { keywords, keys, apiKey, knownDomains, knownNames, filters } = req.body;
+  const { keys, apiKey, knownDomains, knownNames, filters } = req.body;
   const _f = (filters && typeof filters === 'object') ? filters : {};
   // ── DEDUPE ────────────────────────────────────────────────────────────────
   // Nothing previously stopped a company you have already researched from coming
@@ -18559,7 +18575,11 @@ app.post('/api/discover', async (req, res) => {
   const placesKey = process.env.GOOGLE_PLACES_KEY || '';
 
   console.log('\n=== DISCOVERY START ===');
-  console.log('Keywords:', keywords);
+  // The headline of a discovery run now names what actually decides the leads:
+  // the category grid and the filters. `keywords` used to print here and was
+  // read by nothing - see the note at the cron caller.
+  const _tgt = filters && typeof filters === 'object' ? filters : {};
+  console.log(`Targeting: ${_tgt.onlyNoWebsite ? 'businesses with NO website only' : _tgt.onlyBuilderSite ? 'free page-builder sites only' : 'the full category grid'}${Number.isFinite(Number(_tgt.minRating)) ? `, rating ${_tgt.minRating}-${_tgt.maxRating ?? '4.85'}` : ', default rating band'}`);
   console.log('Adzuna keys present:', !!(adzunaId && adzunaKey));
   // DIAGNOSTIC: prove whether each key actually arrived from the frontend.
   console.log('Keys arrived →', JSON.stringify({
