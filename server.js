@@ -32268,6 +32268,27 @@ app.post('/api/compose-email', async (req, res) => {
             // assembled by us and is therefore least predictable.
             const _brainBody = _tidy(_v.body);
             composed.variantA = { ...composed.variantA, body: _brainBody, writtenBy: 'brain' };
+            // ══ THE MODEL WROTE ONE VARIANT AND WE SEND THE OTHER ═══════
+            // writtenBy was set on variantA and only on variantA. abVariant is
+            // assigned CLIENT-SIDE at generate time, long after research has
+            // finished, and it picks B about half the time — so on half of every
+            // batch the email that actually goes out is the raw assembled
+            // template, and the model's version sits next to it labelled "for
+            // reference".
+            //
+            // Both live sends that were rejected as flat were variant B. The
+            // screen even said so: "Composed by code from measurements — no model
+            // wrote any part of this email." That label was accurate. It was
+            // describing a lead where the model HAD written one, into the arm
+            // nobody sent.
+            //
+            // Both arms now carry the written body and keep their own subject, so
+            // the split test measures the subject line — which is the thing worth
+            // testing, and the only thing that was ever genuinely different
+            // between them — instead of measuring prose against a template.
+            if (composed.variantB) {
+              composed.variantB = { ...composed.variantB, body: _brainBody, writtenBy: 'brain' };
+            }
             sessionAttachEmail(company, composed.variantA.subject, _brainBody, '');
             console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
           } else {
@@ -32295,6 +32316,11 @@ app.post('/api/compose-email', async (req, res) => {
             } catch (e) { void e; }
             if (_fixed) {
               composed.variantA = { ...composed.variantA, body: _tidy(_fixed), writtenBy: 'brain' };
+              // Same reason as the accepted-first-time path above: the arm that
+              // ships must not be the one the model never touched.
+              if (composed.variantB) {
+                composed.variantB = { ...composed.variantB, body: _tidy(_fixed), writtenBy: 'brain' };
+              }
               sessionAttachEmail(company, composed.variantA.subject, _fixed, '');
               console.log(`\u270d\ufe0f REWRITTEN AND ACCEPTED [${company}]: the first draft was refused — ${String(_v.why).slice(0, 90)} — and the corrected version passes every check. This lead would previously have dropped to the composed template.`);
             } else {
