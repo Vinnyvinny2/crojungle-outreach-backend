@@ -14538,7 +14538,18 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
     // worth retrying. totalReviews travels out too, so the log can say how deep we read.
     return { signals, summary: parsed.summary || '', totalReviews: total,
              read: rv.read, coverage: rv.coverage, sampleComplete: rv.sampleComplete,
-             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount, recentCount: rv.recentCount };
+             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount, recentCount: rv.recentCount,
+             // WAS MISSING, AND IT KILLED THE FEATURE. _fetchApifyReviewsUncached
+             // computes `velocity` and returns it on rv; this literal did not
+             // forward it, so deep.velocity was undefined on every lead,
+             // reviewVelocity stayed null, reviewVelocityChecked was always
+             // false, and review_velocity_drop could not fire once.
+             //
+             // The unit test proved the RUNG works when handed
+             // reviewVelocityChecked:true. It never proved anything hands it
+             // that - the test did the delivery itself, which is the same way
+             // the duplicate-send test passed over a Map nothing wrote to.
+             velocity: rv.velocity };
   } catch(e) { console.log('deepReviewMine failed:', e.message); return { read: 0, why: e.message }; }
 };
 
@@ -22026,7 +22037,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         tenure: _tenure,
         reviewCount: localRank && localRank.ours ? localRank.ours.reviews : (gbpHealth && gbpHealth.reviewCount),
         reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
-        reviewRecencyDays: gbpHealth && gbpHealth.reviewRecencyDays,
+        // gbpHealth returns reviewRecency: { checked, newestDays, stale, veryCold }.
+        // There is no reviewRecencyDays and never was - resolveMeasurements was
+        // corrected for this months ago and this call site was missed, so every
+        // history finding gated on recency has been unreachable.
+        reviewRecencyDays: (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked)
+          ? gbpHealth.reviewRecency.newestDays : null,
         trade: customerTrade || verifiedIndustry || req.body.industry || '',
         headcount: verifiedEmployees,
       });
@@ -22612,7 +22628,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       } else if (localRank && localRank.checked) push(`NOT in the top ${Number.isFinite(Number(localRank.scanned)) ? localRank.scanned : 'twenty'} for their primary trade`);
       if (localRank && localRank.ours) push(`${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}\u2605`);
       if (gbpHealth && gbpHealth.checked) {
-        if (Number.isFinite(gbpHealth.reviewRecencyDays)) push(`Newest review is about ${gbpHealth.reviewRecencyDays} days old`);
+        // Same non-existent field. The situation read has never been told how
+        // stale their reviews are.
+        if (gbpHealth.reviewRecency && Number.isFinite(gbpHealth.reviewRecency.newestDays)) push(`Newest review is about ${gbpHealth.reviewRecency.newestDays} days old`);
         if (Number.isFinite(gbpHealth.photoCount)) push(`${gbpHealth.photoCount} photos on the Google profile`);
         if (gbpHealth.gaps && gbpHealth.gaps.length) push(`Google profile gaps: ${gbpHealth.gaps.join('; ')}`);
       }
@@ -22642,16 +22660,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Stated as eligibility only. We cannot see whether he runs it — many
       // advertisers never display the badge — so the finding is the eligibility
       // and the question, never a claim about his spend.
-      if (lsa && lsa.checked && lsa.eligible) {
-        push(lsa.running
+      // detectLSA returns { eligible, badgeFound, evidence, marker, status }.
+      // There is no `checked` field and no `running` field on it, so this test
+      // has been false on every lead since it was written - which means the one
+      // measurement in this system that is about MONEY rather than markup, by
+      // its own note directly above, never reached the situation read at all.
+      // The real signal is status === 'running_lsa', which is what the audit
+      // prompt already branches on.
+      if (lsa && lsa.eligible) {
+        push(lsa.status === 'running_lsa'
           ? `Local Services Ads: they ARE running them \u2014 the Google Guaranteed badge appears on their own site. That is a paid channel they already spend on, so cost per lead is a number they watch.`
           : `Local Services Ads: their trade is ELIGIBLE for Google Guaranteed and no badge appears on their site. \u26a0 Many advertisers never display the badge, so make NO claim about whether they run it \u2014 the finding is that the channel exists above the map pack in their category, and it is worth asking whether anyone owns it. This is the one measurement here about money rather than markup.`);
       }
       if (marketClarity && marketClarity.checked) push(`Positioning read: ${marketClarity.verdict}${marketClarity.reasons && marketClarity.reasons.length ? ' \u2014 ' + marketClarity.reasons.join('; ') : ''}`);
       if (socialPresence && socialPresence.count) push(`Social channels linked: ${socialPresence.platforms.join(', ')}`);
       if (Number.isFinite(verifiedEmployees) && verifiedEmployees > 0) push(`${verifiedEmployees} employees`);
-      if (htmlSignals && htmlSignals.checked) push(`Site: https=${htmlSignals.https}, mobile viewport=${htmlSignals.viewport}, title tag=${htmlSignals.title}`);
-      if (leadMagnet && leadMagnet.checked) push(`Lead magnet: ${leadMagnet.found ? leadMagnet.what : 'none \u2014 the only way to engage is to ask'}`);
+      // extractHtmlSignals returns isHttps / hasViewport / hasTitle. Reading
+      // .https / .viewport / .title printed "https=undefined, mobile
+      // viewport=undefined, title tag=undefined" into the evidence the
+      // situation read is built from, on every single lead.
+      if (htmlSignals && htmlSignals.checked) push(`Site: https=${htmlSignals.isHttps}, mobile viewport=${htmlSignals.hasViewport}, title tag=${htmlSignals.hasTitle}`);
+      // readLeadMagnet returns { checked, hasAny, assets, gaps, ... }. There is
+      // no `found` and no `what`, so this always took the else branch and told
+      // the situation read "none - the only way to engage is to ask" even on
+      // leads carrying a downloadable guide. The identical field-name bug is
+      // already documented a few hundred lines above for the ladder inputs and
+      // was never fixed here.
+      if (leadMagnet && leadMagnet.checked) push(`Lead magnet: ${leadMagnet.hasAny ? (leadMagnet.assets || []).slice(0, 3).join(', ') : 'none \u2014 the only way to engage is to ask'}`);
       // ── EVERYTHING ELSE WE ALREADY HOLD ───────────────────────────────────
       // These were all computed and none reached the synthesis. A read can only
       // be as rich as the facts handed to it, and the briefing was thin partly
@@ -25399,6 +25434,22 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // this line _claimRisks would silently never reach the UI.
             _claimRisks: parsed._claimRisks,
             positioningRead: parsed.positioningRead || null,
+            // == PAID FOR ON EVERY AUDIT AND THROWN AWAY ======================
+            // signalReads is requested in the schema with its own ordering
+            // rationale, and max_tokens was raised 3000 -> 4200 specifically to
+            // fit it - roughly 400-600 extra OUTPUT tokens per audit, on every
+            // lead. brainAudit is an explicit literal and this key was not in
+            // it, so the value was generated, billed, and dropped.
+            //
+            // The client asks for it on every render: `const reads =
+            // Array.isArray(ba.signalReads) ? ba.signalReads : []` and falls
+            // back to the terse mechanical status string when it is absent. So
+            // the briefing has been showing "Ranks #15" where it was meant to
+            // show what #15 MEANS, and we were paying for the sentence.
+            //
+            // Same class as _claimRisks directly above, which carries the same
+            // warning for the same reason.
+            signalReads: Array.isArray(parsed.signalReads) ? parsed.signalReads : null,
             realPain: parsed.realPain,
             embarrassingFinding: parsed.embarrassingFinding,
             recommendedProduct: parsed.recommendedProduct,
@@ -27952,38 +28003,150 @@ app.listen(PORT, () => {
     console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
   }
 
-  // ══ FIVE SIGNALS ARE MEASURED AND NEVER USED ═════════════════════════════
-  // CRM detection, analytics, social proof, CTA-above-fold and LSA are all
-  // measured, shown in the audit panel, and never reach the brain.
+  // ══ EVERY FIELD A RUNG READS MUST ACTUALLY ARRIVE ════════════════════════
+  // MEASUREMENT DELIVERY CHECK guards eleven hand-listed fields that
+  // resolveMeasurements owns. That leaves every OTHER field a rung reads
+  // unguarded — and review_velocity_drop was added today reading four of them,
+  // three of which were delivered and one of which was not, so the rung could
+  // never fire on any lead. Its unit test passed because the test handed
+  // rankHarms the field directly; the live path never did.
   //
-  // Four of them SHOULD stay out, and that is the point of this check — it
-  // records the judgement so nobody wires them in later thinking they were
-  // forgotten. CRM detection admits a server-side tool is invisible to it, so
-  // "no CRM detected" would tell an owner with HubSpot he has none. Analytics
-  // and social proof are near-universal and binary. CTA-above-fold is real only
-  // when a screenshot exists, and a live audit already invented a button's
-  // destination on a lead where it did not.
+  // That is the fourth instance of this class in one session, and the second
+  // where the test performed the delivery it was supposed to be verifying. A
+  // hand-written list of guarded fields cannot fix it, because the list is
+  // exactly what nobody updates.
   //
-  // LSA is the exception and it is now wired: the only measurement in this
-  // system about MONEY rather than markup. A home-service owner knows exactly
-  // what a lead costs him on Local Services Ads, and Google Guaranteed is a
-  // badge his competitors carry above him in the map pack.
+  // So this derives BOTH sides from the source instead. Every `m.<field>` any
+  // rung reads, against every key _harmInputs assigns plus everything
+  // resolveMeasurements returns. A rung reading a field nothing delivers is
+  // silent forever, and silence is the one failure no log reports.
   try {
-    const _lsaLine = (lsa) => (lsa && lsa.checked && lsa.eligible
-      ? (lsa.running ? 'running' : 'eligible-no-badge') : '');
-    const _eligible = _lsaLine({ checked: true, eligible: true, running: false });
-    const _running = _lsaLine({ checked: true, eligible: true, running: true });
-    const _notEligible = _lsaLine({ checked: true, eligible: false });
-    const _unchecked = _lsaLine({ checked: false });
-    if (!_eligible || !_running) {
-      console.log(`\u26d4 LSA WIRING CHECK: an eligible business produces no line for the brain, so the one money-side measurement in this system stays in the panel and never reaches an audit.`);
-    } else if (_notEligible || _unchecked) {
-      console.log(`\u26d4 LSA WIRING CHECK: a business that is not eligible, or was never checked, still produces a line. Claiming a channel exists for a trade that cannot use it is a false finding.`);
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.replace(/^\s*\/\/.*$/gm, '');
+
+    // What the rungs read. Sliced from the real ladder text so it cannot drift.
+    const _la = _code.indexOf('const HARM_LADDER');
+    let _d = 0, _le = _la;
+    for (let i = _code.indexOf('[', _la); i < _code.length; i++) {
+      if (_code[i] === '[') _d++;
+      if (_code[i] === ']') { _d--; if (!_d) { _le = i + 1; break; } }
+    }
+    const _ladderTxt = _code.slice(_la, _le);
+    const _wanted = new Set([..._ladderTxt.matchAll(/\bm\.([A-Za-z_$][\w$]*)/g)].map(x => x[1]));
+
+    // What _harmInputs assigns, plus what resolveMeasurements returns. Both are
+    // read from source, and resolveMeasurements is additionally CALLED so a
+    // spread of a real return value is covered rather than guessed at.
+    // NOT indexOf('_harmInputs = {') - that finds `let _harmInputs = {};`, the
+    // empty initialiser, and slicing from there yields a literal with no keys at
+    // all. The first version of this check did exactly that and reported 38
+    // fields missing, almost all of which are delivered. A check that cries wolf
+    // gets switched off, so this matches only the multi-line assignment.
+    const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_code);
+    const _hi = _hiM ? _hiM.index : -1;
+    if (_hi < 0) throw new Error('could not find the _harmInputs assignment');
+    let _d2 = 0, _hie = _hi;
+    for (let i = _code.indexOf('{', _hi); i < _code.length; i++) {
+      if (_code[i] === '{') _d2++;
+      if (_code[i] === '}') { _d2--; if (!_d2) { _hie = i + 1; break; } }
+    }
+    const _hiTxt = _code.slice(_hi, _hie);
+    const _given = new Set([..._hiTxt.matchAll(/^\s+([A-Za-z_$][\w$]*)\s*:/gm)].map(x => x[1]));
+    try {
+      for (const k of Object.keys(resolveMeasurements({}) || {})) _given.add(k);
+    } catch { /* resolver needs no args on this path; if it throws, the list below is just shorter */ }
+    // Spread helpers inside _harmInputs contribute keys too. Called for real
+    // rather than assumed, for the same reason.
+    // Called with text long enough to clear their own minimum. measureAbandonment
+    // returns {} for anything under 400 characters, so passing '' made it look as
+    // though it delivered nothing and reported four of its fields as dead.
+    const _fixture = 'lorem ipsum dolor sit amet copyright 2019 posted 2021 '.repeat(30);
+    for (const fn of ['measureAbandonment', 'measureHistory']) {
+      try {
+        const f = eval(fn);
+        if (typeof f === 'function') for (const k of Object.keys(f(_fixture) || {})) _given.add(k);
+      } catch { /* not spreadable on this input — skip */ }
+    }
+
+    const _missing = [...(_wanted)].filter(f => !_given.has(f)).sort();
+    if (_missing.length) {
+      console.log(`⛔ RUNG INPUT CHECK: ${_missing.length} field(s) are read by a rung and delivered by nothing — ${_missing.join(', ')}. Every rung reading one of those is silent on every lead, and no log says so. This is exactly how review_velocity_drop shipped dead.`);
     } else {
-      console.log(`\u2713 LSA WIRING CHECK: eligibility reaches the brain as eligibility \u2014 never as a claim about their spend \u2014 while CRM detection, analytics, social proof and CTA-above-fold stay out on purpose, being unreliable, universal or screenshot-dependent.`);
+      console.log(`✓ RUNG INPUT CHECK: all ${_wanted.size} field(s) any rung reads are actually assigned by _harmInputs or returned by the resolver — derived from the source on both sides, so a rung cannot be added that reads something nothing delivers.`);
     }
   } catch (e) {
-    console.log(`\u26d4 LSA WIRING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+    console.log(`⛔ RUNG INPUT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THIS CHECK TESTED A LAMBDA IT DECLARED ITSELF ════════════════════════
+  // The old version built `_lsaLine = (lsa) => lsa && lsa.checked && lsa.eligible
+  // ? (lsa.running ? ... : ...) : ''` inside its own try block and asserted THAT
+  // behaved correctly. It was not production code, nothing in the pipeline
+  // called it, and its shape did not match production: detectLSA returns
+  // { eligible, badgeFound, evidence, marker, status } and has NO `checked`
+  // field and NO `running` field. So the check printed a tick forever, and
+  // deleting the LSA block from the prompt entirely would not have made it
+  // fail. A check that cannot fail is not a check.
+  //
+  // Worse, its own comment was false. It claimed CRM detection, analytics,
+  // social proof and CTA-above-fold 'never reach the brain'. All four are
+  // interpolated into the audit prompt today, and two of them GATE A PRODUCT
+  // RECOMMENDATION. Anyone reading it would either wire them in again,
+  // creating duplicates, or reason about the prompt on a false premise.
+  //
+  // This version reads the REAL detectLSA and the REAL source text. It cannot
+  // pass by testing a copy of itself.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _fails = [];
+    // 1. The real function's shape. If a future edit reintroduces `checked` or
+    //    `running`, the readers below are fine; if it REMOVES `status`, they
+    //    break, and this is where that shows.
+    const _shape = detectLSA('plumber', 'we are Google Guaranteed', 'Test Co');
+    if (!_shape || typeof _shape.status !== 'string' || typeof _shape.eligible !== 'boolean') {
+      _fails.push('detectLSA no longer returns { eligible, status } — every consumer reads those two');
+    }
+    // 2. Nothing may read a field detectLSA does not return. This is the exact
+    //    bug that kept LSA out of the situation read for months: `lsa.checked`
+    //    and `lsa.running` were tested and neither exists.
+    // Scanning raw source made this check see ITSELF - its own comment and its
+    // own needle array both contain the strings it looks for, so it reported a
+    // ghost read that does not exist. Comments are stripped, and the needles are
+    // assembled at runtime so no literal in this file can match them.
+    const _code = _src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const _ghosts = ['ch' + 'ecked', 'ru' + 'nning']
+      .filter(f => new RegExp('lsa\\.' + f + '\\b').test(_code))
+      .map(f => 'lsa.' + f);
+    if (_ghosts.length) {
+      _fails.push(`${_ghosts.join(' and ')} read somewhere, and detectLSA returns neither — that test is always false and the block behind it never runs`);
+    }
+    // 3. Eligibility must actually reach the situation read, which is where it
+    //    was missing, and the audit prompt, where it already was.
+    if (!/if \(lsa && lsa\.eligible\) \{/.test(_src)) {
+      _fails.push('the situation read no longer gates on lsa.eligible, so the one money-side measurement here does not reach the briefing');
+    }
+    if (!/lsa\.status === 'running_lsa'/.test(_src)) {
+      _fails.push("nothing branches on status === 'running_lsa', so a business that demonstrably runs LSA reads the same as one that might not");
+    }
+    // 4. The four signals this check used to claim were unwired. They ARE wired,
+    //    and the point of naming them is that the claim stays true either way:
+    //    each must appear in the prompt WITH its caveat, because none of them
+    //    can be stated as a fact about the business.
+    const _caveated = [
+      ['CRM', /None detected on page \(unverified\)/],
+      ['social proof', /review widgets load late, so do NOT claim/],
+    ];
+    const _bare = _caveated.filter(([, re]) => !re.test(_src)).map(([n]) => n);
+    if (_bare.length) {
+      _fails.push(`${_bare.join(', ')} reach the prompt without the caveat that makes them safe — "no CRM detected" would tell an owner with HubSpot he has none`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ LSA WIRING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LSA WIRING CHECK: detectLSA's real shape is honoured, nothing reads a field it does not return, eligibility reaches BOTH the audit prompt and the situation read, and the unreliable signals — CRM, analytics, social proof, CTA-above-fold — reach the prompt only with the caveat that stops them being stated as facts.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LSA WIRING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A QUOTED POSITIONING FINDING MUST SURVIVE ═══════════════════════════
