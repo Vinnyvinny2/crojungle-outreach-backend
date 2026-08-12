@@ -11386,20 +11386,74 @@ const composeFullEmail = (spine, opts = {}) => {
 };
 
 
-const buildProblemList = (harms) => {
+// == WHY EVERY AUDIT LOOKED THE SAME =========================================
+// This sorted by `harm`, and harm is a CONSTANT written on the rung - 54 for no
+// published pricing on every business that ever existed. So the list carried no
+// information about THIS lead: the same rungs, in the same order, every time.
+//
+// Two separate faults, and they compound:
+//
+//   ORDER. Every other signal the ladder computes - urgency from their trade,
+//   referral acquisition, the measured binding constraint, how sellable it is,
+//   whether he can fix it alone - lands in `opener`, and the audit was throwing
+//   all of it away to sort on a constant. Ordering by opener costs nothing and
+//   differs for every lead, because it is built from their own measurements.
+//
+//   AMBIENT CONDITIONS. "No published pricing", "no lead magnet", "no named
+//   offer", "undifferentiated copy", "the site looks dated" are true of nearly
+//   every owner-operated local business. The ladder ALREADY says so - `novel` is
+//   30, 25, 20, 15 and 30 on exactly those five rungs, hand-set and correct. A
+//   condition shared by ninety percent of the market cannot explain why THIS
+//   business is behind, and this file's own rule says it plainly: a finding
+//   lands when it contradicts something the owner did ON PURPOSE, and fails
+//   when it is merely suboptimal.
+//
+//   So they stop counting as findings. They are still measured, still returned,
+//   still on the call sheet - where agreement is the point and Mike can raise
+//   them himself. They just no longer pad the list to five and make a real
+//   finding look like one of a crowd.
+//
+// The exception is deliberate: when an ambient condition sits INSIDE the
+// measured binding constraint it is not filler, it is the diagnosis. A business
+// whose constraint measured OFFER has "no named offer" as its actual problem.
+//
+// NOT changed: `opener` scoring itself. The 7-point cap on novel is deliberate
+// and documented - four live ranking failures came from a modifier outweighing
+// harm, and the fix was to make modifiers gates rather than multipliers. That
+// reasoning still holds. This changes what the AUDIT SHOWS, not what the email
+// opens on.
+const AMBIENT_NOVEL_MAX = 35;
+const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
-  return harms.byHarm
-    // Under this heading, everything must actually be a problem. The ladder only
-    // contains problems, so nothing needs filtering \u2014 which is the point.
-    .map(h => ({
+  const bindingLayer = opts.bindingLayer || null;
+  const rows = harms.byHarm.map(h => {
+    const novel = Number(h.novel);
+    // Unknown novelty is NOT treated as ambient. Requiring a real number stops
+    // a rung that never got one from being silently deleted from the audit -
+    // the "unmeasured treated as zero" failure, pointed the other way.
+    const ambient = Number.isFinite(novel) && novel <= AMBIENT_NOVEL_MAX
+      && !(bindingLayer && HARM_LADDER_LAYER[h.id] === bindingLayer);
+    return {
       area: AREA_OF[h.id] || 'Other',
       problem: h.finding,       // measured sentence, written by code
       costs: h.costs,           // what it does to his business
       harm: h.harm,
+      opener: Number.isFinite(Number(h.opener)) ? Number(h.opener) : (Number(h.harm) || 0),
+      novel: Number.isFinite(novel) ? novel : null,
+      ambient,
       id: h.id,
-    }))
-    // Costliest first, so the reader meets the worst thing immediately.
-    .sort((a, b) => b.harm - a.harm);
+    };
+  });
+  const real = rows.filter(r => !r.ambient).sort((a, b) => b.opener - a.opener);
+  const amb  = rows.filter(r =>  r.ambient).sort((a, b) => b.opener - a.opener);
+  // A thin audit is worse than a padded one. When the measurements genuinely
+  // produced almost nothing, the ambient conditions are all there is to say, so
+  // they are let back in rather than showing a near-empty page.
+  const out = real.length >= 3 ? real : real.concat(amb.slice(0, 3 - real.length));
+  if (amb.length && real.length >= 3) {
+    console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
+  }
+  return out;
 };
 
 // ══ WHAT ONE JOB IS WORTH IN THEIR TRADE ═════════════════════════════════════
@@ -11655,7 +11709,7 @@ const buildFactualSpine = (harms, m = {}) => {
     //
     // Both now count the same list, so the number in the email is the number of
     // rows he will be walked through.
-    problemCount: buildProblemList(harms).length,
+    problemCount: buildProblemList(harms, { bindingLayer: (m || {}).bindingLayer }).length,
     // Everything else we found, worst first \u2014 for the call sheet, not the email.
     rest: (harms.byHarm || []).filter(x => x.id !== lead.id).map(x => x.finding),
     // ══ THE FOLLOW-UPS ARE FULL EMAILS, SO THEY NEED FULL RUNGS ════════════
@@ -21804,11 +21858,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // The problems section, built from the ladder instead of written by a
             // model. Every entry is measured, every entry is genuinely a problem,
             // and each carries what it costs and which area it belongs to.
-            problemList: buildProblemList(_harms),
+            problemList: buildProblemList(_harms, { bindingLayer: (_harmInputs || {}).bindingLayer, company }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
             subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
-            problemCount: _harms.all.length,
+            // Counts the findings the audit actually stands behind. It used to
+            // count every rung that fired, so "those are 2 of 5" was padded with
+            // conditions true of the whole market. Overstating the count is the
+            // same defect as overstating a figure.
+            problemCount: buildProblemList(_harms, { bindingLayer: (_harmInputs || {}).bindingLayer }).length,
             // ══ THE ID IS NOT COSMETIC ══════════════════════════════════════
             // Subjects are looked up by ladder id (SUBJECTS_FOR[id]), so a
             // ranked list stored without ids can be rebuilt into an email with
