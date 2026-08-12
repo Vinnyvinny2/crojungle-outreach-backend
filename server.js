@@ -7305,6 +7305,11 @@ const fetchGBPHealth = async (placeId, placesKey) => {
     const mask = [
       'rating','userRatingCount','businessStatus','primaryTypeDisplayName',
       'regularOpeningHours','websiteUri','nationalPhoneNumber','photos',
+      // WHERE THEY ACTUALLY ARE. Free on a call we already make, and the only
+      // authoritative answer: it comes from their own Place record rather than
+      // from geocoding a town name. The local-rank check needs it to prove a
+      // search landed in their market - see the WRONG TOWN guard.
+      'location',
       'editorialSummary','googleMapsUri','reviewSummary','reviews'
     ].join(',');
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
@@ -7379,6 +7384,10 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       // the most authoritative one that exists, and free with a call we already
       // make.
       phone: d.nationalPhoneNumber || d.internationalPhoneNumber || '',
+      // Their real coordinates, straight off their listing. Carried so the rank
+      // search can be checked against where the business actually is.
+      lat: (d.location && Number.isFinite(Number(d.location.latitude))) ? Number(d.location.latitude) : null,
+      lng: (d.location && Number.isFinite(Number(d.location.longitude))) ? Number(d.location.longitude) : null,
       reviewRecency,          // {checked, newestDays, stale, veryCold} — never claim if unchecked
       primaryCategory,        // their listing's primary category, or null
       gaps,           // only real, observed gaps — safe to state as fact
@@ -11049,7 +11058,19 @@ const composeEmail = (spine, opts = {}) => {
   // Fixing it in each skeleton would mean fixing it again in the next one. This
   // is the single exit every composed body passes through, so it is the only
   // place the rule can be stated once.
-  const body = _tidy(skeleton.render({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }))
+  // ══ ONE PLACE WHERE WHITESPACE IS MADE CORRECT ═══════════════════════════
+  // Every skeleton joins optional fields, and an empty one leaves a double space
+  // behind. The fuzzer found 19 in 1,825 emails — invisible in a log, visible to
+  // the owner, and exactly the kind of small wrongness that makes an email read
+  // as machine-written.
+  //
+  // Fixing it in each skeleton would mean fixing it again in the next one. This
+  // is the single exit every composed body passes through, so it is the only
+  // place the rule can be stated once.
+  const _render = (parts) => _tidy(skeleton.render({
+    first, fact, costs, reframe, count, cta, earned, insight,
+    money: parts.money, pattern: parts.pattern, second: parts.second,
+  }))
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ {2,}/g, ' ')
     // A dropped reframe leaves the skeleton's separating space at the start of
@@ -11058,44 +11079,68 @@ const composeEmail = (spine, opts = {}) => {
     .replace(/^ +/, '')
     .replace(/\s+([.,])/g, '$1')
     .trim();
-  // == LENGTH IS A CEILING, NOT A WARNING ==================================
-  // The 125-word limit existed only as red text in the browser. Sohan & Sons
-  // shipped at 131 words with the warning showing, because nothing ever refused
-  // it. A number nobody enforces is a number that gets ignored, which is the
-  // same lesson as the duplicate-key baseline.
+
+  // ══ LENGTH IS A CEILING, AND IT IS ENFORCED BY NOT WRITING THE SENTENCE ══
+  // The 125-word limit was red text in the browser and nothing else, so Sohan &
+  // Sons shipped at 131 with the warning showing. A number nobody enforces is a
+  // number that gets ignored — the same lesson as the duplicate-key baseline.
   //
-  // The published data is consistent and one-directional: 50-125 words replies
-  // at roughly 2.4x the rate of 200+, the measured sweet spot is 75-100, and an
-  // 80-word email beats a 120-word one by about 15%. So 125 is the ceiling and
-  // ~80 is the target, not the other way round.
+  // The published data is one-directional: 50-125 words replies at roughly 2.4x
+  // the rate of 200+, the measured sweet spot is 75-100, and an 80-word email
+  // beats a 120-word one by about 15%. So 125 is the ceiling and ~80 is the
+  // target, not the reverse.
   //
-  // It TRIMS rather than rejects. Every element here is true and measured, so
-  // refusing the email would throw away a good lead over a word count; dropping
-  // the least load-bearing sentence keeps it sendable. The order is the reverse
-  // of what earns a reply — the pattern line is category wisdom, the money is
-  // context, the second finding is a bonus. The finding, the cost and the ask
-  // are never touched, because those three ARE the email.
-  const _fit = (b) => {
-    const wc = (x) => String(x).trim().split(/\s+/).filter(Boolean).length;
-    if (wc(b) <= 125) return { body: b, dropped: [] };
-    const dropped = [];
-    for (const [name, part] of [['the pattern line', pattern], ['the job value', money], ['the second finding', second]]) {
-      if (!part || wc(b) <= 125) continue;
-      // Remove the sentence carrying that element, not the raw fragment — the
-      // skeletons capitalise and punctuate it on the way in, so a substring
-      // match would leave the stub behind.
-      const key = String(part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 40);
-      const re = new RegExp(`(?:^|(?<=[.!?])\\s*)[^.!?\\n]*${key}[^.!?\\n]*[.!?]\\s*`, 'i');
-      const next = b.replace(re, ' ');
-      if (next !== b) { b = next.replace(/ {2,}/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/\s+([.,])/g, '$1').trim(); dropped.push(name); }
-    }
-    return { body: b, dropped };
-  };
-  const _fitted = _fit(body);
-  if (_fitted.dropped.length) {
-    console.log(`✂ LENGTH [${opts.company || 'lead'}]: trimmed to ${String(_fitted.body).trim().split(/\s+/).filter(Boolean).length} words by dropping ${_fitted.dropped.join(' and ')}. The ceiling is 125 and the target is 80 — 50-125 replies at about 2.4x the rate of 200+, and an 80-word email beats a 120-word one by roughly 15%. The finding, what it costs and the ask are never trimmed.`);
+  // THE FIRST VERSION OF THIS CUT SENTENCES OUT OF THE RENDERED BODY WITH A
+  // REGEX, AND HAD THREE DEFECTS, ALL OF WHICH SHIPPED:
+  //
+  //   · It could never remove the job value. `money` already ends in a full
+  //     stop, so the escaped key carried a trailing "\." and the pattern then
+  //     demanded a SECOND terminator after it. The match could not succeed, so
+  //     the loop fell through and dropped the SECOND FINDING instead — the one
+  //     element the comment ranks last to go.
+  //
+  //   · It welded paragraphs together. The pattern's `\s*` on both sides eats
+  //     newlines, and the replacement was a single space, so removing the last
+  //     sentence of a paragraph deleted the blank line after it. Nothing
+  //     downstream can restore a break that was deleted.
+  //
+  //   · It reported failure as success. With all three elements gone and the
+  //     body still long it returned the over-length text anyway, and logged the
+  //     post-trim count without ever comparing it to the ceiling it claimed to
+  //     enforce.
+  //
+  // All three come from the same mistake: editing prose after it was written.
+  // The elements are optional INPUTS and every skeleton already renders cleanly
+  // without them, so the fix is to decide what goes in and render again.
+  // Paragraphs are then correct by construction rather than by repair.
+  const _wc = (x) => String(x || '').trim().split(/\s+/).filter(Boolean).length;
+  const CEILING = 125;
+  // Reverse order of what earns a reply: the pattern line is category wisdom,
+  // the job value is context, the second finding is a bonus. The finding, what
+  // it costs and the ask are never candidates — those three ARE the email.
+  const _LADDER = [
+    { name: 'the pattern line', drop: { pattern: '' } },
+    { name: 'the job value', drop: { money: '' } },
+    { name: 'the second finding', drop: { second: '' } },
+  ];
+  let _parts = { money, pattern, second };
+  let body = _render(_parts);
+  const _dropped = [];
+  for (const step of _LADDER) {
+    if (_wc(body) <= CEILING) break;
+    const key = Object.keys(step.drop)[0];
+    if (!_parts[key]) continue;                 // nothing there to remove
+    _parts = { ..._parts, ...step.drop };
+    body = _render(_parts);
+    _dropped.push(step.name);
   }
-  return { body: _fitted.body, composedBy: 'code' };
+  if (_dropped.length) {
+    const _over = _wc(body) > CEILING;
+    console.log(_over
+      ? `⚠ LENGTH [${opts.company || 'lead'}]: still ${_wc(body)} words after dropping ${_dropped.join(' and ')} — every optional element is gone and the finding, the cost and the ask alone exceed the ${CEILING}-word ceiling. Sending it rather than refusing a measured lead, but the rung sentences on this lead are too long and that is where to fix it.`
+      : `✂ LENGTH [${opts.company || 'lead'}]: ${_wc(body)} words after dropping ${_dropped.join(' and ')}. Ceiling ${CEILING}, target 80 — 50-125 replies at about 2.4x the rate of 200+, and an 80-word email beats a 120-word one by roughly 15%. The finding, what it costs and the ask are never trimmed.`);
+  }
+  return { body, composedBy: 'code' };
 };
 
 // ══ THE CTA, DECIDED WHERE THE FINDING LIVES ═════════════════════════════════
@@ -19651,7 +19696,7 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
-                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.userRatingCount' },
+                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.userRatingCount,places.location' },
       body: JSON.stringify({ textQuery: query, includePureServiceAreaBusinesses: true }),
     }, 12000);
     const d = await r.json();
@@ -19663,7 +19708,9 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
       } catch { return false; }
     });
     if (!hit || !hit.id) return null;
-    return { id: hit.id, name: (hit.displayName && hit.displayName.text) || '', reviews: hit.userRatingCount || 0 };
+    return { id: hit.id, name: (hit.displayName && hit.displayName.text) || '', reviews: hit.userRatingCount || 0,
+             lat: (hit.location && Number.isFinite(Number(hit.location.latitude))) ? Number(hit.location.latitude) : null,
+             lng: (hit.location && Number.isFinite(Number(hit.location.longitude))) ? Number(hit.location.longitude) : null };
   } catch { return null; }
 };
 
@@ -19966,14 +20013,31 @@ const serviceKeywordsFromSitemap = (urls) => {
   return out;
 };
 
-const auditLocalVisibility = async ({ companyName, placeId, website, industry, location, placesKey, sitemapUrls, maxServices = 3 }) => {
+// == THE GUARDS INSIDE checkLocalRank WERE UNREACHABLE ======================
+// checkLocalRank carries two protections that both read bizLat/bizLng: a 30km
+// locationBias on the query, and the WRONG TOWN median-distance check that
+// refuses a rank claim when the results are not in their market.
+//
+// Neither ever ran. This function did not accept coordinates at all, so every
+// entry point passed an object literal without them. The ONLY producer was
+// checkLocalRank's own return value on a SUCCESSFUL lookup, fed back by
+// checkLocalRankStable for the second sample - and that path returns early
+// when the business was not found, which is precisely the wrong-town case.
+// So the guard written to stop a false absence claim could only ever run on a
+// lead that had already been found correctly.
+//
+// The coordinates were always available from a different place: their own
+// Google Place record, which fetchGBPHealth and resolvePlaceId both already
+// read. Asking for `location` there costs nothing and is authoritative, where
+// geocoding a town name is a guess.
+const auditLocalVisibility = async ({ companyName, placeId, website, industry, location, placesKey, sitemapUrls, maxServices = 3, bizLat = null, bizLng = null }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   const results = [];
 
   // 1. The head term for their trade — the query with the most volume behind it.
   // Two samples. The head term is the only rank that reaches an email, so it is
   // the only one worth paying twice for.
-  const head = await checkLocalRankStable({ companyName, placeId, website, industry, location, placesKey });
+  const head = await checkLocalRankStable({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng });
   if (head.checked) results.push({ ...head, kind: 'primary trade' });
 
   // ══ THE MARKET THEY SELL INTO, NOT THE TOWN THEY ARE REGISTERED IN ═══════
@@ -20022,6 +20086,13 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   // settles that, and paying for six more does not change what the email says.
   if (_serviceAreaCities.length && head.checked) {
     const _alt = _serviceAreaCities[0];
+    // DELIBERATELY NO bizLat/bizLng HERE. This search is aimed at a market the
+    // business publishes BEYOND its registered city, so its results are supposed
+    // to sit far from their own coordinates. Anchoring it would make the WRONG
+    // TOWN guard reject exactly the case it was asked to measure, and a 30km
+    // locationBias on their home town would bias the query away from the market
+    // being checked. The two paths that describe their OWN town - the head term
+    // and the service pages - are anchored; this one cannot be.
     const _altRank = await checkLocalRankStable({
       companyName, placeId, website, industry,
       location: _alt, placesKey,
@@ -20058,7 +20129,7 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   } else {
     const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
     for (const svc of services) {
-      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey });
+      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng });
       if (r.checked) results.push({ ...r, kind: 'their own service page' });
     }
   }
@@ -21122,6 +21193,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           industry: customerTrade || verifiedIndustry || '',
           location: req.body.location || '',
           placesKey, sitemapUrls: _siteUrls,
+          // Their OWN coordinates, read off their Google Place record by
+          // fetchGBPHealth on this same lead. Without these, both protections
+          // inside checkLocalRank - the locationBias and the WRONG TOWN check -
+          // are unreachable, which is how a Colorado business came to be
+          // measured against a town in Wyoming and told it did not rank.
+          bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
+          bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null,
         });
         if (lv.checked) {
           localVisibility = lv;
@@ -21257,6 +21335,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           industry: _trade,
           location: req.body.location || '',
           placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: [],
+          bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
+          bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null,
         });
         if (lv2.checked) {
           localVisibility = lv2;
@@ -28878,6 +28958,54 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A GUARD IS ONLY REAL IF ITS INPUTS ARRIVE ════════════════════════════
+  // checkLocalRank holds two protections that both read bizLat/bizLng — the
+  // 30km locationBias, and the WRONG TOWN median-distance check that refuses a
+  // rank claim when the results are not in their market. Both were unreachable:
+  // auditLocalVisibility did not accept coordinates, so no entry point could
+  // pass them, and the only producer was a SUCCESSFUL lookup fed back for the
+  // second sample. On an absent business — the exact wrong-town case — there is
+  // no successful lookup, and checkLocalRankStable returns before the second
+  // sample is taken.
+  //
+  // So the guard written to stop a false absence claim could only run on a lead
+  // that had already been found correctly. Correct code behind a condition
+  // nothing could satisfy. Same disease as the duplicate-send Map that was read
+  // and never written, three hours earlier.
+  //
+  // This asserts the WIRING, not the logic: the parameter exists, every caller
+  // that describes their own town supplies it, and the two sources that read
+  // their Place record actually request the field.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _fails = [];
+    if (!/const auditLocalVisibility = async \(\{[^}]*bizLat/.test(_src)) {
+      _fails.push('auditLocalVisibility does not accept bizLat/bizLng, so no caller can supply them');
+    }
+    // The head-term and service-page searches describe THEIR town and must be
+    // anchored. The service-area search deliberately must not be — it is aimed
+    // at another market on purpose.
+    if (!/checkLocalRankStable\(\{ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng \}\)/.test(_src)) {
+      _fails.push('the head-term rank search is not anchored to the business');
+    }
+    if (!/checkLocalRank\(\{ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng \}\)/.test(_src)) {
+      _fails.push('the service-page rank searches are not anchored to the business');
+    }
+    if (!/'location',/.test(_src) || !/lat: \(d\.location/.test(_src)) {
+      _fails.push('fetchGBPHealth does not read location off their Place record, so no coordinates exist to pass');
+    }
+    if (!/bizLat: gbpHealth && Number\.isFinite\(gbpHealth\.lat\)/.test(_src)) {
+      _fails.push('no call site forwards the coordinates into auditLocalVisibility');
+    }
+    if (_fails.length) {
+      console.log(`⛔ RANK ANCHOR CHECK: ${_fails.join(' | ')}. Both protections inside checkLocalRank read bizLat/bizLng, so without this wiring they are dead code and a search that resolves to another town becomes a finding.`);
+    } else {
+      console.log(`✓ RANK ANCHOR CHECK: the business's own coordinates are read off their Google Place record and reach every rank search that describes their own town, so the locationBias and the WRONG TOWN guard can actually fire. The service-area search is deliberately left unanchored — it is aimed at another market.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A RUNG THAT INTERPOLATES RUNTIME TEXT IS NOT A TEMPLATE ══════════════
