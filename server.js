@@ -10209,6 +10209,53 @@ because you actually looked \u2014 not because you are being nice.`;
 
 
 
+// ══ A JUDGEMENT IS NOT A FACT, AND WE HAD NO WAY TO SAY SO ══════════════════
+// Every guard in this file polices ASSERTIONS, and correctly: a sentence that
+// states something about his business must trace to a measurement, because a
+// number we invented is checkable and one false number destroys every true one
+// around it.
+//
+// The cost of that was never noticed, because it does not show up as an error.
+// It shows up as flatness. The system's best thinking — the synthesis written
+// with the whole corpus in view, the diagnosis of which layer of the business is
+// actually stuck — was handed to the writer inside a block headed "Never state
+// these as facts", and the writer obeyed. So the email could report what we
+// measured and could never say what we THINK, which is the only thing that makes
+// a stranger read like an expert rather than a scanner.
+//
+// Vin, after reading two live sends: "we are so scared of the brain fabricating
+// that it is being choked into writing flat things and is unable to actually have
+// an opinion or pick a side on anything."
+//
+// The distinction is not checkability, it is GRAMMAR — who owns the sentence.
+//
+//   "Your office manager is drowning."          a claim about his business.
+//                                               We never saw it. Fabrication.
+//   "My read is your office manager is drowning" a claim about OUR READING of his
+//                                               business. It cannot be false,
+//                                               because we do think it.
+//
+// Same words, different speaker, and only one of them can be wrong about the
+// world. So a marked clause is exempt from the families that police assumptions
+// about how he runs his business — and from nothing else. A marker converts a
+// JUDGEMENT into something sayable; it never converts a NUMBER into one.
+// "My read is you're losing $40k a month" still dies, because the $40k is a
+// fabricated fact wearing an opinion's clothes.
+//
+// The list is deliberately short and fixed. A marker the writer invents is not a
+// marker — the reader has to recognise it instantly as the sender stepping out
+// from behind the evidence, and that only works with the plain forms people
+// actually use out loud.
+const OPINION_MARKERS = /\b(?:my (?:read|guess|hunch|sense) (?:is|here is)|what it looks like from (?:outside|the outside)|from (?:outside|the outside) it looks like|I'?d guess|I would guess|I think|I suspect|I could be wrong,? but|I might be wrong,? but|if I had to guess|reading it from outside|my honest read)\b/i;
+
+// A body is split on sentence terminators AND on the connectives that start a new
+// clause, because "X, and my read is Y" carries a marked half and an unmarked
+// one, and only the marked half earns the exemption.
+const opinionClauses = (body) => String(body || '')
+  .split(/(?<=[.!?])\s+|\n+/)
+  .flatMap(sen => sen.split(/\s+(?=(?:and|but|so|though|although)\s+(?:my |I |what it looks|from outside|if I had))/i))
+  .map(x => x.trim()).filter(Boolean);
+
 // ══ EVERYTHING WE LEARNED, IN ONE PLACE ══════════════════════════════════════
 // The email writer was receiving eleven fields out of a research pass that
 // produces dozens. Not by design — by accretion. Each time something was missing
@@ -10230,6 +10277,7 @@ because you actually looked \u2014 not because you are being nice.`;
 // information means better judgement about which true thing to say.
 const buildEmailEvidence = (ev = {}) => {
   const A = [];   // may be asserted
+  const R = [];   // may be stated AS AN OPINION, marked as ours
   const C = [];   // context only
   const line = (arr, t) => { if (t) arr.push(t); };
   const n = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
@@ -10319,14 +10367,56 @@ const buildEmailEvidence = (ev = {}) => {
   if (Array.isArray(sp.prices) && sp.prices.length) {
     line(A, `THEIR OWN PUBLISHED PRICES: ${sp.prices.map(x => `${x.amount} (${x.what})`).join('; ')}. Printed on their site, so safe to use in arithmetic.`);
   }
-  if (ev.bindingLayer) line(C, `THE PART OF THE BUSINESS THAT IS ACTUALLY STUCK: ${ev.bindingLayer}${ev.bindingWhy ? ` — ${ev.bindingWhy}` : ''}`);
-  if (ev.situationRead) line(C, `YOUR OWN READ OF THIS BUSINESS: ${ev.situationRead}`);
+  // ══ THESE TWO WERE THE BEST THINKING IN THE SYSTEM, AND MUZZLED ════════
+  // Both were computed with the whole corpus in view, both were handed to the
+  // writer inside a block headed "Never state these as facts", and the writer
+  // obeyed. They are not facts and they never were — they are READS, and a read
+  // is exactly what an owner cannot get anywhere else and exactly what makes a
+  // stranger sound like somebody who knows the business he is in.
+  //
+  // They move to R, where the writer may state one, in its own words, marked as
+  // ours. Nothing about what may be ASSERTED has changed.
+  if (ev.bindingLayer) line(R, `WHERE THIS BUSINESS IS ACTUALLY STUCK: ${ev.bindingLayer}${ev.bindingWhy ? ` \u2014 ${ev.bindingWhy}` : ''}`);
+  if (ev.situationRead) line(R, `WHAT YOU CONCLUDED READING EVERYTHING: ${ev.situationRead}`);
+  // The positioning read. Their own copy is the anchor and the judgement is ours,
+  // which is the whole shape this block exists for: he can check the quote and he
+  // cannot check the read, and the read is the part worth replying to.
+  const _mc = ev.marketClarity || {};
+  if (_mc.checked && _mc.band) {
+    line(R, `HOW THEIR OWN COPY POSITIONS THEM: it reads as ${_mc.band}${Array.isArray(_mc.gaps) && _mc.gaps.length ? ` \u2014 ${_mc.gaps.slice(0, 2).join('; ')}` : ''}${Array.isArray(_mc.signals) && _mc.signals.length ? `. What it does say: ${_mc.signals[0]}` : ''}`);
+  }
 
   return {
     assertable: A,
+    myRead: R,
     context: C,
     block: [
       A.length ? `\u2550\u2550\u2550 FACTS YOU MAY ASSERT \u2014 every one measured and verified \u2550\u2550\u2550\n${A.map(x => `\u2022 ${x}`).join('\n')}` : '',
+      // ══ THE BLOCK THAT LETS IT TAKE A SIDE ══════════════════════════════
+      // Placed between the two on purpose. A model reading top to bottom meets
+      // the evidence, then what it is allowed to conclude from the evidence, then
+      // the material it may use but not say. That is the order a person thinks in.
+      R.length ? `\n\u2550\u2550\u2550 MY READ \u2014 YOURS TO STATE, AND YOU MUST MARK IT AS YOURS \u2550\u2550\u2550
+These are JUDGEMENTS, not measurements. They are the reason to write to this man
+at all: he can find every fact above on his own phone in ten minutes, and he
+cannot get this anywhere.
+
+You may state ONE of them. Not two \u2014 two opinions is a lecture, and the second
+one dilutes the first. Say it in your own words, plainly, the way you would say it
+standing in his shop. Take a side. A read that hedges every clause is worth
+nothing to him and he can tell you are protecting yourself.
+
+IT MUST BE MARKED AS YOURS. Use one of: "my read is", "what it looks like from
+outside", "I'd guess", "I think", "I could be wrong, but". Those exact shapes \u2014
+a marker you invent will not be recognised and the draft is discarded.
+
+An unmarked judgement is a claim about his business, and we did not measure it.
+A marked one cannot be wrong about the world, only about our reading, and being
+told a thoughtful read he disagrees with is the most likely thing on this page to
+make him write back.
+
+A marker does NOT license a number. Every figure still has to come from the facts
+above, inside an opinion or outside one.\n${R.map(x => `\u2022 ${x}`).join('\n')}` : '',
       C.length ? `\n\u2550\u2550\u2550 CONTEXT \u2014 to decide WHAT TO SAY. Never state these as facts \u2550\u2550\u2550\n${C.join('\n')}` : '',
     ].filter(Boolean).join('\n'),
   };
@@ -10455,14 +10545,26 @@ holding his business back. You are writing to tell him ONE true thing he does no
 know, in a way that makes him feel seen rather than sold to. The facts above are
 your evidence; the read above is your argument. Use both.
 
+He has been sent a hundred emails that report things about his business. Not one
+of them told him what somebody who had actually looked THINKS. That is the whole
+difference between this email and every other one in his inbox, and it lives in
+one sentence: the measured fact proves you looked, and the read proves you
+understood what you were looking at.
+
 This is not a list of findings joined with commas. It is one point, made once,
 by someone who understands the business he is in.
 
 ${MIKE_VOICE_FOR_EMAIL}
 
 ABSOLUTE RULES, and the email is discarded if any is broken:
-- Do NOT add any fact not listed above. No numbers, no times, no competitor
+- Do NOT add any FACT not listed above. No numbers, no times, no competitor
   counts, no dollar figures beyond the one supplied.
+- A JUDGEMENT IS NOT A FACT. You may state one read from MY READ above, in your
+  own words, if you mark it as yours. That sentence is the only place in this
+  email where you are allowed to think out loud, and it is the reason he replies
+  \u2014 every fact above, he can find himself. Do not waste it hedging: say what you
+  actually conclude, plainly, and let him disagree. A read he argues with is a
+  reply; a read nobody could argue with is not a read.
 - Never say what happens AFTER someone contacts them: no callbacks, no voicemail,
   no auto-replies, no "they go elsewhere", no "you never hear from them". We have
   never observed any of it.
@@ -10716,6 +10818,12 @@ const verifyBrainEmail = (body, opts = {}) => {
     [/\b(nobody|no one|no-one|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back)\b/i, 'claims their calls go unanswered — never tested'],
     [/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'asserts the fate of a message we never sent'],
     [/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'states what their prospect already did'],
+    // Every existing rule in this family required the word "first" or "instead",
+    // so "they call somebody else before you ever hear about it" walked through
+    // all of them — the exact claim the family exists to stop, in the phrasing a
+    // writer reaches for most naturally. Found by MY READ CHECK, which was
+    // testing the marker and caught a hole in the battery underneath it.
+    [/\b(calls?|called|calling|phones?|phoned|books?|booked|hires?|hired|goes?|went|end(?:s|ed)? up with)\s+(?:with\s+|to\s+)?(someone else|somebody else|another (?:company|firm|contractor|practice|shop|guy|outfit))\b/i, 'states which business the customer chose — never observed'],
     [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'claims a competitor response time'],
     [/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'invented competitor count'],
     [/\b(is|are|'?s|'?re) (gone|lost)\b/i, 'states the visitor is gone — an outcome we never observed'],
@@ -10781,13 +10889,41 @@ const verifyBrainEmail = (body, opts = {}) => {
     // generic email: it proves we do not know him, in a sentence that claims we
     // do. These are the operational assumptions the model reaches for.
     [/\byou(?:'?re| are) (buying|running|spending on|paying for) (more )?(leads|ads|traffic|ppc|adwords)\b/i, 'assumes he buys leads or ads — never measured'],
-    [/\byour (team|staff|crew|office|front desk|receptionist|admin)\b[^.]{0,40}\b(cannot|can't|struggles|is overwhelmed|is drowning|misses)\b/i, 'describes how his team is coping — never observed'],
+    // MY READ CHECK found this list too narrow: "your front desk is buried and
+    // nobody owns the follow-up" is the identical claim as "is drowning" and
+    // passed every gate. The verbs an owner would actually use for the same
+    // condition all belong here — and now that a MARKED clause is exempt, being
+    // stricter costs nothing except forcing the writer to own the sentence.
+    [/\byour (team|staff|crew|office|front desk|receptionist|admin)\b[^.]{0,45}\b(cannot|can'?t|struggles|is overwhelmed|is drowning|is buried|is swamped|is underwater|is behind|is stretched|is maxed|misses|cannot keep up|can'?t keep up)\b/i, 'describes how his team is coping — never observed'],
     [/\b(demand|volume|work) is outpacing\b|\bgrowing faster than you can\b/i, 'claims his growth outpaced his capacity — never measured'],
     [/\byou (are|'re) (hiring|understaffed|short[- ]staffed|at capacity)\b/i, 'claims his staffing position — never measured'],
   ];
+  // ══ THE FAMILIES THAT POLICE A JUDGEMENT, NOT A FACT ══════════════════
+  // Some of these rules exist because a confident wrong guess about how he runs
+  // his business proves we do not know him. That reasoning is exactly right for
+  // an ASSERTION and exactly wrong for a marked read: "my read is your front desk
+  // is buried" is not a claim that his front desk is buried, it is a claim about
+  // what we think, and being told a thoughtful read he disagrees with is the most
+  // likely thing in the email to make him write back.
+  //
+  // So these families skip a clause that carries an opinion marker. Every other
+  // family stays absolute on every clause, marked or not \u2014 in particular the
+  // figure rules and the post-contact rules, because "my read is you're losing
+  // $40k a month" contains a fabricated number and "my read is they call someone
+  // else" narrates an event we never observed. A marker makes a JUDGEMENT
+  // sayable. It has never made a FACT sayable and it must not start now.
+  const OPINABLE = /assumes he buys leads|describes how his team is coping|claims his growth outpaced|claims his staffing position|consultant framing|narrates the finding in abstract nouns/i;
+  const _clauses = opinionClauses(text);
   for (const [re, why] of FABRICATION) {
     const m = text.match(re);
-    if (m) return { ok: false, why: `${why} — "${m[0].slice(0, 40)}"` };
+    if (!m) continue;
+    if (OPINABLE.test(why)) {
+      // Which clause did it fire in? Only that clause needs the marker — a marked
+      // read elsewhere in the email cannot license an unmarked assumption here.
+      const _hit = _clauses.find(c => re.test(c));
+      if (_hit && OPINION_MARKERS.test(_hit)) continue;
+    }
+    return { ok: false, why: `${why} — "${m[0].slice(0, 40)}"` };
   }
   const pc = detectPostContactClaims(text);
   if (pc.length) return { ok: false, why: String(pc[0]).slice(0, 90) };
@@ -26073,6 +26209,17 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // being persisted but never delivered — the exact "computed but not
             // passed" shape that has cost this system five fields.
             growthConstraint: (brainAudit && brainAudit.growthConstraint) || null,
+            // ══ THE POSITIONING READ, WHICH NOTHING DOWNSTREAM COULD SEE ═══
+            // readMarketClarity runs on the whole corpus, prints MARKET CLARITY to
+            // the log, and reached the ladder only as a one-word band. The email
+            // writer runs in a LATER request off req.body.brainAudit, so anything
+            // not on this object does not exist by then — and the gaps and signals
+            // it produces are the closest thing this system has to Vin's "your
+            // positioning targets X and should target Y".
+            //
+            // Carried whole, so the MY READ block can quote what their own copy
+            // does and does not say instead of naming a band nobody can picture.
+            marketClarity: marketClarity && marketClarity.checked ? marketClarity : null,
             situationRead: (brainAudit && brainAudit.situationRead) || null,
             // ══ THE THREE THE EMAIL WRITER NEEDS MOST ═══════════════════════
             // buildEmailEvidence reads reviewPain, deepPain and localRank. None
@@ -30242,6 +30389,73 @@ app.listen(PORT, () => {
     console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ THE BLOCK THAT LETS IT TAKE A SIDE, AND THE GATE THAT KILLED IT ═
+  // Three separate features in this file shipped dead: the duplicate-send Map was
+  // read and never written, review velocity was computed and never delivered, the
+  // WRONG TOWN guard sat behind a condition nothing could satisfy. Every one of
+  // them looked finished and every one of them was silent on every lead.
+  //
+  // MY READ has TWO ways to die that way, and neither shows up as an error:
+  //   1. the block never reaches the prompt, so the writer is never told it may
+  //      have an opinion at all, and nothing changes;
+  //   2. the block reaches the prompt, the writer states a read, and the
+  //      fabrication battery refuses the draft as an unmeasured claim about his
+  //      business — which drops it to the composed template, which is the flat
+  //      email this whole change exists to stop.
+  //
+  // So this walks the real chain: the real assembler, the real markers, the real
+  // verifier. Four assertions, and the middle two are the ones that matter —
+  // the SAME sentence must pass when marked and fail when not, or the marker is
+  // decorative and the loosening is real in one direction only.
+  try {
+    const _fails = [];
+
+    // 1. The block is built and says what it must say.
+    const _ev = buildEmailEvidence({
+      trade: 'plumber', measured: { reviewCount: 120, rating: 4.4 },
+      bindingLayer: 'OFFER', bindingWhy: 'nothing on the site says who this is for',
+      situationRead: 'The reputation is real and the path to it is blocked',
+      marketClarity: { checked: true, band: 'undifferentiated',
+        gaps: ['no named customer', 'no guarantee'], signals: ['experienced and caring staff'] },
+    });
+    if (!Array.isArray(_ev.myRead) || _ev.myRead.length < 3) {
+      _fails.push(`the read block carries ${(_ev.myRead || []).length} of the 3 judgements it was handed — the binding layer, the situation read and the positioning read must all reach it`);
+    }
+    if (!/MY READ/.test(_ev.block) || !/MUST MARK IT AS YOURS/.test(_ev.block)) {
+      _fails.push('the assembled block does not contain the MY READ section, so the writer is never told it may have an opinion');
+    }
+    if (/Never state these as facts[\s\S]*WHAT YOU CONCLUDED READING EVERYTHING/.test(_ev.block)) {
+      _fails.push("the situation read is still inside the CONTEXT block, whose header says never state it — that is the muzzle this change exists to remove");
+    }
+
+    // 2. THE SAME SENTENCE, MARKED AND UNMARKED. This is the whole mechanism.
+    const _spine = '8 of their own Google reviews name the same thing';
+    const _vopts = { spine: _spine, figures: ['reviews: 120'], money: '', earned: '', count: '' };
+    const _base = (mid) => `Dale, 8 of your own Google reviews name the same thing.\n\n${mid}\n\nIs that anybody's job at the moment?`;
+    const _marked = verifyBrainEmail(_base('My read is your front desk is buried and nobody owns the follow-up.'), _vopts);
+    const _bare = verifyBrainEmail(_base('Your front desk is buried and nobody owns the follow-up.'), _vopts);
+    if (!_marked.ok) {
+      _fails.push(`a MARKED read is still refused (${_marked.why}) — the writer will be told to have an opinion and then punished for having one, and every lead drops to the composed template`);
+    }
+    if (_bare.ok) {
+      _fails.push('an UNMARKED claim about how his business runs still passes — the marker is decorative, and the loosening went both ways when it was only meant to go one');
+    }
+
+    // 3. A MARKER MUST NOT LAUNDER A NUMBER. The one thing that can never move.
+    const _money = verifyBrainEmail(_base("My read is you're losing $40k a month to this."), _vopts);
+    const _after = verifyBrainEmail(_base('My read is they call somebody else before you ever hear about it.'), _vopts);
+    if (_money.ok) _fails.push('an invented dollar figure passed because it was wearing an opinion marker — a marker makes a judgement sayable, never a number');
+    if (_after.ok) _fails.push('a claim about what a customer did after leaving passed because it was marked — we never observe that, and an opinion about an unobserved event is still a claim about an event');
+
+    if (_fails.length) {
+      console.log(`⛔ MY READ CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ MY READ CHECK: the writer receives a MY READ block carrying the binding layer, the situation read and the positioning read — the three judgements that were previously delivered under a header saying never state them. The same sentence passes the fabrication battery when marked as ours and is still refused when stated as a fact about his business, and a marker cannot launder an invented figure or a claim about what a customer did.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MY READ CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THE ONE THING NO REVIEW OF A SINGLE EMAIL CAN SEE ══════════════
   // Every gate in this file reads ONE email. "These emails are flat" is not a
   // property of one email — it is a property of the BATCH, and it is invisible
@@ -32246,6 +32460,9 @@ app.post('/api/compose-email', async (req, res) => {
               bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer) || '',
               bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
               situationRead: (audit.situationRead && audit.situationRead.headline) || '',
+              // The positioning read. Feeds MY READ, never ASSERT — it is a
+              // judgement about what their copy does, anchored on copy we read.
+              marketClarity: audit.marketClarity || null,
             },
             bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer)
               || (audit._persisted && audit._persisted.growthConstraint && audit._persisted.growthConstraint.layer) || '',
