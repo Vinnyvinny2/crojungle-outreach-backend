@@ -316,7 +316,25 @@ const detectPostContactClaims = (prose) => {
         || /\breviewers?\b/i.test(sent)) {
       continue;
     }
-    out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people; illegal attached to them${clocked && !owned ? ' (a specific time implies we watched it)' : ''} \u2014 "${sent.slice(0, 95)}"`);
+    // ══ A MARKED READ IS THE THIRD CASE THIS GUARD NEVER HAD ═══════════
+    // It already draws two lines correctly: a general truth about people is
+    // legal, and the same behaviour ATTACHED to his business is not, because we
+    // never watched it. There is a third case it could not express — the same
+    // sentence offered as our reading rather than as a report.
+    //
+    // "Your callers give up and phone somebody else" asserts an event.
+    // "My read is a lot of them give up and phone somebody else" asserts what we
+    // think, from an intake path we measured and behaviour that is not in
+    // dispute. That is the sentence an owner argues with, and an owner who
+    // argues has replied.
+    //
+    // TWO THINGS A MARKER STILL CANNOT BUY, and they are the ones that claim
+    // knowledge rather than judgement: a COMPLETED event ("already signed"), and
+    // a CLOCK. Both say we were watching, and no hedge makes that true.
+    const _marked = OPINION_MARKERS.test(sent);
+    const _claimsKnowledge = /\balready (signed|hired|booked|chosen|heard)\b/i.test(sent) || clocked;
+    if (_marked && !_claimsKnowledge) continue;
+    out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people, and legal marked as your own read; illegal stated as a report${clocked ? ' (a specific time implies we watched it, and a marker does not change that)' : ''} \u2014 "${sent.slice(0, 95)}"`);
   }
   return out;
 };
@@ -8706,7 +8724,20 @@ const HARM_LADDER = [
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
     reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
-    say: () => 'The copy does not name who the business is for',
+    // ══ AN ADJECTIVE HE CAN ARGUE WITH, OR HIS OWN SENTENCE ═══════════════
+    // "The copy does not name who the business is for" is a judgement, and it is
+    // the reason this rung scores specific 30 and has never once opened an email:
+    // anyone could write it without looking. The same finding built from the
+    // quote readMarketClarity already extracted is a different sentence entirely
+    // — he can open his own homepage and see the words.
+    //
+    // keepSpan because the quoted fragment is HIS text, and the second-person
+    // rewrite must not turn his copy's "their" into "your".
+    say: (m) => {
+      const g = (Array.isArray(m.marketClarityGaps) ? m.marketClarityGaps : [])
+        .find(x => /"/.test(String(x || '')));
+      return g ? upper1(keepSpan(String(g))) : 'The copy does not name who the business is for';
+    },
     // "on their own ... applies to them" is the STRANGER, not the owner, so the
     // second-person rewrite turned it into "a stranger has to work out on YOUR
     // own whether it applies to YOU". Named rather than pronounced — see RUNG
@@ -10912,7 +10943,25 @@ const verifyBrainEmail = (body, opts = {}) => {
   // $40k a month" contains a fabricated number and "my read is they call someone
   // else" narrates an event we never observed. A marker makes a JUDGEMENT
   // sayable. It has never made a FACT sayable and it must not start now.
-  const OPINABLE = /assumes he buys leads|describes how his team is coping|claims his growth outpaced|claims his staffing position|consultant framing|narrates the finding in abstract nouns/i;
+  // ══ WHAT A MARKER MAY AND MAY NOT BUY ═══════════════════════════════
+  // Widened deliberately. "My read is a lot of them call whoever answers first"
+  // is an inference from two things we DID measure — his intake is phone-only,
+  // and people comparing trades call the one that answers — and it is exactly
+  // what a consultant says out loud in the first five minutes. Refusing it was
+  // the collar, not the safety.
+  //
+  // What a marker still cannot buy, and this is the line:
+  //   · a FIGURE about his business. "My read is you're losing $40k a month" is
+  //     not a derived read, it is a slot filled by a language model. We have no
+  //     revenue, no volume and no close rate, so nothing produced that number.
+  //     It is also the one sentence he can check against knowledge only he has,
+  //     and getting it wrong invalidates every true thing around it.
+  //   · a COMPLETED EVENT. "My read is they've already signed with somebody
+  //     else" claims knowledge of something that happened. An opinion about the
+  //     future or the habitual is a read; an opinion about a finished event is
+  //     an assertion wearing a hedge.
+  //   · a CLOCK. A specific hour implies we watched it happen.
+  const OPINABLE = /assumes he buys leads|describes how his team is coping|claims his growth outpaced|claims his staffing position|consultant framing|narrates the finding in abstract nouns|states which business the customer chose|states the visitor is gone|states they never return|states what the customer ended up doing|states the visitor moved on|states the outcome of a visit/i;
   const _clauses = opinionClauses(text);
   for (const [re, why] of FABRICATION) {
     const m = text.match(re);
@@ -13015,10 +13064,42 @@ const rankHarms = (m = {}) => {
     // unusable, they do not fine-tune. specific < 60 means anyone could have
     // written it without looking at his business; weFix < 30 means it is not ours
     // to fix (clinical care, workmanship, staff conduct).
+    // ══ THE GATE WAS JUDGING THE RUNG, NOT THE SENTENCE ═══════════════════
+    // `specific` is a constant on the rung, and for the positioning findings it
+    // is permanently below this bar — undifferentiated 30, no_offer 45. So a
+    // positioning finding has never led an email on any lead, whatever it
+    // actually said. The comment beside the bar states the real test: "anyone
+    // could write this without looking at his business."
+    //
+    // That is true of "your positioning is generic" and false of "your copy uses
+    // the language of serving everyone — 'everyone' and 'anyone'", which nobody
+    // could write without reading his pages. Same rung, same constant, opposite
+    // sentences — and the constant cannot tell them apart.
+    //
+    // VERIFIABILITY_RULES already can. It is scanned top-down, its FIRST rule
+    // exists precisely for this ("a quoted sentence is a measurement, whatever it
+    // is about"), and POSITIONING QUOTE CHECK has been asserting at boot for
+    // weeks that a quoting positioning finding scores 5 while a characterisation
+    // does not. It was never wired to the gate it was built for.
+    //
+    // So: the constant still decides by default, and a sentence that scores as a
+    // real quote from their own page overrides it. A characterisation is
+    // untouched — it still cannot lead, which is correct.
+    let _specificEff = h.specific;
+    if (h.specific < 60) {
+      try {
+        for (const [_n, _re] of VERIFIABILITY_RULES) {
+          if (_re.test(sentence)) { _specificEff = Math.max(h.specific, _n >= 5 ? 75 : h.specific); break; }
+        }
+      } catch (e) { void e; }
+    }
     const _disqualified =
-      h.specific < 60 ? `anyone could write this without looking at his business (specific ${h.specific})`
+      _specificEff < 60 ? `anyone could write this without looking at his business (specific ${h.specific})`
       : weFixThis < 30 ? 'not ours to fix'
       : null;
+    if (_specificEff !== h.specific) {
+      console.log(`\u{1F5E3} QUOTED POSITIONING [${h.id}]: the sentence quotes their own copy, so it scores as checkable (${h.specific} \u2192 ${_specificEff}) and may lead. A characterisation of the same finding still cannot \u2014 "${String(sentence).slice(0, 80)}"`);
+    }
     // Novel survives as a TIEBREAK only: among findings within 8 harm points of
     // each other, the one he is least likely to know already goes first.
     // ══ A FINDING HE CAN FIX ALONE IS A GIFT, NOT AN OPENER ═══════════════
@@ -23092,6 +23173,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // measured right, logged right, delivered wrong.
           leadMagnet: leadMagnet && leadMagnet.checked ? !!leadMagnet.hasAny : null,
           marketClarity: marketClarity && marketClarity.band,
+          // ══ THE BAND WITHOUT THE EVIDENCE IS AN ADJECTIVE ═══════════════
+          // Only the one-word band reached the ladder, so the positioning rung
+          // could say "the copy does not name who this is for" and nothing else —
+          // a characterisation, which is exactly why it has been disqualified
+          // from leading on every lead this system has ever run. readMarketClarity
+          // already QUOTES their copy in its gaps ('their copy uses the language
+          // of serving everyone — "everyone" and "anyone"'), and those quotes
+          // never left the function.
+          marketClarityGaps: (marketClarity && marketClarity.checked && Array.isArray(marketClarity.gaps))
+            ? marketClarity.gaps : null,
           // Free reads over text already scraped — no fetch, no credit.
           ...measureAbandonment(String(content || '') + ' ' + String((sitePages && sitePages.corpus) || '')),
           // HTTPS: only when our own probe is trustworthy. The guard elsewhere
@@ -30441,11 +30532,31 @@ app.listen(PORT, () => {
       _fails.push('an UNMARKED claim about how his business runs still passes — the marker is decorative, and the loosening went both ways when it was only meant to go one');
     }
 
-    // 3. A MARKER MUST NOT LAUNDER A NUMBER. The one thing that can never move.
+    // 3. WHERE THE LINE MOVED, AND WHERE IT DID NOT.
+    // The first version of this check asserted that a marked claim about what a
+    // customer does must still fail. Vin overruled it, and he was right: "my read
+    // is a lot of them call whoever answers first" is an inference from two things
+    // we DID measure — his intake path, and how people choose a trade — and it is
+    // what a consultant says in the first five minutes. Refusing it was the collar
+    // rather than the safety, and the check was asserting my caution rather than a
+    // real boundary. It now asserts the boundary that survived the argument.
+    //
+    // MARKED AND ALLOWED: behaviour and causation. The habitual, the likely, the
+    // read. He can disagree, and an owner who disagrees has replied.
+    const _behaviour = verifyBrainEmail(_base('My read is a lot of them call whoever answers first and you never hear about it.'), _vopts);
+    if (!_behaviour.ok) {
+      _fails.push(`a marked read about how his customers behave is still refused (${_behaviour.why}) — that is the collar, not the safety, and it is the sentence that earns the reply`);
+    }
+    // MARKED AND STILL REFUSED, and these three are the whole remaining line.
+    // Each one claims KNOWLEDGE rather than judgement, and no hedge makes that
+    // true: a figure nothing produced, an event that finished, a clock that
+    // implies we were watching.
     const _money = verifyBrainEmail(_base("My read is you're losing $40k a month to this."), _vopts);
-    const _after = verifyBrainEmail(_base('My read is they call somebody else before you ever hear about it.'), _vopts);
-    if (_money.ok) _fails.push('an invented dollar figure passed because it was wearing an opinion marker — a marker makes a judgement sayable, never a number');
-    if (_after.ok) _fails.push('a claim about what a customer did after leaving passed because it was marked — we never observe that, and an opinion about an unobserved event is still a claim about an event');
+    const _done = verifyBrainEmail(_base("My read is they've already signed with somebody else by then."), _vopts);
+    const _clock = verifyBrainEmail(_base('My read is the ones who find you at 9pm on a Sunday give up.'), _vopts);
+    if (_money.ok) _fails.push("an invented dollar figure passed because it was wearing an opinion marker — we hold no revenue, no volume and no close rate, so nothing produced that number, and it is the one sentence he can check against knowledge only he has");
+    if (_done.ok) _fails.push('a COMPLETED event passed because it was marked — "already signed" claims something happened, which is an assertion wearing a hedge');
+    if (_clock.ok) _fails.push('a specific hour passed because it was marked — a clock says we were watching, and a marker does not make that true');
 
     if (_fails.length) {
       console.log(`⛔ MY READ CHECK: ${_fails.join(' | ')}.`);
