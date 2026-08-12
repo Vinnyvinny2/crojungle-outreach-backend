@@ -3415,30 +3415,30 @@ const LSA_TRADE_ALIASES = [
   // down names `basement waterproof` explicitly, which is the author saying in
   // writing where waterproofing was meant to land. First match wins, so it never
   // got there. Two tables, one loose regex, same lead wrong in both.
-  [/waterproof|foundation|crawl ?space|piering|slabjack|underpinning/i, 'Foundation'],
-  [/\broof(?:ing|er)?\b|re-?roof/i, 'Roofing'], [/plumb|drain|rooter|sewer/i, 'Plumbing'],
-  [/hvac|heating|cooling|air condition|furnace|boiler/i, 'HVAC'],
-  [/restoration|remediation|water damage|fire damage|mold/i, 'Restoration'],
-  [/foundation|crawl ?space|basement waterproof/i, 'Foundation'],
-  [/solar/i, 'Solar'], [/garage door/i, 'Garage Doors'],
-  [/window|door replace/i, 'Windows & Doors'], [/insulation/i, 'Insulation'],
-  [/electric/i, 'Electrical'], [/floor/i, 'Flooring'], [/deck/i, 'Decks'],
-  [/pave|asphalt|driveway/i, 'Paving'], [/concrete/i, 'Concrete'],
-  [/mason|brick|stone/i, 'Masonry'], [/hardscap/i, 'Hardscaping'],
-  [/landscap|lawn/i, 'Landscaping'], [/tree (service|removal|trimming)/i, 'Tree Service'],
-  [/pest control|extermin/i, 'Pest Control'], [/\bwell (?:drilling|pump|water)|water well|septic/i, 'Well & Septic'],
-  [/pool (build|install|construction|contractor)/i, 'Pool Construction'],
-  [/kitchen remodel/i, 'Kitchen Remodel'], [/bath(room)? remodel/i, 'Bath Remodel'],
-  [/remodel|renovat|general contractor|home build|custom home/i, 'Construction'],
-  [/orthodont/i, 'Orthodontics'], [/oral (and )?maxillofacial|oral surg/i, 'Oral Surgery'],
-  [/cosmetic dent/i, 'Cosmetic Dentistry'], [/dent/i, 'Dental'],
-  [/dermatolog/i, 'Dermatology'], [/lasik|vision correction|ophthalmolog/i, 'LASIK'],
-  [/chiropract/i, 'Chiropractic'], [/physical therapy|physio/i, 'Physical Therapy'],
-  [/veterinar|animal hospital/i, 'Veterinary'], [/med ?spa|aesthetic|plastic surg/i, 'Med Spa'],
-  [/senior care|home care|assisted living/i, 'Senior Care'],
-  [/personal injury|injury (lawyer|attorney)/i, 'PI Law'],
-  [/estate (planning|attorney|lawyer)|probate|trust/i, 'Estate Law'],
-  [/cpa|accountant|accounting|bookkeep|tax/i, 'Accounting'],
+  [/\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning/i, 'Foundation'],
+  [/\broof(?:ing|er)?\b|\bre-?roof/i, 'Roofing'], [/\bplumb|\bdrain|\brooter|\bsewer/i, 'Plumbing'],
+  [/\bhvac|\bheating|\bcooling|\bair condition|\bfurnace|\bboiler/i, 'HVAC'],
+  [/\brestoration|\bremediation|\bwater damage|\bfire damage|\bmold/i, 'Restoration'],
+  [/\bfoundation|\bcrawl ?space|\bbasement waterproof/i, 'Foundation'],
+  [/\bsolar/i, 'Solar'], [/\bgarage door/i, 'Garage Doors'],
+  [/\bwindow|\bdoor replace/i, 'Windows & Doors'], [/\binsulation/i, 'Insulation'],
+  [/\belectric/i, 'Electrical'], [/\bfloor/i, 'Flooring'], [/\bdeck/i, 'Decks'],
+  [/\bpave|\basphalt|\bdriveway/i, 'Paving'], [/\bconcrete/i, 'Concrete'],
+  [/\bmason|\bbrick|\bstone/i, 'Masonry'], [/\bhardscap/i, 'Hardscaping'],
+  [/\blandscap|\blawn/i, 'Landscaping'], [/\btree (service|removal|trimming)/i, 'Tree Service'],
+  [/\bpest control|\bextermin/i, 'Pest Control'], [/\bwell (?:drilling|pump|water)|\bwater well|\bseptic/i, 'Well & Septic'],
+  [/\bpool (build|install|construction|contractor)/i, 'Pool Construction'],
+  [/\bkitchen remodel/i, 'Kitchen Remodel'], [/\bbath(room)? remodel/i, 'Bath Remodel'],
+  [/\bremodel|\brenovat|\bgeneral contractor|\bhome build|\bcustom home/i, 'Construction'],
+  [/\borthodont/i, 'Orthodontics'], [/\boral (and )?maxillofacial|\boral surg/i, 'Oral Surgery'],
+  [/\bcosmetic dent/i, 'Cosmetic Dentistry'], [/\bdent/i, 'Dental'],
+  [/\bdermatolog/i, 'Dermatology'], [/\blasik|\bvision correction|\bophthalmolog/i, 'LASIK'],
+  [/\bchiropract/i, 'Chiropractic'], [/\bphysical therapy|\bphysio/i, 'Physical Therapy'],
+  [/\bveterinar|\banimal hospital/i, 'Veterinary'], [/\bmed ?spa|\baesthetic|\bplastic surg/i, 'Med Spa'],
+  [/\bsenior care|\bhome care|\bassisted living/i, 'Senior Care'],
+  [/\bpersonal injury|\binjury (lawyer|attorney)/i, 'PI Law'],
+  [/\bestate (planning|attorney|lawyer)|\bprobate|\btrust/i, 'Estate Law'],
+  [/\bcpa|\baccountant|\baccounting|\bbookkeep|\btax/i, 'Accounting'],
 ];
 
 // Map free-text trade to an LSA category. Returns the original when nothing
@@ -8967,6 +8967,23 @@ const endSentence = (t) => {
 // dismiss the strongest finding we have — two out of a hundred and seven reads
 // as nothing — and it tells him we only skimmed. This removes the clause and
 // leaves the complaint. See the note at reviewPainTop for why.
+// The same rule as stripReviewRatio, but as a TEST rather than a rewrite, and
+// for text we did not write. stripReviewRatio only ever matched the miner's own
+// trailing clause; an audit finding states the ratio in its own words and
+// anywhere in the sentence — "Three of your 39 reviews name it", "2 of ~133
+// reviews mention this" — so the strip could not fire even if it were called.
+//
+// Rewriting a model's sentence to remove a clause is how the pattern-line repair
+// produced "A a business like this business". A claim carrying the arithmetic is
+// REFUSED instead, and the ladder's own sentence stands — already stripped, and
+// the floor we would have sent anyway.
+// NOT "not one of the 150". A ZERO numerator is the strongest form this system
+// has - "not one of the 150 reviews we read has a reply" is unarguable, and the
+// count is what makes it land. What must not reach the opening line is a SMALL
+// numerator over a large denominator, because that is the sentence that hands
+// the owner his dismissal.
+const containsReviewRatio = (t) => /(?<!\bnot\s)(?<!\bnone\s)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+of\s+(?:the\s+|your\s+|his\s+|their\s+|those\s+)?(?:~\s*)?\d+\s+(?:google\s+)?reviews?\b/i.test(String(t || ''));
+
 const stripReviewRatio = (t) => String(t || '')
   .replace(/\s*[—–-]\s*\d+\s+of\s+(?:the\s+)?~?\d+\s+reviews?\s+(?:we\s+read\s+say\s+it|mention\s+this)\s*$/i, '')
   .replace(/\s*[—–-]\s*\d+\s+reviews?\s+mention\s+this\s*$/i, '')
@@ -9923,8 +9940,34 @@ const buildEmailEvidence = (ev = {}) => {
 
   // ── WHERE THEY SIT IN SEARCH ─────────────────────────────────────────────
   const r = ev.localRank || {};
+  // ── THE THIRD READER OF A SUPPRESSED RANK ────────────────────────────────
+  // When two rank samples disagree by more than two places, the reconciler
+  // DELETES rank and scanned off the object and sets rankSuppressed — but it
+  // leaves `found: true`, and localRank is selected on r.found. So every reader
+  // that gates on `found` and then interpolates `rank` prints undefined.
+  //
+  // Two of the three readers were fixed earlier today. This one was missed, and
+  // it is the worst of the three: A is the ASSERTABLE block — the list of things
+  // the writer is explicitly permitted to state — so "Ranked #undefined of
+  // undefined" was handed to the model as a fact it may use.
+  //
+  // Math.max(1, (r.rank || 1) - 1) reads like a guard and is not one: with rank
+  // undefined it silently becomes 1 and the ratio reads "2 of the 1 above them",
+  // which is arithmetic nobody can make true.
+  //
+  // The durable claim survives the drift and is what the email says anyway, so
+  // it is stated without the digits.
+  const _rk = Number(r.rank), _sc = Number(r.scanned);
+  const _rankSayable = Number.isFinite(_rk) && _rk > 0 && !r.rankSuppressed;
+  if (r.found && r.query && _rankSayable) {
+    line(A, `Ranked #${_rk} of ${Number.isFinite(_sc) ? _sc : '?'} for "${r.query}".${r.weakerAbove ? ` ${r.weakerAbove} of the ${Math.max(1, _rk - 1)} above them have FEWER reviews.` : ''}`);
+  } else if (r.found && r.query) {
+    // Position withheld, but the durable fact is not. "Businesses with fewer
+    // reviews than yours are ranking above you" is true at #4 and at #1 alike,
+    // which is precisely why the digit was dropped and this was kept.
+    line(A, `They DO appear for "${r.query}" but the position is NOT sayable — two checks disagreed, so state NO rank, NO band and NO denominator.${r.weakerAbove ? ` What survives: ${r.weakerAbove} business(es) above them have FEWER reviews.` : ''}`);
+  }
   if (r.found && r.query) {
-    line(A, `Ranked #${r.rank} of ${r.scanned} for "${r.query}".${r.weakerAbove ? ` ${r.weakerAbove} of the ${Math.max(1, (r.rank || 1) - 1)} above them have FEWER reviews.` : ''}`);
     const comps = Array.isArray(r.above) ? r.above.slice(0, 3) : [];
     if (comps.length) line(A, `Above them: ${comps.map(c => `${c.name}${c.reviews ? ` (${c.reviews} reviews)` : ''}`).join(', ')}.`);
   }
@@ -11751,14 +11794,14 @@ const buildProblemList = (harms, opts = {}) => {
 // figures. The claim is "a job in this trade runs about this", never "your job".
 const TRADE_JOB_VALUE = [
   // Home exterior / structural
-  { re: /custom home|home build|new construction|luxury home/i, say: 'a custom home runs several hundred thousand dollars' },
-  { re: /waterproof|foundation|crawl ?space|piering|slabjack|underpinning|structural repair/i, say: 'a foundation or waterproofing job runs five figures' },
+  { re: /\bcustom home|\bhome build|\bnew construction|\bluxury home/i, say: 'a custom home runs several hundred thousand dollars' },
+  { re: /\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning|\bstructural repair/i, say: 'a foundation or waterproofing job runs five figures' },
   // A basement REMODEL is a finish-out, not foundation work and not a kitchen.
   // Bare `basement` is deliberately matched by none of these — a "basement
   // contractor" could be either trade, and no figure is always safe where a
   // wrong one never is.
-  { re: /basement (?:remodel|refinish|finish|conversion)|finished basement/i, say: 'a basement finish-out runs $20k-$70k' },
-  { re: /kitchen (?:and|&) bath|kitchen remodel|bath(?:room)? remodel|remodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
+  { re: /\bbasement (?:remodel|refinish|finish|conversion)|\bfinished basement/i, say: 'a basement finish-out runs $20k-$70k' },
+  { re: /\bkitchen (?:and|&) bath|\bkitchen remodel|\bbath(?:room)? remodel|\bremodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
   // ══ A GARAGE DOOR IS NOT A WINDOW ═════════════════════════════════════════
   // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k"
   // in email one and again in follow-up one. The bare word `door` in the exterior
@@ -11771,11 +11814,11 @@ const TRADE_JOB_VALUE = [
   // ten times off proves we did not, and every true sentence around it dies with
   // it. Specific trades are matched BEFORE the broad exterior bucket, and `door`
   // is no longer a bare alternative.
-  { re: /garage door|overhead door|dock door|roll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
-  { re: /window|siding|exterior|entry door|patio door|replacement door/i, say: 'a window or siding job runs $8k-$40k' },
+  { re: /\bgarage door|\boverhead door|\bdock door|\broll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
+  { re: /\bwindow|\bsiding|\bexterior|\bentry door|\bpatio door|\breplacement door/i, say: 'a window or siding job runs $8k-$40k' },
   // ══ AND WATERPROOFING IS NOT ROOFING ══════════════════════════════════════
   // The note directly above diagnosed this exact class for `door`, fixed that
-  // one instance, and never searched for the next. `/roof/i` is a bare
+  // one instance, and never searched for the next. `/\broof/i` is a bare
   // unanchored substring, and the letters roof sit inside wate-ROOF-ing.
   //
   // Live on Sohan & Son's Waterproofing, 2026-08-12: "A roof replacement runs
@@ -11787,48 +11830,48 @@ const TRADE_JOB_VALUE = [
   // Structural is matched FIRST now, and roof carries a boundary so it can
   // only match the word itself. Same for fireproofing and soundproofing, which
   // were reachable the moment a Places category used either word.
-  { re: /\broof(?:ing|er)?\b|re-?roof/i, say: 'a roof replacement runs $8k-$30k' },
+  { re: /\broof(?:ing|er)?\b|\bre-?roof/i, say: 'a roof replacement runs $8k-$30k' },
   // Same trap as the garage door: a pool SERVICE company maintains pools, it does
   // not build them, and quoting a build price at a maintenance business is the
   // same ten-times error. Service is matched first.
-  { re: /pool (?:service|cleaning|maintenance)|pool tech/i, say: 'a season of pool service runs several hundred dollars' },
-  { re: /pool build|pool install|pool construction|spa install|pool/i, say: 'a pool build runs $40k-$100k' },
-  { re: /concrete|paving|asphalt|driveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
-  { re: /landscap|hardscape|lawn care/i, say: 'a landscaping project runs $5k-$30k' },
-  { re: /solar/i, say: 'a solar install runs $15k-$40k' },
-  { re: /fence|deck|patio/i, say: 'a deck or fence job runs $5k-$25k' },
+  { re: /\bpool (?:service|cleaning|maintenance)|\bpool tech/i, say: 'a season of pool service runs several hundred dollars' },
+  { re: /\bpool build|\bpool install|\bpool construction|\bspa install|\bpool/i, say: 'a pool build runs $40k-$100k' },
+  { re: /\bconcrete|\bpaving|\basphalt|\bdriveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
+  { re: /\blandscap|\bhardscape|\blawn care/i, say: 'a landscaping project runs $5k-$30k' },
+  { re: /\bsolar/i, say: 'a solar install runs $15k-$40k' },
+  { re: /\bfence|\bdeck|\bpatio/i, say: 'a deck or fence job runs $5k-$25k' },
   // Home services / trades
-  { re: /hvac|heating|air condition|furnace/i, say: 'a system replacement runs $6k-$15k' },
-  { re: /plumb/i, say: 'a repipe or major plumbing job runs $4k-$15k' },
-  { re: /electric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
-  { re: /restoration|water damage|mold|disaster|cleanup/i, say: 'a restoration job runs five figures' },
-  { re: /pest|exterminat/i, say: 'an annual pest contract runs several hundred dollars' },
+  { re: /\bhvac|\bheating|\bair condition|\bfurnace/i, say: 'a system replacement runs $6k-$15k' },
+  { re: /\bplumb/i, say: 'a repipe or major plumbing job runs $4k-$15k' },
+  { re: /\belectric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
+  { re: /\brestoration|\bwater damage|\bmold|\bdisaster|\bcleanup/i, say: 'a restoration job runs five figures' },
+  { re: /\bpest|\bexterminat/i, say: 'an annual pest contract runs several hundred dollars' },
   // (the second garage-door row lived here and was unreachable — the row near
   //  the top catches every one of its alternatives — while quoting a DIFFERENT
   //  price, $2k-$6k against $1k-$4k. Two prices for one trade in one table is
   //  a coin toss waiting to be re-ordered into an email. Removed.)
-  { re: /paint/i, say: 'a whole-home paint job runs $4k-$12k' },
-  { re: /floor/i, say: 'a flooring job runs $5k-$20k' },
+  { re: /\bpaint/i, say: 'a whole-home paint job runs $4k-$12k' },
+  { re: /\bfloor/i, say: 'a flooring job runs $5k-$20k' },
   // Medical / dental / aesthetic
-  { re: /dentist|dental|dds|dmd|orthodon/i, say: 'a single implant or ortho case runs several thousand dollars' },
-  { re: /plastic surg|cosmetic surg|aesthetic|med ?spa|dermatolog/i, say: 'a single procedure runs several thousand dollars' },
-  { re: /lasik|ophthalm|eye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
-  { re: /chiropract/i, say: 'a care plan runs $1k-$3k' },
-  { re: /veterinar|animal hospital/i, say: 'a surgical case runs $1k-$5k' },
-  { re: /assisted living|senior (?:living|care)|memory care/i, say: 'one resident is several thousand dollars a month' },
+  { re: /\bdentist|\bdental|\bdds|\bdmd|\borthodon/i, say: 'a single implant or ortho case runs several thousand dollars' },
+  { re: /\bplastic surg|\bcosmetic surg|\baesthetic|\bmed ?spa|\bdermatolog/i, say: 'a single procedure runs several thousand dollars' },
+  { re: /\blasik|\bophthalm|\beye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
+  { re: /\bchiropract/i, say: 'a care plan runs $1k-$3k' },
+  { re: /\bveterinar|\banimal hospital/i, say: 'a surgical case runs $1k-$5k' },
+  { re: /\bassisted living|\bsenior (?:living|care)|\bmemory care/i, say: 'one resident is several thousand dollars a month' },
   // Professional services
-  { re: /attorney|law (?:firm|office)|legal|esq\b/i, say: 'a single matter runs several thousand dollars' },
-  { re: /cpa|account(?:ant|ing)|bookkeep|tax/i, say: 'an annual engagement runs several thousand dollars' },
-  { re: /insurance/i, say: 'one policy is years of renewal commission' },
+  { re: /\battorney|\blaw (?:firm|office)|\blegal|\besq\b/i, say: 'a single matter runs several thousand dollars' },
+  { re: /\bcpa|\baccount(?:ant|ing)|\bbookkeep|\btax/i, say: 'an annual engagement runs several thousand dollars' },
+  { re: /\binsurance/i, say: 'one policy is years of renewal commission' },
   // `broker` is a job title, not an industry. A bare alternative here caught
   // `mortgage broker` and `freight broker` and told a trucking company its
   // revenue was a real-estate closing commission. Specific brokers first.
-  { re: /mortgage|lending|loan officer|loan origin/i, say: 'one funded loan is a full commission' },
-  { re: /freight|logistics|truck|transport|hauling|dispatch/i, say: 'one contracted lane is recurring revenue' },
-  { re: /real estate|realtor|realty|broker/i, say: 'one closing is a full commission' },
+  { re: /\bmortgage|\blending|\bloan officer|\bloan origin/i, say: 'one funded loan is a full commission' },
+  { re: /\bfreight|\blogistics|\btruck|\btransport|\bhauling|\bdispatch/i, say: 'one contracted lane is recurring revenue' },
+  { re: /\breal estate|\brealtor|\brealty|\bbroker/i, say: 'one closing is a full commission' },
   // Commercial / logistics
-  { re: /commercial clean|janitorial|facility/i, say: 'one building contract is recurring monthly revenue' },
-  { re: /security|alarm|surveillance/i, say: 'one monitored account is recurring monthly revenue' },
+  { re: /\bcommercial clean|\bjanitorial|\bfacility/i, say: 'one building contract is recurring monthly revenue' },
+  { re: /\bsecurity|\balarm|\bsurveillance/i, say: 'one monitored account is recurring monthly revenue' },
 ];
 
 const tradeJobValue = (tradeWord) => {
@@ -24311,7 +24354,21 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               const _dropped = _ranked.length - _kept.length;
               if (_kept.length) {
                 _ranked = _kept;
-                _pcount = _kept.length;
+                // == COUNT WHAT THE AUDIT SHOWS, NOT EVERY RUNG THAT FIRED ==
+                // _kept is harmsRanked minus the local-only rungs, i.e. every
+                // rung that fired including the AMBIENT ones the audit now
+                // holds back. problemList is the filtered list. So the email
+                // said "those are 2 of 5" while the audit showed 3.
+                //
+                // Before ambient filtering existed the two were the same list
+                // and this could only ever UNDERSTATE. It can now overstate,
+                // which is the same defect as overstating a figure: the owner
+                // opens the write-up and counts.
+                //
+                // buildProblemList is the single definition of what counts as a
+                // finding, so it decides here too rather than a second rule
+                // drifting alongside it.
+                _pcount = buildProblemList({ byHarm: _kept }, { bindingLayer: (_harmInputs || {}).bindingLayer }).length;
                 // ══ THE SECOND CLAIM IS IN THE EMAIL TOO ═══════════════════
                 // This checked only claimId. On David Leon the LEAD was pricing
                 // — not local-only, so nothing rebuilt — while secondClaim held
@@ -24333,7 +24390,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 }
                 if (_spine && LOCAL_ONLY_RUNGS.has(_spine.claimId)) {
                   const _lead = _kept[0];
-                  _spine = { ...(_spine), claim: _lead.finding, claimId: _lead.id, costs: _lead.costs, problemCount: _kept.length };
+                  _spine = { ...(_spine), claim: _lead.finding, claimId: _lead.id, costs: _lead.costs, problemCount: _pcount };
                   console.log(`\u{1F3E2} SPINE REBUILT [${company}]: the email was going to open on a local-search finding. It now opens on "${String(_lead.finding).slice(0, 90)}".`);
                 }
                 console.log(`\u{1F3E2} BUSINESS MODEL [${company}]: ${_bm.model} \u2014 ${_bm.why} Their own page says: "${String(_bm.evidence || '').slice(0, 110)}". ${_dropped} local-search finding(s) withheld: they are measured and true, and they are about a market this business does not sell into.`);
@@ -24518,7 +24575,19 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                   const t = String((o && o.finding) || '').toLowerCase();
                   return t.length >= 25 && _lw.filter(w => t.includes(w)).length >= 2;
                 });
-                if (_sharp) {
+                // == THE SWAP MUST NOT UNDO THE STRIP ======================
+                // reviewPainTop is stripped of its ratio before it reaches the
+                // ladder, precisely so "2 of the 107 reviews we read say it"
+                // cannot open an email — it hands the owner the dismissal and
+                // advertises how shallow the read was. This path then replaced
+                // that stripped sentence with the audit's own finding, raw, and
+                // audit findings state the ratio in their own words.
+                //
+                // So the arithmetic came back in the FIRST sentence, by a route
+                // that bypassed the only place the strip was applied.
+                if (_sharp && containsReviewRatio(_sharp.finding)) {
+                  console.log(`\u{1F50E} SHARPER CLAIM REFUSED [${company}]: the audit's finding is sharper but states the review arithmetic — "${String(_sharp.finding).slice(0, 70)}". That number is for the call sheet, not the opening line. Keeping the ladder sentence, which is the floor we would have sent anyway.`);
+                } else if (_sharp) {
                   console.log(`\u{1F50E} SHARPER CLAIM [${company}]: the audit's own finding covers the same ground as the ladder rung and quotes their pages. Using "${String(_sharp.finding).slice(0, 76)}" instead of "${String(_sp.claim).slice(0, 46)}". Every figure in it is still checked against what we measured.`);
                   _sp.claim = String(_sharp.finding).trim();
                   _sp.claimSource = 'audit_original';
@@ -29230,6 +29299,55 @@ app.listen(PORT, () => {
       ['basement remodeling', /kitchen or bathroom/i], ['basement waterproofing', /kitchen or bathroom/i],
       ['wellness center', /septic|well/i],
     ];
+    // == THE ENUMERATION COULD NEVER BE COMPLETE ==========================
+    // The list above is the three bugs already found, and it cannot be more
+    // than that: the input is not a closed vocabulary. tradeWord comes from
+    // customerTrade, which is free text parsed out of a model reading their
+    // homepage. A check that enumerates its own input can only confirm the bugs
+    // we already fixed - a regression test wearing a guard's clothes, which is
+    // why it printed a tick while the same class was still live in the table.
+    //
+    // So the real guarantee is STRUCTURAL and is tested first: every alternative
+    // in both trade tables must only be able to match at the START of a word.
+    // `roof` matching inside wate-ROOF-ing is the entire class, and a leading \b
+    // makes it impossible for every trade that exists, including the ones nobody
+    // has typed yet. Prefix matching is untouched, so `plumb` still catches
+    // plumbing - verified across 54 live trades with zero change to what any of
+    // them resolves to.
+    const _unanchored = [];
+    try {
+      const _tsrc = require('fs').readFileSync(__filename, 'utf8');
+      for (const _marker of ['const TRADE_JOB_VALUE = [', 'const LSA_TRADE_ALIASES = [']) {
+        const _a = _tsrc.indexOf(_marker);
+        if (_a < 0) { _unanchored.push(`${_marker} missing`); continue; }
+        let _d = 0, _e = _a;
+        for (let i = _tsrc.indexOf('[', _a); i < _tsrc.length; i++) {
+          if (_tsrc[i] === '[') _d++;
+          if (_tsrc[i] === ']') { _d--; if (!_d) { _e = i + 1; break; } }
+        }
+        for (const _m of _tsrc.slice(_a, _e).matchAll(/\/((?:[^\/\\\n]|\\.)+)\/i/g)) {
+          // Split on top-level | only, so alternatives inside a group are not
+          // mistaken for table entries.
+          const _body = _m[1];
+          let _depth = 0, _cur = '';
+          const _alts = [];
+          for (let i = 0; i < _body.length; i++) {
+            const c = _body[i];
+            if (c === '\\') { _cur += c + _body[++i]; continue; }
+            if (c === '(') _depth++;
+            if (c === ')') _depth--;
+            if (c === '|' && _depth === 0) { _alts.push(_cur); _cur = ''; continue; }
+            _cur += c;
+          }
+          _alts.push(_cur);
+          for (const _alt of _alts) {
+            const t = _alt.trim();
+            if (!t || !/^[a-zA-Z]/.test(t)) continue;   // anchored, or a class
+            _unanchored.push(t.slice(0, 24));
+          }
+        }
+      }
+    } catch (e) { _unanchored.push(`tables unreadable: ${(e && e.message) || e}`); }
     const _bad = [];
     for (const [trade, mustNotSay] of _CROSS) {
       const got = tradeJobValue(trade);
@@ -29253,14 +29371,16 @@ app.listen(PORT, () => {
         const probe = String(row.re.source).split('|')[0].replace(/[\\^$?:()\[\]{}+*]/g, '').replace(/\s+/g, ' ').trim();
         return probe.length > 3 && prev.re.test(probe);
       })).map(r => r.say);
-    if (_bad.length) {
+    if (_unanchored.length) {
+      console.log(`⛔ TRADE ANCHOR CHECK: ${_unanchored.length} alternative(s) in the trade tables can match INSIDE another word — ${_unanchored.slice(0, 8).join(', ')}. That is exactly how `+"`roof`"+` matched wate-roof-ing and a waterproofing contractor was quoted a roof replacement price in a live email. Prefix every alternative with a word boundary; prefix matching is unaffected.`);
+    } else if (_bad.length) {
       console.log(`⛔ TRADE CROSS-INDUSTRY CHECK: ${_bad.length} trade(s) are quoted ANOTHER INDUSTRY'S money — ${_bad.join(' | ')}. A figure the owner knows is ten times off proves we did not measure his business, and every true sentence in the email dies with it.`);
     } else if (_missed.length) {
       console.log(`⛔ TRADE CROSS-INDUSTRY CHECK: ${_missed.join(' | ')} — a live trade lost the job value it should have. Silence is safe, but this one used to resolve and no longer does.`);
     } else if (_dead.length) {
       console.log(`⚠ TRADE CROSS-INDUSTRY CHECK: ${_dead.length} unreachable row(s) — ${_dead.join(' | ')}. An earlier row catches everything they match, so they are a second price for a trade that already has one.`);
     } else {
-      console.log(`✓ TRADE CROSS-INDUSTRY CHECK: no trade resolves to another industry's figure — waterproofing is not roofing, a freight broker is not a realtor, a garage door is not a window — and every live trade keeps its own. The one figure in the email exempt from the measurement trace is the one nothing downstream can check.`);
+      console.log(`✓ TRADE ANCHOR CHECK: every alternative in both trade tables is anchored to a word start, so no trade can inherit another industry's figure by matching inside a longer word — that holds for trades nobody has typed yet, not only the three we found. Spot-checks pass too: no trade resolves to another industry's figure — waterproofing is not roofing, a freight broker is not a realtor, a garage door is not a window — and every live trade keeps its own. The one figure in the email exempt from the measurement trace is the one nothing downstream can check.`);
     }
   } catch (e) {
     console.log(`⛔ TRADE CROSS-INDUSTRY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -30858,8 +30978,19 @@ app.post('/api/compose-email', async (req, res) => {
             earned: _parts.earned || '', count: _parts.count || '',
           }) : { ok: false, why: 'model returned nothing' };
           if (_v.ok) {
-            composed.variantA = { ...composed.variantA, body: _v.body, writtenBy: 'brain' };
-            sessionAttachEmail(company, composed.variantA.subject, _v.body, '');
+            // == THE THIRD EXIT ==========================================
+            // _tidy's own comment says "every composed body passes through one
+            // of two exits, so the rule is stated once here and applied at
+            // both". That stopped being true when the brain path was added:
+            // verifyBrainEmail returns String(body||'').trim() and it is
+            // assigned straight onto variantA, so a model-written email got no
+            // whitespace normalisation at all - the double spaces, the space
+            // before a full stop and the triple newline that _tidy exists to
+            // remove all shipped, on the ONE path where the text was not
+            // assembled by us and is therefore least predictable.
+            const _brainBody = _tidy(_v.body);
+            composed.variantA = { ...composed.variantA, body: _brainBody, writtenBy: 'brain' };
+            sessionAttachEmail(company, composed.variantA.subject, _brainBody, '');
             console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
           } else {
             // ══ TELL IT WHAT WAS WRONG AND ASK ONCE ═══════════════════════
@@ -30885,7 +31016,7 @@ app.post('/api/compose-email', async (req, res) => {
               }
             } catch (e) { void e; }
             if (_fixed) {
-              composed.variantA = { ...composed.variantA, body: _fixed, writtenBy: 'brain' };
+              composed.variantA = { ...composed.variantA, body: _tidy(_fixed), writtenBy: 'brain' };
               sessionAttachEmail(company, composed.variantA.subject, _fixed, '');
               console.log(`\u270d\ufe0f REWRITTEN AND ACCEPTED [${company}]: the first draft was refused — ${String(_v.why).slice(0, 90)} — and the corrected version passes every check. This lead would previously have dropped to the composed template.`);
             } else {
@@ -30960,7 +31091,7 @@ app.post('/api/compose-email', async (req, res) => {
                     trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
                   });
                   if (_v3.ok) {
-                    composed[_sendKey] = { ...composed[_sendKey], body: _v3.body, writtenBy: 'brain-sim-corrected' };
+                    composed[_sendKey] = { ...composed[_sendKey], body: _tidy(_v3.body), writtenBy: 'brain-sim-corrected' };
                     sessionAttachEmail(company, _send.subject, _v3.body, `${_sim.verdict}: ${_sim.reaction}`);
                     console.log(`\u21bb REWRITTEN AFTER SIM [${company}]: the owner's own objection was "${_why.slice(0, 80)}" and the email has been rewritten to answer it from the facts we already had. Every figure still traces to a measurement.`);
                   } else {
