@@ -11376,11 +11376,49 @@ const composeBreakup = (spine, opts) => {
   const open = first
     ? `${first}, I'll leave this here.`
     : `I'll leave this here.`;
+  // == THE LAST TOUCH WAS THE SAME EMAIL FOR EVERY PROSPECT ==================
+  // Measured across 40 composed leads spanning 20 trades: ONE distinct break-up
+  // body and ONE distinct subject, 40 times each. It receives `spine` and used
+  // nothing from it, so a quarter of every sequence - and the final impression
+  // anyone forms - carried no information about their business. Two owners in
+  // the same trade comparing notes see the identical letter.
+  //
+  // The constraint above is real and stays: this works ONLY when it is
+  // low-pressure and leaves the door open, and the named anti-patterns are "I
+  // never heard back" and "there were N things you're leaving on the table". So
+  // this adds NO count, NO urgency and NO new claim.
+  //
+  // What it names is spine.claim - the single sentence the email is already
+  // permitted to assert, verified upstream. Reusing it cannot introduce a
+  // fabrication, because nothing new is said; the same fact is simply what the
+  // door is left open on.
+  const _claim = toSecondPerson(String((spine && spine.claim) || '').trim());
+  // Prefer the WHOLE claim, and only shorten when it will not fit. Splitting
+  // first threw away the half that carries the meaning: "more than one of your
+  // own Google reviews names the same thing" — the same thing being WHAT? The
+  // complaint itself lives after the dash.
+  const _wc = (x) => (x ? String(x).trim().split(/\s+/).filter(Boolean).length : 0);
+  const _full = _claim.replace(/[.\s]+$/, '');
+  const _first = _claim.split(/\s+[—–-]\s+|,\s+(?:so|which|and)\b/)[0].trim().replace(/[.\s]+$/, '');
+  const _short = _wc(_full) <= 24 ? _full : _first;
+  const _w = _wc(_short);
+  const _usable = _w >= 4 && _w <= 24 ? _short : '';
   return {
-    subject: 'closing the loop',
+    // The subject followed the body - "closing the loop" on all 40. It stays
+    // soft, because a break-up subject that shouts is exactly what the research
+    // warns against, but it no longer has to be the same four words every time.
+    subject: _usable ? 'last note on this' : 'closing the loop',
     body: [
       open,
-      `If the timing isn't right, no problem at all — I won't keep filling your inbox. If it ever is, the write-up is yours and one reply gets it to you.`,
+      // The claim is a COMPLETE SENTENCE, so it cannot be used as the subject of
+      // another one. Appending a predicate produced "more than one of your own
+      // Google reviews names the same thing IS STILL THERE whenever you want to
+      // look at it" - two verbs, and the same shape of wreck as the pattern-line
+      // name swap. It stands as its own sentence and the next one refers back to
+      // it, which is grammatical whatever the claim happens to be.
+      _usable
+        ? `If the timing isn't right, no problem at all — I won't keep filling your inbox. ${endSentence(upper1(_usable))} That is still true whenever you want to look at it, and one reply gets you the write-up.`
+        : `If the timing isn't right, no problem at all — I won't keep filling your inbox. If it ever is, the write-up is yours and one reply gets it to you.`,
     ].join('\n\n'),
     ctaKind: 'breakup',
   };
