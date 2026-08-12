@@ -17,7 +17,7 @@ const PORT = 4900;
 const rand = (a) => a[Math.floor(Math.random() * a.length)];
 const maybe = (p, v, d = null) => (Math.random() < p ? v : d);
 
-// Every rung id, harvested from the live ladder so the fuzzer can never drift 
+// Every rung id, harvested from the live ladder so the fuzzer can never drift
 // from what the system actually has.
 const fs = require('fs');
 const src = fs.readFileSync('server.js', 'utf8');
@@ -178,8 +178,14 @@ const INVARIANTS = [
   // shipping a fragment while claiming it is fine. Written this way there is no
   // tolerated baseline to match, which is the mistake the duplicate-key check
   // made for its whole life.
+  // 40 was the old WORD floor. The composer's floor is now about ELEMENTS - does
+  // the body carry a measured finding, a reason it matters, and something to
+  // answer - because carrying one category sentence instead of two takes a
+  // healthy single-finding email to about 41 words, and the word rule then called
+  // a good email a broken merge. 28 is the composer's own last-resort backstop
+  // and this tests the same number, so the fuzzer and the code cannot disagree.
   ['unmarked stub', (b, key, e) => /^variant/.test(key)
-    && b.trim().split(/\s+/).filter(Boolean).length < 40
+    && b.trim().split(/\s+/).filter(Boolean).length < 28
     && !(e && e.tooThin === true),
     'a 25-word cold email reads as a broken mail-merge, and one that is not flagged reaches the send screen looking normal'],
   ['empty body', b => !b || b.trim().length < 20],
