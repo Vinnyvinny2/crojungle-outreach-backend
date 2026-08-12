@@ -7978,6 +7978,41 @@ const HARM_LADDER = [
     say: (m) => `Google lists their business category as "${m.gbpCategory}" rather than ${m.tradeWord}`,
     costs: 'the map pack is ranked largely on category, so the wrong one keeps them out of searches for what they actually do' },
 
+  // == THE ONLY FINDING HERE WITH A CLOCK ON IT ==============================
+  // Everything else the ladder measures is a STANDING CONDITION: no pricing, no
+  // booking, a thin profile. All true, all true last year, and all true of most
+  // of the market - which is why an email built on one competes with the whole
+  // inbox. This is the only rung that describes something that CHANGED, and a
+  // change is the only thing that makes a message feel timely.
+  //
+  // It is also the closest thing measured here to what Mike actually sells. A
+  // review count is a marketing fact. A review count that has halved since the
+  // spring is an OPERATIONS fact - fewer jobs, or a process that quietly
+  // stopped, or someone who left. He cannot fix that by telling his crew to ask
+  // harder, because he does not yet know which of those it is. That is a
+  // conversation, not a task, and it is the conversation Mike wants.
+  //
+  // harm 72: above the review COUNT finding (68), below a wrong category (74).
+  // Being outranked costs more today; a business whose proof has stopped
+  // compounding is losing something that does not come back.
+  //
+  // novel 90 is the highest on the ladder and it is earned. He knows his review
+  // total. He has never once divided it by month and compared two quarters -
+  // Google does not show it, and nothing else he owns does either.
+  //
+  // delegable 20: nobody forwards "why did our reviews stop" to a web developer.
+  //
+  // The test requires reviewVelocityChecked, so the rung is silent on every lead
+  // where the two windows were not equally observed. It never infers from a
+  // count and it never fires on a business we simply read shallowly.
+  { harm: 72, specific: 96, novel: 90, delegable: 20, weFix: 80, band: 'INVISIBLE', id: 'review_velocity_drop',
+    reframe: 'proof of recent work is what a stranger checks first, and it goes stale faster than most owners expect',
+    test: (m) => m.reviewVelocityChecked === true && m.reviewVelocitySlowing === true
+      && Number.isFinite(Number(m.reviewsRecent90)) && Number.isFinite(Number(m.reviewsPrior90)),
+    say: (m) => Number(m.reviewsRecent90) === 0
+      ? `their Google reviews have stopped — none in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`
+      : `their Google reviews have slowed — ${m.reviewsRecent90} in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`,
+    costs: 'a stranger checking whether a business is still busy looks at the dates, not the total' },
   { harm: 68, specific: 94, novel: 70, delegable: 25, weFix: 95, band: 'INVISIBLE', id: 'review_deficit',
     // We already read their review count AND the counts of everyone ranking above
     // them. Saying "you have 22 and the three above you have 400+" requires having
@@ -8745,7 +8780,7 @@ const AREA_OF = {
   listing_closed: 'Google listing', thin_profile: 'Google listing',
   no_hours_on_profile: 'Google listing', stale_reviews: 'Google listing',
   low_rating: 'Reputation', no_owner_replies: 'Reputation',
-  review_deficit: 'Reputation', not_compounding: 'Reputation',
+  review_deficit: 'Reputation', not_compounding: 'Reputation', review_velocity_drop: 'Reputation',
   review_pain_pattern: 'Reputation', partial_owner_replies: 'Reputation',
   no_published_pricing: 'Why choose them',
   no_offer: 'Why choose them', no_lead_magnet: 'Why choose them',
@@ -8826,6 +8861,7 @@ const SUBJECTS_FOR = {
   // subject rules at once — numbers, and two clauses split for rhythm. Three
   // options so two leads leading on the same rung do not get the same line.
   not_compounding:      ['your reviews are not adding up', 'your reviews stopped', "reviews don't match the work"],
+  review_velocity_drop: ['your reviews slowed down', 'your reviews went quiet', 'something changed in the spring'],
   // Colleague voice, under 30 characters, nothing a consultant would type.
   // ══ THREE LEADS, ONE SUBJECT LINE ═══════════════════════════════════════
   // Grant Renne, Anthony & Sylvan and Dr Barnthouse all went out as "the same
@@ -9169,6 +9205,7 @@ const HARM_LADDER_LAYER = {
   no_website_on_profile: 'LEADS',
   stale_reviews:         'LEADS',
   review_deficit:        'LEADS',
+  review_velocity_drop:  'LEADS',
   not_compounding:       'LEADS',
 
   // CONVERSION — the path from interested to customer.
@@ -9239,7 +9276,7 @@ const SELLABLE = {
   // ── 5: this is the pitch ────────────────────────────────────────────────
   site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5,
   no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
-  review_deficit: 5, no_after_hours: 5,
+  review_deficit: 5, no_after_hours: 5, review_velocity_drop: 4,
 
   // ── 3: real work, inside an engagement ──────────────────────────────────
   undifferentiated: 3, no_offer: 3, form_only_no_booking: 3,
@@ -11276,6 +11313,7 @@ const CTA_BY_FINDING = {
   //
   // The mined pattern gets its own ask, about the thing the reviews describe.
   review_pain_pattern: 'operations', not_compounding: 'process', no_owner_replies: 'process',
+  review_velocity_drop: 'change',
   partial_owner_replies: 'process', stale_reviews: 'process', review_deficit: 'process',
   low_rating: 'process',
   // Search. There is a concrete artefact to hand over, so hand it over.
@@ -11326,6 +11364,15 @@ const CTA_TEXT = {
   // It is also the question only he can answer — a foreman cannot tell you
   // whether the estimate and the final invoice usually match.
   operations: { text: 'Does that come up much on your end?', kind: 'operations' },
+  // == THE ONLY ASK ABOUT A CHANGE RATHER THAN A CONDITION ==================
+  // Every other ask here is about who OWNS a standing problem. This finding is
+  // different in kind: something moved, and the whole value of it is that he
+  // almost certainly noticed the symptom without ever seeing the number.
+  //
+  // So the question hands him the diagnosis rather than asking for one. It is
+  // also the only question in this file he can answer from memory and cannot
+  // delegate - a foreman does not know what changed in the office in March.
+  change: { text: 'Did something change around then \u2014 a person, a process, the kind of work coming in?', kind: 'change' },
   // ══ NEVER ASK FOR SOMETHING HE CAN GET HIMSELF ═══════════════════════════
   // "Want the list of who's ranking above you?" offers him a Google search. He
   // can run it in ten seconds and does not need us, so the ask has no value and
@@ -14244,11 +14291,73 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     const d = r.when ? Date.parse(r.when) : NaN;
     return !isNaN(d) && d >= _yearAgo;
   }).length;
+  // == REVIEW VELOCITY - THE BUSINESS SIGNAL SITTING IN DATA WE ALREADY BUY ==
+  // Every review carries a publish date and nothing has ever looked at them.
+  // A review COUNT describes a business's whole life; the TREND describes the
+  // last six months, and it is the only thing measured here that can put a
+  // clock on anything. An owner knows roughly how many reviews he has. He has
+  // almost certainly never plotted them against time, and if the flow has
+  // halved he feels it as a quiet phone without connecting the two.
+  //
+  // TWO WINDOWS, NOT A RATE. "Eleven in the last ninety days against twenty-six
+  // in the ninety before" is a sentence he can check on his own profile in a
+  // minute. A rate per month is arithmetic he has to take on trust.
+  //
+  // -- THE GUARD THAT MAKES THIS HONEST, AND IT IS NOT OPTIONAL --------------
+  // Apify returns reviews NEWEST FIRST and the pull is capped. So on a profile
+  // with 500 reviews where we read 150, the recent window is complete and the
+  // EARLIER window is whatever happened to fit - truncated at an arbitrary
+  // date. Comparing a complete window against a truncated one manufactures a
+  // decline out of nothing but our own page size, and it would do it on
+  // exactly the biggest and healthiest businesses, which are the ones most
+  // worth writing to.
+  //
+  // So the comparison runs only when the OLDEST review we actually read is
+  // older than the far edge of the earlier window. If it is not, the two
+  // windows are not equally observed and NOTHING is claimed. That is the whole
+  // difference between a measurement and an artefact of pagination.
+  const velocity = (() => {
+    const DAY = 86400000, WINDOW = 90;
+    const dates = reviews
+      .map(r => (r && r.when ? Date.parse(r.when) : NaN))
+      .filter(t => Number.isFinite(t))
+      .sort((a, b) => b - a);
+    if (dates.length < 6) return { checked: false, why: `only ${dates.length} review(s) carry a readable date` };
+    const now = Date.now();
+    const edgeRecent = now - WINDOW * DAY;
+    const edgeEarlier = now - 2 * WINDOW * DAY;
+    const oldestRead = dates[dates.length - 1];
+    if (oldestRead > edgeEarlier) {
+      return { checked: false, truncated: true,
+        why: `the oldest review we read is only ${Math.round((now - oldestRead) / DAY)} days old, so the earlier ${WINDOW}-day window is cut off by our own page size rather than by their history - a comparison here would invent a decline` };
+    }
+    const recent = dates.filter(t => t >= edgeRecent).length;
+    const earlier = dates.filter(t => t < edgeRecent && t >= edgeEarlier).length;
+    // Noise floor. Two against one is not a trend, it is two customers. The
+    // earlier window has to carry enough for its absence to mean something.
+    if (earlier < 4) return { checked: false, why: `only ${earlier} review(s) in the earlier window - too few for a change to mean anything` };
+    const drop = (earlier - recent) / earlier;
+    return {
+      checked: true, recent, earlier, windowDays: WINDOW,
+      // A third down, and at least three fewer, is the point at which an owner
+      // would recognise it if he counted.
+      slowing: drop >= 0.34 && (earlier - recent) >= 3,
+      stopped: recent === 0,
+      growing: recent > earlier,
+      oldestReadDays: Math.round((now - oldestRead) / DAY),
+    };
+  })();
+  if (velocity.checked) {
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'}. Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
+  } else {
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
+  }
+
   const coverage = meta.totalReviews ? `${reviews.length} of ${meta.totalReviews} reviews`
                                      : `${reviews.length} reviews (total on the profile unknown)`;
   console.log(`APIFY REVIEWS [${companyName}]: read ${coverage} — ${withText.length} with text, ${negative.length} at 3 stars or below, ${ownerReplies.length} owner replies`);
   return { checked: true, reviews, read: reviews.length, totalReviews: meta.totalReviews,
-           rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage, recentCount,
+           rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage, recentCount, velocity,
            sampleComplete: meta.totalReviews ? reviews.length >= meta.totalReviews : false };
 };
 
@@ -20343,6 +20452,11 @@ const _runResearchInner = async (req, res) => {
   // Can they actually fund the engagement? Internal only — never reaches copy.
   let affordability = { checked: false, band: 'unknown' };
   let recentReviewCount = null;
+  // The review TREND, measured from publish dates we already pay for. Null on
+  // every lead where the two windows were not equally observed - see the guard
+  // in the miner. Hoisted here so the ladder can read it, because a value that
+  // is computed and never delivered is the most expensive bug class in this file.
+  let reviewVelocity = null;
   // Which channel reaches this owner. Never a discard — always a route.
   // Observed owner engagement, hoisted because deepReviewMine is block-scoped
   // far above where reachability is finally scored.
@@ -21181,6 +21295,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             reviewsRead = deep.read;
             ownerReplyCount = Array.isArray(deep.ownerReplies) ? deep.ownerReplies.length : 0;
             if (typeof deep.recentCount === 'number') recentReviewCount = deep.recentCount;
+            if (deep.velocity && deep.velocity.checked) reviewVelocity = deep.velocity;
           }
           if (deep && deep.signals && deep.signals.length > 0) {
             _deepReadCount = deep.read || 0;
@@ -22184,6 +22299,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           //
           // Published pricing and owner reply rate are the same story: measured,
           // logged, and unreachable by any rung.
+          // Three fields, not one object, because rankHarms reads m.<field> and a
+          // nested shape is how a measurement quietly stops arriving.
+          reviewVelocityChecked: !!(reviewVelocity && reviewVelocity.checked),
+          reviewsRecent90: reviewVelocity ? reviewVelocity.recent : null,
+          reviewsPrior90: reviewVelocity ? reviewVelocity.earlier : null,
+          reviewVelocitySlowing: !!(reviewVelocity && (reviewVelocity.slowing || reviewVelocity.stopped)),
           reviewPainCount: Array.isArray(publicPainSignals) ? publicPainSignals.length : 0,
           // \u2550\u2550 THE RATIO IS FOR THE CALL SHEET, NOT THE FIRST SENTENCE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
           // The miner bakes "\u2014 3 of the 39 reviews we read say it" into the pain
