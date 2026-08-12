@@ -8210,7 +8210,12 @@ const HARM_LADDER = [
     // and it is the best thing about his profile; the inverse is a real finding.
     test: (m) => Number(m.reviewsRead || 0) >= 15 && Number(m.ownerReplies || 0) === 0,
     say: (m) => `Not one of the ${m.reviewsRead} reviews we read has a reply from the business`,
-    costs: 'a prospect reading reviews sees a business that does not answer, which is the same signal a bad review sends' },
+    // The reframe above already says "a stranger reading reviews sees a business
+     // that does not answer". This used to repeat it nearly verbatim, and the
+     // skeletons put the two in consecutive sentences. RUNG PHRASE CHECK below
+     // fails the boot on that now. The cost is the asymmetry, which is a
+     // different point and a sharper one.
+    costs: 'every reply is free and permanent, and the ones already written are the only ones anybody reads' },
 
   { harm: 62, specific: 85, novel: 85, delegable: 85, weFix: 95, band: 'BLOCKS', id: 'no_hours_on_profile',
     // Free to fix, ten minutes, and genuinely unknown \u2014 nobody looks at their own
@@ -8401,6 +8406,73 @@ const HARM_LADDER = [
   // on Thermal King the AUDIT said "the ranking gap is the real cost" while the
   // EMAIL opened on a contact form \u2014 two different stories about one business,
   // and Mike would have taken a call on the wrong one.
+  // ══ THE ONE FINDING HE CANNOT ASSEMBLE HIMSELF ═══════════════════════════
+  // Vin's objection to naming what we withhold, and it is correct: he can read
+  // his own reviews, and he can Google one keyword to see who is above him. Every
+  // data point in a good audit is public. Withholding public data is theatre.
+  //
+  // What he cannot do is the ASSEMBLY. Running the same trade search across six
+  // metros and tallying which ones he does not appear in is an afternoon of work
+  // he will never do, and it is not a thing any employee has ever handed him.
+  // So: give away the INSTANCE he can check in ten seconds — one named metro he
+  // is missing from — and hold the AGGREGATE, which is the six-market table.
+  // That is Mike's "give him something to check" and the withholding in one
+  // sentence rather than in tension.
+  //
+  // The whole measurement is already paid for. Find runs every category across
+  // every city, so by the end of a run we know both the markets a business came
+  // back in and the markets it did not, and the absent list is already filtered
+  // to within 120 miles of a market it DOES appear in — so it can never claim a
+  // market the business could not plausibly work. It has been logged as
+  // COVERAGE GAP since it was built, reaches buildEmailEvidence as CONTEXT, and
+  // no rung has ever tested it. Computed and never passed, on the best
+  // measurement in the system.
+  //
+  // CLAUDE.md says do not add rungs, and it is right about the reason: every
+  // previous addition described the same website one more time. This one does
+  // not describe a website at all. It is about market coverage, a web developer
+  // cannot fix it, and the fix is the retainer — which is the layer PART 4 says
+  // is missing from 27 of the 33 rungs.
+  //
+  // novel 96: no owner expects a stranger to know the shape of his own coverage.
+  // delegable 5: there is nobody to forward this to.
+  { harm: 88, specific: 94, novel: 96, delegable: 5, weFix: 90, band: 'INVISIBLE', id: 'coverage_gap',
+    // The behavioural truth on its own. The first version of this ended "...so a
+     // market you are not indexed in cannot see you at all", which is the COST
+     // sentence said twice — the composed email carried both, back to back, in
+     // nearly identical words. The reframe explains how people behave; the cost
+     // says what it does to him. One each.
+    reframe: 'people only ever see what the search puts in front of them, and a search is local before it is anything else',
+    // Three searched markets minimum, so "1 of 1" and "1 of 2" cannot fire — at
+    // two markets one absence is noise. At least one absence, and at least one
+    // sighting, or there is nothing to compare against.
+    test: (m) => Array.isArray(m.marketsSearched) && m.marketsSearched.length >= 3
+              && Array.isArray(m.marketsAbsent) && m.marketsAbsent.length >= 1
+              && Array.isArray(m.marketsSeen) && m.marketsSeen.length >= 1,
+    // ══ THE INSTANCE HE CAN CHECK, THEN THE SET HE CANNOT BUILD ═══════════
+    // The first version read "they came up in 2 of the 4 markets WE SEARCHED for
+    // foundation repair". Three problems, all of them Mike's rules:
+    //
+    //   · "we searched" is a report on our afternoon. PART 8: never describe our
+    //     process. The same fact stated about HIS coverage is stronger and shorter.
+    //   · it led with the aggregate, so the first thing he read was a ratio he
+    //     cannot verify. PART 7 wants the checkable thing first — he can search
+    //     his own trade in one named city on his phone in ten seconds.
+    //   · "is one they did not" is a truncated clause a colleague would not type.
+    //
+    // Instance first, then the size of the set. He verifies the instance and
+    // cannot assemble the set, which is the whole mechanism.
+    //
+    // "nowhere in the first twenty" is exactly what was measured — the same
+    // twenty-result query the whole grid runs — so it does not overstate into
+    // "nobody can find you". State codes are stripped because "San Antonio TX"
+    // is how a database writes it and "San Antonio" is how a person says it.
+    say: (m) => {
+      const town = (c) => String(c || '').replace(/\s+[A-Z]{2}$/, '');
+      return `they are nowhere in the first twenty results for ${m.tradeWord || 'their trade'} in ${town(m.marketsAbsent[0])} \u2014 and that's ${m.marketsAbsent.length} of the ${m.marketsSearched.length} metros around them`;
+    },
+    costs: "a metro they don't come up in can't send them a single job" },
+
   { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
   reframe: 'people searching pick from what is in front of them, not from who is actually best',
     // ══ THIS IS TRUE AT EVERY POSITION, SO IT MUST NOT REQUIRE ONE ══════════
@@ -8500,8 +8572,29 @@ const HARM_LADDER = [
     // The mined complaint is the reviewers' words, not ours. keepSpan registers
     // it so the second-person rewrite leaves it alone - see toSecondPerson. It
     // returns the text unchanged, so this line cannot print without protecting.
-    say: (m) => `more than one of their own Google reviews names the same thing — ${keepSpan(String(m.reviewPainTop).toLowerCase())}`,
-    costs: 'a complaint that repeats is the one a stranger comparing three companies will find' },
+    //
+    // ══ THE COUNT, WHEN THERE IS ONE WORTH SAYING ═════════════════════════
+    // "More than one" is true at 2 of 107 and at 30 of 40, and it was chosen so
+    // the sentence could never be argued down. It also flattens the strongest
+    // number this system produces: eleven people independently describing the
+    // same thing is not "more than one", and the count is the part he cannot
+    // assemble without reading and theming every review himself.
+    //
+    // Three is the floor. At two, "more than one" and "two" say the same thing
+    // and the digit only invites the division. Number.isFinite first, because an
+    // unparsed count must never be read as a count of zero.
+    say: (m) => {
+      const n = m.reviewPainMentions;
+      const lead = (Number.isFinite(n) && n >= 3)
+        ? `${n} of their own Google reviews name the same thing`
+        : 'more than one of their own Google reviews names the same thing';
+      return `${lead} — ${keepSpan(String(m.reviewPainTop).toLowerCase())}`;
+    },
+    // "a stranger comparing three companies" was in the reframe too, so both
+     // sentences opened on the same five words. This states the exposure instead:
+     // present tense, public, and it stops at the wall rather than narrating what
+     // the reader then does.
+    costs: 'it is on the record, in public, in front of everybody still deciding' },
 
   // ══ NO PRICE ANYWHERE ON THE SITE ════════════════════════════════════════
   // pricingMeasured is the "did we look?" gate: a null prices array means the
@@ -8589,7 +8682,9 @@ const HARM_LADDER = [
       const who = t ? `a stranger choosing a ${t}` : 'a hesitant stranger';
       return `Nothing on the site tells ${who} why to pick them over the next name — no guarantee, no named offer, no promise anyone else could not also make`;
     },
-    costs: 'nothing tells a hesitant stranger why to choose them over the next name' },
+    // say() already ends "why to pick them over the next name". Repeating it in
+     // the cost line put the same five words twice in one short email.
+    costs: 'the only thing left to compare on is price, and somebody is always cheaper' },
 
   { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
   reframe: 'most people are not ready to buy the day they look, and they remember whoever gave them something',
@@ -8929,6 +9024,7 @@ const AREA_OF = {
   long_form: 'Getting in touch', form_only_no_booking: 'Getting in touch',
   no_after_hours: 'Getting in touch', phone_mismatch: 'Getting in touch',
   absent_from_search: 'Being found', outranked_by_weaker: 'Being found',
+  coverage_gap: 'Being found',
   wrong_gbp_category: 'Being found', no_google_listing: 'Being found',
   no_website_on_profile: 'Being found',
   listing_closed: 'Google listing', thin_profile: 'Google listing',
@@ -8989,6 +9085,9 @@ const SUBJECTS_FOR = {
   // about a thing rather than a verdict on his effort — same information, less
   // accusation, and it is the phrasing he would use himself.
   outranked_by_weaker:  ['your reviews are broken', 'your reviews are not working', 'smaller shops are above you'],
+  // Mike's subject test: could someone who WORKS there have sent it. A colleague
+  // who noticed the company missing from a nearby market writes exactly this.
+  coverage_gap:         ['we are not showing up there', 'nothing in half your area', 'you are missing from two towns'],
   wrong_gbp_category:   ['google has your category wrong', 'your category is wrong'],
   no_google_listing:    ['you have no google listing', 'you are not on the map'],
   // "your door closes at 5" was here, and it states a closing time nobody
@@ -9174,6 +9273,33 @@ const endSentence = (t) => {
 // the owner his dismissal.
 const containsReviewRatio = (t) => /(?<!\bnot\s)(?<!\bnone\s)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+of\s+(?:the\s+|your\s+|his\s+|their\s+|those\s+)?(?:~\s*)?\d+\s+(?:google\s+)?reviews?\b/i.test(String(t || ''));
 
+// ══ THE NUMERATOR IS THE AGGREGATE; THE DENOMINATOR IS THE DISMISSAL ═══════
+// stripReviewRatio removes the whole ratio, and the reasoning for that is right
+// about the denominator: "2 of the 107 reviews we read say it" hands the owner
+// the division and he is correct to make it. It also advertises how shallow the
+// read was, on the one finding whose entire power is "how do they know that?".
+//
+// But it threw away the numerator with it, and the numerator is the part he
+// cannot assemble. He can read his own reviews — that is easy, and it is the
+// reason "we've got the eleven reviews that say it" is a weak thing to withhold.
+// What he cannot do is read a hundred and fifty of them and count how many
+// describe the same thing. "Eleven of your reviews name the same thing" is that
+// count, stated as a fact about his business, with nothing to divide it by.
+//
+// So the ratio still never reaches an email, and the count now can.
+const reviewPainMentions = (t) => {
+  const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12 };
+  const m = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+of\s+(?:the\s+|your\s+|his\s+|their\s+|those\s+)?~?\s*(\d{1,4})\s+(?:google\s+)?reviews?\b/i
+    .exec(String(t || ''));
+  if (!m) return null;
+  const n = /^\d+$/.test(m[1]) ? Number(m[1]) : WORDS[m[1].toLowerCase()];
+  const of = Number(m[2]);
+  // A numerator that exceeds its own denominator is a parse, not a measurement.
+  if (!Number.isFinite(n) || !Number.isFinite(of) || n < 1 || n > of) return null;
+  return n;
+};
+
 const stripReviewRatio = (t) => String(t || '')
   .replace(/\s*[—–-]\s*\d+\s+of\s+(?:the\s+)?~?\d+\s+reviews?\s+(?:we\s+read\s+say\s+it|mention\s+this)\s*$/i, '')
   .replace(/\s*[—–-]\s*\d+\s+reviews?\s+mention\s+this\s*$/i, '')
@@ -9353,6 +9479,7 @@ const HARM_LADDER_LAYER = {
   no_google_listing:     'LEADS',
   absent_from_search:    'LEADS',
   outranked_by_weaker:   'LEADS',
+  coverage_gap:          'MARKET',
   wrong_gbp_category:    'LEADS',
   thin_profile:          'LEADS',
   no_hours_on_profile:   'LEADS',
@@ -9429,6 +9556,7 @@ const BINDING_LAYER_BONUS = 10;
 const SELLABLE = {
   // ── 5: this is the pitch ────────────────────────────────────────────────
   site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5,
+  coverage_gap: 5,
   no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
   review_deficit: 5, no_after_hours: 5, review_velocity_drop: 4,
 
@@ -9684,6 +9812,7 @@ const LOCAL_ONLY_RUNGS = new Set([
   'no_google_listing',      // absent from the map pack entirely
   'absent_from_search',     // not in the first twenty local results
   'outranked_by_weaker',    // local competitors ranked above them
+  'coverage_gap',           // absence from a nearby metro's local results
   'wrong_gbp_category',     // Google ranks the map pack largely on category
   'review_deficit',         // their review count against the businesses ranking above them
   'thin_profile',           // photos on the Google listing
@@ -11137,7 +11266,14 @@ const toSecondPerson = (raw) => {
 const _convertPerson = (t) => String(t || '')
   .replace(/\bTheir\b/g, 'Your').replace(/\btheir\b/g, 'your')
   .replace(/\bThey have\b/g, 'You have').replace(/\bthey have\b/g, 'you have')
-  .replace(/\bThey are\b/g, "You're").replace(/\bthey are\b/g, "you're")
+  // ══ A CONTRACTION NEEDS SOMETHING AFTER IT ══════════════════════════════
+  // "however good they are." converted to "however good you're." — which is not
+  // English, and it appeared at the end of the cost line of a composed email.
+  // "they are" can only contract when another word follows it; clause-final it
+  // has to stay expanded. Two rules rather than one, and the ORDER matters: the
+  // contracting form must run first or the expanded form eats every case.
+  .replace(/\bThey are\b(?=\s+\S)/g, "You're").replace(/\bthey are\b(?=\s+\S)/g, "you're")
+  .replace(/\bThey are\b/g, 'You are').replace(/\bthey are\b/g, 'you are')
   .replace(/\bThey do not\b/g, "You don't").replace(/\bthey do not\b/g, "you don't")
   .replace(/\bThey\b/g, 'You').replace(/\bthey\b/g, 'you')
   .replace(/\bThem\b/g, 'You').replace(/\bthem\b/g, 'you')
@@ -11257,7 +11393,20 @@ const composeEmail = (spine, opts = {}) => {
         ? [`There's one more.`, `Those are 2 of ${n}.`, `And one more after that.`]
         : [`There are ${r} more.`, `Those are 2 of ${n}.`, `${r} more after those.`];
     })() : [
-      `There are ${n} of these on your site.`,
+      // ══ THE COUNT MUST NOT PUT THE PROBLEM SOMEWHERE IT IS NOT ════════
+      // "There are 4 of these on your site." went out under findings that are
+      // not about a site at all: a repeating complaint in his Google reviews, a
+      // competitor ranking above him, a review count that stopped compounding,
+      // and now a market he does not appear in. Every reply this system has ever
+      // earned came from one of those, so the count line was contradicting the
+      // finding it was counting on exactly the leads that work.
+      //
+      // Naming the noun was right — "that's one of 8" is cryptic — but the noun
+      // is "things like this one", not "things on your site". True whatever the
+      // finding is about, and it still frames the two he read as a sample.
+      // n INCLUDES the finding just named, so "there are 2 things like this"
+      // reads as two MORE. The inclusive wording is the honest one.
+      `That's one of ${n} things like it.`,
       `That's one of ${n} things costing you work.`,
       `${n} of these, and that's the one you can check fastest.`,
     ]),
@@ -11541,6 +11690,7 @@ const CTA_BY_FINDING = {
   low_rating: 'process',
   // Search. There is a concrete artefact to hand over, so hand it over.
   outranked_by_weaker: 'list', absent_from_search: 'list',
+  coverage_gap: 'coverage',
   // Everything about how they are bought from — offer, positioning, booking.
   // The write-up already exists; it is delivered, not proposed.
   // ══ FIVE DIFFERENT FINDINGS SHARED ONE GENERIC ASK ═══════════════════════
@@ -11606,6 +11756,16 @@ const CTA_TEXT = {
   // business with a fifth of his reviews sits above him is not, and it is the
   // question he has actually been wondering about.
   list: { text: 'Want to know why they are above you?', kind: 'list' },
+  // ══ THE ASK THAT NAMES THE SET HE CANNOT BUILD ═══════════════════════════
+  // Everything else in this table asks who owns a problem. This one names an
+  // artifact, because the artifact is the point: he can check the one market we
+  // named in ten seconds, and he cannot build the table of six without running
+  // the searches himself and writing down the results.
+  //
+  // Mike's rule against pitch mode holds — no calendar, no service, no price. And
+  // his rule against describing our process is honoured by stating the table as
+  // a fact about his coverage rather than as work we did.
+  coverage: { text: 'Want the other markets \u2014 which ones you are in and which you are not?', kind: 'coverage' },
   // ══ AN OFFER IS EASY TO IGNORE; A QUESTION IS NOT ═════════════════════════
   // "The write-up is yours whenever you want it." asks for nothing, so nothing is
   // the easy answer. It also arrives as the fourth flat statement in a row, which
@@ -12209,6 +12369,13 @@ const buildFactualSpine = (harms, m = {}) => {
   // impossible to fake. It was missing from the permitted list, so the model used
   // it and the allowlist called it invented.
   add('reviews we read', m.reviewsRead);
+  // ══ THE SENTENCE AND THE ALLOWLIST MOVE TOGETHER ═══════════════════════
+  // review_pain_pattern now states the number of reviews naming the same thing.
+  // Without this line the allowlist would call the sharpest number in the email
+  // invented and the composed email would fall back — which is exactly what
+  // happened when the named competitor's review count was added to a finding
+  // and not to this list.
+  add('reviews naming the same thing', m.reviewPainMentions);
   add('reviews the owner answered', m.ownerReplies);
   // ══ THE NAMED COMPETITOR'S REVIEW COUNT ══════════════════════════════════
   // The finding now says "Overhead Door Company ranks above them with 41 reviews
@@ -22413,6 +22580,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
           booking: sitePages && sitePages.booking,
           bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          // ══ THE COVERAGE TABLE, WHICH HAS NEVER BEEN A FINDING ═══════════
+          // Find measures these for free on every run and they have only ever
+          // been logged and handed to the writer as background. RUNG INPUT CHECK
+          // named all three the moment coverage_gap was added, which is exactly
+          // what it is for.
+          //
+          // marketsSearched is DERIVED rather than sent. The client posts seen
+          // and absent, and by construction in searchGooglePlaces absent is the
+          // near-filtered searched list minus seen — so their union IS searched,
+          // and deriving it means there is no new wire field that can fail to
+          // arrive. That is the failure mode of every dead measurement in this
+          // file. The 120-mile filter has already been applied upstream, so
+          // nothing here can claim a market they could not plausibly work.
+          marketsSeen: Array.isArray(req.body.marketsSeen) ? req.body.marketsSeen.filter(Boolean) : [],
+          marketsAbsent: Array.isArray(req.body.marketsAbsent) ? req.body.marketsAbsent.filter(Boolean) : [],
+          marketsSearched: [...new Set([
+            ...(Array.isArray(req.body.marketsSeen) ? req.body.marketsSeen.filter(Boolean) : []),
+            ...(Array.isArray(req.body.marketsAbsent) ? req.body.marketsAbsent.filter(Boolean) : []),
+          ])],
           // ══ THE THREE ORDERING FIXES NEVER REACHED THE LADDER ══════════════
           // rankHarms is called with _harmInputs, which is assembled field by
           // field from _measured — and I added purchaseUrgency,
@@ -22623,6 +22809,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // publicPainSignals string and keep every number.
           reviewPainTop: (Array.isArray(publicPainSignals) && publicPainSignals[0])
             ? stripReviewRatio(String(publicPainSignals[0]).split(' \u2014 evidence:')[0].trim()) : null,
+          // Parsed from the SAME string, before the strip above removes it. Null
+          // when the miner did not state a count, and null is not zero: the rung
+          // falls back to "more than one", which is what it has always said.
+          reviewPainMentions: (Array.isArray(publicPainSignals) && publicPainSignals[0])
+            ? reviewPainMentions(String(publicPainSignals[0])) : null,
           // Array.isArray is the "did we look?" test. A null prices array means
           // the page audit never ran, and absence can only be claimed about
           // something we actually looked for.
@@ -29817,6 +30008,60 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A RUNG MUST NOT SAY THE SAME THING TWICE ═══════════════════════
+  // Every rung carries three sentences and the skeletons put all three in one
+  // short email, usually consecutively. Three rungs were restating themselves:
+  //
+  //   review_pain_pattern  reframe AND costs both opened "a stranger comparing
+  //                        three companies" — the finding that has earned replies
+  //   no_owner_replies     costs was the reframe again, nearly word for word
+  //   no_offer             say() and costs both ended "over the next name"
+  //
+  // In an 80-word email a repeated five-word phrase is the clearest possible tell
+  // that nobody read it before it sent, and it undoes the whole point of composing
+  // from measurements. fuzz.js has an invariant for exactly this and could not see
+  // it: its fixtures use synthetic reframes and costs, not the real ladder's.
+  //
+  // So this reads the REAL rungs. One fixture, every rung evaluated, and any
+  // five-word phrase appearing twice across a rung's own say/reframe/costs fails
+  // the boot. Baseline zero — three collisions were sitting in the ladder and a
+  // tolerated number is a number nobody reads.
+  try {
+    const _m = { hasPlace: true, tradeWord: 'plumber', reviewCount: 120, rating: 4.4, reviewsRead: 60,
+      ownerReplies: 5, reviewPainCount: 2, reviewPainTop: 'appointments rescheduled without a call',
+      reviewPainMentions: 7, formFieldCount: 9, photoCount: 2, rank: 9, scanned: 20, weakerAbove: 3,
+      tenureYears: 20, reviewsPerYear: 6, businessStatus: 'OPERATIONAL', copyrightYear: 2019,
+      newestPostYear: 2021, placeholderSample: 'Lorem ipsum dolor sit amet',
+      marketsSeen: ['Dallas TX', 'Austin TX'], marketsAbsent: ['San Antonio TX', 'Waco TX'],
+      marketsSearched: ['Dallas TX', 'Austin TX', 'San Antonio TX', 'Waco TX'] };
+    const _grams = (t) => {
+      const w = String(t || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+      const out = [];
+      for (let k = 0; k + 5 <= w.length; k++) out.push(w.slice(k, k + 5).join(' '));
+      return out;
+    };
+    const _dup = [];
+    let _checked = 0;
+    for (const h of HARM_LADDER) {
+      let said = '';
+      try { said = String((typeof h.say === 'function' ? h.say(_m) : h.say) || ''); } catch { continue; }
+      if (!said) continue;
+      _checked++;
+      const _seen = new Set();
+      for (const g of _grams([said, h.reframe || '', h.costs || ''].join(' . '))) {
+        if (_seen.has(g)) { _dup.push(`${h.id}: "${g}"`); break; }
+        _seen.add(g);
+      }
+    }
+    if (_dup.length) {
+      console.log(`⛔ RUNG PHRASE CHECK: ${_dup.length} rung(s) repeat a five-word phrase inside their own three sentences — ${_dup.join(' | ')}. The skeletons place all three in one short email, so the reader gets the same clause twice in consecutive sentences. That is the automation tell, on findings we are choosing to lead with.`);
+    } else {
+      console.log(`✓ RUNG PHRASE CHECK: none of the ${_checked} rungs that fired repeats a five-word phrase across its finding, its reframe and its cost line — so no composed email can hand the reader the same clause twice. fuzz.js has this invariant too and cannot see it: its fixtures are synthetic, and these are the real sentences.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RUNG PHRASE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ AN ADDRESS WE FOUND MUST ACTUALLY BE AN ADDRESS ════════════
