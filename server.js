@@ -4014,6 +4014,28 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0;
   let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
+  // ══ BUSINESSES WE ALREADY OWN, SKIPPED BEFORE THEY COST A SLOT ═══════════
+  // Passed in by /api/discover. Absent means no constraint, so every other
+  // caller behaves exactly as before.
+  const _knownH = _flt.knownHosts instanceof Set ? _flt.knownHosts : new Set();
+  const _knownN = _flt.knownNames instanceof Set ? _flt.knownNames : new Set();
+  const _nrm = typeof _flt.normName === 'function' ? _flt.normName : (x) => String(x || '').toLowerCase().trim();
+  let skippedAlreadyOwned = 0;
+  // ══ PAGE TWO EXISTS AND WE NEVER ASKED FOR IT ════════════════════════════
+  // Places searchText answers with 20 results and a nextPageToken; we sent no
+  // pageSize and never used the token, so the reachable universe of this whole
+  // system was the twenty most PROMINENT businesses in each of 39 categories x
+  // 20 cities. Prominence order is deterministic, so "plumber in Denver" returns
+  // the same twenty every run, forever — about 15,600 businesses in total, out of
+  // millions on Places.
+  //
+  // Depth is bought only where it is needed: if a query's page ran out of NEW
+  // businesses (because we already own them, or the band and the caps rejected
+  // them), ask for the next page. A query that yielded plenty stops at one page,
+  // so the extra requests land exactly on the exhausted verticals.
+  const PAGE_BUDGET = parseInt(process.env.GP_PAGE_BUDGET || '80', 10);
+  const NEW_PER_QUERY = parseInt(process.env.GP_NEW_PER_QUERY || '4', 10);
+  let pagesBought = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     // Recorded before the request so a failed query does not silently become a
     // market we claim not to have searched.
@@ -4021,14 +4043,24 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
     const _searchedForCat = citiesSearchedByCat.get(cat.label);
     if (!_searchedForCat.includes(city)) _searchedForCat.push(city);
     try {
+      // pageToken carries the query forward. Google requires the ORIGINAL request
+      // body to be resent alongside it, so textQuery stays on every page.
+      let _pageToken = '', _pagesHere = 0, _stop = false;
+      do {
+      const _body = { textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true, pageSize: 20 };
+      if (_pageToken) _body.pageToken = _pageToken;
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': FIELD_MASK },
-        body: JSON.stringify({ textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true }),
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken` },
+        body: JSON.stringify(_body),
       }, 12000);
       calls++;
+      if (_pageToken) pagesBought++;
+      _pagesHere++;
       const d = await r.json();
-      if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) break; continue; }
+      if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) { _stop = true; break; } break; }
+      // Counted per page so the decision to buy the next one is about THIS page.
+      let _newHere = 0;
       for (const p of (d.places || [])) {
         const name = (p.displayName?.text || '').trim();
         const website = p.websiteUri || '';
@@ -4075,6 +4107,15 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // who will reply that they have a team for that.
         if (reviews > GP_MAX_REVIEWS) { skippedTooBig++; continue; }
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
+        // ── ALREADY IN THE PIPELINE: SKIP IT HERE, NOT AT THE END ──────────
+        // Before the per-category slot, so the slot goes to a business we do not
+        // already own. This is the whole fix for repeat leads: the run stops
+        // spending its capacity re-finding the businesses it found last time.
+        if (_knownH.size || _knownN.size) {
+          const _h = website ? website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase() : '';
+          const _k = _nrm(name);
+          if ((_h && _knownH.has(_h)) || (_k && _k.length > 4 && _knownN.has(_k))) { skippedAlreadyOwned++; continue; }
+        }
         const catCount = perCat.get(cat.label) || 0;
         if (catCount >= PER_CAT_CAP) { skippedCatCap++; continue; }    // one vertical must not flood the queue
         // A lead with no website is keyed on its Place id instead, so two
@@ -4133,7 +4174,14 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         };
         seen.set(domainKey, _lead);
         out.push(_lead);
+        _newHere++;
       }
+      // Ask for the next page only when this one ran dry of NEW businesses, and
+      // only while the page budget lasts. A productive query costs one request.
+      _pageToken = (_newHere < NEW_PER_QUERY && pagesBought < PAGE_BUDGET && _pagesHere < 3)
+        ? String(d.nextPageToken || '') : '';
+      } while (_pageToken);
+      if (_stop) break;
     } catch(e) { /* fail-safe per query */ }
   }
   // ROUND-ROBIN INTERLEAVE. Results are collected query by query, so they leave this
@@ -4151,7 +4199,14 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig} too big, ${skippedCatCap} over per-category cap)`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig} too big, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
+  // ══ HOW DEEP THE RUN ACTUALLY REACHED ════════════════════════════════════
+  // The number to watch when leads feel repetitive. Places answers each query
+  // with its twenty most prominent businesses in the same order every time, so
+  // without extra pages a run can only ever see 39 categories x 20 cities x 20 =
+  // about 15,600 businesses in total. Pages are bought only for queries that ran
+  // out of NEW businesses, which is exactly where the repetition comes from.
+  console.log(`\u{1F50E} DEPTH [Places]: ${pagesBought} extra page(s) of results pulled on queries whose first page returned fewer than ${NEW_PER_QUERY} businesses we do not already own (budget ${PAGE_BUDGET}). ${skippedAlreadyOwned} business(es) were skipped BEFORE they could take a per-category slot \u2014 previously they filled the slot and were dropped at the very end, so the run reported leads it never returned.`);
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
   // whether filtering on what we can know BEFORE auditing changes the odds.
@@ -5998,7 +6053,24 @@ const verifyEmailSMTP = async (email, verifierKey) => {
       : /ECONNREFUSED|ECONNRESET|EPIPE/i.test(_m) ? 'the verifier host refused or dropped the connection'
       : /CERT|TLS|SSL/i.test(_m) ? 'the TLS handshake with the verifier failed'
       : `an unexpected error: ${_m}`;
-    console.log(`\u26a0 SMTP VERIFY FAILED [${String(email).split('@')[1] || '?'}]: ${_why}. Until this succeeds every address stays T4 and NOTHING can be sent, so this one line is the whole send path.`);
+    // ══ THIS LINE WAS THE DEFECT, NOT THE CODE UNDER IT ════════════════
+    // It used to end "Until this succeeds every address stays T4 and NOTHING can
+    // be sent, so this one line is the whole send path." That is false in the
+    // common case, and it fires on a routine per-domain condition: the verifier
+    // holds a live SMTP conversation with the RECIPIENT's mail server, and
+    // hardened Microsoft 365 tenants stall RCPT TO probes specifically to defeat
+    // address harvesting. Those domains hang until our cap fires; most answer fine.
+    //
+    // Live proof it blocks almost nothing: emilytaylorlaw.com timed out at
+    // 22:58:43 and resolved "Verified by Hunter + SMTP | sendable: true" twenty-two
+    // seconds later. Across every visible run each EMAIL RESULT read sendable:true.
+    //
+    // The overstatement cost a rewrite of the timeout logic and a place at the top
+    // of the roadmap that the evidence never supported. A message that overstates
+    // its severity costs exactly as much as one that understates it, so the alarm
+    // is reserved for the case where every route has failed — which is a different
+    // log line, on the path that resolves no pattern on a normal domain.
+    console.log(`\u26a0 SMTP VERIFY DID NOT ANSWER [${String(email).split('@')[1] || '?'}]: ${_why}. This is usually the recipient's own mail server refusing RCPT TO probes to stop address harvesting — it is per-domain and normal, and it does NOT block the send: the address falls back to Hunter verification and to the learned-pattern route, and typically resolves sendable seconds later. Only a lead where EVERY route failed is actually blocked, and that says so separately.`);
     return { valid: null, catchAll: null, unknown: true, error: true };
   }
 };
@@ -6096,6 +6168,40 @@ const isCatchAllDomain = async (domain, verifierKey) => {
   catchAllCache.set(domain, isCatchAll);
   console.log(`Catch-all probe [${domain}]: ${isCatchAll ? 'CATCH-ALL (SMTP unreliable here)' : 'normal domain (SMTP trustworthy)'}`);
   return isCatchAll;
+};
+
+// ══ A FILENAME IS NOT AN ADDRESS ═══════════════════════════════
+// Live, Vargas Face and Skin Center:
+//
+//   EMAIL scrape [vargasfaceandskin.com]: no same-domain address; using personal
+//   off-domain email realself@2x.png from homepage
+//
+// and the address the lead was finally scored on was team-dr-vargas@2x.jpg —
+// reachability 100/100, sendable: true. A JPEG was graded as a human being, and
+// the hard bounce would have been charged to the warming domain.
+//
+// Both are retina image filenames. `logo@2x.png` is one of the most common
+// filename conventions on the web and it is shaped exactly like an address: a
+// local part, an @, a short "domain", a three-letter "TLD". Every regex in this
+// file matched it and every junk filter passed it, because every one of those
+// filters asks "is this a KNOWN bad address" and none asked "is this an address".
+//
+// A real mailbox's last label is a public suffix, and no public suffix is also a
+// file extension. So this is decidable rather than heuristic, and it belongs in
+// ONE predicate: four separate places extract addresses with four copies of the
+// same regex, and a fifth will be added.
+const FILE_EXT_TLD = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico|tiff?|pdf|docx?|xlsx?|pptx?|csv|txt|xml|json|js|mjs|cjs|css|scss|less|html?|php|aspx?|jsp|zip|rar|gz|tgz|7z|mp3|mp4|m4a|mov|avi|webm|wav|ogg|woff2?|ttf|eot|otf|map|md|yml|yaml|lock|dll|exe|bin|swf)$/i;
+const isMailboxShape = (e) => {
+  const t = String(e == null ? '' : e).trim().toLowerCase();
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(t)) return false;
+  const at = t.lastIndexOf('@');
+  const local = t.slice(0, at), dom = t.slice(at + 1);
+  if (!local || !dom) return false;
+  if (FILE_EXT_TLD.test(dom)) return false;              // logo@2x.png, hero@3x.jpg
+  const labels = dom.split('.');
+  if (labels.some(l => !l)) return false;                // "a@b..com"
+  if (/^\d+x$/.test(labels[0])) return false;            // the retina descriptor itself
+  return true;
 };
 
 // ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
@@ -6205,7 +6311,9 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
     // that begins mid-word means we sometimes find no address, which is safe.
     (text.match(/(?<![A-Za-z0-9*_`~<])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
       .forEach(e => found.add(e.toLowerCase()));
-    const clean = [...found].filter(e => !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60);
+    // isMailboxShape FIRST: the junk lists only know bad ADDRESSES, and
+    // realself@2x.png is not a bad address, it is not an address.
+    const clean = [...found].filter(e => isMailboxShape(e) && !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60);
     const same = clean.filter(e => e.endsWith('@' + domain));
     if (same.length) return same;
     if (!allowOffDomain) return [];
@@ -7140,7 +7248,9 @@ ABOUT THE EMAIL — this matters a lot:
     const parsed = parseLLMJSON(text) || {};
     // Sanity-check the vision-read email — if it isn't a well-formed address, drop it
     // rather than let a misread string reach the email engine.
-    if (parsed.visibleEmail && !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(String(parsed.visibleEmail).trim())) {
+    // A screenshot is the likeliest place of all to read a filename as an
+    // address, because the model is looking at rendered image assets.
+    if (parsed.visibleEmail && !isMailboxShape(parsed.visibleEmail)) {
       console.log(`VISION [${companyName}]: discarded malformed email read "${parsed.visibleEmail}"`);
       parsed.visibleEmail = null;
     }
@@ -7977,7 +8087,7 @@ const HARM_LADDER = [
 
   { harm: 38, specific: 90, novel: 90, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'placeholder_text',
     test: (m) => m.placeholderFound === true,
-    say: (m) => `Placeholder text is still live on their site \u2014 "${m.placeholderSample}"`,
+    say: (m) => `Placeholder text is still live on their site \u2014 "${keepSpan(m.placeholderSample)}"`,
     costs: 'it is the clearest possible signal that nobody has looked at the page in a long time' },
 
   { harm: 34, specific: 85, novel: 80, delegable: 85, weFix: 90, band: 'ABANDONED', id: 'dead_blog',
@@ -8387,9 +8497,10 @@ const HARM_LADDER = [
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
     reframe: 'a stranger comparing three companies reads the reviews before anything else',
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
-    // The mined complaint is the reviewers' words, not ours. PROTECT keeps the
-    // second-person rewrite off it - see the note above toSecondPerson.
-    say: (m) => `more than one of their own Google reviews names the same thing — ${PROTECT(String(m.reviewPainTop).toLowerCase())}`,
+    // The mined complaint is the reviewers' words, not ours. keepSpan registers
+    // it so the second-person rewrite leaves it alone - see toSecondPerson. It
+    // returns the text unchanged, so this line cannot print without protecting.
+    say: (m) => `more than one of their own Google reviews names the same thing — ${keepSpan(String(m.reviewPainTop).toLowerCase())}`,
     costs: 'a complaint that repeats is the one a stranger comparing three companies will find' },
 
   // ══ NO PRICE ANYWHERE ON THE SITE ════════════════════════════════════════
@@ -10939,41 +11050,88 @@ const EMAIL_SKELETONS = [
 // system does not bend, and the boot check could not see it: it evaluates each
 // rung against a fixed fixture and only ever inspects the STATIC template.
 //
-// So the boundary is marked. PROTECT() wraps a span the converter must leave
-// exactly as written; everything around it converts as before. Any rung that
-// interpolates runtime text should wrap it.
+// ══ THE FIRST FIX PUT NOTATION IN THE SENTENCE, AND IT REACHED A PROSPECT ══
+// The original answer marked the boundary INSIDE the string: PROTECT() wrapped
+// the span in '[[keep:' ... ':keep]]', the converter split on those markers, and
+// both the converter and _tidy stripped them on the way out.
 //
-// The markers are ordinary visible ASCII on purpose. An invisible sentinel that
-// escapes is a mystery; a visible one that escapes is a bug report. They are
-// stripped on the way out of the converter AND again in _tidy, so a leak needs
-// two independent failures.
+// It failed live on Ram Jack. A marked string is a normal string, so it travelled
+// everywhere a normal string travels — and only TWO of those destinations strip:
+//
+//   ✉ EMAIL OPENS ON [Ram Jack]: ... — [[keep:scheduling/appointment miscommunication:keep]]
+//   ✓ FACTUAL SPINE [Ram Jack]: "... [[keep:scheduli
+//   the audit row shown in the app, the break-up body, and the ASSERT block of
+//   the writer's own prompt — which is why the fact-checker reported
+//   "PITCH ANGLE USES INTERNAL NOTATION ... this is backend markup, not
+//   prospect-facing copy".
+//
+// Stripping at each of those is a list of sinks, and a list of sinks is exactly
+// the thing nobody updates when the next sink is added. So the marker is gone.
+//
+// Instead the span is REGISTERED at the moment it is interpolated — keepSpan()
+// returns the text unchanged and remembers it — and the converter protects any
+// registered span it finds. The registration and the interpolation are the same
+// expression, so a rung cannot interpolate runtime text and forget to protect it
+// without also failing to print it. And because no string ever carries notation,
+// there is nothing left to leak into a log, an audit row, a prompt or an inbox.
+//
+// Bounded to the last 16 spans and never cleared, so a follow-up or a break-up
+// composed later in the same process is still protected. A stale span can only
+// ever cause a phrase from another lead's REVIEWS to skip pronoun conversion,
+// which is the safe direction.
+const _KEEP_SPANS = [];
+const keepSpan = (t) => {
+  const raw = String(t == null ? '' : t);
+  const s = raw.trim();
+  // Short spans are not worth protecting and risk matching our own wording.
+  if (s.length >= 12) {
+    const at = _KEEP_SPANS.indexOf(s);
+    if (at !== -1) _KEEP_SPANS.splice(at, 1);
+    _KEEP_SPANS.push(s);
+    while (_KEEP_SPANS.length > 16) _KEEP_SPANS.shift();
+  }
+  return raw;
+};
+
+// PROTECT/stripProtect are retained as a SCRUB, not a mechanism. Nothing writes
+// a marker any more; stripProtect stays wired into the converter and _tidy so
+// that if any older stored text still carries one, it dies here instead of in an
+// inbox. LADDER MARKER CHECK below fails the boot if a rung marks in-band again.
 const _PROT_A = '[[keep:', _PROT_B = ':keep]]';
 const PROTECT = (t) => `${_PROT_A}${String(t == null ? '' : t)}${_PROT_B}`;
 const stripProtect = (t) => String(t || '').split(_PROT_A).join('').split(_PROT_B).join('');
 
+// _convertPerson collapses whitespace and trims, which is right for a whole
+// sentence and wrong for a fragment: converting the half before a protected
+// span ate the space after the em-dash and produced "same thing —the
+// technician". Each segment's edge whitespace is captured and restored, so only
+// the words are touched.
+const _convertEdges = (chunk) => {
+  const lead = (chunk.match(/^\s*/) || [''])[0];
+  const tail = (chunk.match(/\s*$/) || [''])[0];
+  const core = chunk.slice(lead.length, chunk.length - tail.length);
+  return core ? lead + _convertPerson(core) + tail : chunk;
+};
+
 const toSecondPerson = (raw) => {
-  const src = String(raw || '');
-  if (!src.includes(_PROT_A)) return _convertPerson(src);
-  // Convert only the unprotected segments and reassemble, so the protected text
-  // survives byte for byte.
-  // _convertPerson collapses whitespace and trims, which is right for a whole
-  // sentence and wrong for a fragment: converting the half before a protected
-  // span ate the space after the em-dash and produced "same thing —the
-  // technician". Each segment's edge whitespace is captured and restored, so
-  // only the words are touched.
-  const edges = (chunk) => {
-    const lead = (chunk.match(/^\s*/) || [''])[0];
-    const tail = (chunk.match(/\s*$/) || [''])[0];
-    const core = chunk.slice(lead.length, chunk.length - tail.length);
-    return core ? lead + _convertPerson(core) + tail : chunk;
-  };
-  const out = src.split(_PROT_A).map((chunk, i) => {
-    if (i === 0) return edges(chunk);
-    const end = chunk.indexOf(_PROT_B);
-    if (end < 0) return chunk;                    // unbalanced - keep as written
-    return chunk.slice(0, end) + edges(chunk.slice(end + _PROT_B.length));
-  }).join('');
-  return stripProtect(out);
+  const src = stripProtect(String(raw || ''));
+  const spans = _KEEP_SPANS.filter(sp => src.includes(sp)).sort((a, b) => b.length - a.length);
+  if (!spans.length) return _convertPerson(src);
+  // Longest first, and overlaps discarded, so a span that sits inside another
+  // registered span cannot split the outer one in half.
+  const ranges = [];
+  for (const sp of spans) {
+    let from = 0, i;
+    while ((i = src.indexOf(sp, from)) !== -1) {
+      const end = i + sp.length;
+      if (!ranges.some(r => i < r[1] && end > r[0])) ranges.push([i, end]);
+      from = end;
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  let out = '', at = 0;
+  for (const [a, b] of ranges) { out += _convertEdges(src.slice(at, a)) + src.slice(a, b); at = b; }
+  return out + _convertEdges(src.slice(at));
 };
 
 const _convertPerson = (t) => String(t || '')
@@ -11298,7 +11456,29 @@ const composeEmail = (spine, opts = {}) => {
       ? `⚠ LENGTH [${opts.company || 'lead'}]: still ${_wc(body)} words after dropping ${_dropped.join(' and ')} — every optional element is gone and the finding, the cost and the ask alone exceed the ${CEILING}-word ceiling. Sending it rather than refusing a measured lead, but the rung sentences on this lead are too long and that is where to fix it.`
       : `✂ LENGTH [${opts.company || 'lead'}]: ${_wc(body)} words after dropping ${_dropped.join(' and ')}. Ceiling ${CEILING}, target 80 — 50-125 replies at about 2.4x the rate of 200+, and an 80-word email beats a 120-word one by roughly 15%. The finding, what it costs and the ask are never trimmed.`);
   }
-  return { body, composedBy: 'code' };
+  // ══ THERE WAS A CEILING AND NO FLOOR ════════════════════════════════════
+  // Ram Jack, live: Variant A came out at 25 words. Nothing had been dropped —
+  // the ceiling ladder only fires above 125 — so those 25 words were everything
+  // the lead had: a short claim, no cost line, no reframe, no job value.
+  //
+  // A 25-word cold email is not a short email, it is a fragment. It reads as a
+  // mail-merge that failed, and it spends the one first impression the domain
+  // gets on this business. The five moves that earn a reply (somebody looked, one
+  // judgement given freely, the turn, the cost in human terms, a small ask) do not
+  // fit in 25 words, so if the body is this short the inputs were too thin and
+  // that is a fact about the LEAD, not about the composer.
+  //
+  // Nothing is invented to pad it. The count travels out on the return so the
+  // caller can refuse it, and the log says which element was missing, because
+  // that is the part worth fixing upstream.
+  const FLOOR = 45;
+  const _words = _wc(body);
+  if (_words < FLOOR) {
+    const _absent = [!costs && 'what it costs him', !reframe && 'the reframe',
+      !money && 'what one job is worth', !second && 'a second finding'].filter(Boolean);
+    console.log(`\u26a0 TOO SHORT [${opts.company || 'lead'}]: the composed body is ${_words} words against a ${FLOOR}-word floor${_absent.length ? ` \u2014 missing ${_absent.join(', ')}` : ''}. Nothing was trimmed; that is everything this lead gave us. A body this short reads as a broken mail-merge, and padding it would mean inventing something, so it is returned marked thin instead. The fix is upstream: this lead did not produce enough measured material to write to.`);
+  }
+  return { body, composedBy: 'code', words: _words, tooThin: _words < FLOOR };
 };
 
 // ══ THE CTA, DECIDED WHERE THE FINDING LIVES ═════════════════════════════════
@@ -11733,7 +11913,11 @@ const composeFullEmail = (spine, opts = {}) => {
     const _pick = subjects.length
       ? subjects[(Math.abs(_seed) + i) % subjects.length]
       : '';
-    return composed ? { subject: _pick || '', body: composed.body } : null;
+    // words/tooThin travel with the body. composeEmail computes them and this
+    // line used to drop both, so a 25-word first touch reached the screen with
+    // nothing marking it - the same shape as every other measurement in this
+    // file that was computed and never passed.
+    return composed ? { subject: _pick || '', body: composed.body, words: composed.words, tooThin: !!composed.tooThin } : null;
   };
 
   const second = (spine.rest || [])[0] || null;
@@ -16106,7 +16290,27 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   } catch(e) { console.log('hunterFindPersonEmail failed:', e.message); return null; }
 };
 
-const findEmailFireproof = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '' }) => {
+// ══ ONE EXIT, AND NOTHING SHAPED LIKE A FILE LEAVES THROUGH IT ═════════════
+// The resolver has fourteen return points across four evidence tiers. Gating the
+// four EXTRACTORS stops a filename becoming a candidate, which is the real fix —
+// but a fourteen-exit function is exactly where the next route in gets added, and
+// the cost of missing one is a bounce charged to the sending domain.
+//
+// So the resolver keeps its fourteen exits and the NAME everything calls is a
+// wrapper with one. An address that is not shaped like a mailbox cannot leave,
+// whichever route produced it, and it says so loudly rather than silently
+// downgrading — a filename in the address slot means a scrape went wrong, and
+// that is worth reading in the log.
+const findEmailFireproof = async (_args) => {
+  const _r = await _findEmailFireproofCore(_args || {});
+  if (_r && _r.email && !isMailboxShape(_r.email)) {
+    console.log(`\u26d4 EMAIL REJECTED [${_r.email}]: this is not a mailbox \u2014 it is shaped like a file (a retina image asset such as logo@2x.png reads as an address to every regex). Live, team-dr-vargas@2x.jpg was scored 100/100 and marked sendable. The lead now carries no address instead of a JPEG, and the bounce is not charged to the sending domain.`);
+    return { email: '', ...EMAIL_TIERS.NONE, name: _r.name || '', pattern: null, lookupBlocked: _r.lookupBlocked || null };
+  }
+  return _r;
+};
+
+const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '' }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
   // Set when a PAID lookup was refused (spent quota / dead key) rather than
@@ -17640,6 +17844,7 @@ const routeChannel = ({ ownerFound, homepageContent, website, companyName, isPla
     const root = domain.split('.').slice(-2).join('.');
     const found = (content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
       .map(e => e.toLowerCase())
+      .filter(isMailboxShape)
       .filter(e => !/@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i.test(e))
       .filter(e => !/^(noreply|no-reply|donotreply|postmaster|abuse|webmaster|privacy|legal|dmca|unsubscribe|mailer-daemon|bounce|test)@/i.test(e))
       .filter(e => e.endsWith('@' + domain) || e.endsWith('.' + root) || e.endsWith('@' + root));
@@ -17651,7 +17856,7 @@ const routeChannel = ({ ownerFound, homepageContent, website, companyName, isPla
       // rejected it on the domain test, reported "0 routes to a mailbox" and
       // scored the lead 24/100. A long SEO domain for the site and a short one
       // for mail is a normal setup and the address was theirs.
-      const _all = (content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).map(e => e.toLowerCase());
+      const _all = (content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).map(e => e.toLowerCase()).filter(isMailboxShape);
       const _counts = _all.reduce((m, e) => (m[e] = (m[e] || 0) + 1, m), {});
       for (const [cand, n] of Object.entries(_counts)) {
         const hit = looksLikeTheirOffDomainMailbox(cand, domain, companyName, n);
@@ -18661,7 +18866,14 @@ app.post('/api/discover', async (req, res) => {
       // ═══ GOOGLE PLACES — local owner-operated businesses (free tier) ═══════
       // The highest-reachability segment: the owner runs the shop and reads
       // their own email. No size data, so Research confirms owner + email.
-      searchGooglePlaces(placesKey, _f),
+      // ══ THE DEDUPE HAS TO HAPPEN BEFORE THE SLOTS ARE SPENT ══════════
+      // The known-lead filter used to run at the very end, after the per-category
+      // cap and MAX_TOTAL had already chosen which 120 leads to return. So a
+      // category whose top fourteen results were all businesses we already own
+      // contributed FOURTEEN kept leads to the log and ZERO to the queue, and the
+      // slots were gone. That is the mechanism behind "repetitive leads": not
+      // that duplicates got through, but that they consumed the run.
+      searchGooglePlaces(placesKey, { ..._f, knownHosts: _knownHosts, knownNames: _knownNames, normName: _normName }),
     ]);
 
     // Owner venting returns both identifiable leads AND the raw pain language
@@ -29607,6 +29819,48 @@ app.listen(PORT, () => {
     console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ AN ADDRESS WE FOUND MUST ACTUALLY BE AN ADDRESS ════════════
+  // Vargas Face and Skin Center, live: the scraper reported realself@2x.png as a
+  // "personal off-domain email from homepage", and the lead was finally scored on
+  // team-dr-vargas@2x.jpg at 100/100 with sendable: true.
+  //
+  // Every junk filter in the email path asks "is this a KNOWN BAD address" — a
+  // noreply, a Wix placeholder, a Sentry DSN. None of them asked "is this an
+  // address", so a retina image filename walked through all of them.
+  //
+  // Two halves, and both must hold: the predicate has to be right, and it has to
+  // be WIRED at every place an address is extracted. The second half is what the
+  // duplicate-send Map and review velocity both failed on — correct code that
+  // nothing called — so the wiring is read out of the source rather than assumed.
+  try {
+    const _notMail = ['team-dr-vargas@2x.jpg', 'realself@2x.png', 'logo@3x.webp', 'sprite@2X.SVG',
+      'hero@2x.PNG', 'icon@2x.min.js', 'a@b..com'];
+    const _mail = ['mike@crojungleteam.com', 'info@hawkva.com', 'j.smith@sub.domain.co.uk',
+      'dusty@hannahcustomhomes.com', 'first.last@a-b.io', 'vin+lead@crojungleteam.com'];
+    const _wrong = _notMail.filter(e => isMailboxShape(e)).map(e => `${e} accepted`)
+      .concat(_mail.filter(e => !isMailboxShape(e)).map(e => `${e} rejected`));
+
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _sites = [
+      ['the site scraper', /const clean = \[\.\.\.found\]\.filter\(e => isMailboxShape\(e\)/],
+      ['the reachability route', /\.filter\(isMailboxShape\)/],
+      ['the second reachability pass', /\.map\(e => e\.toLowerCase\(\)\)\.filter\(isMailboxShape\)/],
+      ['the screenshot read', /parsed\.visibleEmail && !isMailboxShape\(parsed\.visibleEmail\)/],
+      ['the resolver\'s single exit', /_r\.email && !isMailboxShape\(_r\.email\)/],
+    ];
+    const _unwired = _sites.filter(([, re]) => !re.test(_src)).map(([n]) => n);
+
+    if (_wrong.length) {
+      console.log(`⛔ MAILBOX SHAPE CHECK: ${_wrong.join(', ')}. A real mailbox's last label is a public suffix and no public suffix is also a file extension, so this is decidable — getting it wrong either sends to a JPEG or throws away a real lead.`);
+    } else if (_unwired.length) {
+      console.log(`⛔ MAILBOX SHAPE CHECK: the predicate is correct but ${_unwired.join(' and ')} no longer use it, so an image filename can still enter as a candidate there. This is the class that shipped the duplicate-send Map and review velocity dead: right code, nothing calling it.`);
+    } else {
+      console.log(`✓ MAILBOX SHAPE CHECK: retina image filenames (team-dr-vargas@2x.jpg) are refused and real addresses on shortened, hyphenated and multi-label domains still pass — gated at all four extraction points and again at the resolver's single exit, so no route can hand a filename to the sender.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MAILBOX SHAPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A RUNG THAT INTERPOLATES RUNTIME TEXT IS NOT A TEMPLATE ══════════════
   // RUNG PRONOUN CHECK evaluates each rung against ONE fixture and inspects the
   // sentence that comes back. That covers every word we wrote and none of the
@@ -29634,17 +29888,78 @@ app.listen(PORT, () => {
         _bad.push(`${h.id}: "${_after.slice(0, 110)}"`);
       }
     }
-    // And the marker must never survive into anything a prospect could read.
+    // The scrub must still work on any older stored text that carries a marker.
     const _leaks = /\[\[keep:|:keep\]\]/.test(toSecondPerson(PROTECT('x')) + _tidy(PROTECT('y')));
+
+    // ══ AND THE WHOLE CHAIN, NOT THE CONVERTER ON ITS OWN ═════════════
+    // The old version of this check tested `toSecondPerson(PROTECT('x'))` and
+    // `_tidy(PROTECT('y'))` and nothing else. Both of those strip by definition,
+    // so it printed a tick while the marker was reaching the opener log, the
+    // factual-spine log, the audit row, the break-up body and the writer's own
+    // prompt. It was a check that could only pass.
+    //
+    // This runs the real chain — rankHarms → buildFactualSpine → composeFullEmail
+    // — on a lead whose mined complaint is full of third-person pronouns, and
+    // inspects every one of the four touches plus the ranked rows and the spine.
+    // Nothing a prospect or an operator can see may contain notation, and the
+    // reviewers' own words must come out byte for byte.
+    let _notation = '', _mangled = '', _ran = false;
+    try {
+      const _harms = rankHarms(_m);
+      const _sp = buildFactualSpine(_harms, _m);
+      const _full = _sp ? composeFullEmail(_sp, { founderName: 'Dale', company: 'Test Co', subjects: ['two reviews say the same thing'] }) : null;
+      if (_full) {
+        _ran = true;
+        const _touch = [_full.variantA, _full.variantB, _full.followUp1, _full.followUp2, _full.breakup]
+          .filter(Boolean).map(t => `${(t && t.subject) || ''} ${(t && t.body) || ''}`).join(' \n ');
+        // Everything an operator reads, too: the ranked rows are what the audit
+        // renders and what the opener log prints.
+        const _shown = _touch + ' ' + JSON.stringify(_harms.byHarm || []) + ' ' + JSON.stringify(_sp);
+        if (/\[\[keep:|:keep\]\]/.test(_shown)) {
+          _notation = 'internal notation reached the composed copy, the ranked rows or the spine';
+        }
+        // Only assert survival where the complaint is actually being quoted.
+        const _quotes = [_sp.claim, _sp.secondClaim, ...(_sp.rest || [])].some(t => String(t || '').includes(_mined));
+        if (_quotes && !_touch.includes(_mined)) {
+          _mangled = 'the complaint is quoted in the evidence but does not appear byte for byte in any of the four touches';
+        }
+      }
+    } catch (e) { _notation = `the chain threw — ${(e && e.message) || e}`; }
+
     if (_bad.length) {
-      console.log(`⛔ MINED TEXT CHECK: ${_bad.join(' | ')} — the second-person rewrite altered a complaint written by a model from THEIR reviewers' words. Those pronouns are the reviewer, the technician or the crew, never the owner, so converting them invents a statement about him inside a sentence that claims to quote his reviews. Wrap runtime text in PROTECT().`);
-    } else if (_leaks) {
-      console.log(`⛔ MINED TEXT CHECK: a PROTECT marker survived into output text. It is visible ASCII precisely so this is caught, but it must never reach a body.`);
+      console.log(`⛔ MINED TEXT CHECK: ${_bad.join(' | ')} — the second-person rewrite altered a complaint written by a model from THEIR reviewers' words. Those pronouns are the reviewer, the technician or the crew, never the owner, so converting them invents a statement about him inside a sentence that claims to quote his reviews. Register runtime text with keepSpan().`);
+    } else if (_leaks || _notation) {
+      console.log(`⛔ MINED TEXT CHECK: ${_notation || 'a PROTECT marker survived the scrub'}. This is the Ram Jack failure — "[[keep:scheduling/appointment miscommunication:keep]]" reached the opener log, the spine, the break-up and the writer's prompt, and the fact-checker reported it as backend markup in prospect-facing copy.`);
+    } else if (_mangled) {
+      console.log(`⛔ MINED TEXT CHECK: ${_mangled}. The sentence claims to be quoting their Google reviews, so any edit to it is a fabricated statement about the owner.`);
     } else {
-      console.log(`✓ MINED TEXT CHECK: a mined complaint full of third-person pronouns survives the second-person rewrite byte for byte, while our own half of the sentence still converts — and no PROTECT marker escapes into the copy.`);
+      console.log(`✓ MINED TEXT CHECK: a mined complaint full of third-person pronouns survives the second-person rewrite byte for byte through rankHarms, the spine and all four composed touches, while our own half of the sentence still converts — and no internal notation appears anywhere an owner or an operator can read${_ran ? '' : ' (the compose chain did not build on this fixture, so only the converter was exercised)'}.`);
     }
   } catch (e) {
     console.log(`⛔ MINED TEXT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A RUNG MAY NOT MARK A BOUNDARY INSIDE ITS OWN SENTENCE ════════════
+  // In-band marking is the mechanism that leaked. keepSpan() replaced it, and the
+  // only way it comes back is somebody wrapping runtime text in PROTECT() inside
+  // a rung again — which reads like the safe thing to do, because the comment
+  // above toSecondPerson said so for a week.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _la = _src.indexOf('const HARM_LADDER');
+    let _d = 0, _le = _la;
+    for (let i = _src.indexOf('[', _la); i < _src.length; i++) {
+      if (_src[i] === '[') _d++;
+      if (_src[i] === ']') { _d--; if (!_d) { _le = i + 1; break; } }
+    }
+    const _ladder = _src.slice(_la, _le).replace(/^\s*\/\/.*$/gm, '');
+    if (/PROTECT\s*\(/.test(_ladder)) {
+      console.log(`⛔ LADDER MARKER CHECK: a rung wraps runtime text in PROTECT(), which puts '[[keep:' into the sentence itself. A marked string is a normal string — it travelled to the opener log, the spine log, the audit row, the break-up and the writer's prompt, and only two of those strip. Use keepSpan(), which registers the span and returns the text unchanged.`);
+    } else {
+      console.log(`✓ LADDER MARKER CHECK: no rung writes internal notation into its own sentence. Runtime text is registered with keepSpan() at the point it is interpolated, so there is no marker in any string that could reach a log, an audit row, a prompt or an inbox.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LADDER MARKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A GUARD THAT IS READ AND NEVER WRITTEN IS DECORATION ═════════════════
