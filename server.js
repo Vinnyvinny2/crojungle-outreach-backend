@@ -8723,7 +8723,19 @@ const HARM_LADDER = [
 
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
     reframe: 'when nothing separates two companies, people choose on price',
-    test: (m) => m.marketClarity === 'UNDIFFERENTIATED',
+    // ══ A CASE MISMATCH KEPT THIS RUNG SILENT FOR ITS ENTIRE LIFE ═══════
+    // readMarketClarity returns `band = score >= 2 ? 'specific' : score >= 0 ?
+    // 'partial' : 'undifferentiated'` — lowercase, always. This tested
+    // 'UNDIFFERENTIATED'. Nothing between them uppercases anything, so the
+    // condition has been false on every lead since the rung was written.
+    //
+    // That is the real reason no audit has ever produced a positioning finding,
+    // and it sat underneath the opener-gate fix made earlier today: the gate was
+    // genuinely blocking quoted positioning findings, and fixing it changed
+    // nothing, because the rung that would have produced one could not fire.
+    //
+    // Compared case-insensitively so neither casing can break it again.
+    test: (m) => String(m.marketClarity || '').toUpperCase() === 'UNDIFFERENTIATED',
     // ══ AN ADJECTIVE HE CAN ARGUE WITH, OR HIS OWN SENTENCE ═══════════════
     // "The copy does not name who the business is for" is a judgement, and it is
     // the reason this rung scores specific 30 and has never once opened an email:
@@ -26299,7 +26311,32 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // The email writer argues FROM these. RESPONSE CHECK caught them
             // being persisted but never delivered — the exact "computed but not
             // passed" shape that has cost this system five fields.
-            growthConstraint: (brainAudit && brainAudit.growthConstraint) || null,
+            // ══ THIS WAS READING ITSELF, AND ITSELF IS ALWAYS null ═══════════
+            // `let brainAudit = null` is declared at the top of this route and is
+            // never assigned anywhere in it. So both of these lines evaluated
+            // `(null && null.growthConstraint) || null` on every lead this system
+            // has ever run, and the two best judgements the audit produces — the
+            // measured binding constraint and the synthesis written with the whole
+            // corpus in view — left the server as null every single time.
+            //
+            // Nothing looked wrong. The log prints both from the LOCAL variables a
+            // few lines earlier, so 🎯 GROWTH CONSTRAINT and ✦ SITUATION READ appear
+            // on every run and read correctly. Only the object the browser gets, and
+            // therefore the object /api/compose-email receives as req.body.brainAudit,
+            // was empty.
+            //
+            // Which means the MY READ block built to carry them has been EMPTY on
+            // every real lead since it shipped. The boot check passed because it
+            // hands buildEmailEvidence a synthetic object directly — it proved the
+            // block populates when given data, never that any data arrives. That is
+            // the harness-that-lies failure this file records twice already, and I
+            // wrote a third one.
+            //
+            // Both variables are in scope here: growthConstraint at the top of the
+            // route, and the situation read on `parsed`, which is what the log line
+            // itself reads.
+            growthConstraint: (growthConstraint && growthConstraint.checked !== false ? growthConstraint : null)
+              || (parsed && parsed.growthConstraint) || null,
             // ══ THE POSITIONING READ, WHICH NOTHING DOWNSTREAM COULD SEE ═══
             // readMarketClarity runs on the whole corpus, prints MARKET CLARITY to
             // the log, and reached the ladder only as a one-word band. The email
@@ -26311,7 +26348,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // Carried whole, so the MY READ block can quote what their own copy
             // does and does not say instead of naming a band nobody can picture.
             marketClarity: marketClarity && marketClarity.checked ? marketClarity : null,
-            situationRead: (brainAudit && brainAudit.situationRead) || null,
+            situationRead: (parsed && parsed.situationRead) || null,
             // ══ THE THREE THE EMAIL WRITER NEEDS MOST ═══════════════════════
             // buildEmailEvidence reads reviewPain, deepPain and localRank. None
             // of the three was in the response, the persistence list, or the
@@ -30480,6 +30517,97 @@ app.listen(PORT, () => {
     console.log(`⛔ RANK ANCHOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ A FIELD THAT READS A VARIABLE NOTHING EVER ASSIGNS ═════════════
+  // The response object handed to the browser carried, for the entire life of
+  // this system:
+  //
+  //   growthConstraint: (brainAudit && brainAudit.growthConstraint) || null,
+  //   situationRead:    (brainAudit && brainAudit.situationRead)    || null,
+  //
+  // `let brainAudit = null` is declared at the top of that route and assigned
+  // nowhere in it. Both lines evaluated to null on every lead ever run — so the
+  // measured binding constraint and the synthesis written with the whole corpus
+  // in view never left the server, and /api/compose-email, which can only see
+  // what survives that round trip, received neither.
+  //
+  // Nothing looked wrong: the log lines print from the LOCAL variables, so
+  // 🎯 GROWTH CONSTRAINT and ✦ SITUATION READ appeared correctly on every run.
+  // The MY READ block built to carry them was empty on every real lead, and its
+  // own boot check passed because it hands buildEmailEvidence a synthetic object
+  // — proving the block populates when given data, never that data arrives.
+  //
+  // This reads the SOURCE and finds any object field whose value is guarded by a
+  // variable that is declared in the same route and never assigned. A guard on a
+  // name that is permanently null is not a guard, it is a deletion, and it is
+  // invisible in every log because the log reads something else.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _dead = [];
+    // Every `let NAME = null;` / `let NAME = { checked: false };` in the file.
+    for (const m of _src.matchAll(/^\s*let\s+([A-Za-z_$][\w$]*)\s*=\s*(?:null|\{\s*checked:\s*false\s*\})\s*;/gm)) {
+      const name = m[1];
+      // Assigned anywhere else? `name =` that is not `==`, `===`, `=>` or a redeclare.
+      const assigned = new RegExp(`(?<![=!<>])\\b${name}\\s*=(?!=|>)`, 'g');
+      let hits = 0;
+      for (const a of _src.matchAll(assigned)) { if (a.index !== undefined && a.index > m.index) hits++; }
+      if (hits > 0) continue;   // it is assigned somewhere — fine
+      // Never assigned. Is it USED to guard an object field's value?
+      const used = new RegExp(`\\b([A-Za-z_$][\\w$]*)\\s*:\\s*\\(\\s*${name}\\s*&&`, 'g');
+      for (const u of _src.matchAll(used)) _dead.push(`${u[1]}: guarded by \`${name}\`, which is declared null and never assigned`);
+    }
+    if (_dead.length) {
+      console.log(`⛔ NULL GUARD CHECK: ${_dead.length} response field(s) are gated on a variable that is never assigned, so they leave the server as null on every lead — ${_dead.slice(0, 4).join(' | ')}. The log prints these correctly from local variables, which is why it has never looked wrong.`);
+    } else {
+      console.log(`✓ NULL GUARD CHECK: no response field is guarded by a variable that is declared null and never assigned. growthConstraint and situationRead were both shaped that way for the life of this system — the audit's two best judgements, computed, logged, and deleted on the way out, with the MY READ block that carries them empty on every real lead.`);
+    }
+  } catch (e) {
+    console.log(`⛔ NULL GUARD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A RUNG WHOSE TEST CANNOT BE TRUE ═══════════════════════════════
+  // review_pain_pattern's twin: undifferentiated tested
+  // `m.marketClarity === 'UNDIFFERENTIATED'` while readMarketClarity returns
+  // 'undifferentiated' in lower case, always. The condition was false on every
+  // lead the system has ever run, which is the real reason no audit has ever
+  // produced a positioning finding — and it sat underneath the opener-gate fix
+  // made the same day, so fixing the gate changed nothing.
+  //
+  // This compares every string literal a rung tests against the values the
+  // producers actually emit, case-sensitively, and reports a comparison that no
+  // producer can satisfy.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    const _bad = [];
+    const _la = _src.indexOf('const HARM_LADDER');
+    let _d = 0, _le = _la;
+    for (let k = _src.indexOf('[', _la); k < _src.length; k++) {
+      if (_src[k] === '[') _d++;
+      if (_src[k] === ']') { _d--; if (!_d) { _le = k + 1; break; } }
+    }
+    const _ladder = _src.slice(_la, _le);
+    for (const m of _ladder.matchAll(/m\.([A-Za-z_$][\w$]*)\s*(?:\|\|\s*''\s*\)?\s*)?===\s*'([A-Za-z_]{3,})'/g)) {
+      const field = m[1], want = m[2];
+      // Every string literal assigned to that field name anywhere in the file.
+      const emitted = new Set();
+      for (const e of _src.matchAll(new RegExp(`${field}\\s*[:=]\\s*'([A-Za-z_]{3,})'`, 'g'))) emitted.add(e[1]);
+      for (const e of _src.matchAll(new RegExp(`\\bband\\s*=\\s*[^;]*?'([a-z_]{3,})'`, 'g'))) {
+        if (/marketClarity/.test(field)) emitted.add(e[1]);
+      }
+      if (!emitted.size) continue;                       // nothing to compare against
+      if (emitted.has(want)) continue;                   // satisfiable
+      // Case-insensitive match means the ONLY difference is casing — that is the bug.
+      const ci = [...emitted].find(x => x.toUpperCase() === want.toUpperCase());
+      if (ci) _bad.push(`a rung tests ${field} === '${want}' and the producer emits '${ci}'`);
+    }
+    if (_bad.length) {
+      console.log(`⛔ RUNG VALUE CHECK: ${_bad.join(' | ')}. The test can never be true, so that rung is silent on every lead and no log says so — which is exactly how the positioning finding stayed missing while three separate fixes were made downstream of it.`);
+    } else {
+      console.log(`✓ RUNG VALUE CHECK: every string a rung compares against is a value some producer actually emits, in the same case. A rung whose test cannot be true is silent forever and reports nothing, and one of them was.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RUNG VALUE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THE BLOCK THAT LETS IT TAKE A SIDE, AND THE GATE THAT KILLED IT ═
   // Three separate features in this file shipped dead: the duplicate-send Map was
   // read and never written, review velocity was computed and never delivered, the
@@ -31126,8 +31254,23 @@ app.listen(PORT, () => {
   // there is no runtime signal to test, because the failure IS the absence.
   try {
     const _src = require('fs').readFileSync(__filename, 'utf8');
+    // ══ A FIXED WINDOW IS A CHECK THAT CHANGES MEANING AS THE FILE GROWS ══
+    // This sliced 6000 characters from the start of the literal. Adding a long
+    // comment INSIDE the object pushed reviewPain, deepPain and localRank past
+    // the cut and the check reported three delivered fields as missing — a false
+    // alarm produced by nothing but a comment, on the gate whose whole job is
+    // telling the operator what did not survive. The literal ends where its
+    // braces balance, so read to there and the window cannot drift again.
     const _i = _src.indexOf('brainAudit = {');
-    const _lit = _i > -1 ? _src.slice(_i, _i + 6000) : '';
+    let _lit = '';
+    if (_i > -1) {
+      let _bd = 0, _bend = _i;
+      for (let k = _src.indexOf('{', _i); k < _src.length; k++) {
+        if (_src[k] === '{') _bd++;
+        else if (_src[k] === '}') { _bd--; if (!_bd) { _bend = k + 1; break; } }
+      }
+      _lit = _src.slice(_i, _bend);
+    }
     const _required = ['composedEmail', 'factualSpine', 'harmsRanked', 'problemList',
                        'subjectOptions', 'allowedReframes', 'measuredNumbers', 'patternLine', 'originalFindings', 'businessModel',
                        // The email writer now argues FROM these. Without them
