@@ -8300,7 +8300,9 @@ const HARM_LADDER = [
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
     reframe: 'a stranger comparing three companies reads the reviews before anything else',
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
-    say: (m) => `more than one of their own Google reviews names the same thing — ${String(m.reviewPainTop).toLowerCase()}`,
+    // The mined complaint is the reviewers' words, not ours. PROTECT keeps the
+    // second-person rewrite off it - see the note above toSecondPerson.
+    say: (m) => `more than one of their own Google reviews names the same thing — ${PROTECT(String(m.reviewPainTop).toLowerCase())}`,
     costs: 'a complaint that repeats is the one a stranger comparing three companies will find' },
 
   // ══ NO PRICE ANYWHERE ON THE SITE ════════════════════════════════════════
@@ -10703,7 +10705,7 @@ const earnedLine = (m = {}) => {
 // Fixing it inside each template means fixing it again in the next one. Every
 // composed body passes through one of two exits, so the rule is stated once here
 // and applied at both.
-const _tidy = (t) => String(t || '')
+const _tidy = (t) => stripProtect(String(t || ''))
   .replace(/[ \t]{2,}/g, ' ')        // collapse runs of spaces
   .replace(/[ \t]+\n/g, '\n')        // no trailing space before a break
   .replace(/\n{3,}/g, '\n\n')        // never more than one blank line
@@ -10768,7 +10770,64 @@ const EMAIL_SKELETONS = [
 // business in the third person because the audit is read by us; the email is
 // read by him. This is mechanical substitution, not rewriting \u2014 the claim is
 // unchanged and no new words enter.
-const toSecondPerson = (t) => String(t || '')
+// == WORDS WE WROTE vs WORDS A MODEL WROTE ===================================
+// toSecondPerson is a blind whole-word substitution, and that is correct for
+// LADDER text: every rung sentence is written by hand and audited by RUNG
+// PRONOUN CHECK. It is NOT safe on text that arrives at runtime.
+//
+// review_pain_pattern interpolates the mined complaint - model-written, drawn
+// from their reviewers' words - straight into its claim. Inside a complaint,
+// "he", "them" and "his" refer to the REVIEWER, the technician or the crew.
+// Never to the owner. The rewriter flipped them anyway:
+//
+//   "the technician said he would call back and never did"
+//     -> "...the technician said YOU would call back and never did"
+//   "the crew left the site dirty and he had to clean up himself"
+//     -> "The crew left YOUR site dirty and YOU had to clean up YOURSELF."
+//
+// Each is a fabricated statement about the prospect, sitting inside a sentence
+// that claims to be quoting his own Google reviews. That is the one rule this
+// system does not bend, and the boot check could not see it: it evaluates each
+// rung against a fixed fixture and only ever inspects the STATIC template.
+//
+// So the boundary is marked. PROTECT() wraps a span the converter must leave
+// exactly as written; everything around it converts as before. Any rung that
+// interpolates runtime text should wrap it.
+//
+// The markers are ordinary visible ASCII on purpose. An invisible sentinel that
+// escapes is a mystery; a visible one that escapes is a bug report. They are
+// stripped on the way out of the converter AND again in _tidy, so a leak needs
+// two independent failures.
+const _PROT_A = '[[keep:', _PROT_B = ':keep]]';
+const PROTECT = (t) => `${_PROT_A}${String(t == null ? '' : t)}${_PROT_B}`;
+const stripProtect = (t) => String(t || '').split(_PROT_A).join('').split(_PROT_B).join('');
+
+const toSecondPerson = (raw) => {
+  const src = String(raw || '');
+  if (!src.includes(_PROT_A)) return _convertPerson(src);
+  // Convert only the unprotected segments and reassemble, so the protected text
+  // survives byte for byte.
+  // _convertPerson collapses whitespace and trims, which is right for a whole
+  // sentence and wrong for a fragment: converting the half before a protected
+  // span ate the space after the em-dash and produced "same thing —the
+  // technician". Each segment's edge whitespace is captured and restored, so
+  // only the words are touched.
+  const edges = (chunk) => {
+    const lead = (chunk.match(/^\s*/) || [''])[0];
+    const tail = (chunk.match(/\s*$/) || [''])[0];
+    const core = chunk.slice(lead.length, chunk.length - tail.length);
+    return core ? lead + _convertPerson(core) + tail : chunk;
+  };
+  const out = src.split(_PROT_A).map((chunk, i) => {
+    if (i === 0) return edges(chunk);
+    const end = chunk.indexOf(_PROT_B);
+    if (end < 0) return chunk;                    // unbalanced - keep as written
+    return chunk.slice(0, end) + edges(chunk.slice(end + _PROT_B.length));
+  }).join('');
+  return stripProtect(out);
+};
+
+const _convertPerson = (t) => String(t || '')
   .replace(/\bTheir\b/g, 'Your').replace(/\btheir\b/g, 'your')
   .replace(/\bThey have\b/g, 'You have').replace(/\bthey have\b/g, 'you have')
   .replace(/\bThey are\b/g, "You're").replace(/\bthey are\b/g, "you're")
@@ -28819,6 +28878,46 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A RUNG THAT INTERPOLATES RUNTIME TEXT IS NOT A TEMPLATE ══════════════
+  // RUNG PRONOUN CHECK evaluates each rung against ONE fixture and inspects the
+  // sentence that comes back. That covers every word we wrote and none of the
+  // words a model wrote, so it passed while review_pain_pattern was turning a
+  // reviewer's pronoun into a claim about the owner:
+  //
+  //   "the technician said he would call back"
+  //     -> "the technician said YOU would call back"
+  //
+  // This feeds the ladder a complaint that is FULL of third-person pronouns and
+  // asserts they come out the other side untouched. A rung that interpolates
+  // model text without PROTECT() fails here rather than in an inbox.
+  try {
+    const _mined = 'the technician said he would call back and never did, and his crew left them waiting';
+    const _m = { hasPlace: true, hoursListed: false, tradeWord: 'plumber', reviewCount: 80,
+      rating: 4.4, reviewsRead: 40, ownerReplies: 0, reviewPainCount: 2, reviewPainTop: _mined,
+      formFieldCount: 5, photoCount: 3 };
+    const _bad = [];
+    for (const h of HARM_LADDER) {
+      let said = '';
+      try { said = typeof h.say === 'function' ? String(h.say(_m) || '') : String(h.say || ''); } catch { continue; }
+      if (!said.toLowerCase().includes('technician')) continue;   // this rung did not use it
+      const _after = toSecondPerson(said);
+      if (!_after.includes(_mined)) {
+        _bad.push(`${h.id}: "${_after.slice(0, 110)}"`);
+      }
+    }
+    // And the marker must never survive into anything a prospect could read.
+    const _leaks = /\[\[keep:|:keep\]\]/.test(toSecondPerson(PROTECT('x')) + _tidy(PROTECT('y')));
+    if (_bad.length) {
+      console.log(`⛔ MINED TEXT CHECK: ${_bad.join(' | ')} — the second-person rewrite altered a complaint written by a model from THEIR reviewers' words. Those pronouns are the reviewer, the technician or the crew, never the owner, so converting them invents a statement about him inside a sentence that claims to quote his reviews. Wrap runtime text in PROTECT().`);
+    } else if (_leaks) {
+      console.log(`⛔ MINED TEXT CHECK: a PROTECT marker survived into output text. It is visible ASCII precisely so this is caught, but it must never reach a body.`);
+    } else {
+      console.log(`✓ MINED TEXT CHECK: a mined complaint full of third-person pronouns survives the second-person rewrite byte for byte, while our own half of the sentence still converts — and no PROTECT marker escapes into the copy.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MINED TEXT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A GUARD THAT IS READ AND NEVER WRITTEN IS DECORATION ═════════════════
