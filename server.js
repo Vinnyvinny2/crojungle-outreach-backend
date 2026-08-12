@@ -20573,7 +20573,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           const resS = rS && rS.ok ? await rS.json() : null;
           if (resS && !looksEmpty(resS)) {
             console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
-            return resS;
+            // _withShot, like the timeout and empty-content paths above. This one
+            // returned resS raw, so a lead recovered over https reached the brain
+            // with the corpus and NO screenshot - the render was dropped for the
+            // scheme change and never asked for again.
+            return await _withShot(resS);
           }
         } catch (e) { void e; }
       }
@@ -22691,22 +22695,60 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             const ia = _ORDER.indexOf(a.key), ib = _ORDER.indexOf(b.key);
             return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
           });
+          // Reads width and height out of the IHDR chunk. The 8-byte signature is
+          // checked too: without it, ANY buffer whose bytes 12-15 happen to spell
+          // IHDR would pass, and more importantly a non-PNG returns null - which
+          // the caller must treat as "refuse", not as "no ceiling applies".
           const _png = (buf) => {
-            if (!buf || buf.length < 24 || buf.readUInt32BE(12) !== 0x49484452) return null;
-            return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+            if (!buf || buf.length < 24) return null;
+            const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+            for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return null;
+            if (buf.readUInt32BE(12) !== 0x49484452) return null;
+            const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+            if (!w || !h) return null;
+            return { w, h };
           };
           const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
           let _sent = 0, _bytes = 0;
           const _skipped = [], _sentKeys = [];
+          // == THE HOMEPAGE MUST BE THE FIRST IMAGE, OR NONE OF THEM GO ========
+          // The block this replaced was gated on `msgContent.length`, and that
+          // term was load-bearing: it guaranteed no interior render was attached
+          // unless the homepage viewport shot had already been pushed. Dropping
+          // it meant that when the homepage scrape produced no screenshot - the
+          // exact failure the rest of this function exists to handle - up to five
+          // FULL-PAGE interior renders became images 0 through 4.
+          //
+          // The prompt in that case tells the model it is auditing WITHOUT the
+          // site, and the vision read is written to describe the homepage. So the
+          // model would have been shown a booking page, told nothing rendered,
+          // and asked what the homepage looks like.
+          //
+          // Interiors supplement the homepage; they never stand in for it.
+          if (!msgContent.some(m => m && m.type === 'image')) {
+            if (_shots.length) console.log(`\u26a0 PAGE RENDERS HELD [${company}]: ${_shots.length} interior render(s) were captured but the homepage produced no screenshot, so none are sent. The first image the model sees has to be the homepage - the prompt and the vision read both describe it - and an interior page in that slot is worse than no picture.`);
+            throw new Error('no homepage render');
+          }
           for (const pg of _ranked) {
             if (_sent >= MAX_IMAGES || _bytes >= MAX_TOTAL) break;
             if (!pg || !pg.shot) continue;
             try {
               const _r = await fetchT(pg.shot, {}, 8000);
+              // A signed screenshot URL expires. Without this, a 403 or 404 HTML
+              // error body became the buffer, failed the IHDR test, skipped the
+              // ceiling because the check only fired when _d was truthy, and was
+              // base64'd into the audit request labelled image/png.
+              if (!_r || !_r.ok) { _skipped.push(`${pg.key} (HTTP ${_r ? _r.status : 'no response'})`); continue; }
               const _b = await _r.buffer();
               if (_b.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (${Math.round(_b.length / 104857.6) / 10}MB)`); continue; }
               const _d = _png(_b);
-              if (_d && (_d.h > MAX_EDGE || _d.w > MAX_EDGE)) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
+              // FAIL CLOSED. `if (_d && oversize)` skipped the ceiling entirely
+              // whenever the buffer was not a readable PNG - so the one payload
+              // we could say nothing about was the one that bypassed the guard
+              // and was still sent as an image. Anything we cannot measure is
+              // refused instead.
+              if (!_d) { _skipped.push(`${pg.key} (not a readable PNG - refused rather than sent unmeasured)`); continue; }
+              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px, over the vision ceiling)`); continue; }
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _b.toString('base64') } });
               _sent++; _bytes += _b.length; _sentKeys.push(pg.key);
             } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
@@ -28995,6 +29037,50 @@ app.listen(PORT, () => {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ AN IDENTIFIER THAT RESOLVES TO NOTHING ═══════════════════════════════
+  // Five occurrences in one session, every one of them silent:
+  //
+  //   l.fullPageUrl    crashed the audit view, so a lead looked deleted
+  //   lead.brainAudit  threw AFTER Hunter accepted the mail — nothing marked
+  //                    sent, "failed" shown, and the next click double-emailed
+  //   setResearchError the fact-check refusal crashed instead of warning
+  //   prettyPhone      a call-sheet branch that has never once executed
+  //   _spineTxt/_figs/_parts
+  //                    declared inside a try that closes 90 lines above their
+  //                    use, so the prospect-simulator correction path threw on
+  //                    its first line every time and its own catch swallowed it.
+  //                    That feature has never run.
+  //
+  // `node --check` cannot see any of them: all are valid syntax. They fail only
+  // when that exact branch executes, which is why several sat live for weeks.
+  //
+  // scopecheck.js walks the real scope chain and reports any name that resolves
+  // to no binding. Running it HERE means both files are gated on every boot,
+  // rather than only when someone remembers the command.
+  try {
+    const { execFileSync } = require('child_process');
+    const _files = ['server.js', 'index.html'];
+    const _bad = [];
+    for (const f of _files) {
+      const _path = require('path').join(__dirname, f);
+      if (!require('fs').existsSync(_path)) continue;   // index.html is deployed separately
+      try {
+        execFileSync(process.execPath, [require('path').join(__dirname, 'scopecheck.js'), _path],
+          { stdio: 'pipe', timeout: 30000 });
+      } catch (err) {
+        const out = String((err && err.stdout) || '').trim().split('\n').slice(1, 4).join(' | ');
+        _bad.push(`${f}: ${out || 'unresolved identifier(s)'}`);
+      }
+    }
+    if (_bad.length) {
+      console.log(`⛔ SCOPE CHECK: ${_bad.join('  //  ')}. Each of these throws ReferenceError the moment its branch runs, and several of the live ones were swallowed by a surrounding catch, so the feature simply never worked.`);
+    } else {
+      console.log(`✓ SCOPE CHECK: every identifier in ${_files.length} file(s) resolves to a real binding — no name copied out of a scope it belonged to, and no declaration stranded inside a block that closed before its use.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A GUARD IS ONLY REAL IF ITS INPUTS ARRIVE ════════════════════════════
   // checkLocalRank holds two protections that both read bizLat/bizLng — the
   // 30km locationBias, and the WRONG TOWN median-distance check that refuses a
@@ -30695,10 +30781,27 @@ app.post('/api/compose-email', async (req, res) => {
       //
       // So the floor is exactly the email we would have sent anyway. This can
       // improve the prose; it cannot damage the facts.
+      // == DECLARED OUT HERE BECAUSE TWO BLOCKS NEED THEM =====================
+      // These three lived inside the try below, which closes ~90 lines further
+      // down. The prospect-simulator correction path — the block that hands the
+      // writer the owner's own objection after a DELETE verdict — sits AFTER
+      // that close and read all three anyway.
+      //
+      // It threw ReferenceError on its first line, every time, and its own
+      // `catch (e) { void e; }` swallowed it. So the feature never ran once.
+      // Every simulator DELETE in the logs should have produced a corrected
+      // rewrite and none did, silently — the comment above that block calls the
+      // simulator's objection "the most useful signal in the whole compose
+      // path", and it was being discarded by a scoping accident.
+      //
+      // This is the failure CLAUDE.md names as "line order is not scope": the
+      // declaration DOES appear earlier in the file, inside a block that had
+      // already closed. Found by scopecheck.js, which was written this session
+      // for index.html and now runs on this file too.
+      const _spineTxt = String(useSpine.claim || '');
+      const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
+      const _parts = composed._parts || {};
       try {
-        const _spineTxt = String(useSpine.claim || '');
-        const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
-        const _parts = composed._parts || {};
         if (req.body.apiKey && _spineTxt) {
           // ══ THE WRITER GETS WHAT THE AUDIT BRAIN KNEW ═══════════════════
           // It used to receive seven strings and produce a scanner's sentence.
