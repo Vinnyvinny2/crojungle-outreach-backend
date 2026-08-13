@@ -3350,6 +3350,146 @@ const searchAdzuna = async (appId, appKey, location) => {
 // EMAIL INFRASTRUCTURE CHECK — SPF/DMARC via Google DNS API. Free, factual.
 // No DMARC = they've never set up serious email marketing/deliverability.
 // CONTENT FRESHNESS — sitemap.xml lastmod dates. "Last update 14 months ago" is provable.
+// ══ WHAT A JOB TITLE ACTUALLY MEANS — CLASSIFIED, NEVER ASSUMED ════════════
+// The old code assumed the QUERY implied the SIGNAL: we asked for ops titles,
+// therefore every result is an ops hire. It then stamped
+// `ai_replacement_signal: true` on every lead unconditionally — while three of
+// the thirteen titles it asked for were MARKETING titles.
+//
+// The consequence is the exact bug the file elsewhere says is impossible. From
+// the audit's own comment: "the ai_replacement flags fire only on our curated
+// ops searches (dispatcher, scheduler, CS rep, data entry, bookkeeper). A
+// marketing coordinator or social media manager is a RETAINER problem, NOT
+// something a software build replaces. This is the Eat Right Atlanta bug: 2
+// marketing roles wrongly triggered a $75k AI build pitch on an obvious
+// retainer lead." That invariant was false for every TheirStack lead, and
+// `_realOpsSignal` therefore pitched a $40k-$100k Custom AI Software Build to
+// businesses whose only signal was that they were hiring a Marketing Manager.
+//
+// So the query no longer implies anything. Every returned title is classified
+// HERE, on its own text, and the signals are set from the classification. Edit
+// the query however you like afterwards — the labels cannot go wrong, because
+// they no longer depend on what was asked for.
+const JOB_TITLE_EXCLUDE = /\b(intern|internship|apprentice|volunteer|student)\b|\bproduct\s+marketing\b|\bmarketing\s+(analyst|data\s+analyst)\b|\bfield\s+marketing\b|\b(recruit|talent\s+acquisition)/i;
+// Tier A — hiring someone to OWN marketing. He has decided the function is
+// missing and the budget is approved. The strongest retainer window there is.
+const JOB_MARKETING_OWNER = /\b(marketing\s+(director|manager|lead)|director\s+of\s+marketing|head\s+of\s+marketing|vp\s+of\s+marketing|vice\s+president[,\s]+marketing|cmo|chief\s+marketing\s+officer|(director|head|vp)\s+of\s+growth|growth\s+(manager|marketer|lead)|demand\s+gen(eration)?)\b/i;
+// Tier B — he has NAMED the channel he thinks is broken. This is the most
+// useful tier and the reason titles are kept: it tells the ladder which finding
+// to open on. Hiring an SEO specialist while ranking #8 for a service he built
+// a page for is a different email from hiring a web developer.
+const JOB_MARKETING_CHANNEL = {
+  search:  /\b(seo|search\s+engine\s+optimi)/i,
+  paid:    /\b(ppc|paid\s+(media|search|social|ads?)|sem\b|google\s+ads|adwords|media\s+buyer)/i,
+  web:     /\b(web|website)\s*(site)?\s*(designer|developer|master|design|development)\b|\bwebmaster\b|\bfront[-\s]?end\s+(developer|designer)\b/i,
+  content: /\b(content\s+(marketing\s+)?(manager|specialist|strategist|writer|creator)|copywriter|blog(ger)?)\b/i,
+  social:  /\bsocial\s+media\b/i,
+  email:   /\b(email\s+marketing|marketing\s+automation|crm\s+(marketing|manager)|lifecycle\s+marketing)\b/i,
+  brand:   /\bbrand\s+(manager|strategist|director)\b/i,
+};
+// Tier C — the function exists and is under-resourced. A real window, weaker.
+const JOB_MARKETING_SUPPORT = /\bmarketing\s+(coordinator|specialist|assistant|associate|intern)\b|\bdigital\s+marketing\b|\bmarketing\b/i;
+// Ops roles — the AI-software thesis. Untouched from the original curated list,
+// because that list is the one the "$40k-$100k build" pitch is allowed to rest
+// on and narrowing it is not this change's job.
+const JOB_OPS_ROLE = /\b(dispatcher|scheduler|scheduling\s+coordinator|data\s+entry|office\s+manager|operations\s+coordinator|administrative\s+assistant|admin\s+assistant|customer\s+service\s+(rep|representative)|appointment\s+setter|bookkeeper|receptionist|billing\s+(clerk|specialist)|intake\s+(coordinator|specialist))\b/i;
+
+const classifyJobTitle = (title) => {
+  const t = String(title || '').trim();
+  if (!t) return { lane: 'other', channel: null };
+  if (JOB_TITLE_EXCLUDE.test(t)) return { lane: 'excluded', channel: null };
+  if (JOB_OPS_ROLE.test(t)) return { lane: 'ops', channel: null };
+  for (const [channel, re] of Object.entries(JOB_MARKETING_CHANNEL)) {
+    if (re.test(t)) return { lane: 'marketing', channel };
+  }
+  if (JOB_MARKETING_OWNER.test(t)) return { lane: 'marketing', channel: 'owner' };
+  if (JOB_MARKETING_SUPPORT.test(t)) return { lane: 'marketing', channel: 'support' };
+  return { lane: 'other', channel: null };
+};
+
+// ══ THE BUYING WINDOW THAT WAS NEVER MEASURED ══════════════════════════════
+// CLAUDE.md PART 4 calls this the largest gap in the system: "Every lead logs
+// [LANE] no job-posting signal — there is NO measured buying window. Thirty-plus
+// leads, zero exceptions." It was read as a discovery problem — that our sources
+// simply never return a trigger.
+//
+// It is not. It is a key name.
+//
+// The test was written by hand in TWO places, both reading
+// `discoverySignals.ai_replacement`. Grep the whole file for that key with the
+// _signal / _multi / _heavy suffixes excluded and there is exactly one hit, and
+// it is inside a comment. NOTHING IN THIS FILE HAS EVER ASSIGNED IT. The other
+// two terms were `hiring_marketing`, whose only lead-producing assignment lived
+// in searchAdzuna — which is disabled and returns Promise.resolve([]) — and
+// `ai_replacement_multi`, which needs two or more roles at one company.
+//
+// So a lead from a real, fresh, size-verified job posting for a single role
+// evaluated false on all three, and the audit prompt told the model:
+// "NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding
+// event, no exit signal." That sentence was false, and it was printed on top of
+// the only trigger data we buy.
+//
+// One function now, used by both call sites, over a NAMED list of keys — and a
+// boot check asserts every key on that list is one some source actually emits,
+// so a key that nobody sets can never quietly rejoin the test.
+//
+// The list is deliberately narrow. Only signals with a hard source belong:
+// TheirStack reads them off a real posting title, SEC EDGAR off a real Form D
+// filing. The softer news-scraped signals (expanding, rebranding,
+// recently_launched) are NOT here — claiming a window that turns out not to
+// exist would let the audit imply the owner is spending money when he is not,
+// and that is the one class of error this system may not make.
+const BUYING_WINDOW_KEYS = [
+  'hiring_marketing', 'hiring_marketing_multi',
+  'ai_replacement_signal', 'ai_replacement_multi', 'ai_replacement_heavy',
+  'raised_funding',
+];
+const hasMeasuredBuyingWindow = (sig) =>
+  !!(sig && typeof sig === 'object' && BUYING_WINDOW_KEYS.some(k => !!sig[k]));
+// Which window it is, for the log and for the pitch. Marketing outranks ops:
+// a company hiring both is a retainer lead that also has ops pain, never the
+// other way round — see the Eat Right Atlanta note above classifyJobTitle.
+const buyingWindowKind = (sig) => {
+  if (!hasMeasuredBuyingWindow(sig)) return '';
+  if (sig.hiring_marketing || sig.hiring_marketing_multi) return 'retainer';
+  if (sig.raised_funding) return 'funding';
+  return 'software';
+};
+// ══ ONE PLACE DECIDES WHAT A SET OF JOB TITLES MEANS ═══════════════════════
+// Split out of searchTheirStack so it can be RUN at boot. The first version of
+// the guard below tested classifyJobTitle and the lane function directly and
+// passed with flying colours while the emission between them was deliberately
+// broken — a marketing hire re-stamped as ops sailed straight through it. That
+// is the same disease as the bug: the pieces were each correct and the wire
+// between them was not, and nothing executed the wire.
+//
+// searchTheirStack now has no signal logic of its own. It collects titles and
+// calls this. The boot check calls this. There is no third path.
+const signalsFromTitles = (titles) => {
+  const list = (Array.isArray(titles) ? titles : []).map(t => String(t || '').trim()).filter(Boolean);
+  const marketing = [], ops = [], channels = new Set();
+  for (const t of list) {
+    const { lane, channel } = classifyJobTitle(t);
+    if (lane === 'marketing') {
+      if (!marketing.includes(t)) marketing.push(t);
+      if (channel) channels.add(channel);
+    } else if (lane === 'ops') {
+      if (!ops.includes(t)) ops.push(t);
+    }
+  }
+  return {
+    marketing, ops, channels: [...channels],
+    signals: {
+      // A marketing hire is a RETAINER window. It is not, and has never been,
+      // evidence that manual work can be replaced by software.
+      hiring_marketing: marketing.length > 0,
+      hiring_marketing_multi: marketing.length >= 2,
+      ai_replacement_signal: ops.length > 0,
+      ai_replacement_multi: ops.length >= 2,
+      ai_replacement_heavy: ops.length >= 3,
+    },
+  };
+};
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE: THEIRSTACK — the size problem solved AT THE QUERY.
 // Unlike Adzuna, TheirStack filters by company size BEFORE returning results.
@@ -3358,10 +3498,20 @@ const searchAdzuna = async (appId, appKey, location) => {
 // filtering, no whack-a-mole. COST: 1 API credit per job returned, so we cap
 // tight. Free tier = 200 credits/mo; keep TS_LIMIT small until on a paid plan.
 // Fails safe to [] if no key or the call errors. Never fabricates.
+//
+// ══ NARROWED TO MARKETING, WHICH COSTS NOTHING AND MULTIPLIES THE LANE ══════
+// The title list used to be thirteen entries, ten of them ops roles, all of
+// them competing for the same 25 credits per run. Marketing was three slots in
+// thirteen. Narrowing to marketing does not reduce volume — it takes roughly
+// every credit that used to buy a dispatcher posting and spends it on the lane
+// we sell into. Ops titles stay in classifyJobTitle so that a company hiring
+// BOTH still reports both correctly; they are simply no longer what we buy.
 // ═══════════════════════════════════════════════════════════
 const TS_LIMIT = 25; // credits per run = TS_LIMIT (1 credit/job). Raise on paid plan.
 // Track last TheirStack run in memory (persists across requests, resets on deploy).
-// 24h gate: costs 25 credits/run, free tier = 200/mo. Once/day = ~200/mo, stays free.
+// NOTE: this in-memory gate is the WEAKER of the two. The binding one is
+// TS_MIN_HOURS (default 84h) held in Supabase cron_state, which survives a
+// deploy; this one does not, so it protects the manual Find button only.
 let _tsLastRun = 0;
 const TS_GATE_MS = 23 * 60 * 60 * 1000; // 23h so it doesn't drift
 
@@ -3383,12 +3533,33 @@ const searchTheirStack = async (theirstackKey) => {
       min_employee_count: 10,                      // THE FIX — size filtered at source
       max_employee_count: 200,
       order_by: [{ field: 'date_posted', desc: true }],
-      // Target the same AI-replaceable / marketing roles the rest of Find hunts
+      // ── MARKETING ONLY, AND WRITTEN OUT RATHER THAN PATTERN-MATCHED ───────
+      // TheirStack also exposes `job_title_pattern_or` (regex), which would be
+      // shorter. It is deliberately NOT used: `job_title_or` is the parameter
+      // this integration has been observed to work with live (24 companies from
+      // 25 jobs on 2026-08-12), and an unrecognised filter name is the kind of
+      // thing an API IGNORES rather than rejects — which would return every job
+      // in the country and look like a successful run. Do not swap this for a
+      // parameter nobody here has watched succeed.
+      //
+      // Ordered by how strong a buying window the title represents: someone
+      // hired to OWN marketing first, then the channel specialists who tell us
+      // which finding to open on, then the support hires.
       job_title_or: [
-        'Dispatcher', 'Scheduler', 'Scheduling Coordinator', 'Data Entry',
-        'Office Manager', 'Operations Coordinator', 'Administrative Assistant',
-        'Customer Service Representative', 'Appointment Setter', 'Bookkeeper',
-        'Marketing Coordinator', 'Marketing Manager', 'Social Media Manager',
+        // Tier A — hiring someone to own marketing
+        'Marketing Director', 'Director of Marketing', 'Head of Marketing',
+        'Marketing Manager', 'VP of Marketing', 'Chief Marketing Officer',
+        'Growth Manager', 'Director of Growth', 'Demand Generation Manager',
+        // Tier B — the channel he thinks is broken
+        'Digital Marketing Manager', 'Digital Marketing Specialist',
+        'SEO Specialist', 'SEO Manager',
+        'PPC Specialist', 'Paid Media Manager', 'Paid Search Manager',
+        'Google Ads Manager', 'Content Marketing Manager', 'Content Manager',
+        'Email Marketing Manager', 'Marketing Automation Specialist',
+        'Social Media Manager', 'Social Media Specialist',
+        'Web Designer', 'Web Developer', 'Brand Manager',
+        // Tier C — the function exists and is under-resourced
+        'Marketing Coordinator', 'Marketing Specialist', 'Marketing Associate',
       ],
     };
     const r = await fetchT('https://api.theirstack.com/v1/jobs/search', {
@@ -3419,19 +3590,58 @@ const searchTheirStack = async (theirstackKey) => {
       if (!byCompany.has(name)) {
         byCompany.set(name, {
           name,
-          website: j.company_object?.url || j.final_url || '',
+          // ══ A JOB POSTING URL IS NOT THEIR WEBSITE ═══════════════════════
+          // This read `j.company_object?.url || j.final_url`. final_url is the
+          // link to the POSTING — an Indeed, Workable or Greenhouse page. When
+          // company_object was missing, that URL became the lead's `website`,
+          // and everything downstream audited a job board: the scraper fetched
+          // it, the domain check compared it to their name, and the email would
+          // have described someone else's applicant-tracking system as their
+          // site. An empty website is recoverable — the WEBSITE GUARD resolves
+          // the real domain by search. A wrong one is not.
+          website: j.company_object?.url || '',
           location: j.short_location || j.location || '',
           verifiedEmployees: (typeof emp === 'number' && emp > 0) ? emp : null,
           roles: new Set(),
           industry: j.company_object?.industry || '',
+          // Everything below was thrown away by the old grouping loop.
+          marketing: [],       // the actual marketing titles, verbatim
+          ops: [],             // the actual ops titles, verbatim
+          channels: new Set(), // search / paid / web / content / social / email / brand / owner
+          newestPostedAt: null,
+          postingUrl: '',
+          description: '',
         });
       }
       const c = byCompany.get(name);
-      if (j.job_title) c.roles.add(j.job_title);
+      const title = String(j.job_title || '').trim();
+      if (title) c.roles.add(title);
+      // ── THE POSTING DATE IS MEASURED, NOT ASSUMED ────────────────────────
+      // The request is ORDERED BY date_posted and then the age was hard-coded
+      // to 7 days on every lead. A posting from this morning and one from
+      // thirteen days ago were identical to everything downstream, including
+      // the reach-window language that states how long the window stays open.
+      const _dp = j.date_posted || j.discovered_at || null;
+      const _t = _dp ? Date.parse(_dp) : NaN;
+      if (Number.isFinite(_t) && (c.newestPostedAt === null || _t > c.newestPostedAt)) {
+        c.newestPostedAt = _t;
+        // Keep the posting that goes WITH the freshest date, so the URL, the
+        // date and the text all describe the same job rather than three.
+        c.postingUrl = j.url || j.final_url || '';
+        c.description = String(j.description || j.job_description || '').slice(0, 4000);
+      }
     }
 
     const out = [...byCompany.values()].map(c => {
       const roleCount = c.roles.size;
+      // Every signal on this lead comes from here and from nowhere else.
+      const _lanes = signalsFromTitles([...c.roles]);
+      c.marketing = _lanes.marketing; c.ops = _lanes.ops; c.channels = new Set(_lanes.channels);
+      const mktgCount = _lanes.marketing.length;
+      const opsCount = _lanes.ops.length;
+      const ageDays = c.newestPostedAt
+        ? Math.max(0, Math.round((Date.now() - c.newestPostedAt) / 86400000))
+        : null;
       return {
         name: c.name,
         website: c.website,
@@ -3439,21 +3649,52 @@ const searchTheirStack = async (theirstackKey) => {
         // TheirStack gives us verified size for FREE in the same call — huge.
         verifiedEmployees: c.verifiedEmployees,
         industry: c.industry,
-        manualRoleCount: roleCount,
-        manualCategories: Math.min(roleCount, 3),
+        manualRoleCount: opsCount,
+        // Was Math.min(roleCount, 3) — arithmetic on a count, presented
+        // downstream as a number of distinct business functions. It is now the
+        // ops role count, capped, which is the thing it was always read as.
+        manualCategories: Math.min(opsCount, 3),
         source: 'theirstack',
         perfectFit: true,                          // size-verified in range by construction
-        signalFreshness: 'hot',
-        signalAgeDays: 7,
-        signals: {
-          ai_replacement_signal: true,
-          ai_replacement_multi: roleCount >= 2,
-          ai_replacement_heavy: roleCount >= 3,
-        },
-        jobTitle: `Hiring ${roleCount} manual role${roleCount === 1 ? '' : 's'} at a ${c.verifiedEmployees ? '~' + c.verifiedEmployees + '-person' : 'verified small'} company (size-filtered at source)`,
+        // Freshness is now MEASURED. Null age means the posting carried no
+        // usable date, and 'warm' is the honest label for "recent enough that
+        // TheirStack returned it, but we cannot say how recent".
+        signalFreshness: ageDays === null ? 'warm' : (ageDays <= 7 ? 'hot' : 'warm'),
+        signalAgeDays: ageDays,
+        // ══ THE TITLES THEMSELVES, WHICH DECIDE THE PITCH ══════════════════
+        // The audit prompt has a branch that says "Name the exact roles. Do the
+        // math on the loaded salary." Nothing in the payload could satisfy it,
+        // because the grouping loop read only `c.roles.size` and dropped every
+        // string. An instruction to state a specific fact that was never
+        // delivered is invention pressure, and it lands in the AUDIT — upstream
+        // of the email's fabrication verifier, where nothing catches it.
+        marketingRoles: c.marketing,
+        opsRoles: c.ops,
+        marketingChannels: [...c.channels],
+        jobPostingUrl: c.postingUrl,
+        jobPostedAt: c.newestPostedAt ? new Date(c.newestPostedAt).toISOString() : null,
+        // Kept for quoting. It is the owner describing, in his own words and
+        // unprompted, what he thinks is broken — the only text of that kind
+        // this system can obtain. It must still pass the same corpus
+        // verification as any other quote before it can reach an email.
+        jobSnippet: c.description,
+        // ══ SET FROM THE TITLES, NOT FROM THE QUERY ══════════════════════
+        // Built by signalsFromTitles, which is the ONLY thing in this file that
+        // decides what a set of job titles means — so the boot check can run
+        // the same wire that ships. hiring_marketing is the retainer lane, and
+        // it had exactly one assignment in this whole file before now: inside
+        // searchAdzuna, which is disabled and returns Promise.resolve([]). The
+        // flag that decides "budget allocated, direction not chosen, the
+        // retainer pitch writes itself" was unreachable on every live lead.
+        signals: _lanes.signals,
+        jobTitle: mktgCount
+          ? `Hiring ${c.marketing.slice(0, 3).join(', ')}${mktgCount > 3 ? ` and ${mktgCount - 3} more` : ''}${ageDays === null ? '' : ageDays === 0 ? ' — posted today' : ` — posted ${ageDays} day${ageDays === 1 ? '' : 's'} ago`}`
+          : `Hiring ${roleCount} role${roleCount === 1 ? '' : 's'} at a ${c.verifiedEmployees ? '~' + c.verifiedEmployees + '-person' : 'verified small'} company (size-filtered at source)`,
       };
     });
-    console.log(`TheirStack: ${out.length} size-verified SMBs from ${jobs.length} jobs (${TS_LIMIT} credits)`);
+    const _mktg = out.filter(o => o.signals.hiring_marketing).length;
+    const _dated = out.filter(o => Number.isFinite(o.signalAgeDays)).length;
+    console.log(`TheirStack: ${out.length} size-verified SMBs from ${jobs.length} jobs (${TS_LIMIT} credits) — ${_mktg} hiring for marketing, ${_dated} with a real posting date. A marketing hire is now flagged as a RETAINER window, not as a manual-ops one; the old code stamped every lead ai_replacement_signal regardless of the role and pitched a $40k-$100k software build at businesses hiring a marketing manager.`);
     return out;
   } catch (e) {
     console.log('TheirStack failed:', e.message);
@@ -5535,6 +5776,28 @@ let FIRECRAWL_RATE_LIMIT_HITS = 0;
 // do not change hour to hour, so a 2-day window is safe and makes re-research nearly
 // instant. Pass a shorter window for anything genuinely time-sensitive.
 const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+// ══ WHAT A BATCH JOB IS WORTH WAITING FOR, AND WHETHER TO SUBMIT ONE ════════
+// Both of these were implicit and both were wrong.
+//
+// THE WAIT WAS A PER-PAGE TIMEOUT USED AS A WHOLE-JOB DEADLINE, then floored at
+// 30 seconds. The two call sites pass 40000 and 45000, so every lead slept 40s
+// on the leadership pages and 45s on the site audit — 85 SECONDS PER LEAD —
+// before giving up and buying all nine pages one at a time anyway. On the
+// 2026-08-13 Kansas City run that was four give-ups across two leads, about 28%
+// of a five-minute run spent waiting for a result that was thrown away.
+//
+// A longer wait cannot help. The individual fallback runs the URLs in parallel
+// and answers in roughly twenty seconds, so anything past that is buying a
+// discount with time we do not have.
+//
+// AND THE SUBMIT DECISION DID NOT EXIST. With n pages and completion probability
+// p, batching costs p(0.5n) + (1-p)(0.5n + n) credits — an abandoned job is
+// still scraped by Firecrawl, still billed, and then every page is bought again
+// by the fallback. That only beats paying n outright when p > 0.5. Measured p
+// on this run: 0 of 4. Turn it back on when the give-up line starts reporting
+// jobs that were close.
+const FC_BATCH_GIVEUP_MS = Number(process.env.FC_BATCH_GIVEUP_MS || 8000);
+const FC_BATCH_ENABLED = String(process.env.FC_BATCH || 'off').toLowerCase() === 'on';
 // ═══ BATCH SCRAPE — HALF PRICE FOR PAGES WE ALREADY KNOW WE WANT ═══════════
 // Firecrawl bills a single /scrape at 1 credit per page but a /batch/scrape at
 // 0.5. Every place this system reads several interior pages of the SAME site, it
@@ -5585,6 +5848,25 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
     if (md) out.set(need[0], md);
     return out;
   }
+  // ══ SUBMITTING IS WHAT COSTS. GIVING UP ONLY SAVES THE CLOCK. ═══════════
+  // Four submits, four give-ups, on the 2026-08-13 run — and the comment at the
+  // site-audit call site records the same thing happening earlier, where the
+  // response was to cut ten pages to seven rather than fix the wait.
+  //
+  // Nothing here cancels the job. Firecrawl's worker keeps scraping after we
+  // stop polling and bills per page, so the credit is spent the moment we
+  // submit. That is why this guard sits BEFORE the submit and not around the
+  // poll: a guard after it would turn the log off and leave the spend on.
+  //
+  // The cache serve and the single-URL shortcut above still run, so a re-scrape
+  // inside the two-day window is still free and one URL is still a plain scrape.
+  if (!FC_BATCH_ENABLED) {
+    console.log(`BATCH: not submitting ${need.length} page(s) \u2014 batching is OFF (FC_BATCH=on restores it). An abandoned batch is billed in full and then bought again individually, so it only pays above a 50% completion rate and this run measured 0 of 4. Falling straight to individual scrapes, which is where every page delivered today already came from.`);
+    // Returns exactly what the catch below would return — the cache hits — so
+    // the caller's individual-scrape fallback runs unchanged. Throwing would
+    // have worked and logged it as an error, which this is not.
+    return out;
+  }
 
   try {
     const submit = await fetchT('https://api.firecrawl.dev/v1/batch/scrape', {
@@ -5631,7 +5913,10 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
 
     // Poll. Bounded by both attempts and wall clock so a stuck job can never hang
     // a research run — that is the failure mode that produced the 359-second lead.
-    const deadline = Date.now() + Math.max(30000, perPageTimeoutMs);
+    // A TIME BUDGET, not a per-page number. perPageTimeoutMs is what one page is
+    // allowed to take; using it as the deadline for the whole job — and then
+    // flooring it at 30s — is what produced 85 seconds of dead sleep per lead.
+    const deadline = Date.now() + FC_BATCH_GIVEUP_MS;
     let data = null;
     for (let attempt = 0; Date.now() < deadline; attempt++) {
       await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 3000));
@@ -6877,7 +7162,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     // Reading it here costs nothing and cannot hallucinate: every name and title
     // is copied out of the page verbatim or not returned at all.
     try {
-      const _roster = parseTeamRoster(corpus);
+      const _roster = parseTeamRoster(corpus, companyName);
       const _owners = _roster.filter(r => r.isOwner);
       if (_owners.length) {
         const _pick = _owners[0];
@@ -7107,7 +7392,76 @@ const OWNER_TITLE_RE = /\b(?:co[- ]?)?(?:owner|founder|co[- ]?founder|proprietor
 // a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
 const NON_OWNER_TITLE_RE = /\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
 
-const parseTeamRoster = (html) => {
+// ══ A ROSTER LINE IS ALMOST NEVER A BARE "FIRST LAST" ══════════════════════
+// The name pattern is anchored — the whole run had to BE a name, with nothing
+// before it and nothing after. Almost no real roster line looks like that, and
+// the ones that break it are exactly the industries this pipeline sells into:
+//
+//   Dr. Matthew Yip                        honorific, fails on the period
+//   John P. Goodman, D.D.S.                credentials after a comma
+//   Hannah Vargas, MD                      same
+//   [Dr. Matthew Yip](/dr-yip)             Firecrawl markdown renders team
+//                                          cards as links; the brackets alone
+//                                          made the run unmatchable
+//   Kacie Carrico, COO                     name AND title on one line — and
+//                                          this one was WORSE than unmatched:
+//                                          the title test runs first, "COO"
+//                                          matched, and the whole run was
+//                                          skipped as though it were a title
+//                                          with no person attached
+//
+// So the run is NORMALISED before it is matched, rather than the pattern being
+// loosened. Loosening is how a parser starts naming the wrong person, and a
+// perfect email to the wrong person is worse than no email at all. Stripping a
+// known honorific and a known credential from a run that then matches the same
+// strict pattern cannot invent anybody.
+//
+// The same-line title is the dominant shape on medical, dental and legal
+// rosters, and reading it is the whole point: it is the company stating who
+// owns it, on a page they maintain, and it costs nothing.
+const HONORIFIC_RE = /^(?:dr|doctor|mr|mrs|ms|miss|prof|professor|rev|father|atty|attorney|hon|sir|dame)\.?\s+/i;
+// Matched only as a WHOLE segment or a whole trailing word, never inside one.
+// The two-letter ones that are also real words or names — PA, MS, BS, DO, OD,
+// PE, DC, EA, RA — are accepted ONLY in their dotted form. "Do" is a surname.
+const CREDENTIAL_RE = /^(?:(?:[A-Za-z]\.){2,6}|(?:D\.?D\.?S|D\.?M\.?D|D\.?V\.?M|Ph\.?D|Esq|C\.?P\.?A|M\.?B\.?A|A\.?I\.?A|F\.?A\.?C\.?S|F\.?A\.?G\.?D|C\.?F\.?P|C\.?F\.?A|L\.?M\.?T|M\.?P\.?H|F\.?N\.?P|C\.?R\.?N\.?A|LEED\s*AP|MD|JD|RN|NP)|P\.A|M\.S|B\.S|D\.O|O\.D|P\.E|D\.C|E\.A|R\.A)\.?$/i;
+// One optional internal capital in the surname, so McDonald, MacLeod and
+// DeVries are people rather than unparseable.
+const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?(?:\s+[A-Z][a-z'’-]{1,20})?\s+[A-Z][a-z'’-]{0,25}(?:[A-Z][a-z'’-]{1,20})?)$/;
+
+const personFromRun = (raw, companyName = '') => {
+  let t = String(raw || '').trim();
+  if (!t || t.length > 110) return null;
+  // Markdown link or image: keep the label, drop the target.
+  t = t.replace(/!?\[([^\]]{2,70})\]\([^)]*\)/g, '$1');
+  t = t.replace(/[*_`~]+/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  // Deliberately NOT split on "/": "CO-OWNER/CFO" is one title and splitting it
+  // is how a co-owner gets filed as the CFO.
+  const seg = t.split(/\s*(?:,|–|—|\||\s-\s)\s*/).map(s => s.trim()).filter(Boolean);
+  if (!seg.length) return null;
+  let head = seg[0].replace(HONORIFIC_RE, '').trim();
+  // Credentials glued on with no comma: "Matthew Yip DDS". Never below three
+  // words, so a two-word name is untouchable.
+  const words = head.split(' ');
+  while (words.length > 2 && CREDENTIAL_RE.test(words[words.length - 1])) words.pop();
+  head = words.join(' ');
+  if (!ROSTER_NAME_RE.test(head)) return null;
+  // ── THEIR OWN NAME IS NOT A PERSON ──────────────────────────────────────
+  // "Tiffany Springs" satisfies every name rule ever written, and it is the
+  // practice. A candidate whose every word already appears in the company name
+  // is the company. A family business survives this: "Dusty Hannah" at Hannah
+  // Custom Homes keeps "Dusty", which the company name does not contain.
+  const _co = String(companyName || '').toLowerCase();
+  if (_co) {
+    const _cw = new Set(_co.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+    const _nw = head.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+    if (_nw.length && _nw.every(w => _cw.has(w))) return null;
+  }
+  const rest = seg.slice(1).filter(s => !CREDENTIAL_RE.test(s));
+  return { name: head, inlineTitle: rest.length ? rest.join(', ') : '' };
+};
+
+const parseTeamRoster = (html, companyName = '') => {
   const out = [];
   if (!html) return out;
   // Strip scripts and styles; keep tags so the name/title pairing survives.
@@ -7140,7 +7494,9 @@ const parseTeamRoster = (html) => {
     'see more', 'find us', 'call us', 'our work', 'case studies',
     'our services', 'why choose', 'meet our', 'privacy policy', 'terms of',
   ]);
-  const NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?\s+[A-Z][a-z'’-]{1,25})$/;
+  // The pattern itself now lives at module scope as ROSTER_NAME_RE, beside the
+  // normaliser that feeds it, so both can be tested directly.
+  const NAME_RE = ROSTER_NAME_RE;
   // ══ A TWO-WORD TITLE LOOKS EXACTLY LIKE A NAME ═════════════════════════
   // "Managing Partner", "Office Manager" and "Vice President" all satisfy the
   // First-Last pattern, so the loop below treated them as the next person and
@@ -7166,18 +7522,32 @@ const parseTeamRoster = (html) => {
     return null;
   };
   for (let i = 0; i < runs.length; i++) {
-    if (titleKind(runs[i])) continue;            // a title, not a person
-    const m = runs[i].match(NAME_RE);
-    if (!m) continue;
+    // ORDER MATTERS AND IT CHANGED. This used to ask "is this a title?" first
+    // and skip the run if so — which threw away every line carrying a name AND
+    // a title, the commonest shape there is. "Kacie Carrico, COO" matched the
+    // title test and the person went with it.
+    //
+    // So: normalise first. If the run yielded no inline title then it might be
+    // a bare job title dressed as a name — "Managing Partner" satisfies every
+    // name pattern — and only then is the title test the right question.
+    const p = personFromRun(runs[i], companyName);
+    if (!p) continue;
+    if (!p.inlineTitle && titleKind(runs[i])) continue;
+    const m = [p.name, p.name];
     // A section heading occupies the same position as a name and matches the
     // same shape. "About Us" reached a live email as the greeting.
     if (NOT_A_NAME.has(m[1].toLowerCase().trim())) continue;
+    // The company saying it on one line is the best evidence there is.
+    if (p.inlineTitle) {
+      const _k = titleKind(p.inlineTitle);
+      if (_k) { out.push({ name: p.name, title: p.inlineTitle.replace(/\s+/g, ' ').trim(), isOwner: _k === 'owner' }); continue; }
+    }
     // The title is normally the next non-empty run, occasionally the one after.
     for (let j = i + 1; j <= Math.min(i + 3, runs.length - 1); j++) {
       const t = runs[j];
       if (!t) break;
       const kind = titleKind(t);
-      if (!kind && NAME_RE.test(t)) break;       // the next person, no title
+      if (!kind && personFromRun(t, companyName)) break;   // the next person, no title
       if (t.length > 70) continue;
       // ══ AN OWNER TOKEN WINS OVER A C-SUITE ONE ═══════════════════════
       // "CO-OWNER/CFO" is Misty Pyle at Hannah Custom Homes. Checking the
@@ -8312,9 +8682,10 @@ const HARM_LADDER = [
     // looked at both, which is why specific is 94.
     // Distinct from outranked_by_weaker, which is the opposite case: there they
     // have MORE reviews than the businesses beating them.
-    test: (m) => Number(m.reviewCount || 0) > 0 && Number(m.aboveMedianReviews || 0) > 0
-      && Number(m.aboveMedianReviews) >= Number(m.reviewCount) * 4,
-    say: (m) => `They have ${m.reviewCount} reviews; the businesses ranking above them average about ${Math.round(Number(m.aboveMedianReviews))}`,
+    test: (m) => Number(m.reviewCount || 0) > 0 && Number(m.aboveReviewsN || 0) >= 2
+      && Number.isFinite(Number(m.aboveReviewsAvg))
+      && Number(m.aboveReviewsAvg) >= Number(m.reviewCount) * 4,
+    say: (m) => `They have ${m.reviewCount} reviews; the ${m.aboveReviewsN} businesses at the top of that search average ${Math.round(Number(m.aboveReviewsAvg))} each`,
     costs: 'a buyer choosing between names on a map reads the review count before anything else' },
 
   { harm: 92, specific: 92, novel: 88, delegable: 60, weFix: 95, band: 'DEAD', id: 'expired_certificate',
@@ -10978,8 +11349,26 @@ Return ONLY the email body. No subject, no signature, no preamble.`;
   }
 };
 
+// ══ THE WRITER WAS PUNISHED FOR FORMATTING A NUMBER CORRECTLY ═══════════════
+// Every figure in an email is checked against the measurements. The permitted
+// list is built from our own strings, which carry no thousands separators, so a
+// measurement arrives as "2344". Any competent writer types "2,344".
+//
+// Those tokenised to different strings, so the comma made a TRUE figure look
+// INVENTED. verifyBrainEmail refused the draft — "contains 1 figure(s) we never
+// measured" — and the lead fell back to the composed template. On John P.
+// Goodman DDS the headline number was 2344, so the model-written email was at
+// risk of being discarded for writing the number properly, and the fallback
+// shipped bare digits that read like a database dump.
+//
+// It only bites above 999, which is why nobody saw it: review counts, ratings,
+// photo counts and page counts are almost always three digits or fewer.
+//
+// Commas are stripped for COMPARISON ONLY. Nothing about what may be said moves:
+// 2,344 and 2344 are the same number, and a figure nothing measured is still
+// refused. Periods are left alone, so 4.8 stays 4.8 rather than becoming 48.
 const NUMBER_TOKENS = (t) => (String(t || '').match(/\d[\d,.]*/g) || [])
-  .map(x => x.replace(/[.,]$/, ''));
+  .map(x => x.replace(/[.,]$/, '').replace(/,/g, ''));
 const verifyBrainEmail = (body, opts = {}) => {
   const text = String(body || '').trim();
   if (!text) return { ok: false, why: 'empty' };
@@ -12870,7 +13259,30 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
   // Subject: this finding's own line, a DIFFERENT one from the first email so the
   // follow-up opens a new angle rather than repeating the subject he already
   // ignored. Falls back to the finding itself, lower-cased and trimmed short.
-  const subs = (SUBJECTS_FOR[rung.id] || []).filter(Boolean);
+  // ══ THIS SHIPPED THE TEMPLATE INSTEAD OF THE SUBJECT ═══════════════════
+  // SUBJECTS_FOR holds TEMPLATES. Six of its seventy-six entries carry a
+  // placeholder:
+  //
+  //   review_pain_pattern  '{pain}'
+  //   stale_copyright      'your footer still says {year}'
+  //   dead_blog            'your blog stopped in {year}'
+  //   low_rating           'your rating is {rating}'
+  //
+  // buildSubjects() is the function that resolves those. This read the array
+  // DIRECTLY and used whichever string the seed landed on, so a follow-up whose
+  // index hit a placeholder entry shipped it verbatim. Live, on John P. Goodman
+  // DDS, follow-up 1 went to the queue with the subject line:
+  //
+  //   {pain}
+  //
+  // The most visible line in the email, reading as a broken mail merge, on the
+  // one finding — a repeating complaint in his own reviews — that PART 5 credits
+  // with every reply this system has earned.
+  //
+  // buildSubjects also DROPS a template that resolves to empty, so a lead with
+  // no mined complaint now falls back to the next real subject instead of
+  // sending a blank one. Both behaviours come free by calling it.
+  const subs = buildSubjects({ id: rung.id }, opts.measured || {}).filter(Boolean);
   const _seed = String(opts.company || opts.founderName || '')
     .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
   const subject = subs.length
@@ -21933,6 +22345,123 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
     bestRank: ranked.length ? Math.min(...ranked.map(r => r.rank)) : null,
   };
 };
+// ══ WHICH OF THE MEASURED SEARCHES BECOMES THE FINDING ═════════════════════
+// This used to be one expression, written twice, in two places 140 lines apart:
+//
+//   localRank = results.find(r => r.kind === 'primary trade' && r.found)
+//            || results.find(r => r.found) || results[0];
+//
+// It picks the head term whenever the head term was found, and it never looks at
+// what the row actually says. John P. Goodman DDS, 2026-08-13, four real Places
+// searches on one lead:
+//
+//   #3 of 20  "dentist in Kansas City, MO"        (primary trade)  — nothing
+//   #12 of 20 "root canal in Kansas City, MO"     — 3 of the 11 above have FEWER reviews
+//   #8 of 20  "gum surgery in Kansas City, MO"    — 4 of the 7 above have FEWER reviews
+//   #13 of 20 "dental exam in Kansas City, MO"    — 5 of the 12 above have FEWER reviews
+//
+// It chose the first row. weakerAbove was 0 there, so `outranked_by_weaker` —
+// the rung that has produced replies, one of only two things in this system with
+// evidence behind it — tested false and switched off, on a lead carrying that
+// exact finding three separate times. We paid for three searches that each found
+// it and handed the audit the one row that says he is doing fine. #3 of 20 is a
+// compliment, and the email opened on something else entirely.
+//
+// So the rule is not "which query is the most canonical". It is WHICH ROW HOLDS
+// THE FINDING. A row where businesses with fewer reviews rank above him beats a
+// row where none do, every time, whatever the query was.
+//
+// Among rows that do hold it, strength is weakerAbove squared over the number
+// above — the count weighted by how much of the field it is. Both halves matter
+// and neither is enough alone: 5 of 12 is more businesses but 4 of 7 is most of
+// them, and "most of the businesses ahead of you have a weaker reputation than
+// yours" is the sentence an owner cannot argue with. Gum surgery wins on
+// John (2.29 against 2.08 and 0.82), which is the right answer by eye too.
+//
+// A row whose position two samples disagreed on sorts BELOW every statable row
+// regardless of strength: its ratio may not be written down, so it is a weaker
+// email even when it is a bigger number.
+//
+// Not-found rows are deliberately NOT considered here. Absence has its own
+// route — localVisibility, the search_absence signal and the SERVICES THEY SELL
+// BUT CANNOT BE FOUND FOR block — and pulling one into localRank would blank the
+// rank, the review counts and the competitor names that this object carries.
+// ══ AN AVERAGE THAT WAS A MEDIAN, AND THE WRONG HALF OF IT ═════════════════
+// review_deficit said "the businesses ranking above them average about N" and N
+// was computed as n[Math.floor(n.length / 2)] — a median. With TWO businesses
+// above, Math.floor(2 / 2) is 1, so it returned the LARGER of the two. One
+// practice's 2,344 reviews were reported as what two businesses "average".
+//
+// Two further things were wrong with the sentence whatever the arithmetic did:
+//
+//   · localRank.above holds at most THREE rows (above.slice(0, 3)). At rank #12
+//     a claim about "the businesses ranking above them" was being computed from
+//     a quarter of them, and worded as though it covered all eleven.
+//   · Nothing required those businesses to actually have MORE reviews. On a
+//     mixed field this rung and outranked_by_weaker make opposite claims about
+//     the same lead — one says he is behind on reviews, the other says the
+//     businesses beating him have fewer.
+//
+// So: a true mean, over exactly the rows we hold, reported with how many that
+// is, and only when every one of them really is ahead on reviews. If the field
+// is mixed, outranked_by_weaker owns the lead and this one stays silent rather
+// than averaging the disagreement into a number that is true of nobody.
+//
+// The rows are places.slice(0, idx) — the TOP of that search, not the businesses
+// immediately above him — so the sentence says so.
+const summariseAboveReviews = (above, ourReviews) => {
+  const rows = (Array.isArray(above) ? above : []).filter(Boolean);
+  const counts = rows.map(x => Number(x && x.reviews)).filter(n => Number.isFinite(n) && n > 0);
+  const ours = Number(ourReviews);
+  // One competitor is not "the businesses at the top of that search".
+  if (counts.length < 2) return { n: 0, avg: null, why: 'fewer than two review counts held' };
+  if (!Number.isFinite(ours) || ours <= 0) return { n: 0, avg: null, why: 'their own review count is not measured' };
+  if (counts.some(c => c <= ours)) {
+    return { n: 0, avg: null, why: 'at least one business at the top of that search has FEWER reviews than they do — that lead belongs to outranked_by_weaker, and averaging the two claims together produces a number that is true of nobody' };
+  }
+  const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+  return { n: counts.length, avg, why: '' };
+};
+const pickRankRow = (results) => {
+  const rows = (Array.isArray(results) ? results : []).filter(Boolean);
+  if (!rows.length) return { row: null, note: 'no rank rows at all' };
+  const found = rows.filter(r => r.found);
+  if (!found.length) {
+    return { row: rows.find(r => r.kind === 'primary trade') || rows[0],
+             note: 'they were not found for any query — absence is the finding and it travels by its own route' };
+  }
+  const above = (r) => {
+    const n = Number(r.rank) - 1;
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const strength = (r) => {
+    const w = Number(r.weakerAbove);
+    if (!Number.isFinite(w) || w <= 0) return 0;
+    const a = above(r);
+    // Position suppressed: we know how many weaker businesses are ahead but not
+    // how many are ahead in total, so the density cannot be computed. Use the
+    // count. The statable/unstable split below is what keeps this from
+    // outranking a row we can actually put in an email.
+    return a === null ? w : (w * w) / a;
+  };
+  const statable = (r) => Number.isFinite(Number(r.rank)) && r.rankStable !== false;
+  const scored = found.map(r => ({ r, s: strength(r), st: statable(r) ? 1 : 0 }));
+  const holding = scored.filter(x => x.s > 0);
+  if (!holding.length) {
+    return { row: found.find(r => r.kind === 'primary trade') || found[0],
+             note: `no query put a weaker-reviewed business above them (${found.length} checked) — there is no outranked finding on this lead` };
+  }
+  holding.sort((a, b) => (b.st - a.st)
+    || (b.s - a.s)
+    || ((b.r.kind === 'primary trade' ? 1 : 0) - (a.r.kind === 'primary trade' ? 1 : 0)));
+  const win = holding[0];
+  const others = holding.slice(1).concat(scored.filter(x => x.s <= 0))
+    .map(x => `"${x.r.query}" (${x.s > 0 ? x.r.weakerAbove + ' weaker above' : 'nothing'})`);
+  return {
+    row: win.r,
+    note: `"${win.r.query}" (${win.r.kind}) carries the finding — ${win.r.weakerAbove} of the ${above(win.r) === null ? '?' : above(win.r)} businesses above them have FEWER reviews${others.length ? `. Passed over: ${others.join(', ')}` : ''}`,
+  };
+};
 
 const _runResearchInner = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
@@ -21975,6 +22504,22 @@ const _runResearchInner = async (req, res) => {
   const emailData = browserData.emailData || {};
   const companyData = browserData.companyData || {};
   const discoverySignals = req.body.discoverySignals || {};
+  // ══ THE OWNER'S OWN WORDS, WHICH WE HAVE NEVER ONCE READ ═══════════════
+  // A job posting is the one place a business owner writes down, unprompted,
+  // what he thinks is broken: "take over a website that isn't generating
+  // leads", "manage our Google Ads, which aren't converting". searchTheirStack
+  // now keeps that text, the frontend now forwards it, and it lands here.
+  //
+  // It is treated as CORPUS, not as a claim. It joins the text that
+  // originalFindings are verified against, so a quote from it has to survive
+  // the same check as a quote from their homepage — which is the only reason
+  // it is safe to let a model near it. Nothing here asserts anything.
+  const jobSnippet = String(req.body.jobSnippet || '').slice(0, 4000);
+  const marketingRoles = Array.isArray(req.body.marketingRoles) ? req.body.marketingRoles.filter(Boolean).map(String) : [];
+  const marketingChannels = Array.isArray(req.body.marketingChannels) ? req.body.marketingChannels.filter(Boolean).map(String) : [];
+  if (jobSnippet || marketingRoles.length) {
+    console.log(`\u{1F4CC} JOB POSTING [${req.body.company || req.body.name || '?'}]: ${marketingRoles.length ? 'hiring ' + marketingRoles.join(', ') : 'no titles'}${marketingChannels.length ? ` (channel: ${marketingChannels.join(', ')})` : ''}${jobSnippet ? ` \u2014 ${jobSnippet.length} characters of their own posting text, added to the corpus every quote is checked against` : ' \u2014 no posting text'}. Until now the find stage kept none of this and Research received none of it.`);
+  }
   const discoverySource = req.body.discoverySource || '';
   const discoveryReason = req.body.discoveryReason || '';
   // LANE VISIBILITY - the retainer pitch silently falling back to software was a
@@ -21994,8 +22539,16 @@ const _runResearchInner = async (req, res) => {
   // A default that asserts something unmeasured is the exact failure this system
   // is built to prevent \u2014 so say plainly that there is no job signal instead.
   const _laneRaw = req.body.buyingLane;
-  const _laneFromJobs = !!(discoverySignals && (discoverySignals.hiring_marketing || discoverySignals.ai_replacement || discoverySignals.ai_replacement_multi));
-  const _lane = (_laneRaw === 'software' && !_laneFromJobs) ? '' : _laneRaw;
+  // Was three hand-written key tests, one of which named a key nothing in
+  // this file assigns. See hasMeasuredBuyingWindow.
+  const _laneFromJobs = hasMeasuredBuyingWindow(discoverySignals);
+  // A measured window also CORRECTS the lane. The frontend sends a
+  // hard-coded 'software' default; if the signal says the owner is hiring
+  // for marketing, this is a retainer lead and the old code would have
+  // carried 'software' through on the strength of a default nobody chose.
+  const _laneKind = buyingWindowKind(discoverySignals);
+  const _lane = _laneFromJobs ? (_laneKind === 'funding' ? (_laneRaw || 'retainer') : _laneKind)
+    : (_laneRaw === 'software' ? '' : _laneRaw);
   if (!_lane) console.log(`[LANE] ${company}: no job-posting signal on this lead, so there is NO measured buying window. The pitch must come from the audit alone. (A hard-coded 'software' default was being sent here and framed every local business as one hiring manual ops roles.)`);
   else console.log(`[LANE] ${company}: ${_lane}${_lane === 'retainer' ? '  <- RETAINER (core product)' : _lane === 'both' ? '  <- PERFECT STORM' : ''}`);
 
@@ -22177,215 +22730,216 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     const scrapeHomepage = async () => {
       if (!website || !firecrawlKey) return {};
-      // ══ THE HOMEPAGE ASK IS THE HEAVIEST REQUEST WE MAKE, AND IT IS FIRST ══
-      // `light: true` drops both renders and asks for text only. firecrawlScrape
-      // already learned this lesson and carries the fix ("NEVER LOSE THE CORPUS
-      // TO A SCREENSHOT", ~line 5480); this function — the FIRST call on every
-      // lead — never got it, and asks for FOUR formats where that one asked for
-      // two. See the retry block below for what that cost.
-      const doScrape = (timeout, opts = {}) => fetchT('https://api.firecrawl.dev/v1/scrape', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        // ── VIEWPORT, NOT FULL PAGE \u2014 AND HERE IS WHY ──────────────────
-        // 'screenshot@fullPage' was tried and REVERTED. It works, but a long
-        // marketing homepage renders past 8000px, and Claude's vision API rejects
-        // any image with a dimension over that limit:
-        //   BRAIN ERROR: image dimensions exceed max allowed size: 8000 pixels
-        //   VISION: CTA=undefined headline=undefined blankHero=undefined
-        //   Brain JSON truncated \u2014 partial extraction used
-        // The vision read died, the audit came back with a null pitch angle, and
-        // the whole lead degraded. A viewport screenshot that works beats a full
-        // page that kills the audit.
-        //
-        // If full-page is wanted later it needs downscaling before it reaches the
-        // vision call \u2014 capture tall, resize to under 8000px, then send.
-        body: JSON.stringify({ url: website, // ══ BOTH IMAGES: ONE FOR VISION, ONE FOR THE HUMAN ═════════════════════════
-      // 'screenshot' is the viewport \u2014 roughly the top 1000px \u2014 and it is the ONLY
-      // one that may go to the vision call. The comment this replaces records why:
-      // a tall marketing homepage renders past 8000px, Claude's vision API rejects
-      // any image over that, the read dies, the pitch angle comes back null and
-      // the whole lead degrades. A plastic surgery homepage is exactly that tall.
+      // ══ THE FIRST PAID CALL ON EVERY LEAD WAS REFUSED, NOT EMPTY ══════════
+      // This function used to open with ONE request asking Firecrawl for four
+      // things at once — markdown, a viewport render, a full-page render and
+      // rawHtml — with waitFor 4000. It came back with nothing on every lead in
+      // every run recorded anywhere in this file, and the log line above it
+      // explained that as the homepage being too heavy to render.
       //
-      // But the viewport-only capture is how an email told a Dallas surgeon "you
-      // have 170 five-star reviews. None of it is on that page" when his reviews
-      // sit at the BOTTOM of his homepage. Nothing rendered the bottom, so nothing
-      // could contradict the claim.
+      // The timestamps say otherwise and they are not ambiguous:
       //
-      // So take both in the same request, for the same credit: the viewport image
-      // goes to vision where the size limit applies, and the full-page render goes
-      // to the audit view, where a human can scroll it and no API rejects it for
-      // being tall.
-      formats: opts.light ? ['markdown', 'rawHtml'] : ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'],
-      onlyMainContent: false, waitFor: opts.light ? 1500 : 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-      }, timeout).then(r => { fcNote(true, opts.light ? 'scrape (text only, recovery)' : 'scrape+screenshot', website); return r.json(); });
-      const looksEmpty = (res) => {
-        const md = (res?.data?.markdown || res?.markdown || '');
-        return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
-      };
-      // ══ A RETRY THAT CHANGES NOTHING IS A SECOND FAILURE, PAID FOR ═════════
-      // Live 2026-08-12: the homepage came back EMPTY on all three leads in the
-      // run, both attempts each, on an account with ~1000 credits. Inner pages
-      // on the same leads and the same key scraped fine. It was never credits.
+      //   13:44:29.726  Research: Tiffany Springs Dental Group
+      //   13:44:30.219  FC PAID [scrape+screenshot]          ← 493 ms later
+      //   13:44:34.833  FC PAID [scrape (text only, recovery)]
+      //   13:44:35.172  CORPUS RECOVERED: 14926 characters
       //
-      // This request asks for markdown + viewport shot + FULL-PAGE shot + rawHtml
-      // with waitFor 4000, against the heaviest page on the site, as the first
-      // call of every lead. firecrawlScrape hit exactly this and its fix is
-      // already in the file: when the combined request comes back empty, ask
-      // again for TEXT ALONE. That function recovers; this one never learned,
-      // and re-sent the identical four-format payload instead — the same
-      // question, expecting a different answer.
+      // 493 milliseconds, on a request carrying `waitFor: 4000`. Firecrawl cannot
+      // have fetched that page and waited four seconds on it in half a second. It
+      // never scraped anything — it REFUSED the request and answered instantly.
+      // John P. Goodman: 388 ms. Vargas: 498 ms. Nine leads out of nine behave
+      // the same way, and the text-only retry on the SAME url with the SAME key
+      // seconds later takes 3-5 seconds and returns 14,000 to 53,000 characters.
+      // The page was always fine. The payload was not.
       //
-      // It also set the pace of the whole run. The old ladder was
-      // 50s + 60s + 30s(https) + 2.5s + 30s = up to 172 SECONDS on the homepage
-      // before the audit properly began, which is most of the "4-5 minutes per
-      // lead", and three concurrent leads contend for the same dyno on top.
+      // Nobody could see it because `looksEmpty()` read `data.markdown` and
+      // nothing else. Through that lens an HTTP 400 carrying Firecrawl's own
+      // explanation is indistinguishable from a page that rendered blank — so the
+      // system printed a confident invented reason ("the four-format request is
+      // the heaviest thing this API can be asked for"), poisoned an
+      // hour-long "this domain returns nothing" memory with it, and bought two
+      // more requests to route around a problem it had misdiagnosed.
       //
-      // So: ask heavy once, then LIGHTEN rather than repeat. Text-only with
-      // waitFor 1500 is the cheapest thing this API can be asked for, and the
-      // corpus is what every quote, every positioning finding and every original
-      // finding is checked against. Losing the render costs a picture. Losing
-      // the corpus costs the audit.
-      // ══ AND THEN GO BACK FOR THE PICTURE, ON ITS OWN ═══════════════════════
-      // Dropping the render to save the corpus is the right trade, but taken
-      // alone it costs the audit its eyes. The brain gets the homepage shot and
-      // one interior page; if the homepage shot is missing, msgContent is empty
-      // and the SECOND RENDER is skipped too — so a failed homepage scrape means
-      // the model reads the whole site as text and sees NOTHING. Every lead in
-      // the 2026-08-12 run logged `screenshot: false`, which is why positioning
-      // and layout findings have been reading like a category label.
+      // What it cost beyond the wasted credit and 13 seconds of every lead:
+      // `screenshot@fullPage` NEVER ARRIVED. Not on one lead, ever — `FULL PAGE:
+      // captured top to bottom` has never printed. So the audit view has never
+      // had a scrollable homepage, and the expensive part: THE BRAIN HAS ONLY
+      // EVER SEEN THE TOP ~1000px OF THE MOST IMPORTANT PAGE ON THE SITE. Every
+      // interior page reaches it as a full-page render — `PAGE RENDERS TO THE
+      // BRAIN: 4 interior page render(s) sent` is in every run — while the
+      // homepage, the one page the prompt asks it to describe, is the one page it
+      // has never actually looked at. That is why positioning and layout findings
+      // read like category labels, and it is how an email told a Dallas surgeon
+      // "you have 170 five-star reviews, none of it is on that page" about
+      // reviews sitting at the bottom of his homepage.
       //
-      // A viewport screenshot ALONE is a fraction of the work of the four-format
-      // request that just failed: no full-page render, no markdown, no rawHtml.
-      // The vision call only ever uses the viewport image anyway — the full-page
-      // one goes to the audit view for a human. So ask for exactly that, once,
-      // and stay silent if it fails. A missing picture costs a picture; a
-      // missing corpus costs the audit.
-      const _withShot = async (result) => {
+      // So this asks for exactly the two shapes with a recorded success rate, at
+      // the same time instead of one after the other:
+      //
+      //   ['markdown','rawHtml']   @ waitFor 1500  — 9 of 9 leads, 3-5s
+      //   ['screenshot@fullPage']  @ waitFor 4000  — the shape every INNER page
+      //                                              already uses successfully,
+      //                                              3-7 renders per lead
+      //
+      // Two requests instead of three, together instead of in sequence: one
+      // credit less, roughly half the wall clock, and the brain gets the whole
+      // page. The 8000px vision ceiling that made the old code take a viewport
+      // crop is handled where it belongs — at the image, by reading the PNG's own
+      // dimensions and downscaling, which is what interior renders already do.
+      //
+      // ── ONE POST, AND THE CALLER IS TOLD WHAT ACTUALLY CAME BACK ──────────
+      // `refused` is the state that had no name before: the request never ran, so
+      // nothing about it is evidence about their website. A refusal is announced
+      // with the status and Firecrawl's own words, and is NOT charged to the
+      // credit ledger. The next payload mistake costs one log line, not a month.
+      const fcAsk = async (target, formats, waitFor, timeout, kind) => {
+        const t0 = Date.now();
+        let r;
         try {
-          if (result?.data?.screenshot || result?.screenshot) return result;
-          const rs = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+          r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: website, formats: ['screenshot'], onlyMainContent: false,
-              waitFor: 2500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-          }, 20000);
-          const ds = await rs.json();
-          const shot = ds?.data?.screenshot || ds?.screenshot || null;
-          if (!shot) return result;
-          console.log(`📷 RENDER RECOVERED [${website}]: the combined request could not produce a screenshot, a viewport-only request could. The brain gets to LOOK at the page instead of only reading it, which is what every layout and positioning finding depends on.`);
-          return { ...result, data: { ...(result?.data || {}), screenshot: shot } };
-        } catch (e) { void e; return result; }
+            body: JSON.stringify({ url: target, formats, onlyMainContent: false, waitFor,
+              maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+          }, timeout);
+        } catch (e) {
+          const ms = Date.now() - t0;
+          console.log(`FIRECRAWL NO ANSWER [${kind}] ${target} — nothing came back within ${ms}ms (${e.message}). The request may still be running on their side.`);
+          return { refused: true, status: 0, body: null, reason: e.message, ms };
+        }
+        let body = null;
+        try { body = await r.json(); } catch { body = null; }
+        const ms = Date.now() - t0;
+        const errText = String(body?.error || body?.message || (body?.details ? JSON.stringify(body.details) : '') || '').slice(0, 400);
+        if (isCreditError(body, r.status)) {
+          FIRECRAWL_OUT_OF_CREDITS = true;
+          console.log(`🔴 FIRECRAWL OUT OF CREDITS — the homepage request for ${target} was refused (HTTP ${r.status}). NOTHING about this site is known and no absence may be claimed from it. Top up before judging any audit from this run.`);
+          return { refused: true, status: r.status, body, reason: errText || 'out of credits', ms };
+        }
+        if (isRateLimited(body, r.status)) {
+          FIRECRAWL_RATE_LIMIT_HITS++;
+          console.log(`⏳ FIRECRAWL RATE LIMITED on the homepage [${kind}] ${target} — HTTP ${r.status} in ${ms}ms. This is throttling, NOT an empty page and NOT their site.`);
+          return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
+        }
+        if (!r.ok || body?.success === false || (body && body.error)) {
+          console.log(`⛔ FIRECRAWL REFUSED THE REQUEST [${kind}] ${target} — HTTP ${r.status} in ${ms}ms, formats ${JSON.stringify(formats)}. Firecrawl said: ${errText || '(no message)'}. Read that literally: the request NEVER RAN, so this is not evidence that their page is slow, heavy or blank. If it answered in under a second it did not even try. Fix the payload; do not add a retry.`);
+          return { refused: true, status: r.status, body, reason: errText || `HTTP ${r.status}`, ms };
+        }
+        fcNote(true, kind, target);
+        return { refused: false, status: r.status, body, reason: '', ms };
       };
-      const _merge = (base, light) => {
-        if (!light) return base;
-        const b = base || {}, l = light;
-        return { ...b, data: { ...(b.data || {}), ...(l.data || {}),
-          // keep any render attempt 1 did manage to return
-          screenshot: b.data?.screenshot || b.screenshot || l.data?.screenshot || null,
-          'screenshot@fullPage': b.data?.['screenshot@fullPage'] || b['screenshot@fullPage'] || null } };
+
+      const askCorpus   = (t, timeout = 20000, waitFor = 1500) => fcAsk(t, ['markdown', 'rawHtml'], waitFor, timeout, 'scrape (text)');
+      // waitFor 4000, matching firecrawlScrape's inner-page shape, and for the
+      // same reason recorded there: review widgets and embeds populate 2-4s after
+      // load, and a shot taken at 1.5s shows an empty slot where the proof is.
+      // That already told an electrician he had no social proof on a page
+      // carrying 221 Google reviews. On a homepage, where the proof is usually
+      // the thing furthest down, it matters more, not less.
+      const askFullPage = (t, timeout = 30000) => fcAsk(t, ['screenshot@fullPage'], 4000, timeout, 'scrape+screenshot');
+      const askViewport = (t, timeout = 20000) => fcAsk(t, ['screenshot'], 2500, timeout, 'scrape+screenshot (viewport)');
+
+      const mdOf   = (b) => String(b?.data?.markdown || b?.markdown || '');
+      const fullOf = (b) => b?.data?.['screenshot@fullPage'] || b?.['screenshot@fullPage'] || null;
+      const viewOf = (b) => b?.data?.screenshot || b?.screenshot || null;
+      const looksEmpty = (b) => {
+        const md = mdOf(b);
+        return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
       };
-      let res;
-      try {
-        res = await doScrape(45000);
-      } catch(e) {
-        console.log(`Firecrawl did not answer the full markdown+screenshot request for ${website} within 45s. NOT re-sending it — the heavy render is what timed out, so asking again the same way buys the same timeout. Falling back to text only, which is what the audit actually runs on.`);
-        try {
-          const _l = await doScrape(20000, { light: true });
-          if (!looksEmpty(_l)) {
-            console.log(`♻ CORPUS RECOVERED [${website}]: the render timed out, text alone returned ${(String(_l?.data?.markdown || _l?.markdown || '')).length} characters. No screenshot on this lead; the corpus — which every quote and every positioning finding is checked against — is intact.`);
-            return await _withShot(_l);
-          }
-          res = _l;
-        } catch(e2) { console.log('Firecrawl text-only fallback also failed:', e2.message); return {}; }
-      }
-      // CONTENT-LEVEL RETRY: a "Connection Reset"/empty scrape is usually transient
-      // on the free tier (A1 Restoration lost its whole audit to one). Pause and try
-      // once more before we give up the homepage, the owner, and the audit.
+      // Usable means the request RAN and the page had content. A refusal is not a
+      // blank page; keeping those apart is the whole point of this rewrite.
+      const usable = (res) => !!res && !res.refused && !looksEmpty(res.body);
+      const settle = (s) => s.status === 'fulfilled' ? s.value
+        : { refused: true, status: 0, body: null, reason: String((s.reason && s.reason.message) || s.reason || 'threw'), ms: 0 };
+
+      let target = website;
+      let [cRes, rRes] = (await Promise.allSettled([askCorpus(target), askFullPage(target)])).map(settle);
+
       // ── RETRY THE SAME URL, THEN RETRY A BETTER ONE ──────────────────────
       // Richard Joseph came to us as http://www.drrichardjoseph.com/ and both
       // attempts returned nothing. Retrying plain http twice asks the same
       // question twice. Nearly every live site now serves over https and many
       // simply do not answer on port 80 at all, so the second attempt should
-      // change something \u2014 and the cheapest thing to change is the scheme.
-      if (looksEmpty(res) && /^http:\/\//i.test(String(website || ''))) {
+      // change something — and the cheapest thing to change is the scheme.
+      if (!usable(cRes) && /^http:\/\//i.test(String(website || ''))) {
         const _https = String(website).replace(/^http:\/\//i, 'https://');
-        console.log(`Firecrawl returned nothing for ${website}, which is a plain http URL. Trying ${_https} before concluding anything \u2014 most sites redirect to https and some do not answer on port 80 at all.`);
-        try {
-          // `firecrawlScrape(fcKey, ...)` was written here and neither name exists
-          // in this scope \u2014 fcKey is a parameter of auditSitePages, and there is no
-          // firecrawlScrape helper on this path. It threw instantly inside the
-          // try/catch, so the https upgrade silently never ran on a single lead
-          // while the log line above claimed it was being tried.
-          //
-          // This scope has `firecrawlKey` and does its own fetch. Use them.
-          // Text-only, like every other recovery on this path. Attempt 1 already
-          // demonstrated that the heavy render is what this page will not give
-          // us; changing the scheme AND keeping the payload that just failed
-          // tests two things at once and usually fails for the old reason.
-          const rS = await fetchT('https://api.firecrawl.dev/v1/scrape', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: _https, formats: ['markdown', 'rawHtml'],
-              onlyMainContent: false, waitFor: 1500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-          }, 20000);
-          const resS = rS && rS.ok ? await rS.json() : null;
-          if (resS && !looksEmpty(resS)) {
-            console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
-            // _withShot, like the timeout and empty-content paths above. This one
-            // returned resS raw, so a lead recovered over https reached the brain
-            // with the corpus and NO screenshot - the render was dropped for the
-            // scheme change and never asked for again.
-            return await _withShot(resS);
-          }
-        } catch (e) { void e; }
-      }
-      if (looksEmpty(res)) {
-        // ══ ONLY RETRY WHAT A RETRY COULD PLAUSIBLY FIX ═══════════════════════
-        // Every empty result bought a second paid scrape 2.5 seconds later. Some
-        // of those are worth buying: a 502, a 503, a timeout, a momentarily
-        // overloaded host — genuinely transient, and the retry note above is right
-        // that free-tier hiccups cost real audits.
-        //
-        // But some failures are deterministic and the second call is guaranteed to
-        // return exactly the same thing. A refused connection means the server
-        // actively said no. A DNS failure means the name does not resolve. Neither
-        // changes in two and a half seconds, and paying to confirm it is spending
-        // a credit to learn something we already knew.
-        //
-        // James Dougherty Construction ran three times, two paid scrapes each. The
-        // second one told us nothing on any of the six occasions.
-        const _md = String(res?.data?.markdown || res?.markdown || '').slice(0, 400);
-        const _deterministic = /refused to connect|can'?t be reached|err_name_not_resolved|err_connection_refused|dns_probe|nxdomain|certificate|ssl_error/i.test(_md);
-        // ── A DOMAIN THAT HAS NEVER RETURNED ANYTHING IS NOT TRANSIENT ────────
-        // The split above reads the error STRING, so a site returning zero bytes
-        // with no message falls to "transient" and buys a retry every time.
-        // jamesdconstruction.com has now come back empty on both attempts of five
-        // separate runs — ten paid scrapes to learn the same thing ten times.
-        //
-        // Once is bad luck. Twice in a row is the site. Remembering that for an
-        // hour costs nothing and stops us paying to re-confirm it, while still
-        // letting a genuinely recovered host back in shortly after.
-        const _emptyKey = String(website || '').toLowerCase();
-        const _priorEmpty = EMPTY_SCRAPE_MEMORY.get(_emptyKey) || 0;
-        const _seenEmptyBefore = _priorEmpty > 0 && (Date.now() - _priorEmpty) < 3600000;
-        EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
-        if (_seenEmptyBefore) {
-          console.log(`Firecrawl returned nothing for ${website}, and it also returned nothing on a run within the last hour. NOT retrying \u2014 twice in a row is the site, not luck, and a second fetch buys the same empty response again. It will be tried afresh after an hour.`);
-        } else if (_deterministic) {
-          console.log(`Firecrawl returned a hard failure for ${website} (the host refused the connection or the name does not resolve). NOT retrying \u2014 that answer will be identical in three seconds and the second fetch costs a credit to confirm what we already know.`);
-        } else {
-          console.log(`Firecrawl returned empty/error content for ${website} — retrying once for TEXT ONLY. The four-format request is the heaviest thing this API can be asked for and it is what came back empty; re-sending it would buy the same empty response again, which is what this line used to do on every lead.`);
-          await new Promise(r => setTimeout(r, 1500));
-          try {
-            const res2 = await doScrape(20000, { light: true });
-            if (!looksEmpty(res2)) {
-              console.log(`♻ CORPUS RECOVERED [${website}]: markdown+screenshot came back empty, text alone returned ${(String(res2?.data?.markdown || res2?.markdown || '')).length} characters. The render is lost on this page; the corpus is not.`);
-              return await _withShot(_merge(res, res2));
-            }
-          } catch {}
+        console.log(`Firecrawl gave us no corpus for ${website}, which is a plain http URL. Trying ${_https} before concluding anything — most sites redirect to https and some do not answer on port 80 at all.`);
+        const _haveShot = !!fullOf(rRes.body);
+        const [c2, r2] = (await Promise.allSettled([
+          askCorpus(_https),
+          _haveShot ? Promise.resolve(rRes) : askFullPage(_https),
+        ])).map(settle);
+        if (usable(c2)) {
+          console.log(`✓ Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
+          target = _https;
+          cRes = c2;
+          if (fullOf(r2.body)) rRes = r2;
         }
       }
-      return res || {};
+
+      if (!usable(cRes)) {
+        // ══ ONLY RETRY WHAT A RETRY COULD PLAUSIBLY FIX ═══════════════════════
+        // Some empty results are worth buying twice: a 502, a 503, a momentarily
+        // overloaded host. Some are deterministic — a refused connection, a name
+        // that does not resolve — and the second call is guaranteed to return
+        // exactly the same thing. James Dougherty Construction ran three times,
+        // two paid scrapes each; the second one told us nothing on any of the six.
+        //
+        // A REFUSAL IS NEITHER. If Firecrawl rejected our payload, that says
+        // nothing whatsoever about their site — so it must not be remembered as
+        // "this domain returns nothing", which is exactly what the old code did
+        // on every lead for weeks, suppressing the retry on sites that were fine.
+        const _md = mdOf(cRes.body).slice(0, 400);
+        const _deterministic = /refused to connect|can'?t be reached|err_name_not_resolved|err_connection_refused|dns_probe|nxdomain|certificate|ssl_error/i.test(_md);
+        const _emptyKey = String(target || '').toLowerCase();
+        const _priorEmpty = EMPTY_SCRAPE_MEMORY.get(_emptyKey) || 0;
+        const _seenEmptyBefore = _priorEmpty > 0 && (Date.now() - _priorEmpty) < 3600000;
+        if (cRes.refused) {
+          console.log(`No corpus for ${target}, and the reason is on OUR side — Firecrawl refused the request (${cRes.reason}). Not remembering this domain as empty and not retrying the same payload: neither would be about their website.`);
+        } else if (_seenEmptyBefore) {
+          EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+          console.log(`Firecrawl returned nothing for ${target}, and it also returned nothing on a run within the last hour. NOT retrying — twice in a row is the site, not luck, and a second fetch buys the same empty response again. It will be tried afresh after an hour.`);
+        } else if (_deterministic) {
+          EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+          console.log(`Firecrawl returned a hard failure for ${target} (the host refused the connection or the name does not resolve). NOT retrying — that answer will be identical in three seconds and the second fetch costs a credit to confirm what we already know.`);
+        } else {
+          EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+          // A second identical request is a second failure, paid for. The one
+          // thing worth changing is how long the page is given to render, so the
+          // retry asks a genuinely different question: wait four times as long.
+          console.log(`Firecrawl ran but ${target} came back with almost no text. Asking once more with four times the render wait — a slow single-page app that has not painted by 1.5s is the one cause a second attempt can actually fix.`);
+          const c3 = settle((await Promise.allSettled([askCorpus(target, 30000, 6000)]))[0]);
+          if (usable(c3)) {
+            console.log(`♻ CORPUS RECOVERED [${target}]: a longer render wait returned ${mdOf(c3.body).length} characters. Their page renders late; it is not empty.`);
+            cRes = c3;
+          }
+        }
+      }
+
+      // ── THE PICTURE, IF THE FULL PAGE COULD NOT BE TAKEN ──────────────────
+      // A viewport crop is worth far less than the whole page, but it is worth
+      // much more than nothing: a missing homepage render holds back EVERY
+      // interior render too (see "the homepage must be the first image, or none
+      // of them go"), so a lead with no homepage picture is a lead the brain
+      // reads entirely as text.
+      if (!fullOf(rRes.body) && !viewOf(rRes.body)) {
+        const v = settle((await Promise.allSettled([askViewport(target)]))[0]);
+        if (viewOf(v.body)) {
+          console.log(`📷 RENDER RECOVERED [${target}]: the full-page render did not come back, a viewport one did. The brain sees the top of the page instead of nothing, and the interior renders are released.`);
+          rRes = v;
+        }
+      }
+
+      // ── HAND BACK ONE OBJECT, WITH BOTH IMAGES NAMED HONESTLY ─────────────
+      // `screenshot` is whatever goes to the vision call. It is the full page
+      // when we have one, because the 8000px ceiling is now handled at the image
+      // by measuring and downscaling rather than by cropping at capture time.
+      const _body = (cRes && cRes.body) || {};
+      const _full = fullOf(rRes.body);
+      const _view = viewOf(rRes.body);
+      return { ..._body, data: { ...(_body.data || {}),
+        screenshot: _full || _view || null,
+        'screenshot@fullPage': _full || null } };
     };
 
     const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
@@ -22469,15 +23023,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     }
 
     let screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
-    // ══ TWO IMAGES, TWO PURPOSES ══════════════════════════════════════════════
-    // screenshotUrl  \u2014 the viewport. This is the ONLY one that may reach the
-    //                  vision call, because a tall page renders past 8000px and
-    //                  Claude's vision API rejects it, killing the whole audit.
-    // fullPageUrl    \u2014 top to bottom. Nothing rejects it for being tall, so it
-    //                  goes to the audit view where a human can scroll it.
+    // ══ ONE IMAGE NOW, AND IT IS THE WHOLE PAGE ═══════════════════════════════
+    // screenshotUrl  — what the vision call is given. It used to be a viewport
+    //                  crop of the top ~1000px, because a tall page renders past
+    //                  8000px and Claude's vision API rejects the entire request
+    //                  when it does. That ceiling is now handled at the image
+    //                  itself: the PNG's own IHDR dimensions are read and the
+    //                  picture is downscaled to fit, exactly as every interior
+    //                  render already was. So this is the full page.
+    // fullPageUrl    — the same capture, un-downscaled, for the audit view where
+    //                  a human can scroll it. Until this rewrite it was NEVER
+    //                  populated on any lead: the request that asked for it was
+    //                  being refused by Firecrawl in under half a second, and the
+    //                  refusal was being read as "the page came back blank".
     //
-    // This exists because a live email told a Dallas surgeon "you have 170
-    // five-star reviews. None of it is on that page" \u2014 his reviews are displayed
+    // This matters because a live email told a Dallas surgeon "you have 170
+    // five-star reviews. None of it is on that page" — his reviews are displayed
     // at the BOTTOM of his homepage, below everything the viewport captured. A
     // false absence is the worst claim we make: he scrolls, sees the thing we
     // said was missing, and every true statement in the email dies with it.
@@ -22509,7 +23070,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       fullPageUrl = null;
     }
     if (fullPageUrl) {
-      console.log(`\u1f5bc FULL PAGE [${company}]: captured top to bottom alongside the viewport image. The viewport one goes to the vision call (the 8000px limit applies there); this one is for the audit view, where the content below the fold is what stops us claiming something is missing when it is simply further down.`);
+      // `\u1f5bc` was a five-digit \u escape, which JavaScript reads as \u1f5b
+      // followed by the letter c. Every one of these lines has been printing a
+      // stray character for its whole life. \u{...} is the form that works.
+      console.log(`\u{1F5BC} FULL PAGE [${company}]: the homepage was captured top to bottom. This is the first lead on which that has happened \u2014 the request that asked for it was being refused by Firecrawl in under half a second and the refusal was read as an empty page. The audit view can now be scrolled, and the model is shown the whole page rather than the top thousand pixels, which is what stops us calling something missing when it is simply further down.`);
     }
     // ══ IF WE GOT NOTHING, PROVE IT IS THEM BEFORE SAYING SO ═══════════════
     // Firecrawl returning empty means our fetch failed. It does NOT mean the
@@ -23022,7 +23586,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         });
         if (lv.checked) {
           localVisibility = lv;
-          localRank = lv.results.find(r => r.kind === 'primary trade' && r.found) || lv.results.find(r => r.found) || lv.results[0];
+          const _pick = pickRankRow(lv.results);
+          localRank = _pick.row;
+          console.log(`RANK ROW [${company}]: ${_pick.note}`);
           for (const r of lv.results) {
             if (r.found) {
               // ══ THE POSITION MAY HAVE BEEN REMOVED ON PURPOSE ═════════════
@@ -23159,7 +23725,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         });
         if (lv2.checked) {
           localVisibility = lv2;
-          localRank = lv2.results.find(r => r.kind === 'primary trade' && r.found) || lv2.results.find(r => r.found) || lv2.results[0];
+          const _pick2 = pickRankRow(lv2.results);
+          localRank = _pick2.row;
+          console.log(`RANK ROW [${company}]: ${_pick2.note}`);
           for (const r of lv2.results) {
             console.log(r.found
               ? `LOCAL RANK [${company}] (guaranteed pass): #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind})`
@@ -23876,11 +24444,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           tradeWord: customerTrade || verifiedIndustry || null,
           // The median review count of the businesses ranking ABOVE them. We
           // already read both numbers and never compared them.
-          aboveMedianReviews: (() => {
-            const ab = (localRank && Array.isArray(localRank.above)) ? localRank.above : [];
-            const n = ab.map(x => Number(x && x.reviews)).filter(Number.isFinite).sort((a, b) => a - b);
-            return n.length ? n[Math.floor(n.length / 2)] : null;
-          })(),
+          // See summariseAboveReviews: this used to be a median described as an
+          // average, and on an even count it returned the larger of the two.
+          aboveReviewsN: summariseAboveReviews(localRank && localRank.above, _measured.reviewCount).n,
+          aboveReviewsAvg: summariseAboveReviews(localRank && localRank.above, _measured.reviewCount).avg,
           certExpired: _siteDownVerdict && _siteDownVerdict.certExpired === true,
           hasViewport: htmlSignals ? htmlSignals.hasViewport : null,
           rank: _measured.rank,
@@ -23908,6 +24475,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // single highest-value sentence in the system.
           weakerNames: _measured.weakerNames,
           ourReviews: _measured.ourReviews,
+          // ══ THE SUBJECT RESOLVER'S OWN INPUTS ════════════════════════════
+          // buildSubjects fills {pain}, {city}, {year} from these four, and
+          // _harmInputs — the object every subject is resolved against —
+          // forwarded none of them. LADDER SURVIVAL CHECK already warns about
+          // painTheme specifically ("the subject line falls back to the generic
+          // set on exactly the leads with the best finding") and it tests the
+          // resolver directly, so it never saw the wire.
+          painTheme: _measured.painTheme,
+          // ── THE SUBJECT LINE'S {city} WAS ALWAYS BLANK ────────────────────
+          // This read `_measured.city`, and resolveMeasurements does not return
+          // a city — it accepts one as an ARGUMENT and never passes it through.
+          // So `m.city` was undefined on every lead, `m.rankCity` is produced
+          // nowhere in the file, and buildSubjects' `{city}` token resolved to
+          // the empty string every time. Shipped this morning, in the same
+          // change that was fixing this exact class. localRank.city is the real
+          // value and it is the one the rank sentence itself uses.
+          city: (localRank && localRank.city) || '',
+          copyrightYear: _measured.copyrightYear,
+          newestPostYear: _measured.newestPostYear,
           rankQuery: localRank && localRank.query,
           tenureYears: _measured.tenureYears,
           reviewCount: _measured.reviewCount,
@@ -24543,19 +25129,77 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // Build message content — always send text, add image if available
         const msgContent = [];
 
+        // ══ MEASURE THE HOMEPAGE IMAGE — DO NOT ASSUME ITS SHAPE ════════════
+        // This was the one image path in the file with no dimension check. Every
+        // interior render is measured out of its own IHDR chunk and downscaled if
+        // it is too tall. The homepage — the tallest page on the site, and the
+        // only image the prompt actually asks the model to describe — was sent
+        // unmeasured, on trust, because it used to be a viewport crop that could
+        // never be tall.
+        //
+        // It is the full page now, and that is the entire point: the brain sees
+        // the reviews at the bottom, the footer, the third call to action. But a
+        // marketing homepage renders past 8000px and the vision API rejects the
+        // WHOLE request when it does — "image dimensions exceed max allowed size:
+        // 8000 pixels" — which killed audits outright and returned a null pitch
+        // angle. That hazard is why the old code cropped at capture time.
+        //
+        // Cropping was never the fix; measuring is. A PNG states its width and
+        // height in the IHDR chunk inside its first 24 bytes, so this reads them
+        // and downscales instead of guessing. Anything that cannot be measured is
+        // refused — an unreadable buffer is the one payload we can say nothing
+        // about, and it must not be the one that gets through labelled image/png.
+        const _MAX_EDGE = 7800;
+        const _pngDims = (buf) => {
+          if (!buf || buf.length < 24) return null;
+          const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+          for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return null;
+          if (buf.readUInt32BE(12) !== 0x49484452) return null;
+          const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+          if (!w || !h) return null;
+          return { w, h };
+        };
+
         let screenshotBase64 = null;
         if (screenshotUrl && !siteUnreachable) {
-          try {
-            const imgRes = await fetchT(screenshotUrl, {}, 10000);
-            const imgBuffer = await imgRes.buffer();
-            // Render free tier uploads slowly — a 4MB image alone can eat 20s.
-            // Cap at 1.5MB: most above-fold screenshots fit; oversized ones get
-            // skipped and the audit runs from the scraped text (still good).
-            if (imgBuffer.length < 3 * 1024 * 1024) {
-              screenshotBase64 = imgBuffer.toString('base64');
-              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } });
+          const _homeImage = async () => {
+            const imgRes = await fetchT(screenshotUrl, {}, 15000);
+            // A signed screenshot URL expires. Without this, a 403 or 404 HTML
+            // error body became the buffer and was base64'd into the audit
+            // request labelled image/png.
+            if (!imgRes || !imgRes.ok) {
+              console.log(`Homepage render [${company}]: the screenshot URL answered HTTP ${imgRes ? imgRes.status : 'nothing'}. No homepage image on this lead.`);
+              return null;
+            }
+            let buf = await imgRes.buffer();
+            const d = _pngDims(buf);
+            if (!d) {
+              console.log(`Homepage render [${company}]: ${buf.length} bytes came back and they are not a readable PNG. Refused rather than sent unmeasured.`);
+              return null;
+            }
+            if (d.w > _MAX_EDGE || d.h > _MAX_EDGE) {
+              const fit = _pngscale ? _pngscale.fitWithin(buf, _MAX_EDGE) : { skip: 'pngscale.js not deployed' };
+              if (!fit.buffer) {
+                console.log(`Homepage render [${company}]: ${d.w}x${d.h} is past the ${_MAX_EDGE}px vision ceiling and could not be downscaled (${fit.skip}). Sending it would fail the ENTIRE audit request, so it is dropped and the audit runs from text.`);
+                return null;
+              }
+              console.log(`\u{1F5BC} HOMEPAGE FULL PAGE [${company}]: ${fit.from} downscaled to ${fit.width}x${fit.height} to clear the vision ceiling. The model is reading the whole homepage top to bottom — every lead before this one showed it the top thousand pixels and nothing else.`);
+              buf = fit.buffer;
             } else {
-              console.log(`Screenshot too large (${Math.round(imgBuffer.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
+              console.log(`\u{1F5BC} HOMEPAGE RENDER [${company}]: ${d.w}x${d.h}, sent whole.`);
+            }
+            // Render's free tier uploads slowly — a 4MB image alone can eat 20s.
+            if (buf.length >= 3 * 1024 * 1024) {
+              console.log(`Screenshot too large (${Math.round(buf.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
+              return null;
+            }
+            return buf;
+          };
+          try {
+            const _buf = await _homeImage();
+            if (_buf) {
+              screenshotBase64 = _buf.toString('base64');
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } });
             }
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
         }
@@ -24615,16 +25259,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // checked too: without it, ANY buffer whose bytes 12-15 happen to spell
           // IHDR would pass, and more importantly a non-PNG returns null - which
           // the caller must treat as "refuse", not as "no ceiling applies".
-          const _png = (buf) => {
-            if (!buf || buf.length < 24) return null;
-            const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
-            for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return null;
-            if (buf.readUInt32BE(12) !== 0x49484452) return null;
-            const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
-            if (!w || !h) return null;
-            return { w, h };
-          };
-          const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
+          //
+          // ONE READER, ONE CEILING. This was a second copy of both, and the
+          // homepage above had NEITHER. Two definitions of the same rule is how
+          // one of them silently stops matching the other; the homepage and every
+          // interior page now measure with the same function against the same
+          // number, so a change to the ceiling cannot apply to only half the
+          // images in a request.
+          const _png = _pngDims;
+          const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = _MAX_EDGE;
           let _sent = 0, _bytes = 0;
           const _skipped = [], _sentKeys = [], _rescaled = [];
           // == THE HOMEPAGE MUST BE THE FIRST IMAGE, OR NONE OF THEM GO ========
@@ -25300,7 +25943,7 @@ RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 ═══ THE BUYING WINDOW WE ARE INTERCEPTING (this determines the ENTIRE pitch) ═══
-${(req.body.buyingLane === 'software' && !(req.body.discoverySignals && (req.body.discoverySignals.hiring_marketing || req.body.discoverySignals.ai_replacement || req.body.discoverySignals.ai_replacement_multi))) ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
+${(req.body.buyingLane === 'software' && !hasMeasuredBuyingWindow(req.body.discoverySignals)) ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
 : req.body.buyingLane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
 They have allocated budget on BOTH fronts and committed on NEITHER. This is the strongest possible position.
 THE PITCH: they are about to spend ~$125k/year on two hires (one to do repetitive work software handles, one junior marketer). CROJ replaces the first with a build and the second with a senior team — for less, and it compounds.
@@ -26410,6 +27053,13 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 company,   // same seed as the rebuild path, so both agree
                 subjects: parsed.subjectOptions,
                 reframes: (allowedConsequences && allowedConsequences.lines) || [],
+                // ══ THE COMPOSER WAS HANDED NO MEASUREMENTS ═══════════════
+                // composeFullEmail reads opts.measured, and this call site —
+                // the only one production uses — never passed it. So every
+                // follow-up subject resolved against {} and could not fill a
+                // single placeholder even once it started trying. The two boot
+                // fixtures DO pass it, which is why nothing failed at boot.
+                measured: _harmInputs || {},
               });
             } catch (e) {
               console.log(`\u26d4 COMPOSE TRACE [${company}] step 4 THREW: ${e && e.message}. The email was not composed and THIS is the reason \u2014 not a missing deploy and not a cached audit.`);
@@ -26438,7 +27088,15 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // We hold the corpus, so this is checkable — and a finding that can
             // be traced to their own words is exactly the one that makes an owner
             // think somebody looked rather than scanned.
-            const _corpus = (sitePages && sitePages.rawText) || trustedContent || '';
+            // ══ THE JOB POSTING IS PART OF THE CORPUS, NOT PART OF THE CLAIM ══
+            // verifyOriginalFinding takes the corpus as a PARAMETER, so it can
+            // check a quote against a job posting with no change to its logic.
+            // Appending the posting is therefore the whole wiring job: a finding
+            // that quotes the owner's own advertisement now VERIFIES instead of
+            // being dropped as unquotable, and one that invents a sentence he
+            // never wrote is still dropped exactly as before.
+            const _corpusBase = (sitePages && sitePages.rawText) || trustedContent || '';
+            const _corpus = jobSnippet ? `${_corpusBase}\n\n${jobSnippet}` : _corpusBase;
             const _origIn = Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [];
             const _origOk = [];
             for (const _it of _origIn.slice(0, 3)) {
@@ -31254,20 +31912,49 @@ app.listen(PORT, () => {
       ['Bill Chen', 'Founder & President'], ['Kim Park', 'Office Manager'],
       ['Ana Diaz', 'Director of Operations'], ['Sue Ellis', 'Proprietor'],
       ['Rob Vale', 'Chief Executive Officer'], ['Dan Fox', 'Estimator'],
+      // ── THE SHAPES THAT USED TO RETURN NOBODY ───────────────────────
+      // Every one of these is a real line off a real roster in this
+      // pipeline's own leads, and the anchored name pattern rejected all
+      // of them: an honorific has a period where the pattern wants a
+      // space, credentials sit past the end anchor, and Firecrawl renders
+      // a team card as a markdown link.
+      ['Dr. Matthew Yip', 'Owner'], ['John P. Goodman D.D.S.', 'Founder'],
+      ['Hannah Vargas MD', 'President'], ['Sean McDonald', 'Principal'],
+      ['Mary Jo Reyes', 'Superintendent'], ['Anh Thi Do', 'Owner'],
     ];
     const _want = { 'Dusty Hannah': 1, 'Misty (Hannah) Pyle': 1, 'Kacie Carrico': 0,
       'Tom Reed': 1, 'Joe Adams': 0, 'Ann Lee': 0, 'Bill Chen': 1, 'Kim Park': 0,
-      'Ana Diaz': 0, 'Sue Ellis': 1, 'Rob Vale': 1, 'Dan Fox': 0 };
-    const _got = parseTeamRoster(_page.map(([n, t]) => _fig(n, t)).join(''));
+      'Ana Diaz': 0, 'Sue Ellis': 1, 'Rob Vale': 1, 'Dan Fox': 0,
+      'Matthew Yip': 1, 'John P. Goodman': 1, 'Hannah Vargas': 1,
+      'Sean McDonald': 1, 'Mary Jo Reyes': 0, 'Anh Thi Do': 1 };
+    // The honorific and the credentials are stripped, so the name we expect
+    // back is not the name on the page.
+    const _asName = (n) => n.replace(/^Dr\.\s+/, '').replace(/\s+(?:D\.D\.S\.|MD)$/, '');
+    const _got = parseTeamRoster(_page.map(([n, t]) => _fig(n, t)).join(''), 'Hannah Custom Homes');
     const _wrong = _got.filter(r => (r.isOwner ? 1 : 0) !== _want[r.name])
       .map(r => `${r.name} read as ${r.isOwner ? 'owner' : 'staff'} from "${r.title}"`);
-    const _missing = _page.map(x => x[0]).filter(n => !_got.some(r => r.name === n));
-    if (_missing.length) {
+    const _missing = _page.map(x => _asName(x[0])).filter(n => !_got.some(r => r.name === n));
+    // A name-and-title on ONE line is the commonest roster shape there is, and
+    // the title test used to run first and swallow the person with it.
+    const _inline = parseTeamRoster('<p>Kacie Carrico, COO</p><p>[Dr. Matthew Yip](/dr-yip), DDS, Owner</p>');
+    const _kc = _inline.find(r => r.name === 'Kacie Carrico');
+    const _my = _inline.find(r => r.name === 'Matthew Yip');
+    const _inlineBad = [];
+    if (!_kc || _kc.isOwner) _inlineBad.push('"Kacie Carrico, COO" on one line is not read as a staff member');
+    if (!_my || !_my.isOwner) _inlineBad.push('"[Dr. Matthew Yip](/dr-yip), DDS, Owner" on one line is not read as an owner');
+    // And their own name is not a person. "Tiffany Springs" satisfies every
+    // name rule ever written and it is the practice.
+    if (parseTeamRoster('<h3>Tiffany Springs</h3><p>Owner</p>', 'Tiffany Springs Dental Group').length) {
+      _inlineBad.push('the company\'s own name was returned as its owner');
+    }
+    if (_inlineBad.length) {
+      console.log(`\u26d4 ROSTER CHECK: ${_inlineBad.join(' | ')}.`);
+    } else if (_missing.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_missing.length} of ${_page.length} people on a team page were not read at all \u2014 ${_missing.join(', ')}. A roster that silently returns fewer people than the page lists still looks plausible, which is why this is checked rather than eyeballed.`);
     } else if (_wrong.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_wrong.length} title(s) classified wrongly \u2014 ${_wrong[0]}. An owner misread as staff loses the lead; staff misread as the owner sends an owner-level email to somebody who forwards it.`);
     } else {
-      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, and a vice president is not a president.`);
+      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, a vice president is not a president, "Dr." and ", D.D.S." are stripped without inventing anybody, a name and title on ONE line is read as both, and the practice's own name is not returned as its owner.`);
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
@@ -32132,6 +32819,520 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 QUOTE SYMMETRY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SUBJECT LINE THAT SHIPPED ITS OWN TEMPLATE ═══════════════════════
+  // SUBJECTS_FOR holds templates; buildSubjects resolves them. composeFollowUp
+  // read the array directly, so a follow-up whose seed landed on a placeholder
+  // entry sent it verbatim. Live, John P. Goodman DDS, follow-up 1:
+  //
+  //   SUBJECT: {pain}
+  //
+  // The most visible line in the email, reading as a broken mail merge, on the
+  // finding PART 5 credits with every reply this system has earned.
+  //
+  // The rule is absolute and needs no vocabulary: NO composed subject, on any
+  // touch, may contain a brace. That cannot be satisfied by remembering, and it
+  // covers placeholders nobody has invented yet.
+  try {
+    const _fails = [];
+    // Every template that carries a placeholder, so the fixture targets the
+    // rungs that can actually break rather than a rung chosen by hand.
+    const _risky = Object.entries(SUBJECTS_FOR)
+      .filter(([, v]) => Array.isArray(v) && v.some(t => /\{[a-z]+\}/i.test(String(t))))
+      .map(([k]) => k);
+    if (_risky.length < 3) _fails.push(`only ${_risky.length} rung(s) with a placeholder template were found \u2014 this check is not looking at the right table`);
+    // Resolvable measurements: every touch must come out clean.
+    const _m = { painTheme: 'no callback on follow-up requests', city: 'Kansas City, MO',
+      rating: 4.2, copyrightYear: 2019, newestPostYear: 2021, reviewCount: 251,
+      photoCount: 8, formFieldCount: 5, gbpCategory: 'Dentist', tenureYears: 20 };
+    for (const id of _risky) {
+      for (const _sub of buildSubjects({ id }, _m)) {
+        if (/[{}]/.test(String(_sub))) _fails.push(`[${id}] resolved subject still contains a brace: "${_sub}"`);
+      }
+      // And the harder case: NOTHING measured. A template that cannot resolve
+      // must be dropped, never sent half-filled or blank.
+      for (const _sub of buildSubjects({ id }, {})) {
+        if (/[{}]/.test(String(_sub))) _fails.push(`[${id}] with no measurements at all, an unresolved template survives: "${_sub}"`);
+        if (!String(_sub).trim()) _fails.push(`[${id}] produced an empty subject rather than dropping the template`);
+      }
+    }
+    // THE WIRE, both halves. A resolver nothing feeds is the bug that shipped.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _cf = _src.indexOf('const composeFollowUp = (rung, spine, opts, ordinal');
+    const _cfBlk = _cf > -1 ? _src.slice(_cf, _cf + 4000) : '';
+    if (!_cfBlk) _fails.push('composeFollowUp could not be located');
+    else if (/const subs = \(SUBJECTS_FOR\[rung\.id\]/.test(_cfBlk)) {
+      _fails.push('composeFollowUp still reads SUBJECTS_FOR directly instead of resolving through buildSubjects');
+    }
+    // The live call site must hand the composer its measurements, or the
+    // resolver above runs against {} and fills nothing.
+    const _cc = _src.indexOf('parsed.composedEmail = composeFullEmail(parsed.factualSpine, {');
+    const _ccBlk = _cc > -1 ? _src.slice(_cc, _src.indexOf('});', _cc)) : '';
+    if (!_ccBlk) _fails.push('the live composeFullEmail call site could not be located');
+    else if (!/measured:/.test(_ccBlk)) _fails.push('the live composer call passes no measurements, so every follow-up subject resolves against an empty object');
+    if (_fails.length) {
+      console.log(`\u26d4 SUBJECT RESOLUTION CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SUBJECT RESOLUTION CHECK: no subject on any touch can contain a brace \u2014 tested across every rung whose template carries a placeholder, both fully measured and measured not at all, where an unresolvable template is dropped rather than sent blank. The follow-up path resolves through buildSubjects and the live composer is handed its measurements. A literal "{pain}" reached the send queue.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SUBJECT RESOLUTION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A COMMA MADE A TRUE NUMBER LOOK INVENTED ═══════════════════════════
+  // The permitted list is built from our own measurement strings, which carry no
+  // thousands separators. A writer typing "2,344" tokenised differently from the
+  // measured "2344", so the figure gate called a true number invented and threw
+  // the whole draft away. Only bites above 999, which is why it survived.
+  try {
+    const _fails = [];
+    const _o = { spine: 'the two above you average 2344 reviews', figures: ['2344', '251'] };
+    const _mk = (mid) => `John, ${mid}\n\nThat is not about the quality of your work.\n\nHas anyone owned that, or has it just never come up?`;
+    const _fmt = verifyBrainEmail(_mk('the two practices above you average 2,344 reviews against your 251.'), _o);
+    if (!_fmt.ok) _fails.push(`a correctly formatted figure was refused (${_fmt.why}) \u2014 the writer is being punished for writing the number properly and the lead falls back to the template`);
+    const _plain = verifyBrainEmail(_mk('the two practices above you average 2344 reviews against your 251.'), _o);
+    if (!_plain.ok) _fails.push(`the unformatted figure was refused (${_plain.why})`);
+    const _fake = verifyBrainEmail(_mk('the two practices above you average 9,999 reviews against your 251.'), _o);
+    if (_fake.ok) _fails.push('an invented figure passed once commas were normalised \u2014 the fix bought formatting with the guarantee');
+    // A rating must not become an integer.
+    if (NUMBER_TOKENS('4.8 stars')[0] !== '4.8') _fails.push('stripping separators damaged a decimal \u2014 4.8 must not become 48');
+    if (NUMBER_TOKENS('2,344')[0] !== '2344') _fails.push('a thousands separator is not being normalised');
+    if (_fails.length) {
+      console.log(`\u26d4 FIGURE FORMAT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 FIGURE FORMAT CHECK: a figure written the way a person writes it \u2014 2,344 \u2014 is accepted when 2344 was measured, an invented one is still refused, and 4.8 is still 4.8. Every number over 999 in a model-written email used to fail this and take the whole draft down with it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FIGURE FORMAT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ EIGHTY-FIVE SECONDS PER LEAD, SPENT WAITING FOR NOTHING ════════════
+  // The batch poller used a PER-PAGE timeout as the WHOLE-JOB deadline and then
+  // floored it at 30s. The two call sites pass 40000 and 45000, so every lead
+  // slept 40 seconds on the leadership pages and 45 on the site audit, gave up,
+  // and bought all nine pages individually anyway. Four give-ups across two
+  // leads on the 2026-08-13 run — about 28% of a five-minute run spent waiting
+  // for a result that was discarded.
+  //
+  // And submitting is what costs. Firecrawl keeps scraping after we stop polling
+  // and bills per page, so an abandoned job is billed in full AND bought again
+  // by the fallback. Batching only pays above a 50% completion rate; measured
+  // rate on this run was 0 of 4, so it is off by default.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    if (/Math\.max\(30000, perPageTimeoutMs\)/.test(_src)) {
+      _fails.push('the whole-job deadline is still derived from the per-page timeout and floored at 30s \u2014 that is the 85 seconds');
+    }
+    if (!Number.isFinite(FC_BATCH_GIVEUP_MS)) _fails.push('FC_BATCH_GIVEUP_MS is not a number');
+    else if (FC_BATCH_GIVEUP_MS > 20000) {
+      _fails.push(`the batch give-up is ${Math.round(FC_BATCH_GIVEUP_MS / 1000)}s \u2014 the individual fallback answers in about twenty, so anything past that buys a discount with time the run does not have`);
+    }
+    if (typeof FC_BATCH_ENABLED !== 'boolean') _fails.push('the submit switch is not a boolean');
+    // The guard must sit BEFORE the paid submit. After it, the log goes quiet
+    // and the spend continues — which is the failure it exists to prevent.
+    const _fn = _src.indexOf('const firecrawlBatchScrape');
+    const _blk = _fn > -1 ? _src.slice(_fn, _src.indexOf("api.firecrawl.dev/v1/batch/scrape", _fn)) : '';
+    if (!_blk) _fails.push('firecrawlBatchScrape or its submit could not be located');
+    else if (!/FC_BATCH_ENABLED/.test(_blk)) {
+      _fails.push('the submit guard is not between the function start and the submit call \u2014 a guard after the submit turns the log off and leaves the credit spent');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 BATCH BUDGET CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 BATCH BUDGET CHECK: the batch wait is a time budget (${Math.round(FC_BATCH_GIVEUP_MS / 1000)}s), not a per-page timeout used as one, and the submit guard sits before the paid call rather than after it. Batching is ${FC_BATCH_ENABLED ? 'ON' : 'OFF'}. This removed about 85 seconds of guaranteed dead sleep from every lead, with no effect on the email \u2014 every page delivered today already came from the individual fallback.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BATCH BUDGET CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+  // ══ THE FIRST PAID CALL ON EVERY LEAD, AND IT NEVER RAN ════════════════
+  // `FC PAID [scrape+screenshot]` printed on every lead and returned nothing on
+  // every lead, and the code called that an empty page. The timestamps settle it:
+  // 493ms for Tiffany Springs, 388ms for John Goodman, 498ms for Vargas, on a
+  // request carrying `waitFor: 4000`. Firecrawl did not fetch those pages and
+  // wait four seconds in half a second — it refused the payload and answered at
+  // once. The text-only retry on the same URL with the same key, seconds later,
+  // took 3-5 seconds and returned 14,000 to 53,000 characters every time.
+  //
+  // It was invisible because the only thing read off the response was
+  // `data.markdown`. An HTTP 400 carrying Firecrawl's own explanation and a page
+  // that rendered blank are the same thing through that lens — so the system
+  // printed an invented reason, remembered the DOMAIN as bad for an hour, and
+  // bought two more requests to route around a problem it had misdiagnosed.
+  //
+  // Three things must hold, and none of them can be checked by reading a log:
+  //   1. Every shape sent from the homepage path has a recorded success.
+  //   2. A refusal is named as a refusal — status read, credit and throttle
+  //      cases separated, and NOT billed to the credit ledger.
+  //   3. The homepage image is measured before it is sent. It is the full page
+  //      now, and an unmeasured tall PNG fails the WHOLE vision request.
+  try {
+    const _fails = [];
+    const _srcAll = require('fs').readFileSync(__filename, 'utf8');
+    // Whole-line comments only. A trailing-comment stripper has to understand
+    // regex literals — `/^http:\/\//i` contains a literal `//` — and a stripper
+    // that gets that wrong deletes real code and fails a check that should pass.
+    // Every explanatory comment in these two blocks is a whole-line one.
+    const _code = (s) => s.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+
+    // ── the homepage scrape block ────────────────────────────────────────
+    const _hs = _srcAll.indexOf('const scrapeHomepage = async () => {');
+    const _he = _hs > -1 ? _srcAll.indexOf('\n    };', _hs) : -1;
+    const _home = (_hs > -1 && _he > _hs) ? _code(_srcAll.slice(_hs, _he)) : '';
+    // Self-verifying slice: if the terminator matched the wrong closing brace,
+    // the function's real last statement is not inside it and this says so
+    // instead of quietly checking a fragment.
+    if (!_home) _fails.push('scrapeHomepage could not be located');
+    else if (!/return \{ \.\.\._body, data:/.test(_home)) {
+      _fails.push('the scrapeHomepage slice does not reach its own return statement — the block boundary is wrong, so nothing below this line was really checked');
+    } else {
+      // 1. EVERY SHAPE MUST BE ONE WE HAVE WATCHED SUCCEED.
+      const PROVEN = ["['markdown','rawHtml']", "['screenshot@fullPage']", "['screenshot']"];
+      const _shapes = (_home.match(/\[\s*'(?:markdown|rawHtml|screenshot|screenshot@fullPage)'[^\]]*\]/g) || [])
+        .map(s => s.replace(/\s+/g, ''));
+      if (!_shapes.length) _fails.push('no request shape found in scrapeHomepage at all');
+      for (const s of _shapes) {
+        if (PROVEN.includes(s)) continue;
+        _fails.push(`the homepage asks Firecrawl for ${s}, which has no recorded success. The four-format shape answered in under half a second on nine leads out of nine — it was refused, not slow. Only ${PROVEN.join(', ')} have ever come back with anything`);
+      }
+      // 2. A REFUSAL MUST BE NAMED, AND MUST NOT BE BILLED.
+      for (const [needle, why] of [
+        ['r.status', 'the HTTP status is never read, so a 400 and a blank page are the same thing again'],
+        ['isCreditError(', 'an out-of-credits refusal is not detected on the first call of every lead'],
+        ['isRateLimited(', 'a throttled homepage reads as an empty page, which is how a fine site gets called dead'],
+        ['refused: true', 'there is no refusal state — that distinction IS the fix'],
+      ]) if (!_home.includes(needle)) _fails.push(why);
+      const _fcNotes = (_home.match(/fcNote\(true,/g) || []).length;
+      if (_fcNotes !== 1) {
+        _fails.push(`fcNote(true,...) appears ${_fcNotes} times in the homepage path; it must appear exactly once, after every refusal has already returned, or refused requests get billed as scrapes again`);
+      } else {
+        // Scoped to fcAsk itself. Measured against the whole block this failed
+        // on a `refused: true` that lives in the settle() helper BELOW fcAsk —
+        // a true statement about the wrong two lines, which is the shape of
+        // every false failure this file has ever produced.
+        const _a0 = _home.indexOf('const fcAsk =');
+        const _a1 = _home.indexOf('const askCorpus', _a0);
+        const _ask = (_a0 > -1 && _a1 > _a0) ? _home.slice(_a0, _a1) : '';
+        if (!_ask) _fails.push('fcAsk could not be isolated, so the billing order was not really checked');
+        else if (_ask.indexOf('fcNote(true,') < _ask.lastIndexOf('refused: true')) {
+          _fails.push('fcNote runs before the last refusal branch — a request the API rejected would be charged to the ledger as a paid scrape, which is exactly what hid this for weeks');
+        }
+      }
+    }
+
+    // ── the homepage image block ─────────────────────────────────────────
+    const _is = _srcAll.indexOf('const _homeImage = async () => {');
+    const _ie = _is > -1 ? _srcAll.indexOf('\n          };', _is) : -1;
+    const _img = (_is > -1 && _ie > _is) ? _code(_srcAll.slice(_is, _ie)) : '';
+    if (!_img) _fails.push('the homepage image block could not be located');
+    else {
+      if (!/_pngDims\(/.test(_img)) _fails.push('the homepage image is sent without reading its dimensions — it is the full page now, and one tall PNG fails the entire vision request, not just the picture');
+      if (!/_pngscale\s*\?\s*_pngscale\.fitWithin\(/.test(_img)) _fails.push('an over-tall homepage is not downscaled, so the whole audit dies on the pages that matter most');
+      if (!/_MAX_EDGE/.test(_img)) _fails.push('the homepage image does not use the shared vision ceiling');
+    }
+    // 3. ONE CEILING, ONE READER. Two copies is how one of them stops matching.
+    if (!/MAX_EDGE = _MAX_EDGE/.test(_srcAll)) {
+      _fails.push('the interior-render ceiling is a second literal rather than the shared one — change it in one place and half the images in a request keep the old rule');
+    }
+    if (!/const _png = _pngDims;/.test(_srcAll)) {
+      _fails.push('there are two PNG dimension readers again');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ HOMEPAGE REQUEST CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ HOMEPAGE REQUEST CHECK: the first paid call of every lead asks only for shapes that have come back with something, a refusal is reported as a refusal with Firecrawl's own words and is not billed as a scrape, and the homepage render is measured and downscaled before it is sent. The brain now sees the whole homepage instead of the top thousand pixels — on every lead recorded before this, 'FULL PAGE: captured top to bottom' had never printed once.`);
+    }
+  } catch (e) {
+    console.log(`⛔ HOMEPAGE REQUEST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE LARGEST GAP IN THIS SYSTEM WAS A KEY NOBODY ASSIGNED ═══════════
+  // CLAUDE.md PART 4 opens with "Nothing has a clock on it. Every lead logs
+  // [LANE] no job-posting signal — thirty-plus leads, zero exceptions," and
+  // reads it as a discovery problem. It was a spelling problem. Two hand-written
+  // copies of the buying-window test both read `discoverySignals.ai_replacement`
+  // and nothing in this file has ever assigned that key; the source sets
+  // `ai_replacement_signal`. So a lead carrying a real, fresh, size-verified job
+  // posting was reported to the audit as having no measured window at all.
+  //
+  // A test over a key nobody sets cannot fail — it is always false — which is
+  // the same disease as a check that cannot fail, pointed the other way. This
+  // asserts the list is grounded: every key the test reads must be one some
+  // source in this file actually assigns to a lead. It is the guard that would
+  // have caught the original on the day it was written.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    if (!Array.isArray(BUYING_WINDOW_KEYS) || !BUYING_WINDOW_KEYS.length) {
+      _fails.push('BUYING_WINDOW_KEYS is empty');
+    }
+    for (const k of (BUYING_WINDOW_KEYS || [])) {
+      // An ASSIGNMENT, not a mention. `key: <something>` inside an object
+      // literal is how every source in this file emits a signal. A comment or
+      // another read does not count, which is precisely the distinction the
+      // original bug turned on.
+      const assigned = new RegExp(`(^|[^A-Za-z0-9_.])${k}\\s*:\\s*[^\\s,}]`, 'm').test(
+        _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n')
+      );
+      if (!assigned) {
+        _fails.push(`the buying-window test reads "${k}" and NOTHING in this file assigns it — that test can only ever be false, which is exactly how thirty-plus leads in a row reported no measured window while carrying a real job posting`);
+      }
+    }
+    // Behaviour, not source text. A marketing hire must be a RETAINER window and
+    // must NOT set the ops flag: the ops flag is what makes a $40k-$100k Custom
+    // AI Software Build eligible, and it used to be stamped on every TheirStack
+    // lead unconditionally — the Eat Right Atlanta bug, live on every lead.
+    const _mk = classifyJobTitle('Marketing Manager');
+    const _seo = classifyJobTitle('SEO Specialist');
+    const _web = classifyJobTitle('Web Developer');
+    const _disp = classifyJobTitle('Dispatcher');
+    const _int = classifyJobTitle('Marketing Intern');
+    const _prod = classifyJobTitle('Product Marketing Manager');
+    if (_mk.lane !== 'marketing') _fails.push(`"Marketing Manager" classifies as ${_mk.lane}, not marketing`);
+    if (_seo.lane !== 'marketing' || _seo.channel !== 'search') _fails.push(`"SEO Specialist" must be marketing/search, got ${_seo.lane}/${_seo.channel}`);
+    if (_web.lane !== 'marketing' || _web.channel !== 'web') _fails.push(`"Web Developer" must be marketing/web, got ${_web.lane}/${_web.channel}`);
+    if (_disp.lane !== 'ops') _fails.push(`"Dispatcher" must stay an ops signal, got ${_disp.lane}`);
+    if (_int.lane !== 'excluded') _fails.push('"Marketing Intern" is not excluded — an intern posting is not a budget');
+    if (_prod.lane !== 'excluded') _fails.push('"Product Marketing Manager" is not excluded — that is a SaaS title, outside the ICP');
+    // ── EXERCISE THE EMISSION, NOT JUST THE CLASSIFIER ─────────────────────
+    // The first version of this check tested classifyJobTitle and the lane
+    // function directly and PASSED while the wire between them was deliberately
+    // broken — a marketing hire re-stamped as an ops signal went straight
+    // through. Both pieces were right; the wire was not; nothing ran the wire.
+    // signalsFromTitles is that wire, and searchTheirStack now has no signal
+    // logic of its own, so running it here runs what actually ships.
+    const _mSig = signalsFromTitles(['Marketing Manager']).signals;
+    const _oSig = signalsFromTitles(['Dispatcher']).signals;
+    if (_mSig.ai_replacement_signal) {
+      _fails.push('a company hiring ONLY a Marketing Manager still emits ai_replacement_signal — that flag is what makes a $40k-$100k Custom AI Software Build eligible, and it is the Eat Right Atlanta bug in its original form');
+    }
+    if (!_mSig.hiring_marketing) _fails.push('a marketing hire does not emit hiring_marketing, so the retainer lane stays unreachable');
+    if (_oSig.hiring_marketing) _fails.push('an ops-only hire emits hiring_marketing');
+    const _both = signalsFromTitles(['Marketing Manager', 'Dispatcher', 'Bookkeeper']).signals;
+    if (!_both.hiring_marketing || !_both.ai_replacement_signal) {
+      _fails.push('a company hiring for both lanes must report both');
+    }
+    if (signalsFromTitles(['Marketing Intern']).signals.hiring_marketing) {
+      _fails.push('an intern posting counts as a marketing budget');
+    }
+    if (signalsFromTitles([]).signals.hiring_marketing || signalsFromTitles([]).signals.ai_replacement_signal) {
+      _fails.push('an empty title list emits a signal');
+    }
+    const _ch = signalsFromTitles(['SEO Specialist', 'Web Developer']).channels;
+    if (!_ch.includes('search') || !_ch.includes('web')) {
+      _fails.push(`the channels a lead is hiring for are lost: got [${_ch.join(', ')}] — those decide which finding the email opens on`);
+    }
+    if (!hasMeasuredBuyingWindow(_mSig)) _fails.push('a marketing hire does not register as a measured buying window');
+    if (!hasMeasuredBuyingWindow(_oSig)) _fails.push('an ops hire does not register as a measured buying window');
+    if (buyingWindowKind(_mSig) !== 'retainer') _fails.push(`a marketing hire resolves to "${buyingWindowKind(_mSig)}" instead of the retainer lane`);
+    if (buyingWindowKind(_oSig) !== 'software') _fails.push(`an ops hire resolves to "${buyingWindowKind(_oSig)}"`);
+    // Hiring BOTH is a retainer lead that also has ops pain, never the reverse.
+    if (buyingWindowKind({ hiring_marketing: true, ai_replacement_heavy: true }) !== 'retainer') {
+      _fails.push('a company hiring for marketing AND ops resolves to the software lane — that is the $75k-pitch-at-a-retainer-lead bug');
+    }
+    if (hasMeasuredBuyingWindow({}) || hasMeasuredBuyingWindow(null)) _fails.push('an empty signal set reports a measured window');
+    // And no call site may hand-roll the test again.
+    if (/discoverySignals(\.|\?\.)?(ai_replacement|hiring_marketing)\s*\|\|/.test(
+      _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n'))) {
+      _fails.push('a call site is testing the signal keys inline again instead of going through hasMeasuredBuyingWindow — two hand-written copies is how one of them kept a key that does not exist');
+    }
+    if (_fails.length) {
+      console.log(`⛔ BUYING WINDOW CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ BUYING WINDOW CHECK: every key the buying-window test reads is one a source actually assigns, a marketing hire opens the RETAINER lane instead of being stamped as manual-ops work, and both call sites go through one function. The test used to read a key spelled "ai_replacement" that nothing in this file has ever set, which is why thirty-plus leads in a row reported no measured buying window while carrying a real job posting.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BUYING WINDOW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE OWNER'S OWN WORDS, AND WHY THEY WERE UNUSABLE ══════════════════
+  // A job posting is the one place a business owner writes down, unprompted,
+  // what he thinks is broken — "take over a website that isn't generating
+  // leads". It is the strongest email material this system can obtain and it
+  // was thrown away twice over: searchTheirStack read only c.roles.size and
+  // dropped every string, and the frontend research payload is a hand-written
+  // allowlist that never named the field.
+  //
+  // It is CORPUS, never a claim. verifyOriginalFinding takes the corpus as a
+  // parameter, so appending the posting is the entire wiring job: a finding
+  // quoting his own advertisement now verifies, and an invented one is still
+  // dropped. That distinction is what this check exists to hold.
+  try {
+    const _fails = [];
+    const _site = 'We are a full service dental practice in Kansas City serving families since 1998.';
+    const _post = 'Marketing Manager wanted. You will take over a website that is not generating leads and rebuild our patient intake from scratch.';
+    // Exactly the concatenation the research path performs.
+    const _joined = `${_site}\n\n${_post}`;
+    const _fromPosting = verifyOriginalFinding({
+      finding: 'Their own job posting says they need someone to take over a website that is not generating leads',
+      evidence: 'take over a website that is not generating leads',
+    }, _joined);
+    if (!_fromPosting.ok) {
+      _fails.push(`a quote lifted verbatim from the owner's own job posting was dropped (${_fromPosting.why}) — the posting is not reaching the corpus, so the strongest sentence available to this system is unusable by construction`);
+    }
+    // The same quote must FAIL when the posting is absent. Without this, the
+    // test above would pass on a verifier that accepts anything, and the check
+    // would be measuring nothing at all.
+    const _withoutPosting = verifyOriginalFinding({
+      finding: 'Their own job posting says they need someone to take over a website that is not generating leads',
+      evidence: 'take over a website that is not generating leads',
+    }, _site);
+    if (_withoutPosting.ok) {
+      _fails.push('that same quote also verifies with NO posting in the corpus — the verifier is accepting text it never saw, so the check above proves nothing');
+    }
+    // And an invented posting quote is still refused.
+    const _invented = verifyOriginalFinding({
+      finding: 'Their job posting says they are replacing their entire agency next quarter',
+      evidence: 'replacing their entire agency next quarter',
+    }, _joined);
+    if (_invented.ok) _fails.push('a sentence the owner never wrote verified against his posting');
+
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!/const jobSnippet = String\(req\.body\.jobSnippet/.test(_code)) {
+      _fails.push('the research route never reads req.body.jobSnippet');
+    }
+    if (!/const _corpus = jobSnippet \? /.test(_code)) {
+      _fails.push('the posting is read but never joined to the corpus — computed but not passed, on the one field this build exists to deliver');
+    }
+    // ── THE CLIENT HALF, WHICH LIVES IN ANOTHER REPO ──────────────────────
+    // index.html deploys to Netlify from somewhere else and is carried over by
+    // hand. If a copy is sitting here it is checked; if not, this SAYS so
+    // rather than passing quietly, because a green line about a half nobody
+    // verified is worse than no line.
+    let _clientNote;
+    try {
+      const _idx = require('fs').readFileSync(require('path').join(__dirname, 'index.html'), 'utf8');
+      const _missing = ['jobSnippet:', 'signalAgeDays:', 'marketingChannels:'].filter(k => !_idx.includes(k));
+      if (_missing.length) {
+        _fails.push(`the local index.html research payload does not forward ${_missing.join(', ')} — the server reads them and the client never sends them, which is how req.body.signalAgeDays came to be read on every lead and sent on none`);
+      }
+      _clientNote = ' The local index.html forwards all of them; it still has to be carried to Netlify by hand.';
+    } catch (e) {
+      void e;
+      _clientNote = ' NOTE: no index.html beside this file, so the client half of the wire was NOT verified here — check it before trusting a live run.';
+    }
+    if (_fails.length) {
+      console.log(`⛔ JOB POSTING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ JOB POSTING CHECK: a finding that quotes the owner's own job posting verifies against it, the identical quote is refused when the posting is absent, and an invented one is refused either way. The posting is corpus, never a claim.${_clientNote}`);
+    }
+  } catch (e) {
+    console.log(`⛔ JOB POSTING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
+  // John P. Goodman DDS ran four real Places searches. Three of them found
+  // businesses with fewer reviews ranking above him. The row handed to the audit
+  // was the fourth — #3 of 20 for "dentist in Kansas City, MO", weakerAbove 0 —
+  // because the selector preferred the head term and never read what the row
+  // said. `outranked_by_weaker` therefore tested false on a lead carrying it
+  // three times over, and that rung is one of only two things in this system
+  // with evidence behind it.
+  //
+  // This runs the real rows through the real function. A source scan would only
+  // prove the expression changed; this proves the answer did.
+  try {
+    const _fails = [];
+    const JOHN = [
+      { kind: 'primary trade',         found: true, rank: 3,  scanned: 20, weakerAbove: 0, query: 'dentist in Kansas City, MO' },
+      { kind: 'their own service page', found: true, rank: 12, scanned: 20, weakerAbove: 3, query: 'root canal in Kansas City, MO' },
+      { kind: 'their own service page', found: true, rank: 8,  scanned: 20, weakerAbove: 4, query: 'gum surgery in Kansas City, MO' },
+      { kind: 'their own service page', found: true, rank: 13, scanned: 20, weakerAbove: 5, query: 'dental exam in Kansas City, MO' },
+    ];
+    const _john = pickRankRow(JOHN);
+    if (!_john.row || _john.row.query !== 'gum surgery in Kansas City, MO') {
+      _fails.push(`John P. Goodman's four measured searches select "${_john.row ? _john.row.query : 'nothing'}" — it must be the gum surgery row, where 4 of the 7 businesses above him have fewer reviews. The head term (#3, nothing above him weaker) is a compliment, and choosing it switches the outranked finding off on a lead that measured it three times`);
+    }
+    if (_john.row && !(Number(_john.row.weakerAbove) > 0)) {
+      _fails.push('the chosen row carries no weaker-above count at all, so outranked_by_weaker cannot fire');
+    }
+    // A row we cannot state loses to one we can, even carrying a bigger number.
+    const _unstable = pickRankRow([
+      { kind: 'primary trade', found: true, rank: null, rankStable: false, weakerAbove: 9, query: 'suppressed' },
+      { kind: 'their own service page', found: true, rank: 6, scanned: 20, weakerAbove: 2, query: 'statable' },
+    ]);
+    if (!_unstable.row || _unstable.row.query !== 'statable') {
+      _fails.push('a row whose position two samples disagreed on was chosen over a statable one — its ratio may not be written down, so it is a weaker email however big the count');
+    }
+    // Nothing to find: must still hand back the head term rather than nothing.
+    const _flat = pickRankRow([
+      { kind: 'primary trade', found: true, rank: 2, scanned: 20, weakerAbove: 0, query: 'head' },
+      { kind: 'their own service page', found: true, rank: 4, scanned: 20, weakerAbove: 0, query: 'svc' },
+    ]);
+    if (!_flat.row || _flat.row.query !== 'head') _fails.push('with no finding anywhere the head term must still be returned');
+    if (pickRankRow([]).row !== null) _fails.push('an empty result set must return no row rather than undefined');
+    const _absent = pickRankRow([{ kind: 'primary trade', found: false, scanned: 20, query: 'nowhere' }]);
+    if (!_absent.row) _fails.push('a not-found row must still be handed back — absence travels by its own route and the object is still read');
+    // Both call sites must go through it. Two copies of a selection rule 140
+    // lines apart is how one of them keeps the old behaviour forever.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    if (/localRank = lv2?\.results\.find\(/.test(_src)) {
+      _fails.push('a call site still selects the rank row inline instead of through pickRankRow');
+    }
+    if ((_src.match(/= pickRankRow\(lv/g) || []).length !== 2) {
+      _fails.push('pickRankRow is not used at both of the two rank call sites');
+    }
+    if (_fails.length) {
+      console.log(`⛔ RANK ROW CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RANK ROW CHECK: the search that becomes the finding is the one where businesses with fewer reviews rank above them — not whichever query was most canonical. On John P. Goodman's real rows that is "gum surgery in Kansas City, MO", 4 of the 7 above him weaker, instead of a #3 head-term placing that says he is doing fine. Three paid Places searches per lead stop being thrown away.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RANK ROW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ A MEDIAN CALLED AN AVERAGE, AND THE LARGER HALF OF IT ══════════════
+  // review_deficit reported n[Math.floor(n.length / 2)] as what "the businesses
+  // ranking above them average". With two businesses above, that index is 1 —
+  // the LARGER one. A single practice's 2,344 reviews were stated as the average
+  // of two. Every number in an email has to trace to a measurement; this one
+  // traced to a real measurement wearing the wrong description, which is harder
+  // to catch and just as false.
+  try {
+    const _fails = [];
+    const R = (n) => ({ reviews: n });
+    // The live shape: two above, one of them BELOW our own count. The old code
+    // returned 2344 and called it an average. It must now say nothing at all —
+    // outranked_by_weaker owns a field where somebody ahead has fewer reviews.
+    const _mixed = summariseAboveReviews([R(120), R(2344)], 500);
+    if (_mixed.n !== 0 || _mixed.avg !== null) {
+      _fails.push(`a field where one business above them has FEWER reviews (120 against their 500) still produces a deficit figure of ${_mixed.avg} — that lead belongs to outranked_by_weaker and the two rungs would contradict each other in the same audit`);
+    }
+    // The mean, not the middle. [100, 900] is 500; the old median returned 900.
+    const _two = summariseAboveReviews([R(100), R(900)], 10);
+    if (_two.n !== 2 || Math.round(_two.avg) !== 500) {
+      _fails.push(`two competitors on 100 and 900 average 500; this returns ${_two.avg} (the old median returned 900, the larger of the two)`);
+    }
+    const _three = summariseAboveReviews([R(180), R(340), R(2344)], 22);
+    if (_three.n !== 3 || Math.round(_three.avg) !== 955) {
+      _fails.push(`three competitors average 955 each; this returns ${_three.avg} over ${_three.n}`);
+    }
+    // One competitor is not "the businesses at the top of that search".
+    if (summariseAboveReviews([R(900)], 10).n !== 0) {
+      _fails.push('a single competitor is being described in the plural');
+    }
+    if (summariseAboveReviews([R(100), R(900)], 0).n !== 0) {
+      _fails.push('a deficit is claimed against a review count we never measured');
+    }
+    if (summariseAboveReviews(null, 10).n !== 0) _fails.push('a missing competitor list does not return silence');
+    // And the count must reach the rung, or the fix is computed and never passed
+    // — the failure mode this file has shipped more often than any other.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // Split so the scan cannot match its own source. Written whole, this line
+    // found itself and reported the bug it exists to detect — the same way the
+    // content[0] scan once counted three hits inside its own success message.
+    if (new RegExp('aboveMedian' + 'Reviews').test(_src)) _fails.push('the old median field is still in the file');
+    for (const k of ['aboveReviewsN', 'aboveReviewsAvg']) {
+      if (!new RegExp(`^\\s+${k}: summariseAboveReviews\\(`, 'm').test(_src)) {
+        _fails.push(`${k} is never assembled into the harm inputs, so the rung reads undefined and can never fire`);
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ REVIEW DEFICIT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ REVIEW DEFICIT CHECK: "the businesses at the top of that search average N each" is now a real average of the counts we actually hold, states how many that is, and is refused outright when any of them has FEWER reviews than the business we are writing to. The old line reported one practice's 2,344 reviews as the average of two.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW DEFICIT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
