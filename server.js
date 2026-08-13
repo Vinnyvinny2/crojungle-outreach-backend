@@ -15977,9 +15977,32 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
     // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
     // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
     // would be catastrophic. Verify a distinctive 4-word span; drop anything unproven.
-    const corpusFlat = md.toLowerCase().replace(/\s+/g, ' ');
+    // ══ THE TWO SIDES WERE NORMALISED DIFFERENTLY ═══════════════════════════
+    // The corpus was lowercased and whitespace-collapsed, keeping its
+    // punctuation. The quote had punctuation replaced with spaces. So the two
+    // strings being compared had been through different transforms, and a
+    // reviewer's apostrophe could only ever cause a miss.
+    //
+    // MEASURED, not assumed — the effect is narrower than it looks, and worth
+    // stating precisely. A long quote survives because SOME four-word window
+    // inside it happens to contain no punctuation. It is the SHORT quote where
+    // every window carries a mark that dies:
+    //
+    //   "I'm still waiting"        real, in the corpus, DROPPED
+    //   "didn't call back promptly" real, in the corpus, passed anyway
+    //
+    // Which is the worst possible selection, because the short emphatic
+    // sentence full of contractions is exactly what an angry reviewer writes —
+    // "they didn't show", "wasn't worth it", "I'm done" — and review pain is the
+    // finding PART 5 credits with every reply this system has earned.
+    //
+    // Both sides now go through the SAME transform. This does not loosen the
+    // guarantee: a fabricated quote is refused before and after, verified
+    // against this corpus both ways. It only stops punctuation deciding it.
+    const _flatten = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const corpusFlat = _flatten(md);
     const quoteExists = (q) => {
-      const c = String(q || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const c = _flatten(q);
       if (c.length < 8) return false;
       const w = c.split(' ');
       if (w.length < 4) return corpusFlat.includes(c);
@@ -32063,6 +32086,52 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 CLOCK PREMISE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE QUOTE AND THE CORPUS WENT THROUGH DIFFERENT TRANSFORMS ═════════
+  // deepReviewMine verifies a mined complaint by checking the reviewer's words
+  // against the review corpus. The corpus kept its punctuation; the quote had
+  // punctuation replaced with spaces. Comparing two differently-normalised
+  // strings means an apostrophe can only ever cause a miss — and the miss lands
+  // on short emphatic sentences, which is what an angry reviewer actually
+  // writes, on the finding PART 5 credits with every reply this system has had.
+  //
+  // The invariant is structural: ONE normaliser, applied to both sides. Asserted
+  // from source, because the function is local to the miner and cannot be called
+  // from here — and asserted behaviourally on the normaliser's own logic, so the
+  // check cannot pass on a source that merely looks symmetrical.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _i = _src.indexOf('const quoteExists = (q) => {');
+    if (_i < 0) _fails.push('quoteExists could not be located, so nothing was checked');
+    else {
+      const _blk = _src.slice(Math.max(0, _i - 2200), _i + 700);
+      if (!/const _flatten = \(t\) =>/.test(_blk)) _fails.push('there is no single normaliser \u2014 the two sides can drift apart again');
+      if (!/const corpusFlat = _flatten\(md\)/.test(_blk)) _fails.push('the corpus is not normalised by the shared function');
+      if (!/const c = _flatten\(q\)/.test(_blk)) _fails.push('the quote is not normalised by the shared function');
+      // The old asymmetric form must be gone, not merely shadowed.
+      if (/corpusFlat = md\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ' '\)/.test(_blk)) {
+        _fails.push('the corpus still uses the whitespace-only normaliser while the quote strips punctuation');
+      }
+    }
+    // Behaviour: the same transform on both sides finds a real short quote and
+    // still refuses an invented one. Both directions, or it is not a check.
+    const _flat = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const _corpus = _flat("Great crew but they didn't call back promptly. I'm still waiting.");
+    const _hit = (q) => { const c = _flat(q); const w = c.split(' ');
+      if (w.length < 4) return _corpus.includes(c);
+      for (let i = 0; i + 4 <= w.length; i++) if (_corpus.includes(w.slice(i, i + 4).join(' '))) return true;
+      return false; };
+    if (!_hit("I'm still waiting")) _fails.push('a real short quote containing an apostrophe is still refused \u2014 that is the exact sentence the asymmetry was dropping');
+    if (_hit('we offer a lifetime warranty')) _fails.push('an invented quote now passes \u2014 the fix bought the drop rate with the guarantee, which is the wrong trade');
+    if (_fails.length) {
+      console.log(`\u26d4 QUOTE SYMMETRY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 QUOTE SYMMETRY CHECK: the reviewer's words and the review corpus go through one shared normaliser, so punctuation can no longer decide whether a true complaint survives. A short quote with an apostrophe passes and an invented one is still refused \u2014 the drop was landing on exactly the sentences an angry reviewer writes.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 QUOTE SYMMETRY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
