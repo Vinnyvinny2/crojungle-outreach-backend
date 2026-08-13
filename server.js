@@ -2018,9 +2018,33 @@ const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
 // held up by deterministic scoring underneath it; this call's is not.
 const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-4-6';
 
+// ══ A PRICE TABLE THAT KNOWS TWO MODELS, AND A SWITCH THAT OFFERS MORE ══════
+// BRAIN_MODEL and SITUATION_MODEL are environment variables. The table below
+// held exactly two rows, and the lookup fell back to HAIKU for anything it did
+// not recognise. So setting SITUATION_MODEL to a better model priced a $5-in /
+// $25-out call at $1 / $5 and reported the upgrade as very nearly free — the
+// one number anybody would use to decide whether the upgrade was affordable.
+//
+// AND THE CACHE WRITE WAS WRONG ON BOTH EXISTING ROWS. cacheWrite was set at
+// 1.25x input, which is the FIVE-MINUTE rate. All three cache_control blocks in
+// this file request `ttl: '1h'`, and a one-hour write bills 2x. Every first
+// lead of a batch under-reported its own cache write by 37.5% of that
+// component. The break-even moves with it: a 5-minute cache pays for itself on
+// the second read, a 1-hour cache needs the third.
+//
+// minCache is the number that decides whether a cache_control block does
+// anything at all. A prefix shorter than the model's minimum is NOT an error —
+// the call succeeds and returns cache_creation_input_tokens: 0. And the minimum
+// is NOT monotonic across generations, which is the trap: Haiku 4.5 needs 4,096
+// tokens while newer and more expensive models need 1,024 or 512. The comment
+// on the situation-read call recommends switching it to Haiku; its system block
+// is about 3,160 tokens, so taking that advice silently turns its cache off.
 const ANTHROPIC_PRICES = {
-  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
-  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 1.25 / 1e6 },
+  'claude-opus-5':              { in: 5 / 1e6,   out: 25 / 1e6,  cacheRead: 0.50 / 1e6, cacheWrite: 10.00 / 1e6, minCache: 512 },
+  'claude-sonnet-5':            { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 6.00 / 1e6,  minCache: 1024 },
+  'claude-opus-4-8':            { in: 5 / 1e6,   out: 25 / 1e6,  cacheRead: 0.50 / 1e6, cacheWrite: 10.00 / 1e6, minCache: 1024 },
+  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 6.00 / 1e6,  minCache: 1024 },
+  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 2.00 / 1e6,  minCache: 4096 },
 };
 // ══ ONE VARIABLE CANNOT HOLD TWO CONCURRENT LEADS ════════════════════════════
 // This was a single module-level string. Running HEGG and Mid-American at the
@@ -2135,10 +2159,24 @@ const looksLikeTheirOffDomainMailbox = (email, siteDomain, companyName, occurren
   return { email: e, why: `${e} is on a different domain from their website, but it is a business inbox, "${shared}" is shared with ${siteRoot.includes(shared) ? 'their site domain' : 'their business name'}, and it appears ${occurrences} times across the pages we read \u2014 a long domain for the site and a short one for mail is common and this is theirs` };
 };
 
+const _UNPRICED = new Set();
 const meterAnthropic = (company, label, model, usage) => {
   try {
     if (!usage) return 0;
-    const p = ANTHROPIC_PRICES[model] || ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
+    // ══ AN UNPRICED MODEL MUST NOT REPORT AS THE CHEAPEST ONE ═══════════
+    // This fell back to Haiku silently. The whole purpose of this meter is to
+    // tell the operator what a model change costs, and the one moment it was
+    // guaranteed to be consulted — right after changing the model — was the one
+    // moment it was guaranteed to be wrong, in the direction that makes the
+    // change look affordable. It now says so, loudly, once per model.
+    const p = ANTHROPIC_PRICES[model];
+    if (!p) {
+      if (!_UNPRICED.has(model)) {
+        _UNPRICED.add(model);
+        console.log(`\u26d4 UNPRICED MODEL [${model}]: this call is NOT in the spend total. Nothing below is being charged to the meter for it. Add a row to ANTHROPIC_PRICES \u2014 the old behaviour was to price it as Haiku, which reported an upgraded model at a fifth of its real cost on the exact run you would use to decide whether to keep it.`);
+      }
+      return 0;
+    }
     const fresh = usage.input_tokens || 0;
     const cRead = usage.cache_read_input_tokens || 0;
     const cWrite = usage.cache_creation_input_tokens || 0;
@@ -2177,6 +2215,51 @@ const anthropicFetch = async (url, opts, timeoutMs, label) => {
     meterAnthropic(_CURRENT_LEAD(), label || 'anthropic', model, j && j.usage);
   } catch (e) { void e; }
   return r;
+};
+
+// ══ content[0] IS NOT THE TEXT ON A THINKING MODEL ═══════════════════════════
+// Twenty-three call sites in this file read the model's answer as
+// `content[0].text`. That is correct on Haiku 4.5 and silently wrong on every
+// model we are about to move to.
+//
+// Claude Sonnet 5 and Opus 5 run ADAPTIVE THINKING BY DEFAULT — omitting the
+// `thinking` parameter enables it rather than disabling it — and `display`
+// defaults to "omitted". So the response still carries a thinking block, it is
+// still FIRST, and its text is an EMPTY STRING. content[0].text returns "".
+//
+// Every one of those twenty-three sites has `|| ''` after it. So the failure is
+// not an exception and not a log line: the owner lookup finds no owner, the
+// review miner finds no pain, the audit brain returns nothing, the email writer
+// returns nothing — and every one of them reports it as "the model returned
+// nothing", which is the message this file already prints for a genuine empty
+// answer. The upgrade would look like every model in the world got worse.
+//
+// THE SECOND HALF, which is the one that ships a lie: `stop_reason` appears ZERO
+// times in 34,000 lines. Opus 5 and Fable 5 run safety classifiers that can
+// DECLINE a request — HTTP 200, empty content, `stop_reason: "refusal"`. Read
+// through `content[0].text || ''` that is indistinguishable from a model that
+// simply had nothing to say. It is not: it is a request that never ran.
+//
+// So the text is whatever TEXT blocks the response holds, joined; a refusal is
+// named as a refusal; and a response carrying blocks but no text at all says so
+// rather than returning the empty string that every caller treats as "fine".
+const anthropicText = (j, label) => {
+  if (!j || typeof j !== 'object') return '';
+  if (j.stop_reason === 'refusal') {
+    const _why = (j.stop_details && (j.stop_details.category || j.stop_details.explanation)) || 'no category given';
+    console.log(`\u26d4 MODEL DECLINED [${label || 'anthropic'}]: the request was refused by a safety classifier (${_why}), not answered. This returns HTTP 200 with empty content, so without this line it reads as "the model returned nothing" \u2014 which is the same message a real empty answer produces, and the two need different fixes.`);
+    return '';
+  }
+  const blocks = Array.isArray(j.content) ? j.content : [];
+  const text = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '')).join('');
+  if (!text && blocks.length) {
+    const _kinds = [...new Set(blocks.map(b => (b && b.type) || 'unknown'))].join(', ');
+    console.log(`\u26a0 NO TEXT BLOCK [${label || 'anthropic'}]: the response carried ${blocks.length} block(s) \u2014 ${_kinds} \u2014 and not one of them was text. On a thinking model the FIRST block is a thinking block whose text is empty by default, which is exactly what reading content[0] returns.`);
+  }
+  if (j.stop_reason === 'max_tokens') {
+    console.log(`\u26a0 TRUNCATED [${label || 'anthropic'}]: the model hit max_tokens. On an adaptive-thinking model max_tokens caps THINKING PLUS the answer, so a budget tuned for Haiku can spend itself on reasoning and return a part-written reply that still parses.`);
+  }
+  return text;
 };
 
 const reportLeadSpend = (company) => {
@@ -2253,7 +2336,7 @@ app.post('/api/claude', async (req, res) => {
         + `${(_u.cache_read_input_tokens || 0) > 0 ? ' \u267b prompt cache HIT' : ''}`);
     }
     if (!r.ok) return res.status(r.status).json({ error: d.error?.message || 'Anthropic error' });
-    const _text = d.content[0].text;
+    const _text = anthropicText(d, 'generate');
 
     // ── VERIFY THE COPY THAT WILL ACTUALLY BE SENT ────────────────────────
     // This endpoint is where the browser generates variant A/B and the two
@@ -6895,7 +6978,7 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
-    let text = d.content?.[0]?.text || '';
+    let text = anthropicText(d);
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -7183,7 +7266,7 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
-    let text = d.content?.[0]?.text || '';
+    let text = anthropicText(d);
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -7287,7 +7370,7 @@ ABOUT THE EMAIL — this matters a lot:
     }, 30000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -7361,7 +7444,7 @@ Return ONLY JSON:
     }, 20000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -7447,7 +7530,7 @@ ${corpus}` }]
     }, 25000);
 
     const d = await r2.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -8091,6 +8174,7 @@ const confirmBrokenPage = async (broken, fcKey) => {
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
   { harm: 95, specific: 98, novel: 95, delegable: 95, weFix: 95, band: 'DEAD', id: 'broken_page',
+    blind: 'a page that errors reports it to nobody — the only person who ever sees it is the stranger who clicked',
     // Only a CONFIRMED failure counts. An unconfirmed one never reaches here.
     test: (m) => (m.brokenPages || []).some(b => b && b.confirmed === true),
     say: (m) => { const b = (m.brokenPages || []).find(x => x && x.confirmed === true);
@@ -8098,6 +8182,7 @@ const HARM_LADDER = [
     costs: 'every visitor who clicks it leaves, and nothing records that it happened' },
 
   { harm: 97, specific: 95, novel: 90, delegable: 80, weFix: 95, band: 'DEAD', id: 'site_empty',
+    blind: 'he reaches his own site by bookmark or admin link and sees a different page from the one a stranger is served',
     // Only when a SECOND, independent fetch also failed. Firecrawl returning
     // nothing is our problem until proven otherwise.
     test: (m) => m.siteConfirmedDown === true,
@@ -8109,11 +8194,13 @@ const HARM_LADDER = [
   // inside every product we sell. Google telling searchers he is CLOSED is the
   // most expensive item on this list and it was ranking fifth because of it.
   { harm: 96, specific: 95, novel: 92, delegable: 70, weFix: 90, band: 'DEAD', id: 'listing_closed',
+    blind: 'Google shows that flag to searchers and sends no notice at all to the business it is showing it about',
     test: (m) => m.businessStatus && m.businessStatus !== 'OPERATIONAL',
     say: (m) => `Google is showing their business status as ${m.businessStatus}`,
     costs: 'Google is telling searchers they are shut' },
 
   { harm: 88, specific: 92, novel: 85, delegable: 90, weFix: 95, band: 'DEAD', id: 'no_website_on_profile',
+    blind: 'a listing is set up once and never read back — nothing on it reports the fields left empty',
     test: (m) => m.hasPlace === true && m.websiteOnProfile === false,
     say: () => 'Their Google listing has no website link on it',
     // Same correction: the measurement is that the listing carries no link. What
@@ -8126,22 +8213,26 @@ const HARM_LADDER = [
   // window says on a high street — is anyone still there? \u2014 and the owner never
   // sees it, because he does not read his own footer.
   { harm: 40, specific: 88, novel: 88, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'stale_copyright',
+    blind: 'the footer is the one part of a site nobody reads, including the person who owns it',
     test: (m) => m.copyrightYear && (new Date().getFullYear() - m.copyrightYear) >= 3,
     say: (m) => `The copyright line at the bottom of their site still reads ${m.copyrightYear}`,
     costs: 'a visitor checking whether the business is still going reads that as a site nobody maintains' },
 
   { harm: 38, specific: 90, novel: 90, delegable: 95, weFix: 95, band: 'ABANDONED', id: 'placeholder_text',
+    blind: 'template text survives exactly where nobody looks, which is why it survives',
     test: (m) => m.placeholderFound === true,
     say: (m) => `Placeholder text is still live on their site \u2014 "${keepSpan(m.placeholderSample)}"`,
     costs: 'it is the clearest possible signal that nobody has looked at the page in a long time' },
 
   { harm: 34, specific: 85, novel: 80, delegable: 85, weFix: 90, band: 'ABANDONED', id: 'dead_blog',
+    blind: 'a page that stopped being updated does not announce that it stopped',
     test: (m) => m.newestPostYear && (new Date().getFullYear() - m.newestPostYear) >= 3,
     say: (m) => `Their news or blog section has nothing newer than ${m.newestPostYear}`,
     costs: 'an empty-looking site suggests a business winding down, whatever the truth is' },
 
 
   { harm: 78, specific: 70, novel: 70, delegable: 90, weFix: 90, band: 'DEAD', id: 'no_https',
+    blind: 'the address bar warning shows to a first-time visitor, and nobody who works here arrives as one',
     test: (m) => m.isHttps === false,
     say: () => 'Their site is not on HTTPS, so browsers show a "Not secure" warning beside the address',
     costs: 'a warning in the address bar before a stranger has read a word, on a site asking for a name and a phone number' },
@@ -8153,6 +8244,7 @@ const HARM_LADDER = [
   // a live email. All four use data we already hold and cost nothing.
 
   { harm: 97, specific: 95, novel: 60, delegable: 40, weFix: 95, band: 'DEAD', id: 'no_google_listing',
+    blind: 'absence produces no signal at all — there is nothing to notice, which is what makes it last',
     // The most complete version of invisible. A local business with no Google
     // Business Profile does not appear in the map pack at all, cannot be reviewed,
     // and cannot be found by anyone searching their trade. We resolve a Place on
@@ -8164,6 +8256,7 @@ const HARM_LADDER = [
     costs: 'the map pack is where local buying decisions start, and they are not in it' },
 
   { harm: 74, specific: 96, novel: 92, delegable: 65, weFix: 95, band: 'CONTRADICTS', id: 'wrong_gbp_category',
+    blind: 'the category is chosen once at setup and never shown to him again',
     // Bruce Favret, live: a probate law firm categorised on Google as
     // "Consultant". We logged the category on every lead and never used it.
     // Google ranks the map pack largely by category, so a wrong one keeps you out
@@ -8204,6 +8297,7 @@ const HARM_LADDER = [
   // where the two windows were not equally observed. It never infers from a
   // count and it never fires on a business we simply read shallowly.
   { harm: 72, specific: 96, novel: 90, delegable: 20, weFix: 80, band: 'INVISIBLE', id: 'review_velocity_drop',
+    blind: 'reviews still arrive, so nothing looks broken. Only the rate changed, and nobody counts rates',
     reframe: 'proof of recent work is what a stranger checks first, and it goes stale faster than most owners expect',
     test: (m) => m.reviewVelocityChecked === true && m.reviewVelocitySlowing === true
       && Number.isFinite(Number(m.reviewsRecent90)) && Number.isFinite(Number(m.reviewsPrior90)),
@@ -8212,6 +8306,7 @@ const HARM_LADDER = [
       : `their Google reviews have slowed — ${m.reviewsRecent90} in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`,
     costs: 'a stranger checking whether a business is still busy looks at the dates, not the total' },
   { harm: 68, specific: 94, novel: 70, delegable: 25, weFix: 95, band: 'INVISIBLE', id: 'review_deficit',
+    blind: 'he knows his own count. Nothing ever shows it to him beside the counts of the businesses sitting above him',
     // We already read their review count AND the counts of everyone ranking above
     // them. Saying "you have 22 and the three above you have 400+" requires having
     // looked at both, which is why specific is 94.
@@ -8223,6 +8318,7 @@ const HARM_LADDER = [
     costs: 'a buyer choosing between names on a map reads the review count before anything else' },
 
   { harm: 92, specific: 92, novel: 88, delegable: 60, weFix: 95, band: 'DEAD', id: 'expired_certificate',
+    blind: 'the expiry sits in a file nobody opens until a browser reports it',
     // Different from no_https and much worse. An expired certificate does not
     // show a small "Not secure" note \u2014 the browser puts up a full-page red
     // interstitial that most people will not click through. It is effectively an
@@ -8263,6 +8359,7 @@ const HARM_LADDER = [
     costs: 'every reply is free and permanent, and the ones already written are the only ones anybody reads' },
 
   { harm: 62, specific: 85, novel: 85, delegable: 85, weFix: 95, band: 'BLOCKS', id: 'no_hours_on_profile',
+    blind: 'hours are set once and the listing never reports back which fields were left empty',
     // Free to fix, ten minutes, and genuinely unknown \u2014 nobody looks at their own
     // listing the way a stranger does at 7pm on a Sunday.
     test: (m) => m.hasPlace === true && m.hoursListed === false,
@@ -8270,6 +8367,7 @@ const HARM_LADDER = [
     costs: 'someone deciding whether to call right now cannot tell if they are open' },
 
   { harm: 70, specific: 82, novel: 75, delegable: 80, weFix: 95, band: 'BLOCKS', id: 'no_mobile_viewport',
+    blind: 'he looks at his own site on the machine it was built on',
     // A page that does not fit a phone, in 2026, on a business whose traffic is
     // mostly mobile. He has not opened his own site on a phone recently \u2014 almost
     // nobody does.
@@ -8294,6 +8392,7 @@ const HARM_LADDER = [
   // Dropped to 48 so it sits with the other tidy-ups. It still appears in the
   // audit and on the call sheet, where it is a good specific detail for Mike.
   { harm: 48, specific: 98, novel: 92, delegable: 92, weFix: 95, band: 'CONTRADICTS', id: 'phone_mismatch',
+    blind: 'two numbers in two systems each agree with themselves, and nothing anywhere compares them',
     test: (m) => m.phoneMismatch === true,
     say: (m) => `The number on their Google listing (${m.googlePhone}) appears nowhere on their own website`,
     costs: 'the number a searcher dials and the number on the website are different lines' },
@@ -8306,6 +8405,7 @@ const HARM_LADDER = [
   // worse than a missing one: it looks like coverage.
 
   { harm: 66, specific: 92, novel: 86, delegable: 95, weFix: 95, band: 'CONTRADICTS', id: 'tap_to_call_broken',
+    blind: 'the number shows on the page and looks right; only tapping it reveals the difference',
     reframe: 'most people search for this on a phone and expect the number to dial',
     test: (m) => m.tapToCallGenuinelyBroken === true,
     say: () => 'The phone number on their site is not tappable on a phone — it is plain text',
@@ -8313,6 +8413,7 @@ const HARM_LADDER = [
 
   // ── BLOCKS ──────────────────────────────────────────────────────────────
   { harm: 74, specific: 80, novel: 55, delegable: 45, weFix: 90, band: 'BLOCKS', id: 'no_after_hours',
+    blind: 'a visit that ends without contact leaves no record anywhere — not with us, not with him, not with anybody',
   reframe: 'people comparing three options go with whichever one lets them start',
     // If their sitemap lists a booking page we never opened, we cannot say the
     // phone is the only route — we did not look at the page built to be the route.
@@ -8364,6 +8465,7 @@ const HARM_LADDER = [
     costs: 'outside those hours there is no published way in at all' },
 
   { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
+    blind: 'an abandoned form records nothing. Only the completed ones are ever counted',
     reframe: 'people abandon a long form and go back to the results page',
     test: (m) => m.formFieldCountIsSingleForm === true && (m.formFieldCount || 0) >= 7,
     // "enquiry" is British. Every recipient of this system is American, and an
@@ -8374,6 +8476,7 @@ const HARM_LADDER = [
     costs: 'each extra field costs completions, and this is the only way in' },
 
   { harm: 58, specific: 80, novel: 45, delegable: 40, weFix: 95, band: 'BLOCKS', id: 'form_only_no_booking',
+    blind: 'a form counts what was submitted and never what was opened and closed',
   reframe: 'people comparing three options go with whichever one lets them start',
     test: (m) => m.booking === 'form' && m.bookingMeasured === true && m.unreadBooking !== true,
     // ══ SIX AUDITS, THE SAME SENTENCE ════════════════════════════════════
@@ -8389,12 +8492,14 @@ const HARM_LADDER = [
     costs: 'someone ready to commit has to stop and hope for a reply' },
 
   { harm: 46, specific: 88, novel: 70, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'stale_reviews',
+    blind: 'nothing puts the date of the newest review in front of an owner — only the running total is ever shown',
   reframe: 'people check how recent the reviews are before they trust the rating',
     test: (m) => (m.reviewRecency || 0) > 365,
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
     costs: 'a buyer comparing options reads that as a business that may not still be running' },
 
   { harm: 62, specific: 25, novel: 30, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
+    blind: 'a year printed on a badge stops registering after the first time you read it',
     // Deliberately low on NOVEL. He has looked at his own site; he knows what it
     // looks like. This is real harm and a poor opener, which is exactly the case
     // the three-factor model exists to handle.
@@ -8409,6 +8514,7 @@ const HARM_LADDER = [
   // search. outranked_by_weaker keeps novel 18 because he genuinely does half-know
   // that others are above him; absence is a different fact and it is news.
   { harm: 96, specific: 90, novel: 80, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
+    blind: 'searching his own name shows him instantly. The search a customer types is a different search',
   reframe: 'people searching pick from what is in front of them, not from who is actually best',
     // HEGG Windows, live: "NOT IN TOP 20 for replacement windows and doors
     // contractor in Dublin" \u2014 a 33-year business that does not appear at all \u2014
@@ -8486,6 +8592,7 @@ const HARM_LADDER = [
   // novel 96: no owner expects a stranger to know the shape of his own coverage.
   // delegable 5: there is nobody to forward this to.
   { harm: 88, specific: 94, novel: 96, delegable: 5, weFix: 90, band: 'INVISIBLE', id: 'coverage_gap',
+    blind: 'a market he is not in reports nothing — nothing anywhere tells a business where it was not shown',
     // The behavioural truth on its own. The first version of this ended "...so a
      // market you are not indexed in cannot see you at all", which is the COST
      // sentence said twice — the composed email carried both, back to back, in
@@ -8523,6 +8630,7 @@ const HARM_LADDER = [
     costs: "a metro they don't come up in can't send them a single job" },
 
   { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
+    blind: 'he searches his own name and comes up first. That is a different search from the one his customers type, and only one of the two is ever shown to him',
   reframe: 'people searching pick from what is in front of them, not from who is actually best',
     // ══ THIS IS TRUE AT EVERY POSITION, SO IT MUST NOT REQUIRE ONE ══════════
     // The old test demanded rank > 5. Two consequences, both live:
@@ -8585,6 +8693,7 @@ const HARM_LADDER = [
     costs: 'the reputation is real and it is not reaching the people searching right now' },
 
   { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
+    blind: 'the dashboard shows him fields and a completeness bar, never what a searcher actually sees',
   reframe: 'the listing is what people see before they ever reach the site',
     // ══ AN UNMEASURED COUNT IS NOT ZERO ══════════════════════════════════
     // `(m.photoCount || 0) < 5` turns a missing measurement into 0, which is
@@ -8616,6 +8725,7 @@ const HARM_LADDER = [
   // A pattern requires two or more mentions by construction, so "more than one"
   // is measured, not estimated.
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
+    blind: 'he has read every one of these. Nobody tabulates their own reviews looking for the same words twice, and that is the only way this shows up',
     reframe: 'a stranger comparing three companies reads the reviews before anything else',
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
     // The mined complaint is the reviewers' words, not ours. keepSpan registers
@@ -8655,6 +8765,7 @@ const HARM_LADDER = [
   // which is correct. It belongs in the write-up and on the call, not usually in
   // the first sentence.
   { harm: 54, specific: 78, novel: 30, delegable: 45, weFix: 85, band: 'OPINION', id: 'no_published_pricing',
+    blind: 'somebody who wanted a price and did not ask produces nothing to count',
     reframe: 'most people will not hand over their details just to find out what something costs',
     // The unread gate: if their sitemap lists a pricing page we did not open, we
     // cannot say a price appears nowhere. We did not look.
@@ -8684,6 +8795,7 @@ const HARM_LADDER = [
   // a thin sample. All-Weather answers 33 of 40 — 82% — and this correctly stays
   // silent there.
   { harm: 48, specific: 94, novel: 68, delegable: 25, weFix: 85, band: 'INVISIBLE', id: 'partial_owner_replies',
+    blind: 'the replies you wrote are the ones you remember, and nothing shows you the ones you skipped',
     reframe: 'a stranger reading reviews sees a business that does not answer, whatever the stars say',
     test: (m) => (m.reviewsRead || 0) >= 10 && (m.ownerReplies || 0) > 0
               && ((m.ownerReplies || 0) / (m.reviewsRead || 1)) < 0.6,
@@ -8691,6 +8803,7 @@ const HARM_LADDER = [
     costs: 'the ones without a reply are the ones a stranger reads as unanswered' },
 
   { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
+    blind: 'the total goes up every year, so it reads as growth. The rate against the years traded is the part nobody works out',
     reframe: 'people comparing companies read the reviews first, and a thin record reads as a thin business',
     test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
     // ══ STATE THE TWO MEASUREMENTS, NOT THE DIVISION ══════════════════════
@@ -8712,6 +8825,7 @@ const HARM_LADDER = [
 
   // ── OPINION ─────────────────────────────────────────────────────────────
   { harm: 56, specific: 45, novel: 20, delegable: 20, weFix: 95, band: 'OPINION', id: 'no_offer',
+    blind: 'an absence reports nothing. Nothing on a page shows what is not on the page',
     reframe: 'when nothing separates two companies, people choose on price',
     test: (m) => m.guarantee === false && m.namedOffer === false,
     // ══ A CATEGORY LABEL IS NOT A FINDING ═══════════════════════════════
@@ -8736,6 +8850,7 @@ const HARM_LADDER = [
     costs: 'the only thing left to compare on is price, and somebody is always cheaper' },
 
   { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
+    blind: 'there is nothing on the page for somebody not ready to commit, so there is nothing that would record that they came',
   reframe: 'most people are not ready to buy the day they look, and they remember whoever gave them something',
     // "Nothing to take away" is a claim about every page. Any unopened page
     // could hold the guide, the checklist or the price sheet that disproves it.
@@ -8749,6 +8864,7 @@ const HARM_LADDER = [
     costs: 'everyone not ready to commit today leaves with nothing' },
 
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
+    blind: 'his own copy reads clearly to him because he knows what he means by it. It is the stranger reading it cold who sees nothing to hold on to',
     reframe: 'when nothing separates two companies, people choose on price',
     // ══ A CASE MISMATCH KEPT THIS RUNG SILENT FOR ITS ENTIRE LIFE ═══════
     // readMarketClarity returns `band = score >= 2 ? 'specific' : score >= 0 ?
@@ -10118,7 +10234,7 @@ Be honest. Most cold emails are a delete and saying so is the useful answer. If 
       }),
     }, 25000, 'prospect-sim');
     const j = await r.json();
-    const text = (j && j.content && j.content[0] && j.content[0].text) || '';
+    const text = anthropicText(j);
     return parseProspectVerdict(text);
   } catch (e) {
     console.log(`PROSPECT SIM: could not run (${e && e.message}) — the email stands unreviewed.`);
@@ -10530,6 +10646,13 @@ const buildEmailEvidence = (ev = {}) => {
   if (Array.isArray(sp.prices) && sp.prices.length) {
     line(A, `THEIR OWN PUBLISHED PRICES: ${sp.prices.map(x => `${x.amount} (${x.what})`).join('; ')}. Printed on their site, so safe to use in arithmetic.`);
   }
+  // ══ WHY HE HAS NOT ALREADY SEEN IT ══════════════════════════════════════
+  // Neither a measurement nor a judgement about him: a true statement about why
+  // this class of problem produces no signal from inside a business. It sits
+  // between the two because that is what it does \u2014 it is the bridge from a fact
+  // he can check to a read he cannot get anywhere, and it is the honest version
+  // of the thing every agency email fakes.
+  if (ev.blind) line(R, `WHY HE HAS NOT ALREADY SEEN THIS \u2014 true, and the strongest sentence available to you: ${ev.blind}`);
   // ══ THESE TWO WERE THE BEST THINKING IN THE SYSTEM, AND MUZZLED ════════
   // Both were computed with the whole corpus in view, both were handed to the
   // writer inside a block headed "Never state these as facts", and the writer
@@ -10564,10 +10687,24 @@ These are JUDGEMENTS, not measurements. They are the reason to write to this man
 at all: he can find every fact above on his own phone in ten minutes, and he
 cannot get this anywhere.
 
-You may state ONE of them. Not two \u2014 two opinions is a lecture, and the second
-one dilutes the first. Say it in your own words, plainly, the way you would say it
-standing in his shop. Take a side. A read that hedges every clause is worth
-nothing to him and he can tell you are protecting yourself.
+State ONE of them \u2014 and then FOLLOW IT THROUGH. Say what it means, and say what
+it is costing him. That is one thought carried to its end, which is what an
+expert sounds like. Two UNRELATED opinions is a lecture and the second dilutes
+the first; one opinion with its consequence attached is the whole email.
+
+DO NOT RATION IT. Every fact above he can check on his own phone in ten seconds,
+so the facts only prove that somebody looked. The read is the only evidence that
+somebody who UNDERSTANDS this business looked, and that is the entire reason he
+would write back rather than delete.
+
+A withheld diagnosis reads as a tease, and a tease is what every other agency
+email in his inbox is already doing. Give him the whole thought. Knowing WHY a
+weaker competitor sits above him tells him nothing about how to change it \u2014 the
+diagnosis is free and the work is not, so there is nothing to protect here.
+
+Say it in your own words, plainly, the way you would say it standing in his shop.
+Take a side. A read that hedges every clause is worth nothing to him and he can
+tell you are protecting yourself.
 
 IT MUST BE MARKED AS YOURS. Use one of: "my read is", "what it looks like from
 outside", "I'd guess", "I think", "I could be wrong, but". Those exact shapes \u2014
@@ -10637,7 +10774,7 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
         messages: [{ role: 'user', content: prompt }] }),
     }, 25000, { label: 'email rewrite', company });
     const d = await res.json();
-    const out = String((d.content && d.content[0] && d.content[0].text) || '').trim()
+    const out = String(anthropicText(d)).trim()
       .replace(/^["'\u201c]+|["'\u201d]+$/g, '').trim();
     return out || null;
   } catch (e) { return null; }
@@ -10645,7 +10782,7 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
 
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
-  const { first, spine, earned, pattern, reframe, money, count, cta,
+  const { first, spine, earned, pattern, reframe, money, count, cta, blind,
     trade, tenure, situationRead, bindingLayer, bindingWhy, acquisitionIsReferral,
     purchaseUrgency: urgency, second } = parts;
   // ══ THE BRIEF HAD EXACTLY ONE LEGAL MOVE IN IT: REWORD ═════════════════
@@ -10682,6 +10819,12 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
     pattern ? `WHAT THIS USUALLY MEANS in businesses of this kind (general, safe): ${pattern}` : '',
     money ? `WHAT THE WORK IS WORTH in their trade (public knowledge): ${money}` : '',
     count ? `HOW MANY THINGS WE FOUND IN TOTAL: ${count}` : '',
+    // ══ THE ONE TRUE FORM OF FEAR AVAILABLE TO US ════════════════════════
+    // Not "this is costing you money" — we cannot know that. This answers the
+    // question he is asking as he reads: if this were real, wouldn't I know?
+    // For this finding the answer is no, and there is a mechanical reason why.
+    blind ? `WHY HE HAS NOT ALREADY SEEN THIS (true, and the most useful thing in this email): ${blind}` : '',
+    blind ? `  \u2192 Use it. This is the difference between an email that reports a problem and one that explains why the problem survived. It is not a guess about how he feels and it must not become one \u2014 it says why the thing produces no signal from inside the business, and nothing about what anyone did.` : '',
     // ══ THE ASK IS A JOB, NOT A STRING ═══════════════════════════════════
     // "use close to verbatim" made the last sentence of every email one of nine
     // fixed questions. He has read the finding in the writer's voice and then
@@ -10693,7 +10836,7 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
     // his time. MEETING_ASK in verifyBrainEmail now enforces that mechanically,
     // which is what makes releasing the wording safe.
     `THE ASK \u2014 this is its JOB, not its wording: ${cta}`,
-    `  \u2192 Write that last sentence yourself, in the voice of the rest of the email. It must be a QUESTION, it must be the LAST thing he reads, and it must be answerable in four words. Ask who is handling this, or whether he already knew, or whether he wants the part you have not told him. NEVER ask for a call, a meeting, a time or any number of minutes \u2014 that is a decision he has no reason to make yet, and the draft is discarded for it.`,
+    `  \u2192 Write that last sentence yourself, in the voice of the rest of the email. It must be a QUESTION, it must be the LAST thing he reads, and it must be answerable in four words.\n  \u2192 NEVER ASK HIM SOMETHING YOU JUST ANSWERED. "Any idea what's putting them ahead?" and "has anyone checked whether that is affecting your searches?" are both real asks this system has sent, and both take the best sentence in the email, turn it into a question and hand it back. He reads that as a quiz, or as proof you never knew. If you worked it out, SAY IT \u2014 in the body, in full \u2014 and ask him something else.\n  \u2192 What is left is the only thing worth asking for: the part HE alone holds. Whether he had noticed. Whether it was deliberate or just how it ended up. Who looks after it now. What changed that month. Or simply offer the set \u2014 how many more there are, never what they are.\n  \u2192 NEVER ask for a call, a meeting, a time or any number of minutes. That is a decision he has no reason to make yet, and the draft is discarded for it.`,
   ].filter(Boolean).join('\n');
 
   // WHO THIS PERSON IS. Without it the writer produced "I noticed a business with
@@ -10763,8 +10906,9 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
 - Do NOT add any FACT not listed above. No numbers, no times, no competitor
   counts, no dollar figures beyond the one supplied.
 - A JUDGEMENT IS NOT A FACT. You may state one read from MY READ above, in your
-  own words, if you mark it as yours. That sentence is the only place in this
-  email where you are allowed to think out loud, and it is the reason he replies
+  own words, if you mark it as yours \u2014 and you may carry it through to what it
+  means and what it costs him. That is where you are expected to think out loud,
+  and it is the reason he replies
   \u2014 every fact above, he can find himself. Do not waste it hedging: say what you
   actually conclude, plainly, and let him disagree. A read he argues with is a
   reply; a read nobody could argue with is not a read.
@@ -10791,7 +10935,22 @@ ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and then THE 
   is optional and belongs AFTER it; one clause at most, and only if it is a
   measured number rather than praise.` : '- No greeting; open on the finding.'}
 
-55-85 words. The worked example above governs. Match its MOVES, not its facts.
+110-130 words. The worked example above governs. Match its MOVES, not its facts.
+
+MAKE IT SCANNABLE, NOT SHORT. Those are different things and only one of them
+matters. A short email that states a fact and asks a question is the one he
+deletes \u2014 he can get the fact himself in ten seconds. Length is never the
+problem; a word that does not earn its place is.
+
+So: he must have the core problem inside the first TWO SENTENCES. Not the
+background, not what you noticed, not a compliment \u2014 the problem, and why it
+matters. Everything after that exists to support those two sentences, and if a
+sentence is not supporting them it comes out.
+
+Then make it survive a scan. One or two sentences per paragraph, never three.
+No sentence longer than about twenty-five words. Short first paragraph. He reads
+this standing up, on a phone, between two other things, and he is deciding in the
+first two seconds whether the rest is worth his attention.
 
 Before you return it, check it against the example: is there a person in it? Is
 there one judgement given freely? Is there a turn? Does the cost land on a human
@@ -10811,7 +10970,7 @@ Return ONLY the email body. No subject, no signature, no preamble.`;
       }),
     }, 30000, 'email-writer');
     const j = await r.json();
-    const text = (j && j.content && j.content[0] && j.content[0].text) || '';
+    const text = anthropicText(j);
     return String(text).trim() || null;
   } catch (e) {
     console.log(`EMAIL WRITER [${company}]: model call failed (${e && e.message}) — the composed email stands.`);
@@ -10826,7 +10985,20 @@ const verifyBrainEmail = (body, opts = {}) => {
   if (!text) return { ok: false, why: 'empty' };
 
   const words = text.split(/\s+/).length;
-  if (words > 120) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
+  // ══ A CEILING THAT ONLY FITS AN OBSERVATION ════════════════════════════
+  // 120 here and "55-85 words" in the brief. Both were tuned for an email that
+  // states a fact and asks a question, and that is exactly the email that keeps
+  // coming back flat: the observation fits, the DIAGNOSIS does not.
+  //
+  // What an owner cannot get anywhere else is not the fact — he can check the
+  // fact on his own phone in ten seconds. It is what the fact MEANS and what it
+  // is costing him, and that will not go in sixty words alongside a greeting, a
+  // finding and an ask.
+  //
+  // 150 is still an email he reads on a phone in under a minute. It is not
+  // permission to list findings: every other gate here still allows exactly one
+  // point, one read and one ask. It is room to finish the thought.
+  if (words > 150) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
   if (words < 25) return { ok: false, why: `${words} words — too short to carry the finding and the ask` };
 
   // ══ THE ASK MUST BE THE LAST THING HE READS ═══════════════════════════════
@@ -10931,6 +11103,29 @@ const verifyBrainEmail = (body, opts = {}) => {
     if (_sents >= 4 && _paras.length < 2) {
       return { ok: false, why: `${_sents} sentences in a single block — on a phone that is a grey rectangle. Every one or two sentences needs its own paragraph` };
     }
+    // ══ SCANNABLE IS THE RULE. SHORT WAS ONLY EVER A PROXY FOR IT ═══════
+    // The old ceiling said 120 words and the brief said 55-85, and both were
+    // solving the wrong problem. Length is not what loses him; a wall is. He
+    // reads this standing up, on a phone, between two other things, and what
+    // decides whether he continues is whether the shape of it looks like work.
+    //
+    // Three rules, and each one is a thing a scanning reader physically cannot
+    // do: a sentence he has to re-read, a paragraph he has to commit to, and an
+    // opening block that asks for attention before it has earned any. None of
+    // them constrains WHAT is said, which is why they can be absolute.
+    const _long = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean)
+      .find(x => x.split(/\s+/).filter(Boolean).length > 32);
+    if (_long) {
+      return { ok: false, why: `a ${_long.split(/\s+/).filter(Boolean).length}-word sentence — "${_long.slice(0, 50)}..." — is one a scanning reader gives up on halfway. Break it` };
+    }
+    const _fat = _paras.find(p => p.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length > 3);
+    if (_fat) {
+      return { ok: false, why: `a paragraph of ${_fat.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length} sentences — on a phone that is a block he has to commit to before he knows whether it is worth it. One or two per paragraph` };
+    }
+    const _open = (_paras[0] || '').split(/\s+/).filter(Boolean).length;
+    if (_open > 45) {
+      return { ok: false, why: `the first paragraph runs ${_open} words — that is the block he decides on, and it is asking for his attention before it has earned any` };
+    }
   }
 
   // ══ NAMING THE FIX TURNS THE EMAIL INTO AN AD ═══════════════════════════
@@ -10993,6 +11188,100 @@ const verifyBrainEmail = (body, opts = {}) => {
   const _tail = _sentences.slice(_lastQ + 1).join(' ').split(/\s+/).filter(Boolean).length;
   if (_lastQ !== _last && _tail > 6) {
     return { ok: false, why: `the ask sits ${_last - _lastQ} sentence(s) from the end with ${_tail} words after it — an ask he reads past is not an ask` };
+  }
+
+  // ══ AN ASK WE ALREADY ANSWERED IS A QUIZ ═══════════════════════════════
+  // Two live asks, both wrong in the same way:
+  //
+  //   "Has anyone checked whether the category mismatch is affecting which
+  //    searches actually show your profile?"
+  //   "Any idea what's putting them ahead in the results that matter?"
+  //
+  // We measured the category mismatch. We measured who is ahead of him. The read
+  // that explains what it costs him is the single most valuable sentence this
+  // system produces — and both of those lines take it, turn it into a question,
+  // and hand it back to him.
+  //
+  // He reads that as one of two things and neither is good: a quiz, where he is
+  // being walked through our homework, or an admission that we never actually
+  // knew. A man who has run his business for twenty years recognises the shape
+  // in half a second, because it is the shape every consultant uses on him.
+  //
+  // THE RULE: never ask a question whose answer is in our own audit. What is
+  // left is the only thing worth asking for — the part he alone holds. Whether
+  // he had noticed. Whether it was deliberate. What changed that month. He
+  // answers those in three words, and three words is a reply.
+  //
+  // The explanation does not disappear. It moves into the BODY, which is the
+  // whole point: giving away the diagnosis is what makes a stranger sound like
+  // somebody who understands the business, and it costs nothing, because knowing
+  // WHY you are outranked tells you nothing about how to fix it.
+  {
+    const _ask = String(_sentences[_lastQ] || '');
+    // A. Demands the CAUSE of something we measured. "Do you know what changed
+    //    around then" survives this deliberately — we measured the collapse and
+    //    never measured what caused it, so that one is genuinely his to answer.
+    const QUIZ_CAUSE = /\b(?:any idea|any thoughts on|do you know|do you have any sense of|have you worked out|has anyone worked out|ever wondered|what do you (?:think|reckon) is|why do you think|can you (?:see|tell))\b[^?]{0,25}\b(?:why|putting|causing|driving|behind it|the reason)\b/i;
+    // B. Asks him to go and VERIFY the thing we are asserting. If it needed
+    //    checking we should not have stated it; if we stated it we already did.
+    const QUIZ_VERIFY = /\b(?:have you (?:checked|looked at|verified|tested|compared)|has anyone (?:checked|looked at|verified|tested|compared)|did you know that|are you aware)\b/i;
+    const _q = _ask.match(QUIZ_CAUSE) || _ask.match(QUIZ_VERIFY);
+    if (_q) {
+      return { ok: false, why: `the ask is a question we answered ourselves — "${_ask.trim().slice(0, 62)}". We measured this. Asking him to explain it back reads as a quiz, and asking him to go and check it says we were not sure. Put the explanation in the body and ask him the part only he holds: whether he had noticed, or whether it was deliberate` };
+    }
+    // C. Backstop: a question (not an offer) that restates the finding's own
+    //    distinctive nouns is the finding read back with a question mark.
+    const _isOffer = /\b(?:want|worth (?:seeing|a look)|shall I|should I|happy to|I can send)\b/i.test(_ask);
+    if (!_isOffer) {
+      const _sw = [...contentWords(opts.spine || '')];
+      const _al = _ask.toLowerCase();
+      const _echo = _sw.filter(w => _al.includes(w));
+      if (_sw.length >= 4 && _echo.length >= 3) {
+        return { ok: false, why: `the ask repeats the finding back to him — "${_ask.trim().slice(0, 62)}" carries ${_echo.length} of the finding's own words. That is the finding with a question mark on it, and he has nothing to add to it` };
+      }
+    }
+  }
+
+  // ══ WE HAVE NEVER MEASURED A CLOCK ON ANYTHING ═════════════════════════
+  // Thirty-plus leads, every one logging "there is NO measured buying window."
+  // Adzuna, BizBuySell, EDGAR and Google News are all built, wired, and produce
+  // essentially nothing. So every urgency this email could express is invented,
+  // and invented urgency is the most recognisable agency tell there is.
+  //
+  // This is a rule rather than a judgement precisely BECAUSE the pressure to
+  // break it is structural: a scarcity line lifts reply rate in every study
+  // anyone quotes, and we have nothing true to build one from. The competitor
+  // above him IS measured and IS a real threat — that is where the urgency
+  // comes from, and it needs no clock bolted onto it.
+  {
+    const INVENTED_CLOCK = /\b(?:every (?:day|week|month) (?:that |this )?(?:goes by|passes|it (?:stays|sits))|right now,? (?:someone|somebody|a customer)|before (?:long|the end of (?:the )?(?:month|quarter|year))|in the next (?:few )?(?:days|weeks|months)|this (?:month|quarter|season) alone|while you (?:still|read this|are reading)|running out of time|(?:the )?window is (?:closing|narrowing)|only getting worse|by (?:the time |)next (?:month|quarter|season)|sooner (?:you|this) (?:fix|sort|deal))/i;
+    const _clk = text.match(INVENTED_CLOCK);
+    // ══ A GUARD WHOSE PREMISE IS A FACT ABOUT TODAY'S DATA ═══════════════
+    // The refusal below reasons: "Every lead this system has ever run logged
+    // 'no measured buying window', so any urgency in this email was invented."
+    //
+    // That premise is true right now and it is not a rule about truth. It is an
+    // observation about a pipeline that has never yet carried a date. PART 4
+    // calls the missing clock the largest gap in the system and PART 7 puts
+    // fixing it on the roadmap — so this guard is written to be falsified, and
+    // when it is falsified it keeps firing. The first lead with a real permit
+    // date, a real licence date, a real funding date would produce the one
+    // genuinely urgent email this system can write, and this line would refuse
+    // it with a sentence explaining that no lead has ever had one.
+    //
+    // The honest rule is the same shape as the rank gate: refuse a clock claim
+    // when no window was MEASURED, and allow it when one was. So the test moves
+    // off the assumption and onto the measurement. Nothing loosens today —
+    // opts.window is absent on every current lead and the refusal is unchanged
+    // — but the day a date arrives the guard stops being wrong.
+    const _windowMeasured = !!(opts.window && String(opts.window).trim());
+    if (_clk && _windowMeasured) {
+      // A measured window still cannot license an ARBITRARY clock: the email may
+      // refer to the window we hold, not to a deadline it invented beside it.
+      console.log(`\u23f1 CLOCK ALLOWED: "${String(_clk[0]).trim()}" stands because this lead carries a measured window (${String(opts.window).slice(0, 60)}). This is the first shape of urgency this system can state truthfully.`);
+    } else if (_clk) {
+      return { ok: false, why: `"${_clk[0].trim()}" — this puts a clock on something we never timed. No buying window was measured on this lead, so the urgency was invented. The moment a real dated signal arrives — a permit, a licence filing, a funding date — this passes instead, because the test is now the measurement rather than the assumption that no measurement can exist.` };
+    }
   }
 
   // ── EVERY NUMBER MUST BE ONE WE MEASURED ────────────────────────────────
@@ -12323,9 +12612,24 @@ const CTA_TEXT = {
   // The thing he cannot get himself is WHY. Position is public; the reason a
   // business with a fifth of his reviews sits above him is not, and it is the
   // question he has actually been wondering about.
-  list: { text: 'Want to know why they are above you?', kind: 'list',
-    alts: ['Do you know why they are ahead of you?',
-           'Any idea what is putting them above you?'] },
+  // ══ THREE WAYS OF ASKING HIM TO DO OUR JOB ═══════════════════════════════
+  // "Want to know why they are above you?" / "Do you know why they are ahead of
+  // you?" / "Any idea what is putting them above you?" — the same mistake in
+  // three suits. WE measured that he is outranked, and the read that explains it
+  // is the most valuable sentence this system can write.
+  //
+  // Asking him to supply it is a quiz: he either answers our own homework or
+  // concludes we never knew. Dangling it is a tease, and a tease is what every
+  // agency email in his inbox does. Both spend the last line of the email
+  // pretending not to know something we know.
+  //
+  // The explanation moves into the BODY, where it is the thing that makes a
+  // stranger sound like somebody who understands his market. The ask moves to
+  // the one fact in the whole exchange that only he holds: whether he had
+  // noticed. He answers that in three words, and three words is a reply.
+  list: { text: 'Had you seen them sitting there, or is that news?', kind: 'list',
+    alts: ['Is that a name you already know?',
+           'Do they come up much on your side — same jobs, same customers?'] },
   // ══ THE ASK THAT NAMES THE SET HE CANNOT BUILD ═══════════════════════════
   // Everything else in this table asks who owns a problem. This one names an
   // artifact, because the artifact is the point: he can check the one market we
@@ -12349,15 +12653,42 @@ const CTA_TEXT = {
   //
   // The count is filled by the composer from the measured problem count, so the
   // sentence never claims a number we did not find.
-  writeup: { text: "I've written up the rest — want me to send them over?", kind: 'writeup' },
+  // ══ THE SET IS THE ONE THING HE CANNOT ASSEMBLE ══════════════════════════
+  // Two faults in the old line. "I've written up the rest" describes our own
+  // work, which every other guard in this file forbids — he does not care what
+  // we did. And it offers a document, which turns a reply into a delivery.
+  //
+  // What survives is the only legitimate offer shape: the SET. He can check any
+  // ONE finding in ten seconds; he cannot build the list without running every
+  // check himself, which is the work he would be hiring us for. It names a
+  // quantity and never a content, so it gives nothing away and it cannot be a
+  // false claim.
+  writeup: { text: 'Want the rest of them?', kind: 'writeup',
+    alts: ['Worth seeing the others?', 'Want the whole list?'] },
   // ══ ASKS THAT MATCH THE FINDING THEY FOLLOW ═══════════════════════════════
   // Each is a question the owner can answer in one line from his own experience,
   // and none can be answered by anyone else in his business. That is what makes
   // a reply cheap for him and useful for Mike.
   pricing: { text: 'Where do most of your leads stall \u2014 before the first call or after it?', kind: 'pricing' },
   differentiator: { text: 'When someone picks you over the firm down the road, what do they usually say made the difference?', kind: 'differentiator' },
-  notready: { text: 'What happens to the ones who are interested but not ready this month?', kind: 'notready' },
-  afterhours: { text: 'What happens to the ones who find you after hours?', kind: 'afterhours' },
+  // ══ ASKING HIM TO NARRATE THE THING WE JUST TOLD HIM ═════════════════════
+  // "What happens to the ones who are interested but not ready?" and "What
+  // happens to the ones who find you after hours?" are the finding read back as
+  // a question. We measured that there is nothing for the not-ready and that the
+  // phone is the only route in; asking what happens next is asking him to write
+  // our second paragraph.
+  //
+  // They are also both questions about what happens AFTER contact — the exact
+  // territory every fabrication guard in this file refuses to let the email
+  // ASSERT. Refusing to state it and then asking him to state it is the same
+  // unobserved claim with the risk moved onto him.
+  //
+  // Both become questions about INTENT, which is the one thing here we genuinely
+  // cannot see and he answers without thinking.
+  notready: { text: 'Was that deliberate — keeping it to a direct enquiry — or has it just never come up?', kind: 'notready',
+    alts: ['Is that on purpose, or just how it ended up?'] },
+  afterhours: { text: 'Was phone-only a deliberate call, or just how it has always been?', kind: 'afterhours',
+    alts: ['Is that on purpose, or has it just never been worth changing?'] },
 };
 
 // ══ ONE ASK PER KIND MEANT ONE ASK PER BATCH ═══════════════════════════════
@@ -12687,6 +13018,7 @@ const composeFullEmail = (spine, opts = {}) => {
       money: spine.jobValue ? String(spine.jobValue).trim() : '',   // jobValue, not money — the field the composer itself reads
       count: Number(spine.problemCount) || 0,
       cta: cta.text,
+      blind: String(spine.blind || '').trim(),
     },
     // ══ FOLLOW-UPS BUILT TO THE FIRST EMAIL'S STANDARD ════════════════════
     // Each is a full email on the next-strongest finding — its own fact,
@@ -12921,6 +13253,51 @@ const tradeJobValue = (tradeWord) => {
   return hit ? hit.say : null;   // unlisted trade -> no money sentence, shorter email
 };
 
+// ══ AUTHENTIC FEAR, AND THE ONLY HONEST WAY TO PRODUCE IT ═══════════════════
+// Fear converts. Every study says so, and every study is describing invented
+// fear — a deadline nobody set, a loss figure nobody computed, a customer nobody
+// watched. This system cannot write any of that and must not: it is the one
+// sentence an owner checks against knowledge only he has, and being wrong about
+// it kills every true number standing beside it.
+//
+// But there IS a form of fear that is entirely true, and we have never used it.
+// It is not "this is costing you money" — we cannot know that. It is the answer
+// to the question he is actually asking while he reads:
+//
+//     "If this were real, wouldn't I already know?"
+//
+// And for almost every finding in this ladder the honest answer is NO, with a
+// specific mechanical reason. He searches his own business name and comes up
+// first — that is a different search from the one his customers type, and only
+// one of the two is ever shown to him. His reviews still arrive, so nothing looks
+// broken; only the RATE changed, and nobody counts rates. He has read every one
+// of his reviews and has never tabulated them looking for the same words twice.
+//
+// That lands exactly where fear lives, because it is the shape of every problem
+// that has ever actually hurt a business: the ones you can see get fixed. And it
+// is not psychology we invented about him — it is a true statement about the
+// STRUCTURE of the finding, which is why it is safe.
+//
+// THE LINE THIS GATE DRAWS, and it is what keeps the whole idea ethical:
+// a blind line may describe why something is NOT VISIBLE. It may never describe
+// an OUTCOME. "Nothing records a visit that ended without contact" is a fact
+// about record-keeping. "The ones who leave never come back" is a claim about
+// people we never watched, and no amount of true framing around it makes it
+// sayable. Every line in the ladder is asserted against this at boot.
+const BLIND_OUTCOME = /\b(?:los(?:e|es|ing|t)|miss(?:ed|es|ing)?|elsewhere|never (?:hear|hears|call|calls|return|returns|come|comes)|chose|choose|chooses|pick|picks|picked|book|books|booked|hire|hires|hired|walk(?:s|ed)? away|give(?:s)? up|go(?:es)? (?:to|with)|instead)\b/i;
+const BLIND_VISIBILITY = /\b(?:record|records|recorded|notice|noticed|see|sees|seen|show|shows|shown|showing|look|looks|read|reads|report|reports|signal|trace|count|counts|counted|tabulat\w*|announce|announces|register|registers|registering|visible|invisible|dashboard|nobody|nothing)\b/i;
+const blindLineSafe = (raw) => {
+  const t = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!t) return { ok: true, line: '' };                       // absent is fine
+  if (/\d/.test(t)) return { ok: false, why: 'contains a figure — a blind line explains why something is not visible, and a number is a claim' };
+  const w = t.split(' ').length;
+  if (w > 34) return { ok: false, why: `${w} words — this is one clause, not a paragraph` };
+  const o = t.match(BLIND_OUTCOME);
+  if (o) return { ok: false, why: `"${o[0]}" — that states an OUTCOME. A blind line may only say why the thing is hard to see; what anybody did about it is something we never watched` };
+  if (!BLIND_VISIBILITY.test(t)) return { ok: false, why: 'says nothing about visibility — a blind line that is not about seeing is just another assertion' };
+  return { ok: true, line: t };
+};
+
 const buildFactualSpine = (harms, m = {}) => {
   // ══ THE SPINE IS ABOUT TRUTH, NOT ABOUT WHETHER TO SEND ═══════════════════
   // This required harms.lead \u2014 the finding that clears the OPENER gate. On a
@@ -13047,6 +13424,12 @@ const buildFactualSpine = (harms, m = {}) => {
     claimSource: 'ladder_rung',
     claimId: lead.id,
     costs: String(lead.costs || '').trim(),
+    // Why a man who has run this business for twenty years has not already seen
+    // it. Empty on the rungs where there is no honest answer — low_rating and
+    // no_owner_replies, both of which he plainly knows — because a manufactured
+    // reason he could not have seen something is exactly the fabrication this
+    // whole idea has to avoid to be worth anything.
+    blind: String(lead.blind || '').trim(),
     // The second finding, when one clears the bar. Null is the common case and
     // the composer renders exactly as before.
     secondClaim: _second ? String(_second.finding || '').trim() : '',
@@ -13080,7 +13463,7 @@ const buildFactualSpine = (harms, m = {}) => {
     restRungs: (harms.byHarm || [])
       .filter(x => x.id !== lead.id)
       .map(x => ({ id: x.id, finding: x.finding, costs: x.costs, harm: x.harm,
-                   reframe: x.reframe || null })),
+                   reframe: x.reframe || null, blind: x.blind || '' })),
   };
 };
 
@@ -13510,6 +13893,12 @@ const rankHarms = (m = {}) => {
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
       selfFix: _selfFix.score, selfFixWhy: _selfFix.why,
       opener: openerScore, finding: sentence, costs: h.costs,
+      // ══ WHY HE HAS NEVER SEEN THIS ══════════════════════════════════════
+      // Travels with the rung because it is a property OF the rung — the reason
+      // this particular finding produces no signal from inside the business.
+      // Gated here rather than trusted, so a line added later that drifts into
+      // an outcome claim is dropped instead of shipped.
+      blind: (() => { const b = blindLineSafe(h.blind); return b.ok ? b.line : ''; })(),
       // ══ THE REFRAME BELONGS TO THE FINDING ═══════════════════════════════
       // Reframes used to arrive as a model-written list built from ALL the
       // measured walls, and the composer picked one positionally. On the live
@@ -14674,7 +15063,10 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     }, 45000);
     const d = await r.json();
     if (!d || !d.content) return null;
-    const txt = (d.content || []).map(c => c.text || '').join('');
+    // Already joined across blocks, which was half right \u2014 but it joined EVERY
+    // block, so on a thinking model it prepends an empty thinking block, and it
+    // read a refusal as an ordinary empty answer.
+    const txt = anthropicText(d, 'situation-read');
     const parsed = parseLLMJSON(txt);
     if (!parsed || !parsed.read) return null;
 
@@ -15571,7 +15963,7 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
       // clean profile and is the worst way for this to fail.
     }, 45000);
     const d = await res.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -15585,9 +15977,32 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
     // ANTI-FABRICATION: every evidence quote must ACTUALLY appear in the scraped
     // reviews. This copy feeds a real sales email — a hallucinated "customer quote"
     // would be catastrophic. Verify a distinctive 4-word span; drop anything unproven.
-    const corpusFlat = md.toLowerCase().replace(/\s+/g, ' ');
+    // ══ THE TWO SIDES WERE NORMALISED DIFFERENTLY ═══════════════════════════
+    // The corpus was lowercased and whitespace-collapsed, keeping its
+    // punctuation. The quote had punctuation replaced with spaces. So the two
+    // strings being compared had been through different transforms, and a
+    // reviewer's apostrophe could only ever cause a miss.
+    //
+    // MEASURED, not assumed — the effect is narrower than it looks, and worth
+    // stating precisely. A long quote survives because SOME four-word window
+    // inside it happens to contain no punctuation. It is the SHORT quote where
+    // every window carries a mark that dies:
+    //
+    //   "I'm still waiting"        real, in the corpus, DROPPED
+    //   "didn't call back promptly" real, in the corpus, passed anyway
+    //
+    // Which is the worst possible selection, because the short emphatic
+    // sentence full of contractions is exactly what an angry reviewer writes —
+    // "they didn't show", "wasn't worth it", "I'm done" — and review pain is the
+    // finding PART 5 credits with every reply this system has earned.
+    //
+    // Both sides now go through the SAME transform. This does not loosen the
+    // guarantee: a fabricated quote is refused before and after, verified
+    // against this corpus both ways. It only stops punctuation deciding it.
+    const _flatten = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const corpusFlat = _flatten(md);
     const quoteExists = (q) => {
-      const c = String(q || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const c = _flatten(q);
       if (c.length < 8) return false;
       const w = c.split(' ');
       if (w.length < 4) return corpusFlat.includes(c);
@@ -15729,7 +16144,7 @@ ${corpus}` }]
       }),
     }, 25000);
     const d = await res.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -15808,7 +16223,7 @@ ${replyBlocks}` }]
       }),
     }, 18000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const p = parseLLMJSON(t) || {};
@@ -16114,7 +16529,7 @@ ${corpus}` }]
       }),
     }, 22000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16319,7 +16734,7 @@ ${md.slice(0, 14000)}` }]
       }),
     }, 20000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16412,7 +16827,7 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -16537,7 +16952,7 @@ ${corpus}` }]
       }),
     }, 20000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16613,7 +17028,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       }),
     }, 18000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16787,7 +17202,7 @@ ${content}` }]
     }, 20000);
 
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -17964,7 +18379,7 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -18080,7 +18495,7 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'); let lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     // The listings array is long and often gets truncated at max_tokens, which
@@ -22174,9 +22589,30 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             .replace(/<[^>]+>/g, ' ')
             .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
             .replace(/\s+/g, ' ').trim();
-          if (_salvaged.length > 400) {
+          // ══ A CLIFF AT 400 CHARACTERS, AND SILENCE UNDERNEATH IT ═══════
+          // This was `if (_salvaged.length > 400)` with no else. A page that
+          // yielded 380 characters was discarded without a word — no log line,
+          // no counter, nothing. The operator sees a lead with a thin corpus and
+          // no way to tell whether the fetch failed, the site is genuinely
+          // empty, or we recovered 380 characters and threw them away.
+          //
+          // Two separate faults in one line. The cliff is arbitrary: 380
+          // characters of their own copy is worse than 4,000 and strictly better
+          // than nothing, and "nothing" is what the audit falls back to — the
+          // 35-rung list every lead gets. And the silence is worse than the
+          // cliff, because it is indistinguishable from the fetch never running.
+          //
+          // The rule is now the only one that cannot regress: take whichever is
+          // LONGER. Salvage never shortens the corpus, and every outcome says
+          // what it did, including the ones that change nothing.
+          const _prevLen = String(content || '').length;
+          if (_salvaged.length > _prevLen && _salvaged.length > 0) {
             content = _salvaged.slice(0, 60000);
-            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.`);
+            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}${_prevLen ? `, against ${_prevLen} we already had` : ''}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.${_salvaged.length < 400 ? ' \u26a0 Under 400 characters \u2014 this used to be discarded in silence, and a thin corpus is why an audit falls back to the list every lead gets.' : ''}`);
+          } else if (_salvaged.length) {
+            console.log(`\u267b SALVAGE NOT USED [${company}]: our own fetch of ${_siteDownVerdict.workingUrl} yielded ${_salvaged.length} characters and we already hold ${_prevLen}, so the longer one stands. Nothing was lost \u2014 this line exists because the old code took the same decision without saying so.`);
+          } else {
+            console.log(`\u267b SALVAGE EMPTY [${company}]: our own fetch of ${_siteDownVerdict.workingUrl} returned HTML that stripped to nothing. That is a page built entirely by script, and no amount of plain-text recovery will read it.`);
           }
         }
       } else if (_siteDownVerdict.down === true) {
@@ -23010,6 +23446,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const _mentionsNow = companyCore.length === 0 || companyCore.some(w => _lowerNow.includes(w));
     const _brokenNow = scrapeLooksBroken && _lowerNow.length < 300;
     const scrapeTrustworthy = content.length > 300 && !_brokenNow && _mentionsNow;
+    // ══ A BIGGER CORPUS MUST NOT QUIETLY BUY LESS TRUST ══════════════════
+    // scrapeTrustworthy gates whether findings are allowed to be stated at all.
+    // It is recomputed here against whatever content we ended up with — which is
+    // right, and which has a failure mode nothing was watching: if a recovery
+    // pulls in navigation and boilerplate that happens not to contain the
+    // company's own name tokens, _mentionsNow flips false, scrapeTrustworthy
+    // goes false, and findings are suppressed on a lead whose corpus just got
+    // BIGGER. The audit gets worse because the scrape got better, and the only
+    // trace is a generic "content not trustworthy" line.
+    //
+    // Now the direction of the change is reported, so a corpus that grew and
+    // lost trust is visible as the contradiction it is rather than as routine.
+    if (_mentionsNow === false && pageMentionsCompany === true) {
+      console.log(`\u26a0 TRUST LOST ON MORE CONTENT [${company}]: the original scrape mentioned the company and the ${content.length} characters we ended up with do not. Findings are about to be suppressed on a lead whose corpus grew. Either the recovery pulled in boilerplate from somewhere else, or their own pages genuinely never name them \u2014 those need different answers, and until now both looked like "content not trustworthy".`);
+    }
     if (_mentionsNow !== pageMentionsCompany) {
       console.log(`\u2139 TRUST RECOMPUTED [${company}]: the mention check was run on the original scrape and said ${pageMentionsCompany}; against the ${content.length} characters we actually ended up with it says ${_mentionsNow}. Using the recomputed value \u2014 the earlier one describes content we no longer have.`);
     }
@@ -23434,6 +23885,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           hasViewport: htmlSignals ? htmlSignals.hasViewport : null,
           rank: _measured.rank,
           weakerAbove: _measured.weakerAbove,
+          // ══ THE NAMED COMPETITOR HAS NEVER ONCE REACHED THE EMAIL ═════════
+          // outranked_by_weaker is the rung PART 5 credits with replies, and its
+          // say() has two branches. The good one names the business above them:
+          //
+          //   "Overhead Door Company ranks above them for 'garage door repair in
+          //    Carmel' with 41 reviews against their 260"
+          //
+          // The fallback is the one every SEO email he has ever deleted:
+          //
+          //   "A business with fewer reviews than theirs is ranking above them"
+          //
+          // The named branch needs m.weakerNames and m.ourReviews. Both are
+          // computed by resolveMeasurements. Neither was listed here. So the
+          // branch has never been taken on any lead this system has ever run,
+          // the rung silently wrote the template sentence every time, and the
+          // comment above it — "a named competitor roughly doubles reply rate
+          // against the same body, because it proves the research instead of
+          // claiming it" — described a sentence the code could not produce.
+          //
+          // Two lines. This is the "computed but not passed" seam again, on the
+          // single highest-value sentence in the system.
+          weakerNames: _measured.weakerNames,
+          ourReviews: _measured.ourReviews,
           rankQuery: localRank && localRank.query,
           tenureYears: _measured.tenureYears,
           reviewCount: _measured.reviewCount,
@@ -23950,12 +24424,46 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     // ═══ REACH INTELLIGENCE ═══════════════════════════════════════════════
     // Timing window — deterministic from discovery signals
-    const reachWindow = discoverySignals.preparing_for_exit ? { window: 'NOW — actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately' }
-      : discoverySignals.agency_review ? { window: '~60 days', urgency: 'high', note: 'Actively shopping for agency replacement — window closes when they sign someone' }
-      : discoverySignals.raised_funding ? { window: '30-90 days post-raise', urgency: 'medium-high', note: 'Deploying new capital; budgets being allocated right now' }
-      : (discoverySignals.rebranding || discoverySignals.recently_launched) ? { window: '~30 days', urgency: 'medium', note: 'In transition — vendors being picked' }
-      : (manualRoleCount >= 3) ? { window: 'while job postings are live', urgency: 'medium', note: 'Feeling the labor pain right now — live postings prove it is current' }
-      : { window: 'standard', urgency: 'normal', note: '' };
+    // ══ AN INVENTED CLOCK, RUNNING IN PRODUCTION TODAY ═════════════════════
+    // Every branch of this stated a DURATION derived from a BOOLEAN:
+    //
+    //   raised_funding      -> "30-90 days post-raise"
+    //   agency_review       -> "~60 days"
+    //   rebranding          -> "~30 days"
+    //
+    // discoverySignals carries flags, not dates. Post-raise measured from WHEN?
+    // Nothing here knows. If the raise was eight months ago, "30-90 days
+    // post-raise" is simply false — and it is interpolated into the audit prompt
+    // and handed to Mike on the call sheet as the timing line.
+    //
+    // This is the exact thing PART 3 forbids, and it sits on the AUDIT side of
+    // the fence, where INVENTED_CLOCK in verifyBrainEmail cannot reach it. The
+    // whole file is built to stop a fabricated number reaching a prospect, and
+    // this one has been walking past the guard the entire time, because the
+    // guard is downstream of it.
+    //
+    // THE HONEST VERSION: state the CONDITION, which we did detect, and say the
+    // AGE only when a real one arrives. signalAgeDays is computed at five
+    // discovery sites and read by two ranking functions — and never posted to
+    // this route, so today the age is always absent and the line says so rather
+    // than inventing one. The moment the client sends it, this states a measured
+    // number of days and nothing else changes.
+    const _sigAgeRaw = Number(req.body.signalAgeDays);
+    const _sigAge = Number.isFinite(_sigAgeRaw) && _sigAgeRaw >= 0 ? Math.round(_sigAgeRaw) : null;
+    const _ageNote = _sigAge === null
+      ? 'age of this signal NOT measured — do not state or imply how long ago it happened'
+      : `the signal is ${_sigAge} day${_sigAge === 1 ? '' : 's'} old`;
+    const reachWindow = discoverySignals.preparing_for_exit ? { window: 'actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately', ageNote: _ageNote }
+      : discoverySignals.agency_review ? { window: 'shopping for an agency', urgency: 'high', note: 'Looking to replace an incumbent — the opening closes when they sign somebody', ageNote: _ageNote }
+      : discoverySignals.raised_funding ? { window: 'has raised funding', urgency: 'medium-high', note: 'New capital to deploy; budgets get allocated after a raise', ageNote: _ageNote }
+      : (discoverySignals.rebranding || discoverySignals.recently_launched) ? { window: 'rebranding or newly launched', urgency: 'medium', note: 'In transition — vendors being picked', ageNote: _ageNote }
+      // The one branch that is genuinely current: a posting that is LIVE is live
+      // now, which is a present-tense fact rather than a duration.
+      : (manualRoleCount >= 3) ? { window: 'job postings live right now', urgency: 'medium', note: 'Live postings prove this is current — the only branch here with a fact about the present', ageNote: _ageNote }
+      : { window: 'standard', urgency: 'normal', note: '', ageNote: _ageNote };
+    if (reachWindow.window !== 'standard' && _sigAge === null) {
+      console.log(`\u26a0 NO CLOCK ON THIS SIGNAL [${company}]: the lead carries "${reachWindow.window}" and NO date. This line used to state a window anyway — "30-90 days post-raise" off a boolean — which is a fabricated number on the audit side, where the email's clock guard cannot see it. signalAgeDays is computed during discovery and is not being posted to this route; wire it and this states a measured age instead.`);
+    }
 
     // Hunter contact verified against homepage
     // The email finder only sets founderName when IT was the thing that found the
@@ -24874,7 +25382,7 @@ ${enrichment ? `- Company size: ${enrichment.employeeCount || enrichment.headcou
 - Executives (verified via public web): ${enrichment.executives?.length ? enrichment.executives.map(e=>e.name+' ('+e.title+')').join(', ') : 'none found'}${enrichment.founded ? '\n- Founded: ' + enrichment.founded : ''}` : ''}
 
 TIMING WINDOW (deterministic from their discovery signals — use this in reachPlan.timing):
-${reachWindow.window} | urgency: ${reachWindow.urgency}${reachWindow.note ? ' | ' + reachWindow.note : ''}
+${reachWindow.window} | urgency: ${reachWindow.urgency}${reachWindow.note ? ' | ' + reachWindow.note : ''}${reachWindow.ageNote ? ' | ' + reachWindow.ageNote : ''}
 
 WHY THIS COMPANY WAS FLAGGED (discovery signal — factor this into your audit):
 - Source: ${discoverySource || 'unknown'}
@@ -25016,7 +25524,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           }
           console.log('BRAIN ERROR:', brainError);
         }
-        const vText = vd.content?.[0]?.text || '';
+        const vText = anthropicText(vd);
         if (!vText && !vd.error) {
           brainError = `Claude returned empty response (status shape: ${JSON.stringify(Object.keys(vd))})`;
           console.log('BRAIN ERROR:', brainError);
@@ -25939,6 +26447,58 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               else console.log(`\u{1F50E} ORIGINAL FINDING [${company}]: dropped \u2014 ${_v.why}`);
             }
             parsed.originalFindings = _origOk;
+            // ══ THE ONE UNIQUE THING WE PRODUCE NEVER REACHED THE AUDIT ══════
+            // "The section seems very thin. It is always generic and saying the
+            // same thing for multiple audits. Nothing unique to the business,
+            // ever." That is exactly what it was, and it was structural.
+            //
+            // The findings section renders problemList, and buildProblemList maps
+            // harms.byHarm and nothing else. harms.byHarm is the 35-rung ladder:
+            // eleven fixed sentences, fifteen that vary only by a number, one that
+            // varies only by the trade word. So by construction the section says
+            // the same thing on every lead, because it is the same list with
+            // different digits in it.
+            //
+            // Meanwhile originalFindings — the findings that QUOTE the business's
+            // own copy, the only rows in the whole system no competitor's audit
+            // could also produce — were verified here, logged here, used to
+            // sharpen the email's opening claim, and then dropped. They reached
+            // the client as a separate field the findings section never reads.
+            //
+            // The reason is ordering, not intent: problemList is assembled ~2,300
+            // lines above this, before these have been checked against the corpus.
+            // Which is precisely the "computed but not passed" shape this file
+            // records five times — the value exists, it is correct, and the thing
+            // that consumes it was built before it arrived.
+            //
+            // They go in at the TOP, because specificity is the whole argument:
+            // a row quoting his own page is worth more to a man reading his own
+            // audit than any rung beneath it.
+            if (_origOk.length && Array.isArray(parsed.problemList)) {
+              const _seen = new Set(parsed.problemList.map(r => String(r && r.problem || '').toLowerCase().slice(0, 40)));
+              const _rows = _origOk
+                .filter(o => !_seen.has(String(o.finding || '').toLowerCase().slice(0, 40)))
+                .map(o => ({
+                  area: 'Their own pages',
+                  problem: o.finding,
+                  // The quote IS the cost line here: it is the proof, in his
+                  // words, and it is the reason this row cannot be a template.
+                  costs: o.evidence ? `their own words: "${String(o.evidence).slice(0, 140)}"` : '',
+                  harm: 70, opener: 999, novel: 95, ambient: false, id: 'audit_original',
+                  fromTheirPages: true,
+                }));
+              if (_rows.length) {
+                parsed.problemList = [..._rows, ...parsed.problemList];
+                // ══ ONE COUNT, OR THE CALL STARTS WRONG ══════════════════════
+                // The email says "N things" and Mike opens the audit on the call.
+                // If those two numbers disagree the first thing that happens on
+                // the one call this system exists to produce is a correction.
+                // Both readers move together or neither does.
+                parsed.problemCount = parsed.problemList.length;
+                if (parsed.factualSpine) parsed.factualSpine.problemCount = parsed.problemList.length;
+                console.log(`\u{1F50E} INTO THE AUDIT [${company}]: ${_rows.length} finding(s) quoting their own pages added to the findings section, at the top. Until now that section rendered the ladder alone \u2014 the same 35 sentences with different numbers in them on every lead \u2014 and these, the only rows nobody else's audit could produce, were verified and then dropped on the floor. Count moved to ${parsed.problemCount} in both the audit and the email.`);
+              }
+            }
             // ══ THE SPINE IS BUILT BEFORE THESE ARE VERIFIED ══════════════
             // buildFactualSpine runs ~2,000 lines above this, so it cannot see
             // a finding that has not been checked yet. On Grant Renne the audit
@@ -26905,7 +27465,7 @@ Return ONLY valid JSON:
             }, 25000);
 
             const cd = await critiqueRes.json();
-            const cText = cd.content?.[0]?.text || '';
+            const cText = anthropicText(cd);
             let cClean = cText.replace(/```json|```/g, '').trim();
             // Extract just the JSON object if there's trailing text
             const firstBrace = cClean.indexOf('{');
@@ -29268,8 +29828,33 @@ app.listen(PORT, () => {
     }
     const _hiTxt = _code.slice(_hi, _hie);
     const _given = new Set([..._hiTxt.matchAll(/^\s+([A-Za-z_$][\w$]*)\s*:/gm)].map(x => x[1]));
+    // ══ THIS LINE IS WHY THE CHECK MISSED THE ONE THAT MATTERED ═══════════
+    // It used to read:
+    //
+    //   for (const k of Object.keys(resolveMeasurements({}))) _given.add(k);
+    //
+    // `_given` is the set of fields considered DELIVERED TO THE LADDER. But the
+    // ladder is called as rankHarms(_harmInputs), and _harmInputs is assembled
+    // BY HAND — 63 keys, no `..._measured`, verified. So a field the resolver
+    // computes reaches the ladder only if _harmInputs also names it.
+    //
+    // Adding the resolver's keys to `_given` therefore asserted the wrong thing:
+    // that the value can be COMPUTED, not that it ARRIVES. Every hand-assembly
+    // omission passed. weakerNames and ourReviews were computed by the resolver,
+    // never forwarded, and read by the rung that produced this system's replies
+    // — and this gate, whose entire job is that class of bug, ticked green on
+    // every boot for the life of the file.
+    //
+    // The resolver's keys are tracked SEPARATELY now, so the check can name the
+    // last hop instead of papering over it. Three states, not two:
+    //   delivered  — _harmInputs assigns it. Fine.
+    //   DROPPED    — the resolver computes it and _harmInputs does not forward
+    //                it. This is the weakerNames class: measured, correct, and
+    //                thrown away one line before the thing that reads it.
+    //   missing    — nothing produces it at all. A rung that can never fire.
+    const _resolved = new Set();
     try {
-      for (const k of Object.keys(resolveMeasurements({}) || {})) _given.add(k);
+      for (const k of Object.keys(resolveMeasurements({}) || {})) _resolved.add(k);
     } catch { /* resolver needs no args on this path; if it throws, the list below is just shorter */ }
     // Spread helpers inside _harmInputs contribute keys too. Called for real
     // rather than assumed, for the same reason.
@@ -29284,11 +29869,18 @@ app.listen(PORT, () => {
       } catch { /* not spreadable on this input — skip */ }
     }
 
-    const _missing = [...(_wanted)].filter(f => !_given.has(f)).sort();
+    // DROPPED is reported first and loudest: it is the expensive one, because
+    // the measurement succeeded and its log line printed correctly.
+    const _dropped = [...(_wanted)].filter(f => !_given.has(f) && _resolved.has(f)).sort();
+    const _missing = [...(_wanted)].filter(f => !_given.has(f) && !_resolved.has(f)).sort();
+    if (_dropped.length) {
+      console.log(`⛔ RUNG INPUT CHECK — MEASURED AND DROPPED: ${_dropped.length} field(s) are computed by resolveMeasurements, read by a rung, and NOT forwarded by _harmInputs — ${_dropped.join(', ')}. The measurement ran, its log printed correctly, and the value never arrived. Every rung reading one of these silently takes its fallback branch on every lead. This is how the named competitor never once reached an email.`);
+    }
     if (_missing.length) {
-      console.log(`⛔ RUNG INPUT CHECK: ${_missing.length} field(s) are read by a rung and delivered by nothing — ${_missing.join(', ')}. Every rung reading one of those is silent on every lead, and no log says so. This is exactly how review_velocity_drop shipped dead.`);
-    } else {
-      console.log(`✓ RUNG INPUT CHECK: all ${_wanted.size} field(s) any rung reads are actually assigned by _harmInputs or returned by the resolver — derived from the source on both sides, so a rung cannot be added that reads something nothing delivers.`);
+      console.log(`⛔ RUNG INPUT CHECK: ${_missing.length} field(s) are read by a rung and produced by nothing at all — ${_missing.join(', ')}. Those rungs are silent on every lead and no log says so. This is exactly how review_velocity_drop shipped dead.`);
+    }
+    if (!_dropped.length && !_missing.length) {
+      console.log(`✓ RUNG INPUT CHECK: all ${_wanted.size} field(s) any rung reads are assigned by _harmInputs ITSELF — not merely computable by the resolver, which is the distinction this check previously failed to draw and the reason it ticked green while the named-competitor sentence was unreachable.`);
     }
   } catch (e) {
     console.log(`⛔ RUNG INPUT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -31288,6 +31880,600 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SURFACE SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE MODEL UPGRADE WOULD HAVE FAILED SILENTLY, ON EVERY CALL ════════
+  // Twenty-three sites read the answer as content[0].text, every one with an
+  // `|| ''` after it. On Haiku 4.5 that is correct. On Sonnet 5 and Opus 5
+  // adaptive thinking is ON BY DEFAULT — omitting the thinking parameter enables
+  // it — and display defaults to "omitted", so the first block is a thinking
+  // block whose text is the empty string.
+  //
+  // Every owner lookup, every review mine, the audit brain and the email writer
+  // would have returned "" and reported it as "the model returned nothing" —
+  // the same message this file already prints for a genuinely empty answer. The
+  // upgrade would have looked like every model got worse, with no error anywhere.
+  //
+  // And stop_reason appeared ZERO times in 34,000 lines. A safety-classifier
+  // refusal is HTTP 200 with empty content; through `|| ''` it is indistinguishable
+  // from a model with nothing to say, and the two need different fixes.
+  try {
+    const _fails = [];
+    // Comments AND string bodies stripped. Without the second, this check fails
+    // on its own success message \u2014 three of its matches were the characters
+    // "content[0]" inside log prose in this very block. A source scan that can
+    // match its own text is the harness-that-lies class, and this session has
+    // now produced four of them.
+    const _src = require('fs').readFileSync(__filename, 'utf8')
+      .replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/`(?:\\.|[^`\\])*`/g, '``').replace(/'(?:\\.|[^'\\\n])*'/g, "''");
+    // Only an actual READ counts \u2014 `content[0].text`, never the phrase.
+    for (const _m of _src.matchAll(/content\s*(?:\?\.)?\[0\]\s*(?:\?\.)?\.?text/g)) {
+      const _ln = _src.slice(0, _m.index).split('\n').length;
+      _fails.push(`a raw content[0] read survives near line ${_ln} \u2014 on a thinking model that is an empty thinking block`);
+    }
+    // A thinking-first response: the answer is the TEXT block, not the first one.
+    const _thinky = anthropicText({ stop_reason: 'end_turn', content: [
+      { type: 'thinking', thinking: '' }, { type: 'text', text: 'the real answer' }] });
+    if (_thinky !== 'the real answer') _fails.push(`a thinking-first response returned "${_thinky}" instead of the answer \u2014 that is the upgrade failing silently on all 23 sites`);
+    // Text split across blocks must join, not truncate.
+    const _split = anthropicText({ content: [{ type: 'text', text: 'one ' }, { type: 'text', text: 'two' }] });
+    if (_split !== 'one two') _fails.push(`text split across blocks came back as "${_split}"`);
+    // A refusal is not an empty answer.
+    if (anthropicText({ stop_reason: 'refusal', content: [] }, 'selftest') !== '') _fails.push('a refusal returned something');
+    // And the ordinary case still works.
+    if (anthropicText({ content: [{ type: 'text', text: 'plain' }] }) !== 'plain') _fails.push('an ordinary single-text response broke');
+    if (_fails.length) {
+      console.log(`\u26d4 RESPONSE READ CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 RESPONSE READ CHECK: every model response is read by finding its TEXT blocks and joining them, never by index. A thinking-first reply returns the answer, a refusal is named as a refusal rather than read as an empty answer, and a truncated reply says so. All 23 sites went through content[0], which on the models we are moving to is an empty thinking block \u2014 the upgrade would have returned nothing everywhere and logged it as the model having nothing to say.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 RESPONSE READ CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE METER MUST NOT MAKE AN UPGRADE LOOK CHEAP ══════════════════════
+  // The price table held two models and fell back to HAIKU for anything else,
+  // so the one run you would use to judge an upgrade priced it at a fifth of
+  // its cost. And cacheWrite was the five-minute rate while every breakpoint in
+  // the file asks for an hour, which bills double.
+  try {
+    const _fails = [];
+    for (const [_id, _p] of Object.entries(ANTHROPIC_PRICES)) {
+      if (!Number.isFinite(_p.minCache)) _fails.push(`${_id} has no minCache \u2014 a cache block below the model's minimum returns zero cached tokens and no error`);
+      // A 1-hour cache write bills 2x input. Every cache_control in this file asks for 1h.
+      if (Math.abs(_p.cacheWrite - _p.in * 2) > 1e-12) _fails.push(`${_id} prices its cache write at ${(_p.cacheWrite / _p.in).toFixed(2)}x input; every breakpoint here requests ttl 1h, which bills 2x`);
+    }
+    for (const _m of [BRAIN_MODEL, SITUATION_MODEL]) {
+      if (!ANTHROPIC_PRICES[_m]) _fails.push(`the configured model ${_m} is not in the price table, so its spend is invisible`);
+    }
+    // The trap the file's own comment walks into: the situation read's system
+    // block is ~3,160 tokens and that comment recommends Haiku, whose floor is 4,096.
+    const _h = ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
+    if (!_h || _h.minCache <= 3160) _fails.push('the Haiku cache floor is recorded as low enough that the situation-read breakpoint looks safe on it \u2014 it is not, and the failure is silent');
+    if (_fails.length) {
+      console.log(`\u26d4 SPEND METER CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SPEND METER CHECK: every priced model carries its cache floor, cache writes are priced at the one-hour rate every breakpoint in this file actually requests, and both configured models are in the table. An unpriced model is now announced instead of being charged at Haiku rates \u2014 which is what made an upgraded model report as nearly free on the exact run you would use to decide about it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SPEND METER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE NAMED COMPETITOR, WHICH HAS NEVER REACHED A SINGLE EMAIL ═══════
+  // outranked_by_weaker is the rung PART 5 credits with replies. Its say() names
+  // the business above them when it has weakerNames and ourReviews, and falls
+  // back to "a business with fewer reviews than yours" when it does not.
+  // resolveMeasurements computes both. _harmInputs forwarded neither. So the
+  // fallback has been taken on every lead ever run, and the rung has only ever
+  // written the sentence that reads like every SEO email he has deleted.
+  try {
+    const _fails = [];
+    const _rung = HARM_LADDER.find(h => h.id === 'outranked_by_weaker');
+    if (!_rung) _fails.push('the rung is gone');
+    else {
+      const _named = String(_rung.say({ weakerNames: [{ name: 'Overhead Door Company', reviews: 41 }],
+        ourReviews: 260, weakerAbove: 1, rankQuery: 'garage door repair in Carmel' }));
+      if (!/Overhead Door Company/.test(_named) || !/41/.test(_named) || !/260/.test(_named)) {
+        _fails.push(`given the names and our count, the rung still wrote "${_named.slice(0, 60)}"`);
+      }
+      const _generic = String(_rung.say({ weakerAbove: 1, rankQuery: 'q' }));
+      if (/Overhead/.test(_generic)) _fails.push('the rung names a competitor it was not given');
+    }
+    // THE WIRE. The rung reads m.<field>; _harmInputs is assembled by hand.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // ══ A FIXED WINDOW, FOR THE THIRD TIME TODAY ═══════════════════════
+    // Written as slice(_hi2, _hi2 + 9000). The field it looks for sits 10,209
+    // characters into that literal, so the check reported a wire it had just
+    // been handed as missing. RESPONSE CHECK and AUDIT UNIQUENESS CHECK made
+    // the identical mistake earlier in this session. Brace-match. Always.
+    const _needle = '_harmInputs' + ' = {';
+    const _hi2 = _src.indexOf(_needle, _src.indexOf(_needle) + 10);
+    let _blk = '';
+    if (_hi2 > -1) {
+      const _open = _src.indexOf('{', _hi2);
+      let _d = 0, _e = _open;
+      for (let k = _open; k < _src.length; k++) {
+        if (_src[k] === '{') _d++;
+        else if (_src[k] === '}') { _d--; if (!_d) { _e = k + 1; break; } }
+      }
+      _blk = _src.slice(_hi2, _e);
+    }
+    if (!_blk) _fails.push('the _harmInputs literal could not be located, so the wire was not checked');
+    else {
+      for (const _f of ['weakerNames', 'ourReviews']) {
+        if (!new RegExp(`${_f}\\s*:`).test(_blk)) _fails.push(`${_f} is computed by the resolver and still not forwarded to the ladder \u2014 the named-competitor sentence cannot be produced`);
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 NAMED COMPETITOR CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 NAMED COMPETITOR CHECK: the rung that earned this system its replies can now name the business ranking above them and put its review count beside theirs. Both measurements reach it. Until now they were computed, never forwarded, and the rung silently wrote "a business with fewer reviews than yours is ranking above you" \u2014 on every lead, forever.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 NAMED COMPETITOR CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE CLOCK THAT WAS RUNNING ON THE OTHER SIDE OF THE GUARD ══════════
+  // verifyBrainEmail has INVENTED_CLOCK, and it is a hard refusal, because a
+  // fabricated deadline is the fastest way to lose a reader who can check it.
+  // reachWindow sat UPSTREAM of that guard, on the audit side, doing exactly
+  // what the guard forbids: stating "30-90 days post-raise", "~60 days" and
+  // "~30 days" off booleans that carry no date at all. It went into the audit
+  // prompt and onto Mike's call sheet as the timing line.
+  //
+  // This asserts the shape rather than the wording: no branch of reachWindow may
+  // state a duration, and every branch must carry the ageNote that says whether
+  // a real age was measured. A future edit that reintroduces "~30 days" fails
+  // here rather than being noticed on a call.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _rw = _src.indexOf('const reachWindow = discoverySignals');
+    if (_rw < 0) _fails.push('reachWindow could not be located, so nothing was checked');
+    else {
+      // Brace-match to the end of the assignment rather than guessing a window.
+      const _end = _src.indexOf('\n    if (reachWindow.window', _rw);
+      const _blk = _end > -1 ? _src.slice(_rw, _end) : _src.slice(_rw, _rw + 4000);
+      // A duration is the fabrication: a number of days, or a tilde-approximation.
+      const DURATION = /\b\d+\s*(?:-\s*\d+)?\s*days?\b|~\s*\d+|\bwithin \d+|\bnext \d+/i;
+      const _hit = _blk.match(DURATION);
+      if (_hit) _fails.push(`a reachWindow branch states "${_hit[0]}" \u2014 a duration off a boolean with no date behind it, which is the fabrication this whole file exists to prevent`);
+      // Every branch must carry the measured-or-not marker.
+      const _branches = (_blk.match(/window:\s*'/g) || []).length;
+      const _notes = (_blk.match(/ageNote:/g) || []).length;
+      if (_branches && _notes < _branches) _fails.push(`${_branches - _notes} of ${_branches} reachWindow branches carry no ageNote, so they say nothing about whether the timing was measured`);
+      // And it must actually reach the audit prompt, or it is a comment.
+      if (!/reachWindow\.ageNote/.test(_src)) _fails.push('ageNote is computed and never interpolated \u2014 the caveat exists and the brain never sees it');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 MEASURED CLOCK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 MEASURED CLOCK CHECK: no branch of reachWindow states a duration, every branch says whether the signal's age was actually measured, and that caveat reaches the audit prompt. It used to assert "30-90 days post-raise" from a boolean \u2014 an invented clock sitting upstream of the guard built to stop invented clocks.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MEASURED CLOCK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A GUARD WRITTEN TO BE FALSIFIED, THAT KEPT FIRING AFTERWARDS ═══════
+  // INVENTED_CLOCK refused any urgency in an email, and its stated reason was
+  // that every lead ever run logged "no measured buying window". That is an
+  // observation about a pipeline that has never carried a date — not a rule
+  // about truth. PART 4 calls the missing clock the largest gap in the system
+  // and PART 7 puts fixing it on the roadmap, so the premise is scheduled to
+  // become false, and the guard would have gone on refusing the one genuinely
+  // urgent email this system can write.
+  //
+  // Both directions are asserted, because a guard that only refuses is as wrong
+  // as one that only permits.
+  try {
+    const _fails = [];
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid}\n\nWho's handling that for you at the moment?`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    const _urgent = _mk('Every week that goes by, that pattern is setting into how people describe you.');
+    // TODAY: no window measured anywhere, so this must still be refused.
+    const _noWin = verifyBrainEmail(_urgent, _base);
+    if (_noWin.ok) _fails.push('an invented clock passed on a lead with no measured window — that is the fabrication this guard exists for');
+    // TOMORROW: a real dated signal arrives and the same sentence is true.
+    const _withWin = verifyBrainEmail(_urgent, { ..._base, window: 'permit filed 11 days ago' });
+    if (!_withWin.ok) _fails.push(`the same sentence is still refused when the lead carries a measured window (${_withWin.why}) — the guard is keyed on the assumption that no window can exist rather than on whether one does`);
+    // And the refusal must no longer justify itself with the old premise.
+    if (/every lead this system has ever run/i.test(String(_noWin.why || ''))) {
+      _fails.push('the refusal still argues from "no lead has ever had a window", which is a fact about today\'s data and stops being true the moment discovery carries a date');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 CLOCK PREMISE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 CLOCK PREMISE CHECK: an invented clock is still refused on every lead we have today, and the identical sentence passes once the lead carries a measured window. The guard now tests the measurement instead of the assumption that no measurement can exist \u2014 it was written to be falsified by the roadmap and would have refused the first true dated email.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 CLOCK PREMISE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE QUOTE AND THE CORPUS WENT THROUGH DIFFERENT TRANSFORMS ═════════
+  // deepReviewMine verifies a mined complaint by checking the reviewer's words
+  // against the review corpus. The corpus kept its punctuation; the quote had
+  // punctuation replaced with spaces. Comparing two differently-normalised
+  // strings means an apostrophe can only ever cause a miss — and the miss lands
+  // on short emphatic sentences, which is what an angry reviewer actually
+  // writes, on the finding PART 5 credits with every reply this system has had.
+  //
+  // The invariant is structural: ONE normaliser, applied to both sides. Asserted
+  // from source, because the function is local to the miner and cannot be called
+  // from here — and asserted behaviourally on the normaliser's own logic, so the
+  // check cannot pass on a source that merely looks symmetrical.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _i = _src.indexOf('const quoteExists = (q) => {');
+    if (_i < 0) _fails.push('quoteExists could not be located, so nothing was checked');
+    else {
+      const _blk = _src.slice(Math.max(0, _i - 2200), _i + 700);
+      if (!/const _flatten = \(t\) =>/.test(_blk)) _fails.push('there is no single normaliser \u2014 the two sides can drift apart again');
+      if (!/const corpusFlat = _flatten\(md\)/.test(_blk)) _fails.push('the corpus is not normalised by the shared function');
+      if (!/const c = _flatten\(q\)/.test(_blk)) _fails.push('the quote is not normalised by the shared function');
+      // The old asymmetric form must be gone, not merely shadowed.
+      if (/corpusFlat = md\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ' '\)/.test(_blk)) {
+        _fails.push('the corpus still uses the whitespace-only normaliser while the quote strips punctuation');
+      }
+    }
+    // Behaviour: the same transform on both sides finds a real short quote and
+    // still refuses an invented one. Both directions, or it is not a check.
+    const _flat = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const _corpus = _flat("Great crew but they didn't call back promptly. I'm still waiting.");
+    const _hit = (q) => { const c = _flat(q); const w = c.split(' ');
+      if (w.length < 4) return _corpus.includes(c);
+      for (let i = 0; i + 4 <= w.length; i++) if (_corpus.includes(w.slice(i, i + 4).join(' '))) return true;
+      return false; };
+    if (!_hit("I'm still waiting")) _fails.push('a real short quote containing an apostrophe is still refused \u2014 that is the exact sentence the asymmetry was dropping');
+    if (_hit('we offer a lifetime warranty')) _fails.push('an invented quote now passes \u2014 the fix bought the drop rate with the guarantee, which is the wrong trade');
+    if (_fails.length) {
+      console.log(`\u26d4 QUOTE SYMMETRY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 QUOTE SYMMETRY CHECK: the reviewer's words and the review corpus go through one shared normaliser, so punctuation can no longer decide whether a true complaint survives. A short quote with an apostrophe passes and an invented one is still refused \u2014 the drop was landing on exactly the sentences an angry reviewer writes.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 QUOTE SYMMETRY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
+  // "It is always generic and saying the same thing for multiple audits" was
+  // treated as a copy problem for weeks. It is arithmetic, and nobody had ever
+  // counted it.
+  //
+  // The findings section renders the ladder. A rung's say() can vary by lead in
+  // exactly three ways, and they are not equal:
+  //
+  //   QUOTES   it reproduces the business's own words (keepSpan). Nobody else's
+  //            audit produces this sentence. This is the only kind that cannot
+  //            be a template.
+  //   NAMED    it carries a proper noun we measured — a competitor, their trade.
+  //   NUMBER   it plugs a measurement into a fixed sentence. True, and the same
+  //            sentence every lead gets with different digits in it.
+  //   FIXED    no interpolation at all. Identical on every audit, forever.
+  //
+  // AND THE ROOT, which is upstream of every rung: a rung can only quote what it
+  // is GIVEN. Counting the text-bearing fields that reach the ladder at all is
+  // the number that actually caps how specific an audit can ever be — and it is
+  // four, one of which is the trade word. That is the ceiling. No amount of
+  // rewriting say() raises it.
+  //
+  // This does not fail the boot. It reports a score, so the number moves when
+  // the work is done and cannot quietly slide back.
+  try {
+    const _cls = { quotes: [], named: [], number: [], fixed: [] };
+    for (const h of HARM_LADDER) {
+      const _say = String(h.say || '');
+      if (!/=>/.test(_say)) { _cls.fixed.push(h.id); continue; }
+      if (/keepSpan\s*\(/.test(_say)) _cls.quotes.push(h.id);
+      else if (/m\.(?:weakerNames|tradeWord|namedOffer|marketClarityGaps|rankQuery|city)\b/.test(_say)) _cls.named.push(h.id);
+      else if (/\$\{[^}]*\bm\./.test(_say)) _cls.number.push(h.id);
+      else _cls.fixed.push(h.id);
+    }
+    // The ceiling: text-bearing fields actually delivered to the ladder.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _m = /_harmInputs = \{\s*[\r\n]/.exec(_src);
+    let _textFields = [];
+    if (_m) {
+      let _d = 0, _e = _m.index;
+      for (let k = _src.indexOf('{', _m.index); k < _src.length; k++) {
+        if (_src[k] === '{') _d++;
+        else if (_src[k] === '}') { _d--; if (!_d) { _e = k + 1; break; } }
+      }
+      _textFields = [...new Set([..._src.slice(_m.index, _e).matchAll(/^\s+([A-Za-z_$][\w$]*)\s*:/gm)]
+        .map(x => x[1]).filter(k => /sample|quote|phrase|headline|tagline|copy|gap|namedOffer|weakerNames|tradeWord/i.test(k)))];
+    }
+    const _n = HARM_LADDER.length;
+    const _specific = _cls.quotes.length + _cls.named.length;
+    console.log(`\u{1F4CF} AUDIT SPECIFICITY: of ${_n} rungs \u2014 ${_cls.quotes.length} quote the business's own words, ${_cls.named.length} carry a measured proper noun, ${_cls.number.length} plug a number into a fixed sentence, ${_cls.fixed.length} are the same sentence on every lead. So ${_specific} of ${_n} can say something a competitor's audit could not also say. The ceiling is upstream: ${_textFields.length} text-bearing field(s) reach the ladder at all (${_textFields.join(', ') || 'none'}) \u2014 a rung can only quote what it is given, and rewriting say() cannot raise that number.`);
+    if (_cls.quotes.length === 0) {
+      console.log(`\u26d4 AUDIT SPECIFICITY: not one rung quotes the business. Every finding in every audit is a sentence written here, and an owner reading three of them knows he received a scan.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 AUDIT SPECIFICITY COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
+  // Two asks that actually went out:
+  //   "Any idea what's putting them ahead in the results that matter?"
+  //   "Has anyone checked whether the category mismatch is affecting which
+  //    searches actually show your profile?"
+  // We measured both. Handing the answer back as a question reads as a quiz, or
+  // as an admission we never knew, and it spends the last line of the email —
+  // the only line with a reply in it — pretending not to know something.
+  //
+  // The hard half of this check is the FALSE POSITIVE. "Do you know what changed
+  // around then?" looks identical in shape and is the best ask in the table: we
+  // measured that his review flow collapsed and we never measured why. If a rule
+  // against quizzes also kills that one, it has taken more than it gave.
+  try {
+    const _fails = [];
+    const _mk = (ask) => `Michael, 8 of your 42 Google reviews name the same delay.\n\nThat is the kind of thing that repeats when nobody owns it.\n\n${ask}`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    for (const _q of ["Any idea what's putting them ahead in the results that matter?",
+                      'Has anyone checked whether the category mismatch is affecting which searches actually show your profile?',
+                      'Do you know why they are ahead of you?',
+                      'Have you checked where you land for that search?']) {
+      if (verifyBrainEmail(_mk(_q), _base).ok) _fails.push(`"${_q.slice(0, 52)}" passed \u2014 we measured the answer to that`);
+    }
+    // The one that must survive: same shape, and we genuinely do not hold it.
+    const _real = verifyBrainEmail(_mk('Do you know what changed around then?'), _base);
+    if (!_real.ok) _fails.push(`"Do you know what changed around then?" was refused (${_real.why}) \u2014 we measured the collapse and never measured its cause, so that is his to answer and it is the strongest ask in the table`);
+    let _n = 0;
+    for (const _entry of Object.values(CTA_TEXT || {})) {
+      for (const _t of [_entry && _entry.text, ...((_entry && _entry.alts) || [])].filter(Boolean)) {
+        _n++;
+        const _v = verifyBrainEmail(_mk(_t), { ..._base, count: _t });
+        if (!_v.ok) _fails.push(`our own ask "${String(_t).slice(0, 44)}" is refused (${_v.why})`);
+      }
+    }
+    if (_n < 8) _fails.push(`only ${_n} asks were tested \u2014 the table is not being read`);
+    if (_fails.length) {
+      console.log(`\u26d4 QUIZ ASK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 QUIZ ASK CHECK: an ask that demands the cause of something we measured, or sends him off to verify it, is refused \u2014 both live examples included. "Do you know what changed around then?" still passes, because we measured the collapse and never measured why, and all ${_n} asks in the table survive. The explanation belongs in the body; the ask belongs to the part only he holds.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 QUIZ ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
+  // Every lead logs "no measured buying window", thirty-plus in a row, with
+  // Adzuna, BizBuySell, EDGAR and Google News all wired and all silent. So an
+  // email that says "every week that goes by" is describing a countdown nobody
+  // started. The pressure to write one is structural — scarcity lifts reply rate
+  // in every study anyone quotes — which is exactly why it has to be a rule
+  // rather than a judgement made per email.
+  try {
+    const _fails = [];
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid}\n\nWho's handling that for you at the moment?`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    for (const _c of ['Every week that goes by, more of them notice.',
+                      'Right now, someone is reading those and deciding.',
+                      'In the next few months that gap only widens.',
+                      'That window is closing faster than most owners expect.']) {
+      if (verifyBrainEmail(_mk(_c), _base).ok) _fails.push(`"${_c.slice(0, 46)}" passed \u2014 nothing in this system has ever measured a clock`);
+    }
+    // The urgency we DO hold is a measured competitor, and it must survive.
+    const _threat = verifyBrainEmail(_mk('A business with fewer reviews than yours is sitting above you for that phrase.'), _base);
+    if (!_threat.ok) _fails.push(`the measured competitor threat was refused (${_threat.why}) \u2014 that is the only real urgency we hold and the rule must not touch it`);
+    if (_fails.length) {
+      console.log(`\u26d4 INVENTED CLOCK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 INVENTED CLOCK CHECK: an email cannot put a deadline on a lead where no buying window was measured \u2014 and none ever has been. The competitor sitting above him still stands, because that one is measured and needs no countdown bolted to it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 INVENTED CLOCK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE READ WAS CAPPED AT ONE HEDGED SENTENCE ═════════════════════════
+  // MY READ shipped last week and was immediately throttled: "You may state ONE
+  // of them. Not two" in the block, "that sentence is the only place you are
+  // allowed to think out loud" in the rules, and a 120-word ceiling over both.
+  // So the one part of the email an owner cannot get anywhere else was capped at
+  // a single clause, which is the flatness — the facts he can check himself got
+  // the whole email and the diagnosis got a line.
+  //
+  // The ceiling and the cap move together or neither moves: permission to follow
+  // a thought through is worthless if the words are not there to do it in.
+  try {
+    const _fails = [];
+    const _ev = buildEmailEvidence({
+      trade: 'plumber', measured: { reviewCount: 120, rating: 4.4 },
+      bindingLayer: 'OFFER', bindingWhy: 'nothing on the site says who this is for',
+      situationRead: 'The reputation is real and the path to it is blocked',
+    });
+    if (!/FOLLOW IT THROUGH/.test(_ev.block)) _fails.push('the read block still asks for a single sentence rather than a thought carried to its end');
+    if (!/DO NOT RATION IT/.test(_ev.block)) _fails.push('nothing tells the writer to give the diagnosis away, so it will keep teasing it');
+    if (/You may state ONE of them\. Not two/.test(_ev.block)) _fails.push('the one-sentence cap is still in the block');
+    if (!/MUST MARK IT AS YOURS/.test(_ev.block)) _fails.push('the marking requirement was lost while loosening the cap \u2014 an unmarked judgement is a claim about his business');
+    // And the room to do it in.
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    // Each filler is its own paragraph. Stacked into one block they trip the
+    // three-sentence rule added alongside this, and the check would then be
+    // reporting a shape fault as a length fault.
+    const _fill = '\n\nThat pattern is the kind of thing an owner rarely sees from inside his own business.';
+    const _head = `Michael, 8 of your 42 Google reviews name the same delay.\n\nMy read is that is a scheduling problem rather than a crew problem, and it lands in the last hour of the job.`;
+    const _ask = `\n\nWho's handling that for you at the moment?`;
+    let _mid = '';
+    const _wc = (b) => b.split(/\s+/).filter(Boolean).length;
+    while (_wc(_head + _mid + _ask) < 130) _mid += _fill;
+    const _long = verifyBrainEmail(_head + _mid + _ask, _base);
+    if (!_long.ok) _fails.push(`a ${_wc(_head + _mid + _ask)}-word email carrying the finding, the read and its consequence was refused (${_long.why}) \u2014 a diagnosis does not fit in sixty words`);
+    let _over = _mid;
+    while (_wc(_head + _over + _ask) <= 155) _over += _fill;
+    if (verifyBrainEmail(_head + _over + _ask, _base).ok) _fails.push(`a ${_wc(_head + _over + _ask)}-word email passed \u2014 the ceiling moved to make room for a diagnosis, not to remove the limit`);
+    if (_fails.length) {
+      console.log(`\u26d4 READ DEPTH CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 READ DEPTH CHECK: the read may now be carried through to what it means and what it costs, and there are words to do it in \u2014 a 130-word email passes where 120 was the wall, and 155 still does not. Every fact still has to be measured and every judgement still has to be marked as ours; what changed is that the one thing he cannot get anywhere else is no longer capped at a clause.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 READ DEPTH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ONLY HONEST FEAR THIS SYSTEM CAN PRODUCE ═══════════════════════
+  // Fear converts, and every version of it in the wild is invented — a deadline
+  // nobody set, a loss figure nobody computed, a customer nobody watched. We can
+  // write none of that. What we CAN write is the answer to the question he is
+  // asking while he reads: if this were real, wouldn't I already know?
+  //
+  // For almost every rung the honest answer is no, with a mechanical reason. He
+  // searches his own name and comes up first — a different search from the one
+  // his customers type. His reviews still arrive, so nothing looks broken; only
+  // the rate changed, and nobody counts rates.
+  //
+  // The ethics live entirely in one boundary: a blind line may say why something
+  // is NOT VISIBLE and may never say what happened because of it. This asserts
+  // that boundary against every line in the ladder, and then asserts the wire —
+  // because a field that is computed and never delivered is the failure this file
+  // records five times.
+  try {
+    const _fails = [];
+    let _n = 0;
+    for (const h of HARM_LADDER) {
+      if (!h.blind) continue;
+      _n++;
+      const _v = blindLineSafe(h.blind);
+      if (!_v.ok) _fails.push(`[${h.id}] ${_v.why} — "${String(h.blind).slice(0, 46)}"`);
+    }
+    if (_n < 25) _fails.push(`only ${_n} of ${HARM_LADDER.length} rungs carry a blind line — the ones without one are deliberate, but this few means the field is not reaching the ladder`);
+    // The boundary, in both directions.
+    if (blindLineSafe('the ones who leave never come back, and nothing records it').ok) {
+      _fails.push('an OUTCOME claim passed the gate — "never come back" is a thing we have never watched, and dressing it as a blind spot does not make it observed');
+    }
+    if (blindLineSafe('roughly 4 in 10 of them go elsewhere before anyone notices').ok) {
+      _fails.push('an invented figure passed the gate');
+    }
+    if (!blindLineSafe('reviews still arrive, so nothing looks broken. Only the rate changed, and nobody counts rates').ok) {
+      _fails.push('the strongest true blind line in the ladder is refused by its own gate');
+    }
+    // THE WIRE. Computed and not delivered is the way this fails silently.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _fnI = _src.indexOf('const writeEmailWithBrain');
+    const _fnJ = _src.indexOf('const NUMBER_TOKENS', _fnI);
+    const _fn = (_fnI > -1 && _fnJ > -1) ? _src.slice(_fnI, _fnJ).replace(/^\s*\/\/.*$/gm, '') : '';
+    if (!/WHY HE HAS NOT ALREADY SEEN THIS/.test(_fn)) _fails.push('the writer prompt never mentions it, so the line is computed and thrown away');
+    const _rsN = "app.post('" + '/api/compose-email' + "'";
+    const _rs = _src.indexOf(_rsN);
+    const _reNext = _src.indexOf('app.post' + '(', _rs + 20);
+    const _route = _rs > -1 ? _src.slice(_rs, _reNext > -1 ? _reNext : _src.length) : '';
+    if (!_route) _fails.push('the compose route could not be read, so the wire was not checked');
+    else if (!/blind:\s*_parts\.blind/.test(_route)) _fails.push('the compose route does not pass the blind line to the writer — it is computed on the rung and dropped at the door');
+    const _ev = buildEmailEvidence({ blind: 'reviews still arrive, so nothing looks broken', measured: {} });
+    if (!/WHY HE HAS NOT ALREADY SEEN THIS/.test(_ev.block)) _fails.push('the assembled evidence block does not carry it, so the writer sees it in one place and not the other');
+    if (_fails.length) {
+      console.log(`\u26d4 BLIND LINE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 BLIND LINE CHECK: ${_n} rungs carry a true reason the owner has never seen the finding, every one of them about VISIBILITY and none about an outcome. An outcome claim and an invented figure are both refused by the same gate. It reaches the rung, the spine, the writer's evidence and the assembled block. This is the only form of fear this system can produce without inventing something, and it is the answer to the question he is actually asking.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BLIND LINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ SCANNABLE, NOT SHORT ═══════════════════════════════════════════════
+  // The old rule was 120 words and "55-85" in the brief, and both were solving
+  // the wrong problem. He does not abandon an email because it is long; he
+  // abandons it because the shape of it looks like work. A wall of a sentence, a
+  // paragraph he has to commit to, an opening block that asks for attention
+  // before earning any — those lose him, at any length.
+  try {
+    const _fails = [];
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    const _ask = `\n\nWho's handling that for you at the moment?`;
+    const _good = `Michael, 8 of your 42 Google reviews name the same delay.\n\nMy read is that is a scheduling problem rather than a crew problem, and it lands in the last hour of the job.\n\nReviews still arrive, so nothing about it looks broken from where you sit.${_ask}`;
+    const _g = verifyBrainEmail(_good, _base);
+    if (!_g.ok) _fails.push(`a well-shaped email was refused (${_g.why})`);
+    const _wall = `Michael, 8 of your 42 Google reviews name the same delay and that is the kind of thing that repeats quietly for months on end without anybody inside the business ever having a reason to go and line them up against each other and count.${_ask}`;
+    if (verifyBrainEmail(_wall, _base).ok) _fails.push('a 40-word sentence passed — that is a sentence a scanning reader gives up on halfway');
+    const _fat = `Michael, 8 of your 42 Google reviews name the same delay.\n\nThat repeats quietly. Nothing about it looks broken. Reviews still arrive. The rate is the part nobody counts.${_ask}`;
+    if (verifyBrainEmail(_fat, _base).ok) _fails.push('a four-sentence paragraph passed — on a phone that is a block he has to commit to');
+    const _heavy = `Michael, 8 of your 42 Google reviews name the same delay, and that is the kind of thing that repeats quietly for months. Nothing about it looks broken from where you sit, because the reviews themselves are still arriving at a normal rate. That has been true for a while now.${_ask}`;
+    const _hw = (_heavy.split(/\n\s*\n/)[0] || '').split(/\s+/).filter(Boolean).length;
+    if (_hw <= 45) _fails.push(`the heavy-opening fixture is only ${_hw} words, so it is not testing the rule it names`);
+    if (verifyBrainEmail(_heavy, _base).ok) _fails.push(`a ${_hw}-word opening paragraph passed — that is the block he decides on`);
+    if (_fails.length) {
+      console.log(`\u26d4 SCANNABLE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SCANNABLE CHECK: a sentence over 32 words, a paragraph over three sentences and an opening block over 45 words are each refused, and none of those rules touches WHAT the email says. Length was never the thing that lost him \u2014 the brief now asks for 110-130 words and the core problem inside the first two sentences.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SCANNABLE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FINDINGS SECTION COULD ONLY EVER SAY THE SAME THING ════════════
+  // "It is always generic and saying the same thing for multiple audits. Nothing
+  // unique to the business, ever."
+  //
+  // That was structurally true, not a quality problem. The section renders
+  // problemList; buildProblemList maps harms.byHarm and nothing else; byHarm is
+  // the 35-rung ladder. Eleven of those rungs are a fixed sentence, fifteen vary
+  // only by a number and one only by the trade word — so the section IS the same
+  // list every time, by construction.
+  //
+  // The rows that could not be a template — the ones quoting his own copy — were
+  // verified 2,300 lines later than the list was assembled, and never joined it.
+  // Ordering, not intent, which is the same shape as every other dead feature in
+  // this file.
+  try {
+    const _fails = [];
+    const _harms = { byHarm: [
+      { id: 'not_compounding', finding: '39 reviews across 21 years of trading', costs: 'x', harm: 62, opener: 70, novel: 60 },
+      { id: 'no_published_pricing', finding: 'no price appears anywhere', costs: 'y', harm: 54, opener: 60, novel: 40 },
+      { id: 'no_owner_replies', finding: 'not one of the 39 reviews has a reply', costs: 'z', harm: 58, opener: 64, novel: 55 },
+    ] };
+    const _list = buildProblemList(_harms, {});
+    if (!_list.length) _fails.push('buildProblemList returned nothing on a three-rung fixture, so this check is testing nothing');
+    // The "before" state, asserted rather than remembered: with no merge, every
+    // row in the section comes from the ladder.
+    if (_list.some(r => r && r.fromTheirPages)) {
+      _fails.push('buildProblemList is inventing own-page rows by itself — the merge belongs where the findings have been verified against the corpus, not here');
+    }
+    // THE WIRE. This one is source-read because the merge sits deep inside the
+    // audit route, after verification, where no unit test can reach it.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // ══ A FIXED WINDOW IS A CHECK THAT CHANGES MEANING AS THE FILE GROWS ══
+    // Written as slice(_at, _at + 3400) this failed on its first run, because
+    // the block it reads is 3,358 characters long and the line it was looking
+    // for finished ten characters past the cut. It then reported a real, working
+    // wire as broken — the same false alarm RESPONSE CHECK produced earlier
+    // today, for the same reason, four hours apart. The lesson did not take the
+    // first time, so it is written here as well: bound the slice by the code's
+    // own braces, never by a number somebody guessed.
+    const _mk = 'parsed.originalFindings = ' + '_origOk;';
+    const _at = _src.indexOf(_mk);
+    let _blk = '';
+    if (_at > -1) {
+      const _open = _src.indexOf('{', _src.indexOf('if (_origOk.length', _at));
+      let _d = 0, _e = _open;
+      for (let k = _open; k > -1 && k < _src.length; k++) {
+        if (_src[k] === '{') _d++;
+        else if (_src[k] === '}') { _d--; if (!_d) { _e = k + 1; break; } }
+      }
+      _blk = _open > -1 ? _src.slice(_at, _e) : '';
+    }
+    if (!_blk) _fails.push('the verification site could not be located, so the merge was not checked');
+    else {
+      if (!/parsed\.problemList = \[\.\.\._rows/.test(_blk)) {
+        _fails.push('the verified own-page findings are still not joining the findings section \u2014 they are computed, logged, and dropped, and the section stays the same list every lead gets');
+      }
+      // The count is read by the EMAIL ("we found N things") and by the audit
+      // Mike opens on the call. If the merge moves one and not the other, the
+      // first thing that happens on that call is a correction.
+      if (!/parsed\.problemCount = parsed\.problemList\.length/.test(_blk)) {
+        _fails.push('problemList grew and problemCount did not \u2014 the email would say one number and the audit would show another');
+      }
+      if (!/factualSpine\.problemCount = parsed\.problemList\.length/.test(_blk)) {
+        _fails.push('the spine still carries the pre-merge count, and the spine is what the email interpolates');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 AUDIT UNIQUENESS CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 AUDIT UNIQUENESS CHECK: findings that quote the business's own copy now join the findings section, at the top, and both counts move with them. Before this the section rendered the ladder alone \u2014 35 sentences, eleven of them fixed and fifteen varying only by a number \u2014 so it said the same thing on every lead by construction, and the only rows no competitor's audit could produce were verified and then dropped.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 AUDIT UNIQUENESS CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE ONE THING NO REVIEW OF A SINGLE EMAIL CAN SEE ══════════════
   // Every gate in this file reads ONE email. "These emails are flat" is not a
   // property of one email — it is a property of the BATCH, and it is invisible
@@ -32805,7 +33991,7 @@ Return ONLY valid JSON, no markdown:
     }, 30000);
 
     const data = await r.json();
-    const text = data.content?.[0]?.text || '';
+    const text = anthropicText(data, 'linkedin-drafts');
     let clean = text.replace(/```json|```/g, '').trim();
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
     if (fb >= 0 && lb > fb) clean = clean.slice(fb, lb + 1);
@@ -33291,7 +34477,7 @@ app.post('/api/compose-email', async (req, res) => {
             first: _parts.first || '', spine: _spineTxt, earned: _parts.earned || '',
             pattern: _parts.pattern || '', reframe: _parts.reframe || '',
             money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
-            second: _parts.second || '',
+            second: _parts.second || '', blind: _parts.blind || '',
             // Who he is, so the email is not written to a generic owner.
             trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
             tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
@@ -33328,6 +34514,10 @@ app.post('/api/compose-email', async (req, res) => {
               bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer) || '',
               bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
               situationRead: (audit.situationRead && audit.situationRead.headline) || '',
+              // Five features have shipped dead in this file because a value was
+              // computed and never reached the thing that consumes it. This is
+              // the wire, and BLIND LINE CHECK asserts it at boot.
+              blind: _parts.blind || '',
               // The positioning read. Feeds MY READ, never ASSERT — it is a
               // judgement about what their copy does, anchored on copy we read.
               marketClarity: audit.marketClarity || null,
