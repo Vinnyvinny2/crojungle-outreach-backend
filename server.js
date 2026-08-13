@@ -11313,6 +11313,85 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
   } catch (e) { return null; }
 };
 
+// ══ WHAT "THE FINDING IS IN THE FIRST TWELVE WORDS" ACTUALLY MEANS ═════════
+// The rule is right and it came from a real prospect: "If they'd led with 'a
+// business with fewer reviews outranking you for your exact local search term'
+// instead of the review count, I'd have opened this in 30 seconds instead of
+// almost deleting it." Reply rate is decided in the first twelve words.
+//
+// The IMPLEMENTATION was wrong in three ways, and between them they killed the
+// model's draft on both attempts for Kurt Kavanaugh Orthodontics, Window Doctor
+// of Colorado, Sohan & Son's Waterproofing and Oral & Facial Surgery of
+// Oklahoma — every one of which then shipped the composed template instead.
+//
+//  1. IT TESTED FOR WORD BINGO, NOT FOR THE FINDING. It kept every word from
+//     the spine longer than four characters that was not in a stop-list, and
+//     demanded one of them appear verbatim. A writer paraphrases — that is the
+//     job — so "prior" instead of "before" was a rejection.
+//
+//  2. THE STOP-LIST REMOVED THE WORDS THAT CARRY A REVIEW FINDING. "reviews",
+//     "google", "business", "customers" are all stopped. For Kurt's spine —
+//     "their Google reviews have slowed, 6 in the last 90 days against 10 in
+//     the 90 days before that" — what survived as "distinctive" was:
+//
+//         slowed, against, before
+//
+//     Two of those three are prepositions that appear only because of how the
+//     sentence happens to be built. So a review finding was measured against
+//     connectives, which is why review findings failed this gate far more often
+//     than website findings ("no pricing" yields price, range, starting, point).
+//     And the composed template that ships on failure LEADS on the review
+//     finding — which is exactly why every email looked like it was about
+//     reviews.
+//
+//  3. NUMBERS WERE EXCLUDED ENTIRELY by the length > 4 filter. An opening that
+//     stated the exact measured figures — "you had 6 reviews in the last 90
+//     days and 10 in the 90 before" — carried the whole finding and was refused.
+//     A measured figure is the hardest evidence a sentence can contain.
+//
+// So: the opening qualifies if it carries a measured FIGURE or a genuinely
+// distinctive CONTENT word. Function words never count. And because the writer
+// cannot comply with a rule it was never told, the SAME function produces the
+// list that goes into the brief — one source, so the instruction and the test
+// can never drift apart.
+const OPENING_FUNCTION_WORD = /^(?:against|before|after|between|during|through|within|across|around|under|below|since|until|while|where|which|their|there|these|those|about|would|could|should|every|other|another|still|never|always|often|usually|simply|really|actually|currently|recently|almost|nearly|whole|entire|different|separate|single|anyone|someone|somebody|anybody|nothing|something|because|though|although|however|instead|rather|enough|inside|outside|without|beyond|toward|towards|itself|themselves|having|being|doing|going|getting|makes|making|taking|given|gives)$/;
+// The generic nouns that appear in almost every finding. Kept from the original
+// list — these really are undistinctive — but they are no longer the ONLY thing
+// removed, and a figure can now stand in for them.
+const OPENING_GENERIC_NOUN = /^(?:business|businesses|company|companies|website|websites|appears|anywhere|reviews?|reviewers?|google|customers?|clients?|people|owner|pages?|thing|things|names?|mention|mentions|search|searches|online|results?|profile|listing|listings)$/;
+const _NUM_WORD = ['zero','one','two','three','four','five','six','seven','eight','nine','ten',
+  'eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
+
+// Returns { words, figures, all } — every token whose presence in the opening
+// proves the finding is there. `all` is what the brief prints and what the
+// rejection message names.
+const openingTokens = (spine, figures) => {
+  const words = String(spine || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 4 && !OPENING_FUNCTION_WORD.test(w) && !OPENING_GENERIC_NOUN.test(w));
+  const figs = new Set();
+  // If no figure list is supplied, read them out of the spine itself. The
+  // caller having to remember to pass them is precisely how the number half of
+  // this rule would go missing on one of the two call sites, and this file's
+  // dominant bug is a value computed in one place and not passed to another.
+  const _supplied = (Array.isArray(figures) && figures.length)
+    ? figures
+    : (String(spine || '').match(/\d[\d,.]*/g) || []);
+  for (const f of _supplied) {
+    const d = String(f).replace(/[^0-9.]/g, '');
+    if (!d) continue;
+    figs.add(d);
+    // A person writes 2,344. The composer measured 2344. Both are the figure.
+    const whole = d.split('.')[0];
+    if (whole.length > 3) figs.add(whole.replace(/\B(?=(\d{3})+(?!\d))/g, ','));
+    const n = Number(d);
+    // A writer says "six", not "6", at the start of a sentence. That is correct
+    // English and it was being read as the figure being absent.
+    if (Number.isInteger(n) && n >= 0 && n <= 20) figs.add(_NUM_WORD[n]);
+  }
+  const uniq = [...new Set(words)];
+  return { words: uniq, figures: [...figs], all: [...uniq, ...figs] };
+};
+
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
   const { first, spine, earned, pattern, reframe, money, count, cta, blind,
@@ -11467,6 +11546,20 @@ ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and then THE 
   found, in his words where possible, inside the first twelve words. Recognition
   is optional and belongs AFTER it; one clause at most, and only if it is a
   measured number rather than praise.` : '- No greeting; open on the finding.'}
+${(() => {
+  // ══ THE RULE THE WRITER WAS NEVER TOLD ═══════════════════════════════════
+  // "Inside the first twelve words" was enforced by a check the writer could not
+  // see: it demanded one of the spine's own words appear verbatim. A writer
+  // paraphrases, so "prior" for "before" was a rejection — twice, on four leads
+  // in the logs, each of which then shipped the composed template.
+  //
+  // The constraint is a FACT, so code states it, exactly as code states the
+  // figures. Same function as the gate, so the instruction and the test cannot
+  // drift apart. This is the difference between a rule and a guessing game.
+  const _t = openingTokens(spine, parts.figures);
+  if (_t.all.length < 3) return '';
+  return `\n- YOUR FIRST TWELVE WORDS MUST CONTAIN AT LEAST ONE OF THESE, and it is\n  checked mechanically: ${_t.all.slice(0, 12).join(', ')}\n  Write the sentence any way you like \u2014 these are not a phrase to copy. They are\n  proof the finding itself is in the opening rather than a preamble about it. A\n  measured number counts, spelled out or in digits.`;
+})()}
 
 110-130 words. The worked example above governs. Match its MOVES, not its facts.
 
@@ -11623,22 +11716,16 @@ const verifyBrainEmail = (body, opts = {}) => {
   // by a generic opener that happens to be short.
   if (opts.spine) {
     const _open = text.split(/\s+/).slice(0, 14).join(' ').toLowerCase();
-    // ══ A GENERIC WORD MUST NOT COUNT AS THE FINDING ═══════════════════
-    // "reviews" was in the allowed set by accident of ordering, so an opener
-    // that spent fourteen words on what WE did — "I went through your website
-    // and your Google reviews carefully this morning" — satisfied the rule
-    // simply by containing the word "reviews". That is the exact shape this
-    // guard exists to stop.
-    //
-    // Stop-words are the words that appear in almost every finding. What is
-    // left is the distinctive part: "construction", "timelines", "outranking",
-    // "guarantee". If none of THOSE is in the opening, the finding is not.
-    const _STOP = /^(their|there|these|those|about|which|while|would|could|should|business|businesses|company|companies|website|websites|appears|anywhere|reviews?|reviewers?|google|customers?|clients?|people|owner|pages?|thing|things|same|names?|mention|mentions)$/;
-    const _key = String(opts.spine).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter(w => w.length > 4 && !_STOP.test(w));
-    const _hit = _key.filter(w => _open.includes(w)).length;
-    if (_key.length >= 3 && _hit === 0) {
-      return { ok: false, why: 'the finding does not appear in the first dozen words — the opening is spent on what we did or on praise, and that is the part that decides whether he reads on' };
+    const _tok = openingTokens(opts.spine, opts.figures);
+    // A figure counts wherever it appears in the opening — "6" inside "6 in
+    // the last 90 days" is the finding. A word must match on a boundary so
+    // "rank" does not satisfy itself out of "franking".
+    const _hitWord = _tok.words.filter(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(_open));
+    const _hitFig = _tok.figures.filter(f => _open.includes(String(f).toLowerCase()));
+    // Enough signal to judge at all. Below this the spine is too generic for
+    // absence to mean anything, exactly as before.
+    if (_tok.all.length >= 3 && !_hitWord.length && !_hitFig.length) {
+      return { ok: false, why: `the finding is not in the first twelve words \u2014 the opening is spent on what we did or on praise, and that is the part that decides whether he reads on. Open with the finding itself. Any ONE of these in the first twelve words satisfies it: ${_tok.all.slice(0, 12).join(', ')}` };
     }
   }
 
@@ -33555,6 +33642,86 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ SEQUENCE DIVERSITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ THE GATE THAT SENT EVERY GOOD EMAIL BACK TO THE TEMPLATE ═══════════
+  // From the live logs, both attempts, four separate leads — Kurt Kavanaugh
+  // Orthodontics, Window Doctor of Colorado, Sohan & Son's Waterproofing, Oral
+  // & Facial Surgery of Oklahoma:
+  //
+  //   "BRAIN DRAFT REJECTED: the finding does not appear in the first dozen
+  //    words" ... "REWRITE ALSO REJECTED: [same]" ... "sending the composed
+  //    version"
+  //
+  // The rule is right. The test demanded one of the SPINE'S OWN WORDS appear
+  // verbatim, after stripping words under five letters and a stop-list that
+  // contained "reviews", "google", "business" and "customers". For Kurt's
+  // review-velocity spine the entire required set was:
+  //
+  //     slowed, against, before
+  //
+  // Two prepositions. A writer paraphrases — "prior" for "before" — and was
+  // refused. Numbers were excluded outright by the length filter, so an opening
+  // stating the exact measured figures was refused too.
+  //
+  // Review findings suffered worst, because their subject nouns are the stopped
+  // ones; a pricing finding yields price, range, starting, point. And the
+  // composed template that ships on failure LEADS on the review finding. That is
+  // the mechanism behind "every email is about reviews".
+  try {
+    const _fails = [];
+    const KURT = 'their Google reviews have slowed — 6 in the last 90 days, against 10 in the 90 days before that';
+    const _t = openingTokens(KURT, ['6', '10', '90']);
+    // The connectives must be gone.
+    for (const bad of ['against', 'before', 'after', 'within', 'between']) {
+      if (_t.words.includes(bad)) _fails.push(`"${bad}" still counts as the finding — it is a preposition that is only in the spine because of how the sentence happens to be built`);
+    }
+    if (!_t.words.includes('slowed')) _fails.push('"slowed" — the verb that IS the finding — is no longer required');
+    // Figures count, in both forms a writer would use.
+    for (const want of ['6', 'six', '10', 'ten', '90']) {
+      if (!_t.all.includes(want)) _fails.push(`"${want}" is not accepted as proof the finding is in the opening; a measured figure is the hardest evidence a sentence can carry, and the length filter used to drop every number`);
+    }
+    // A big figure written the way a person writes it.
+    const _big = openingTokens('the businesses at the top of that search average 2344 each', ['2344']);
+    if (!_big.figures.includes('2,344')) _fails.push('2,344 written with a comma is not recognised as the measured 2344');
+    // BEHAVIOUR, through the real verifier. The shape that was rejected twice.
+    const _opts = { spine: KURT, figures: ['6', '10', '90'], money: '', earned: '', count: '', trade: 'orthodontist' };
+    const _good = verifyBrainEmail(
+      'Kurt, six reviews came in over the last ninety days against ten in the ninety before.\n\n' +
+      'A stranger checking whether you are still busy reads the dates, not the total.\n\n' +
+      'I wrote up what we measured. Want it?', _opts);
+    if (!_good.ok) _fails.push(`a paraphrased opening carrying the finding and the figures is STILL rejected: ${_good.why}`);
+    // And the two shapes the rule exists to stop must still be stopped.
+    const _pre = verifyBrainEmail(
+      'Kurt, I went through your website and your Google reviews carefully this morning.\n\n' +
+      'I wanted to share what I noticed.\n\nWant me to send it over?', _opts);
+    if (_pre.ok) _fails.push('an opening spent on what WE did now passes — that is the exact shape this rule exists to stop');
+    const _praise = verifyBrainEmail(
+      'Kurt, you have built something really impressive here and I wanted to reach out.\n\n' +
+      'There is an opportunity worth a look.\n\nWant me to send it?', _opts);
+    if (_praise.ok) _fails.push('an opening spent on praise now passes');
+    // ONE SOURCE. The brief must print the same list the gate tests, or the
+    // writer is being marked against a rule it was told differently.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if ((_code.match(/openingTokens\(/g) || []).length < 3) {
+      _fails.push('openingTokens is not used by both the brief and the gate — two copies of this rule is how the writer ends up marked against something it was never told');
+    }
+    // Split so the scan cannot match its own source. Written whole, this line
+    // found ITSELF and passed with the brief instruction deleted — the same
+    // way the review-deficit scan and the content[0] scan each did earlier.
+    if (!new RegExp('YOUR FIRST TWELVE ' + 'WORDS MUST CONTAIN').test(_src)) {
+      _fails.push('the writer brief never states the required tokens, so the model has to guess which words satisfy an invisible test — which is what it was doing');
+    }
+    if (!new RegExp('Any ONE of these in the ' + 'first twelve words satisfies').test(_src)) {
+      _fails.push('the rejection message does not name the tokens, so the rewrite is told what is wrong but not what would fix it — that is why the second attempt failed identically on all four leads');
+    }
+    if (_fails.length) {
+      console.log(`⛔ OPENING RULE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ OPENING RULE CHECK: the opening qualifies on a measured FIGURE or a genuinely distinctive word — never on a preposition, and numbers count in digits or spelled out. Kurt's required set went from "slowed, against, before" to "slowed, 6, six, 10, ten, 90". A paraphrased opening passes, preamble and praise are still refused, the brief prints the same list the gate tests, and the rejection message names it so a rewrite can act on it.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OPENING RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
   // businesses with fewer reviews ranking above him. The row handed to the audit
@@ -36014,6 +36181,13 @@ app.post('/api/compose-email', async (req, res) => {
             pattern: _parts.pattern || '', reframe: _parts.reframe || '',
             money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
             second: _parts.second || '', blind: _parts.blind || '',
+            // ══ THE FIGURES, SO THE OPENING RULE CAN NAME THEM ═══════════
+            // openingTokens treats a measured figure as proof the finding is
+            // in the opening — "you had 6 reviews in the last 90 days" carries
+            // the whole finding. Without this the writer is handed the rule
+            // with the number half missing while the VERIFIER still counts
+            // them, which is the drift this whole change exists to remove.
+            figures: _figs,
             // Who he is, so the email is not written to a generic owner.
             trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
             tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
