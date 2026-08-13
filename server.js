@@ -10564,10 +10564,24 @@ These are JUDGEMENTS, not measurements. They are the reason to write to this man
 at all: he can find every fact above on his own phone in ten minutes, and he
 cannot get this anywhere.
 
-You may state ONE of them. Not two \u2014 two opinions is a lecture, and the second
-one dilutes the first. Say it in your own words, plainly, the way you would say it
-standing in his shop. Take a side. A read that hedges every clause is worth
-nothing to him and he can tell you are protecting yourself.
+State ONE of them \u2014 and then FOLLOW IT THROUGH. Say what it means, and say what
+it is costing him. That is one thought carried to its end, which is what an
+expert sounds like. Two UNRELATED opinions is a lecture and the second dilutes
+the first; one opinion with its consequence attached is the whole email.
+
+DO NOT RATION IT. Every fact above he can check on his own phone in ten seconds,
+so the facts only prove that somebody looked. The read is the only evidence that
+somebody who UNDERSTANDS this business looked, and that is the entire reason he
+would write back rather than delete.
+
+A withheld diagnosis reads as a tease, and a tease is what every other agency
+email in his inbox is already doing. Give him the whole thought. Knowing WHY a
+weaker competitor sits above him tells him nothing about how to change it \u2014 the
+diagnosis is free and the work is not, so there is nothing to protect here.
+
+Say it in your own words, plainly, the way you would say it standing in his shop.
+Take a side. A read that hedges every clause is worth nothing to him and he can
+tell you are protecting yourself.
 
 IT MUST BE MARKED AS YOURS. Use one of: "my read is", "what it looks like from
 outside", "I'd guess", "I think", "I could be wrong, but". Those exact shapes \u2014
@@ -10693,7 +10707,7 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
     // his time. MEETING_ASK in verifyBrainEmail now enforces that mechanically,
     // which is what makes releasing the wording safe.
     `THE ASK \u2014 this is its JOB, not its wording: ${cta}`,
-    `  \u2192 Write that last sentence yourself, in the voice of the rest of the email. It must be a QUESTION, it must be the LAST thing he reads, and it must be answerable in four words. Ask who is handling this, or whether he already knew, or whether he wants the part you have not told him. NEVER ask for a call, a meeting, a time or any number of minutes \u2014 that is a decision he has no reason to make yet, and the draft is discarded for it.`,
+    `  \u2192 Write that last sentence yourself, in the voice of the rest of the email. It must be a QUESTION, it must be the LAST thing he reads, and it must be answerable in four words.\n  \u2192 NEVER ASK HIM SOMETHING YOU JUST ANSWERED. "Any idea what's putting them ahead?" and "has anyone checked whether that is affecting your searches?" are both real asks this system has sent, and both take the best sentence in the email, turn it into a question and hand it back. He reads that as a quiz, or as proof you never knew. If you worked it out, SAY IT \u2014 in the body, in full \u2014 and ask him something else.\n  \u2192 What is left is the only thing worth asking for: the part HE alone holds. Whether he had noticed. Whether it was deliberate or just how it ended up. Who looks after it now. What changed that month. Or simply offer the set \u2014 how many more there are, never what they are.\n  \u2192 NEVER ask for a call, a meeting, a time or any number of minutes. That is a decision he has no reason to make yet, and the draft is discarded for it.`,
   ].filter(Boolean).join('\n');
 
   // WHO THIS PERSON IS. Without it the writer produced "I noticed a business with
@@ -10763,8 +10777,9 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
 - Do NOT add any FACT not listed above. No numbers, no times, no competitor
   counts, no dollar figures beyond the one supplied.
 - A JUDGEMENT IS NOT A FACT. You may state one read from MY READ above, in your
-  own words, if you mark it as yours. That sentence is the only place in this
-  email where you are allowed to think out loud, and it is the reason he replies
+  own words, if you mark it as yours \u2014 and you may carry it through to what it
+  means and what it costs him. That is where you are expected to think out loud,
+  and it is the reason he replies
   \u2014 every fact above, he can find himself. Do not waste it hedging: say what you
   actually conclude, plainly, and let him disagree. A read he argues with is a
   reply; a read nobody could argue with is not a read.
@@ -10791,7 +10806,13 @@ ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and then THE 
   is optional and belongs AFTER it; one clause at most, and only if it is a
   measured number rather than praise.` : '- No greeting; open on the finding.'}
 
-55-85 words. The worked example above governs. Match its MOVES, not its facts.
+90-140 words. The worked example above governs. Match its MOVES, not its facts.
+
+You are not being paid to be brief. You are being paid to be the only email in
+his inbox that TELLS HIM SOMETHING. A short email that states a fact and asks a
+question is the one he deletes; he can get the fact himself in ten seconds. Spend
+the words on what it MEANS and what it is costing him, because that is the part
+he cannot get anywhere, and it is the only reason anybody writes back.
 
 Before you return it, check it against the example: is there a person in it? Is
 there one judgement given freely? Is there a turn? Does the cost land on a human
@@ -10826,7 +10847,20 @@ const verifyBrainEmail = (body, opts = {}) => {
   if (!text) return { ok: false, why: 'empty' };
 
   const words = text.split(/\s+/).length;
-  if (words > 120) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
+  // ══ A CEILING THAT ONLY FITS AN OBSERVATION ════════════════════════════
+  // 120 here and "55-85 words" in the brief. Both were tuned for an email that
+  // states a fact and asks a question, and that is exactly the email that keeps
+  // coming back flat: the observation fits, the DIAGNOSIS does not.
+  //
+  // What an owner cannot get anywhere else is not the fact — he can check the
+  // fact on his own phone in ten seconds. It is what the fact MEANS and what it
+  // is costing him, and that will not go in sixty words alongside a greeting, a
+  // finding and an ask.
+  //
+  // 150 is still an email he reads on a phone in under a minute. It is not
+  // permission to list findings: every other gate here still allows exactly one
+  // point, one read and one ask. It is room to finish the thought.
+  if (words > 150) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
   if (words < 25) return { ok: false, why: `${words} words — too short to carry the finding and the ask` };
 
   // ══ THE ASK MUST BE THE LAST THING HE READS ═══════════════════════════════
@@ -10993,6 +11027,77 @@ const verifyBrainEmail = (body, opts = {}) => {
   const _tail = _sentences.slice(_lastQ + 1).join(' ').split(/\s+/).filter(Boolean).length;
   if (_lastQ !== _last && _tail > 6) {
     return { ok: false, why: `the ask sits ${_last - _lastQ} sentence(s) from the end with ${_tail} words after it — an ask he reads past is not an ask` };
+  }
+
+  // ══ AN ASK WE ALREADY ANSWERED IS A QUIZ ═══════════════════════════════
+  // Two live asks, both wrong in the same way:
+  //
+  //   "Has anyone checked whether the category mismatch is affecting which
+  //    searches actually show your profile?"
+  //   "Any idea what's putting them ahead in the results that matter?"
+  //
+  // We measured the category mismatch. We measured who is ahead of him. The read
+  // that explains what it costs him is the single most valuable sentence this
+  // system produces — and both of those lines take it, turn it into a question,
+  // and hand it back to him.
+  //
+  // He reads that as one of two things and neither is good: a quiz, where he is
+  // being walked through our homework, or an admission that we never actually
+  // knew. A man who has run his business for twenty years recognises the shape
+  // in half a second, because it is the shape every consultant uses on him.
+  //
+  // THE RULE: never ask a question whose answer is in our own audit. What is
+  // left is the only thing worth asking for — the part he alone holds. Whether
+  // he had noticed. Whether it was deliberate. What changed that month. He
+  // answers those in three words, and three words is a reply.
+  //
+  // The explanation does not disappear. It moves into the BODY, which is the
+  // whole point: giving away the diagnosis is what makes a stranger sound like
+  // somebody who understands the business, and it costs nothing, because knowing
+  // WHY you are outranked tells you nothing about how to fix it.
+  {
+    const _ask = String(_sentences[_lastQ] || '');
+    // A. Demands the CAUSE of something we measured. "Do you know what changed
+    //    around then" survives this deliberately — we measured the collapse and
+    //    never measured what caused it, so that one is genuinely his to answer.
+    const QUIZ_CAUSE = /\b(?:any idea|any thoughts on|do you know|do you have any sense of|have you worked out|has anyone worked out|ever wondered|what do you (?:think|reckon) is|why do you think|can you (?:see|tell))\b[^?]{0,25}\b(?:why|putting|causing|driving|behind it|the reason)\b/i;
+    // B. Asks him to go and VERIFY the thing we are asserting. If it needed
+    //    checking we should not have stated it; if we stated it we already did.
+    const QUIZ_VERIFY = /\b(?:have you (?:checked|looked at|verified|tested|compared)|has anyone (?:checked|looked at|verified|tested|compared)|did you know that|are you aware)\b/i;
+    const _q = _ask.match(QUIZ_CAUSE) || _ask.match(QUIZ_VERIFY);
+    if (_q) {
+      return { ok: false, why: `the ask is a question we answered ourselves — "${_ask.trim().slice(0, 62)}". We measured this. Asking him to explain it back reads as a quiz, and asking him to go and check it says we were not sure. Put the explanation in the body and ask him the part only he holds: whether he had noticed, or whether it was deliberate` };
+    }
+    // C. Backstop: a question (not an offer) that restates the finding's own
+    //    distinctive nouns is the finding read back with a question mark.
+    const _isOffer = /\b(?:want|worth (?:seeing|a look)|shall I|should I|happy to|I can send)\b/i.test(_ask);
+    if (!_isOffer) {
+      const _sw = [...contentWords(opts.spine || '')];
+      const _al = _ask.toLowerCase();
+      const _echo = _sw.filter(w => _al.includes(w));
+      if (_sw.length >= 4 && _echo.length >= 3) {
+        return { ok: false, why: `the ask repeats the finding back to him — "${_ask.trim().slice(0, 62)}" carries ${_echo.length} of the finding's own words. That is the finding with a question mark on it, and he has nothing to add to it` };
+      }
+    }
+  }
+
+  // ══ WE HAVE NEVER MEASURED A CLOCK ON ANYTHING ═════════════════════════
+  // Thirty-plus leads, every one logging "there is NO measured buying window."
+  // Adzuna, BizBuySell, EDGAR and Google News are all built, wired, and produce
+  // essentially nothing. So every urgency this email could express is invented,
+  // and invented urgency is the most recognisable agency tell there is.
+  //
+  // This is a rule rather than a judgement precisely BECAUSE the pressure to
+  // break it is structural: a scarcity line lifts reply rate in every study
+  // anyone quotes, and we have nothing true to build one from. The competitor
+  // above him IS measured and IS a real threat — that is where the urgency
+  // comes from, and it needs no clock bolted onto it.
+  {
+    const INVENTED_CLOCK = /\b(?:every (?:day|week|month) (?:that |this )?(?:goes by|passes|it (?:stays|sits))|right now,? (?:someone|somebody|a customer)|before (?:long|the end of (?:the )?(?:month|quarter|year))|in the next (?:few )?(?:days|weeks|months)|this (?:month|quarter|season) alone|while you (?:still|read this|are reading)|running out of time|(?:the )?window is (?:closing|narrowing)|only getting worse|by (?:the time |)next (?:month|quarter|season)|sooner (?:you|this) (?:fix|sort|deal))/i;
+    const _clk = text.match(INVENTED_CLOCK);
+    if (_clk) {
+      return { ok: false, why: `"${_clk[0].trim()}" — this puts a clock on something we never timed. Every lead this system has ever run logged "no measured buying window", so any urgency in this email was invented, and invented urgency is the one thing every agency email in his inbox already does. The competitor ranking above him is the real threat and it needs no deadline attached` };
+    }
   }
 
   // ── EVERY NUMBER MUST BE ONE WE MEASURED ────────────────────────────────
@@ -12323,9 +12428,24 @@ const CTA_TEXT = {
   // The thing he cannot get himself is WHY. Position is public; the reason a
   // business with a fifth of his reviews sits above him is not, and it is the
   // question he has actually been wondering about.
-  list: { text: 'Want to know why they are above you?', kind: 'list',
-    alts: ['Do you know why they are ahead of you?',
-           'Any idea what is putting them above you?'] },
+  // ══ THREE WAYS OF ASKING HIM TO DO OUR JOB ═══════════════════════════════
+  // "Want to know why they are above you?" / "Do you know why they are ahead of
+  // you?" / "Any idea what is putting them above you?" — the same mistake in
+  // three suits. WE measured that he is outranked, and the read that explains it
+  // is the most valuable sentence this system can write.
+  //
+  // Asking him to supply it is a quiz: he either answers our own homework or
+  // concludes we never knew. Dangling it is a tease, and a tease is what every
+  // agency email in his inbox does. Both spend the last line of the email
+  // pretending not to know something we know.
+  //
+  // The explanation moves into the BODY, where it is the thing that makes a
+  // stranger sound like somebody who understands his market. The ask moves to
+  // the one fact in the whole exchange that only he holds: whether he had
+  // noticed. He answers that in three words, and three words is a reply.
+  list: { text: 'Had you seen them sitting there, or is that news?', kind: 'list',
+    alts: ['Is that a name you already know?',
+           'Do they come up much on your side — same jobs, same customers?'] },
   // ══ THE ASK THAT NAMES THE SET HE CANNOT BUILD ═══════════════════════════
   // Everything else in this table asks who owns a problem. This one names an
   // artifact, because the artifact is the point: he can check the one market we
@@ -12349,15 +12469,42 @@ const CTA_TEXT = {
   //
   // The count is filled by the composer from the measured problem count, so the
   // sentence never claims a number we did not find.
-  writeup: { text: "I've written up the rest — want me to send them over?", kind: 'writeup' },
+  // ══ THE SET IS THE ONE THING HE CANNOT ASSEMBLE ══════════════════════════
+  // Two faults in the old line. "I've written up the rest" describes our own
+  // work, which every other guard in this file forbids — he does not care what
+  // we did. And it offers a document, which turns a reply into a delivery.
+  //
+  // What survives is the only legitimate offer shape: the SET. He can check any
+  // ONE finding in ten seconds; he cannot build the list without running every
+  // check himself, which is the work he would be hiring us for. It names a
+  // quantity and never a content, so it gives nothing away and it cannot be a
+  // false claim.
+  writeup: { text: 'Want the rest of them?', kind: 'writeup',
+    alts: ['Worth seeing the others?', 'Want the whole list?'] },
   // ══ ASKS THAT MATCH THE FINDING THEY FOLLOW ═══════════════════════════════
   // Each is a question the owner can answer in one line from his own experience,
   // and none can be answered by anyone else in his business. That is what makes
   // a reply cheap for him and useful for Mike.
   pricing: { text: 'Where do most of your leads stall \u2014 before the first call or after it?', kind: 'pricing' },
   differentiator: { text: 'When someone picks you over the firm down the road, what do they usually say made the difference?', kind: 'differentiator' },
-  notready: { text: 'What happens to the ones who are interested but not ready this month?', kind: 'notready' },
-  afterhours: { text: 'What happens to the ones who find you after hours?', kind: 'afterhours' },
+  // ══ ASKING HIM TO NARRATE THE THING WE JUST TOLD HIM ═════════════════════
+  // "What happens to the ones who are interested but not ready?" and "What
+  // happens to the ones who find you after hours?" are the finding read back as
+  // a question. We measured that there is nothing for the not-ready and that the
+  // phone is the only route in; asking what happens next is asking him to write
+  // our second paragraph.
+  //
+  // They are also both questions about what happens AFTER contact — the exact
+  // territory every fabrication guard in this file refuses to let the email
+  // ASSERT. Refusing to state it and then asking him to state it is the same
+  // unobserved claim with the risk moved onto him.
+  //
+  // Both become questions about INTENT, which is the one thing here we genuinely
+  // cannot see and he answers without thinking.
+  notready: { text: 'Was that deliberate — keeping it to a direct enquiry — or has it just never come up?', kind: 'notready',
+    alts: ['Is that on purpose, or just how it ended up?'] },
+  afterhours: { text: 'Was phone-only a deliberate call, or just how it has always been?', kind: 'afterhours',
+    alts: ['Is that on purpose, or has it just never been worth changing?'] },
 };
 
 // ══ ONE ASK PER KIND MEANT ONE ASK PER BATCH ═══════════════════════════════
@@ -31286,6 +31433,122 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SURFACE SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
+  // Two asks that actually went out:
+  //   "Any idea what's putting them ahead in the results that matter?"
+  //   "Has anyone checked whether the category mismatch is affecting which
+  //    searches actually show your profile?"
+  // We measured both. Handing the answer back as a question reads as a quiz, or
+  // as an admission we never knew, and it spends the last line of the email —
+  // the only line with a reply in it — pretending not to know something.
+  //
+  // The hard half of this check is the FALSE POSITIVE. "Do you know what changed
+  // around then?" looks identical in shape and is the best ask in the table: we
+  // measured that his review flow collapsed and we never measured why. If a rule
+  // against quizzes also kills that one, it has taken more than it gave.
+  try {
+    const _fails = [];
+    const _mk = (ask) => `Michael, 8 of your 42 Google reviews name the same delay.\n\nThat is the kind of thing that repeats when nobody owns it.\n\n${ask}`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    for (const _q of ["Any idea what's putting them ahead in the results that matter?",
+                      'Has anyone checked whether the category mismatch is affecting which searches actually show your profile?',
+                      'Do you know why they are ahead of you?',
+                      'Have you checked where you land for that search?']) {
+      if (verifyBrainEmail(_mk(_q), _base).ok) _fails.push(`"${_q.slice(0, 52)}" passed \u2014 we measured the answer to that`);
+    }
+    // The one that must survive: same shape, and we genuinely do not hold it.
+    const _real = verifyBrainEmail(_mk('Do you know what changed around then?'), _base);
+    if (!_real.ok) _fails.push(`"Do you know what changed around then?" was refused (${_real.why}) \u2014 we measured the collapse and never measured its cause, so that is his to answer and it is the strongest ask in the table`);
+    let _n = 0;
+    for (const _entry of Object.values(CTA_TEXT || {})) {
+      for (const _t of [_entry && _entry.text, ...((_entry && _entry.alts) || [])].filter(Boolean)) {
+        _n++;
+        const _v = verifyBrainEmail(_mk(_t), { ..._base, count: _t });
+        if (!_v.ok) _fails.push(`our own ask "${String(_t).slice(0, 44)}" is refused (${_v.why})`);
+      }
+    }
+    if (_n < 8) _fails.push(`only ${_n} asks were tested \u2014 the table is not being read`);
+    if (_fails.length) {
+      console.log(`\u26d4 QUIZ ASK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 QUIZ ASK CHECK: an ask that demands the cause of something we measured, or sends him off to verify it, is refused \u2014 both live examples included. "Do you know what changed around then?" still passes, because we measured the collapse and never measured why, and all ${_n} asks in the table survive. The explanation belongs in the body; the ask belongs to the part only he holds.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 QUIZ ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
+  // Every lead logs "no measured buying window", thirty-plus in a row, with
+  // Adzuna, BizBuySell, EDGAR and Google News all wired and all silent. So an
+  // email that says "every week that goes by" is describing a countdown nobody
+  // started. The pressure to write one is structural — scarcity lifts reply rate
+  // in every study anyone quotes — which is exactly why it has to be a rule
+  // rather than a judgement made per email.
+  try {
+    const _fails = [];
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid}\n\nWho's handling that for you at the moment?`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    for (const _c of ['Every week that goes by, more of them notice.',
+                      'Right now, someone is reading those and deciding.',
+                      'In the next few months that gap only widens.',
+                      'That window is closing faster than most owners expect.']) {
+      if (verifyBrainEmail(_mk(_c), _base).ok) _fails.push(`"${_c.slice(0, 46)}" passed \u2014 nothing in this system has ever measured a clock`);
+    }
+    // The urgency we DO hold is a measured competitor, and it must survive.
+    const _threat = verifyBrainEmail(_mk('A business with fewer reviews than yours is sitting above you for that phrase.'), _base);
+    if (!_threat.ok) _fails.push(`the measured competitor threat was refused (${_threat.why}) \u2014 that is the only real urgency we hold and the rule must not touch it`);
+    if (_fails.length) {
+      console.log(`\u26d4 INVENTED CLOCK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 INVENTED CLOCK CHECK: an email cannot put a deadline on a lead where no buying window was measured \u2014 and none ever has been. The competitor sitting above him still stands, because that one is measured and needs no countdown bolted to it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 INVENTED CLOCK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE READ WAS CAPPED AT ONE HEDGED SENTENCE ═════════════════════════
+  // MY READ shipped last week and was immediately throttled: "You may state ONE
+  // of them. Not two" in the block, "that sentence is the only place you are
+  // allowed to think out loud" in the rules, and a 120-word ceiling over both.
+  // So the one part of the email an owner cannot get anywhere else was capped at
+  // a single clause, which is the flatness — the facts he can check himself got
+  // the whole email and the diagnosis got a line.
+  //
+  // The ceiling and the cap move together or neither moves: permission to follow
+  // a thought through is worthless if the words are not there to do it in.
+  try {
+    const _fails = [];
+    const _ev = buildEmailEvidence({
+      trade: 'plumber', measured: { reviewCount: 120, rating: 4.4 },
+      bindingLayer: 'OFFER', bindingWhy: 'nothing on the site says who this is for',
+      situationRead: 'The reputation is real and the path to it is blocked',
+    });
+    if (!/FOLLOW IT THROUGH/.test(_ev.block)) _fails.push('the read block still asks for a single sentence rather than a thought carried to its end');
+    if (!/DO NOT RATION IT/.test(_ev.block)) _fails.push('nothing tells the writer to give the diagnosis away, so it will keep teasing it');
+    if (/You may state ONE of them\. Not two/.test(_ev.block)) _fails.push('the one-sentence cap is still in the block');
+    if (!/MUST MARK IT AS YOURS/.test(_ev.block)) _fails.push('the marking requirement was lost while loosening the cap \u2014 an unmarked judgement is a claim about his business');
+    // And the room to do it in.
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    const _fill = ' That pattern is the kind of thing an owner rarely sees from inside his own business.';
+    const _head = `Michael, 8 of your 42 Google reviews name the same delay.\n\nMy read is that is a scheduling problem rather than a crew problem, and it lands in the last hour of the job.`;
+    const _ask = `\n\nWho's handling that for you at the moment?`;
+    let _mid = '';
+    const _wc = (b) => b.split(/\s+/).filter(Boolean).length;
+    while (_wc(_head + _mid + _ask) < 130) _mid += _fill;
+    const _long = verifyBrainEmail(_head + _mid + _ask, _base);
+    if (!_long.ok) _fails.push(`a ${_wc(_head + _mid + _ask)}-word email carrying the finding, the read and its consequence was refused (${_long.why}) \u2014 a diagnosis does not fit in sixty words`);
+    let _over = _mid;
+    while (_wc(_head + _over + _ask) <= 155) _over += _fill;
+    if (verifyBrainEmail(_head + _over + _ask, _base).ok) _fails.push(`a ${_wc(_head + _over + _ask)}-word email passed \u2014 the ceiling moved to make room for a diagnosis, not to remove the limit`);
+    if (_fails.length) {
+      console.log(`\u26d4 READ DEPTH CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 READ DEPTH CHECK: the read may now be carried through to what it means and what it costs, and there are words to do it in \u2014 a 130-word email passes where 120 was the wall, and 155 still does not. Every fact still has to be measured and every judgement still has to be marked as ours; what changed is that the one thing he cannot get anywhere else is no longer capped at a clause.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 READ DEPTH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE ONE THING NO REVIEW OF A SINGLE EMAIL CAN SEE ══════════════
