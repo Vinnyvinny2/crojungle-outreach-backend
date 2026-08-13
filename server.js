@@ -5535,6 +5535,28 @@ let FIRECRAWL_RATE_LIMIT_HITS = 0;
 // do not change hour to hour, so a 2-day window is safe and makes re-research nearly
 // instant. Pass a shorter window for anything genuinely time-sensitive.
 const FC_CACHE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+// ══ WHAT A BATCH JOB IS WORTH WAITING FOR, AND WHETHER TO SUBMIT ONE ════════
+// Both of these were implicit and both were wrong.
+//
+// THE WAIT WAS A PER-PAGE TIMEOUT USED AS A WHOLE-JOB DEADLINE, then floored at
+// 30 seconds. The two call sites pass 40000 and 45000, so every lead slept 40s
+// on the leadership pages and 45s on the site audit — 85 SECONDS PER LEAD —
+// before giving up and buying all nine pages one at a time anyway. On the
+// 2026-08-13 Kansas City run that was four give-ups across two leads, about 28%
+// of a five-minute run spent waiting for a result that was thrown away.
+//
+// A longer wait cannot help. The individual fallback runs the URLs in parallel
+// and answers in roughly twenty seconds, so anything past that is buying a
+// discount with time we do not have.
+//
+// AND THE SUBMIT DECISION DID NOT EXIST. With n pages and completion probability
+// p, batching costs p(0.5n) + (1-p)(0.5n + n) credits — an abandoned job is
+// still scraped by Firecrawl, still billed, and then every page is bought again
+// by the fallback. That only beats paying n outright when p > 0.5. Measured p
+// on this run: 0 of 4. Turn it back on when the give-up line starts reporting
+// jobs that were close.
+const FC_BATCH_GIVEUP_MS = Number(process.env.FC_BATCH_GIVEUP_MS || 8000);
+const FC_BATCH_ENABLED = String(process.env.FC_BATCH || 'off').toLowerCase() === 'on';
 // ═══ BATCH SCRAPE — HALF PRICE FOR PAGES WE ALREADY KNOW WE WANT ═══════════
 // Firecrawl bills a single /scrape at 1 credit per page but a /batch/scrape at
 // 0.5. Every place this system reads several interior pages of the SAME site, it
@@ -5585,6 +5607,25 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
     if (md) out.set(need[0], md);
     return out;
   }
+  // ══ SUBMITTING IS WHAT COSTS. GIVING UP ONLY SAVES THE CLOCK. ═══════════
+  // Four submits, four give-ups, on the 2026-08-13 run — and the comment at the
+  // site-audit call site records the same thing happening earlier, where the
+  // response was to cut ten pages to seven rather than fix the wait.
+  //
+  // Nothing here cancels the job. Firecrawl's worker keeps scraping after we
+  // stop polling and bills per page, so the credit is spent the moment we
+  // submit. That is why this guard sits BEFORE the submit and not around the
+  // poll: a guard after it would turn the log off and leave the spend on.
+  //
+  // The cache serve and the single-URL shortcut above still run, so a re-scrape
+  // inside the two-day window is still free and one URL is still a plain scrape.
+  if (!FC_BATCH_ENABLED) {
+    console.log(`BATCH: not submitting ${need.length} page(s) \u2014 batching is OFF (FC_BATCH=on restores it). An abandoned batch is billed in full and then bought again individually, so it only pays above a 50% completion rate and this run measured 0 of 4. Falling straight to individual scrapes, which is where every page delivered today already came from.`);
+    // Returns exactly what the catch below would return — the cache hits — so
+    // the caller's individual-scrape fallback runs unchanged. Throwing would
+    // have worked and logged it as an error, which this is not.
+    return out;
+  }
 
   try {
     const submit = await fetchT('https://api.firecrawl.dev/v1/batch/scrape', {
@@ -5631,7 +5672,10 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
 
     // Poll. Bounded by both attempts and wall clock so a stuck job can never hang
     // a research run — that is the failure mode that produced the 359-second lead.
-    const deadline = Date.now() + Math.max(30000, perPageTimeoutMs);
+    // A TIME BUDGET, not a per-page number. perPageTimeoutMs is what one page is
+    // allowed to take; using it as the deadline for the whole job — and then
+    // flooring it at 30s — is what produced 85 seconds of dead sleep per lead.
+    const deadline = Date.now() + FC_BATCH_GIVEUP_MS;
     let data = null;
     for (let attempt = 0; Date.now() < deadline; attempt++) {
       await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 3000));
@@ -32277,6 +32321,46 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 FIGURE FORMAT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ EIGHTY-FIVE SECONDS PER LEAD, SPENT WAITING FOR NOTHING ════════════
+  // The batch poller used a PER-PAGE timeout as the WHOLE-JOB deadline and then
+  // floored it at 30s. The two call sites pass 40000 and 45000, so every lead
+  // slept 40 seconds on the leadership pages and 45 on the site audit, gave up,
+  // and bought all nine pages individually anyway. Four give-ups across two
+  // leads on the 2026-08-13 run — about 28% of a five-minute run spent waiting
+  // for a result that was discarded.
+  //
+  // And submitting is what costs. Firecrawl keeps scraping after we stop polling
+  // and bills per page, so an abandoned job is billed in full AND bought again
+  // by the fallback. Batching only pays above a 50% completion rate; measured
+  // rate on this run was 0 of 4, so it is off by default.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    if (/Math\.max\(30000, perPageTimeoutMs\)/.test(_src)) {
+      _fails.push('the whole-job deadline is still derived from the per-page timeout and floored at 30s \u2014 that is the 85 seconds');
+    }
+    if (!Number.isFinite(FC_BATCH_GIVEUP_MS)) _fails.push('FC_BATCH_GIVEUP_MS is not a number');
+    else if (FC_BATCH_GIVEUP_MS > 20000) {
+      _fails.push(`the batch give-up is ${Math.round(FC_BATCH_GIVEUP_MS / 1000)}s \u2014 the individual fallback answers in about twenty, so anything past that buys a discount with time the run does not have`);
+    }
+    if (typeof FC_BATCH_ENABLED !== 'boolean') _fails.push('the submit switch is not a boolean');
+    // The guard must sit BEFORE the paid submit. After it, the log goes quiet
+    // and the spend continues — which is the failure it exists to prevent.
+    const _fn = _src.indexOf('const firecrawlBatchScrape');
+    const _blk = _fn > -1 ? _src.slice(_fn, _src.indexOf("api.firecrawl.dev/v1/batch/scrape", _fn)) : '';
+    if (!_blk) _fails.push('firecrawlBatchScrape or its submit could not be located');
+    else if (!/FC_BATCH_ENABLED/.test(_blk)) {
+      _fails.push('the submit guard is not between the function start and the submit call \u2014 a guard after the submit turns the log off and leaves the credit spent');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 BATCH BUDGET CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 BATCH BUDGET CHECK: the batch wait is a time budget (${Math.round(FC_BATCH_GIVEUP_MS / 1000)}s), not a per-page timeout used as one, and the submit guard sits before the paid call rather than after it. Batching is ${FC_BATCH_ENABLED ? 'ON' : 'OFF'}. This removed about 85 seconds of guaranteed dead sleep from every lead, with no effect on the email \u2014 every page delivered today already came from the individual fallback.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BATCH BUDGET CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
