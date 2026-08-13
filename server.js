@@ -8802,7 +8802,7 @@ const HARM_LADDER = [
       const t = String(m.tradeWord || '').trim();
       if (m.purchaseUrgency === 'EMERGENCY') {
         return t
-          ? `When somebody needs a ${t} outside office hours, there is no published way to reach them at all`
+          ? `When somebody needs ${anFor(t)} ${t} outside office hours, there is no published way to reach them at all`
           : `Outside office hours there is no published way to reach them at all`;
       }
       // ══ NOT EVERY "THEY" IN A RUNG IS THE OWNER ══════════════════════════
@@ -8821,7 +8821,7 @@ const HARM_LADDER = [
       // boot on any rung that puts a pronoun inside a "Someone who ..." clause,
       // so the next one cannot reach an inbox the way this one did.
       return t
-        ? `Someone deciding at nine at night to hire a ${t} has nowhere to start until the office opens`
+        ? `Someone deciding at nine at night to hire ${anFor(t)} ${t} has nowhere to start until the office opens`
         : `Someone deciding in the evening has nowhere to start until the office opens`;
     },
     // ══ DESCRIBE THE WALL, NOT WHAT SOMEBODY DID AT IT ═══════════════════
@@ -8857,7 +8857,7 @@ const HARM_LADDER = [
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
       return t
-        ? `Someone ready to hire a ${t} cannot book a time — the only route is a form and a wait`
+        ? `Someone ready to hire ${anFor(t)} ${t} cannot book a time — the only route is a form and a wait`
         : `There is no way to book a time — the only option is a form and a wait`;
     },
     costs: 'someone ready to commit has to stop and hope for a reply' },
@@ -9147,7 +9147,7 @@ const HARM_LADDER = [
     // about a website.
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
-      const job = t ? ` before committing to a ${t}` : '';
+      const job = t ? ` before committing to ${anFor(t)} ${t}` : '';
       return `Someone comparing three companies can find no price, no range and no starting point anywhere on the pages we read${job}`;
     },
     // ══ NOT EVERY "THEM" IS THE BUSINESS ═══════════════════════════════════
@@ -9213,7 +9213,7 @@ const HARM_LADDER = [
     // sentence becomes about a custom home builder rather than about websites.
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
-      const who = t ? `a stranger choosing a ${t}` : 'a hesitant stranger';
+      const who = t ? `a stranger choosing ${anFor(t)} ${t}` : 'a hesitant stranger';
       return `Nothing on the site tells ${who} why to pick them over the next name — no guarantee, no named offer, no promise anyone else could not also make`;
     },
     // say() already ends "why to pick them over the next name". Repeating it in
@@ -9442,6 +9442,95 @@ const measurementLooksWrong = (m = {}) => {
 // So: one function, every fallback chain written down once, both callers reading
 // from it. Drift stops being a thing that can happen rather than a thing we
 // keep finding.
+// ══ "A ORTHODONTIST" WENT OUT IN A LIVE EMAIL ══════════════════════════════
+// Six places interpolate a trade word after a bare "a", and the trade is read
+// off the business's own homepage, so it is whatever word they use. Live,
+// 2026-08-13: "before committing to a orthodontist". An email whose whole claim
+// is that somebody looked carefully cannot open with a grammar error a reader
+// notices before the finding.
+//
+// Sound, not spelling. "an hour" and "an HVAC contractor" take AN despite the
+// consonant; "a urologist" and "a uniform" take A despite the vowel, because
+// the u is pronounced "you". The exceptions are listed rather than guessed.
+const AN_DESPITE_CONSONANT = /^(?:hour|honest|honou?r|heir|herb|hvac|mri|x-?ray|seo|rv\b|llc|ll\.?m|md\b|fbi)/i;
+// "un" takes AN except before an i — underground and undertaker do, uniform
+// and unit do not.
+const AN_DESPITE_U = /^(?:up|um|un(?!i)|urb)/i;
+const anFor = (word) => {
+  const s = String(word || '').trim().toLowerCase();
+  if (!s) return 'a';
+  if (AN_DESPITE_CONSONANT.test(s)) return 'an';
+  if (s.startsWith('u')) return AN_DESPITE_U.test(s) ? 'an' : 'a';
+  if (s.startsWith('eu')) return 'a';          // a European, a eulogy
+  return /^[aeio]/.test(s) ? 'an' : 'a';
+};
+
+// ══ REVIEW VELOCITY, AS A FUNCTION THAT CAN BE RUN ═════════════════════════
+// Lifted out of deepReviewMine so the boot check can execute the real thing.
+// It was an inline IIFE, so the check had to REIMPLEMENT the gate to test it —
+// and a reimplementation passes happily while the shipped copy is broken. That
+// has now happened three times in one day in this file, on three different
+// features, and it is the same disease as every "computed but not passed" bug:
+// two things that are supposed to be one.
+//
+// `now` is a parameter so a test can pin the clock instead of building dates
+// relative to the moment it runs.
+const measureReviewVelocity = (timestamps, now = Date.now()) => {
+  const DAY = 86400000, WINDOW = 90;
+  const dates = (Array.isArray(timestamps) ? timestamps : [])
+    .filter(t => Number.isFinite(t))
+    .sort((a, b) => b - a);
+  if (dates.length < 6) return { checked: false, why: `only ${dates.length} review(s) carry a readable date` };
+  const edgeRecent = now - WINDOW * DAY;
+  const edgeEarlier = now - 2 * WINDOW * DAY;
+  const oldestRead = dates[dates.length - 1];
+  if (oldestRead > edgeEarlier) {
+    return { checked: false, truncated: true,
+      why: `the oldest review we read is only ${Math.round((now - oldestRead) / DAY)} days old, so the earlier ${WINDOW}-day window is cut off by our own page size rather than by their history - a comparison here would invent a decline` };
+  }
+  const recent = dates.filter(t => t >= edgeRecent).length;
+  const earlier = dates.filter(t => t < edgeRecent && t >= edgeEarlier).length;
+  // Noise floor. Two against one is not a trend, it is two customers. The
+  // earlier window has to carry enough for its absence to mean something.
+  if (earlier < 4) return { checked: false, why: `only ${earlier} review(s) in the earlier window - too few for a change to mean anything` };
+  const drop = (earlier - recent) / earlier;
+  // ══ A SLOWDOWN HAS TO BE BIGGER THAN RANDOMNESS ═══════════════════════
+  // Live, 2026-08-13, Kurt Kavanaugh Orthodontics: 6 reviews in the last 90
+  // days against 10 in the 90 before. That cleared both gates below — a 40%
+  // drop, four fewer — and became the OPENING SENTENCE of his email.
+  //
+  // It is not a slowdown. Reviews arrive as a Poisson process, and the spread
+  // of a count with mean lambda is sqrt(lambda), so the difference between two
+  // such counts has a standard deviation of sqrt(a+b). Here that is sqrt(16) =
+  // 4 and the observed difference is 4 — EXACTLY ONE standard deviation, the
+  // single most ordinary thing randomness produces. A business with a steady
+  // rate of eight a quarter shows a "40% drop" by luck about a third of the
+  // time.
+  //
+  // Telling an owner his reviews have slowed when the change is chance is the
+  // same failure as the truncated-window artefact guarded against above — that
+  // note calls it "a comparison that would invent a decline" — and it is the
+  // one thing this system may not do. A percentage hides it because a
+  // percentage has no sample size in it.
+  //
+  // Two sigma is the ordinary bar. It keeps every case this feature was built
+  // for — eleven against twenty-six is 2.47, twelve against twenty-six is
+  // 2.27, a full stop from four or more always clears it — and refuses
+  // six-from-ten, two-from-six and three-from-eight, which are noise wearing a
+  // percentage.
+  const sigma = Math.sqrt(recent + earlier);
+  const sigmas = sigma > 0 ? (earlier - recent) / sigma : 0;
+  const distinguishable = sigmas >= 2;
+  return {
+    checked: true, recent, earlier, windowDays: WINDOW, sigmas,
+    // A third down, at least three fewer, AND bigger than chance.
+    slowing: drop >= 0.34 && (earlier - recent) >= 3 && distinguishable,
+    stopped: recent === 0 && distinguishable,
+    growing: recent > earlier,
+    oldestReadDays: Math.round((now - oldestRead) / DAY),
+  };
+};
+
 const resolveMeasurements = ({
   localRank = null, gbpHealth = null, history = null, htmlSignals = null,
   reviewsRead = null, ownerReplyCount = null, deepReviews = null,
@@ -11214,7 +11303,7 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
   // fewer reviews than yours is ranking above you" for a twenty-year estate
   // lawyer — true, and the voice of a tool that has never met him.
   const who = [
-    trade ? `${first || 'He'} runs a ${trade} business${tenure ? `, ${tenure} years in` : ''}.` : '',
+    trade ? `${first || 'He'} runs ${anFor(trade)} ${trade} business${tenure ? `, ${tenure} years in` : ''}.` : '',
     acquisitionIsReferral
       ? `HOW HE GETS WORK: through relationships and referrals, not people typing into Google. Do not frame this as a search or ranking problem — he will stop reading, and he will be right to.`
       : '',
@@ -13633,7 +13722,18 @@ const TRADE_JOB_VALUE = [
   // than fudged. A law firm matter spans a parking ticket to a wrongful-death
   // suit; there is no honest single figure and pretending otherwise is the same
   // failure in the other direction.
-  { re: /\bdentist|\bdental|\bdds|\bdmd|\borthodon/i, say: 'a single implant or ortho case runs $4k-$7k' },
+  // ══ AN ORTHODONTIST DOES NOT PLACE IMPLANTS ═══════════════════════════
+  // One row covered dentist, dental, DDS, DMD and orthodontist and said "a
+  // single implant or ortho case". Live, 2026-08-13, that sentence went into an
+  // email to an ORTHODONTIST — a specialty that does braces and aligners and
+  // refers implants out to oral surgery. It is the same cross-industry error
+  // already recorded twice in this file for roofing/waterproofing and garage
+  // doors/windows, and it is worse here: naming a procedure he does not perform
+  // tells him immediately that nobody read his site.
+  //
+  // Ortho FIRST, because the general row would otherwise swallow it.
+  { re: /\borthodon|\bbraces\b|\binvisalign|\baligner/i, say: 'a full orthodontic case runs $3k-$7k' },
+  { re: /\bdentist|\bdental|\bdds|\bdmd/i, say: 'a single implant or crown case runs $4k-$7k' },
   // Split from med spa and dermatology, which are a different order of magnitude
   // — the same cross-industry error the trade tables already record for roofing
   // and waterproofing. A botox appointment is not a rhinoplasty.
@@ -16247,39 +16347,11 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   // older than the far edge of the earlier window. If it is not, the two
   // windows are not equally observed and NOTHING is claimed. That is the whole
   // difference between a measurement and an artefact of pagination.
-  const velocity = (() => {
-    const DAY = 86400000, WINDOW = 90;
-    const dates = reviews
-      .map(r => (r && r.when ? Date.parse(r.when) : NaN))
-      .filter(t => Number.isFinite(t))
-      .sort((a, b) => b - a);
-    if (dates.length < 6) return { checked: false, why: `only ${dates.length} review(s) carry a readable date` };
-    const now = Date.now();
-    const edgeRecent = now - WINDOW * DAY;
-    const edgeEarlier = now - 2 * WINDOW * DAY;
-    const oldestRead = dates[dates.length - 1];
-    if (oldestRead > edgeEarlier) {
-      return { checked: false, truncated: true,
-        why: `the oldest review we read is only ${Math.round((now - oldestRead) / DAY)} days old, so the earlier ${WINDOW}-day window is cut off by our own page size rather than by their history - a comparison here would invent a decline` };
-    }
-    const recent = dates.filter(t => t >= edgeRecent).length;
-    const earlier = dates.filter(t => t < edgeRecent && t >= edgeEarlier).length;
-    // Noise floor. Two against one is not a trend, it is two customers. The
-    // earlier window has to carry enough for its absence to mean something.
-    if (earlier < 4) return { checked: false, why: `only ${earlier} review(s) in the earlier window - too few for a change to mean anything` };
-    const drop = (earlier - recent) / earlier;
-    return {
-      checked: true, recent, earlier, windowDays: WINDOW,
-      // A third down, and at least three fewer, is the point at which an owner
-      // would recognise it if he counted.
-      slowing: drop >= 0.34 && (earlier - recent) >= 3,
-      stopped: recent === 0,
-      growing: recent > earlier,
-      oldestReadDays: Math.round((now - oldestRead) / DAY),
-    };
-  })();
+  const velocity = measureReviewVelocity(
+    reviews.map(r => (r && r.when ? Date.parse(r.when) : NaN))
+  );
   if (velocity.checked) {
-    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'}. Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'} (${velocity.sigmas.toFixed(2)} sigma; under 2.00 the change cannot be told apart from randomness and NO trend is claimed). Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
   } else {
     console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
   }
@@ -33219,6 +33291,95 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ JOB POSTING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THREE THINGS A LIVE EMAIL TO AN ORTHODONTIST GOT WRONG ═════════════
+  // Kurt Kavanaugh Orthodontics, 2026-08-13. The email opened:
+  //   "your Google reviews have slowed — 6 in the last 90 days, against 10 in
+  //    the 90 days before that"
+  //   "...before committing to a orthodontist"
+  //   "A single implant or ortho case runs $4k-$7k"
+  //
+  // The first is not true, the second is a grammar error in the opening
+  // paragraph of an email whose entire claim is that somebody looked carefully,
+  // and the third names a procedure an orthodontist does not perform.
+  try {
+    const _fails = [];
+    // 1. A SLOWDOWN MUST BE BIGGER THAN CHANCE, AND THIS RUNS THE REAL GATE.
+    // The first version of this block reimplemented the arithmetic locally and
+    // PASSED with the shipped gate deliberately removed — the third time in one
+    // day a check in this file tested a copy instead of the thing. So the real
+    // measurement is now a function and this calls it.
+    //
+    // Dates are built backwards from a pinned clock so the windows are exact.
+    const _DAY = 86400000, _NOW = Date.UTC(2026, 7, 13);
+    const _dates = (recent, prior) => {
+      const out = [];
+      for (let i = 0; i < recent; i++) out.push(_NOW - (5 + i % 80) * _DAY);        // inside 90
+      for (let i = 0; i < prior; i++) out.push(_NOW - (95 + i % 80) * _DAY);        // 90-180
+      // Three fillers, well outside both windows. They prove the earlier window
+      // is fully observed AND clear the six-date minimum, which a 0-vs-4 case
+      // does not reach on its own — the first version of this fixture failed
+      // for that reason and the failure was in the TEST, not in the gate.
+      out.push(_NOW - 400 * _DAY, _NOW - 420 * _DAY, _NOW - 440 * _DAY);
+      return out;
+    };
+    const _v = (r, p) => measureReviewVelocity(_dates(r, p), _NOW);
+    const _slow = (r, p) => {
+      const v = _v(r, p);
+      if (!v.checked) { _fails.push(`${r} against ${p} did not even measure: ${v.why}`); return false; }
+      if (v.recent !== r || v.earlier !== p) { _fails.push(`window arithmetic is wrong: asked for ${r}/${p}, measured ${v.recent}/${v.earlier}`); return false; }
+      return v.slowing;
+    };
+    const _sig = (r, p) => { const v = _v(r, p); return v.checked ? v.sigmas : 0; };
+    // The live case. 6 vs 10 is exactly 1.00 sigma — the most ordinary outcome
+    // randomness produces — and it became an opening sentence.
+    if (_slow(6, 10)) _fails.push('6 reviews against 10 still reports as a slowdown; that is 1.00 sigma, which a steady business produces by luck about a third of the time, and it opened a live email');
+    if (_slow(2, 6)) _fails.push('2 against 6 still reports as a slowdown (1.41 sigma)');
+    if (_slow(3, 8)) _fails.push('3 against 8 still reports as a slowdown (1.51 sigma)');
+    // And the cases this feature exists for must survive. Both are quoted in
+    // the function's own comment as the motivating example.
+    if (!_slow(11, 26)) _fails.push('eleven against twenty-six no longer reports as a slowdown — that is 2.47 sigma and it is the example this feature was written for');
+    if (!_slow(12, 26)) _fails.push('twelve against twenty-six no longer reports (2.27 sigma)');
+    if (!_slow(40, 100)) _fails.push('forty against a hundred no longer reports (5.07 sigma)');
+    if (!_slow(8, 20)) _fails.push('eight against twenty no longer reports (2.27 sigma)');
+    // A full stop from a real base still clears it.
+    if (_sig(0, 4) < 2) _fails.push('a complete stop from four is no longer distinguishable');
+    // deepReviewMine must go through that same function — if it keeps its own
+    // inline copy, everything above is testing a second implementation again.
+    if (!/const velocity = measureReviewVelocity\(/.test(require('fs').readFileSync(__filename, 'utf8'))) {
+      _fails.push('the review miner is not calling measureReviewVelocity, so it has its own copy of the gate and nothing above describes what ships');
+    }
+    // 2. ARTICLE AGREEMENT, BY SOUND. These are real trade words this pipeline
+    // has read off real homepages.
+    for (const [w, want] of [
+      ['orthodontist', 'an'], ['electrician', 'an'], ['architect', 'an'],
+      ['attorney', 'an'], ['accountant', 'an'], ['optometrist', 'an'],
+      ['engineer', 'an'], ['oral surgeon', 'an'], ['insurance agent', 'an'],
+      ['roofer', 'a'], ['plumber', 'a'], ['dentist', 'a'], ['builder', 'a'],
+      ['cosmetic surgeon', 'a'], ['foundation repair contractor', 'a'],
+      ['urologist', 'a'], ['uniform supplier', 'a'],
+      ['hvac contractor', 'an'], ['upholsterer', 'an'],
+    ]) {
+      const got = anFor(w);
+      if (got !== want) _fails.push(`"${got} ${w}" — it is "${want} ${w}". The trade is read off their own homepage, so it is whatever word they use, and this sits in the opening paragraph`);
+    }
+    if (anFor('') !== 'a' || anFor(null) !== 'a') _fails.push('a missing trade word does not fall back cleanly');
+    // 3. AN ORTHODONTIST DOES NOT PLACE IMPLANTS.
+    const _money = (t) => { const row = TRADE_JOB_VALUE.find(x => x.re.test(t)); return row ? row.say : ''; };
+    const _ortho = _money('orthodontist');
+    if (/implant/i.test(_ortho)) {
+      _fails.push(`an orthodontist is still told "${_ortho}" — implants are oral surgery, and naming a procedure he does not perform tells him nobody read his site`);
+    }
+    if (!/orthodontic/i.test(_ortho)) _fails.push(`an orthodontist gets "${_ortho}", which does not describe orthodontics`);
+    if (!/implant|crown/i.test(_money('dentist'))) _fails.push('a general dentist lost his own figure to the ortho split');
+    if (_money('invisalign provider') === _money('dentist')) { /* fine either way */ }
+    if (_fails.length) {
+      console.log(`⛔ LIVE EMAIL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LIVE EMAIL CHECK: a review slowdown must now be bigger than randomness (two sigma) before it can be stated — six against ten is 1.00 sigma and is refused, while eleven against twenty-six and a full stop still stand; the article agrees with the trade word by sound, so "a orthodontist" cannot go out again; and an orthodontist is quoted an orthodontic case rather than an implant.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LIVE EMAIL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
