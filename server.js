@@ -32134,6 +32134,63 @@ app.listen(PORT, () => {
     console.log(`\u26d4 QUOTE SYMMETRY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
+  // "It is always generic and saying the same thing for multiple audits" was
+  // treated as a copy problem for weeks. It is arithmetic, and nobody had ever
+  // counted it.
+  //
+  // The findings section renders the ladder. A rung's say() can vary by lead in
+  // exactly three ways, and they are not equal:
+  //
+  //   QUOTES   it reproduces the business's own words (keepSpan). Nobody else's
+  //            audit produces this sentence. This is the only kind that cannot
+  //            be a template.
+  //   NAMED    it carries a proper noun we measured — a competitor, their trade.
+  //   NUMBER   it plugs a measurement into a fixed sentence. True, and the same
+  //            sentence every lead gets with different digits in it.
+  //   FIXED    no interpolation at all. Identical on every audit, forever.
+  //
+  // AND THE ROOT, which is upstream of every rung: a rung can only quote what it
+  // is GIVEN. Counting the text-bearing fields that reach the ladder at all is
+  // the number that actually caps how specific an audit can ever be — and it is
+  // four, one of which is the trade word. That is the ceiling. No amount of
+  // rewriting say() raises it.
+  //
+  // This does not fail the boot. It reports a score, so the number moves when
+  // the work is done and cannot quietly slide back.
+  try {
+    const _cls = { quotes: [], named: [], number: [], fixed: [] };
+    for (const h of HARM_LADDER) {
+      const _say = String(h.say || '');
+      if (!/=>/.test(_say)) { _cls.fixed.push(h.id); continue; }
+      if (/keepSpan\s*\(/.test(_say)) _cls.quotes.push(h.id);
+      else if (/m\.(?:weakerNames|tradeWord|namedOffer|marketClarityGaps|rankQuery|city)\b/.test(_say)) _cls.named.push(h.id);
+      else if (/\$\{[^}]*\bm\./.test(_say)) _cls.number.push(h.id);
+      else _cls.fixed.push(h.id);
+    }
+    // The ceiling: text-bearing fields actually delivered to the ladder.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _m = /_harmInputs = \{\s*[\r\n]/.exec(_src);
+    let _textFields = [];
+    if (_m) {
+      let _d = 0, _e = _m.index;
+      for (let k = _src.indexOf('{', _m.index); k < _src.length; k++) {
+        if (_src[k] === '{') _d++;
+        else if (_src[k] === '}') { _d--; if (!_d) { _e = k + 1; break; } }
+      }
+      _textFields = [...new Set([..._src.slice(_m.index, _e).matchAll(/^\s+([A-Za-z_$][\w$]*)\s*:/gm)]
+        .map(x => x[1]).filter(k => /sample|quote|phrase|headline|tagline|copy|gap|namedOffer|weakerNames|tradeWord/i.test(k)))];
+    }
+    const _n = HARM_LADDER.length;
+    const _specific = _cls.quotes.length + _cls.named.length;
+    console.log(`\u{1F4CF} AUDIT SPECIFICITY: of ${_n} rungs \u2014 ${_cls.quotes.length} quote the business's own words, ${_cls.named.length} carry a measured proper noun, ${_cls.number.length} plug a number into a fixed sentence, ${_cls.fixed.length} are the same sentence on every lead. So ${_specific} of ${_n} can say something a competitor's audit could not also say. The ceiling is upstream: ${_textFields.length} text-bearing field(s) reach the ladder at all (${_textFields.join(', ') || 'none'}) \u2014 a rung can only quote what it is given, and rewriting say() cannot raise that number.`);
+    if (_cls.quotes.length === 0) {
+      console.log(`\u26d4 AUDIT SPECIFICITY: not one rung quotes the business. Every finding in every audit is a sentence written here, and an owner reading three of them knows he received a scan.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 AUDIT SPECIFICITY COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
   // Two asks that actually went out:
   //   "Any idea what's putting them ahead in the results that matter?"
