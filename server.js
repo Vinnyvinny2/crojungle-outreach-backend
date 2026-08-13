@@ -1057,6 +1057,33 @@ const computeVerifiability = (findingText) => {
   // which findings fell through, and the next time our own copy rules change the
   // vocabulary, the drift is visible in the log on the first run instead of being
   // reverse-engineered from a demoted candidate.
+  // ══ THE LIST IS A VOCABULARY LIST, AND VOCABULARY DRIFTS FOREVER ═══════
+  // Every rule above matches WORDS. The findings it scores are written by a
+  // model. So every time the copy reaches for a phrasing nobody anticipated, a
+  // real finding silently drops to 2 — and 2 is not neutral, it is below almost
+  // everything the list DOES know, so the finding loses to the ladder's fixed
+  // sentences and the audit goes back to being the same list every lead gets.
+  //
+  // This has been patched twice by adding more regexes, and both times the
+  // comment beside the patch said the drift warning had been firing on nearly
+  // every lead. A live batch had four of four brain findings unmatched. When the
+  // fallback is the common path it is not a fallback, it is the behaviour.
+  //
+  // The vocabulary of FINDINGS is unbounded. The vocabulary of SURFACES is not:
+  // there are only so many things we can look at, and it is a closed list we
+  // control — his pages, his listing, his reviews, the search results. If the
+  // finding is about one of those, he can open it and look, whatever words it
+  // used to say so. That is what verifiability actually asks, and it cannot
+  // drift behind copy it does not depend on.
+  //
+  // 4, not 5: he can see the thing. Whether it is a PROBLEM is still a judgement,
+  // and 5 is reserved for the one-action-unambiguous cases enumerated above.
+  // Post-contact findings never reach here — findingIsUnobservable forces those
+  // to 1 upstream — so this cannot promote a claim we could not observe.
+  const CHECKABLE_SURFACE = /\b(?:home ?page|about page|contact page|services? page|pricing page|booking page|careers? page|team page|blog|gallery|portfolio|testimonials?|reviews? page|your (?:own )?(?:site|website)|their (?:own )?(?:site|website)|on the (?:site|website)|google (?:business )?(?:profile|listing|page)|map pack|google reviews|search results|the listing|navigation|nav bar|menu|footer|header|contact form|headline|banner|hero)\b/i;
+  if (CHECKABLE_SURFACE.test(t)) {
+    return { score: 4, why: 'it is about a page or a listing he can open and look at \u2014 no phrasing rule matched, but the surface is one we read', unmatched: false, bySurface: true };
+  }
   return { score: 2, why: 'no measured artefact he can check in ten seconds', unmatched: true };
 };
 
@@ -9978,8 +10005,28 @@ const verifyOriginalFinding = (item, corpus) => {
   // front. Still six consecutive words of THEIR copy — a fabricated quote
   // cannot produce that by accident — just no longer dependent on where the
   // model chose to begin.
+  // ══ A FIVE-WORD QUOTE COULD NEVER REACH THIS LOOP ══════════════════════
+  // The window ran from min(12, wordCount) down to 6. On a needle of five words
+  // the loop body never executes at all, so a short quote could only survive the
+  // exact-substring test above — and an exact test fails on one added word.
+  //
+  // Live, Fit Money CPA: the model quoted 'BOOK MY STRATEGY CALL HERE'. Their
+  // nav reads BOOK MY STRATEGY CALL. Four of five words verbatim, the fifth
+  // added by a model reading a button, and the finding was dropped as "the
+  // quoted text does not appear on any page we read". All three original
+  // findings on that lead were dropped the same way, and the next log line was
+  // "none survived verification. The audit runs on the measured ladder alone,
+  // which is honest but is the same list every lead gets."
+  //
+  // That is the thin, generic audit — produced by window arithmetic, not by
+  // anything about the business. The floor drops to four consecutive words, and
+  // ONLY for needles too short to reach six. Four exact words of his own copy is
+  // still something no fabrication produces by accident, and the haystack has
+  // not changed. Rejecting a true finding is the expensive direction here:
+  // when nothing survives, every lead gets the same list.
   const words = needle.split(' ');
-  for (let n = Math.min(12, words.length); n >= 6; n--) {
+  const _floor = words.length >= 6 ? 6 : 4;
+  for (let n = Math.min(12, words.length); n >= _floor; n--) {
     for (let i = 0; i + n <= words.length; i++) {
       if (hay.includes(words.slice(i, i + n).join(' '))) return { ok: true, finding: _finding, evidence };
     }
@@ -10095,6 +10142,79 @@ const parseProspectVerdict = (text) => {
   const reaction = clean(o.reaction);
   if (!reaction) return null;
   return { verdict, reaction, wouldReply: clean(o.wouldReply) };
+};
+
+// ══ THE SIMULATOR INVENTED A FACT AND WE PUT IT IN A LIVE EMAIL ═════════════
+// The prospect simulator is handed the email, the company, the owner's name, the
+// trade and the city. It is handed NO measurements. So every concrete-sounding
+// thing it writes is invented by construction — it has nothing to be right from.
+//
+// Its `wouldReply` field asks it for "the one thing that would have got a reply
+// out of you", and a language model answers that question by WRITING A SENTENCE.
+// On Glenn Layton Homes it answered:
+//
+//   like 'you're on page two for custom home builder Jacksonville' with proof
+//
+// That string was then handed to the rewriter as *He said what would have earned
+// a reply: "..."*, the rewriter did as it was told, and the email that went out
+// said "You're on page two for that search." We had measured him at #3 of 20.
+//
+// The bug is not the sentence the simulator wrote. It is that a model with no
+// measurements was treated as a source, and its prose was handed to a writer
+// whose entire job is to turn prose it is given into an email. That is the rule
+// this system is built on, inverted: code assembles facts and the model writes
+// prose around them — never the reverse.
+//
+// So the simulator's output is quarantined down to what it can honestly supply:
+//   · its OBJECTION, scrubbed of anything concrete. That is its opinion of our
+//     email, which is real information about the email and none about him.
+//   · a SELECTION over findings we already measured. Its wish is matched against
+//     our own ranked harms, and if one fits, the writer is pointed at OUR
+//     sentence. Its own words never reach the writer.
+// A quoted span is a PROPOSED SENTENCE, and it is the one that shipped. It is
+// removed by position rather than by a paired-quote regex: the live string was
+//   like 'you're on page two for custom home builder Jacksonville' with proof
+// and the apostrophe in "you're" anchors a naive pattern in the wrong place,
+// leaving "page two" behind — which is the whole fault, surviving the guard
+// written for it.
+//
+// The open quote must follow a space, a colon or the start, and the close quote
+// must be followed by a space, punctuation or the end. That is what separates a
+// QUOTE from an apostrophe inside a word, so "I don't sell in Woodstock, that's
+// not my market" is left intact — and it has to be, because the objection is
+// the useful half of what the simulator produces.
+const SIM_QUOTED_SPAN = /(^|[\s:(\u2014-])["'\u2018\u201c][\s\S]{8,}?["'\u2019\u201d](?=$|[\s.,;:!?)])/g;
+const SIM_SCRUB = [
+  [SIM_QUOTED_SPAN, '$1'],
+  [/\$\s?[\d,]+(?:\.\d+)?\s?[kKmM]?\b/g, 'a figure'],
+  [/#\s?\d+/g, 'a position'],
+  [/\bpage\s*(?:one|two|three|four|1|2|3|4)\b/gi, 'a position'],
+  [/\btop\s*(?:two|three|five|ten|2|3|5|10)\b/gi, 'a position'],
+  [/\b\d[\d,.]*%?\b/g, 'a figure'],
+];
+const scrubSimText = (t) => {
+  let out = String(t || '');
+  for (const [re, rep] of SIM_SCRUB) out = out.replace(re, rep);
+  return out.replace(/\s+/g, ' ').replace(/\s+([,.;:!?])/g, '$1').trim();
+};
+// Which measured finding is the simulator reaching for? Distinctive words only,
+// so "a real number" or "name my actual buyers" matches nothing and we say so
+// rather than pointing the writer at a finding it never meant.
+const SIM_MATCH_STOP = new Set(['about','actual','actually','always','anything','around','because','before','being','business','businesses','company','customer','customers','different','something','someone','specific','their','there','these','those','thing','things','through','would','could','should','really','tells','telling','number','numbers','people','which','while','where']);
+const simWantsWhichHarm = (want, harms) => {
+  const tok = (t) => new Set(String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/).filter(w => w.length >= 5 && !SIM_MATCH_STOP.has(w)));
+  const w = tok(want);
+  if (w.size < 2) return null;
+  let best = null, bestN = 0;
+  for (const h of (Array.isArray(harms) ? harms : [])) {
+    const f = String((h && h.finding) || '').trim();
+    if (!f) continue;
+    let n = 0;
+    for (const x of tok(f)) if (w.has(x)) n++;
+    if (n > bestN) { bestN = n; best = f; }
+  }
+  return bestN >= 2 ? best : null;
 };
 
 // ══ VERIFYING AN EMAIL THE MODEL WROTE ══════════════════════════════════════
@@ -10528,14 +10648,52 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
   const { first, spine, earned, pattern, reframe, money, count, cta,
     trade, tenure, situationRead, bindingLayer, bindingWhy, acquisitionIsReferral,
     purchaseUrgency: urgency, second } = parts;
+  // ══ THE BRIEF HAD EXACTLY ONE LEGAL MOVE IN IT: REWORD ═════════════════
+  // What the writer was handed:
+  //
+  //   THE FINDING (the one verified fact — this MUST survive): <our sentence>
+  //   THE ASK (use close to verbatim, and it MUST BE THE LAST SENTENCE): <ours>
+  //   ...and above them: "You may improve how it reads; you may not change what
+  //   it claims."
+  //
+  // Two of the six sentences arrived pre-written and un-droppable, the opener
+  // was separately required to carry the spine's own distinctive words, and the
+  // verifier at the other end checks that the spine survived. Under that brief
+  // the only safe strategy is to paraphrase our sentence and paste our ask on
+  // the end — which is exactly what every draft has done, and it is why the
+  // emails read like the composed version with the punctuation tidied.
+  //
+  // That is not a model that cannot write. It is a brief with no room in it.
+  //
+  // WHAT ACTUALLY HAS TO SURVIVE IS THE FACT AND ITS FIGURES. The sentence we
+  // happened to build around them is ours to give up, and giving it up is the
+  // only way a different sentence can exist. Nothing about the factual floor
+  // moves: every figure below is still on the permitted list, verifyBrainEmail
+  // still checks each one, still requires two content words of the spine to
+  // survive, and still discards anything that fails — the floor remains the
+  // composed email we would have sent anyway.
+  const _spineFigs = (String(spine || '').match(/\d[\d,.]*%?/g) || [])
+    .map(x => x.replace(/[.,]$/, ''));
   const supplied = [
     earned ? `WHAT THEY HAVE EARNED (measured, true): ${earned}` : '',
-    `THE FINDING (the one verified fact — this MUST survive): ${spine}`,
+    `THE FACT THIS EMAIL IS BUILT ON \u2014 it must survive, IN YOUR OWN WORDS: ${spine}`,
+    `  \u2192 That is how the composed version phrased it, and the phrasing is not the point. Replace it. What may NOT change is the fact itself${_spineFigs.length ? `, and these figures, which must appear exactly as written: ${_spineFigs.join(', ')}` : ''}. Saying it a different way is not a licence to say a different thing.`,
     reframe ? `HOW PEOPLE BEHAVE (general truth, safe): ${reframe}` : '',
     pattern ? `WHAT THIS USUALLY MEANS in businesses of this kind (general, safe): ${pattern}` : '',
     money ? `WHAT THE WORK IS WORTH in their trade (public knowledge): ${money}` : '',
     count ? `HOW MANY THINGS WE FOUND IN TOTAL: ${count}` : '',
-    `THE ASK (use close to verbatim, and it MUST BE THE LAST SENTENCE): ${cta}`,
+    // ══ THE ASK IS A JOB, NOT A STRING ═══════════════════════════════════
+    // "use close to verbatim" made the last sentence of every email one of nine
+    // fixed questions. He has read the finding in the writer's voice and then
+    // hits a line assembled by a table, and the seam is the most visible one in
+    // the email because it is the last thing he reads.
+    //
+    // The JOB is unchanged and it is what actually matters: a question, last,
+    // about who owns this or what he would want to know — never a request for
+    // his time. MEETING_ASK in verifyBrainEmail now enforces that mechanically,
+    // which is what makes releasing the wording safe.
+    `THE ASK \u2014 this is its JOB, not its wording: ${cta}`,
+    `  \u2192 Write that last sentence yourself, in the voice of the rest of the email. It must be a QUESTION, it must be the LAST thing he reads, and it must be answerable in four words. Ask who is handling this, or whether he already knew, or whether he wants the part you have not told him. NEVER ask for a call, a meeting, a time or any number of minutes \u2014 that is a decision he has no reason to make yet, and the draft is discarded for it.`,
   ].filter(Boolean).join('\n');
 
   // WHO THIS PERSON IS. Without it the writer produced "I noticed a business with
@@ -10576,9 +10734,11 @@ ${diagnosis}
 
 ${_ev.block}
 
-THE SENTENCE THIS EMAIL IS BUILT ON. It is measured, and it is what the composed
-version would have said. You may improve how it reads; you may not change what it
-claims:
+WHAT THIS EMAIL HAS TO CARRY. Every line below is measured. The WORDS are not
+measured \u2014 they are one way of saying it, written by an assembler that cannot
+write, and you are not being asked to improve them. You are being asked to say
+these things the way a person who understands this business would say them, which
+means fewer of them, in a different order, in sentences we did not write:
 
 ${supplied}
 
@@ -10612,7 +10772,10 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   no auto-replies, no "they go elsewhere", no "you never hear from them". We have
   never observed any of it.
 - Never state their revenue, their losses, their conversion rate or their hours.
-- The FINDING must still be recognisable and its numbers must appear exactly.
+- The FACT must still be recognisable and its numbers must appear exactly. The
+  SENTENCE does not have to survive and should not: if your draft reads as a
+  tidied version of the supplied line, you have not written an email, you have
+  re-punctuated one.
 - THE ASK IS THE LAST SENTENCE. Nothing follows it. A draft that puts the
   question in the middle and keeps explaining afterwards is discarded — he reads
   past it, finishes on a statement, and has nothing to reply to.
@@ -11039,6 +11202,85 @@ const verifyBrainEmail = (body, opts = {}) => {
   const JARGON = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg)\b/i;
   const j = text.match(JARGON);
   if (j) return { ok: false, why: `agency vocabulary — "${j[0]}"` };
+
+  // ══ A POSITION CLAIM MAY NOT CONTRADICT THE POSITION WE MEASURED ═══════
+  // Live on Glenn Layton Homes. The email that shipped said "You're on page two
+  // for that search." We had measured him at #3 of 20 — page one, top three,
+  // the position he is proudest of. He runs that search, sees himself third,
+  // and every true sentence in the email dies with the false one.
+  //
+  // Nothing caught it. The audit has a rule for exactly this shape, and it only
+  // fires when NO rank was measured — it has never compared a claim against a
+  // rank we do hold. And it lives in the audit checker, so the email path never
+  // ran it at all. That is the failure this file records as "a guard in the
+  // wrong function", and this is the third time it has produced a live error.
+  //
+  // The rank travels with the email now, and the three claim shapes are checked
+  // against it: he is BELOW where we measured, he is ABOVE where we measured, or
+  // he is ABSENT when we found him. Word-spelled numbers are included — "page
+  // two" carries no digit, so every figure gate in this file was blind to it,
+  // which is precisely how it reached a live send.
+  //
+  // Gated on the caller SUPPLYING rank information. A caller that knows nothing
+  // about rank cannot be held to it; the compose route supplies it at all three
+  // verify sites and RANK GATE CHECK asserts that at boot.
+  if (Object.prototype.hasOwnProperty.call(opts, 'rankChecked')) {
+    const _rk = Number(opts.rank);
+    const _known = Number.isFinite(_rk) && _rk > 0;
+    // Only sentences that are ABOUT search. "the first page of your site" is not
+    // a ranking claim and must not be treated as one.
+    const SEARCH_CTX = /\b(search|searches|searching|google|result|results|rank|ranks|ranked|ranking|map pack|maps|looking for|types? in|typed in|first screen|listings?)\b/i;
+    const ABSENT   = /\b(?:invisible|nowhere to be (?:seen|found)|(?:nobody|no one|no-one) (?:sees|finds|can find)|do(?:es)?n'?t (?:show|appear|come) up|not (?:showing|appearing)|never (?:shows?|appears?) up)\b/i;
+    const OFF_P1   = /\bpage\s*(?:2|two|3|three|4|four)\b|\bsecond page\b|\bnot on (?:the )?(?:first|front|1st) page\b|\boff the first page\b|\bpast the first page\b/i;
+    const LOW      = /\bnear the bottom\b|\bbottom of (?:the )?(?:that |their |the )?(?:list|page|results|first \w+)\b|\b(?:way|far) down\b|\bburied\b/i;
+    const HIGH     = /\btop (?:three|3|five|5|two|2)\b|\b(?:at|on) the top of\b|\bfirst page\b|\bpage one\b|\bpage 1\b|\bnumber one\b|\b#\s?1\b/i;
+    for (const _s of text.split(/(?<=[.!?])\s+/)) {
+      if (!SEARCH_CTX.test(_s)) continue;
+      const _bad = (why) => ({ ok: false, why });
+      if (ABSENT.test(_s) && opts.rankFound) {
+        return _bad(`says he cannot be found in search — "${_s.trim().slice(0, 60)}" — and we FOUND him${_known ? ` at #${_rk}` : ''}. He runs the search, sees his own name, and stops believing the rest of the email`);
+      }
+      if (!opts.rankChecked) {
+        if (ABSENT.test(_s) || OFF_P1.test(_s) || LOW.test(_s) || HIGH.test(_s)) {
+          return _bad(`makes a claim about where he ranks — "${_s.trim().slice(0, 60)}" — and we never ran the search on this lead. There is no measurement behind it`);
+        }
+        continue;
+      }
+      if (OFF_P1.test(_s)) {
+        if (_known && _rk <= 10) return _bad(`says he is off the first page — "${_s.trim().slice(0, 60)}" — and we measured #${_rk}${Number.isFinite(Number(opts.rankScanned)) ? ` of ${Number(opts.rankScanned)}` : ''}. That is page one. One search disproves it`);
+        if (opts.rankFound && !_known) return _bad(`states a page position when the measured rank was withheld — two checks disagreed, so we deliberately hold no sayable position on this lead`);
+      } else if (LOW.test(_s)) {
+        if (_known && _rk <= 5) return _bad(`says he is near the bottom of the results — "${_s.trim().slice(0, 60)}" — and we measured #${_rk}. He is at the top of the list he is being told he is buried in`);
+        if (opts.rankFound && !_known) return _bad(`describes where he sits in the results when the measured rank was withheld — two checks disagreed, so there is no position to describe`);
+      } else if (HIGH.test(_s)) {
+        if (_known && _rk > 10) return _bad(`says he is near the top — "${_s.trim().slice(0, 60)}" — and we measured #${_rk}. Flattery he can disprove is worse than the finding we actually hold`);
+        if (opts.rankChecked && !opts.rankFound) return _bad(`says he is near the top — "${_s.trim().slice(0, 60)}" — and he was not in the results at all`);
+      }
+    }
+  }
+
+  // ══ THE ASK MAY NOT TURN INTO A MEETING REQUEST ════════════════════════
+  // Every ask in CTA_TEXT is a question about who owns a problem, or an offer of
+  // something he cannot get himself. Not one mentions a call, a calendar or a
+  // number of minutes, and that is deliberate: this email exists to earn a
+  // REPLY. Asking for time asks him to make a decision he has no reason to make
+  // yet, and it converts an open loop into a sales appointment he can decline in
+  // one word.
+  //
+  // Nothing enforced it, because the ask always arrived pre-written from the
+  // table. The writer is now free to phrase its own ask, so the boundary that
+  // was structural has to become a rule.
+  {
+    // "Got time for a quick chat this week?" walked through the first version of
+    // this, which wanted a verb it did not have. The reliable shape is the NOUN
+    // — call, chat, meeting, slot, minutes — wherever it sits, so the list is
+    // built around the noun rather than around the ways of asking for it.
+    const MEETING_ASK = /\b(?:jump|hop|get) on (?:a |the )?(?:quick |short |brief )?(?:call|chat|zoom|line)\b|\b(?:set up|schedule|book|grab|find|have|spare) (?:a |some )?(?:quick |short |brief )?(?:call|chat|meeting|zoom|slot)\b|\b(?:time|room|space) for a (?:quick |short |brief )?(?:call|chat|meeting|zoom)\b|\bopen to a (?:quick |short |brief )?(?:call|chat|conversation)\b|\b(?:\d{1,2}|ten|fifteen|twenty|thirty) ?-? ?minutes?\b|\bare you free\b|\bdo you have (?:a )?(?:few )?(?:minutes?|time)\b|\bmy calendar\b|\bwhat does your (?:week|schedule|diary) look like\b|\bworth a (?:quick )?(?:call|chat)\b/i;
+    const _ma = text.match(MEETING_ASK);
+    if (_ma) {
+      return { ok: false, why: `"${_ma[0].trim()}" — this asks for his time. The only job of this email is to earn a REPLY; asking for a call asks him to decide something he has no reason to decide yet, and it turns an open question he wants answered into an appointment he can decline in one word` };
+    }
+  }
 
   // ── IT MUST STILL BE ABOUT THE THING WE MEASURED ────────────────────────
   // A fluent email about the wrong subject is worse than a clumsy one about the
@@ -13228,13 +13470,43 @@ const rankHarms = (m = {}) => {
     const _dismissible = h.id === 'review_pain_pattern'
       && Number.isFinite(Number(m.reviewPainMentions)) && Number(m.reviewPainMentions) < 3;
 
+    // ══ ARITHMETIC CANCELLED A CATEGORICAL JUDGEMENT ══════════════════════
+    // URGENCY_ADJUST does not encode a preference. It encodes a fact about the
+    // buyer: nobody price-shops a flooded basement, and nobody is trying to
+    // commission a custom home at eleven at night. Those two entries are -22
+    // and -24, and both were written after a live email failed on exactly them.
+    //
+    // But no_after_hours is also in CONVERSION_SIDE, where harm is multiplied by
+    // traffic — up to +12% for a business at the top of the local results. Live
+    // on Glenn Layton Homes, a custom home builder measured at #3 of 20: harm 74
+    // scaled to 80, and -24 was no longer enough to keep it off the opener. The
+    // email led on "the only way to reach you is a phone call during office
+    // hours", and the prospect simulator named the fault precisely — "they're
+    // not shopping for custom homes at 9 PM on a Tuesday."
+    //
+    // Two measurements answering the same question — how many of his customers
+    // walk into this particular wall — and one of them was a percentage that
+    // could outweigh the other. A finding that says "this buyer does not do
+    // that" cannot be a number a different number is allowed to beat.
+    //
+    // So a heavy demotion (20+, which only ever hits the entries the table was
+    // written for) blocks the rung from LEADING. It keeps its harm, its place in
+    // the ranked list, its row in the audit and its place on the call sheet,
+    // exactly like the review-pain block above. Mike can still ask on the call
+    // whether people can reach him outside hours; that is a fair question from
+    // someone already in conversation. It just cannot be the sentence a stranger
+    // opens with, to a buyer who was never going to try.
+    const _wrongBuyer = _urgAdj <= -20;
+
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
       // Read by the lead selection below. A blocked rung keeps its harm, its
       // place in the list and its row in the audit; it simply cannot be first.
-      leadBlocked: _dismissible,
+      leadBlocked: _dismissible || _wrongBuyer,
       leadBlockedWhy: _dismissible
         ? `only ${m.reviewPainMentions} of the ${m.reviewsRead || '?'} reviews we read name it, and he will do that division before he finishes the sentence`
-        : '',
+        : _wrongBuyer
+          ? `${m.purchaseUrgency === 'EMERGENCY' ? 'people contact this trade when something has already gone wrong, and nobody compares providers mid-crisis' : 'people research this purchase for weeks and decide long before they make contact'}, so this describes a customer who does not exist here (${_urgAdj} on the urgency table)`
+          : '',
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
       selfFix: _selfFix.score, selfFixWhy: _selfFix.why,
       opener: openerScore, finding: sentence, costs: h.costs,
@@ -25784,6 +26056,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             const _cfv = Array.isArray(parsed.candidateFindings) ? parsed.candidateFindings : [];
             const _moved = [];
             const _unmatched = [];
+            const _surfaced = [];
             const _unmatchedSurprise = [];
             const _unmatchedFix = [], _unmatchedOwn = [];
             for (const _c of _cfv) {
@@ -25823,6 +26096,10 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                   ? { score: _measured.v, unmatched: false, why: `scored from the MEASUREMENT (${_measured.id}), not from how the sentence was phrased` }
                   : computeVerifiability(_c.finding);
               if (_v.unmatched) _unmatched.push(`"${String(_c.finding).slice(0, 46)}"`);
+              // Scored from the SURFACE rather than the phrasing. Not a demotion
+              // any more, but still a phrasing our rules did not know, and the
+              // day that list stops covering real findings is a day worth seeing.
+              if (_v.bySurface) _surfaced.push(`"${String(_c.finding).slice(0, 46)}"`);
               // Severity travels with the signal type, so correct it in the same pass.
               const _sev = computeSeverity(_c.signal || _c.declaredSignal);
               if (Number(_c.severity) !== _sev) {
@@ -25868,6 +26145,9 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             }
             if (_unmatchedSurprise.length) {
               console.log(`\u26a0 SURPRISE [${company}]: ${_unmatchedSurprise.length} finding(s) have no known base rate and defaulted to 3 \u2014 ${_unmatchedSurprise.join(' | ')}. If one of those is something almost every business like this has, it is being over-rated and will crowd out a real finding.`);
+            }
+            if (_surfaced.length) {
+              console.log(`\u2713 VERIFIABILITY [${company}]: ${_surfaced.length} finding(s) matched no phrasing rule but ARE about a page or listing we read, so they scored 4 instead of being demoted to 2 \u2014 ${_surfaced.join(' | ')}. Before this they lost to the fixed ladder sentences on wording alone, which is how an audit ends up as the same list every lead gets.`);
             }
             if (_unmatched.length) {
               console.log(`\u26a0 VERIFIABILITY [${company}]: ${_unmatched.length} finding(s) matched NO rule and defaulted to 2 \u2014 ${_unmatched.join(' | ')}. If any of those is something he could actually check in ten seconds, the rule list has drifted behind the copy vocabulary and a real finding is being demoted silently.`);
@@ -30695,6 +30975,319 @@ app.listen(PORT, () => {
     console.log(`⛔ MY READ CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ A CLAIM ABOUT WHERE HE RANKS, AGAINST THE RANK WE MEASURED ═════════
+  // Live on Glenn Layton Homes: the email said "You're on page two for that
+  // search" and localRank held #3 of 20. He is on page one, in the top three,
+  // and the one sentence he would have checked first was false.
+  //
+  // Two separate reasons nothing caught it, and both are recorded failure
+  // classes in this file. The rule for this exact shape lives in the AUDIT
+  // checker, so the email path never ran it — "a guard in the wrong function".
+  // And "page two" contains no digit, so every figure gate in the file was blind
+  // to it.
+  //
+  // This walks the real verifier, and it asserts BOTH directions: the false
+  // claim must fail and the true one must pass. A gate that rejects every
+  // position claim would pass half of this and destroy the strongest finding we
+  // produce.
+  try {
+    const _fails = [];
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid}\n\nWho's handling that for you at the moment?`;
+    const _o = (rank, extra) => ({ spine: '8 of your 42 Google reviews name the same delay',
+      figures: ['8', '42'], rankChecked: true, rankFound: true, rank, rankScanned: 20, ...(extra || {}) });
+
+    // FALSE at #3. This is the sentence that shipped.
+    const _pg2 = verifyBrainEmail(_mk("You're on page two for that search."), _o(3));
+    if (_pg2.ok) _fails.push('"you\u2019re on page two for that search" passed against a measured rank of #3 \u2014 that is the live Glenn Layton email, unchanged');
+    // TRUE at #19. The band language the audit is explicitly told to use.
+    const _band = verifyBrainEmail(_mk('You are near the bottom of the first twenty when someone searches for that.'), _o(19));
+    if (!_band.ok) _fails.push(`the true band claim at #19 was refused (${_band.why}) \u2014 a gate that rejects every position claim throws away the strongest finding this system produces`);
+    // Flattery he can disprove is as damaging as the finding he can disprove.
+    const _high = verifyBrainEmail(_mk('You are in the top three when someone searches for that.'), _o(19));
+    if (_high.ok) _fails.push('"in the top three" passed against a measured rank of #19');
+    // We FOUND him. "Nobody finds you" is a claim he disproves in one search.
+    const _abs = verifyBrainEmail(_mk('Nobody finds you when they search for that.'), _o(3));
+    if (_abs.ok) _fails.push('"nobody finds you" passed on a lead where the local-rank search FOUND him');
+    // Never measured at all: there is nothing behind any of it.
+    const _none = verifyBrainEmail(_mk("You're on page two for that search."),
+      { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'], rankChecked: false, rankFound: false, rank: null, rankScanned: null });
+    if (_none.ok) _fails.push('a page-position claim passed on a lead where the local-rank search never ran');
+    // A caller that knows nothing about rank is not held to a rank it never had.
+    const _silent = verifyBrainEmail(_mk('You are near the bottom of the first twenty when someone searches for that.'),
+      { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] });
+    if (!_silent.ok) _fails.push(`a caller that supplies no rank information at all is being held to a rank gate (${_silent.why})`);
+
+    // ── AND THE MEASUREMENT HAS TO ARRIVE ────────────────────────────────
+    // The gate above is worthless if the compose route does not hand it the
+    // rank. Five fixes have shipped dead in this file for exactly that reason,
+    // and the gap is invisible in every log. So: every verify inside the compose
+    // route must carry it.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // Assembled at runtime on purpose. Written as one literal, this check finds
+    // ITSELF — it sits earlier in the file than the route it is reading, so
+    // indexOf returns the position of its own search string and the slice
+    // contains no route at all. It then reports a clean pass or a false alarm
+    // about a function it never looked at, which is worse than not checking.
+    const _rs = _src.indexOf("app.post('" + '/api/compose-email' + "'");
+    const _re2 = _src.indexOf('app.post' + '(', _rs + 20);
+    const _route = _rs > -1 ? _src.slice(_rs, _re2 > -1 ? _re2 : _src.length) : '';
+    if (!_route) {
+      _fails.push('the compose route could not be located in the source, so the wiring was not checked');
+    } else {
+      let _n = 0, _missing = 0;
+      for (const _m of _route.matchAll(/verifyBrainEmail\(/g)) {
+        _n++;
+        if (!/_rankOpt/.test(_route.slice(_m.index, _m.index + 500))) _missing++;
+      }
+      if (!_n) _fails.push('the compose route contains no verifyBrainEmail call at all \u2014 this check is reading the wrong function');
+      else if (_missing) _fails.push(`${_missing} of the ${_n} verify sites in the compose route do not receive the measured rank, so the gate cannot fire on them`);
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 RANK GATE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 RANK GATE CHECK: a position claim is now checked against the position we measured \u2014 "on page two" is refused at #3, "top three" is refused at #19, "nobody finds you" is refused on a lead we found, and the true band claim still passes. The rank reaches all three verify sites in the compose route. Live, this exact sentence went out to a custom home builder measured at #3 of 20.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 RANK GATE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ASK MAY NOT ASK FOR HIS TIME ═══════════════════════════════════
+  // The writer used to be told to reproduce the ask "close to verbatim", so the
+  // last sentence of every email came from a table of nine and nothing had to
+  // check it. The writer now phrases its own, which means the boundary that was
+  // structural has to be a rule: this email earns a REPLY, and asking for a call
+  // asks him to decide something he has no reason to decide yet.
+  //
+  // Both halves matter. A gate that blocks meeting language is only safe if our
+  // OWN asks still pass it, so every ask in the table is run through the real
+  // verifier \u2014 that is the half that catches me breaking the product while
+  // tightening a rule.
+  try {
+    const _fails = [];
+    const _mk = (ask) => `Michael, 8 of your 42 Google reviews name the same delay.\n\nThat is the kind of thing that repeats when nobody owns it.\n\n${ask}`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    for (const _bad of ['Worth a quick call?', 'Got time for a quick chat this week?',
+                        'Want to jump on a call?', 'Are you free Thursday?']) {
+      if (verifyBrainEmail(_mk(_bad), _base).ok) _fails.push(`"${_bad}" passed \u2014 that is an appointment request, not an ask that earns a reply`);
+    }
+    let _ctaN = 0;
+    for (const _entry of Object.values(CTA_TEXT || {})) {
+      for (const _t of [_entry && _entry.text, ...((_entry && _entry.alts) || [])].filter(Boolean)) {
+        _ctaN++;
+        // The ask's own digits are permitted, exactly as they are in production.
+        const _v = verifyBrainEmail(_mk(_t), { ..._base, count: _t });
+        if (!_v.ok) _fails.push(`our own ask "${String(_t).slice(0, 46)}" is refused by the verifier (${_v.why})`);
+      }
+    }
+    if (_ctaN < 8) _fails.push(`only ${_ctaN} asks were tested \u2014 the table is not being read, so this check is passing on nothing`);
+    if (_fails.length) {
+      console.log(`\u26d4 MEETING ASK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 MEETING ASK CHECK: the writer now phrases its own last sentence, and a request for his time \u2014 a call, a chat, a slot, a number of minutes \u2014 is refused. All ${_ctaN} asks in our own table still pass, so the rule constrains the shape without narrowing what we are allowed to ask.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MEETING ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A FIVE-WORD QUOTE COULD NEVER BE VERIFIED ══════════════════════════
+  // The sliding window ran down to six consecutive words, so on a five-word
+  // quote the loop never executed and only an exact match could save it. Live on
+  // Fit Money CPA the model quoted 'BOOK MY STRATEGY CALL HERE' against a nav
+  // that reads BOOK MY STRATEGY CALL \u2014 four of five words verbatim \u2014 and all
+  // three original findings on that lead were dropped. The next log line was
+  // "none survived verification... the same list every lead gets", which is the
+  // thin generic audit, caused by window arithmetic.
+  //
+  // The floor is four, and only for needles too short to reach six. The second
+  // half of this check is the one that matters: a fabricated short quote must
+  // still be refused, or the floor has bought the drop rate with the guarantee.
+  try {
+    const _fails = [];
+    const _corpus = 'Book my strategy call. We help business owners keep more of what they earn every year.';
+    const _real = verifyOriginalFinding({
+      finding: 'The only thing the navigation asks a visitor to do is BOOK MY STRATEGY CALL HERE, on every page',
+      evidence: 'BOOK MY STRATEGY CALL HERE',
+    }, _corpus);
+    if (!_real.ok) _fails.push(`a quote that is four of its five words verbatim on their page was still dropped (${_real.why}) \u2014 that is the Fit Money drop, unchanged`);
+    const _fake = verifyOriginalFinding({
+      finding: 'The homepage promises a same day response to every enquiry that comes in through the form',
+      evidence: 'we guarantee same day response',
+    }, _corpus);
+    if (_fake.ok) _fails.push('a fabricated short quote passed \u2014 the floor has bought the drop rate with the guarantee, which is the wrong trade');
+    if (_fails.length) {
+      console.log(`\u26d4 SHORT QUOTE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SHORT QUOTE CHECK: a quote too short to reach the six-word window now verifies on four consecutive words of their own copy, and a fabricated one still does not. When nothing survives this function the audit falls back to the ladder, which is the same list every lead gets \u2014 that fallback was being triggered by arithmetic.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SHORT QUOTE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SIMULATOR HOLDS NO MEASUREMENTS ════════════════════════════════
+  // It is given the email, the name, the trade and the city. Nothing else. So
+  // anything concrete it writes was invented, and its "what would have got a
+  // reply out of you" field asks a language model to WRITE A SENTENCE. On Glenn
+  // Layton it wrote: like 'you're on page two for custom home builder
+  // Jacksonville' with proof. That went to the rewriter as the owner's own
+  // words, and "You're on page two for that search" went out.
+  try {
+    const _fails = [];
+    const _dirty = "like 'you're on page two for custom home builder Jacksonville' with proof";
+    const _clean = scrubSimText(_dirty);
+    if (/page two/i.test(_clean)) _fails.push('the simulator\u2019s invented position survives the scrub \u2014 this is the exact string that reached a live email');
+    if (/['\u2018\u201c]/.test(_clean)) _fails.push('a quoted fragment survives the scrub, and a quoted fragment is a proposed sentence \u2014 the writer copies proposed sentences');
+    if (!/a figure/.test(scrubSimText('tell me I am losing $40k a month'))) _fails.push('an invented dollar figure survives the scrub');
+    if (!/a figure/.test(scrubSimText('show me 3 competitors'))) _fails.push('an invented count survives the scrub');
+    // The wish resolves to OUR sentence, or to nothing at all.
+    const _harms = [{ id: 'outranked_by_weaker', finding: 'Two businesses with fewer reviews rank above you in the local results for plumber in Dallas' },
+                    { id: 'review_velocity_drop', finding: 'One review in the last ninety days against ten in the ninety before' }];
+    const _hit = simWantsWhichHarm('name the competitors ranking above me in the local results', _harms);
+    if (_hit !== _harms[0].finding) _fails.push(`a wish that clearly points at a measured finding resolved to ${_hit ? '"' + String(_hit).slice(0, 40) + '"' : 'nothing'} \u2014 then the writer is told only to "lead on something else", which is the weakest possible instruction`);
+    if (simWantsWhichHarm('a real number', _harms)) _fails.push('a vague wish resolved to a measured finding \u2014 pointing the writer at a finding the simulator never meant is worse than pointing it at none');
+    // And the wish must not reach the writer as text, at all.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // Same trap as the compose-route slice above: written as one literal this
+    // finds itself, slices its own text, sees the word wouldReply in its own
+    // assertions and reports the bug it was written to prove absent.
+    const _r3 = _src.indexOf('const _r3 = await ' + 'rewriteEmailWithBrain(');
+    const _r3end = _r3 > -1 ? _src.indexOf('\n                );', _r3) : -1;
+    const _call = (_r3 > -1 && _r3end > -1) ? _src.slice(_r3, _r3end) : '';
+    if (!_call) _fails.push('the sim-correction rewrite call could not be located, so nothing about it was checked');
+    else if (/wouldReply/.test(_call)) _fails.push('the rewriter is still handed the simulator\u2019s wouldReply text \u2014 that is the path that put an invented rank into a live email');
+    if (_fails.length) {
+      console.log(`\u26d4 SIM QUARANTINE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SIM QUARANTINE CHECK: the prospect simulator's prose no longer reaches the writer. Its objection is scrubbed of positions, figures and quoted sentences; its wish is resolved against findings WE measured and only our sentence travels. It holds no measurements, so everything concrete it writes was invented \u2014 and one of those inventions was sent.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SIM QUARANTINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BRIEF HAD ONE LEGAL MOVE IN IT, AND IT WAS REWORD ══════════════
+  // "THE FINDING (this MUST survive)" plus "THE ASK (use close to verbatim)"
+  // plus "you may improve how it reads; you may not change what it claims" is
+  // not a writing brief. Two of six sentences arrived pre-written, and every
+  // draft came back as the composed email with the punctuation tidied. That is
+  // the flatness, and it was in the instructions rather than in the model.
+  //
+  // Source-read, because the failure is a sentence in a prompt: no behaviour
+  // changes, no log moves, and the only evidence is the emails all sounding
+  // alike, which takes a batch to see.
+  try {
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _i = _src.indexOf('const writeEmailWithBrain');
+    const _j = _src.indexOf('const NUMBER_TOKENS', _i);
+    // Comments stripped. The comments in that function QUOTE the instructions
+    // that were removed — explaining what the brief used to say and why — so
+    // reading them as live text reports every removed instruction as still
+    // present. The question this check asks is what the MODEL receives, and the
+    // model never receives a comment.
+    const _fn = (_i > -1 && _j > -1) ? _src.slice(_i, _j).replace(/^\s*\/\/.*$/gm, '') : '';
+    const _fails = [];
+    if (!_fn) _fails.push('writeEmailWithBrain could not be located in the source');
+    else {
+      if (/use close to verbatim/i.test(_fn)) _fails.push('the ask is still handed over as "use close to verbatim", which makes the last sentence of every email one of nine fixed questions');
+      if (/you may not change what it claims/i.test(_fn)) _fails.push('the brief still says the supplied sentence may only be re-read, not rewritten');
+      if (!/IN YOUR OWN WORDS/.test(_fn)) _fails.push('the brief no longer tells the writer the fact must survive in its OWN words, so nothing replaces the instruction that was removed');
+      if (!/_spineFigs/.test(_fn)) _fails.push('the figures that must survive are not named, so releasing the wording releases the numbers with it \u2014 that is the one thing that may never move');
+      if (!/NEVER ask for a call/.test(_fn)) _fails.push('the ask is released without the boundary that replaces it');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 WRITER BRIEF CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 WRITER BRIEF CHECK: what must survive is now the FACT and its FIGURES, named explicitly, and the sentence we assembled around them is not. The ask is handed over as a job rather than a string. Nothing about the factual floor moved \u2014 every figure is still on the permitted list and verifyBrainEmail still discards anything that fails, so the floor is still the composed email.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 WRITER BRIEF CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ ARITHMETIC CANCELLED A CATEGORICAL JUDGEMENT ═══════════════════════
+  // URGENCY_ADJUST says nobody commissions a custom home at eleven at night:
+  // no_after_hours, -24. CONVERSION_SIDE multiplies harm by traffic, and a
+  // business at #3 gets +7%. On Glenn Layton Homes those met and the after-hours
+  // finding still opened the email. The simulator named it exactly: "they're not
+  // shopping for custom homes at 9 PM on a Tuesday."
+  //
+  // Run through resolveMeasurements rather than a hand-built object, because a
+  // hand-built one is how the last two harnesses lied.
+  try {
+    const _fails = [];
+    // booking, bookingMeasured and rankChecked are NOT produced by
+    // resolveMeasurements \u2014 all three are fields _harmInputs assembles BY HAND
+    // beside it, which is the exact seam this file records as "computed but not
+    // passed". A fixture built from the resolver alone leaves the rung under
+    // test unable to fire, and the check then passes on nothing. It mirrors
+    // production instead.
+    //
+    // rankChecked also does the second job here: with a weaker competitor above
+    // them it lets outranked_by_weaker fire, so the lead has TWO eligible
+    // findings. That matters, because when every eligible finding is blocked the
+    // block is deliberately ignored \u2014 a weak opener beats no email. Without a
+    // second finding this check asserts the fallback rather than the rule.
+    const _bk = { booking: 'phone_only', bookingMeasured: true, rankChecked: true,
+      rankQuery: 'custom home builder in Jacksonville' };
+    const _fx = (trade) => ({ ..._bk, ...resolveMeasurements({
+      localRank: { checked: true, found: true, rank: 3, scanned: 20, weakerAbove: 2,
+        ours: { reviews: 120, rating: 4.6 }, query: 'q', city: 'Jacksonville',
+        above: [{ name: 'A', reviews: 40 }, { name: 'B', reviews: 60 }] },
+      gbpHealth: { photoCount: 20, reviewCount: 120, rating: 4.6 },
+      history: {}, htmlSignals: { checked: true, hasForm: false },
+      reviewsRead: 60, ownerReplyCount: 40,
+      sitePagesArg: { booking: 'phone_only', bookingMeasured: true, prices: [] },
+      tradeWordArg: trade,
+    }), ..._bk });
+    const _cons = _fx('custom home builder');
+    const _emer = _fx('emergency water damage restoration');
+    if (_cons.purchaseUrgency !== 'CONSIDERED' || _emer.purchaseUrgency !== 'EMERGENCY') {
+      _fails.push(`the fixture did not classify as intended (${_cons.purchaseUrgency} / ${_emer.purchaseUrgency}) \u2014 this check is not testing what it says it is`);
+    } else {
+      const _rc = rankHarms(_cons), _re3 = rankHarms(_emer);
+      const _hc = _rc.all.find(h => h.id === 'no_after_hours');
+      const _he = _re3.all.find(h => h.id === 'no_after_hours');
+      if (!_hc || !_he) _fails.push('the after-hours rung did not fire on a phone-only fixture, so nothing here was tested');
+      else {
+        if (!_hc.leadBlocked) _fails.push('a custom home builder can still have his email opened by "the only way to reach you is a phone call during office hours" \u2014 that is the Glenn Layton email');
+        if (_he.leadBlocked) _fails.push('the same finding is blocked on an EMERGENCY trade, where being unreachable IS the whole problem \u2014 the block has stopped being about the buyer');
+        if (_rc.lead && _rc.lead.id === 'no_after_hours') _fails.push('the considered-purchase email still opens on the after-hours finding');
+        if (!_rc.all.some(h => h.id === 'no_after_hours')) _fails.push('the finding was suppressed rather than blocked from leading \u2014 it must stay in the audit and on the call sheet');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 WRONG BUYER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 WRONG BUYER CHECK: a finding the urgency table demotes by 20 or more can no longer open the email, whatever the traffic multiplier does to its harm. It keeps its harm, its place in the ranked list and its row on the call sheet. On an emergency trade the same finding is free to lead, which is the point \u2014 the block is about the buyer, not the rung.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 WRONG BUYER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A DEFAULT OF 2 IS A DEMOTION, NOT A SHRUG ══════════════════════════
+  // computeVerifiability matches WORDS, and the findings it scores are written
+  // by a model, so every unanticipated phrasing dropped to 2 \u2014 below almost
+  // everything the list does know, so the finding lost to the ladder's fixed
+  // sentences on wording alone. A live batch had four of four brain findings
+  // unmatched. When the fallback is the common path it is the behaviour.
+  //
+  // Findings drift forever; SURFACES do not. There are only so many things we
+  // can look at, and it is a closed list we control.
+  try {
+    const _fails = [];
+    const _surface = computeVerifiability('Their about page tells the story of the founder and never once says what the work costs');
+    if (_surface.score < 4) _fails.push(`a finding about a page we read still scores ${_surface.score} \u2014 that is the silent demotion that sends every audit back to the ladder`);
+    if (_surface.unmatched) _fails.push('a surface-scored finding is still counted as unmatched, so it is still being reported as a demotion');
+    const _unobs = computeVerifiability('Enquiries sent in the evening are not acknowledged until the following working day');
+    if (_unobs.score !== 2) _fails.push(`something he cannot check by looking scored ${_unobs.score} \u2014 the surface rule has become a way of promoting anything`);
+    const _known = computeVerifiability('Ranked #19 of 20 for plumber in Dallas');
+    if (_known.score !== 5) _fails.push(`a finding the phrasing rules DO know dropped to ${_known.score} \u2014 the surface rule is jumping the queue`);
+    if (_fails.length) {
+      console.log(`\u26d4 SURFACE SCORE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SURFACE SCORE CHECK: a finding phrased in words no rule anticipated, about a page or a listing we actually read, now scores 4 instead of 2. Something he cannot check by looking still scores 2, and the phrasings the rules already know are untouched. The vocabulary of findings is unbounded; the list of things we can look at is not.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SURFACE SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE ONE THING NO REVIEW OF A SINGLE EMAIL CAN SEE ══════════════
   // Every gate in this file reads ONE email. "These emails are flat" is not a
   // property of one email — it is a property of the BATCH, and it is invisible
@@ -32667,6 +33260,27 @@ app.post('/api/compose-email', async (req, res) => {
       const _spineTxt = String(useSpine.claim || '');
       const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
       const _parts = composed._parts || {};
+      // ══ THE RANK HAS TO TRAVEL WITH THE EMAIL ═══════════════════════════
+      // verifyBrainEmail received the spine, the figures, the money and the
+      // trade — and never the one measurement an email is most likely to
+      // contradict. Glenn Layton went out saying "you're on page two for that
+      // search" while localRank held #3 of 20, and there was nothing in the
+      // gate that could have known.
+      //
+      // Assembled here, out of the try, because all three verify sites need it
+      // and the third one sits after that try has closed. rankSuppressed means
+      // two checks disagreed and we deliberately hold no sayable position, so
+      // the digit is withheld here exactly as it is everywhere else.
+      const _rankOpt = (() => {
+        const r = (audit && audit.localRank) || {};
+        const _rk = Number(r.rank);
+        return {
+          rankChecked: !!r.checked,
+          rankFound: !!r.found,
+          rank: (r.found && Number.isFinite(_rk) && _rk > 0 && !r.rankSuppressed) ? _rk : null,
+          rankScanned: Number.isFinite(Number(r.scanned)) ? Number(r.scanned) : null,
+        };
+      })();
       try {
         if (req.body.apiKey && _spineTxt) {
           // ══ THE WRITER GETS WHAT THE AUDIT BRAIN KNEW ═══════════════════
@@ -32725,6 +33339,8 @@ app.post('/api/compose-email', async (req, res) => {
           const _v = _written ? verifyBrainEmail(_written, {
             spine: _spineTxt, figures: _figs, money: _parts.money || '',
             earned: _parts.earned || '', count: _parts.count || '',
+            trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+            ..._rankOpt,
           }) : { ok: false, why: 'model returned nothing' };
           if (_v.ok) {
             // == THE THIRD EXIT ==========================================
@@ -32780,6 +33396,8 @@ app.post('/api/compose-email', async (req, res) => {
                 const _v2 = verifyBrainEmail(_r2, {
                   spine: _spineTxt, figures: _figs, money: _parts.money || '',
                   earned: _parts.earned || '', count: _parts.count || '',
+                  trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+                  ..._rankOpt,
                 });
                 if (_v2.ok) _fixed = _v2.body;
                 else console.log(`\u270d\ufe0f REWRITE ALSO REJECTED [${company}]: ${_v2.why}. Two attempts is enough — sending the composed version.`);
@@ -32853,17 +33471,24 @@ app.post('/api/compose-email', async (req, res) => {
             // cannot pass, the original email stands rather than being lost.
             if (_sim.verdict === 'delete' && req.body.apiKey && _sendKey) {
               try {
-                const _why = String(_sim.reaction || '').slice(0, 220);
-                const _want = String(_sim.wouldReply || '').slice(0, 220);
+                // Scrubbed, because the reaction is prose from a model holding
+                // no measurements. Its WISH is never quoted — it is resolved
+                // against findings we measured, and only OUR sentence travels.
+                const _why = scrubSimText(_sim.reaction).slice(0, 220);
+                const _wantHarm = simWantsWhichHarm(_sim.wouldReply, audit.harmsRanked);
+                if (_sim.wouldReply && scrubSimText(_sim.wouldReply) !== String(_sim.wouldReply || '').replace(/\s+/g, ' ').trim()) {
+                  console.log(`⚠ SIM INVENTED A FACT [${company}]: the simulator's "what would have got a reply" contained something concrete — "${String(_sim.wouldReply).slice(0, 90)}" — and it holds no measurements at all, so that could only have been invented. It has NOT been passed to the writer. On Glenn Layton this exact path put "you're on page two for that search" into a live email against a measured rank of #3.`);
+                }
                 const _r3 = await rewriteEmailWithBrain(
                   _parts, req.body.apiKey, company, _send.body,
-                  `The owner read this and deleted it. In his words: "${_why}"${_want ? ` He said what would have earned a reply: "${_want}"` : ''} Fix that objection using ONLY the facts you were already given — do not add a new claim, a new number or a new finding to answer it. If his objection is that the finding does not apply to how he gets customers, lead on a different measured finding you were given instead.`
+                  `The owner read this and deleted it. His first thought: "${_why}" That is his opinion of THE EMAIL. He was shown nothing else, so it tells you what he did not care about and nothing whatsoever about his business — do not treat any part of it as information about him. Fix that objection using ONLY the facts you were already given: do not add a new claim, a new number or a new finding to answer it.${_wantHarm ? ` Of the findings you were already given, this is the one closest to what he says he would have answered — lead on it, in your own words: "${_wantHarm}"` : ` If his objection is that the finding does not apply to how he gets customers, lead on a different measured finding you were given instead.`}`
                 );
                 if (_r3) {
                   const _v3 = verifyBrainEmail(_r3, {
                     spine: _spineTxt, figures: _figs, money: _parts.money || '',
                     earned: _parts.earned || '', count: _parts.count || '',
                     trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+                    ..._rankOpt,
                   });
                   if (_v3.ok) {
                     composed[_sendKey] = { ...composed[_sendKey], body: _tidy(_v3.body), writtenBy: 'brain-sim-corrected' };
