@@ -24342,12 +24342,46 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     // ═══ REACH INTELLIGENCE ═══════════════════════════════════════════════
     // Timing window — deterministic from discovery signals
-    const reachWindow = discoverySignals.preparing_for_exit ? { window: 'NOW — actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately' }
-      : discoverySignals.agency_review ? { window: '~60 days', urgency: 'high', note: 'Actively shopping for agency replacement — window closes when they sign someone' }
-      : discoverySignals.raised_funding ? { window: '30-90 days post-raise', urgency: 'medium-high', note: 'Deploying new capital; budgets being allocated right now' }
-      : (discoverySignals.rebranding || discoverySignals.recently_launched) ? { window: '~30 days', urgency: 'medium', note: 'In transition — vendors being picked' }
-      : (manualRoleCount >= 3) ? { window: 'while job postings are live', urgency: 'medium', note: 'Feeling the labor pain right now — live postings prove it is current' }
-      : { window: 'standard', urgency: 'normal', note: '' };
+    // ══ AN INVENTED CLOCK, RUNNING IN PRODUCTION TODAY ═════════════════════
+    // Every branch of this stated a DURATION derived from a BOOLEAN:
+    //
+    //   raised_funding      -> "30-90 days post-raise"
+    //   agency_review       -> "~60 days"
+    //   rebranding          -> "~30 days"
+    //
+    // discoverySignals carries flags, not dates. Post-raise measured from WHEN?
+    // Nothing here knows. If the raise was eight months ago, "30-90 days
+    // post-raise" is simply false — and it is interpolated into the audit prompt
+    // and handed to Mike on the call sheet as the timing line.
+    //
+    // This is the exact thing PART 3 forbids, and it sits on the AUDIT side of
+    // the fence, where INVENTED_CLOCK in verifyBrainEmail cannot reach it. The
+    // whole file is built to stop a fabricated number reaching a prospect, and
+    // this one has been walking past the guard the entire time, because the
+    // guard is downstream of it.
+    //
+    // THE HONEST VERSION: state the CONDITION, which we did detect, and say the
+    // AGE only when a real one arrives. signalAgeDays is computed at five
+    // discovery sites and read by two ranking functions — and never posted to
+    // this route, so today the age is always absent and the line says so rather
+    // than inventing one. The moment the client sends it, this states a measured
+    // number of days and nothing else changes.
+    const _sigAgeRaw = Number(req.body.signalAgeDays);
+    const _sigAge = Number.isFinite(_sigAgeRaw) && _sigAgeRaw >= 0 ? Math.round(_sigAgeRaw) : null;
+    const _ageNote = _sigAge === null
+      ? 'age of this signal NOT measured — do not state or imply how long ago it happened'
+      : `the signal is ${_sigAge} day${_sigAge === 1 ? '' : 's'} old`;
+    const reachWindow = discoverySignals.preparing_for_exit ? { window: 'actively listed for sale', urgency: 'high', note: 'Owner is in transaction mode; financial conversations land immediately', ageNote: _ageNote }
+      : discoverySignals.agency_review ? { window: 'shopping for an agency', urgency: 'high', note: 'Looking to replace an incumbent — the opening closes when they sign somebody', ageNote: _ageNote }
+      : discoverySignals.raised_funding ? { window: 'has raised funding', urgency: 'medium-high', note: 'New capital to deploy; budgets get allocated after a raise', ageNote: _ageNote }
+      : (discoverySignals.rebranding || discoverySignals.recently_launched) ? { window: 'rebranding or newly launched', urgency: 'medium', note: 'In transition — vendors being picked', ageNote: _ageNote }
+      // The one branch that is genuinely current: a posting that is LIVE is live
+      // now, which is a present-tense fact rather than a duration.
+      : (manualRoleCount >= 3) ? { window: 'job postings live right now', urgency: 'medium', note: 'Live postings prove this is current — the only branch here with a fact about the present', ageNote: _ageNote }
+      : { window: 'standard', urgency: 'normal', note: '', ageNote: _ageNote };
+    if (reachWindow.window !== 'standard' && _sigAge === null) {
+      console.log(`\u26a0 NO CLOCK ON THIS SIGNAL [${company}]: the lead carries "${reachWindow.window}" and NO date. This line used to state a window anyway — "30-90 days post-raise" off a boolean — which is a fabricated number on the audit side, where the email's clock guard cannot see it. signalAgeDays is computed during discovery and is not being posted to this route; wire it and this states a measured age instead.`);
+    }
 
     // Hunter contact verified against homepage
     // The email finder only sets founderName when IT was the thing that found the
@@ -25266,7 +25300,7 @@ ${enrichment ? `- Company size: ${enrichment.employeeCount || enrichment.headcou
 - Executives (verified via public web): ${enrichment.executives?.length ? enrichment.executives.map(e=>e.name+' ('+e.title+')').join(', ') : 'none found'}${enrichment.founded ? '\n- Founded: ' + enrichment.founded : ''}` : ''}
 
 TIMING WINDOW (deterministic from their discovery signals — use this in reachPlan.timing):
-${reachWindow.window} | urgency: ${reachWindow.urgency}${reachWindow.note ? ' | ' + reachWindow.note : ''}
+${reachWindow.window} | urgency: ${reachWindow.urgency}${reachWindow.note ? ' | ' + reachWindow.note : ''}${reachWindow.ageNote ? ' | ' + reachWindow.ageNote : ''}
 
 WHY THIS COMPANY WAS FLAGGED (discovery signal — factor this into your audit):
 - Source: ${discoverySource || 'unknown'}
@@ -29712,8 +29746,33 @@ app.listen(PORT, () => {
     }
     const _hiTxt = _code.slice(_hi, _hie);
     const _given = new Set([..._hiTxt.matchAll(/^\s+([A-Za-z_$][\w$]*)\s*:/gm)].map(x => x[1]));
+    // ══ THIS LINE IS WHY THE CHECK MISSED THE ONE THAT MATTERED ═══════════
+    // It used to read:
+    //
+    //   for (const k of Object.keys(resolveMeasurements({}))) _given.add(k);
+    //
+    // `_given` is the set of fields considered DELIVERED TO THE LADDER. But the
+    // ladder is called as rankHarms(_harmInputs), and _harmInputs is assembled
+    // BY HAND — 63 keys, no `..._measured`, verified. So a field the resolver
+    // computes reaches the ladder only if _harmInputs also names it.
+    //
+    // Adding the resolver's keys to `_given` therefore asserted the wrong thing:
+    // that the value can be COMPUTED, not that it ARRIVES. Every hand-assembly
+    // omission passed. weakerNames and ourReviews were computed by the resolver,
+    // never forwarded, and read by the rung that produced this system's replies
+    // — and this gate, whose entire job is that class of bug, ticked green on
+    // every boot for the life of the file.
+    //
+    // The resolver's keys are tracked SEPARATELY now, so the check can name the
+    // last hop instead of papering over it. Three states, not two:
+    //   delivered  — _harmInputs assigns it. Fine.
+    //   DROPPED    — the resolver computes it and _harmInputs does not forward
+    //                it. This is the weakerNames class: measured, correct, and
+    //                thrown away one line before the thing that reads it.
+    //   missing    — nothing produces it at all. A rung that can never fire.
+    const _resolved = new Set();
     try {
-      for (const k of Object.keys(resolveMeasurements({}) || {})) _given.add(k);
+      for (const k of Object.keys(resolveMeasurements({}) || {})) _resolved.add(k);
     } catch { /* resolver needs no args on this path; if it throws, the list below is just shorter */ }
     // Spread helpers inside _harmInputs contribute keys too. Called for real
     // rather than assumed, for the same reason.
@@ -29728,11 +29787,18 @@ app.listen(PORT, () => {
       } catch { /* not spreadable on this input — skip */ }
     }
 
-    const _missing = [...(_wanted)].filter(f => !_given.has(f)).sort();
+    // DROPPED is reported first and loudest: it is the expensive one, because
+    // the measurement succeeded and its log line printed correctly.
+    const _dropped = [...(_wanted)].filter(f => !_given.has(f) && _resolved.has(f)).sort();
+    const _missing = [...(_wanted)].filter(f => !_given.has(f) && !_resolved.has(f)).sort();
+    if (_dropped.length) {
+      console.log(`⛔ RUNG INPUT CHECK — MEASURED AND DROPPED: ${_dropped.length} field(s) are computed by resolveMeasurements, read by a rung, and NOT forwarded by _harmInputs — ${_dropped.join(', ')}. The measurement ran, its log printed correctly, and the value never arrived. Every rung reading one of these silently takes its fallback branch on every lead. This is how the named competitor never once reached an email.`);
+    }
     if (_missing.length) {
-      console.log(`⛔ RUNG INPUT CHECK: ${_missing.length} field(s) are read by a rung and delivered by nothing — ${_missing.join(', ')}. Every rung reading one of those is silent on every lead, and no log says so. This is exactly how review_velocity_drop shipped dead.`);
-    } else {
-      console.log(`✓ RUNG INPUT CHECK: all ${_wanted.size} field(s) any rung reads are actually assigned by _harmInputs or returned by the resolver — derived from the source on both sides, so a rung cannot be added that reads something nothing delivers.`);
+      console.log(`⛔ RUNG INPUT CHECK: ${_missing.length} field(s) are read by a rung and produced by nothing at all — ${_missing.join(', ')}. Those rungs are silent on every lead and no log says so. This is exactly how review_velocity_drop shipped dead.`);
+    }
+    if (!_dropped.length && !_missing.length) {
+      console.log(`✓ RUNG INPUT CHECK: all ${_wanted.size} field(s) any rung reads are assigned by _harmInputs ITSELF — not merely computable by the resolver, which is the distinction this check previously failed to draw and the reason it ticked green while the named-competitor sentence was unreachable.`);
     }
   } catch (e) {
     console.log(`⛔ RUNG INPUT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -31862,6 +31928,47 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 NAMED COMPETITOR CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE CLOCK THAT WAS RUNNING ON THE OTHER SIDE OF THE GUARD ══════════
+  // verifyBrainEmail has INVENTED_CLOCK, and it is a hard refusal, because a
+  // fabricated deadline is the fastest way to lose a reader who can check it.
+  // reachWindow sat UPSTREAM of that guard, on the audit side, doing exactly
+  // what the guard forbids: stating "30-90 days post-raise", "~60 days" and
+  // "~30 days" off booleans that carry no date at all. It went into the audit
+  // prompt and onto Mike's call sheet as the timing line.
+  //
+  // This asserts the shape rather than the wording: no branch of reachWindow may
+  // state a duration, and every branch must carry the ageNote that says whether
+  // a real age was measured. A future edit that reintroduces "~30 days" fails
+  // here rather than being noticed on a call.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _rw = _src.indexOf('const reachWindow = discoverySignals');
+    if (_rw < 0) _fails.push('reachWindow could not be located, so nothing was checked');
+    else {
+      // Brace-match to the end of the assignment rather than guessing a window.
+      const _end = _src.indexOf('\n    if (reachWindow.window', _rw);
+      const _blk = _end > -1 ? _src.slice(_rw, _end) : _src.slice(_rw, _rw + 4000);
+      // A duration is the fabrication: a number of days, or a tilde-approximation.
+      const DURATION = /\b\d+\s*(?:-\s*\d+)?\s*days?\b|~\s*\d+|\bwithin \d+|\bnext \d+/i;
+      const _hit = _blk.match(DURATION);
+      if (_hit) _fails.push(`a reachWindow branch states "${_hit[0]}" \u2014 a duration off a boolean with no date behind it, which is the fabrication this whole file exists to prevent`);
+      // Every branch must carry the measured-or-not marker.
+      const _branches = (_blk.match(/window:\s*'/g) || []).length;
+      const _notes = (_blk.match(/ageNote:/g) || []).length;
+      if (_branches && _notes < _branches) _fails.push(`${_branches - _notes} of ${_branches} reachWindow branches carry no ageNote, so they say nothing about whether the timing was measured`);
+      // And it must actually reach the audit prompt, or it is a comment.
+      if (!/reachWindow\.ageNote/.test(_src)) _fails.push('ageNote is computed and never interpolated \u2014 the caveat exists and the brain never sees it');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 MEASURED CLOCK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 MEASURED CLOCK CHECK: no branch of reachWindow states a duration, every branch says whether the signal's age was actually measured, and that caveat reaches the audit prompt. It used to assert "30-90 days post-raise" from a boolean \u2014 an invented clock sitting upstream of the guard built to stop invented clocks.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MEASURED CLOCK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
