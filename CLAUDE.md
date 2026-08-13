@@ -181,9 +181,27 @@ Every lead logs:
 [LANE] no job-posting signal — there is NO measured buying window.
 ```
 
-Thirty-plus leads, zero exceptions. Adzuna, BizBuySell, SEC EDGAR and Google News
-are all built and wired, and produce essentially nothing. 92.5% of discovery is
-Google Places.
+Thirty-plus leads, zero exceptions. 92.5% of discovery is Google Places.
+
+**Correction, 2026-08-13.** This paragraph used to say Adzuna, BizBuySell, SEC
+EDGAR and Google News "produce essentially nothing," and that was wrong about two
+of them. It was written from the absence of the LANE line rather than from the
+sources' own logs, which is the same mistake as reading a Firecrawl refusal as an
+empty page — judging a source by a symptom downstream of it instead of by what it
+actually returned.
+
+- **SEC EDGAR works.** Live: `SEC EDGAR: 13 from 39 hits (investment funds
+  filtered out)`. Thirteen operating companies per run. Low volume and the high
+  end of the ICP — a Form D filer is a business that raised private capital — but
+  it is a real lane, not a dead one.
+- **TheirStack replaced Adzuna** and returns size-verified SMBs. Adzuna is the
+  one that produced nothing; TheirStack is the live source and it is the trigger
+  lane worth investing in.
+
+So the gap is NOT "we have no buying-window sources." It is that the sources we
+have are not targeted at what we sell, and the signal they return is flattened
+into one hardcoded shape before anything downstream can read it. Check a source's
+own log line before writing it off.
 
 The distinction the system does not make: **primary pain** is the ongoing condition
 (thin reviews, no pricing, slow growth); **catalytic pain** is the event that puts
