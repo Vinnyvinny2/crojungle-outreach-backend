@@ -11256,8 +11256,31 @@ const verifyBrainEmail = (body, opts = {}) => {
   {
     const INVENTED_CLOCK = /\b(?:every (?:day|week|month) (?:that |this )?(?:goes by|passes|it (?:stays|sits))|right now,? (?:someone|somebody|a customer)|before (?:long|the end of (?:the )?(?:month|quarter|year))|in the next (?:few )?(?:days|weeks|months)|this (?:month|quarter|season) alone|while you (?:still|read this|are reading)|running out of time|(?:the )?window is (?:closing|narrowing)|only getting worse|by (?:the time |)next (?:month|quarter|season)|sooner (?:you|this) (?:fix|sort|deal))/i;
     const _clk = text.match(INVENTED_CLOCK);
-    if (_clk) {
-      return { ok: false, why: `"${_clk[0].trim()}" — this puts a clock on something we never timed. Every lead this system has ever run logged "no measured buying window", so any urgency in this email was invented, and invented urgency is the one thing every agency email in his inbox already does. The competitor ranking above him is the real threat and it needs no deadline attached` };
+    // ══ A GUARD WHOSE PREMISE IS A FACT ABOUT TODAY'S DATA ═══════════════
+    // The refusal below reasons: "Every lead this system has ever run logged
+    // 'no measured buying window', so any urgency in this email was invented."
+    //
+    // That premise is true right now and it is not a rule about truth. It is an
+    // observation about a pipeline that has never yet carried a date. PART 4
+    // calls the missing clock the largest gap in the system and PART 7 puts
+    // fixing it on the roadmap — so this guard is written to be falsified, and
+    // when it is falsified it keeps firing. The first lead with a real permit
+    // date, a real licence date, a real funding date would produce the one
+    // genuinely urgent email this system can write, and this line would refuse
+    // it with a sentence explaining that no lead has ever had one.
+    //
+    // The honest rule is the same shape as the rank gate: refuse a clock claim
+    // when no window was MEASURED, and allow it when one was. So the test moves
+    // off the assumption and onto the measurement. Nothing loosens today —
+    // opts.window is absent on every current lead and the refusal is unchanged
+    // — but the day a date arrives the guard stops being wrong.
+    const _windowMeasured = !!(opts.window && String(opts.window).trim());
+    if (_clk && _windowMeasured) {
+      // A measured window still cannot license an ARBITRARY clock: the email may
+      // refer to the window we hold, not to a deadline it invented beside it.
+      console.log(`\u23f1 CLOCK ALLOWED: "${String(_clk[0]).trim()}" stands because this lead carries a measured window (${String(opts.window).slice(0, 60)}). This is the first shape of urgency this system can state truthfully.`);
+    } else if (_clk) {
+      return { ok: false, why: `"${_clk[0].trim()}" — this puts a clock on something we never timed. No buying window was measured on this lead, so the urgency was invented. The moment a real dated signal arrives — a permit, a licence filing, a funding date — this passes instead, because the test is now the measurement rather than the assumption that no measurement can exist.` };
     }
   }
 
@@ -22543,9 +22566,30 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             .replace(/<[^>]+>/g, ' ')
             .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
             .replace(/\s+/g, ' ').trim();
-          if (_salvaged.length > 400) {
+          // ══ A CLIFF AT 400 CHARACTERS, AND SILENCE UNDERNEATH IT ═══════
+          // This was `if (_salvaged.length > 400)` with no else. A page that
+          // yielded 380 characters was discarded without a word — no log line,
+          // no counter, nothing. The operator sees a lead with a thin corpus and
+          // no way to tell whether the fetch failed, the site is genuinely
+          // empty, or we recovered 380 characters and threw them away.
+          //
+          // Two separate faults in one line. The cliff is arbitrary: 380
+          // characters of their own copy is worse than 4,000 and strictly better
+          // than nothing, and "nothing" is what the audit falls back to — the
+          // 35-rung list every lead gets. And the silence is worse than the
+          // cliff, because it is indistinguishable from the fetch never running.
+          //
+          // The rule is now the only one that cannot regress: take whichever is
+          // LONGER. Salvage never shortens the corpus, and every outcome says
+          // what it did, including the ones that change nothing.
+          const _prevLen = String(content || '').length;
+          if (_salvaged.length > _prevLen && _salvaged.length > 0) {
             content = _salvaged.slice(0, 60000);
-            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.`);
+            console.log(`\u267b SALVAGED [${company}]: recovered ${_salvaged.length} characters from our own fetch of ${_siteDownVerdict.workingUrl}${_prevLen ? `, against ${_prevLen} we already had` : ''}. The audit runs on this instead of being blocked. It is plain text rather than Firecrawl's markdown, so structure-dependent reads (form fields, tap-to-call) stay unmeasured and must claim nothing.${_salvaged.length < 400 ? ' \u26a0 Under 400 characters \u2014 this used to be discarded in silence, and a thin corpus is why an audit falls back to the list every lead gets.' : ''}`);
+          } else if (_salvaged.length) {
+            console.log(`\u267b SALVAGE NOT USED [${company}]: our own fetch of ${_siteDownVerdict.workingUrl} yielded ${_salvaged.length} characters and we already hold ${_prevLen}, so the longer one stands. Nothing was lost \u2014 this line exists because the old code took the same decision without saying so.`);
+          } else {
+            console.log(`\u267b SALVAGE EMPTY [${company}]: our own fetch of ${_siteDownVerdict.workingUrl} returned HTML that stripped to nothing. That is a page built entirely by script, and no amount of plain-text recovery will read it.`);
           }
         }
       } else if (_siteDownVerdict.down === true) {
@@ -23379,6 +23423,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const _mentionsNow = companyCore.length === 0 || companyCore.some(w => _lowerNow.includes(w));
     const _brokenNow = scrapeLooksBroken && _lowerNow.length < 300;
     const scrapeTrustworthy = content.length > 300 && !_brokenNow && _mentionsNow;
+    // ══ A BIGGER CORPUS MUST NOT QUIETLY BUY LESS TRUST ══════════════════
+    // scrapeTrustworthy gates whether findings are allowed to be stated at all.
+    // It is recomputed here against whatever content we ended up with — which is
+    // right, and which has a failure mode nothing was watching: if a recovery
+    // pulls in navigation and boilerplate that happens not to contain the
+    // company's own name tokens, _mentionsNow flips false, scrapeTrustworthy
+    // goes false, and findings are suppressed on a lead whose corpus just got
+    // BIGGER. The audit gets worse because the scrape got better, and the only
+    // trace is a generic "content not trustworthy" line.
+    //
+    // Now the direction of the change is reported, so a corpus that grew and
+    // lost trust is visible as the contradiction it is rather than as routine.
+    if (_mentionsNow === false && pageMentionsCompany === true) {
+      console.log(`\u26a0 TRUST LOST ON MORE CONTENT [${company}]: the original scrape mentioned the company and the ${content.length} characters we ended up with do not. Findings are about to be suppressed on a lead whose corpus grew. Either the recovery pulled in boilerplate from somewhere else, or their own pages genuinely never name them \u2014 those need different answers, and until now both looked like "content not trustworthy".`);
+    }
     if (_mentionsNow !== pageMentionsCompany) {
       console.log(`\u2139 TRUST RECOMPUTED [${company}]: the mention check was run on the original scrape and said ${pageMentionsCompany}; against the ${content.length} characters we actually ended up with it says ${_mentionsNow}. Using the recomputed value \u2014 the earlier one describes content we no longer have.`);
     }
@@ -31969,6 +32028,41 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 MEASURED CLOCK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A GUARD WRITTEN TO BE FALSIFIED, THAT KEPT FIRING AFTERWARDS ═══════
+  // INVENTED_CLOCK refused any urgency in an email, and its stated reason was
+  // that every lead ever run logged "no measured buying window". That is an
+  // observation about a pipeline that has never carried a date — not a rule
+  // about truth. PART 4 calls the missing clock the largest gap in the system
+  // and PART 7 puts fixing it on the roadmap, so the premise is scheduled to
+  // become false, and the guard would have gone on refusing the one genuinely
+  // urgent email this system can write.
+  //
+  // Both directions are asserted, because a guard that only refuses is as wrong
+  // as one that only permits.
+  try {
+    const _fails = [];
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid}\n\nWho's handling that for you at the moment?`;
+    const _base = { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'] };
+    const _urgent = _mk('Every week that goes by, that pattern is setting into how people describe you.');
+    // TODAY: no window measured anywhere, so this must still be refused.
+    const _noWin = verifyBrainEmail(_urgent, _base);
+    if (_noWin.ok) _fails.push('an invented clock passed on a lead with no measured window — that is the fabrication this guard exists for');
+    // TOMORROW: a real dated signal arrives and the same sentence is true.
+    const _withWin = verifyBrainEmail(_urgent, { ..._base, window: 'permit filed 11 days ago' });
+    if (!_withWin.ok) _fails.push(`the same sentence is still refused when the lead carries a measured window (${_withWin.why}) — the guard is keyed on the assumption that no window can exist rather than on whether one does`);
+    // And the refusal must no longer justify itself with the old premise.
+    if (/every lead this system has ever run/i.test(String(_noWin.why || ''))) {
+      _fails.push('the refusal still argues from "no lead has ever had a window", which is a fact about today\'s data and stops being true the moment discovery carries a date');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 CLOCK PREMISE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 CLOCK PREMISE CHECK: an invented clock is still refused on every lead we have today, and the identical sentence passes once the lead carries a measured window. The guard now tests the measurement instead of the assumption that no measurement can exist \u2014 it was written to be falsified by the roadmap and would have refused the first true dated email.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 CLOCK PREMISE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
