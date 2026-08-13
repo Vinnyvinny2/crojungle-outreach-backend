@@ -22018,6 +22018,87 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
     bestRank: ranked.length ? Math.min(...ranked.map(r => r.rank)) : null,
   };
 };
+// ══ WHICH OF THE MEASURED SEARCHES BECOMES THE FINDING ═════════════════════
+// This used to be one expression, written twice, in two places 140 lines apart:
+//
+//   localRank = results.find(r => r.kind === 'primary trade' && r.found)
+//            || results.find(r => r.found) || results[0];
+//
+// It picks the head term whenever the head term was found, and it never looks at
+// what the row actually says. John P. Goodman DDS, 2026-08-13, four real Places
+// searches on one lead:
+//
+//   #3 of 20  "dentist in Kansas City, MO"        (primary trade)  — nothing
+//   #12 of 20 "root canal in Kansas City, MO"     — 3 of the 11 above have FEWER reviews
+//   #8 of 20  "gum surgery in Kansas City, MO"    — 4 of the 7 above have FEWER reviews
+//   #13 of 20 "dental exam in Kansas City, MO"    — 5 of the 12 above have FEWER reviews
+//
+// It chose the first row. weakerAbove was 0 there, so `outranked_by_weaker` —
+// the rung that has produced replies, one of only two things in this system with
+// evidence behind it — tested false and switched off, on a lead carrying that
+// exact finding three separate times. We paid for three searches that each found
+// it and handed the audit the one row that says he is doing fine. #3 of 20 is a
+// compliment, and the email opened on something else entirely.
+//
+// So the rule is not "which query is the most canonical". It is WHICH ROW HOLDS
+// THE FINDING. A row where businesses with fewer reviews rank above him beats a
+// row where none do, every time, whatever the query was.
+//
+// Among rows that do hold it, strength is weakerAbove squared over the number
+// above — the count weighted by how much of the field it is. Both halves matter
+// and neither is enough alone: 5 of 12 is more businesses but 4 of 7 is most of
+// them, and "most of the businesses ahead of you have a weaker reputation than
+// yours" is the sentence an owner cannot argue with. Gum surgery wins on
+// John (2.29 against 2.08 and 0.82), which is the right answer by eye too.
+//
+// A row whose position two samples disagreed on sorts BELOW every statable row
+// regardless of strength: its ratio may not be written down, so it is a weaker
+// email even when it is a bigger number.
+//
+// Not-found rows are deliberately NOT considered here. Absence has its own
+// route — localVisibility, the search_absence signal and the SERVICES THEY SELL
+// BUT CANNOT BE FOUND FOR block — and pulling one into localRank would blank the
+// rank, the review counts and the competitor names that this object carries.
+const pickRankRow = (results) => {
+  const rows = (Array.isArray(results) ? results : []).filter(Boolean);
+  if (!rows.length) return { row: null, note: 'no rank rows at all' };
+  const found = rows.filter(r => r.found);
+  if (!found.length) {
+    return { row: rows.find(r => r.kind === 'primary trade') || rows[0],
+             note: 'they were not found for any query — absence is the finding and it travels by its own route' };
+  }
+  const above = (r) => {
+    const n = Number(r.rank) - 1;
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const strength = (r) => {
+    const w = Number(r.weakerAbove);
+    if (!Number.isFinite(w) || w <= 0) return 0;
+    const a = above(r);
+    // Position suppressed: we know how many weaker businesses are ahead but not
+    // how many are ahead in total, so the density cannot be computed. Use the
+    // count. The statable/unstable split below is what keeps this from
+    // outranking a row we can actually put in an email.
+    return a === null ? w : (w * w) / a;
+  };
+  const statable = (r) => Number.isFinite(Number(r.rank)) && r.rankStable !== false;
+  const scored = found.map(r => ({ r, s: strength(r), st: statable(r) ? 1 : 0 }));
+  const holding = scored.filter(x => x.s > 0);
+  if (!holding.length) {
+    return { row: found.find(r => r.kind === 'primary trade') || found[0],
+             note: `no query put a weaker-reviewed business above them (${found.length} checked) — there is no outranked finding on this lead` };
+  }
+  holding.sort((a, b) => (b.st - a.st)
+    || (b.s - a.s)
+    || ((b.r.kind === 'primary trade' ? 1 : 0) - (a.r.kind === 'primary trade' ? 1 : 0)));
+  const win = holding[0];
+  const others = holding.slice(1).concat(scored.filter(x => x.s <= 0))
+    .map(x => `"${x.r.query}" (${x.s > 0 ? x.r.weakerAbove + ' weaker above' : 'nothing'})`);
+  return {
+    row: win.r,
+    note: `"${win.r.query}" (${win.r.kind}) carries the finding — ${win.r.weakerAbove} of the ${above(win.r) === null ? '?' : above(win.r)} businesses above them have FEWER reviews${others.length ? `. Passed over: ${others.join(', ')}` : ''}`,
+  };
+};
 
 const _runResearchInner = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
@@ -23118,7 +23199,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         });
         if (lv.checked) {
           localVisibility = lv;
-          localRank = lv.results.find(r => r.kind === 'primary trade' && r.found) || lv.results.find(r => r.found) || lv.results[0];
+          const _pick = pickRankRow(lv.results);
+          localRank = _pick.row;
+          console.log(`RANK ROW [${company}]: ${_pick.note}`);
           for (const r of lv.results) {
             if (r.found) {
               // ══ THE POSITION MAY HAVE BEEN REMOVED ON PURPOSE ═════════════
@@ -23255,7 +23338,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         });
         if (lv2.checked) {
           localVisibility = lv2;
-          localRank = lv2.results.find(r => r.kind === 'primary trade' && r.found) || lv2.results.find(r => r.found) || lv2.results[0];
+          const _pick2 = pickRankRow(lv2.results);
+          localRank = _pick2.row;
+          console.log(`RANK ROW [${company}]: ${_pick2.note}`);
           for (const r of lv2.results) {
             console.log(r.found
               ? `LOCAL RANK [${company}] (guaranteed pass): #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind})`
@@ -32530,6 +32615,66 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ HOMEPAGE REQUEST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
+  // John P. Goodman DDS ran four real Places searches. Three of them found
+  // businesses with fewer reviews ranking above him. The row handed to the audit
+  // was the fourth — #3 of 20 for "dentist in Kansas City, MO", weakerAbove 0 —
+  // because the selector preferred the head term and never read what the row
+  // said. `outranked_by_weaker` therefore tested false on a lead carrying it
+  // three times over, and that rung is one of only two things in this system
+  // with evidence behind it.
+  //
+  // This runs the real rows through the real function. A source scan would only
+  // prove the expression changed; this proves the answer did.
+  try {
+    const _fails = [];
+    const JOHN = [
+      { kind: 'primary trade',         found: true, rank: 3,  scanned: 20, weakerAbove: 0, query: 'dentist in Kansas City, MO' },
+      { kind: 'their own service page', found: true, rank: 12, scanned: 20, weakerAbove: 3, query: 'root canal in Kansas City, MO' },
+      { kind: 'their own service page', found: true, rank: 8,  scanned: 20, weakerAbove: 4, query: 'gum surgery in Kansas City, MO' },
+      { kind: 'their own service page', found: true, rank: 13, scanned: 20, weakerAbove: 5, query: 'dental exam in Kansas City, MO' },
+    ];
+    const _john = pickRankRow(JOHN);
+    if (!_john.row || _john.row.query !== 'gum surgery in Kansas City, MO') {
+      _fails.push(`John P. Goodman's four measured searches select "${_john.row ? _john.row.query : 'nothing'}" — it must be the gum surgery row, where 4 of the 7 businesses above him have fewer reviews. The head term (#3, nothing above him weaker) is a compliment, and choosing it switches the outranked finding off on a lead that measured it three times`);
+    }
+    if (_john.row && !(Number(_john.row.weakerAbove) > 0)) {
+      _fails.push('the chosen row carries no weaker-above count at all, so outranked_by_weaker cannot fire');
+    }
+    // A row we cannot state loses to one we can, even carrying a bigger number.
+    const _unstable = pickRankRow([
+      { kind: 'primary trade', found: true, rank: null, rankStable: false, weakerAbove: 9, query: 'suppressed' },
+      { kind: 'their own service page', found: true, rank: 6, scanned: 20, weakerAbove: 2, query: 'statable' },
+    ]);
+    if (!_unstable.row || _unstable.row.query !== 'statable') {
+      _fails.push('a row whose position two samples disagreed on was chosen over a statable one — its ratio may not be written down, so it is a weaker email however big the count');
+    }
+    // Nothing to find: must still hand back the head term rather than nothing.
+    const _flat = pickRankRow([
+      { kind: 'primary trade', found: true, rank: 2, scanned: 20, weakerAbove: 0, query: 'head' },
+      { kind: 'their own service page', found: true, rank: 4, scanned: 20, weakerAbove: 0, query: 'svc' },
+    ]);
+    if (!_flat.row || _flat.row.query !== 'head') _fails.push('with no finding anywhere the head term must still be returned');
+    if (pickRankRow([]).row !== null) _fails.push('an empty result set must return no row rather than undefined');
+    const _absent = pickRankRow([{ kind: 'primary trade', found: false, scanned: 20, query: 'nowhere' }]);
+    if (!_absent.row) _fails.push('a not-found row must still be handed back — absence travels by its own route and the object is still read');
+    // Both call sites must go through it. Two copies of a selection rule 140
+    // lines apart is how one of them keeps the old behaviour forever.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    if (/localRank = lv2?\.results\.find\(/.test(_src)) {
+      _fails.push('a call site still selects the rank row inline instead of through pickRankRow');
+    }
+    if ((_src.match(/= pickRankRow\(lv/g) || []).length !== 2) {
+      _fails.push('pickRankRow is not used at both of the two rank call sites');
+    }
+    if (_fails.length) {
+      console.log(`⛔ RANK ROW CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RANK ROW CHECK: the search that becomes the finding is the one where businesses with fewer reviews rank above them — not whichever query was most canonical. On John P. Goodman's real rows that is "gum surgery in Kansas City, MO", 4 of the 7 above him weaker, instead of a #3 head-term placing that says he is doing fine. Three paid Places searches per lead stop being thrown away.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RANK ROW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
