@@ -6921,7 +6921,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     // Reading it here costs nothing and cannot hallucinate: every name and title
     // is copied out of the page verbatim or not returned at all.
     try {
-      const _roster = parseTeamRoster(corpus);
+      const _roster = parseTeamRoster(corpus, companyName);
       const _owners = _roster.filter(r => r.isOwner);
       if (_owners.length) {
         const _pick = _owners[0];
@@ -7151,7 +7151,76 @@ const OWNER_TITLE_RE = /\b(?:co[- ]?)?(?:owner|founder|co[- ]?founder|proprietor
 // a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
 const NON_OWNER_TITLE_RE = /\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
 
-const parseTeamRoster = (html) => {
+// ══ A ROSTER LINE IS ALMOST NEVER A BARE "FIRST LAST" ══════════════════════
+// The name pattern is anchored — the whole run had to BE a name, with nothing
+// before it and nothing after. Almost no real roster line looks like that, and
+// the ones that break it are exactly the industries this pipeline sells into:
+//
+//   Dr. Matthew Yip                        honorific, fails on the period
+//   John P. Goodman, D.D.S.                credentials after a comma
+//   Hannah Vargas, MD                      same
+//   [Dr. Matthew Yip](/dr-yip)             Firecrawl markdown renders team
+//                                          cards as links; the brackets alone
+//                                          made the run unmatchable
+//   Kacie Carrico, COO                     name AND title on one line — and
+//                                          this one was WORSE than unmatched:
+//                                          the title test runs first, "COO"
+//                                          matched, and the whole run was
+//                                          skipped as though it were a title
+//                                          with no person attached
+//
+// So the run is NORMALISED before it is matched, rather than the pattern being
+// loosened. Loosening is how a parser starts naming the wrong person, and a
+// perfect email to the wrong person is worse than no email at all. Stripping a
+// known honorific and a known credential from a run that then matches the same
+// strict pattern cannot invent anybody.
+//
+// The same-line title is the dominant shape on medical, dental and legal
+// rosters, and reading it is the whole point: it is the company stating who
+// owns it, on a page they maintain, and it costs nothing.
+const HONORIFIC_RE = /^(?:dr|doctor|mr|mrs|ms|miss|prof|professor|rev|father|atty|attorney|hon|sir|dame)\.?\s+/i;
+// Matched only as a WHOLE segment or a whole trailing word, never inside one.
+// The two-letter ones that are also real words or names — PA, MS, BS, DO, OD,
+// PE, DC, EA, RA — are accepted ONLY in their dotted form. "Do" is a surname.
+const CREDENTIAL_RE = /^(?:(?:[A-Za-z]\.){2,6}|(?:D\.?D\.?S|D\.?M\.?D|D\.?V\.?M|Ph\.?D|Esq|C\.?P\.?A|M\.?B\.?A|A\.?I\.?A|F\.?A\.?C\.?S|F\.?A\.?G\.?D|C\.?F\.?P|C\.?F\.?A|L\.?M\.?T|M\.?P\.?H|F\.?N\.?P|C\.?R\.?N\.?A|LEED\s*AP|MD|JD|RN|NP)|P\.A|M\.S|B\.S|D\.O|O\.D|P\.E|D\.C|E\.A|R\.A)\.?$/i;
+// One optional internal capital in the surname, so McDonald, MacLeod and
+// DeVries are people rather than unparseable.
+const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?(?:\s+[A-Z][a-z'’-]{1,20})?\s+[A-Z][a-z'’-]{0,25}(?:[A-Z][a-z'’-]{1,20})?)$/;
+
+const personFromRun = (raw, companyName = '') => {
+  let t = String(raw || '').trim();
+  if (!t || t.length > 110) return null;
+  // Markdown link or image: keep the label, drop the target.
+  t = t.replace(/!?\[([^\]]{2,70})\]\([^)]*\)/g, '$1');
+  t = t.replace(/[*_`~]+/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  // Deliberately NOT split on "/": "CO-OWNER/CFO" is one title and splitting it
+  // is how a co-owner gets filed as the CFO.
+  const seg = t.split(/\s*(?:,|–|—|\||\s-\s)\s*/).map(s => s.trim()).filter(Boolean);
+  if (!seg.length) return null;
+  let head = seg[0].replace(HONORIFIC_RE, '').trim();
+  // Credentials glued on with no comma: "Matthew Yip DDS". Never below three
+  // words, so a two-word name is untouchable.
+  const words = head.split(' ');
+  while (words.length > 2 && CREDENTIAL_RE.test(words[words.length - 1])) words.pop();
+  head = words.join(' ');
+  if (!ROSTER_NAME_RE.test(head)) return null;
+  // ── THEIR OWN NAME IS NOT A PERSON ──────────────────────────────────────
+  // "Tiffany Springs" satisfies every name rule ever written, and it is the
+  // practice. A candidate whose every word already appears in the company name
+  // is the company. A family business survives this: "Dusty Hannah" at Hannah
+  // Custom Homes keeps "Dusty", which the company name does not contain.
+  const _co = String(companyName || '').toLowerCase();
+  if (_co) {
+    const _cw = new Set(_co.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+    const _nw = head.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+    if (_nw.length && _nw.every(w => _cw.has(w))) return null;
+  }
+  const rest = seg.slice(1).filter(s => !CREDENTIAL_RE.test(s));
+  return { name: head, inlineTitle: rest.length ? rest.join(', ') : '' };
+};
+
+const parseTeamRoster = (html, companyName = '') => {
   const out = [];
   if (!html) return out;
   // Strip scripts and styles; keep tags so the name/title pairing survives.
@@ -7184,7 +7253,9 @@ const parseTeamRoster = (html) => {
     'see more', 'find us', 'call us', 'our work', 'case studies',
     'our services', 'why choose', 'meet our', 'privacy policy', 'terms of',
   ]);
-  const NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?\s+[A-Z][a-z'’-]{1,25})$/;
+  // The pattern itself now lives at module scope as ROSTER_NAME_RE, beside the
+  // normaliser that feeds it, so both can be tested directly.
+  const NAME_RE = ROSTER_NAME_RE;
   // ══ A TWO-WORD TITLE LOOKS EXACTLY LIKE A NAME ═════════════════════════
   // "Managing Partner", "Office Manager" and "Vice President" all satisfy the
   // First-Last pattern, so the loop below treated them as the next person and
@@ -7210,18 +7281,32 @@ const parseTeamRoster = (html) => {
     return null;
   };
   for (let i = 0; i < runs.length; i++) {
-    if (titleKind(runs[i])) continue;            // a title, not a person
-    const m = runs[i].match(NAME_RE);
-    if (!m) continue;
+    // ORDER MATTERS AND IT CHANGED. This used to ask "is this a title?" first
+    // and skip the run if so — which threw away every line carrying a name AND
+    // a title, the commonest shape there is. "Kacie Carrico, COO" matched the
+    // title test and the person went with it.
+    //
+    // So: normalise first. If the run yielded no inline title then it might be
+    // a bare job title dressed as a name — "Managing Partner" satisfies every
+    // name pattern — and only then is the title test the right question.
+    const p = personFromRun(runs[i], companyName);
+    if (!p) continue;
+    if (!p.inlineTitle && titleKind(runs[i])) continue;
+    const m = [p.name, p.name];
     // A section heading occupies the same position as a name and matches the
     // same shape. "About Us" reached a live email as the greeting.
     if (NOT_A_NAME.has(m[1].toLowerCase().trim())) continue;
+    // The company saying it on one line is the best evidence there is.
+    if (p.inlineTitle) {
+      const _k = titleKind(p.inlineTitle);
+      if (_k) { out.push({ name: p.name, title: p.inlineTitle.replace(/\s+/g, ' ').trim(), isOwner: _k === 'owner' }); continue; }
+    }
     // The title is normally the next non-empty run, occasionally the one after.
     for (let j = i + 1; j <= Math.min(i + 3, runs.length - 1); j++) {
       const t = runs[j];
       if (!t) break;
       const kind = titleKind(t);
-      if (!kind && NAME_RE.test(t)) break;       // the next person, no title
+      if (!kind && personFromRun(t, companyName)) break;   // the next person, no title
       if (t.length > 70) continue;
       // ══ AN OWNER TOKEN WINS OVER A C-SUITE ONE ═══════════════════════
       // "CO-OWNER/CFO" is Misty Pyle at Hannah Custom Homes. Checking the
@@ -31546,20 +31631,49 @@ app.listen(PORT, () => {
       ['Bill Chen', 'Founder & President'], ['Kim Park', 'Office Manager'],
       ['Ana Diaz', 'Director of Operations'], ['Sue Ellis', 'Proprietor'],
       ['Rob Vale', 'Chief Executive Officer'], ['Dan Fox', 'Estimator'],
+      // ── THE SHAPES THAT USED TO RETURN NOBODY ───────────────────────
+      // Every one of these is a real line off a real roster in this
+      // pipeline's own leads, and the anchored name pattern rejected all
+      // of them: an honorific has a period where the pattern wants a
+      // space, credentials sit past the end anchor, and Firecrawl renders
+      // a team card as a markdown link.
+      ['Dr. Matthew Yip', 'Owner'], ['John P. Goodman D.D.S.', 'Founder'],
+      ['Hannah Vargas MD', 'President'], ['Sean McDonald', 'Principal'],
+      ['Mary Jo Reyes', 'Superintendent'], ['Anh Thi Do', 'Owner'],
     ];
     const _want = { 'Dusty Hannah': 1, 'Misty (Hannah) Pyle': 1, 'Kacie Carrico': 0,
       'Tom Reed': 1, 'Joe Adams': 0, 'Ann Lee': 0, 'Bill Chen': 1, 'Kim Park': 0,
-      'Ana Diaz': 0, 'Sue Ellis': 1, 'Rob Vale': 1, 'Dan Fox': 0 };
-    const _got = parseTeamRoster(_page.map(([n, t]) => _fig(n, t)).join(''));
+      'Ana Diaz': 0, 'Sue Ellis': 1, 'Rob Vale': 1, 'Dan Fox': 0,
+      'Matthew Yip': 1, 'John P. Goodman': 1, 'Hannah Vargas': 1,
+      'Sean McDonald': 1, 'Mary Jo Reyes': 0, 'Anh Thi Do': 1 };
+    // The honorific and the credentials are stripped, so the name we expect
+    // back is not the name on the page.
+    const _asName = (n) => n.replace(/^Dr\.\s+/, '').replace(/\s+(?:D\.D\.S\.|MD)$/, '');
+    const _got = parseTeamRoster(_page.map(([n, t]) => _fig(n, t)).join(''), 'Hannah Custom Homes');
     const _wrong = _got.filter(r => (r.isOwner ? 1 : 0) !== _want[r.name])
       .map(r => `${r.name} read as ${r.isOwner ? 'owner' : 'staff'} from "${r.title}"`);
-    const _missing = _page.map(x => x[0]).filter(n => !_got.some(r => r.name === n));
-    if (_missing.length) {
+    const _missing = _page.map(x => _asName(x[0])).filter(n => !_got.some(r => r.name === n));
+    // A name-and-title on ONE line is the commonest roster shape there is, and
+    // the title test used to run first and swallow the person with it.
+    const _inline = parseTeamRoster('<p>Kacie Carrico, COO</p><p>[Dr. Matthew Yip](/dr-yip), DDS, Owner</p>');
+    const _kc = _inline.find(r => r.name === 'Kacie Carrico');
+    const _my = _inline.find(r => r.name === 'Matthew Yip');
+    const _inlineBad = [];
+    if (!_kc || _kc.isOwner) _inlineBad.push('"Kacie Carrico, COO" on one line is not read as a staff member');
+    if (!_my || !_my.isOwner) _inlineBad.push('"[Dr. Matthew Yip](/dr-yip), DDS, Owner" on one line is not read as an owner');
+    // And their own name is not a person. "Tiffany Springs" satisfies every
+    // name rule ever written and it is the practice.
+    if (parseTeamRoster('<h3>Tiffany Springs</h3><p>Owner</p>', 'Tiffany Springs Dental Group').length) {
+      _inlineBad.push('the company\'s own name was returned as its owner');
+    }
+    if (_inlineBad.length) {
+      console.log(`\u26d4 ROSTER CHECK: ${_inlineBad.join(' | ')}.`);
+    } else if (_missing.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_missing.length} of ${_page.length} people on a team page were not read at all \u2014 ${_missing.join(', ')}. A roster that silently returns fewer people than the page lists still looks plausible, which is why this is checked rather than eyeballed.`);
     } else if (_wrong.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_wrong.length} title(s) classified wrongly \u2014 ${_wrong[0]}. An owner misread as staff loses the lead; staff misread as the owner sends an owner-level email to somebody who forwards it.`);
     } else {
-      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, and a vice president is not a president.`);
+      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, a vice president is not a president, "Dr." and ", D.D.S." are stripped without inventing anybody, a name and title on ONE line is read as both, and the practice's own name is not returned as its owner.`);
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
