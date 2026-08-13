@@ -2018,9 +2018,33 @@ const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
 // held up by deterministic scoring underneath it; this call's is not.
 const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-4-6';
 
+// ══ A PRICE TABLE THAT KNOWS TWO MODELS, AND A SWITCH THAT OFFERS MORE ══════
+// BRAIN_MODEL and SITUATION_MODEL are environment variables. The table below
+// held exactly two rows, and the lookup fell back to HAIKU for anything it did
+// not recognise. So setting SITUATION_MODEL to a better model priced a $5-in /
+// $25-out call at $1 / $5 and reported the upgrade as very nearly free — the
+// one number anybody would use to decide whether the upgrade was affordable.
+//
+// AND THE CACHE WRITE WAS WRONG ON BOTH EXISTING ROWS. cacheWrite was set at
+// 1.25x input, which is the FIVE-MINUTE rate. All three cache_control blocks in
+// this file request `ttl: '1h'`, and a one-hour write bills 2x. Every first
+// lead of a batch under-reported its own cache write by 37.5% of that
+// component. The break-even moves with it: a 5-minute cache pays for itself on
+// the second read, a 1-hour cache needs the third.
+//
+// minCache is the number that decides whether a cache_control block does
+// anything at all. A prefix shorter than the model's minimum is NOT an error —
+// the call succeeds and returns cache_creation_input_tokens: 0. And the minimum
+// is NOT monotonic across generations, which is the trap: Haiku 4.5 needs 4,096
+// tokens while newer and more expensive models need 1,024 or 512. The comment
+// on the situation-read call recommends switching it to Haiku; its system block
+// is about 3,160 tokens, so taking that advice silently turns its cache off.
 const ANTHROPIC_PRICES = {
-  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 3.75 / 1e6 },
-  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 1.25 / 1e6 },
+  'claude-opus-5':              { in: 5 / 1e6,   out: 25 / 1e6,  cacheRead: 0.50 / 1e6, cacheWrite: 10.00 / 1e6, minCache: 512 },
+  'claude-sonnet-5':            { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 6.00 / 1e6,  minCache: 1024 },
+  'claude-opus-4-8':            { in: 5 / 1e6,   out: 25 / 1e6,  cacheRead: 0.50 / 1e6, cacheWrite: 10.00 / 1e6, minCache: 1024 },
+  'claude-sonnet-4-6':          { in: 3 / 1e6,   out: 15 / 1e6,  cacheRead: 0.30 / 1e6, cacheWrite: 6.00 / 1e6,  minCache: 1024 },
+  'claude-haiku-4-5-20251001':  { in: 1 / 1e6,   out: 5 / 1e6,   cacheRead: 0.10 / 1e6, cacheWrite: 2.00 / 1e6,  minCache: 4096 },
 };
 // ══ ONE VARIABLE CANNOT HOLD TWO CONCURRENT LEADS ════════════════════════════
 // This was a single module-level string. Running HEGG and Mid-American at the
@@ -2135,10 +2159,24 @@ const looksLikeTheirOffDomainMailbox = (email, siteDomain, companyName, occurren
   return { email: e, why: `${e} is on a different domain from their website, but it is a business inbox, "${shared}" is shared with ${siteRoot.includes(shared) ? 'their site domain' : 'their business name'}, and it appears ${occurrences} times across the pages we read \u2014 a long domain for the site and a short one for mail is common and this is theirs` };
 };
 
+const _UNPRICED = new Set();
 const meterAnthropic = (company, label, model, usage) => {
   try {
     if (!usage) return 0;
-    const p = ANTHROPIC_PRICES[model] || ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
+    // ══ AN UNPRICED MODEL MUST NOT REPORT AS THE CHEAPEST ONE ═══════════
+    // This fell back to Haiku silently. The whole purpose of this meter is to
+    // tell the operator what a model change costs, and the one moment it was
+    // guaranteed to be consulted — right after changing the model — was the one
+    // moment it was guaranteed to be wrong, in the direction that makes the
+    // change look affordable. It now says so, loudly, once per model.
+    const p = ANTHROPIC_PRICES[model];
+    if (!p) {
+      if (!_UNPRICED.has(model)) {
+        _UNPRICED.add(model);
+        console.log(`\u26d4 UNPRICED MODEL [${model}]: this call is NOT in the spend total. Nothing below is being charged to the meter for it. Add a row to ANTHROPIC_PRICES \u2014 the old behaviour was to price it as Haiku, which reported an upgraded model at a fifth of its real cost on the exact run you would use to decide whether to keep it.`);
+      }
+      return 0;
+    }
     const fresh = usage.input_tokens || 0;
     const cRead = usage.cache_read_input_tokens || 0;
     const cWrite = usage.cache_creation_input_tokens || 0;
@@ -2177,6 +2215,51 @@ const anthropicFetch = async (url, opts, timeoutMs, label) => {
     meterAnthropic(_CURRENT_LEAD(), label || 'anthropic', model, j && j.usage);
   } catch (e) { void e; }
   return r;
+};
+
+// ══ content[0] IS NOT THE TEXT ON A THINKING MODEL ═══════════════════════════
+// Twenty-three call sites in this file read the model's answer as
+// `content[0].text`. That is correct on Haiku 4.5 and silently wrong on every
+// model we are about to move to.
+//
+// Claude Sonnet 5 and Opus 5 run ADAPTIVE THINKING BY DEFAULT — omitting the
+// `thinking` parameter enables it rather than disabling it — and `display`
+// defaults to "omitted". So the response still carries a thinking block, it is
+// still FIRST, and its text is an EMPTY STRING. content[0].text returns "".
+//
+// Every one of those twenty-three sites has `|| ''` after it. So the failure is
+// not an exception and not a log line: the owner lookup finds no owner, the
+// review miner finds no pain, the audit brain returns nothing, the email writer
+// returns nothing — and every one of them reports it as "the model returned
+// nothing", which is the message this file already prints for a genuine empty
+// answer. The upgrade would look like every model in the world got worse.
+//
+// THE SECOND HALF, which is the one that ships a lie: `stop_reason` appears ZERO
+// times in 34,000 lines. Opus 5 and Fable 5 run safety classifiers that can
+// DECLINE a request — HTTP 200, empty content, `stop_reason: "refusal"`. Read
+// through `content[0].text || ''` that is indistinguishable from a model that
+// simply had nothing to say. It is not: it is a request that never ran.
+//
+// So the text is whatever TEXT blocks the response holds, joined; a refusal is
+// named as a refusal; and a response carrying blocks but no text at all says so
+// rather than returning the empty string that every caller treats as "fine".
+const anthropicText = (j, label) => {
+  if (!j || typeof j !== 'object') return '';
+  if (j.stop_reason === 'refusal') {
+    const _why = (j.stop_details && (j.stop_details.category || j.stop_details.explanation)) || 'no category given';
+    console.log(`\u26d4 MODEL DECLINED [${label || 'anthropic'}]: the request was refused by a safety classifier (${_why}), not answered. This returns HTTP 200 with empty content, so without this line it reads as "the model returned nothing" \u2014 which is the same message a real empty answer produces, and the two need different fixes.`);
+    return '';
+  }
+  const blocks = Array.isArray(j.content) ? j.content : [];
+  const text = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '')).join('');
+  if (!text && blocks.length) {
+    const _kinds = [...new Set(blocks.map(b => (b && b.type) || 'unknown'))].join(', ');
+    console.log(`\u26a0 NO TEXT BLOCK [${label || 'anthropic'}]: the response carried ${blocks.length} block(s) \u2014 ${_kinds} \u2014 and not one of them was text. On a thinking model the FIRST block is a thinking block whose text is empty by default, which is exactly what reading content[0] returns.`);
+  }
+  if (j.stop_reason === 'max_tokens') {
+    console.log(`\u26a0 TRUNCATED [${label || 'anthropic'}]: the model hit max_tokens. On an adaptive-thinking model max_tokens caps THINKING PLUS the answer, so a budget tuned for Haiku can spend itself on reasoning and return a part-written reply that still parses.`);
+  }
+  return text;
 };
 
 const reportLeadSpend = (company) => {
@@ -2253,7 +2336,7 @@ app.post('/api/claude', async (req, res) => {
         + `${(_u.cache_read_input_tokens || 0) > 0 ? ' \u267b prompt cache HIT' : ''}`);
     }
     if (!r.ok) return res.status(r.status).json({ error: d.error?.message || 'Anthropic error' });
-    const _text = d.content[0].text;
+    const _text = anthropicText(d, 'generate');
 
     // ── VERIFY THE COPY THAT WILL ACTUALLY BE SENT ────────────────────────
     // This endpoint is where the browser generates variant A/B and the two
@@ -6895,7 +6978,7 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
-    let text = d.content?.[0]?.text || '';
+    let text = anthropicText(d);
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -7183,7 +7266,7 @@ ${corpus}` }]
     }, 30000);
 
     const d = await r.json();
-    let text = d.content?.[0]?.text || '';
+    let text = anthropicText(d);
     text = text.replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
@@ -7287,7 +7370,7 @@ ABOUT THE EMAIL — this matters a lot:
     }, 30000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -7361,7 +7444,7 @@ Return ONLY JSON:
     }, 20000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -7447,7 +7530,7 @@ ${corpus}` }]
     }, 25000);
 
     const d = await r2.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -10151,7 +10234,7 @@ Be honest. Most cold emails are a delete and saying so is the useful answer. If 
       }),
     }, 25000, 'prospect-sim');
     const j = await r.json();
-    const text = (j && j.content && j.content[0] && j.content[0].text) || '';
+    const text = anthropicText(j);
     return parseProspectVerdict(text);
   } catch (e) {
     console.log(`PROSPECT SIM: could not run (${e && e.message}) — the email stands unreviewed.`);
@@ -10691,7 +10774,7 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
         messages: [{ role: 'user', content: prompt }] }),
     }, 25000, { label: 'email rewrite', company });
     const d = await res.json();
-    const out = String((d.content && d.content[0] && d.content[0].text) || '').trim()
+    const out = String(anthropicText(d)).trim()
       .replace(/^["'\u201c]+|["'\u201d]+$/g, '').trim();
     return out || null;
   } catch (e) { return null; }
@@ -10887,7 +10970,7 @@ Return ONLY the email body. No subject, no signature, no preamble.`;
       }),
     }, 30000, 'email-writer');
     const j = await r.json();
-    const text = (j && j.content && j.content[0] && j.content[0].text) || '';
+    const text = anthropicText(j);
     return String(text).trim() || null;
   } catch (e) {
     console.log(`EMAIL WRITER [${company}]: model call failed (${e && e.message}) — the composed email stands.`);
@@ -14957,7 +15040,10 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     }, 45000);
     const d = await r.json();
     if (!d || !d.content) return null;
-    const txt = (d.content || []).map(c => c.text || '').join('');
+    // Already joined across blocks, which was half right \u2014 but it joined EVERY
+    // block, so on a thinking model it prepends an empty thinking block, and it
+    // read a refusal as an ordinary empty answer.
+    const txt = anthropicText(d, 'situation-read');
     const parsed = parseLLMJSON(txt);
     if (!parsed || !parsed.read) return null;
 
@@ -15854,7 +15940,7 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
       // clean profile and is the worst way for this to fail.
     }, 45000);
     const d = await res.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -16012,7 +16098,7 @@ ${corpus}` }]
       }),
     }, 25000);
     const d = await res.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -16091,7 +16177,7 @@ ${replyBlocks}` }]
       }),
     }, 18000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const p = parseLLMJSON(t) || {};
@@ -16397,7 +16483,7 @@ ${corpus}` }]
       }),
     }, 22000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16602,7 +16688,7 @@ ${md.slice(0, 14000)}` }]
       }),
     }, 20000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16695,7 +16781,7 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -16820,7 +16906,7 @@ ${corpus}` }]
       }),
     }, 20000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -16896,7 +16982,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       }),
     }, 18000);
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -17070,7 +17156,7 @@ ${content}` }]
     }, 20000);
 
     const d = await res.json();
-    let t = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
     if (a >= 0 && b > a) t = t.slice(a, b + 1);
     const parsed = parseLLMJSON(t) || {};
@@ -18247,7 +18333,7 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
@@ -18363,7 +18449,7 @@ ${corpus}` }]
     }, 35000);
 
     const d = await r.json();
-    let text = (d.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'); let lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     // The listings array is long and often gets truncated at max_tokens, which
@@ -23717,6 +23803,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           hasViewport: htmlSignals ? htmlSignals.hasViewport : null,
           rank: _measured.rank,
           weakerAbove: _measured.weakerAbove,
+          // ══ THE NAMED COMPETITOR HAS NEVER ONCE REACHED THE EMAIL ═════════
+          // outranked_by_weaker is the rung PART 5 credits with replies, and its
+          // say() has two branches. The good one names the business above them:
+          //
+          //   "Overhead Door Company ranks above them for 'garage door repair in
+          //    Carmel' with 41 reviews against their 260"
+          //
+          // The fallback is the one every SEO email he has ever deleted:
+          //
+          //   "A business with fewer reviews than theirs is ranking above them"
+          //
+          // The named branch needs m.weakerNames and m.ourReviews. Both are
+          // computed by resolveMeasurements. Neither was listed here. So the
+          // branch has never been taken on any lead this system has ever run,
+          // the rung silently wrote the template sentence every time, and the
+          // comment above it — "a named competitor roughly doubles reply rate
+          // against the same body, because it proves the research instead of
+          // claiming it" — described a sentence the code could not produce.
+          //
+          // Two lines. This is the "computed but not passed" seam again, on the
+          // single highest-value sentence in the system.
+          weakerNames: _measured.weakerNames,
+          ourReviews: _measured.ourReviews,
           rankQuery: localRank && localRank.query,
           tenureYears: _measured.tenureYears,
           reviewCount: _measured.reviewCount,
@@ -25299,7 +25408,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           }
           console.log('BRAIN ERROR:', brainError);
         }
-        const vText = vd.content?.[0]?.text || '';
+        const vText = anthropicText(vd);
         if (!vText && !vd.error) {
           brainError = `Claude returned empty response (status shape: ${JSON.stringify(Object.keys(vd))})`;
           console.log('BRAIN ERROR:', brainError);
@@ -27240,7 +27349,7 @@ Return ONLY valid JSON:
             }, 25000);
 
             const cd = await critiqueRes.json();
-            const cText = cd.content?.[0]?.text || '';
+            const cText = anthropicText(cd);
             let cClean = cText.replace(/```json|```/g, '').trim();
             // Extract just the JSON object if there's trailing text
             const firstBrace = cClean.indexOf('{');
@@ -31623,6 +31732,138 @@ app.listen(PORT, () => {
     console.log(`\u26d4 SURFACE SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THE MODEL UPGRADE WOULD HAVE FAILED SILENTLY, ON EVERY CALL ════════
+  // Twenty-three sites read the answer as content[0].text, every one with an
+  // `|| ''` after it. On Haiku 4.5 that is correct. On Sonnet 5 and Opus 5
+  // adaptive thinking is ON BY DEFAULT — omitting the thinking parameter enables
+  // it — and display defaults to "omitted", so the first block is a thinking
+  // block whose text is the empty string.
+  //
+  // Every owner lookup, every review mine, the audit brain and the email writer
+  // would have returned "" and reported it as "the model returned nothing" —
+  // the same message this file already prints for a genuinely empty answer. The
+  // upgrade would have looked like every model got worse, with no error anywhere.
+  //
+  // And stop_reason appeared ZERO times in 34,000 lines. A safety-classifier
+  // refusal is HTTP 200 with empty content; through `|| ''` it is indistinguishable
+  // from a model with nothing to say, and the two need different fixes.
+  try {
+    const _fails = [];
+    // Comments AND string bodies stripped. Without the second, this check fails
+    // on its own success message \u2014 three of its matches were the characters
+    // "content[0]" inside log prose in this very block. A source scan that can
+    // match its own text is the harness-that-lies class, and this session has
+    // now produced four of them.
+    const _src = require('fs').readFileSync(__filename, 'utf8')
+      .replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/`(?:\\.|[^`\\])*`/g, '``').replace(/'(?:\\.|[^'\\\n])*'/g, "''");
+    // Only an actual READ counts \u2014 `content[0].text`, never the phrase.
+    for (const _m of _src.matchAll(/content\s*(?:\?\.)?\[0\]\s*(?:\?\.)?\.?text/g)) {
+      const _ln = _src.slice(0, _m.index).split('\n').length;
+      _fails.push(`a raw content[0] read survives near line ${_ln} \u2014 on a thinking model that is an empty thinking block`);
+    }
+    // A thinking-first response: the answer is the TEXT block, not the first one.
+    const _thinky = anthropicText({ stop_reason: 'end_turn', content: [
+      { type: 'thinking', thinking: '' }, { type: 'text', text: 'the real answer' }] });
+    if (_thinky !== 'the real answer') _fails.push(`a thinking-first response returned "${_thinky}" instead of the answer \u2014 that is the upgrade failing silently on all 23 sites`);
+    // Text split across blocks must join, not truncate.
+    const _split = anthropicText({ content: [{ type: 'text', text: 'one ' }, { type: 'text', text: 'two' }] });
+    if (_split !== 'one two') _fails.push(`text split across blocks came back as "${_split}"`);
+    // A refusal is not an empty answer.
+    if (anthropicText({ stop_reason: 'refusal', content: [] }, 'selftest') !== '') _fails.push('a refusal returned something');
+    // And the ordinary case still works.
+    if (anthropicText({ content: [{ type: 'text', text: 'plain' }] }) !== 'plain') _fails.push('an ordinary single-text response broke');
+    if (_fails.length) {
+      console.log(`\u26d4 RESPONSE READ CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 RESPONSE READ CHECK: every model response is read by finding its TEXT blocks and joining them, never by index. A thinking-first reply returns the answer, a refusal is named as a refusal rather than read as an empty answer, and a truncated reply says so. All 23 sites went through content[0], which on the models we are moving to is an empty thinking block \u2014 the upgrade would have returned nothing everywhere and logged it as the model having nothing to say.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 RESPONSE READ CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE METER MUST NOT MAKE AN UPGRADE LOOK CHEAP ══════════════════════
+  // The price table held two models and fell back to HAIKU for anything else,
+  // so the one run you would use to judge an upgrade priced it at a fifth of
+  // its cost. And cacheWrite was the five-minute rate while every breakpoint in
+  // the file asks for an hour, which bills double.
+  try {
+    const _fails = [];
+    for (const [_id, _p] of Object.entries(ANTHROPIC_PRICES)) {
+      if (!Number.isFinite(_p.minCache)) _fails.push(`${_id} has no minCache \u2014 a cache block below the model's minimum returns zero cached tokens and no error`);
+      // A 1-hour cache write bills 2x input. Every cache_control in this file asks for 1h.
+      if (Math.abs(_p.cacheWrite - _p.in * 2) > 1e-12) _fails.push(`${_id} prices its cache write at ${(_p.cacheWrite / _p.in).toFixed(2)}x input; every breakpoint here requests ttl 1h, which bills 2x`);
+    }
+    for (const _m of [BRAIN_MODEL, SITUATION_MODEL]) {
+      if (!ANTHROPIC_PRICES[_m]) _fails.push(`the configured model ${_m} is not in the price table, so its spend is invisible`);
+    }
+    // The trap the file's own comment walks into: the situation read's system
+    // block is ~3,160 tokens and that comment recommends Haiku, whose floor is 4,096.
+    const _h = ANTHROPIC_PRICES['claude-haiku-4-5-20251001'];
+    if (!_h || _h.minCache <= 3160) _fails.push('the Haiku cache floor is recorded as low enough that the situation-read breakpoint looks safe on it \u2014 it is not, and the failure is silent');
+    if (_fails.length) {
+      console.log(`\u26d4 SPEND METER CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SPEND METER CHECK: every priced model carries its cache floor, cache writes are priced at the one-hour rate every breakpoint in this file actually requests, and both configured models are in the table. An unpriced model is now announced instead of being charged at Haiku rates \u2014 which is what made an upgraded model report as nearly free on the exact run you would use to decide about it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SPEND METER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE NAMED COMPETITOR, WHICH HAS NEVER REACHED A SINGLE EMAIL ═══════
+  // outranked_by_weaker is the rung PART 5 credits with replies. Its say() names
+  // the business above them when it has weakerNames and ourReviews, and falls
+  // back to "a business with fewer reviews than yours" when it does not.
+  // resolveMeasurements computes both. _harmInputs forwarded neither. So the
+  // fallback has been taken on every lead ever run, and the rung has only ever
+  // written the sentence that reads like every SEO email he has deleted.
+  try {
+    const _fails = [];
+    const _rung = HARM_LADDER.find(h => h.id === 'outranked_by_weaker');
+    if (!_rung) _fails.push('the rung is gone');
+    else {
+      const _named = String(_rung.say({ weakerNames: [{ name: 'Overhead Door Company', reviews: 41 }],
+        ourReviews: 260, weakerAbove: 1, rankQuery: 'garage door repair in Carmel' }));
+      if (!/Overhead Door Company/.test(_named) || !/41/.test(_named) || !/260/.test(_named)) {
+        _fails.push(`given the names and our count, the rung still wrote "${_named.slice(0, 60)}"`);
+      }
+      const _generic = String(_rung.say({ weakerAbove: 1, rankQuery: 'q' }));
+      if (/Overhead/.test(_generic)) _fails.push('the rung names a competitor it was not given');
+    }
+    // THE WIRE. The rung reads m.<field>; _harmInputs is assembled by hand.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // ══ A FIXED WINDOW, FOR THE THIRD TIME TODAY ═══════════════════════
+    // Written as slice(_hi2, _hi2 + 9000). The field it looks for sits 10,209
+    // characters into that literal, so the check reported a wire it had just
+    // been handed as missing. RESPONSE CHECK and AUDIT UNIQUENESS CHECK made
+    // the identical mistake earlier in this session. Brace-match. Always.
+    const _needle = '_harmInputs' + ' = {';
+    const _hi2 = _src.indexOf(_needle, _src.indexOf(_needle) + 10);
+    let _blk = '';
+    if (_hi2 > -1) {
+      const _open = _src.indexOf('{', _hi2);
+      let _d = 0, _e = _open;
+      for (let k = _open; k < _src.length; k++) {
+        if (_src[k] === '{') _d++;
+        else if (_src[k] === '}') { _d--; if (!_d) { _e = k + 1; break; } }
+      }
+      _blk = _src.slice(_hi2, _e);
+    }
+    if (!_blk) _fails.push('the _harmInputs literal could not be located, so the wire was not checked');
+    else {
+      for (const _f of ['weakerNames', 'ourReviews']) {
+        if (!new RegExp(`${_f}\\s*:`).test(_blk)) _fails.push(`${_f} is computed by the resolver and still not forwarded to the ladder \u2014 the named-competitor sentence cannot be produced`);
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 NAMED COMPETITOR CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 NAMED COMPETITOR CHECK: the rung that earned this system its replies can now name the business ranking above them and put its review count beside theirs. Both measurements reach it. Until now they were computed, never forwarded, and the rung silently wrote "a business with fewer reviews than yours is ranking above you" \u2014 on every lead, forever.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 NAMED COMPETITOR CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ THE ASK WAS A QUESTION WE HAD ALREADY ANSWERED ═════════════════════
   // Two asks that actually went out:
   //   "Any idea what's putting them ahead in the results that matter?"
@@ -33423,7 +33664,7 @@ Return ONLY valid JSON, no markdown:
     }, 30000);
 
     const data = await r.json();
-    const text = data.content?.[0]?.text || '';
+    const text = anthropicText(data, 'linkedin-drafts');
     let clean = text.replace(/```json|```/g, '').trim();
     const fb = clean.indexOf('{'), lb = clean.lastIndexOf('}');
     if (fb >= 0 && lb > fb) clean = clean.slice(fb, lb + 1);
