@@ -11392,6 +11392,26 @@ const openingTokens = (spine, figures) => {
   return { words: uniq, figures: [...figs], all: [...uniq, ...figs] };
 };
 
+// ══ THE BANNED WORDS, IN ONE PLACE, SO THE BRIEF CANNOT UNDER-STATE THEM ═══
+// The gate banned twenty terms and the brief disclosed nine. The undisclosed
+// ones included "impressions", which an ordinary email reaches for — "first
+// impressions" — and "nurture". A draft was refused for a rule the writer was
+// never given, and the rewrite prompt restated no vocabulary rule at all, so
+// the second attempt could only fail the same way.
+//
+// Same principle as openingTokens: the constraint is a fact, so code states it,
+// and the brief is GENERATED from the regex rather than written beside it.
+// Two hand-maintained lists of the same rule is how they came to disagree.
+const EMAIL_JARGON_TERMS = ['pixel', 'retargeting', 'H1', 'meta description', 'schema', 'SEO',
+  'above the fold', 'funnel', 'CRM', 'conversion rate', 'CTA', 'landing page', 'attribution',
+  'impressions', 'nurture', 'optimisation', 'UX', 'leverage', 'unlock', 'synergy'];
+// `synerg` used to sit bare inside \b(...)\b, so it could only match the stem
+// "synerg" — not a word anybody writes. "synergy", "synergies" and
+// "synergistic" all sailed through the most notorious entry on the list for
+// the life of this gate. Found by generating the brief FROM the regex and
+// asserting every disclosed term is one the regex actually tests.
+const EMAIL_JARGON_RE = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg[a-z]*)\b/i;
+
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
   const { first, spine, earned, pattern, reframe, money, count, cta, blind,
@@ -11535,8 +11555,9 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
 - THE ASK IS THE LAST SENTENCE. Nothing follows it. A draft that puts the
   question in the middle and keeps explaining afterwards is discarded — he reads
   past it, finishes on a statement, and has nothing to reply to.
-- No marketing words: funnel, CRM, pixel, SEO, conversion rate, landing page,
-  optimisation, leverage, unlock.
+- No marketing words. This list is generated from the check itself, so it is
+  the whole rule and not a summary of it: ${EMAIL_JARGON_TERMS.join(', ')}.
+  "Impressions" is on it in every sense, including "first impressions".
 - THE COUNT IS A NUMBER OF FINDINGS, NOT A NUMBER OF PLACES WE SEARCHED. Never
   write "six places in total", "three different pages", or "everywhere we
   looked". We read a handful of pages and counted separate problems across them.
@@ -11788,7 +11809,20 @@ const verifyBrainEmail = (body, opts = {}) => {
     // actually holds.
     const NAMES_THE_FIX = [
       [/\b(would|will|could|can)\s+(fix|solve|stop|prevent|handle|catch|sort)\s+(that|this|it|the problem|them)\b/i, 'prescribes a fix'],
-      [/\b(a|an|the|your)\s+[a-z-]{3,20}\s+(system|tool|widget|platform|software|app|layer|service)\b[^.]{0,30}\b(would|will|could|can|fixes|solves|handles)\b/i, 'names a product as the answer'],
+      // ══ "SERVICE" IS NOT A PRODUCT WE SELL, IT IS HALF THE ICP ═══════════
+      // 'service' sat in a list of tech-product nouns — system, tool, widget,
+      // platform, software, app, layer — every one of which really is something
+      // we would be selling. It is also ordinary trade vocabulary, and this
+      // system supplies it: the trade table maps 'tree service' and 'septic
+      // service', both from live discovery categories. Verified against the real
+      // verifier, all three of these were refused as naming a product:
+      //   "your tree service will not come up in the map results"
+      //   "the tree service sitting above you can be reached in one tap"
+      //   "your septic service will not appear in the map results"
+      // The second is outranked_by_weaker describing his COMPETITOR — one of
+      // only two findings CLAUDE.md lists as having earned a reply. The words
+      // were the trade name we handed the writer ourselves.
+      [/\b(a|an|the|your)\s+[a-z-]{3,20}\s+(system|tool|widget|platform|software|app|layer)\b[^.]{0,30}\b(would|will|could|can|fixes|solves|handles)\b/i, 'names a product as the answer'],
       [/\b(what you need is|the fix is|the answer is|the solution is)\b/i, 'states the fix outright'],
       [/\b(a|an|your) (scheduler|booking (system|widget|tool|page)|online booking|chatbot|CRM|automation|autoresponder|response layer|AI (brain|layer|system|assistant)|landing page|funnel)\b/i, 'names the product'],
       // ══ NEVER DESCRIBE OUR OWN WORK ═════════════════════════════════════
@@ -12106,7 +12140,22 @@ const verifyBrainEmail = (body, opts = {}) => {
   // six, and every true number in the email dies with it.
   const COUNT_AS_PLACES = /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:different\s+|separate\s+)?(places?|spots?|locations?|pages?|sections?|areas?)\b/i;
   const _places = text.match(COUNT_AS_PLACES);
-  if (_places) {
+  // ══ ONLY WHEN THE NUMBER IS OUR FINDING COUNT ═════════════════════════
+  // This fired on ANY number followed by places/pages/locations anywhere in the
+  // body, and its message asserts "We never counted places" — which is false
+  // whenever the number is HIS: three locations he operates, two pages that
+  // carry the same headline, four markets he publishes. Those arrive through
+  // originalFindings and marketsSeen, which the evidence block hands the writer
+  // as ASSERTABLE. So a truthful sentence built from data we gave it was
+  // refused with a reason that was itself untrue.
+  //
+  // The rule is about ONE thing: our count of findings being restated as a
+  // count of places we looked. So it fires only when the number IS that count.
+  const _placeNum = _places ? String(_places[0]).match(/\d+|one|two|three|four|five|six|seven|eight|nine|ten/i) : null;
+  const _WORDNUM = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
+  const _placeN = _placeNum ? (Number(_placeNum[0]) || _WORDNUM[String(_placeNum[0]).toLowerCase()] || null) : null;
+  const _ourCount = Number(String(opts.count || '').match(/\d+/) || [NaN]);
+  if (_places && Number.isFinite(_ourCount) && _placeN === _ourCount) {
     return { ok: false, why: `"${_places[0]}" — the count is the number of FINDINGS, not the number of places we searched. We never counted places, and he can check that in one look at his own site.` };
   }
   // The same slip without a noun at all: "everywhere we looked", "across the
@@ -12126,7 +12175,7 @@ const verifyBrainEmail = (body, opts = {}) => {
   }
 
   // ── VOCABULARY THE OWNER WOULD NEVER USE ────────────────────────────────
-  const JARGON = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg)\b/i;
+  const JARGON = EMAIL_JARGON_RE;
   const j = text.match(JARGON);
   if (j) return { ok: false, why: `agency vocabulary — "${j[0]}"` };
 
@@ -12204,7 +12253,24 @@ const verifyBrainEmail = (body, opts = {}) => {
     // built around the noun rather than around the ways of asking for it.
     const MEETING_ASK = /\b(?:jump|hop|get) on (?:a |the )?(?:quick |short |brief )?(?:call|chat|zoom|line)\b|\b(?:set up|schedule|book|grab|find|have|spare) (?:a |some )?(?:quick |short |brief )?(?:call|chat|meeting|zoom|slot)\b|\b(?:time|room|space) for a (?:quick |short |brief )?(?:call|chat|meeting|zoom)\b|\bopen to a (?:quick |short |brief )?(?:call|chat|conversation)\b|\b(?:\d{1,2}|ten|fifteen|twenty|thirty) ?-? ?minutes?\b|\bare you free\b|\bdo you have (?:a )?(?:few )?(?:minutes?|time)\b|\bmy calendar\b|\bwhat does your (?:week|schedule|diary) look like\b|\bworth a (?:quick )?(?:call|chat)\b/i;
     const _ma = text.match(MEETING_ASK);
-    if (_ma) {
+    // ══ A DURATION IS NOT A REQUEST FOR HIS TIME ══════════════════════════
+    // The minutes clause was scoped to the whole body while the rule is about
+    // the ASK. The realistic casualty is a VERBATIM CUSTOMER REVIEW — those
+    // reach the writer inside the ASSERTABLE block as "his own reviewers,
+    // repeated", and a waiting complaint saying "we sat there twenty minutes"
+    // made the draft fail as though we had asked him for a meeting. Quoting a
+    // reviewer's own words is the single most persuasive move this system has.
+    //
+    // A bare duration only asks for his time if it sits in a request. Every
+    // other clause in MEETING_ASK already names the request itself and is
+    // unaffected.
+    const _bareDuration = _ma && /^(?:\d{1,2}|ten|fifteen|twenty|thirty) ?-? ?minutes?$/i.test(String(_ma[0]).trim());
+    const _askContext = /\b(?:call|chat|meeting|zoom|slot|spare|give|grab|find|take|need|got|have)\b/i;
+    const _sentenceWith = String(text).split(/(?<=[.!?])\s+/).find(s => s.includes(_ma ? _ma[0] : '\u0000')) || '';
+    const _quoted = /["\u201c\u201d]/.test(_sentenceWith);
+    if (_ma && _bareDuration && (_quoted || !_askContext.test(_sentenceWith))) {
+      // A duration with nobody asking for anything. Not a meeting request.
+    } else if (_ma) {
       return { ok: false, why: `"${_ma[0].trim()}" — this asks for his time. The only job of this email is to earn a REPLY; asking for a call asks him to decide something he has no reason to decide yet, and it turns an open question he wants answered into an appointment he can decline in one word` };
     }
   }
@@ -12212,10 +12278,39 @@ const verifyBrainEmail = (body, opts = {}) => {
   // ── IT MUST STILL BE ABOUT THE THING WE MEASURED ────────────────────────
   // A fluent email about the wrong subject is worse than a clumsy one about the
   // right subject. At least two content words of the spine must survive.
-  const spineWords = [...contentWords(opts.spine || '')];
-  if (spineWords.length >= 3) {
-    const kept = spineWords.filter(w => text.toLowerCase().includes(w)).length;
-    if (kept < 2) return { ok: false, why: 'drifted off the measured finding — the spine is barely present' };
+  // ══ THE SECOND HIDDEN LEXICAL RULE, AND IT SAID THE OPPOSITE ═══════════
+  // This required at least TWO of the spine's literal content words to appear
+  // as raw substrings anywhere in the body, with no stemming — "reviews" did
+  // not match "review", "slipping" did not match "slipped".
+  //
+  // The brief orders the opposite, three separate times: "Replace it", "The
+  // SENTENCE does not have to survive and should not", and the opening rule's
+  // own new line, "these are not a phrase to copy". So a writer following the
+  // instructions exactly was refused by a rule it was never shown, and the
+  // message — "drifted off the measured finding" — named nothing that would
+  // fix it, so the rewrite failed the same way.
+  //
+  // On the live Kurt Kavanaugh spine the silently-required set was
+  // {google, reviews, slowed, days} while the set the brief PRINTS is
+  // {slowed, 6, six, 10, ten, 90}. They overlap on one word. Fixing the
+  // twelve-word gate alone would have left this one killing the same drafts.
+  //
+  // The guard's PURPOSE is real: a fluent email about the wrong subject is
+  // worse than a clumsy one about the right subject. So it is kept and made
+  // honest — the FACTS must survive, not the wording. A measured figure counts
+  // (the brief already requires the numbers verbatim), and a word counts on its
+  // stem, so a writer may pluralise, tense-shift and reorder freely.
+  {
+    const _tok = openingTokens(opts.spine, opts.figures);
+    const _stem = (w) => String(w).toLowerCase().replace(/(?:ing|ed|es|s)$/, '');
+    const _lower = text.toLowerCase();
+    const _bodyStems = new Set(_lower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).map(_stem));
+    const _keptWords = _tok.words.filter(w => _bodyStems.has(_stem(w)) || _lower.includes(_stem(w)));
+    const _keptFigs = _tok.figures.filter(f => _lower.includes(String(f).toLowerCase()));
+    const _kept = _keptWords.length + _keptFigs.length;
+    if (_tok.all.length >= 3 && _kept < 2) {
+      return { ok: false, why: `drifted off the measured finding \u2014 the email no longer carries it. At least TWO of these must appear somewhere in the body, in any form and any order: ${_tok.all.slice(0, 12).join(', ')}. Reword freely; keep the fact.` };
+    }
   }
   return { ok: true, body: text };
 };
@@ -33721,6 +33816,116 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ OPENING RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ FIVE MORE RULES THE WRITER WAS NEVER TOLD ══════════════════════════
+  // Found by an exhaustive audit of the email path after the twelve-word gate
+  // was fixed, then each one adversarially verified by executing the real
+  // verifier. Seven other claimed defects were refuted and are not here.
+  //
+  // They are one disease: THE VERIFIER ENFORCED RULES THE BRIEF NEVER STATED,
+  // AND ITS REJECTION MESSAGES NAMED NOTHING THAT WOULD FIX THEM — so the
+  // rewrite, which is handed only that message, failed the same way every time
+  // and the composed template shipped.
+  try {
+    const _fails = [];
+    const K = 'their Google reviews have slowed — 6 in the last 90 days, against 10 in the 90 days before that';
+    const _o = (over) => ({ spine: K, figures: ['6', '10', '90'], money: '', earned: '', count: '', trade: 'orthodontist', ...over });
+    const P = (b, over) => verifyBrainEmail(b, _o(over));
+
+    // 1. SPINE DRIFT — the blocker. The brief says "Replace it"; the gate
+    // silently demanded two of the spine's literal words, unstemmed.
+    // The audit's own discriminating example. The first draft written here kept
+    // "days" and "against" by accident and satisfied the OLD gate too, so it
+    // proved nothing — verified by restoring the original gate and watching the
+    // check still pass. This one shares NO word with its spine, which is exactly
+    // what "replace the wording" produces and exactly what used to be refused.
+    const _driftSpine = 'Two of your reviews mention timelines slipping';
+    const _reworded =
+      'Kurt, two people who left you feedback describe the same slipped schedule.\n\n' +
+      'That lands in the middle of a five-figure decision, right when someone is trying to move forward.\n\n' +
+      'Was that a one-off, or does it come up on your end?';
+    const _rw = verifyBrainEmail(_reworded, _o({ spine: _driftSpine, figures: ['2'] }));
+    if (!_rw.ok) _fails.push(`a fully reworded draft that keeps every measured figure is still refused: ${_rw.why}`);
+    // But a genuine drift — no figures, no finding — must still be caught.
+    const _drift = P('Kurt, most practices in your position find their marketing is not pulling its weight.\n\n' +
+      'It is usually the same handful of causes.\n\nWorth a look?');
+    if (_drift.ok) _fails.push('an email carrying none of the finding now passes — the drift guard has been removed rather than corrected');
+
+    // 2. "SERVICE" IS THE ICP, NOT A PRODUCT WE SELL. All three of these were
+    // refused as naming a product; the second is outranked_by_weaker describing
+    // his competitor, one of only two findings with a reply behind it.
+    for (const [what, body] of [
+      ['his own trade', 'Dave, your tree service will not come up in the map results when somebody nearby searches for one.\n\nThat decides who gets called before you are in the conversation.\n\nWant the list?'],
+      ['his competitor', 'Dave, the tree service sitting above you can be reached in one tap and you are not on the list at all.\n\nPeople pick from what is in front of them.\n\nWho handles that for you?'],
+      ['a second trade', 'Dave, your septic service will not appear in the map results for anybody searching nearby.\n\nThat is the search a customer actually types.\n\nHad you seen it?'],
+    ]) {
+      const v = verifyBrainEmail(body, { spine: 'they do not come up in the Google map results for tree service',
+        figures: [], money: '', earned: '', count: '', trade: 'tree service' });
+      if (!v.ok && /names a product as the answer/.test(String(v.why))) {
+        _fails.push(`an email about ${what} is still refused as naming a product we sell — "service" is ordinary trade vocabulary and this system supplies it from its own trade table`);
+      }
+    }
+    // A real product pitch must still be refused.
+    // Long enough to clear the 25-word floor, or that gate fires first and this
+    // asserts nothing. The first version was 17 words and did exactly that.
+    const _prod = P('Kurt, six reviews came in over the last ninety days against ten in the ninety before that.\n\n' +
+      'A booking system would fix this in an afternoon and most practices your size already run one.\n\n' +
+      'Want me to send the write-up over?');
+    // Assert it is REFUSED, not which of the eight NAMES_THE_FIX rules fires.
+    // The first version demanded the "names a product" message specifically and
+    // failed because a sibling rule — "would fix this" prescribes a fix — is
+    // matched earlier in the same list. The draft was correctly refused the
+    // whole time; the assertion was wrong, which is its own lesson: a check
+    // that pins the exact wording of a rejection breaks when the gate is
+    // reordered, and reports a regression that did not happen.
+    if (_prod.ok) {
+      _fails.push('"a booking system would fix this in an afternoon" now passes — narrowing the trade-word false positive removed the rule instead of correcting it');
+    }
+
+    // 3. COUNT AS PLACES — fired on HIS numbers and its message asserted
+    // something false about them.
+    const _his = verifyBrainEmail(
+      'Kurt, the same headline appears on three pages of your site, word for word.\n\n' +
+      'Two of them are the pages a search lands on.\n\nWas that deliberate?',
+      { spine: 'the same headline appears on three pages', figures: ['3'], count: '5', money: '', earned: '', trade: 'orthodontist' });
+    if (!_his.ok && /never counted places/.test(String(_his.why))) {
+      _fails.push('a truthful sentence about HIS OWN pages is still refused with "We never counted places" — a message that is itself false whenever the number is his');
+    }
+    // Our finding count restated as places must still be refused.
+    const _ours = verifyBrainEmail(
+      'Kurt, we found problems in five different places across your site.\n\nThat is the pattern.\n\nWant them?',
+      { spine: 'the same headline appears on three pages', figures: [], count: '5', money: '', earned: '', trade: 'orthodontist' });
+    if (_ours.ok) _fails.push('restating OUR finding count as a number of places we searched now passes — that is the claim this rule exists to stop');
+
+    // 4. A DURATION IN A QUOTED REVIEW IS NOT A MEETING REQUEST.
+    const _quote = P('Kurt, one of your reviewers wrote "we sat in the waiting room twenty minutes past our appointment".\n\n' +
+      'Two others say the same thing.\n\nHad that come up?');
+    if (!_quote.ok && /asks for his time/.test(String(_quote.why))) {
+      _fails.push('a verbatim customer review containing a duration is still refused as a request for his time — review quotes are the most persuasive move this system has and they arrive in the ASSERTABLE block');
+    }
+    // A real meeting ask must still be refused.
+    const _meet = P('Kurt, six reviews came in over the last ninety days against ten before.\n\n' +
+      'That is the gap.\n\nGot fifteen minutes for a call this week?');
+    if (_meet.ok) _fails.push('an actual request for fifteen minutes on a call now passes');
+
+    // 5. THE JARGON LIST MUST BE THE WHOLE RULE, NOT A SUMMARY OF IT.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    for (const t of EMAIL_JARGON_TERMS) {
+      if (!EMAIL_JARGON_RE.test(t)) _fails.push(`the brief discloses "${t}" but the gate does not test it`);
+    }
+    for (const t of ['impressions', 'nurture', 'attribution', 'retargeting', 'schema']) {
+      if (!EMAIL_JARGON_TERMS.includes(t)) _fails.push(`the gate bans "${t}" and the brief never tells the writer`);
+    }
+    if (!/EMAIL_JARGON_TERMS\.join/.test(_src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n'))) {
+      _fails.push('the brief writes its own banned-word list instead of generating it from the gate — two hand-kept copies of one rule is how they came to disagree');
+    }
+    if (_fails.length) {
+      console.log(`⛔ HIDDEN RULE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ HIDDEN RULE CHECK: a fully reworded draft that keeps the figures survives the drift gate while a genuine drift is still caught; "your tree service will not come up" and the competitor sentence beside it are no longer read as naming a product we sell, though a real product pitch still is; a count of HIS pages is no longer refused with a reason that was false; a duration inside a quoted review is no longer read as asking for his time, though a real meeting ask still is; and the brief's banned-word list is generated from the gate, so it can no longer disclose nine of twenty.`);
+    }
+  } catch (e) {
+    console.log(`⛔ HIDDEN RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
