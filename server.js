@@ -22262,215 +22262,216 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     const scrapeHomepage = async () => {
       if (!website || !firecrawlKey) return {};
-      // ══ THE HOMEPAGE ASK IS THE HEAVIEST REQUEST WE MAKE, AND IT IS FIRST ══
-      // `light: true` drops both renders and asks for text only. firecrawlScrape
-      // already learned this lesson and carries the fix ("NEVER LOSE THE CORPUS
-      // TO A SCREENSHOT", ~line 5480); this function — the FIRST call on every
-      // lead — never got it, and asks for FOUR formats where that one asked for
-      // two. See the retry block below for what that cost.
-      const doScrape = (timeout, opts = {}) => fetchT('https://api.firecrawl.dev/v1/scrape', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-        // ── VIEWPORT, NOT FULL PAGE \u2014 AND HERE IS WHY ──────────────────
-        // 'screenshot@fullPage' was tried and REVERTED. It works, but a long
-        // marketing homepage renders past 8000px, and Claude's vision API rejects
-        // any image with a dimension over that limit:
-        //   BRAIN ERROR: image dimensions exceed max allowed size: 8000 pixels
-        //   VISION: CTA=undefined headline=undefined blankHero=undefined
-        //   Brain JSON truncated \u2014 partial extraction used
-        // The vision read died, the audit came back with a null pitch angle, and
-        // the whole lead degraded. A viewport screenshot that works beats a full
-        // page that kills the audit.
-        //
-        // If full-page is wanted later it needs downscaling before it reaches the
-        // vision call \u2014 capture tall, resize to under 8000px, then send.
-        body: JSON.stringify({ url: website, // ══ BOTH IMAGES: ONE FOR VISION, ONE FOR THE HUMAN ═════════════════════════
-      // 'screenshot' is the viewport \u2014 roughly the top 1000px \u2014 and it is the ONLY
-      // one that may go to the vision call. The comment this replaces records why:
-      // a tall marketing homepage renders past 8000px, Claude's vision API rejects
-      // any image over that, the read dies, the pitch angle comes back null and
-      // the whole lead degrades. A plastic surgery homepage is exactly that tall.
+      // ══ THE FIRST PAID CALL ON EVERY LEAD WAS REFUSED, NOT EMPTY ══════════
+      // This function used to open with ONE request asking Firecrawl for four
+      // things at once — markdown, a viewport render, a full-page render and
+      // rawHtml — with waitFor 4000. It came back with nothing on every lead in
+      // every run recorded anywhere in this file, and the log line above it
+      // explained that as the homepage being too heavy to render.
       //
-      // But the viewport-only capture is how an email told a Dallas surgeon "you
-      // have 170 five-star reviews. None of it is on that page" when his reviews
-      // sit at the BOTTOM of his homepage. Nothing rendered the bottom, so nothing
-      // could contradict the claim.
+      // The timestamps say otherwise and they are not ambiguous:
       //
-      // So take both in the same request, for the same credit: the viewport image
-      // goes to vision where the size limit applies, and the full-page render goes
-      // to the audit view, where a human can scroll it and no API rejects it for
-      // being tall.
-      formats: opts.light ? ['markdown', 'rawHtml'] : ['markdown', 'screenshot', 'screenshot@fullPage', 'rawHtml'],
-      onlyMainContent: false, waitFor: opts.light ? 1500 : 4000, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-      }, timeout).then(r => { fcNote(true, opts.light ? 'scrape (text only, recovery)' : 'scrape+screenshot', website); return r.json(); });
-      const looksEmpty = (res) => {
-        const md = (res?.data?.markdown || res?.markdown || '');
-        return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
-      };
-      // ══ A RETRY THAT CHANGES NOTHING IS A SECOND FAILURE, PAID FOR ═════════
-      // Live 2026-08-12: the homepage came back EMPTY on all three leads in the
-      // run, both attempts each, on an account with ~1000 credits. Inner pages
-      // on the same leads and the same key scraped fine. It was never credits.
+      //   13:44:29.726  Research: Tiffany Springs Dental Group
+      //   13:44:30.219  FC PAID [scrape+screenshot]          ← 493 ms later
+      //   13:44:34.833  FC PAID [scrape (text only, recovery)]
+      //   13:44:35.172  CORPUS RECOVERED: 14926 characters
       //
-      // This request asks for markdown + viewport shot + FULL-PAGE shot + rawHtml
-      // with waitFor 4000, against the heaviest page on the site, as the first
-      // call of every lead. firecrawlScrape hit exactly this and its fix is
-      // already in the file: when the combined request comes back empty, ask
-      // again for TEXT ALONE. That function recovers; this one never learned,
-      // and re-sent the identical four-format payload instead — the same
-      // question, expecting a different answer.
+      // 493 milliseconds, on a request carrying `waitFor: 4000`. Firecrawl cannot
+      // have fetched that page and waited four seconds on it in half a second. It
+      // never scraped anything — it REFUSED the request and answered instantly.
+      // John P. Goodman: 388 ms. Vargas: 498 ms. Nine leads out of nine behave
+      // the same way, and the text-only retry on the SAME url with the SAME key
+      // seconds later takes 3-5 seconds and returns 14,000 to 53,000 characters.
+      // The page was always fine. The payload was not.
       //
-      // It also set the pace of the whole run. The old ladder was
-      // 50s + 60s + 30s(https) + 2.5s + 30s = up to 172 SECONDS on the homepage
-      // before the audit properly began, which is most of the "4-5 minutes per
-      // lead", and three concurrent leads contend for the same dyno on top.
+      // Nobody could see it because `looksEmpty()` read `data.markdown` and
+      // nothing else. Through that lens an HTTP 400 carrying Firecrawl's own
+      // explanation is indistinguishable from a page that rendered blank — so the
+      // system printed a confident invented reason ("the four-format request is
+      // the heaviest thing this API can be asked for"), poisoned an
+      // hour-long "this domain returns nothing" memory with it, and bought two
+      // more requests to route around a problem it had misdiagnosed.
       //
-      // So: ask heavy once, then LIGHTEN rather than repeat. Text-only with
-      // waitFor 1500 is the cheapest thing this API can be asked for, and the
-      // corpus is what every quote, every positioning finding and every original
-      // finding is checked against. Losing the render costs a picture. Losing
-      // the corpus costs the audit.
-      // ══ AND THEN GO BACK FOR THE PICTURE, ON ITS OWN ═══════════════════════
-      // Dropping the render to save the corpus is the right trade, but taken
-      // alone it costs the audit its eyes. The brain gets the homepage shot and
-      // one interior page; if the homepage shot is missing, msgContent is empty
-      // and the SECOND RENDER is skipped too — so a failed homepage scrape means
-      // the model reads the whole site as text and sees NOTHING. Every lead in
-      // the 2026-08-12 run logged `screenshot: false`, which is why positioning
-      // and layout findings have been reading like a category label.
+      // What it cost beyond the wasted credit and 13 seconds of every lead:
+      // `screenshot@fullPage` NEVER ARRIVED. Not on one lead, ever — `FULL PAGE:
+      // captured top to bottom` has never printed. So the audit view has never
+      // had a scrollable homepage, and the expensive part: THE BRAIN HAS ONLY
+      // EVER SEEN THE TOP ~1000px OF THE MOST IMPORTANT PAGE ON THE SITE. Every
+      // interior page reaches it as a full-page render — `PAGE RENDERS TO THE
+      // BRAIN: 4 interior page render(s) sent` is in every run — while the
+      // homepage, the one page the prompt asks it to describe, is the one page it
+      // has never actually looked at. That is why positioning and layout findings
+      // read like category labels, and it is how an email told a Dallas surgeon
+      // "you have 170 five-star reviews, none of it is on that page" about
+      // reviews sitting at the bottom of his homepage.
       //
-      // A viewport screenshot ALONE is a fraction of the work of the four-format
-      // request that just failed: no full-page render, no markdown, no rawHtml.
-      // The vision call only ever uses the viewport image anyway — the full-page
-      // one goes to the audit view for a human. So ask for exactly that, once,
-      // and stay silent if it fails. A missing picture costs a picture; a
-      // missing corpus costs the audit.
-      const _withShot = async (result) => {
+      // So this asks for exactly the two shapes with a recorded success rate, at
+      // the same time instead of one after the other:
+      //
+      //   ['markdown','rawHtml']   @ waitFor 1500  — 9 of 9 leads, 3-5s
+      //   ['screenshot@fullPage']  @ waitFor 4000  — the shape every INNER page
+      //                                              already uses successfully,
+      //                                              3-7 renders per lead
+      //
+      // Two requests instead of three, together instead of in sequence: one
+      // credit less, roughly half the wall clock, and the brain gets the whole
+      // page. The 8000px vision ceiling that made the old code take a viewport
+      // crop is handled where it belongs — at the image, by reading the PNG's own
+      // dimensions and downscaling, which is what interior renders already do.
+      //
+      // ── ONE POST, AND THE CALLER IS TOLD WHAT ACTUALLY CAME BACK ──────────
+      // `refused` is the state that had no name before: the request never ran, so
+      // nothing about it is evidence about their website. A refusal is announced
+      // with the status and Firecrawl's own words, and is NOT charged to the
+      // credit ledger. The next payload mistake costs one log line, not a month.
+      const fcAsk = async (target, formats, waitFor, timeout, kind) => {
+        const t0 = Date.now();
+        let r;
         try {
-          if (result?.data?.screenshot || result?.screenshot) return result;
-          const rs = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+          r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: website, formats: ['screenshot'], onlyMainContent: false,
-              waitFor: 2500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-          }, 20000);
-          const ds = await rs.json();
-          const shot = ds?.data?.screenshot || ds?.screenshot || null;
-          if (!shot) return result;
-          console.log(`📷 RENDER RECOVERED [${website}]: the combined request could not produce a screenshot, a viewport-only request could. The brain gets to LOOK at the page instead of only reading it, which is what every layout and positioning finding depends on.`);
-          return { ...result, data: { ...(result?.data || {}), screenshot: shot } };
-        } catch (e) { void e; return result; }
+            body: JSON.stringify({ url: target, formats, onlyMainContent: false, waitFor,
+              maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+          }, timeout);
+        } catch (e) {
+          const ms = Date.now() - t0;
+          console.log(`FIRECRAWL NO ANSWER [${kind}] ${target} — nothing came back within ${ms}ms (${e.message}). The request may still be running on their side.`);
+          return { refused: true, status: 0, body: null, reason: e.message, ms };
+        }
+        let body = null;
+        try { body = await r.json(); } catch { body = null; }
+        const ms = Date.now() - t0;
+        const errText = String(body?.error || body?.message || (body?.details ? JSON.stringify(body.details) : '') || '').slice(0, 400);
+        if (isCreditError(body, r.status)) {
+          FIRECRAWL_OUT_OF_CREDITS = true;
+          console.log(`🔴 FIRECRAWL OUT OF CREDITS — the homepage request for ${target} was refused (HTTP ${r.status}). NOTHING about this site is known and no absence may be claimed from it. Top up before judging any audit from this run.`);
+          return { refused: true, status: r.status, body, reason: errText || 'out of credits', ms };
+        }
+        if (isRateLimited(body, r.status)) {
+          FIRECRAWL_RATE_LIMIT_HITS++;
+          console.log(`⏳ FIRECRAWL RATE LIMITED on the homepage [${kind}] ${target} — HTTP ${r.status} in ${ms}ms. This is throttling, NOT an empty page and NOT their site.`);
+          return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
+        }
+        if (!r.ok || body?.success === false || (body && body.error)) {
+          console.log(`⛔ FIRECRAWL REFUSED THE REQUEST [${kind}] ${target} — HTTP ${r.status} in ${ms}ms, formats ${JSON.stringify(formats)}. Firecrawl said: ${errText || '(no message)'}. Read that literally: the request NEVER RAN, so this is not evidence that their page is slow, heavy or blank. If it answered in under a second it did not even try. Fix the payload; do not add a retry.`);
+          return { refused: true, status: r.status, body, reason: errText || `HTTP ${r.status}`, ms };
+        }
+        fcNote(true, kind, target);
+        return { refused: false, status: r.status, body, reason: '', ms };
       };
-      const _merge = (base, light) => {
-        if (!light) return base;
-        const b = base || {}, l = light;
-        return { ...b, data: { ...(b.data || {}), ...(l.data || {}),
-          // keep any render attempt 1 did manage to return
-          screenshot: b.data?.screenshot || b.screenshot || l.data?.screenshot || null,
-          'screenshot@fullPage': b.data?.['screenshot@fullPage'] || b['screenshot@fullPage'] || null } };
+
+      const askCorpus   = (t, timeout = 20000, waitFor = 1500) => fcAsk(t, ['markdown', 'rawHtml'], waitFor, timeout, 'scrape (text)');
+      // waitFor 4000, matching firecrawlScrape's inner-page shape, and for the
+      // same reason recorded there: review widgets and embeds populate 2-4s after
+      // load, and a shot taken at 1.5s shows an empty slot where the proof is.
+      // That already told an electrician he had no social proof on a page
+      // carrying 221 Google reviews. On a homepage, where the proof is usually
+      // the thing furthest down, it matters more, not less.
+      const askFullPage = (t, timeout = 30000) => fcAsk(t, ['screenshot@fullPage'], 4000, timeout, 'scrape+screenshot');
+      const askViewport = (t, timeout = 20000) => fcAsk(t, ['screenshot'], 2500, timeout, 'scrape+screenshot (viewport)');
+
+      const mdOf   = (b) => String(b?.data?.markdown || b?.markdown || '');
+      const fullOf = (b) => b?.data?.['screenshot@fullPage'] || b?.['screenshot@fullPage'] || null;
+      const viewOf = (b) => b?.data?.screenshot || b?.screenshot || null;
+      const looksEmpty = (b) => {
+        const md = mdOf(b);
+        return md.length < 200 || /connection reset|can'?t be reached|took too long|refused to connect|err_|502 bad gateway|503 service|504 gateway/i.test(md.slice(0, 400));
       };
-      let res;
-      try {
-        res = await doScrape(45000);
-      } catch(e) {
-        console.log(`Firecrawl did not answer the full markdown+screenshot request for ${website} within 45s. NOT re-sending it — the heavy render is what timed out, so asking again the same way buys the same timeout. Falling back to text only, which is what the audit actually runs on.`);
-        try {
-          const _l = await doScrape(20000, { light: true });
-          if (!looksEmpty(_l)) {
-            console.log(`♻ CORPUS RECOVERED [${website}]: the render timed out, text alone returned ${(String(_l?.data?.markdown || _l?.markdown || '')).length} characters. No screenshot on this lead; the corpus — which every quote and every positioning finding is checked against — is intact.`);
-            return await _withShot(_l);
-          }
-          res = _l;
-        } catch(e2) { console.log('Firecrawl text-only fallback also failed:', e2.message); return {}; }
-      }
-      // CONTENT-LEVEL RETRY: a "Connection Reset"/empty scrape is usually transient
-      // on the free tier (A1 Restoration lost its whole audit to one). Pause and try
-      // once more before we give up the homepage, the owner, and the audit.
+      // Usable means the request RAN and the page had content. A refusal is not a
+      // blank page; keeping those apart is the whole point of this rewrite.
+      const usable = (res) => !!res && !res.refused && !looksEmpty(res.body);
+      const settle = (s) => s.status === 'fulfilled' ? s.value
+        : { refused: true, status: 0, body: null, reason: String((s.reason && s.reason.message) || s.reason || 'threw'), ms: 0 };
+
+      let target = website;
+      let [cRes, rRes] = (await Promise.allSettled([askCorpus(target), askFullPage(target)])).map(settle);
+
       // ── RETRY THE SAME URL, THEN RETRY A BETTER ONE ──────────────────────
       // Richard Joseph came to us as http://www.drrichardjoseph.com/ and both
       // attempts returned nothing. Retrying plain http twice asks the same
       // question twice. Nearly every live site now serves over https and many
       // simply do not answer on port 80 at all, so the second attempt should
-      // change something \u2014 and the cheapest thing to change is the scheme.
-      if (looksEmpty(res) && /^http:\/\//i.test(String(website || ''))) {
+      // change something — and the cheapest thing to change is the scheme.
+      if (!usable(cRes) && /^http:\/\//i.test(String(website || ''))) {
         const _https = String(website).replace(/^http:\/\//i, 'https://');
-        console.log(`Firecrawl returned nothing for ${website}, which is a plain http URL. Trying ${_https} before concluding anything \u2014 most sites redirect to https and some do not answer on port 80 at all.`);
-        try {
-          // `firecrawlScrape(fcKey, ...)` was written here and neither name exists
-          // in this scope \u2014 fcKey is a parameter of auditSitePages, and there is no
-          // firecrawlScrape helper on this path. It threw instantly inside the
-          // try/catch, so the https upgrade silently never ran on a single lead
-          // while the log line above claimed it was being tried.
-          //
-          // This scope has `firecrawlKey` and does its own fetch. Use them.
-          // Text-only, like every other recovery on this path. Attempt 1 already
-          // demonstrated that the heavy render is what this page will not give
-          // us; changing the scheme AND keeping the payload that just failed
-          // tests two things at once and usually fails for the old reason.
-          const rS = await fetchT('https://api.firecrawl.dev/v1/scrape', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: _https, formats: ['markdown', 'rawHtml'],
-              onlyMainContent: false, waitFor: 1500, maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-          }, 20000);
-          const resS = rS && rS.ok ? await rS.json() : null;
-          if (resS && !looksEmpty(resS)) {
-            console.log(`\u2713 Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
-            // _withShot, like the timeout and empty-content paths above. This one
-            // returned resS raw, so a lead recovered over https reached the brain
-            // with the corpus and NO screenshot - the render was dropped for the
-            // scheme change and never asked for again.
-            return await _withShot(resS);
-          }
-        } catch (e) { void e; }
-      }
-      if (looksEmpty(res)) {
-        // ══ ONLY RETRY WHAT A RETRY COULD PLAUSIBLY FIX ═══════════════════════
-        // Every empty result bought a second paid scrape 2.5 seconds later. Some
-        // of those are worth buying: a 502, a 503, a timeout, a momentarily
-        // overloaded host — genuinely transient, and the retry note above is right
-        // that free-tier hiccups cost real audits.
-        //
-        // But some failures are deterministic and the second call is guaranteed to
-        // return exactly the same thing. A refused connection means the server
-        // actively said no. A DNS failure means the name does not resolve. Neither
-        // changes in two and a half seconds, and paying to confirm it is spending
-        // a credit to learn something we already knew.
-        //
-        // James Dougherty Construction ran three times, two paid scrapes each. The
-        // second one told us nothing on any of the six occasions.
-        const _md = String(res?.data?.markdown || res?.markdown || '').slice(0, 400);
-        const _deterministic = /refused to connect|can'?t be reached|err_name_not_resolved|err_connection_refused|dns_probe|nxdomain|certificate|ssl_error/i.test(_md);
-        // ── A DOMAIN THAT HAS NEVER RETURNED ANYTHING IS NOT TRANSIENT ────────
-        // The split above reads the error STRING, so a site returning zero bytes
-        // with no message falls to "transient" and buys a retry every time.
-        // jamesdconstruction.com has now come back empty on both attempts of five
-        // separate runs — ten paid scrapes to learn the same thing ten times.
-        //
-        // Once is bad luck. Twice in a row is the site. Remembering that for an
-        // hour costs nothing and stops us paying to re-confirm it, while still
-        // letting a genuinely recovered host back in shortly after.
-        const _emptyKey = String(website || '').toLowerCase();
-        const _priorEmpty = EMPTY_SCRAPE_MEMORY.get(_emptyKey) || 0;
-        const _seenEmptyBefore = _priorEmpty > 0 && (Date.now() - _priorEmpty) < 3600000;
-        EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
-        if (_seenEmptyBefore) {
-          console.log(`Firecrawl returned nothing for ${website}, and it also returned nothing on a run within the last hour. NOT retrying \u2014 twice in a row is the site, not luck, and a second fetch buys the same empty response again. It will be tried afresh after an hour.`);
-        } else if (_deterministic) {
-          console.log(`Firecrawl returned a hard failure for ${website} (the host refused the connection or the name does not resolve). NOT retrying \u2014 that answer will be identical in three seconds and the second fetch costs a credit to confirm what we already know.`);
-        } else {
-          console.log(`Firecrawl returned empty/error content for ${website} — retrying once for TEXT ONLY. The four-format request is the heaviest thing this API can be asked for and it is what came back empty; re-sending it would buy the same empty response again, which is what this line used to do on every lead.`);
-          await new Promise(r => setTimeout(r, 1500));
-          try {
-            const res2 = await doScrape(20000, { light: true });
-            if (!looksEmpty(res2)) {
-              console.log(`♻ CORPUS RECOVERED [${website}]: markdown+screenshot came back empty, text alone returned ${(String(res2?.data?.markdown || res2?.markdown || '')).length} characters. The render is lost on this page; the corpus is not.`);
-              return await _withShot(_merge(res, res2));
-            }
-          } catch {}
+        console.log(`Firecrawl gave us no corpus for ${website}, which is a plain http URL. Trying ${_https} before concluding anything — most sites redirect to https and some do not answer on port 80 at all.`);
+        const _haveShot = !!fullOf(rRes.body);
+        const [c2, r2] = (await Promise.allSettled([
+          askCorpus(_https),
+          _haveShot ? Promise.resolve(rRes) : askFullPage(_https),
+        ])).map(settle);
+        if (usable(c2)) {
+          console.log(`✓ Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
+          target = _https;
+          cRes = c2;
+          if (fullOf(r2.body)) rRes = r2;
         }
       }
-      return res || {};
+
+      if (!usable(cRes)) {
+        // ══ ONLY RETRY WHAT A RETRY COULD PLAUSIBLY FIX ═══════════════════════
+        // Some empty results are worth buying twice: a 502, a 503, a momentarily
+        // overloaded host. Some are deterministic — a refused connection, a name
+        // that does not resolve — and the second call is guaranteed to return
+        // exactly the same thing. James Dougherty Construction ran three times,
+        // two paid scrapes each; the second one told us nothing on any of the six.
+        //
+        // A REFUSAL IS NEITHER. If Firecrawl rejected our payload, that says
+        // nothing whatsoever about their site — so it must not be remembered as
+        // "this domain returns nothing", which is exactly what the old code did
+        // on every lead for weeks, suppressing the retry on sites that were fine.
+        const _md = mdOf(cRes.body).slice(0, 400);
+        const _deterministic = /refused to connect|can'?t be reached|err_name_not_resolved|err_connection_refused|dns_probe|nxdomain|certificate|ssl_error/i.test(_md);
+        const _emptyKey = String(target || '').toLowerCase();
+        const _priorEmpty = EMPTY_SCRAPE_MEMORY.get(_emptyKey) || 0;
+        const _seenEmptyBefore = _priorEmpty > 0 && (Date.now() - _priorEmpty) < 3600000;
+        if (cRes.refused) {
+          console.log(`No corpus for ${target}, and the reason is on OUR side — Firecrawl refused the request (${cRes.reason}). Not remembering this domain as empty and not retrying the same payload: neither would be about their website.`);
+        } else if (_seenEmptyBefore) {
+          EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+          console.log(`Firecrawl returned nothing for ${target}, and it also returned nothing on a run within the last hour. NOT retrying — twice in a row is the site, not luck, and a second fetch buys the same empty response again. It will be tried afresh after an hour.`);
+        } else if (_deterministic) {
+          EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+          console.log(`Firecrawl returned a hard failure for ${target} (the host refused the connection or the name does not resolve). NOT retrying — that answer will be identical in three seconds and the second fetch costs a credit to confirm what we already know.`);
+        } else {
+          EMPTY_SCRAPE_MEMORY.set(_emptyKey, Date.now());
+          // A second identical request is a second failure, paid for. The one
+          // thing worth changing is how long the page is given to render, so the
+          // retry asks a genuinely different question: wait four times as long.
+          console.log(`Firecrawl ran but ${target} came back with almost no text. Asking once more with four times the render wait — a slow single-page app that has not painted by 1.5s is the one cause a second attempt can actually fix.`);
+          const c3 = settle((await Promise.allSettled([askCorpus(target, 30000, 6000)]))[0]);
+          if (usable(c3)) {
+            console.log(`♻ CORPUS RECOVERED [${target}]: a longer render wait returned ${mdOf(c3.body).length} characters. Their page renders late; it is not empty.`);
+            cRes = c3;
+          }
+        }
+      }
+
+      // ── THE PICTURE, IF THE FULL PAGE COULD NOT BE TAKEN ──────────────────
+      // A viewport crop is worth far less than the whole page, but it is worth
+      // much more than nothing: a missing homepage render holds back EVERY
+      // interior render too (see "the homepage must be the first image, or none
+      // of them go"), so a lead with no homepage picture is a lead the brain
+      // reads entirely as text.
+      if (!fullOf(rRes.body) && !viewOf(rRes.body)) {
+        const v = settle((await Promise.allSettled([askViewport(target)]))[0]);
+        if (viewOf(v.body)) {
+          console.log(`📷 RENDER RECOVERED [${target}]: the full-page render did not come back, a viewport one did. The brain sees the top of the page instead of nothing, and the interior renders are released.`);
+          rRes = v;
+        }
+      }
+
+      // ── HAND BACK ONE OBJECT, WITH BOTH IMAGES NAMED HONESTLY ─────────────
+      // `screenshot` is whatever goes to the vision call. It is the full page
+      // when we have one, because the 8000px ceiling is now handled at the image
+      // by measuring and downscaling rather than by cropping at capture time.
+      const _body = (cRes && cRes.body) || {};
+      const _full = fullOf(rRes.body);
+      const _view = viewOf(rRes.body);
+      return { ..._body, data: { ...(_body.data || {}),
+        screenshot: _full || _view || null,
+        'screenshot@fullPage': _full || null } };
     };
 
     const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
@@ -22554,15 +22555,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     }
 
     let screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
-    // ══ TWO IMAGES, TWO PURPOSES ══════════════════════════════════════════════
-    // screenshotUrl  \u2014 the viewport. This is the ONLY one that may reach the
-    //                  vision call, because a tall page renders past 8000px and
-    //                  Claude's vision API rejects it, killing the whole audit.
-    // fullPageUrl    \u2014 top to bottom. Nothing rejects it for being tall, so it
-    //                  goes to the audit view where a human can scroll it.
+    // ══ ONE IMAGE NOW, AND IT IS THE WHOLE PAGE ═══════════════════════════════
+    // screenshotUrl  — what the vision call is given. It used to be a viewport
+    //                  crop of the top ~1000px, because a tall page renders past
+    //                  8000px and Claude's vision API rejects the entire request
+    //                  when it does. That ceiling is now handled at the image
+    //                  itself: the PNG's own IHDR dimensions are read and the
+    //                  picture is downscaled to fit, exactly as every interior
+    //                  render already was. So this is the full page.
+    // fullPageUrl    — the same capture, un-downscaled, for the audit view where
+    //                  a human can scroll it. Until this rewrite it was NEVER
+    //                  populated on any lead: the request that asked for it was
+    //                  being refused by Firecrawl in under half a second, and the
+    //                  refusal was being read as "the page came back blank".
     //
-    // This exists because a live email told a Dallas surgeon "you have 170
-    // five-star reviews. None of it is on that page" \u2014 his reviews are displayed
+    // This matters because a live email told a Dallas surgeon "you have 170
+    // five-star reviews. None of it is on that page" — his reviews are displayed
     // at the BOTTOM of his homepage, below everything the viewport captured. A
     // false absence is the worst claim we make: he scrolls, sees the thing we
     // said was missing, and every true statement in the email dies with it.
@@ -22594,7 +22602,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       fullPageUrl = null;
     }
     if (fullPageUrl) {
-      console.log(`\u1f5bc FULL PAGE [${company}]: captured top to bottom alongside the viewport image. The viewport one goes to the vision call (the 8000px limit applies there); this one is for the audit view, where the content below the fold is what stops us claiming something is missing when it is simply further down.`);
+      // `\u1f5bc` was a five-digit \u escape, which JavaScript reads as \u1f5b
+      // followed by the letter c. Every one of these lines has been printing a
+      // stray character for its whole life. \u{...} is the form that works.
+      console.log(`\u{1F5BC} FULL PAGE [${company}]: the homepage was captured top to bottom. This is the first lead on which that has happened \u2014 the request that asked for it was being refused by Firecrawl in under half a second and the refusal was read as an empty page. The audit view can now be scrolled, and the model is shown the whole page rather than the top thousand pixels, which is what stops us calling something missing when it is simply further down.`);
     }
     // ══ IF WE GOT NOTHING, PROVE IT IS THEM BEFORE SAYING SO ═══════════════
     // Firecrawl returning empty means our fetch failed. It does NOT mean the
@@ -24639,19 +24650,77 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // Build message content — always send text, add image if available
         const msgContent = [];
 
+        // ══ MEASURE THE HOMEPAGE IMAGE — DO NOT ASSUME ITS SHAPE ════════════
+        // This was the one image path in the file with no dimension check. Every
+        // interior render is measured out of its own IHDR chunk and downscaled if
+        // it is too tall. The homepage — the tallest page on the site, and the
+        // only image the prompt actually asks the model to describe — was sent
+        // unmeasured, on trust, because it used to be a viewport crop that could
+        // never be tall.
+        //
+        // It is the full page now, and that is the entire point: the brain sees
+        // the reviews at the bottom, the footer, the third call to action. But a
+        // marketing homepage renders past 8000px and the vision API rejects the
+        // WHOLE request when it does — "image dimensions exceed max allowed size:
+        // 8000 pixels" — which killed audits outright and returned a null pitch
+        // angle. That hazard is why the old code cropped at capture time.
+        //
+        // Cropping was never the fix; measuring is. A PNG states its width and
+        // height in the IHDR chunk inside its first 24 bytes, so this reads them
+        // and downscales instead of guessing. Anything that cannot be measured is
+        // refused — an unreadable buffer is the one payload we can say nothing
+        // about, and it must not be the one that gets through labelled image/png.
+        const _MAX_EDGE = 7800;
+        const _pngDims = (buf) => {
+          if (!buf || buf.length < 24) return null;
+          const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+          for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return null;
+          if (buf.readUInt32BE(12) !== 0x49484452) return null;
+          const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+          if (!w || !h) return null;
+          return { w, h };
+        };
+
         let screenshotBase64 = null;
         if (screenshotUrl && !siteUnreachable) {
-          try {
-            const imgRes = await fetchT(screenshotUrl, {}, 10000);
-            const imgBuffer = await imgRes.buffer();
-            // Render free tier uploads slowly — a 4MB image alone can eat 20s.
-            // Cap at 1.5MB: most above-fold screenshots fit; oversized ones get
-            // skipped and the audit runs from the scraped text (still good).
-            if (imgBuffer.length < 3 * 1024 * 1024) {
-              screenshotBase64 = imgBuffer.toString('base64');
-              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } });
+          const _homeImage = async () => {
+            const imgRes = await fetchT(screenshotUrl, {}, 15000);
+            // A signed screenshot URL expires. Without this, a 403 or 404 HTML
+            // error body became the buffer and was base64'd into the audit
+            // request labelled image/png.
+            if (!imgRes || !imgRes.ok) {
+              console.log(`Homepage render [${company}]: the screenshot URL answered HTTP ${imgRes ? imgRes.status : 'nothing'}. No homepage image on this lead.`);
+              return null;
+            }
+            let buf = await imgRes.buffer();
+            const d = _pngDims(buf);
+            if (!d) {
+              console.log(`Homepage render [${company}]: ${buf.length} bytes came back and they are not a readable PNG. Refused rather than sent unmeasured.`);
+              return null;
+            }
+            if (d.w > _MAX_EDGE || d.h > _MAX_EDGE) {
+              const fit = _pngscale ? _pngscale.fitWithin(buf, _MAX_EDGE) : { skip: 'pngscale.js not deployed' };
+              if (!fit.buffer) {
+                console.log(`Homepage render [${company}]: ${d.w}x${d.h} is past the ${_MAX_EDGE}px vision ceiling and could not be downscaled (${fit.skip}). Sending it would fail the ENTIRE audit request, so it is dropped and the audit runs from text.`);
+                return null;
+              }
+              console.log(`\u{1F5BC} HOMEPAGE FULL PAGE [${company}]: ${fit.from} downscaled to ${fit.width}x${fit.height} to clear the vision ceiling. The model is reading the whole homepage top to bottom — every lead before this one showed it the top thousand pixels and nothing else.`);
+              buf = fit.buffer;
             } else {
-              console.log(`Screenshot too large (${Math.round(imgBuffer.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
+              console.log(`\u{1F5BC} HOMEPAGE RENDER [${company}]: ${d.w}x${d.h}, sent whole.`);
+            }
+            // Render's free tier uploads slowly — a 4MB image alone can eat 20s.
+            if (buf.length >= 3 * 1024 * 1024) {
+              console.log(`Screenshot too large (${Math.round(buf.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
+              return null;
+            }
+            return buf;
+          };
+          try {
+            const _buf = await _homeImage();
+            if (_buf) {
+              screenshotBase64 = _buf.toString('base64');
+              msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } });
             }
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
         }
@@ -24711,16 +24780,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // checked too: without it, ANY buffer whose bytes 12-15 happen to spell
           // IHDR would pass, and more importantly a non-PNG returns null - which
           // the caller must treat as "refuse", not as "no ceiling applies".
-          const _png = (buf) => {
-            if (!buf || buf.length < 24) return null;
-            const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
-            for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return null;
-            if (buf.readUInt32BE(12) !== 0x49484452) return null;
-            const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
-            if (!w || !h) return null;
-            return { w, h };
-          };
-          const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = 7800;
+          //
+          // ONE READER, ONE CEILING. This was a second copy of both, and the
+          // homepage above had NEITHER. Two definitions of the same rule is how
+          // one of them silently stops matching the other; the homepage and every
+          // interior page now measure with the same function against the same
+          // number, so a change to the ceiling cannot apply to only half the
+          // images in a request.
+          const _png = _pngDims;
+          const MAX_IMAGES = 5, MAX_TOTAL = 12 * 1024 * 1024, MAX_EDGE = _MAX_EDGE;
           let _sent = 0, _bytes = 0;
           const _skipped = [], _sentKeys = [], _rescaled = [];
           // == THE HOMEPAGE MUST BE THE FIRST IMAGE, OR NONE OF THEM GO ========
@@ -32361,6 +32429,107 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 BATCH BUDGET CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+  // ══ THE FIRST PAID CALL ON EVERY LEAD, AND IT NEVER RAN ════════════════
+  // `FC PAID [scrape+screenshot]` printed on every lead and returned nothing on
+  // every lead, and the code called that an empty page. The timestamps settle it:
+  // 493ms for Tiffany Springs, 388ms for John Goodman, 498ms for Vargas, on a
+  // request carrying `waitFor: 4000`. Firecrawl did not fetch those pages and
+  // wait four seconds in half a second — it refused the payload and answered at
+  // once. The text-only retry on the same URL with the same key, seconds later,
+  // took 3-5 seconds and returned 14,000 to 53,000 characters every time.
+  //
+  // It was invisible because the only thing read off the response was
+  // `data.markdown`. An HTTP 400 carrying Firecrawl's own explanation and a page
+  // that rendered blank are the same thing through that lens — so the system
+  // printed an invented reason, remembered the DOMAIN as bad for an hour, and
+  // bought two more requests to route around a problem it had misdiagnosed.
+  //
+  // Three things must hold, and none of them can be checked by reading a log:
+  //   1. Every shape sent from the homepage path has a recorded success.
+  //   2. A refusal is named as a refusal — status read, credit and throttle
+  //      cases separated, and NOT billed to the credit ledger.
+  //   3. The homepage image is measured before it is sent. It is the full page
+  //      now, and an unmeasured tall PNG fails the WHOLE vision request.
+  try {
+    const _fails = [];
+    const _srcAll = require('fs').readFileSync(__filename, 'utf8');
+    // Whole-line comments only. A trailing-comment stripper has to understand
+    // regex literals — `/^http:\/\//i` contains a literal `//` — and a stripper
+    // that gets that wrong deletes real code and fails a check that should pass.
+    // Every explanatory comment in these two blocks is a whole-line one.
+    const _code = (s) => s.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+
+    // ── the homepage scrape block ────────────────────────────────────────
+    const _hs = _srcAll.indexOf('const scrapeHomepage = async () => {');
+    const _he = _hs > -1 ? _srcAll.indexOf('\n    };', _hs) : -1;
+    const _home = (_hs > -1 && _he > _hs) ? _code(_srcAll.slice(_hs, _he)) : '';
+    // Self-verifying slice: if the terminator matched the wrong closing brace,
+    // the function's real last statement is not inside it and this says so
+    // instead of quietly checking a fragment.
+    if (!_home) _fails.push('scrapeHomepage could not be located');
+    else if (!/return \{ \.\.\._body, data:/.test(_home)) {
+      _fails.push('the scrapeHomepage slice does not reach its own return statement — the block boundary is wrong, so nothing below this line was really checked');
+    } else {
+      // 1. EVERY SHAPE MUST BE ONE WE HAVE WATCHED SUCCEED.
+      const PROVEN = ["['markdown','rawHtml']", "['screenshot@fullPage']", "['screenshot']"];
+      const _shapes = (_home.match(/\[\s*'(?:markdown|rawHtml|screenshot|screenshot@fullPage)'[^\]]*\]/g) || [])
+        .map(s => s.replace(/\s+/g, ''));
+      if (!_shapes.length) _fails.push('no request shape found in scrapeHomepage at all');
+      for (const s of _shapes) {
+        if (PROVEN.includes(s)) continue;
+        _fails.push(`the homepage asks Firecrawl for ${s}, which has no recorded success. The four-format shape answered in under half a second on nine leads out of nine — it was refused, not slow. Only ${PROVEN.join(', ')} have ever come back with anything`);
+      }
+      // 2. A REFUSAL MUST BE NAMED, AND MUST NOT BE BILLED.
+      for (const [needle, why] of [
+        ['r.status', 'the HTTP status is never read, so a 400 and a blank page are the same thing again'],
+        ['isCreditError(', 'an out-of-credits refusal is not detected on the first call of every lead'],
+        ['isRateLimited(', 'a throttled homepage reads as an empty page, which is how a fine site gets called dead'],
+        ['refused: true', 'there is no refusal state — that distinction IS the fix'],
+      ]) if (!_home.includes(needle)) _fails.push(why);
+      const _fcNotes = (_home.match(/fcNote\(true,/g) || []).length;
+      if (_fcNotes !== 1) {
+        _fails.push(`fcNote(true,...) appears ${_fcNotes} times in the homepage path; it must appear exactly once, after every refusal has already returned, or refused requests get billed as scrapes again`);
+      } else {
+        // Scoped to fcAsk itself. Measured against the whole block this failed
+        // on a `refused: true` that lives in the settle() helper BELOW fcAsk —
+        // a true statement about the wrong two lines, which is the shape of
+        // every false failure this file has ever produced.
+        const _a0 = _home.indexOf('const fcAsk =');
+        const _a1 = _home.indexOf('const askCorpus', _a0);
+        const _ask = (_a0 > -1 && _a1 > _a0) ? _home.slice(_a0, _a1) : '';
+        if (!_ask) _fails.push('fcAsk could not be isolated, so the billing order was not really checked');
+        else if (_ask.indexOf('fcNote(true,') < _ask.lastIndexOf('refused: true')) {
+          _fails.push('fcNote runs before the last refusal branch — a request the API rejected would be charged to the ledger as a paid scrape, which is exactly what hid this for weeks');
+        }
+      }
+    }
+
+    // ── the homepage image block ─────────────────────────────────────────
+    const _is = _srcAll.indexOf('const _homeImage = async () => {');
+    const _ie = _is > -1 ? _srcAll.indexOf('\n          };', _is) : -1;
+    const _img = (_is > -1 && _ie > _is) ? _code(_srcAll.slice(_is, _ie)) : '';
+    if (!_img) _fails.push('the homepage image block could not be located');
+    else {
+      if (!/_pngDims\(/.test(_img)) _fails.push('the homepage image is sent without reading its dimensions — it is the full page now, and one tall PNG fails the entire vision request, not just the picture');
+      if (!/_pngscale\s*\?\s*_pngscale\.fitWithin\(/.test(_img)) _fails.push('an over-tall homepage is not downscaled, so the whole audit dies on the pages that matter most');
+      if (!/_MAX_EDGE/.test(_img)) _fails.push('the homepage image does not use the shared vision ceiling');
+    }
+    // 3. ONE CEILING, ONE READER. Two copies is how one of them stops matching.
+    if (!/MAX_EDGE = _MAX_EDGE/.test(_srcAll)) {
+      _fails.push('the interior-render ceiling is a second literal rather than the shared one — change it in one place and half the images in a request keep the old rule');
+    }
+    if (!/const _png = _pngDims;/.test(_srcAll)) {
+      _fails.push('there are two PNG dimension readers again');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ HOMEPAGE REQUEST CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ HOMEPAGE REQUEST CHECK: the first paid call of every lead asks only for shapes that have come back with something, a refusal is reported as a refusal with Firecrawl's own words and is not billed as a scrape, and the homepage render is measured and downscaled before it is sent. The brain now sees the whole homepage instead of the top thousand pixels — on every lead recorded before this, 'FULL PAGE: captured top to bottom' had never printed once.`);
+    }
+  } catch (e) {
+    console.log(`⛔ HOMEPAGE REQUEST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
