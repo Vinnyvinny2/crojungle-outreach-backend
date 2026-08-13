@@ -8356,9 +8356,10 @@ const HARM_LADDER = [
     // looked at both, which is why specific is 94.
     // Distinct from outranked_by_weaker, which is the opposite case: there they
     // have MORE reviews than the businesses beating them.
-    test: (m) => Number(m.reviewCount || 0) > 0 && Number(m.aboveMedianReviews || 0) > 0
-      && Number(m.aboveMedianReviews) >= Number(m.reviewCount) * 4,
-    say: (m) => `They have ${m.reviewCount} reviews; the businesses ranking above them average about ${Math.round(Number(m.aboveMedianReviews))}`,
+    test: (m) => Number(m.reviewCount || 0) > 0 && Number(m.aboveReviewsN || 0) >= 2
+      && Number.isFinite(Number(m.aboveReviewsAvg))
+      && Number(m.aboveReviewsAvg) >= Number(m.reviewCount) * 4,
+    say: (m) => `They have ${m.reviewCount} reviews; the ${m.aboveReviewsN} businesses at the top of that search average ${Math.round(Number(m.aboveReviewsAvg))} each`,
     costs: 'a buyer choosing between names on a map reads the review count before anything else' },
 
   { harm: 92, specific: 92, novel: 88, delegable: 60, weFix: 95, band: 'DEAD', id: 'expired_certificate',
@@ -22059,6 +22060,42 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
 // route — localVisibility, the search_absence signal and the SERVICES THEY SELL
 // BUT CANNOT BE FOUND FOR block — and pulling one into localRank would blank the
 // rank, the review counts and the competitor names that this object carries.
+// ══ AN AVERAGE THAT WAS A MEDIAN, AND THE WRONG HALF OF IT ═════════════════
+// review_deficit said "the businesses ranking above them average about N" and N
+// was computed as n[Math.floor(n.length / 2)] — a median. With TWO businesses
+// above, Math.floor(2 / 2) is 1, so it returned the LARGER of the two. One
+// practice's 2,344 reviews were reported as what two businesses "average".
+//
+// Two further things were wrong with the sentence whatever the arithmetic did:
+//
+//   · localRank.above holds at most THREE rows (above.slice(0, 3)). At rank #12
+//     a claim about "the businesses ranking above them" was being computed from
+//     a quarter of them, and worded as though it covered all eleven.
+//   · Nothing required those businesses to actually have MORE reviews. On a
+//     mixed field this rung and outranked_by_weaker make opposite claims about
+//     the same lead — one says he is behind on reviews, the other says the
+//     businesses beating him have fewer.
+//
+// So: a true mean, over exactly the rows we hold, reported with how many that
+// is, and only when every one of them really is ahead on reviews. If the field
+// is mixed, outranked_by_weaker owns the lead and this one stays silent rather
+// than averaging the disagreement into a number that is true of nobody.
+//
+// The rows are places.slice(0, idx) — the TOP of that search, not the businesses
+// immediately above him — so the sentence says so.
+const summariseAboveReviews = (above, ourReviews) => {
+  const rows = (Array.isArray(above) ? above : []).filter(Boolean);
+  const counts = rows.map(x => Number(x && x.reviews)).filter(n => Number.isFinite(n) && n > 0);
+  const ours = Number(ourReviews);
+  // One competitor is not "the businesses at the top of that search".
+  if (counts.length < 2) return { n: 0, avg: null, why: 'fewer than two review counts held' };
+  if (!Number.isFinite(ours) || ours <= 0) return { n: 0, avg: null, why: 'their own review count is not measured' };
+  if (counts.some(c => c <= ours)) {
+    return { n: 0, avg: null, why: 'at least one business at the top of that search has FEWER reviews than they do — that lead belongs to outranked_by_weaker, and averaging the two claims together produces a number that is true of nobody' };
+  }
+  const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+  return { n: counts.length, avg, why: '' };
+};
 const pickRankRow = (results) => {
   const rows = (Array.isArray(results) ? results : []).filter(Boolean);
   if (!rows.length) return { row: null, note: 'no rank rows at all' };
@@ -24057,11 +24094,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           tradeWord: customerTrade || verifiedIndustry || null,
           // The median review count of the businesses ranking ABOVE them. We
           // already read both numbers and never compared them.
-          aboveMedianReviews: (() => {
-            const ab = (localRank && Array.isArray(localRank.above)) ? localRank.above : [];
-            const n = ab.map(x => Number(x && x.reviews)).filter(Number.isFinite).sort((a, b) => a - b);
-            return n.length ? n[Math.floor(n.length / 2)] : null;
-          })(),
+          // See summariseAboveReviews: this used to be a median described as an
+          // average, and on an even count it returned the larger of the two.
+          aboveReviewsN: summariseAboveReviews(localRank && localRank.above, _measured.reviewCount).n,
+          aboveReviewsAvg: summariseAboveReviews(localRank && localRank.above, _measured.reviewCount).avg,
           certExpired: _siteDownVerdict && _siteDownVerdict.certExpired === true,
           hasViewport: htmlSignals ? htmlSignals.hasViewport : null,
           rank: _measured.rank,
@@ -32675,6 +32711,60 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ RANK ROW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ A MEDIAN CALLED AN AVERAGE, AND THE LARGER HALF OF IT ══════════════
+  // review_deficit reported n[Math.floor(n.length / 2)] as what "the businesses
+  // ranking above them average". With two businesses above, that index is 1 —
+  // the LARGER one. A single practice's 2,344 reviews were stated as the average
+  // of two. Every number in an email has to trace to a measurement; this one
+  // traced to a real measurement wearing the wrong description, which is harder
+  // to catch and just as false.
+  try {
+    const _fails = [];
+    const R = (n) => ({ reviews: n });
+    // The live shape: two above, one of them BELOW our own count. The old code
+    // returned 2344 and called it an average. It must now say nothing at all —
+    // outranked_by_weaker owns a field where somebody ahead has fewer reviews.
+    const _mixed = summariseAboveReviews([R(120), R(2344)], 500);
+    if (_mixed.n !== 0 || _mixed.avg !== null) {
+      _fails.push(`a field where one business above them has FEWER reviews (120 against their 500) still produces a deficit figure of ${_mixed.avg} — that lead belongs to outranked_by_weaker and the two rungs would contradict each other in the same audit`);
+    }
+    // The mean, not the middle. [100, 900] is 500; the old median returned 900.
+    const _two = summariseAboveReviews([R(100), R(900)], 10);
+    if (_two.n !== 2 || Math.round(_two.avg) !== 500) {
+      _fails.push(`two competitors on 100 and 900 average 500; this returns ${_two.avg} (the old median returned 900, the larger of the two)`);
+    }
+    const _three = summariseAboveReviews([R(180), R(340), R(2344)], 22);
+    if (_three.n !== 3 || Math.round(_three.avg) !== 955) {
+      _fails.push(`three competitors average 955 each; this returns ${_three.avg} over ${_three.n}`);
+    }
+    // One competitor is not "the businesses at the top of that search".
+    if (summariseAboveReviews([R(900)], 10).n !== 0) {
+      _fails.push('a single competitor is being described in the plural');
+    }
+    if (summariseAboveReviews([R(100), R(900)], 0).n !== 0) {
+      _fails.push('a deficit is claimed against a review count we never measured');
+    }
+    if (summariseAboveReviews(null, 10).n !== 0) _fails.push('a missing competitor list does not return silence');
+    // And the count must reach the rung, or the fix is computed and never passed
+    // — the failure mode this file has shipped more often than any other.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    // Split so the scan cannot match its own source. Written whole, this line
+    // found itself and reported the bug it exists to detect — the same way the
+    // content[0] scan once counted three hits inside its own success message.
+    if (new RegExp('aboveMedian' + 'Reviews').test(_src)) _fails.push('the old median field is still in the file');
+    for (const k of ['aboveReviewsN', 'aboveReviewsAvg']) {
+      if (!new RegExp(`^\\s+${k}: summariseAboveReviews\\(`, 'm').test(_src)) {
+        _fails.push(`${k} is never assembled into the harm inputs, so the rung reads undefined and can never fire`);
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ REVIEW DEFICIT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ REVIEW DEFICIT CHECK: "the businesses at the top of that search average N each" is now a real average of the counts we actually hold, states how many that is, and is refused outright when any of them has FEWER reviews than the business we are writing to. The old line reported one practice's 2,344 reviews as the average of two.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW DEFICIT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
