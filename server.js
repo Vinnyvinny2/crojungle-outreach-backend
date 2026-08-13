@@ -12870,7 +12870,30 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
   // Subject: this finding's own line, a DIFFERENT one from the first email so the
   // follow-up opens a new angle rather than repeating the subject he already
   // ignored. Falls back to the finding itself, lower-cased and trimmed short.
-  const subs = (SUBJECTS_FOR[rung.id] || []).filter(Boolean);
+  // ══ THIS SHIPPED THE TEMPLATE INSTEAD OF THE SUBJECT ═══════════════════
+  // SUBJECTS_FOR holds TEMPLATES. Six of its seventy-six entries carry a
+  // placeholder:
+  //
+  //   review_pain_pattern  '{pain}'
+  //   stale_copyright      'your footer still says {year}'
+  //   dead_blog            'your blog stopped in {year}'
+  //   low_rating           'your rating is {rating}'
+  //
+  // buildSubjects() is the function that resolves those. This read the array
+  // DIRECTLY and used whichever string the seed landed on, so a follow-up whose
+  // index hit a placeholder entry shipped it verbatim. Live, on John P. Goodman
+  // DDS, follow-up 1 went to the queue with the subject line:
+  //
+  //   {pain}
+  //
+  // The most visible line in the email, reading as a broken mail merge, on the
+  // one finding — a repeating complaint in his own reviews — that PART 5 credits
+  // with every reply this system has earned.
+  //
+  // buildSubjects also DROPS a template that resolves to empty, so a lead with
+  // no mined complaint now falls back to the next real subject instead of
+  // sending a blank one. Both behaviours come free by calling it.
+  const subs = buildSubjects({ id: rung.id }, opts.measured || {}).filter(Boolean);
   const _seed = String(opts.company || opts.founderName || '')
     .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
   const subject = subs.length
@@ -23908,6 +23931,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // single highest-value sentence in the system.
           weakerNames: _measured.weakerNames,
           ourReviews: _measured.ourReviews,
+          // ══ THE SUBJECT RESOLVER'S OWN INPUTS ════════════════════════════
+          // buildSubjects fills {pain}, {city}, {year} from these four, and
+          // _harmInputs — the object every subject is resolved against —
+          // forwarded none of them. LADDER SURVIVAL CHECK already warns about
+          // painTheme specifically ("the subject line falls back to the generic
+          // set on exactly the leads with the best finding") and it tests the
+          // resolver directly, so it never saw the wire.
+          painTheme: _measured.painTheme,
+          city: _measured.city,
+          copyrightYear: _measured.copyrightYear,
+          newestPostYear: _measured.newestPostYear,
           rankQuery: localRank && localRank.query,
           tenureYears: _measured.tenureYears,
           reviewCount: _measured.reviewCount,
@@ -26410,6 +26444,13 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 company,   // same seed as the rebuild path, so both agree
                 subjects: parsed.subjectOptions,
                 reframes: (allowedConsequences && allowedConsequences.lines) || [],
+                // ══ THE COMPOSER WAS HANDED NO MEASUREMENTS ═══════════════
+                // composeFullEmail reads opts.measured, and this call site —
+                // the only one production uses — never passed it. So every
+                // follow-up subject resolved against {} and could not fill a
+                // single placeholder even once it started trying. The two boot
+                // fixtures DO pass it, which is why nothing failed at boot.
+                measured: _harmInputs || {},
               });
             } catch (e) {
               console.log(`\u26d4 COMPOSE TRACE [${company}] step 4 THREW: ${e && e.message}. The email was not composed and THIS is the reason \u2014 not a missing deploy and not a cached audit.`);
@@ -32132,6 +32173,65 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 QUOTE SYMMETRY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SUBJECT LINE THAT SHIPPED ITS OWN TEMPLATE ═══════════════════════
+  // SUBJECTS_FOR holds templates; buildSubjects resolves them. composeFollowUp
+  // read the array directly, so a follow-up whose seed landed on a placeholder
+  // entry sent it verbatim. Live, John P. Goodman DDS, follow-up 1:
+  //
+  //   SUBJECT: {pain}
+  //
+  // The most visible line in the email, reading as a broken mail merge, on the
+  // finding PART 5 credits with every reply this system has earned.
+  //
+  // The rule is absolute and needs no vocabulary: NO composed subject, on any
+  // touch, may contain a brace. That cannot be satisfied by remembering, and it
+  // covers placeholders nobody has invented yet.
+  try {
+    const _fails = [];
+    // Every template that carries a placeholder, so the fixture targets the
+    // rungs that can actually break rather than a rung chosen by hand.
+    const _risky = Object.entries(SUBJECTS_FOR)
+      .filter(([, v]) => Array.isArray(v) && v.some(t => /\{[a-z]+\}/i.test(String(t))))
+      .map(([k]) => k);
+    if (_risky.length < 3) _fails.push(`only ${_risky.length} rung(s) with a placeholder template were found \u2014 this check is not looking at the right table`);
+    // Resolvable measurements: every touch must come out clean.
+    const _m = { painTheme: 'no callback on follow-up requests', city: 'Kansas City, MO',
+      rating: 4.2, copyrightYear: 2019, newestPostYear: 2021, reviewCount: 251,
+      photoCount: 8, formFieldCount: 5, gbpCategory: 'Dentist', tenureYears: 20 };
+    for (const id of _risky) {
+      for (const _sub of buildSubjects({ id }, _m)) {
+        if (/[{}]/.test(String(_sub))) _fails.push(`[${id}] resolved subject still contains a brace: "${_sub}"`);
+      }
+      // And the harder case: NOTHING measured. A template that cannot resolve
+      // must be dropped, never sent half-filled or blank.
+      for (const _sub of buildSubjects({ id }, {})) {
+        if (/[{}]/.test(String(_sub))) _fails.push(`[${id}] with no measurements at all, an unresolved template survives: "${_sub}"`);
+        if (!String(_sub).trim()) _fails.push(`[${id}] produced an empty subject rather than dropping the template`);
+      }
+    }
+    // THE WIRE, both halves. A resolver nothing feeds is the bug that shipped.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _cf = _src.indexOf('const composeFollowUp = (rung, spine, opts, ordinal');
+    const _cfBlk = _cf > -1 ? _src.slice(_cf, _cf + 4000) : '';
+    if (!_cfBlk) _fails.push('composeFollowUp could not be located');
+    else if (/const subs = \(SUBJECTS_FOR\[rung\.id\]/.test(_cfBlk)) {
+      _fails.push('composeFollowUp still reads SUBJECTS_FOR directly instead of resolving through buildSubjects');
+    }
+    // The live call site must hand the composer its measurements, or the
+    // resolver above runs against {} and fills nothing.
+    const _cc = _src.indexOf('parsed.composedEmail = composeFullEmail(parsed.factualSpine, {');
+    const _ccBlk = _cc > -1 ? _src.slice(_cc, _src.indexOf('});', _cc)) : '';
+    if (!_ccBlk) _fails.push('the live composeFullEmail call site could not be located');
+    else if (!/measured:/.test(_ccBlk)) _fails.push('the live composer call passes no measurements, so every follow-up subject resolves against an empty object');
+    if (_fails.length) {
+      console.log(`\u26d4 SUBJECT RESOLUTION CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SUBJECT RESOLUTION CHECK: no subject on any touch can contain a brace \u2014 tested across every rung whose template carries a placeholder, both fully measured and measured not at all, where an unresolvable template is dropped rather than sent blank. The follow-up path resolves through buildSubjects and the live composer is handed its measurements. A literal "{pain}" reached the send queue.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SUBJECT RESOLUTION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
