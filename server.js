@@ -7439,7 +7439,26 @@ const personFromRun = (raw, companyName = '') => {
   // is how a co-owner gets filed as the CFO.
   const seg = t.split(/\s*(?:,|–|—|\||\s-\s)\s*/).map(s => s.trim()).filter(Boolean);
   if (!seg.length) return null;
-  let head = seg[0].replace(HONORIFIC_RE, '').trim();
+  // ── "MEET DR. KURT KAVANAUGH" READ AS NOBODY ────────────────────────────
+  // Live, 2026-08-13: "ROSTER: no owner-level title found. Read 0 name/title
+  // pair(s) from 12078 characters" on a site whose own sitemap lists
+  // /meet-dr-kavanaugh and /meet-dr-zaara-baig. Three paid searches then found
+  // "Owner/Founder" on his own contact page.
+  //
+  // The honorific strip is anchored, and on a team card the honorific is not
+  // first — "Meet Dr. X" is the commonest heading a practice writes. Strip the
+  // heading verb, THEN the honorific. Nothing new can be invented by this: what
+  // remains still has to pass the same strict name pattern, and the headings
+  // that survive it as prose ("Meet Our Team" -> "Our Team", "Meet The Team" ->
+  // "The Team") are already in NOT_A_NAME.
+  const HEADING_VERB_RE = /^(?:meet|about|welcome\s+to|introducing|say\s+hello\s+to)\s+/i;
+  const _noVerb = seg[0].replace(HEADING_VERB_RE, '').trim();
+  // Whether a PERSON marker was present. It decides the eponymous-business case
+  // below, so it is recorded rather than discarded.
+  const _hadHonorific = HONORIFIC_RE.test(_noVerb);
+  let head = _noVerb.replace(HONORIFIC_RE, '').trim();
+  // "Meet Dr. Kurt Kavanaugh" needs BOTH strips; the order above does that in
+  // one pass. A bare "Dr. Kurt Kavanaugh" is unaffected.
   // Credentials glued on with no comma: "Matthew Yip DDS". Never below three
   // words, so a two-word name is untouchable.
   const words = head.split(' ');
@@ -7451,8 +7470,22 @@ const personFromRun = (raw, companyName = '') => {
   // practice. A candidate whose every word already appears in the company name
   // is the company. A family business survives this: "Dusty Hannah" at Hannah
   // Custom Homes keeps "Dusty", which the company name does not contain.
+  // ── AND THE EPONYMOUS BUSINESS, WHICH IS MOST OF THIS PIPELINE ─────────
+  // The guard below rejects a candidate whose every word is already in the
+  // company name. That is right for "Tiffany Springs" at Tiffany Springs Dental
+  // Group — a Kansas City neighbourhood, not a person. It is exactly WRONG for
+  // "Kurt Kavanaugh" at Kurt Kavanaugh Orthodontics, where the overlap is the
+  // single strongest owner signal there is, and this ICP is full of businesses
+  // named after the person who owns them.
+  //
+  // Caught by the boot check on the same live lead that motivated the heading
+  // strip: the strip worked and the guard I had just written threw the result
+  // away. An honorific or a personal credential is the discriminator — a place
+  // name does not carry one — so a run that had one skips the guard.
   const _co = String(companyName || '').toLowerCase();
-  if (_co) {
+  const _credentialed = _hadHonorific || seg.slice(1).some(s => CREDENTIAL_RE.test(s))
+    || words.length !== head.split(' ').length;   // a credential was popped off the end
+  if (_co && !_credentialed) {
     const _cw = new Set(_co.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
     const _nw = head.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
     if (_nw.length && _nw.every(w => _cw.has(w))) return null;
@@ -9529,6 +9562,46 @@ const measureReviewVelocity = (timestamps, now = Date.now()) => {
     growing: recent > earlier,
     oldestReadDays: Math.round((now - oldestRead) / DAY),
   };
+};
+
+// ══ WHAT THE FOLLOW-UPS ARE ALLOWED TO SAY ═════════════════════════════════
+// A module-level function, not an inline expression, so the boot check can RUN
+// it. Three checks in this file have now passed while the shipped code was
+// deliberately broken, every one of them because the check reimplemented what
+// it meant to test.
+//
+// Two rules, both order-only. Nothing is suppressed: if the ladder holds
+// nothing else, the sequence is exactly what it was.
+//
+//  1. DO NOT SAY IT TWICE. This list used to exclude the LEAD rung and nothing
+//     else, but email 1 carries TWO findings — the lead and the second claim.
+//     Live on Kurt Kavanaugh Orthodontics, 2026-08-13, follow-up 2 sent back a
+//     sentence email 1 had already sent, word for word, seventeen days later:
+//     "someone comparing three companies can find no price, no range and no
+//     starting point anywhere on the pages we read". SEQUENCE CHECK asserts
+//     "nothing repeats" and could not see it — it tests that the touches have
+//     distinct CTAs and subjects, not distinct FINDINGS.
+//
+//  2. DO NOT SPEND TWO TOUCHES ON THE SAME PART OF THE BUSINESS. Every rung
+//     that describes the BUSINESS rather than the website is a review rung —
+//     review_pain_pattern, review_velocity_drop, review_deficit, low_rating,
+//     no_owner_replies, partial_owner_replies, not_compounding. So on a lead
+//     with a thin website the top of the ladder is reviews, and the sequence
+//     opens on reviews twice. On Kurt: velocity, then deficit. Our CEO's note
+//     on that run was that the emails are too review-focused, and the prospect
+//     simulator said the same thing in the owner's voice.
+//
+//     NOT a ladder reorder — the ladder is not the constraint and reordering it
+//     has failed repeatedly. Email 1 already applies this exact rule to its own
+//     second finding; it simply stopped at the first email.
+const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand) => {
+  const used = new Set([leadId, secondId].filter(Boolean));
+  const pool = (Array.isArray(byHarm) ? byHarm : []).filter(x => x && !used.has(x.id));
+  const bandOf = (h) => String((h && h.band) || '');
+  const fresh = pool.filter(x => bandOf(x) !== String(leadBand || ''));
+  const same  = pool.filter(x => bandOf(x) === String(leadBand || ''));
+  return [...fresh, ...same].map(x => ({ id: x.id, finding: x.finding, costs: x.costs,
+    harm: x.harm, reframe: x.reframe || null, blind: x.blind || '' }));
 };
 
 const resolveMeasurements = ({
@@ -13972,10 +14045,41 @@ const buildFactualSpine = (harms, m = {}) => {
     // sending). The data is explicit that a follow-up on a weak point, or one
     // that just bumps, costs more in unsubscribes than it earns in replies — so
     // the follow-up must be able to see the finding's strength and decline.
-    restRungs: (harms.byHarm || [])
-      .filter(x => x.id !== lead.id)
-      .map(x => ({ id: x.id, finding: x.finding, costs: x.costs, harm: x.harm,
-                   reframe: x.reframe || null, blind: x.blind || '' })),
+    // ══ FOLLOW-UP 2 SENT A SENTENCE EMAIL 1 HAD ALREADY SENT ═══════════════
+    // This excluded the LEAD rung and nothing else. But email 1 carries TWO
+    // findings — the lead and _second — so the second one was still sitting in
+    // this list, and on Kurt Kavanaugh Orthodontics (live, 2026-08-13) it came
+    // back as follow-up 2, word for word:
+    //
+    //   email 1:     "Someone comparing three companies can find no price, no
+    //                 range and no starting point anywhere on the pages we read"
+    //   follow-up 2: "someone comparing three companies can find no price, no
+    //                 range and no starting point anywhere on the pages we read"
+    //
+    // Seventeen days apart, identical. The SEQUENCE CHECK asserts "nothing
+    // repeats", and it could not see this because it tests that the four
+    // touches have distinct CTAs and subjects, not that they carry distinct
+    // FINDINGS.
+    //
+    // ══ AND TWO REVIEW FINDINGS OPENED THE FIRST TWO TOUCHES ══════════════
+    // Every rung that describes the BUSINESS rather than the website is a
+    // review rung — review_pain_pattern, review_velocity_drop, review_deficit,
+    // low_rating, no_owner_replies, partial_owner_replies, not_compounding. So
+    // on any lead with a thin website, the top of the ladder is reviews and the
+    // sequence opens on reviews twice. On Kurt: velocity, then deficit. Our own
+    // CEO's note on that run was that the emails are too review-focused, and
+    // the prospect simulator said the same thing in the owner's voice.
+    //
+    // The fix is NOT to reorder the ladder — the ladder is not the constraint
+    // and reordering it has failed repeatedly. It is that a SEQUENCE should not
+    // spend two of its four touches on the same part of the business. Email 1
+    // already applies exactly this rule to its own second finding (_band(h) !==
+    // _band(lead)); it simply stopped at the first email.
+    //
+    // Order-only, and nothing is suppressed: a same-band finding is moved
+    // BEHIND the first differently-banded one, so if the ladder holds nothing
+    // else the sequence is exactly what it was.
+    restRungs: orderFollowUpRungs(harms.byHarm, lead.id, _second && _second.id, _band(lead)),
   };
 };
 
@@ -32019,6 +32123,19 @@ app.listen(PORT, () => {
     if (parseTeamRoster('<h3>Tiffany Springs</h3><p>Owner</p>', 'Tiffany Springs Dental Group').length) {
       _inlineBad.push('the company\'s own name was returned as its owner');
     }
+    // ── "MEET DR. X" IS HOW A PRACTICE WRITES A TEAM CARD ─────────────────
+    // Live, 2026-08-13: 0 name/title pairs read from 12,078 characters on a site
+    // whose sitemap lists /meet-dr-kavanaugh and /meet-dr-zaara-baig. Three paid
+    // searches then found "Owner/Founder" on his own contact page.
+    const _meet = parseTeamRoster(
+      '<h3>Meet Dr. Kurt Kavanaugh</h3><p>Owner</p><h3>Meet Our Team</h3><p>Founder</p>',
+      'Kurt Kavanaugh Orthodontics');
+    if (!_meet.some(r => r.name === 'Kurt Kavanaugh' && r.isOwner)) {
+      _inlineBad.push('"Meet Dr. Kurt Kavanaugh" is still read as nobody — the honorific strip is anchored and on a team card the honorific is not first');
+    }
+    if (_meet.some(r => /Our Team|The Team/i.test(r.name))) {
+      _inlineBad.push('stripping the heading verb turned "Meet Our Team" into a person');
+    }
     if (_inlineBad.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_inlineBad.join(' | ')}.`);
     } else if (_missing.length) {
@@ -33380,6 +33497,63 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ LIVE EMAIL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE SEQUENCE SPENT TWO TOUCHES ON ONE FINDING ══════════════════════
+  // Kurt Kavanaugh Orthodontics, live, 2026-08-13. Email 1 carried the review
+  // slowdown and the missing pricing. Follow-up 1 carried the review deficit —
+  // reviews again — and follow-up 2 carried the missing pricing AGAIN, word for
+  // word, seventeen days later.
+  //
+  // Both are structural. Every rung that describes the BUSINESS rather than the
+  // website is a review rung, so on a thin-website lead the ladder's top is
+  // reviews and the sequence opens on reviews twice; and the follow-up pool
+  // excluded only the LEAD rung while email 1 carries two findings.
+  //
+  // This runs the real selector. Reimplementing it here is how three checks in
+  // this file passed today while the shipped code was broken.
+  try {
+    const _fails = [];
+    // Kurt's actual ladder, in his actual order, with the real bands.
+    const KURT = [
+      { id: 'review_velocity_drop', band: 'INVISIBLE', harm: 72, finding: 'reviews slowed' },
+      { id: 'no_pricing',           band: 'BLOCKS',    harm: 66, finding: 'no price anywhere' },
+      { id: 'review_deficit',       band: 'INVISIBLE', harm: 68, finding: 'behind on reviews' },
+      { id: 'partial_owner_replies',band: 'INVISIBLE', harm: 58, finding: 'most reviews unanswered' },
+      { id: 'no_guarantee',         band: 'BLOCKS',    harm: 56, finding: 'no guarantee' },
+    ];
+    const _rest = orderFollowUpRungs(KURT, 'review_velocity_drop', 'no_pricing', 'INVISIBLE');
+    const _ids = _rest.map(r => r.id);
+    if (_ids.includes('review_velocity_drop')) _fails.push('the lead rung is back in the follow-up pool');
+    if (_ids.includes('no_pricing')) {
+      _fails.push('the second finding from email 1 is still in the follow-up pool — that is exactly how follow-up 2 re-sent "no price, no range and no starting point" seventeen days after email 1 said it');
+    }
+    if (_ids[0] !== 'no_guarantee') {
+      _fails.push(`follow-up 1 opens on "${_ids[0]}" — on this lead the first two touches were both review findings, which is the note our CEO gave on this exact run. A different part of the business has to come first when one is available`);
+    }
+    // Order-only: nothing may be dropped.
+    if (_rest.length !== 3) _fails.push(`the pool lost findings: ${_rest.length} of 3 survived — this reorders, it never suppresses`);
+    if (!_ids.includes('review_deficit') || !_ids.includes('partial_owner_replies')) {
+      _fails.push('a same-band finding was removed rather than moved behind');
+    }
+    // With nothing else available the sequence must be exactly what it was.
+    const _only = orderFollowUpRungs(
+      [{ id: 'a', band: 'INVISIBLE', harm: 70 }, { id: 'b', band: 'INVISIBLE', harm: 60 }],
+      'lead', null, 'INVISIBLE');
+    if (_only.map(r => r.id).join(',') !== 'a,b') {
+      _fails.push('when every remaining finding shares the lead band the order changed — with nothing else to offer the sequence must be untouched');
+    }
+    if (orderFollowUpRungs(null, 'x', 'y', 'Z').length !== 0) _fails.push('a missing ladder does not return empty');
+    // And the caller must go through it.
+    if (!/restRungs: orderFollowUpRungs\(/.test(require('fs').readFileSync(__filename, 'utf8'))) {
+      _fails.push('the spine is not using orderFollowUpRungs, so it has its own copy and nothing above describes what ships');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SEQUENCE DIVERSITY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SEQUENCE DIVERSITY CHECK: a finding email 1 already used cannot come back as a follow-up, and a follow-up opens on a different part of the business than the lead did when one is available. Order-only — nothing is suppressed, and when the ladder holds nothing else the sequence is exactly what it was. On Kurt Kavanaugh's real ladder the first two touches were both review findings and follow-up 2 re-sent email 1's pricing sentence verbatim.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SEQUENCE DIVERSITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
