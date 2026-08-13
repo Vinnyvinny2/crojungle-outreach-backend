@@ -3350,6 +3350,146 @@ const searchAdzuna = async (appId, appKey, location) => {
 // EMAIL INFRASTRUCTURE CHECK — SPF/DMARC via Google DNS API. Free, factual.
 // No DMARC = they've never set up serious email marketing/deliverability.
 // CONTENT FRESHNESS — sitemap.xml lastmod dates. "Last update 14 months ago" is provable.
+// ══ WHAT A JOB TITLE ACTUALLY MEANS — CLASSIFIED, NEVER ASSUMED ════════════
+// The old code assumed the QUERY implied the SIGNAL: we asked for ops titles,
+// therefore every result is an ops hire. It then stamped
+// `ai_replacement_signal: true` on every lead unconditionally — while three of
+// the thirteen titles it asked for were MARKETING titles.
+//
+// The consequence is the exact bug the file elsewhere says is impossible. From
+// the audit's own comment: "the ai_replacement flags fire only on our curated
+// ops searches (dispatcher, scheduler, CS rep, data entry, bookkeeper). A
+// marketing coordinator or social media manager is a RETAINER problem, NOT
+// something a software build replaces. This is the Eat Right Atlanta bug: 2
+// marketing roles wrongly triggered a $75k AI build pitch on an obvious
+// retainer lead." That invariant was false for every TheirStack lead, and
+// `_realOpsSignal` therefore pitched a $40k-$100k Custom AI Software Build to
+// businesses whose only signal was that they were hiring a Marketing Manager.
+//
+// So the query no longer implies anything. Every returned title is classified
+// HERE, on its own text, and the signals are set from the classification. Edit
+// the query however you like afterwards — the labels cannot go wrong, because
+// they no longer depend on what was asked for.
+const JOB_TITLE_EXCLUDE = /\b(intern|internship|apprentice|volunteer|student)\b|\bproduct\s+marketing\b|\bmarketing\s+(analyst|data\s+analyst)\b|\bfield\s+marketing\b|\b(recruit|talent\s+acquisition)/i;
+// Tier A — hiring someone to OWN marketing. He has decided the function is
+// missing and the budget is approved. The strongest retainer window there is.
+const JOB_MARKETING_OWNER = /\b(marketing\s+(director|manager|lead)|director\s+of\s+marketing|head\s+of\s+marketing|vp\s+of\s+marketing|vice\s+president[,\s]+marketing|cmo|chief\s+marketing\s+officer|(director|head|vp)\s+of\s+growth|growth\s+(manager|marketer|lead)|demand\s+gen(eration)?)\b/i;
+// Tier B — he has NAMED the channel he thinks is broken. This is the most
+// useful tier and the reason titles are kept: it tells the ladder which finding
+// to open on. Hiring an SEO specialist while ranking #8 for a service he built
+// a page for is a different email from hiring a web developer.
+const JOB_MARKETING_CHANNEL = {
+  search:  /\b(seo|search\s+engine\s+optimi)/i,
+  paid:    /\b(ppc|paid\s+(media|search|social|ads?)|sem\b|google\s+ads|adwords|media\s+buyer)/i,
+  web:     /\b(web|website)\s*(site)?\s*(designer|developer|master|design|development)\b|\bwebmaster\b|\bfront[-\s]?end\s+(developer|designer)\b/i,
+  content: /\b(content\s+(marketing\s+)?(manager|specialist|strategist|writer|creator)|copywriter|blog(ger)?)\b/i,
+  social:  /\bsocial\s+media\b/i,
+  email:   /\b(email\s+marketing|marketing\s+automation|crm\s+(marketing|manager)|lifecycle\s+marketing)\b/i,
+  brand:   /\bbrand\s+(manager|strategist|director)\b/i,
+};
+// Tier C — the function exists and is under-resourced. A real window, weaker.
+const JOB_MARKETING_SUPPORT = /\bmarketing\s+(coordinator|specialist|assistant|associate|intern)\b|\bdigital\s+marketing\b|\bmarketing\b/i;
+// Ops roles — the AI-software thesis. Untouched from the original curated list,
+// because that list is the one the "$40k-$100k build" pitch is allowed to rest
+// on and narrowing it is not this change's job.
+const JOB_OPS_ROLE = /\b(dispatcher|scheduler|scheduling\s+coordinator|data\s+entry|office\s+manager|operations\s+coordinator|administrative\s+assistant|admin\s+assistant|customer\s+service\s+(rep|representative)|appointment\s+setter|bookkeeper|receptionist|billing\s+(clerk|specialist)|intake\s+(coordinator|specialist))\b/i;
+
+const classifyJobTitle = (title) => {
+  const t = String(title || '').trim();
+  if (!t) return { lane: 'other', channel: null };
+  if (JOB_TITLE_EXCLUDE.test(t)) return { lane: 'excluded', channel: null };
+  if (JOB_OPS_ROLE.test(t)) return { lane: 'ops', channel: null };
+  for (const [channel, re] of Object.entries(JOB_MARKETING_CHANNEL)) {
+    if (re.test(t)) return { lane: 'marketing', channel };
+  }
+  if (JOB_MARKETING_OWNER.test(t)) return { lane: 'marketing', channel: 'owner' };
+  if (JOB_MARKETING_SUPPORT.test(t)) return { lane: 'marketing', channel: 'support' };
+  return { lane: 'other', channel: null };
+};
+
+// ══ THE BUYING WINDOW THAT WAS NEVER MEASURED ══════════════════════════════
+// CLAUDE.md PART 4 calls this the largest gap in the system: "Every lead logs
+// [LANE] no job-posting signal — there is NO measured buying window. Thirty-plus
+// leads, zero exceptions." It was read as a discovery problem — that our sources
+// simply never return a trigger.
+//
+// It is not. It is a key name.
+//
+// The test was written by hand in TWO places, both reading
+// `discoverySignals.ai_replacement`. Grep the whole file for that key with the
+// _signal / _multi / _heavy suffixes excluded and there is exactly one hit, and
+// it is inside a comment. NOTHING IN THIS FILE HAS EVER ASSIGNED IT. The other
+// two terms were `hiring_marketing`, whose only lead-producing assignment lived
+// in searchAdzuna — which is disabled and returns Promise.resolve([]) — and
+// `ai_replacement_multi`, which needs two or more roles at one company.
+//
+// So a lead from a real, fresh, size-verified job posting for a single role
+// evaluated false on all three, and the audit prompt told the model:
+// "NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding
+// event, no exit signal." That sentence was false, and it was printed on top of
+// the only trigger data we buy.
+//
+// One function now, used by both call sites, over a NAMED list of keys — and a
+// boot check asserts every key on that list is one some source actually emits,
+// so a key that nobody sets can never quietly rejoin the test.
+//
+// The list is deliberately narrow. Only signals with a hard source belong:
+// TheirStack reads them off a real posting title, SEC EDGAR off a real Form D
+// filing. The softer news-scraped signals (expanding, rebranding,
+// recently_launched) are NOT here — claiming a window that turns out not to
+// exist would let the audit imply the owner is spending money when he is not,
+// and that is the one class of error this system may not make.
+const BUYING_WINDOW_KEYS = [
+  'hiring_marketing', 'hiring_marketing_multi',
+  'ai_replacement_signal', 'ai_replacement_multi', 'ai_replacement_heavy',
+  'raised_funding',
+];
+const hasMeasuredBuyingWindow = (sig) =>
+  !!(sig && typeof sig === 'object' && BUYING_WINDOW_KEYS.some(k => !!sig[k]));
+// Which window it is, for the log and for the pitch. Marketing outranks ops:
+// a company hiring both is a retainer lead that also has ops pain, never the
+// other way round — see the Eat Right Atlanta note above classifyJobTitle.
+const buyingWindowKind = (sig) => {
+  if (!hasMeasuredBuyingWindow(sig)) return '';
+  if (sig.hiring_marketing || sig.hiring_marketing_multi) return 'retainer';
+  if (sig.raised_funding) return 'funding';
+  return 'software';
+};
+// ══ ONE PLACE DECIDES WHAT A SET OF JOB TITLES MEANS ═══════════════════════
+// Split out of searchTheirStack so it can be RUN at boot. The first version of
+// the guard below tested classifyJobTitle and the lane function directly and
+// passed with flying colours while the emission between them was deliberately
+// broken — a marketing hire re-stamped as ops sailed straight through it. That
+// is the same disease as the bug: the pieces were each correct and the wire
+// between them was not, and nothing executed the wire.
+//
+// searchTheirStack now has no signal logic of its own. It collects titles and
+// calls this. The boot check calls this. There is no third path.
+const signalsFromTitles = (titles) => {
+  const list = (Array.isArray(titles) ? titles : []).map(t => String(t || '').trim()).filter(Boolean);
+  const marketing = [], ops = [], channels = new Set();
+  for (const t of list) {
+    const { lane, channel } = classifyJobTitle(t);
+    if (lane === 'marketing') {
+      if (!marketing.includes(t)) marketing.push(t);
+      if (channel) channels.add(channel);
+    } else if (lane === 'ops') {
+      if (!ops.includes(t)) ops.push(t);
+    }
+  }
+  return {
+    marketing, ops, channels: [...channels],
+    signals: {
+      // A marketing hire is a RETAINER window. It is not, and has never been,
+      // evidence that manual work can be replaced by software.
+      hiring_marketing: marketing.length > 0,
+      hiring_marketing_multi: marketing.length >= 2,
+      ai_replacement_signal: ops.length > 0,
+      ai_replacement_multi: ops.length >= 2,
+      ai_replacement_heavy: ops.length >= 3,
+    },
+  };
+};
 // ═══════════════════════════════════════════════════════════
 // SIGNAL SOURCE: THEIRSTACK — the size problem solved AT THE QUERY.
 // Unlike Adzuna, TheirStack filters by company size BEFORE returning results.
@@ -3358,10 +3498,20 @@ const searchAdzuna = async (appId, appKey, location) => {
 // filtering, no whack-a-mole. COST: 1 API credit per job returned, so we cap
 // tight. Free tier = 200 credits/mo; keep TS_LIMIT small until on a paid plan.
 // Fails safe to [] if no key or the call errors. Never fabricates.
+//
+// ══ NARROWED TO MARKETING, WHICH COSTS NOTHING AND MULTIPLIES THE LANE ══════
+// The title list used to be thirteen entries, ten of them ops roles, all of
+// them competing for the same 25 credits per run. Marketing was three slots in
+// thirteen. Narrowing to marketing does not reduce volume — it takes roughly
+// every credit that used to buy a dispatcher posting and spends it on the lane
+// we sell into. Ops titles stay in classifyJobTitle so that a company hiring
+// BOTH still reports both correctly; they are simply no longer what we buy.
 // ═══════════════════════════════════════════════════════════
 const TS_LIMIT = 25; // credits per run = TS_LIMIT (1 credit/job). Raise on paid plan.
 // Track last TheirStack run in memory (persists across requests, resets on deploy).
-// 24h gate: costs 25 credits/run, free tier = 200/mo. Once/day = ~200/mo, stays free.
+// NOTE: this in-memory gate is the WEAKER of the two. The binding one is
+// TS_MIN_HOURS (default 84h) held in Supabase cron_state, which survives a
+// deploy; this one does not, so it protects the manual Find button only.
 let _tsLastRun = 0;
 const TS_GATE_MS = 23 * 60 * 60 * 1000; // 23h so it doesn't drift
 
@@ -3383,12 +3533,33 @@ const searchTheirStack = async (theirstackKey) => {
       min_employee_count: 10,                      // THE FIX — size filtered at source
       max_employee_count: 200,
       order_by: [{ field: 'date_posted', desc: true }],
-      // Target the same AI-replaceable / marketing roles the rest of Find hunts
+      // ── MARKETING ONLY, AND WRITTEN OUT RATHER THAN PATTERN-MATCHED ───────
+      // TheirStack also exposes `job_title_pattern_or` (regex), which would be
+      // shorter. It is deliberately NOT used: `job_title_or` is the parameter
+      // this integration has been observed to work with live (24 companies from
+      // 25 jobs on 2026-08-12), and an unrecognised filter name is the kind of
+      // thing an API IGNORES rather than rejects — which would return every job
+      // in the country and look like a successful run. Do not swap this for a
+      // parameter nobody here has watched succeed.
+      //
+      // Ordered by how strong a buying window the title represents: someone
+      // hired to OWN marketing first, then the channel specialists who tell us
+      // which finding to open on, then the support hires.
       job_title_or: [
-        'Dispatcher', 'Scheduler', 'Scheduling Coordinator', 'Data Entry',
-        'Office Manager', 'Operations Coordinator', 'Administrative Assistant',
-        'Customer Service Representative', 'Appointment Setter', 'Bookkeeper',
-        'Marketing Coordinator', 'Marketing Manager', 'Social Media Manager',
+        // Tier A — hiring someone to own marketing
+        'Marketing Director', 'Director of Marketing', 'Head of Marketing',
+        'Marketing Manager', 'VP of Marketing', 'Chief Marketing Officer',
+        'Growth Manager', 'Director of Growth', 'Demand Generation Manager',
+        // Tier B — the channel he thinks is broken
+        'Digital Marketing Manager', 'Digital Marketing Specialist',
+        'SEO Specialist', 'SEO Manager',
+        'PPC Specialist', 'Paid Media Manager', 'Paid Search Manager',
+        'Google Ads Manager', 'Content Marketing Manager', 'Content Manager',
+        'Email Marketing Manager', 'Marketing Automation Specialist',
+        'Social Media Manager', 'Social Media Specialist',
+        'Web Designer', 'Web Developer', 'Brand Manager',
+        // Tier C — the function exists and is under-resourced
+        'Marketing Coordinator', 'Marketing Specialist', 'Marketing Associate',
       ],
     };
     const r = await fetchT('https://api.theirstack.com/v1/jobs/search', {
@@ -3419,19 +3590,58 @@ const searchTheirStack = async (theirstackKey) => {
       if (!byCompany.has(name)) {
         byCompany.set(name, {
           name,
-          website: j.company_object?.url || j.final_url || '',
+          // ══ A JOB POSTING URL IS NOT THEIR WEBSITE ═══════════════════════
+          // This read `j.company_object?.url || j.final_url`. final_url is the
+          // link to the POSTING — an Indeed, Workable or Greenhouse page. When
+          // company_object was missing, that URL became the lead's `website`,
+          // and everything downstream audited a job board: the scraper fetched
+          // it, the domain check compared it to their name, and the email would
+          // have described someone else's applicant-tracking system as their
+          // site. An empty website is recoverable — the WEBSITE GUARD resolves
+          // the real domain by search. A wrong one is not.
+          website: j.company_object?.url || '',
           location: j.short_location || j.location || '',
           verifiedEmployees: (typeof emp === 'number' && emp > 0) ? emp : null,
           roles: new Set(),
           industry: j.company_object?.industry || '',
+          // Everything below was thrown away by the old grouping loop.
+          marketing: [],       // the actual marketing titles, verbatim
+          ops: [],             // the actual ops titles, verbatim
+          channels: new Set(), // search / paid / web / content / social / email / brand / owner
+          newestPostedAt: null,
+          postingUrl: '',
+          description: '',
         });
       }
       const c = byCompany.get(name);
-      if (j.job_title) c.roles.add(j.job_title);
+      const title = String(j.job_title || '').trim();
+      if (title) c.roles.add(title);
+      // ── THE POSTING DATE IS MEASURED, NOT ASSUMED ────────────────────────
+      // The request is ORDERED BY date_posted and then the age was hard-coded
+      // to 7 days on every lead. A posting from this morning and one from
+      // thirteen days ago were identical to everything downstream, including
+      // the reach-window language that states how long the window stays open.
+      const _dp = j.date_posted || j.discovered_at || null;
+      const _t = _dp ? Date.parse(_dp) : NaN;
+      if (Number.isFinite(_t) && (c.newestPostedAt === null || _t > c.newestPostedAt)) {
+        c.newestPostedAt = _t;
+        // Keep the posting that goes WITH the freshest date, so the URL, the
+        // date and the text all describe the same job rather than three.
+        c.postingUrl = j.url || j.final_url || '';
+        c.description = String(j.description || j.job_description || '').slice(0, 4000);
+      }
     }
 
     const out = [...byCompany.values()].map(c => {
       const roleCount = c.roles.size;
+      // Every signal on this lead comes from here and from nowhere else.
+      const _lanes = signalsFromTitles([...c.roles]);
+      c.marketing = _lanes.marketing; c.ops = _lanes.ops; c.channels = new Set(_lanes.channels);
+      const mktgCount = _lanes.marketing.length;
+      const opsCount = _lanes.ops.length;
+      const ageDays = c.newestPostedAt
+        ? Math.max(0, Math.round((Date.now() - c.newestPostedAt) / 86400000))
+        : null;
       return {
         name: c.name,
         website: c.website,
@@ -3439,21 +3649,52 @@ const searchTheirStack = async (theirstackKey) => {
         // TheirStack gives us verified size for FREE in the same call — huge.
         verifiedEmployees: c.verifiedEmployees,
         industry: c.industry,
-        manualRoleCount: roleCount,
-        manualCategories: Math.min(roleCount, 3),
+        manualRoleCount: opsCount,
+        // Was Math.min(roleCount, 3) — arithmetic on a count, presented
+        // downstream as a number of distinct business functions. It is now the
+        // ops role count, capped, which is the thing it was always read as.
+        manualCategories: Math.min(opsCount, 3),
         source: 'theirstack',
         perfectFit: true,                          // size-verified in range by construction
-        signalFreshness: 'hot',
-        signalAgeDays: 7,
-        signals: {
-          ai_replacement_signal: true,
-          ai_replacement_multi: roleCount >= 2,
-          ai_replacement_heavy: roleCount >= 3,
-        },
-        jobTitle: `Hiring ${roleCount} manual role${roleCount === 1 ? '' : 's'} at a ${c.verifiedEmployees ? '~' + c.verifiedEmployees + '-person' : 'verified small'} company (size-filtered at source)`,
+        // Freshness is now MEASURED. Null age means the posting carried no
+        // usable date, and 'warm' is the honest label for "recent enough that
+        // TheirStack returned it, but we cannot say how recent".
+        signalFreshness: ageDays === null ? 'warm' : (ageDays <= 7 ? 'hot' : 'warm'),
+        signalAgeDays: ageDays,
+        // ══ THE TITLES THEMSELVES, WHICH DECIDE THE PITCH ══════════════════
+        // The audit prompt has a branch that says "Name the exact roles. Do the
+        // math on the loaded salary." Nothing in the payload could satisfy it,
+        // because the grouping loop read only `c.roles.size` and dropped every
+        // string. An instruction to state a specific fact that was never
+        // delivered is invention pressure, and it lands in the AUDIT — upstream
+        // of the email's fabrication verifier, where nothing catches it.
+        marketingRoles: c.marketing,
+        opsRoles: c.ops,
+        marketingChannels: [...c.channels],
+        jobPostingUrl: c.postingUrl,
+        jobPostedAt: c.newestPostedAt ? new Date(c.newestPostedAt).toISOString() : null,
+        // Kept for quoting. It is the owner describing, in his own words and
+        // unprompted, what he thinks is broken — the only text of that kind
+        // this system can obtain. It must still pass the same corpus
+        // verification as any other quote before it can reach an email.
+        jobSnippet: c.description,
+        // ══ SET FROM THE TITLES, NOT FROM THE QUERY ══════════════════════
+        // Built by signalsFromTitles, which is the ONLY thing in this file that
+        // decides what a set of job titles means — so the boot check can run
+        // the same wire that ships. hiring_marketing is the retainer lane, and
+        // it had exactly one assignment in this whole file before now: inside
+        // searchAdzuna, which is disabled and returns Promise.resolve([]). The
+        // flag that decides "budget allocated, direction not chosen, the
+        // retainer pitch writes itself" was unreachable on every live lead.
+        signals: _lanes.signals,
+        jobTitle: mktgCount
+          ? `Hiring ${c.marketing.slice(0, 3).join(', ')}${mktgCount > 3 ? ` and ${mktgCount - 3} more` : ''}${ageDays === null ? '' : ageDays === 0 ? ' — posted today' : ` — posted ${ageDays} day${ageDays === 1 ? '' : 's'} ago`}`
+          : `Hiring ${roleCount} role${roleCount === 1 ? '' : 's'} at a ${c.verifiedEmployees ? '~' + c.verifiedEmployees + '-person' : 'verified small'} company (size-filtered at source)`,
       };
     });
-    console.log(`TheirStack: ${out.length} size-verified SMBs from ${jobs.length} jobs (${TS_LIMIT} credits)`);
+    const _mktg = out.filter(o => o.signals.hiring_marketing).length;
+    const _dated = out.filter(o => Number.isFinite(o.signalAgeDays)).length;
+    console.log(`TheirStack: ${out.length} size-verified SMBs from ${jobs.length} jobs (${TS_LIMIT} credits) — ${_mktg} hiring for marketing, ${_dated} with a real posting date. A marketing hire is now flagged as a RETAINER window, not as a manual-ops one; the old code stamped every lead ai_replacement_signal regardless of the role and pitched a $40k-$100k software build at businesses hiring a marketing manager.`);
     return out;
   } catch (e) {
     console.log('TheirStack failed:', e.message);
@@ -22282,8 +22523,16 @@ const _runResearchInner = async (req, res) => {
   // A default that asserts something unmeasured is the exact failure this system
   // is built to prevent \u2014 so say plainly that there is no job signal instead.
   const _laneRaw = req.body.buyingLane;
-  const _laneFromJobs = !!(discoverySignals && (discoverySignals.hiring_marketing || discoverySignals.ai_replacement || discoverySignals.ai_replacement_multi));
-  const _lane = (_laneRaw === 'software' && !_laneFromJobs) ? '' : _laneRaw;
+  // Was three hand-written key tests, one of which named a key nothing in
+  // this file assigns. See hasMeasuredBuyingWindow.
+  const _laneFromJobs = hasMeasuredBuyingWindow(discoverySignals);
+  // A measured window also CORRECTS the lane. The frontend sends a
+  // hard-coded 'software' default; if the signal says the owner is hiring
+  // for marketing, this is a retainer lead and the old code would have
+  // carried 'software' through on the strength of a default nobody chose.
+  const _laneKind = buyingWindowKind(discoverySignals);
+  const _lane = _laneFromJobs ? (_laneKind === 'funding' ? (_laneRaw || 'retainer') : _laneKind)
+    : (_laneRaw === 'software' ? '' : _laneRaw);
   if (!_lane) console.log(`[LANE] ${company}: no job-posting signal on this lead, so there is NO measured buying window. The pitch must come from the audit alone. (A hard-coded 'software' default was being sent here and framed every local business as one hiring manual ops roles.)`);
   else console.log(`[LANE] ${company}: ${_lane}${_lane === 'retainer' ? '  <- RETAINER (core product)' : _lane === 'both' ? '  <- PERFECT STORM' : ''}`);
 
@@ -24218,7 +24467,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // set on exactly the leads with the best finding") and it tests the
           // resolver directly, so it never saw the wire.
           painTheme: _measured.painTheme,
-          city: _measured.city,
+          // ── THE SUBJECT LINE'S {city} WAS ALWAYS BLANK ────────────────────
+          // This read `_measured.city`, and resolveMeasurements does not return
+          // a city — it accepts one as an ARGUMENT and never passes it through.
+          // So `m.city` was undefined on every lead, `m.rankCity` is produced
+          // nowhere in the file, and buildSubjects' `{city}` token resolved to
+          // the empty string every time. Shipped this morning, in the same
+          // change that was fixing this exact class. localRank.city is the real
+          // value and it is the one the rank sentence itself uses.
+          city: (localRank && localRank.city) || '',
           copyrightYear: _measured.copyrightYear,
           newestPostYear: _measured.newestPostYear,
           rankQuery: localRank && localRank.query,
@@ -25670,7 +25927,7 @@ RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 ═══ THE BUYING WINDOW WE ARE INTERCEPTING (this determines the ENTIRE pitch) ═══
-${(req.body.buyingLane === 'software' && !(req.body.discoverySignals && (req.body.discoverySignals.hiring_marketing || req.body.discoverySignals.ai_replacement || req.body.discoverySignals.ai_replacement_multi))) ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
+${(req.body.buyingLane === 'software' && !hasMeasuredBuyingWindow(req.body.discoverySignals)) ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
 : req.body.buyingLane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
 They have allocated budget on BOTH fronts and committed on NEITHER. This is the strongest possible position.
 THE PITCH: they are about to spend ~$125k/year on two hires (one to do repetitive work software handles, one junior marketer). CROJ replaces the first with a build and the second with a senior team — for less, and it compounds.
@@ -32765,6 +33022,104 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ HOMEPAGE REQUEST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE LARGEST GAP IN THIS SYSTEM WAS A KEY NOBODY ASSIGNED ═══════════
+  // CLAUDE.md PART 4 opens with "Nothing has a clock on it. Every lead logs
+  // [LANE] no job-posting signal — thirty-plus leads, zero exceptions," and
+  // reads it as a discovery problem. It was a spelling problem. Two hand-written
+  // copies of the buying-window test both read `discoverySignals.ai_replacement`
+  // and nothing in this file has ever assigned that key; the source sets
+  // `ai_replacement_signal`. So a lead carrying a real, fresh, size-verified job
+  // posting was reported to the audit as having no measured window at all.
+  //
+  // A test over a key nobody sets cannot fail — it is always false — which is
+  // the same disease as a check that cannot fail, pointed the other way. This
+  // asserts the list is grounded: every key the test reads must be one some
+  // source in this file actually assigns to a lead. It is the guard that would
+  // have caught the original on the day it was written.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    if (!Array.isArray(BUYING_WINDOW_KEYS) || !BUYING_WINDOW_KEYS.length) {
+      _fails.push('BUYING_WINDOW_KEYS is empty');
+    }
+    for (const k of (BUYING_WINDOW_KEYS || [])) {
+      // An ASSIGNMENT, not a mention. `key: <something>` inside an object
+      // literal is how every source in this file emits a signal. A comment or
+      // another read does not count, which is precisely the distinction the
+      // original bug turned on.
+      const assigned = new RegExp(`(^|[^A-Za-z0-9_.])${k}\\s*:\\s*[^\\s,}]`, 'm').test(
+        _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n')
+      );
+      if (!assigned) {
+        _fails.push(`the buying-window test reads "${k}" and NOTHING in this file assigns it — that test can only ever be false, which is exactly how thirty-plus leads in a row reported no measured window while carrying a real job posting`);
+      }
+    }
+    // Behaviour, not source text. A marketing hire must be a RETAINER window and
+    // must NOT set the ops flag: the ops flag is what makes a $40k-$100k Custom
+    // AI Software Build eligible, and it used to be stamped on every TheirStack
+    // lead unconditionally — the Eat Right Atlanta bug, live on every lead.
+    const _mk = classifyJobTitle('Marketing Manager');
+    const _seo = classifyJobTitle('SEO Specialist');
+    const _web = classifyJobTitle('Web Developer');
+    const _disp = classifyJobTitle('Dispatcher');
+    const _int = classifyJobTitle('Marketing Intern');
+    const _prod = classifyJobTitle('Product Marketing Manager');
+    if (_mk.lane !== 'marketing') _fails.push(`"Marketing Manager" classifies as ${_mk.lane}, not marketing`);
+    if (_seo.lane !== 'marketing' || _seo.channel !== 'search') _fails.push(`"SEO Specialist" must be marketing/search, got ${_seo.lane}/${_seo.channel}`);
+    if (_web.lane !== 'marketing' || _web.channel !== 'web') _fails.push(`"Web Developer" must be marketing/web, got ${_web.lane}/${_web.channel}`);
+    if (_disp.lane !== 'ops') _fails.push(`"Dispatcher" must stay an ops signal, got ${_disp.lane}`);
+    if (_int.lane !== 'excluded') _fails.push('"Marketing Intern" is not excluded — an intern posting is not a budget');
+    if (_prod.lane !== 'excluded') _fails.push('"Product Marketing Manager" is not excluded — that is a SaaS title, outside the ICP');
+    // ── EXERCISE THE EMISSION, NOT JUST THE CLASSIFIER ─────────────────────
+    // The first version of this check tested classifyJobTitle and the lane
+    // function directly and PASSED while the wire between them was deliberately
+    // broken — a marketing hire re-stamped as an ops signal went straight
+    // through. Both pieces were right; the wire was not; nothing ran the wire.
+    // signalsFromTitles is that wire, and searchTheirStack now has no signal
+    // logic of its own, so running it here runs what actually ships.
+    const _mSig = signalsFromTitles(['Marketing Manager']).signals;
+    const _oSig = signalsFromTitles(['Dispatcher']).signals;
+    if (_mSig.ai_replacement_signal) {
+      _fails.push('a company hiring ONLY a Marketing Manager still emits ai_replacement_signal — that flag is what makes a $40k-$100k Custom AI Software Build eligible, and it is the Eat Right Atlanta bug in its original form');
+    }
+    if (!_mSig.hiring_marketing) _fails.push('a marketing hire does not emit hiring_marketing, so the retainer lane stays unreachable');
+    if (_oSig.hiring_marketing) _fails.push('an ops-only hire emits hiring_marketing');
+    const _both = signalsFromTitles(['Marketing Manager', 'Dispatcher', 'Bookkeeper']).signals;
+    if (!_both.hiring_marketing || !_both.ai_replacement_signal) {
+      _fails.push('a company hiring for both lanes must report both');
+    }
+    if (signalsFromTitles(['Marketing Intern']).signals.hiring_marketing) {
+      _fails.push('an intern posting counts as a marketing budget');
+    }
+    if (signalsFromTitles([]).signals.hiring_marketing || signalsFromTitles([]).signals.ai_replacement_signal) {
+      _fails.push('an empty title list emits a signal');
+    }
+    const _ch = signalsFromTitles(['SEO Specialist', 'Web Developer']).channels;
+    if (!_ch.includes('search') || !_ch.includes('web')) {
+      _fails.push(`the channels a lead is hiring for are lost: got [${_ch.join(', ')}] — those decide which finding the email opens on`);
+    }
+    if (!hasMeasuredBuyingWindow(_mSig)) _fails.push('a marketing hire does not register as a measured buying window');
+    if (!hasMeasuredBuyingWindow(_oSig)) _fails.push('an ops hire does not register as a measured buying window');
+    if (buyingWindowKind(_mSig) !== 'retainer') _fails.push(`a marketing hire resolves to "${buyingWindowKind(_mSig)}" instead of the retainer lane`);
+    if (buyingWindowKind(_oSig) !== 'software') _fails.push(`an ops hire resolves to "${buyingWindowKind(_oSig)}"`);
+    // Hiring BOTH is a retainer lead that also has ops pain, never the reverse.
+    if (buyingWindowKind({ hiring_marketing: true, ai_replacement_heavy: true }) !== 'retainer') {
+      _fails.push('a company hiring for marketing AND ops resolves to the software lane — that is the $75k-pitch-at-a-retainer-lead bug');
+    }
+    if (hasMeasuredBuyingWindow({}) || hasMeasuredBuyingWindow(null)) _fails.push('an empty signal set reports a measured window');
+    // And no call site may hand-roll the test again.
+    if (/discoverySignals(\.|\?\.)?(ai_replacement|hiring_marketing)\s*\|\|/.test(
+      _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n'))) {
+      _fails.push('a call site is testing the signal keys inline again instead of going through hasMeasuredBuyingWindow — two hand-written copies is how one of them kept a key that does not exist');
+    }
+    if (_fails.length) {
+      console.log(`⛔ BUYING WINDOW CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ BUYING WINDOW CHECK: every key the buying-window test reads is one a source actually assigns, a marketing hire opens the RETAINER lane instead of being stamped as manual-ops work, and both call sites go through one function. The test used to read a key spelled "ai_replacement" that nothing in this file has ever set, which is why thirty-plus leads in a row reported no measured buying window while carrying a real job posting.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BUYING WINDOW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
