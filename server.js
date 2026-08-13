@@ -22504,6 +22504,22 @@ const _runResearchInner = async (req, res) => {
   const emailData = browserData.emailData || {};
   const companyData = browserData.companyData || {};
   const discoverySignals = req.body.discoverySignals || {};
+  // ══ THE OWNER'S OWN WORDS, WHICH WE HAVE NEVER ONCE READ ═══════════════
+  // A job posting is the one place a business owner writes down, unprompted,
+  // what he thinks is broken: "take over a website that isn't generating
+  // leads", "manage our Google Ads, which aren't converting". searchTheirStack
+  // now keeps that text, the frontend now forwards it, and it lands here.
+  //
+  // It is treated as CORPUS, not as a claim. It joins the text that
+  // originalFindings are verified against, so a quote from it has to survive
+  // the same check as a quote from their homepage — which is the only reason
+  // it is safe to let a model near it. Nothing here asserts anything.
+  const jobSnippet = String(req.body.jobSnippet || '').slice(0, 4000);
+  const marketingRoles = Array.isArray(req.body.marketingRoles) ? req.body.marketingRoles.filter(Boolean).map(String) : [];
+  const marketingChannels = Array.isArray(req.body.marketingChannels) ? req.body.marketingChannels.filter(Boolean).map(String) : [];
+  if (jobSnippet || marketingRoles.length) {
+    console.log(`\u{1F4CC} JOB POSTING [${req.body.company || req.body.name || '?'}]: ${marketingRoles.length ? 'hiring ' + marketingRoles.join(', ') : 'no titles'}${marketingChannels.length ? ` (channel: ${marketingChannels.join(', ')})` : ''}${jobSnippet ? ` \u2014 ${jobSnippet.length} characters of their own posting text, added to the corpus every quote is checked against` : ' \u2014 no posting text'}. Until now the find stage kept none of this and Research received none of it.`);
+  }
   const discoverySource = req.body.discoverySource || '';
   const discoveryReason = req.body.discoveryReason || '';
   // LANE VISIBILITY - the retainer pitch silently falling back to software was a
@@ -27072,7 +27088,15 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // We hold the corpus, so this is checkable — and a finding that can
             // be traced to their own words is exactly the one that makes an owner
             // think somebody looked rather than scanned.
-            const _corpus = (sitePages && sitePages.rawText) || trustedContent || '';
+            // ══ THE JOB POSTING IS PART OF THE CORPUS, NOT PART OF THE CLAIM ══
+            // verifyOriginalFinding takes the corpus as a PARAMETER, so it can
+            // check a quote against a job posting with no change to its logic.
+            // Appending the posting is therefore the whole wiring job: a finding
+            // that quotes the owner's own advertisement now VERIFIES instead of
+            // being dropped as unquotable, and one that invents a sentence he
+            // never wrote is still dropped exactly as before.
+            const _corpusBase = (sitePages && sitePages.rawText) || trustedContent || '';
+            const _corpus = jobSnippet ? `${_corpusBase}\n\n${jobSnippet}` : _corpusBase;
             const _origIn = Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [];
             const _origOk = [];
             for (const _it of _origIn.slice(0, 3)) {
@@ -33120,6 +33144,81 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ BUYING WINDOW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE OWNER'S OWN WORDS, AND WHY THEY WERE UNUSABLE ══════════════════
+  // A job posting is the one place a business owner writes down, unprompted,
+  // what he thinks is broken — "take over a website that isn't generating
+  // leads". It is the strongest email material this system can obtain and it
+  // was thrown away twice over: searchTheirStack read only c.roles.size and
+  // dropped every string, and the frontend research payload is a hand-written
+  // allowlist that never named the field.
+  //
+  // It is CORPUS, never a claim. verifyOriginalFinding takes the corpus as a
+  // parameter, so appending the posting is the entire wiring job: a finding
+  // quoting his own advertisement now verifies, and an invented one is still
+  // dropped. That distinction is what this check exists to hold.
+  try {
+    const _fails = [];
+    const _site = 'We are a full service dental practice in Kansas City serving families since 1998.';
+    const _post = 'Marketing Manager wanted. You will take over a website that is not generating leads and rebuild our patient intake from scratch.';
+    // Exactly the concatenation the research path performs.
+    const _joined = `${_site}\n\n${_post}`;
+    const _fromPosting = verifyOriginalFinding({
+      finding: 'Their own job posting says they need someone to take over a website that is not generating leads',
+      evidence: 'take over a website that is not generating leads',
+    }, _joined);
+    if (!_fromPosting.ok) {
+      _fails.push(`a quote lifted verbatim from the owner's own job posting was dropped (${_fromPosting.why}) — the posting is not reaching the corpus, so the strongest sentence available to this system is unusable by construction`);
+    }
+    // The same quote must FAIL when the posting is absent. Without this, the
+    // test above would pass on a verifier that accepts anything, and the check
+    // would be measuring nothing at all.
+    const _withoutPosting = verifyOriginalFinding({
+      finding: 'Their own job posting says they need someone to take over a website that is not generating leads',
+      evidence: 'take over a website that is not generating leads',
+    }, _site);
+    if (_withoutPosting.ok) {
+      _fails.push('that same quote also verifies with NO posting in the corpus — the verifier is accepting text it never saw, so the check above proves nothing');
+    }
+    // And an invented posting quote is still refused.
+    const _invented = verifyOriginalFinding({
+      finding: 'Their job posting says they are replacing their entire agency next quarter',
+      evidence: 'replacing their entire agency next quarter',
+    }, _joined);
+    if (_invented.ok) _fails.push('a sentence the owner never wrote verified against his posting');
+
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!/const jobSnippet = String\(req\.body\.jobSnippet/.test(_code)) {
+      _fails.push('the research route never reads req.body.jobSnippet');
+    }
+    if (!/const _corpus = jobSnippet \? /.test(_code)) {
+      _fails.push('the posting is read but never joined to the corpus — computed but not passed, on the one field this build exists to deliver');
+    }
+    // ── THE CLIENT HALF, WHICH LIVES IN ANOTHER REPO ──────────────────────
+    // index.html deploys to Netlify from somewhere else and is carried over by
+    // hand. If a copy is sitting here it is checked; if not, this SAYS so
+    // rather than passing quietly, because a green line about a half nobody
+    // verified is worse than no line.
+    let _clientNote;
+    try {
+      const _idx = require('fs').readFileSync(require('path').join(__dirname, 'index.html'), 'utf8');
+      const _missing = ['jobSnippet:', 'signalAgeDays:', 'marketingChannels:'].filter(k => !_idx.includes(k));
+      if (_missing.length) {
+        _fails.push(`the local index.html research payload does not forward ${_missing.join(', ')} — the server reads them and the client never sends them, which is how req.body.signalAgeDays came to be read on every lead and sent on none`);
+      }
+      _clientNote = ' The local index.html forwards all of them; it still has to be carried to Netlify by hand.';
+    } catch (e) {
+      void e;
+      _clientNote = ' NOTE: no index.html beside this file, so the client half of the wire was NOT verified here — check it before trusting a live run.';
+    }
+    if (_fails.length) {
+      console.log(`⛔ JOB POSTING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ JOB POSTING CHECK: a finding that quotes the owner's own job posting verifies against it, the identical quote is refused when the posting is absent, and an invented one is refused either way. The posting is corpus, never a claim.${_clientNote}`);
+    }
+  } catch (e) {
+    console.log(`⛔ JOB POSTING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
