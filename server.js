@@ -10978,8 +10978,26 @@ Return ONLY the email body. No subject, no signature, no preamble.`;
   }
 };
 
+// ══ THE WRITER WAS PUNISHED FOR FORMATTING A NUMBER CORRECTLY ═══════════════
+// Every figure in an email is checked against the measurements. The permitted
+// list is built from our own strings, which carry no thousands separators, so a
+// measurement arrives as "2344". Any competent writer types "2,344".
+//
+// Those tokenised to different strings, so the comma made a TRUE figure look
+// INVENTED. verifyBrainEmail refused the draft — "contains 1 figure(s) we never
+// measured" — and the lead fell back to the composed template. On John P.
+// Goodman DDS the headline number was 2344, so the model-written email was at
+// risk of being discarded for writing the number properly, and the fallback
+// shipped bare digits that read like a database dump.
+//
+// It only bites above 999, which is why nobody saw it: review counts, ratings,
+// photo counts and page counts are almost always three digits or fewer.
+//
+// Commas are stripped for COMPARISON ONLY. Nothing about what may be said moves:
+// 2,344 and 2344 are the same number, and a figure nothing measured is still
+// refused. Periods are left alone, so 4.8 stays 4.8 rather than becoming 48.
 const NUMBER_TOKENS = (t) => (String(t || '').match(/\d[\d,.]*/g) || [])
-  .map(x => x.replace(/[.,]$/, ''));
+  .map(x => x.replace(/[.,]$/, '').replace(/,/g, ''));
 const verifyBrainEmail = (body, opts = {}) => {
   const text = String(body || '').trim();
   if (!text) return { ok: false, why: 'empty' };
@@ -32232,6 +32250,33 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SUBJECT RESOLUTION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ A COMMA MADE A TRUE NUMBER LOOK INVENTED ═══════════════════════════
+  // The permitted list is built from our own measurement strings, which carry no
+  // thousands separators. A writer typing "2,344" tokenised differently from the
+  // measured "2344", so the figure gate called a true number invented and threw
+  // the whole draft away. Only bites above 999, which is why it survived.
+  try {
+    const _fails = [];
+    const _o = { spine: 'the two above you average 2344 reviews', figures: ['2344', '251'] };
+    const _mk = (mid) => `John, ${mid}\n\nThat is not about the quality of your work.\n\nHas anyone owned that, or has it just never come up?`;
+    const _fmt = verifyBrainEmail(_mk('the two practices above you average 2,344 reviews against your 251.'), _o);
+    if (!_fmt.ok) _fails.push(`a correctly formatted figure was refused (${_fmt.why}) \u2014 the writer is being punished for writing the number properly and the lead falls back to the template`);
+    const _plain = verifyBrainEmail(_mk('the two practices above you average 2344 reviews against your 251.'), _o);
+    if (!_plain.ok) _fails.push(`the unformatted figure was refused (${_plain.why})`);
+    const _fake = verifyBrainEmail(_mk('the two practices above you average 9,999 reviews against your 251.'), _o);
+    if (_fake.ok) _fails.push('an invented figure passed once commas were normalised \u2014 the fix bought formatting with the guarantee');
+    // A rating must not become an integer.
+    if (NUMBER_TOKENS('4.8 stars')[0] !== '4.8') _fails.push('stripping separators damaged a decimal \u2014 4.8 must not become 48');
+    if (NUMBER_TOKENS('2,344')[0] !== '2344') _fails.push('a thousands separator is not being normalised');
+    if (_fails.length) {
+      console.log(`\u26d4 FIGURE FORMAT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 FIGURE FORMAT CHECK: a figure written the way a person writes it \u2014 2,344 \u2014 is accepted when 2344 was measured, an invented one is still refused, and 4.8 is still 4.8. Every number over 999 in a model-written email used to fail this and take the whole draft down with it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FIGURE FORMAT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ HOW MUCH OF THE AUDIT CAN ACTUALLY BE ABOUT THIS BUSINESS ══════════
