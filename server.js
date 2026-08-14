@@ -8599,6 +8599,100 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // among the things that are novel and checkable. A dead booking page wins because
 // it is all three. Rank loses on novelty alone, not on importance. And a stale
 // copyright year loses on cost, however novel and checkable it is.
+// ══ WHO WE ARE ACTUALLY WRITING TO ══════════════════════════════════════════
+// Vin: "if we are talking to a plumber use language a plumber uses, if we are
+// targeting a surgeon then surgeon talk... but even if they run a $15M business
+// they may not be very experienced with business terms. The simpler the better,
+// but we do need to sound like absolute experts no matter what."
+//
+// Those two demands only look opposed. Expertise in a cold email does not come
+// from vocabulary — it comes from PRECISION. "A stranger comparing three
+// companies" is a sentence anyone could write about anyone. "A patient deciding
+// on a procedure" is a sentence somebody who knows the business writes, and it
+// is the SIMPLER of the two. Every word here is one the owner uses himself all
+// day; none of them is a term he would have to look up.
+//
+// Two words per trade and no more. `buyer` is what he calls the person paying
+// him; `job` is what he calls one unit of work. Those two nouns carry almost all
+// of the register, and a longer table would only be more surface to get wrong —
+// a trade whose economics we describe wrongly proves we did NOT look, which
+// costs more than saying nothing (see the garage-door note in TRADE_JOB_VALUE).
+//
+// Matched top-down, most specific first, on the trade read off their OWN
+// homepage. Anything unrecognised falls back to customer/job, which is true of
+// every business on earth and therefore can never be wrong — this may only ever
+// sharpen a sentence, never fabricate one.
+const AUDIENCE_REGISTER = [
+  // Veterinary before medical: a vet's patient is the animal and his BUYER is
+  // the owner, so "patient" would be the one word in the table that is wrong.
+  { re: /\bvet(erinar\w*)?\b|\banimal (hospital|clinic)|\bpet (clinic|hospital|care)/i,
+    buyer: 'client', job: 'visit', peer: 'practice', peers: 'practices' },
+  { re: /\bdent(al|ist\w*)|\borthodont|\bendodont|\bperiodont|\bprosthodont|\boral surg/i,
+    buyer: 'patient', job: 'case', peer: 'practice', peers: 'practices' },
+  { re: /\bsurg\w*|\bmed(ical|icine)?\b|\bphysician|\bdoctor|\bclinic|\bderm\w*|\bplastic|\bcosmetic|\baesthetic|\bmed ?spa|\blasik|\bchiroprac\w*|\bphysical therapy|\bpodiatr|\bfertility|\bobgyn|\bpsychiatr|\bhealth ?care|\bwellness/i,
+    buyer: 'patient', job: 'procedure', peer: 'practice', peers: 'practices' },
+  { re: /\blaw\b|\blegal\b|\battorney|\blawyer|\bcounsel\b|\bparalegal|\blitigat/i,
+    buyer: 'client', job: 'case', peer: 'firm', peers: 'firms' },
+  { re: /\bcpa\b|\baccount(ing|ant)|\bbookkeep|\btax\b|\bfinancial (advis|plan)|\bwealth|\bfiduciar|\binsurance|\badvisory\b/i,
+    buyer: 'client', job: 'account', peer: 'firm', peers: 'firms' },
+  { re: /\breal(tor| estate)|\bbroker(age)?\b|\bmortgage|\btitle (company|agency)|\bproperty manage/i,
+    buyer: 'client', job: 'sale', peer: 'firm', peers: 'firms' },
+  { re: /\brestaurant|\bcaf[eé]\b|\bbakery|\bbar\b|\bbrewery|\bdiner|\bcatering|\bsalon\b|\bbarber|\bgym\b|\bfitness|\bstudio\b|\bboutique|\bretail\b|\bhotel|\bresort/i,
+    buyer: 'customer', job: 'visit', peer: 'place', peers: 'places' },
+  // B2B / software last among the specifics: a "solutions" or "systems" business
+  // sells deals, not jobs, and the person deciding is a buyer rather than a
+  // customer. Deliberately narrow — these words appear inside trade names too,
+  // which is why the trade families above are matched first.
+  { re: /\bsaas\b|\bsoftware\b|\bb2b\b|\bagency\b|\bconsult(ing|ancy)|\bstaffing|\brecruit|\bmanaged (it|services)|\bmsp\b|\blogistics|\bwholesale|\bdistribut(or|ion)|\bmanufactur/i,
+    buyer: 'buyer', job: 'deal', peer: 'company', peers: 'companies' },
+];
+
+// The safe default. Every business has customers and every business does jobs,
+// so this sentence is never wrong for anyone — which is the property that lets
+// the register sharpen copy without ever being able to invent a claim.
+// `peer` is what he calls a business like his own. Without it a surgeon reads
+// "a patient comparing three COMPANIES", which is the exact register mistake
+// this table exists to prevent — right noun for the buyer, wrong one for him.
+const AUDIENCE_DEFAULT = { buyer: 'customer', job: 'job', peer: 'company', peers: 'companies' };
+
+const audienceOf = (trade) => {
+  const t = String(trade || '').trim();
+  if (!t) return { ...AUDIENCE_DEFAULT, measured: false };
+  const hit = AUDIENCE_REGISTER.find(x => x.re.test(t));
+  // The plural is STATED, not computed. Appending 's' produced "three
+  // companys" on the first run — a spelling mistake in a cold email is the
+  // cheapest possible way to prove a machine wrote it.
+  return hit ? { buyer: hit.buyer, job: hit.job, peer: hit.peer, peers: hit.peers, measured: true }
+             : { ...AUDIENCE_DEFAULT, measured: false };
+};
+
+// ══ THE "SO WHAT", RESOLVED IN EXACTLY ONE PLACE ════════════════════════════
+// Vin: "they might not know what 14 services and 3 pages means to their
+// business — we need a quick simple so what."
+//
+// Every rung already carries a `costs` line and it already reaches the composed
+// email. The gap is not that it is missing; it is that it is written about a
+// generic stranger. "A buyer comparing three companies reads the review count
+// first" is true of everybody, which is exactly why it reads as boilerplate to
+// the one person we sent it to.
+//
+// So `costs` may now be a FUNCTION of the measurements, and a function can say
+// "a patient deciding on a procedure" where the trade was measured. Twenty-one
+// places in this file read `.costs`, and if even one of them keeps reading the
+// raw field it gets a function body where a sentence should be — the exact
+// shape of failure this file has hit repeatedly, and one that would put
+// JavaScript source into a prospect's inbox. So every reader goes through here,
+// and a boot check asserts that none is left reading the field directly.
+const costsOf = (rung, m) => {
+  if (!rung) return '';
+  const c = rung.costs;
+  if (typeof c === 'function') {
+    try { return String(c(m || {}) || '').trim(); } catch (e) { void e; return ''; }
+  }
+  return String(c || '').trim();
+};
+
+
 // ══ THE TWO BUSINESS-LEVEL INPUTS, DERIVED IN ONE PLACE ══════════════════════
 // Both are extracted as real functions rather than assembled inline at the call
 // site, because five separate boot checks passed this session while the bug they
@@ -8789,7 +8883,7 @@ const HARM_LADDER = [
       && Number.isFinite(Number(m.aboveReviewsAvg))
       && Number(m.aboveReviewsAvg) >= Number(m.reviewCount) * 4,
     say: (m) => `They have ${m.reviewCount} reviews; the ${m.aboveReviewsN} businesses at the top of that search average ${Math.round(Number(m.aboveReviewsAvg))} each`,
-    costs: 'a buyer choosing between names on a map reads the review count before anything else' },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} choosing between names on a map reads the review count before anything else` },
 
   { harm: 92, specific: 92, novel: 88, delegable: 60, weFix: 95, band: 'DEAD', id: 'expired_certificate',
     blind: 'the expiry sits in a file nobody opens until a browser reports it',
@@ -8799,7 +8893,13 @@ const HARM_LADDER = [
     // outage, it happens silently on renewal failure, and the owner will not know
     // until someone tells him.
     test: (m) => m.certExpired === true,
-    say: () => 'Their SSL certificate has expired, so browsers show a full-page security warning before the site loads',
+    // "SSL certificate" is the third jargon term the plain-English gate caught
+    // on its first run, and it is the most instructive of the three: the term
+    // is technically correct and an owner has probably heard it, which is
+    // exactly why it slipped past every human reading of this file. He has
+    // heard it and he cannot act on it. What he CAN act on is the thing he
+    // would see if he opened his own site right now.
+    say: () => 'The security certificate on their site has run out, so a browser now shows a full-page red warning before anyone can reach them',
     costs: 'almost nobody clicks past a red browser warning \u2014 in practice the site is down' },
 
   // ── FOUR GAPS FOUND BY AUDITING SIGNAL-BY-SIGNAL ────────────────────────
@@ -8816,7 +8916,7 @@ const HARM_LADDER = [
     test: (m) => Number.isFinite(Number(m.rating)) && Number(m.rating) > 0 && Number(m.rating) < 4.0
       && Number(m.reviewCount || 0) >= 10,
     say: (m) => `Their Google rating is ${Number(m.rating).toFixed(1)} across ${m.reviewCount} reviews`,
-    costs: 'a buyer comparing three names on a map picks on the star line before reading anything' },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} comparing three names on a map picks on the star line before reading anything` },
 
   { harm: 58, specific: 88, novel: 80, delegable: 55, weFix: 95, band: 'BLOCKS', id: 'no_owner_replies',
     reframe: 'a stranger reading reviews sees a business that does not answer, whatever the stars say',
@@ -8846,7 +8946,11 @@ const HARM_LADDER = [
     // mostly mobile. He has not opened his own site on a phone recently \u2014 almost
     // nobody does.
     test: (m) => m.viewportChecked === true && m.hasViewport === false,
-    say: () => 'Their site has no mobile viewport set, so it renders desktop-width on a phone',
+    // "Viewport" and "renders desktop-width" are both developer words. The
+    // observation is one an owner can make himself in two seconds by opening
+    // his own site on his phone, so it should be written the way he would
+    // describe it after doing that.
+    say: () => 'Their site is not built to resize for a phone \u2014 it loads at desktop width and has to be pinched to read',
     costs: 'most of the people finding them are on a phone, and the page arrives zoomed out and unreadable' },
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
@@ -8936,7 +9040,7 @@ const HARM_LADDER = [
     // the operator that flags are noise.
     //
     // What we DID measure: the only published route is a phone line with hours.
-    costs: 'outside those hours there is no published way in at all' },
+    costs: (m) => `outside those hours a ${audienceOf(m.tradeWord).buyer} has no published way in at all` },
 
   { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
     blind: 'an abandoned form records nothing. Only the completed ones are ever counted',
@@ -8963,14 +9067,14 @@ const HARM_LADDER = [
         ? `Someone ready to hire ${anFor(t)} ${t} cannot book a time — the only route is a form and a wait`
         : `There is no way to book a time — the only option is a form and a wait`;
     },
-    costs: 'someone ready to commit has to stop and hope for a reply' },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} ready to commit has to stop and hope for a reply` },
 
   { harm: 46, specific: 88, novel: 70, delegable: 30, weFix: 95, band: 'BLOCKS', id: 'stale_reviews',
     blind: 'nothing puts the date of the newest review in front of an owner — only the running total is ever shown',
   reframe: 'people check how recent the reviews are before they trust the rating',
     test: (m) => (m.reviewRecency || 0) > 365,
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
-    costs: 'a buyer comparing options reads that as a business that may not still be running' },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} comparing options reads that as a business that may not still be running` },
 
   { harm: 62, specific: 25, novel: 30, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
     blind: 'a year printed on a badge stops registering after the first time you read it',
@@ -9018,7 +9122,7 @@ const HARM_LADDER = [
     // Naming it correctly is both more accurate and more credible: it is the
     // surface he already thinks about, and it is exactly what we measured.
     say: (m) => `They do not come up in the Google map results for "${m.rankQuery || 'their main trade term'}" \u2014 we searched it and looked through the whole list`,
-    costs: 'every person searching for exactly what they sell is choosing from a list they are not on' },
+    costs: (m) => `every ${audienceOf(m.tradeWord).buyer} searching for exactly what they sell is choosing from a list they are not on` },
 
 
   // ══ I SCORED THE RANK. THE FINDING IS THE COMPARISON. ══════════════════
@@ -9101,7 +9205,7 @@ const HARM_LADDER = [
       const town = (c) => String(c || '').replace(/\s+[A-Z]{2}$/, '');
       return `they are nowhere in the first twenty results for ${m.tradeWord || 'their trade'} in ${town(m.marketsAbsent[0])} \u2014 and that's ${m.marketsAbsent.length} of the ${m.marketsSearched.length} metros around them`;
     },
-    costs: "a metro they don't come up in can't send them a single job" },
+    costs: (m) => `a metro they do not come up in cannot send them a single ${audienceOf(m.tradeWord).job}` },
 
   { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
     blind: 'he searches his own name and comes up first. That is a different search from the one his customers type, and only one of the two is ever shown to him',
@@ -9260,7 +9364,20 @@ const HARM_LADDER = [
     blind: 'the ads account and the contact page are opened by different people months apart, and nobody has ever had them side by side',
     reframe: 'the click is paid for whether or not anything can happen when it arrives',
     test: (m) => m.adsTagConfirmed === true && !!m.paidLeakGap,
-    say: (m) => `Their site is wired to a Google Ads conversion tag, and ${keepSpan(String(m.paidLeakGap))}`,
+    // ══ THIS SENTENCE SAID "GOOGLE ADS CONVERSION TAG" ═══════════════════
+    // Vin, on the whole system: "even if they run a $15M business they may not
+    // be very experienced with business terms... the simpler the better, but we
+    // do need to sound like absolute experts."
+    //
+    // "Conversion tag" fails both halves at once. An owner who does not know
+    // the term stops reading; one who does knows it is agency vocabulary. The
+    // fact underneath is plain and it is the same fact: somebody set his site
+    // up to track Google Ads clicks. Say that.
+    //
+    // The precision is unchanged. It still claims only that the tracking is
+    // installed, never that a campaign is running today — which is all an AW-
+    // tag in their page source actually proves.
+    say: (m) => `Their site is set up to track Google Ads clicks, and ${keepSpan(String(m.paidLeakGap))}`,
     costs: 'every click they pay for arrives somewhere it cannot be acted on' },
 
 
@@ -9340,7 +9457,7 @@ const HARM_LADDER = [
     // the PEOPLE comparing companies, not to William.
     //
     // Rewritten so the only "them" left is the one that means the business.
-    costs: 'someone comparing three companies has to ask them to find out, and the first company to answer usually gets the call' },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} comparing three ${audienceOf(m.tradeWord).peers} has to ask to find out, and the first one to answer usually gets the ${audienceOf(m.tradeWord).job}` },
 
   // ══ HE ANSWERS SOME OF THEM ══════════════════════════════════════════════
   // no_owner_replies only fires at ZERO. An owner answering 12 of 40 is doing
@@ -9401,7 +9518,7 @@ const HARM_LADDER = [
     },
     // say() already ends "why to pick them over the next name". Repeating it in
      // the cost line put the same five words twice in one short email.
-    costs: 'the only thing left to compare on is price, and somebody is always cheaper' },
+    costs: (m) => `the only thing a ${audienceOf(m.tradeWord).buyer} can compare on is price, and somebody is always cheaper` },
 
   { harm: 50, specific: 45, novel: 25, delegable: 30, weFix: 90, band: 'OPINION', id: 'no_lead_magnet',
     blind: 'there is nothing on the page for somebody not ready to commit, so there is nothing that would record that they came',
@@ -9415,7 +9532,7 @@ const HARM_LADDER = [
     say: (m) => (m.purchaseUrgency === 'CONSIDERED'
       ? `Someone weeks away from deciding has no reason to leave a name — there is nothing to take away short of asking for a quote`
       : `There is nothing on the site to take away short of asking for a quote, so everyone not ready to call today leaves with nothing`),
-    costs: 'everyone not ready to commit today leaves with nothing' },
+    costs: (m) => `every ${audienceOf(m.tradeWord).buyer} not ready to commit today leaves with nothing` },
 
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
     blind: 'his own copy reads clearly to him because he knows what he means by it. It is the stranger reading it cold who sees nothing to hold on to',
@@ -9451,7 +9568,7 @@ const HARM_LADDER = [
     // second-person rewrite turned it into "a stranger has to work out on YOUR
     // own whether it applies to YOU". Named rather than pronounced — see RUNG
     // PRONOUN CHECK at the bottom of this file.
-    costs: 'a stranger is left to work out unaided whether the business is a fit' },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} is left to work out unaided whether the business is a fit` },
 ];
 
 // Runs against measurements, not prose. Returns everything true, worst first.
@@ -15005,7 +15122,13 @@ const rankHarms = (m = {}) => {
           : '',
       delegable: h.delegable || 0, forwardable, weFix: weFixThis,
       selfFix: _selfFix.score, selfFixWhy: _selfFix.why,
-      opener: openerScore, finding: sentence, costs: h.costs,
+      // ══ RESOLVED HERE, ONCE, SO NOTHING DOWNSTREAM CAN GET IT WRONG ═══
+      // Fourteen places read `.costs` off the object this function returns. If
+      // any one of them had to know that a rung's costs line might be a
+      // function, thirteen of them would eventually forget and put JavaScript
+      // source into an email. It is resolved at the single point where the
+      // measurements are in scope, and everything after this sees a sentence.
+      opener: openerScore, finding: sentence, costs: costsOf(h, m),
       // ══ WHY HE HAS NEVER SEEN THIS ══════════════════════════════════════
       // Travels with the rung because it is a property OF the rung — the reason
       // this particular finding produces no signal from inside the business.
@@ -30546,9 +30669,20 @@ app.listen(PORT, () => {
       [/\bat \d{1,2}\s*(am|pm)\b/i, 'states a specific hour we never measured'],
       [/\b(two|three|several) other (companies|firms|contractors|builders)\b/i, 'invents a competitor count'],
     ];
+    // A realistic lead, so a trade-aware costs line renders its real sentence
+    // rather than its fallback. If the fixture were empty the guard would be
+    // checking the generic branch of every rung and passing on text that never
+    // ships — a check that reads the wrong sentence is not a check.
+    const _OUTCOME_FIXTURE = { tradeWord: 'plastic surgeon', city: 'Leawood, KS',
+      reviewCount: 194, rating: 4.6, rank: 4, rankFound: true, scanned: 20 };
     const _sentences = [];
     for (const h of HARM_LADDER) {
-      if (typeof h.costs === 'string') _sentences.push([h.id, h.costs]);
+      // A trade-aware costs line is a FUNCTION, and `typeof === 'string'` used
+      // to skip it silently — so the outcome-claim guard would have stopped
+      // checking the newest sentences in the file, which is the failure mode
+      // this whole gate exists to prevent. Resolved against a fixture instead.
+      const _c = costsOf(h, _OUTCOME_FIXTURE);
+      if (_c) _sentences.push([h.id, _c]);
       if (typeof h.reframe === 'string') _sentences.push([h.id, h.reframe]);
     }
     const _bad = [];
@@ -34868,6 +35002,123 @@ app.listen(PORT, () => {
     console.log(`⛔ BUSINESS SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ THE JARGON GATE NEVER LOOKED AT THE FINDINGS THEMSELVES ═════════════
+  // Vin: "we need to know who we are communicating to and know them very well.
+  // If we are talking to a plumber use language a plumber uses... even if they
+  // run a $15M business they may not be very experienced with business terms.
+  // The simpler the better, but we do need to sound like absolute experts."
+  //
+  // There has been a plain-English gate in this file for weeks. It reads the
+  // sentences the MODEL writes. Every finding in the ladder is assembled by code
+  // and goes into the email without passing it, so the gate has never once
+  // inspected the one sentence every email is built around.
+  //
+  // Two were carrying exactly what he described, and both would have shipped:
+  //   no_mobile_viewport   "their site has no mobile VIEWPORT set"
+  //   paid_traffic_leaks   "wired to a Google Ads CONVERSION TAG"
+  //
+  // The second is a finding added earlier today, which is the point: this is not
+  // a class of mistake anyone stops making by intending to. It needs a gate on
+  // the same side of the wall as the sentences.
+  //
+  // The extra terms below are the vocabulary the LADDER can reach for and the
+  // model's brief never had reason to ban — viewport, conversion tag, canonical,
+  // sitemap. They are checked here and not added to EMAIL_JARGON_TERMS, because
+  // that list is disclosed verbatim to the writer and naming "sitemap" to a model
+  // that never had the word is an invitation, not a prohibition.
+  try {
+    const _fails = [];
+    const _LADDER_JARGON = /\b(viewport|conversion tag|tag manager|canonical|sitemap|meta ?tag|alt text|anchor text|backlink|indexation|crawl(ed|ing)?|SERP|DOM|render(ed|ing)?[- ]width|breakpoint|responsive design|schema markup|structured data|open graph|robots\.txt|ssl certificate|hreflang|core web vitals|LCP|CLS|TTFB|bounce rate|session|impression share|quality score|ROAS|CAC|LTV|MQL|SQL lead|top[- ]of[- ]funnel|omni ?channel|touchpoint|ideal customer profile|value prop(osition)?)\b/i;
+    // Run every rung on a realistic lead so the sentence checked is the sentence
+    // that ships. An empty fixture would exercise each rung's fallback branch and
+    // pass on text no prospect ever receives.
+    const _m = {
+      tradeWord: 'plastic surgeon', city: 'Leawood, KS', rankQuery: 'plastic surgeon in Leawood, KS',
+      reviewCount: 194, ourReviews: 194, rating: 4.6, reviewsRead: 150, ownerReplies: 40,
+      rank: 4, rankFound: true, scanned: 20, weakerAbove: 2,
+      weakerNames: [{ name: 'Cosmetic Surgery KC', reviews: 88 }],
+      reviewPainMentions: 5, reviewPainTop: 'slow callbacks', reviewPainCount: 2,
+      reviewRecency: 400, reviewsRecent90: 1, reviewsPrior90: 9, photoCount: 3,
+      copyrightYear: 2019, newestPostYear: 2020, placeholderSample: 'Lorem ipsum',
+      formFieldCount: 9, formFieldCountIsSingleForm: true, tenureYears: 18, reviewsPerYear: 4,
+      marketsSeen: ['Leawood KS'], marketsAbsent: ['Overland Park KS'], marketsSearched: ['Leawood KS', 'Overland Park KS'],
+      gbpCategory: 'Doctor', googlePhone: '913-341-2188', businessStatus: 'OPERATIONAL',
+      paidLeakGap: 'the only published way to reach them is a phone line with office hours',
+      marketingRoleName: 'marketing manager', jobPostedDaysAgo: 14, hiringMarketing: true,
+      aboveReviewsN: 3, aboveReviewsAvg: 120, painTheme: 'slow callbacks',
+    };
+    let _checked = 0;
+    for (const h of HARM_LADDER) {
+      // finding, so-what and reframe: every string on a rung that can reach an
+      // inbox. `blind` is internal-only and deliberately not checked.
+      const parts = [];
+      try { parts.push(String((typeof h.say === 'function' ? h.say(_m) : h.say) || '')); } catch (e) { void e; }
+      parts.push(costsOf(h, _m));
+      parts.push(String(h.reframe || ''));
+      for (const t of parts) {
+        if (!t) continue;
+        _checked++;
+        const a = t.match(EMAIL_JARGON_RE);
+        if (a) _fails.push(`[${h.id}] says "${a[0]}" — that is agency vocabulary and it is banned in the writer's own brief`);
+        const b = t.match(_LADDER_JARGON);
+        if (b) _fails.push(`[${h.id}] says "${b[0]}" — an owner either does not know the term or knows it is ours, and both lose him mid-sentence`);
+      }
+    }
+    // The gate has to be able to fail, or it is decoration. Prove it on a
+    // sentence known to be bad rather than trusting that it would have caught one.
+    if (!_LADDER_JARGON.test('their site has no mobile viewport set')) {
+      _fails.push('the ladder jargon gate does not catch "viewport", the exact word that was live in this file an hour ago');
+    }
+    if (!_LADDER_JARGON.test('wired to a Google Ads conversion tag')) {
+      _fails.push('the ladder jargon gate does not catch "conversion tag"');
+    }
+    if (_LADDER_JARGON.test('a patient deciding on a procedure reads the review count first')) {
+      _fails.push('the ladder jargon gate rejects a plain sentence — a gate that fires on good copy gets switched off');
+    }
+    // ── AND THE REGISTER MUST ACTUALLY CHANGE THE WORDS ────────────────
+    // audienceOf is only worth having if a surgeon and a plumber get different
+    // sentences. Asserted on a live rung, not on the table.
+    const _pricing = HARM_LADDER.find(x => x.id === 'no_published_pricing');
+    const _surgeon = costsOf(_pricing, { tradeWord: 'plastic surgeon' });
+    const _plumber = costsOf(_pricing, { tradeWord: 'plumber' });
+    const _lawyer = costsOf(_pricing, { tradeWord: 'personal injury lawyer' });
+    if (_surgeon === _plumber) _fails.push('a surgeon and a plumber receive the identical so-what sentence, so the register is not wired to anything');
+    if (!/\bpatient\b/.test(_surgeon)) _fails.push(`a surgeon is not called a patient's provider — got "${_surgeon}"`);
+    if (!/\bcustomer\b/.test(_plumber)) _fails.push(`a plumber's buyer is not a customer — got "${_plumber}"`);
+    if (!/\bclient\b/.test(_lawyer)) _fails.push(`a lawyer's buyer is not a client — got "${_lawyer}"`);
+    // An unknown trade must still produce a true sentence, never a blank or a
+    // guess. Every business has customers and does jobs.
+    const _unknown = costsOf(_pricing, { tradeWord: 'zorbular reticulation' });
+    if (!/\bcustomer\b/.test(_unknown)) _fails.push('an unrecognised trade does not fall back to the safe wording');
+    // Plurals are stated, not computed. "three companys" shipped on the first run.
+    for (const t of ['plumber', 'plastic surgeon', 'personal injury lawyer', 'restaurant', 'saas software']) {
+      const _c = costsOf(_pricing, { tradeWord: t });
+      if (/\b\w+ys\b|\bcompanys\b|\bpractices s\b/.test(_c)) _fails.push(`"${t}" produces a misspelled plural — "${_c}"`);
+    }
+    // ── NO READER MAY BYPASS THE RESOLVER ──────────────────────────────
+    // A costs line is now sometimes a function. Any place still reading the raw
+    // field would put JavaScript source into an email. Source scan, split so it
+    // cannot match its own text.
+    {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _raw = [...(_code.matchAll(new RegExp('HARM_LADDER' + '\\.find\\([^)]*\\)\\.costs', 'g')))];
+      if (_raw.length) _fails.push(`${_raw.length} place(s) read a rung's costs field directly instead of through costsOf`);
+      if (!new RegExp('costs: ' + 'costsOf\\(h, m\\)').test(_code)) {
+        _fails.push('rankHarms no longer resolves costs through costsOf — every consumer downstream would receive a function');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ PLAIN ENGLISH CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ PLAIN ENGLISH CHECK: all ${_checked} sentences the ladder can put in front of an owner — every finding, every so-what, every reframe — are free of agency vocabulary, tested on a realistic lead so the sentence checked is the sentence that ships. Two were not, an hour ago: "mobile viewport" and "Google Ads conversion tag", the second added this morning. The so-what now speaks the trade's own words — a surgeon reads "patient" and "procedure", a plumber "customer" and "job", a lawyer "client" and "case", and a trade we do not recognise falls back to wording that is true of every business on earth. Plurals are stated rather than computed, because "three companys" shipped on the first run.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PLAIN ENGLISH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+
   // ══ A MEDIAN CALLED AN AVERAGE, AND THE LARGER HALF OF IT ══════════════
   // review_deficit reported n[Math.floor(n.length / 2)] as what "the businesses
   // ranking above them average". With two businesses above, that index is 1 —
@@ -35380,7 +35631,7 @@ app.listen(PORT, () => {
       if (!said) continue;
       _checked++;
       const _seen = new Set();
-      for (const g of _grams([said, h.reframe || '', h.costs || ''].join(' . '))) {
+      for (const g of _grams([said, h.reframe || '', costsOf(h, _m)].join(' . '))) {
         if (_seen.has(g)) { _dup.push(`${h.id}: "${g}"`); break; }
         _seen.add(g);
       }
@@ -36979,7 +37230,7 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
         // these the email loses its reframe and drops back to a bare fact.
         const _costs = String(h.costs || '').trim();
         const _rung = (realId ? HARM_LADDER.find(x => x.id === realId) : null)
-          || (_costs ? HARM_LADDER.find(x => String(x.costs || '').trim() === _costs) : null);
+          || (_costs ? HARM_LADDER.find(x => typeof x.costs === 'string' && x.costs.trim() === _costs) : null);
         return {
           // If the rung was identified by its costs line, take its real id too —
           // subjects are keyed by id, so recovering the reframe without the id
@@ -37181,7 +37432,7 @@ app.post('/api/compose-email', async (req, res) => {
             // Older ladders stored no id, so recover the rung by its costs text
             // exactly as the subject and reframe recovery does.
             const _rung = (h.id ? HARM_LADDER.find(x => x.id === h.id) : null)
-              || (h.costs ? HARM_LADDER.find(x => String(x.costs || '').trim() === String(h.costs).trim()) : null);
+              || (h.costs ? HARM_LADDER.find(x => typeof x.costs === 'string' && x.costs.trim() === String(h.costs).trim()) : null);
             return {
               id: h.id || (_rung && _rung.id) || null,
               finding: h.finding,
