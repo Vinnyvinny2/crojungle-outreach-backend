@@ -27373,6 +27373,16 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // called with rather than a hand-copied subset of it. Hand-copied
             // subsets are what measuredNumbers is, and why this was missing.
             parsed.ladderInputs = _harmInputs && Object.keys(_harmInputs).length ? _harmInputs : null;
+            // ══ NARROW EVERY ABSENCE CLAIM TO WHAT WE OPENED ═════════════════
+            // Applied to the whole audit object before anything reads it, so
+            // the screen, the write-up, the call sheet and the email all get the
+            // narrowed sentence rather than the operator being handed a list of
+            // seven things to correct by hand.
+            {
+              const _pr = (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead : [];
+              const _n = narrowAuditAbsence(parsed, _pr);
+              if (_n) console.log(`\u2702 ABSENCE NARROWED [${company}]: ${_n} claim(s) about the whole site rewritten to the page we actually opened (${_pr.length ? _pr.join(', ') : 'homepage only'}). The prompt already forbade this in words and seven got through on one lead \u2014 narrowing is mechanical and can only make a claim more true.`);
+            }
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
               rating: _mm.rating,
@@ -34023,6 +34033,71 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ LADDER REBUILD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ SEVEN ABSENCE CLAIMS ON ONE AUDIT, ALL FLAGGED AND NONE FIXED ══════
+  // Dr. Shaun Parson Plastic Surgery, live, 2026-08-14. The fact-checker caught
+  // every one of them and even wrote the correction — "Reframe as: the homepage
+  // we reviewed leads only to booking or calling" — and nothing applied it, so
+  // the operator was handed seven things to fix by hand on a single lead.
+  //
+  // The prompt already forbids it in words. CLAUDE.md: instructional guards do
+  // not hold. This one is mechanical, and it NARROWS — which can only ever make
+  // a claim more true.
+  try {
+    const _fails = [];
+    const HOME = ['home'];
+    // The real flagged sentences from that audit.
+    for (const [before, mustLose] of [
+      ['The only thing anyone can do when they land on your site is book a consultation or leave.', /your site/i],
+      ['Your site gives her nothing to hold, so she books with whoever does.', /your site/i],
+      ['There is no pricing anywhere on the site.', /on the site/i],
+      ['Nothing across their entire website tells a buyer why to pick them.', /entire website/i],
+    ]) {
+      const r = narrowAbsenceToPagesRead(before, HOME);
+      if (!r.changed) _fails.push(`"${before.slice(0, 50)}..." was left claiming more than we read`);
+      else if (mustLose.test(r.text)) _fails.push(`narrowing did not remove the site-wide scope: "${r.text.slice(0, 70)}"`);
+      else if (!/homepage/i.test(r.text)) _fails.push(`the narrowed sentence does not name the homepage: "${r.text.slice(0, 70)}"`);
+    }
+    // A sentence that is NOT an absence claim must be untouched, byte for byte.
+    const _keep = 'Their site ranks first in Scottsdale and carries 346 reviews at 4.8 stars.';
+    if (narrowAbsenceToPagesRead(_keep, HOME).text !== _keep) {
+      _fails.push('a sentence making no absence claim was rewritten — this may only narrow claims, never edit prose generally');
+    }
+    // An absence claim already scoped to the homepage is untouched.
+    const _already = 'The homepage has no pricing on it.';
+    if (narrowAbsenceToPagesRead(_already, HOME).text !== _already) _fails.push('an already-correct claim was rewritten');
+    // With several pages read, "the site" is a fair description and must stand.
+    const _many = 'There is no pricing anywhere on the site.';
+    if (narrowAbsenceToPagesRead(_many, ['home', 'about', 'services', 'contact']).changed) {
+      _fails.push('a site-wide claim was narrowed on a lead where we read four pages — that under-states what we actually looked at');
+    }
+    // And it must reach the whole audit object, not one named field. The
+    // narrative fields have been renamed twice; a hand-kept list would go stale.
+    const _audit = { situationRead: { headline: 'Your site gives a visitor nothing to compare.' },
+      problemList: [{ finding: 'There is no guarantee anywhere on the website.' }],
+      measuredNumbers: { reviewCount: 346 } };
+    const _n = narrowAuditAbsence(_audit, HOME);
+    if (_n < 2) _fails.push(`walking the audit object narrowed ${_n} claim(s); both the nested headline and the array entry must be reached`);
+    if (/your site/i.test(_audit.situationRead.headline)) _fails.push('a nested narrative field was not reached');
+    if (/the website/i.test(_audit.problemList[0].finding)) _fails.push('an array entry was not reached');
+    if (_audit.measuredNumbers.reviewCount !== 346) _fails.push('the walk altered a measurement');
+    // ── AND IT MUST ACTUALLY BE APPLIED ────────────────────────
+    // The first version of this check tested the function and PASSED with the
+    // call site deleted. That is computed-but-not-passed, the failure this file
+    // has shipped more often than any other, caught here for the fifth time
+    // today. Split so the scan cannot match its own source.
+    const _asrc = require('fs').readFileSync(__filename, 'utf8');
+    const _acode = _asrc.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!new RegExp('narrowAuditAbsence' + '\\(parsed,').test(_acode)) {
+      _fails.push('the narrowing is defined and never applied to the audit — every claim still overreaches and the operator still gets a list of them to fix by hand');
+    }
+    if (_fails.length) {
+      console.log(`⛔ ABSENCE SCOPE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ ABSENCE SCOPE CHECK: a claim about the whole site is narrowed to the page we actually opened, everywhere in the audit including nested fields and arrays; a sentence making no absence claim is returned byte for byte; and on a lead where four pages were read "the site" stands, because there it is a fair description of what we looked at.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ABSENCE SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
   // businesses with fewer reviews ranking above him. The row handed to the audit
@@ -36060,6 +36135,89 @@ const _storedMeasurements = (audit, tradeWordFallback) => {
     formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
       ?? (raw.formFieldCount !== null && raw.formFieldCount !== undefined),
   };
+};
+
+// ══ AN ABSENCE CLAIM MAY NOT EXCEED THE PAGES WE READ ══════════════════════
+// Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery. The fact-checker flagged
+// SEVEN claims on one audit, all the same shape:
+//
+//   "the only thing anyone can do when they land on your site is book a
+//    consultation or leave"        → we read the homepage
+//   "Your site gives her nothing to hold"                → we read the homepage
+//   "No way for a stranger to peek at what makes you different" → homepage
+//
+// The audit prompt already forbids this in words — "PAGES WE ACTUALLY READ: X.
+// Never claim something is missing from a page not on this list" — and seven got
+// through anyway. CLAUDE.md is explicit about why: instructional guards do not
+// hold. The prompt banned post-submission claims nineteen times and every audit
+// produced one. A rule the model is asked to follow is not a rule.
+//
+// The fact-checker even writes the correction — "Reframe as: the homepage we
+// reviewed leads only to booking or calling" — and nothing applies it. So the
+// operator is handed a list of seven things to fix by hand on every lead.
+//
+// This narrows instead of flagging. NARROWING IS ALWAYS SAFE: "your homepage has
+// no pricing" is true wherever "your site has no pricing" was true, and it stays
+// true when the claim was false. It can never widen a claim and can never invent
+// one. Only sentences that BOTH make an absence claim AND scope it to the whole
+// site are touched; everything else is returned byte for byte.
+const narrowAbsenceToPagesRead = (text, pagesRead) => {
+  const src = String(text == null ? '' : text);
+  if (!src) return { text: src, changed: 0 };
+  const read = (Array.isArray(pagesRead) ? pagesRead : []).filter(Boolean).map(String);
+  // With several pages read, "the site" is a fair description of what we looked
+  // at. This only fires when the homepage really was all we opened.
+  if (read.length > 1) return { text: src, changed: 0 };
+  const ABSENCE = /\b(?:no|not|nothing|never|none|missing|absent|lacks?|lacking|without|nowhere|cannot|can'?t|doesn'?t|does not|isn'?t|is not|won'?t|only)\b/i;
+  const SITE = /\b(?:anywhere|nowhere)\s+(?:on|in|across)\s+(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b|\bacross\s+(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b|\bsite[-\s]?wide\b|\b(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b/gi;
+  let changed = 0;
+  const out = src.split(/(?<=[.!?])\s+/).map((s) => {
+    if (!ABSENCE.test(s) || !SITE.test(s)) return s;
+    let touched = false;
+    const rewritten = s.replace(SITE, (m) => {
+      touched = true;
+      const poss = /\byour\b/i.test(m) ? 'your homepage'
+        : /\b(?:their|his|her)\b/i.test(m) ? 'their homepage'
+        : 'the homepage';
+      // "anywhere on the site" -> "anywhere on the homepage", so the sentence
+      // still reads as English rather than losing its preposition.
+      if (/^\s*(?:anywhere|nowhere)/i.test(m)) {
+        const head = m.match(/^\s*(anywhere|nowhere)/i)[1];
+        return `${head} on ${poss}`;
+      }
+      return poss;
+    });
+    if (touched) changed++;
+    return rewritten;
+  }).join(' ');
+  return { text: out, changed };
+};
+
+// Walks every string in the audit and narrows the ones that overreach. Applied
+// to the object rather than to a list of named fields, because the narrative
+// fields have been renamed twice and a hand-kept list of them would go stale in
+// exactly the way measuredNumbers did.
+const narrowAuditAbsence = (obj, pagesRead, depth = 0) => {
+  let changed = 0;
+  if (depth > 6 || obj === null || obj === undefined) return changed;
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      if (typeof obj[i] === 'string') {
+        const r = narrowAbsenceToPagesRead(obj[i], pagesRead);
+        if (r.changed) { obj[i] = r.text; changed += r.changed; }
+      } else if (obj[i] && typeof obj[i] === 'object') changed += narrowAuditAbsence(obj[i], pagesRead, depth + 1);
+    }
+    return changed;
+  }
+  if (typeof obj !== 'object') return changed;
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (typeof v === 'string') {
+      const r = narrowAbsenceToPagesRead(v, pagesRead);
+      if (r.changed) { obj[k] = r.text; changed += r.changed; }
+    } else if (v && typeof v === 'object') changed += narrowAuditAbsence(v, pagesRead, depth + 1);
+  }
+  return changed;
 };
 
 const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
