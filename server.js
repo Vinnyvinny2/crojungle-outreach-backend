@@ -8599,6 +8599,51 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // among the things that are novel and checkable. A dead booking page wins because
 // it is all three. Rank loses on novelty alone, not on importance. And a stale
 // copyright year loses on cost, however novel and checkable it is.
+// ══ THE TWO BUSINESS-LEVEL INPUTS, DERIVED IN ONE PLACE ══════════════════════
+// Both are extracted as real functions rather than assembled inline at the call
+// site, because five separate boot checks passed this session while the bug they
+// existed to catch was still live — every one of them because the check
+// REIMPLEMENTED the logic instead of calling it. A check that runs a copy of the
+// code proves the copy works.
+
+// What the paid click lands on. Returns the second half of the sentence, or ''
+// when nothing about the destination was actually measured — an unmeasured route
+// must never read as a broken one.
+const paidLeakGapFrom = (m = {}) => {
+  if (m.bookingMeasured === true && m.booking === 'phone_only') {
+    return 'the only published way to reach them is a phone line with office hours';
+  }
+  if (m.bookingMeasured === true && m.booking === 'form') {
+    return 'the only way to act on it is a form and a wait for someone to reply';
+  }
+  if (m.formFieldCountIsSingleForm === true && Number(m.formFieldCount) >= 7) {
+    return `the form it lands on asks for ${Number(m.formFieldCount)} pieces of information first`;
+  }
+  return '';
+};
+
+// The marketing hire, from what discovery already shipped. `now` is a parameter
+// so the boot check can pin a date instead of racing the clock.
+const marketingHireFrom = (body = {}, now = Date.now()) => {
+  const sig = body.discoverySignals || {};
+  const roles = Array.isArray(body.marketingRoles) ? body.marketingRoles.filter(Boolean) : [];
+  const hiring = !!(sig.hiring_marketing || sig.hiring_marketing_multi);
+  // A posted date is REQUIRED. Without it there is no clock, and a hire with no
+  // clock is just a fact about them that we would be repeating back.
+  const t = body.jobPostedAt ? Date.parse(body.jobPostedAt) : NaN;
+  const days = Number.isFinite(t) ? Math.floor((now - t) / 86400000) : null;
+  return {
+    hiringMarketing: hiring,
+    jobPostedDaysAgo: Number.isFinite(days) ? days : null,
+    // Lower-cased so the sentence reads as prose, and truncated so a job board's
+    // 90-character title cannot run away with the opening line.
+    marketingRoleName: hiring && roles.length
+      ? String(roles[0]).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 42)
+      : '',
+  };
+};
+
+
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
   { harm: 95, specific: 98, novel: 95, delegable: 95, weFix: 95, band: 'DEAD', id: 'broken_page',
@@ -9139,6 +9184,86 @@ const HARM_LADDER = [
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
+  // ══ THE TWO FINDINGS THAT ARE ABOUT THE BUSINESS, NOT THE STOREFRONT ════
+  // Vin, on reading four consecutive emails to one lead that were all reviews:
+  // "we can't sell them anything for reviews... it should never be what our
+  // emails are centred around."
+  //
+  // He is right, and the cause is structural rather than a ranking mistake. Of
+  // the nine rungs that outrank review_pain_pattern, EIGHT are failure states —
+  // no site, no listing, a 404, an expired certificate, a listing marked closed.
+  // A healthy owner-operated business, which is the entire ICP, has none of
+  // them. So on a good lead the top of the ladder is empty and the highest thing
+  // still standing is the review block. The emails were not drifting toward
+  // reviews; reviews were the only business-level thing that reached the ladder.
+  //
+  // Both signals below were ALREADY MEASURED and neither had ever reached
+  // rankHarms — the "computed but not passed" class, on the two measurements
+  // that map most directly to what Mike actually sells.
+  //
+  //   hiring a marketing person   22 of 25 TheirStack leads on the last run,
+  //                               each with a real posting date. It reached the
+  //                               audit prompt and the lane, and stopped there.
+  //   a Google Ads conversion tag builtWith reads it from markup we already
+  //                               hold. Read by the affordability score and by
+  //                               nothing that can say anything.
+  //
+  // Neither is a complaint about their website. Both are about money the owner
+  // has already decided to spend, which is the only kind of finding a five-figure
+  // engagement can sit on top of.
+
+  // ── THE ONLY FINDING IN THIS FILE WITH A CLOCK ON IT ──────────────────
+  // CLAUDE.md PART 4 opens with "Nothing has a clock on it" and every lead
+  // logging "there is NO measured buying window". This is the fix for that line.
+  //
+  // novel 15, honestly: he knows he posted the job. Novelty is a TIEBREAK in
+  // rankHarms and nothing more, so a low value cannot sink it — and novelty is
+  // not what makes this finding work. What makes it work is that the money is
+  // already committed and the direction is not chosen yet. He is comparing
+  // options right now, which is true of almost no other lead in the pipeline.
+  //
+  // The sentence states only the posting and its age. It does NOT state a
+  // salary, a headcount, or what the role is for — all of which would be
+  // invention. delegable 15 because he is in the middle of trying to delegate
+  // it, which is exactly the point.
+  { harm: 90, specific: 96, novel: 15, delegable: 15, weFix: 95, band: 'SPENDING', id: 'hiring_marketing_now',
+    blind: 'a job board and an analytics screen are two different tabs, and nothing ever shows them together',
+    reframe: 'a hire takes weeks to find and months to get productive, and the problem runs the whole time',
+    // Number(null) is 0, and 0 is finite. The first version of this test used
+    // Number.isFinite(Number(...)) and a lead with NO posting date therefore
+    // read as "posted today" — the exact fabrication this rung exists to carry
+    // a clock without. typeof first, so null and '' cannot become a number at
+    // all. Caught by this rung's own boot check on its first run.
+    test: (m) => m.hiringMarketing === true
+      && typeof m.jobPostedDaysAgo === 'number' && Number.isFinite(m.jobPostedDaysAgo)
+      && m.jobPostedDaysAgo >= 0 && m.jobPostedDaysAgo <= 120
+      && !!m.marketingRoleName,
+    say: (m) => {
+      const d = Number(m.jobPostedDaysAgo);
+      const when = d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
+      return `They posted for ${anFor(String(m.marketingRoleName))} ${keepSpan(String(m.marketingRoleName))} ${when}`;
+    },
+    costs: 'the role is open, so whatever it was posted to fix is running unattended in the meantime' },
+
+  // ── PAYING FOR CLICKS THAT LAND SOMEWHERE THEY CANNOT BE ACTED ON ─────
+  // The shape CLAUDE.md PART 5 records as the one that lands: two things he set
+  // up ON PURPOSE that disagree with each other. He bought the ads account. He
+  // chose phone-only contact, or a form nobody can reach after five. Neither
+  // decision is wrong on its own and together they burn the budget.
+  //
+  // What the tag proves is bounded, and the sentence is bounded to match: an
+  // AW- conversion tag in their own page source proves a Google Ads ACCOUNT
+  // exists and was wired to this site. It does NOT prove a campaign is running
+  // today, and no sentence here says or implies that it is. builtWith.confirmed
+  // must be true and blocked false, so a refused fetch cannot become a claim.
+  { harm: 93, specific: 94, novel: 78, delegable: 35, weFix: 95, band: 'SPENDING', id: 'paid_traffic_leaks',
+    blind: 'the ads account and the contact page are opened by different people months apart, and nobody has ever had them side by side',
+    reframe: 'the click is paid for whether or not anything can happen when it arrives',
+    test: (m) => m.adsTagConfirmed === true && !!m.paidLeakGap,
+    say: (m) => `Their site is wired to a Google Ads conversion tag, and ${keepSpan(String(m.paidLeakGap))}`,
+    costs: 'every click they pay for arrives somewhere it cannot be acted on' },
+
+
   // ══ WHAT THEIR OWN CUSTOMERS WROTE DOWN, MORE THAN ONCE ═══════════════════
   // The Brain prompt calls this the MANDATORY opening — "a pain repeating across
   // their own Google reviews with a count ... outranks every other opener
@@ -9619,13 +9744,87 @@ const measureReviewVelocity = (timestamps, now = Date.now()) => {
 //     NOT a ladder reorder — the ladder is not the constraint and reordering it
 //     has failed repeatedly. Email 1 already applies this exact rule to its own
 //     second finding; it simply stopped at the first email.
-const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand) => {
+// ══ BAND IS NOT SUBJECT MATTER ═══════════════════════════════════════════════
+// This diversified by ladder BAND, and INVISIBLE covers reviews AND search
+// visibility. Live, 2026-08-14, a personal injury firm — every one of the four
+// touches was about his reviews:
+//
+//   email 1   5 of your own Google reviews name the same thing
+//   follow 1  your Google reviews have stopped
+//   follow 2  businesses with FEWER REVIEWS than yours are ranking above you
+//   break-up  5 of your own Google reviews name the same thing (again)
+//
+// All three findings sit in INVISIBLE, so `fresh` was empty, `same` supplied
+// everything, and the ordering did nothing at all. The rule was right and the
+// dimension was wrong.
+//
+// AREA_OF already exists and already files all seven review rungs under
+// 'Reputation', separately from 'Being found', 'Google listing' and 'Why
+// choose them'. That is subject matter, which is what a reader experiences —
+// he does not know what a band is, he knows he has been sent four emails about
+// his reviews.
+//
+// Band is kept as the tie-breaker so nothing that used to work stops working.
+// Order-only: a same-subject finding moves BEHIND the first different-subject
+// one, so when the ladder holds nothing else the sequence is exactly what it
+// was.
+// ══ EVERY RUNG WHOSE FINDING IS ABOUT REVIEWS ════════════════════════════════
+// Keyed by id and not by the sentence, because computeSelfFix already shipped a
+// text-matching version of this idea and review_pain_pattern's live sentence
+// matches none of its patterns — so the penalty it was built to apply has been
+// zero for as long as the sentences have said what they currently say.
+//
+// This set is NOT the same list as NOT_SELLABLE_OPENER. That one answers "can we
+// sell a fix for it" and deliberately lets review_pain_pattern through, because
+// a repeating complaint about communication is an operations problem we build
+// for. This one answers "is this email about his reviews AGAIN", and for that
+// question review_pain_pattern counts exactly like all the others.
+const REVIEW_SUBJECT_RUNGS = new Set([
+  'review_pain_pattern', 'review_velocity_drop', 'review_deficit', 'not_compounding',
+  'low_rating', 'no_owner_replies', 'partial_owner_replies', 'stale_reviews',
+]);
+
+const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand, leadId2) => {
   const used = new Set([leadId, secondId].filter(Boolean));
   const pool = (Array.isArray(byHarm) ? byHarm : []).filter(x => x && !used.has(x.id));
   const bandOf = (h) => String((h && h.band) || '');
-  const fresh = pool.filter(x => bandOf(x) !== String(leadBand || ''));
-  const same  = pool.filter(x => bandOf(x) === String(leadBand || ''));
-  return [...fresh, ...same].map(x => ({ id: x.id, finding: x.finding, costs: x.costs,
+  const areaOf = (h) => String((h && AREA_OF[h.id]) || '');
+  const leadArea = String(AREA_OF[leadId] || '');
+  const diffSubject = pool.filter(x => leadArea && areaOf(x) && areaOf(x) !== leadArea);
+  const rest = pool.filter(x => !diffSubject.includes(x));
+  const fresh = rest.filter(x => bandOf(x) !== String(leadBand || ''));
+  const same  = rest.filter(x => bandOf(x) === String(leadBand || ''));
+  const ordered = [...diffSubject, ...fresh, ...same];
+
+  // ══ ONE REVIEW EMAIL PER SEQUENCE, NOT FOUR ════════════════════════════
+  // Gregory Cox, live, all four touches:
+  //   email 1   5 of your own Google reviews name the same thing
+  //   follow 1  your Google reviews have stopped
+  //   follow 2  businesses with FEWER REVIEWS than yours rank above you
+  //   break-up  5 of your own Google reviews name the same thing (again)
+  //
+  // Every one of those is true and the sequence still fails, because a stranger
+  // who reads four emails about his reviews learns that his reviews are the only
+  // thing we looked at. The sellability gate cannot catch this: it governs the
+  // OPENER, and three of those four are follow-ups.
+  //
+  // So the sequence gets a quota. ONE review finding total, counting the opener
+  // — the opener is where the impression forms and the follow-ups only confirm
+  // it. The rest are pushed behind everything else rather than deleted: on a
+  // lead where reviews genuinely are all we found, a demoted finding still
+  // ships and no lead is lost.
+  const budget = (REVIEW_SUBJECT_RUNGS.has(String(leadId)) || REVIEW_SUBJECT_RUNGS.has(String(secondId))) ? 0 : 1;
+  const keptReviews = [], deferredReviews = [], nonReview = [];
+  for (const x of ordered) {
+    if (!REVIEW_SUBJECT_RUNGS.has(String(x.id))) { nonReview.push(x); continue; }
+    (keptReviews.length < budget ? keptReviews : deferredReviews).push(x);
+  }
+  // The one permitted review finding sits second rather than first, so a
+  // sequence never opens its follow-ups on reviews while a non-review finding
+  // is still unused — which is the entire point of the quota.
+  const final = [...nonReview.slice(0, 1), ...keptReviews, ...nonReview.slice(1), ...deferredReviews];
+
+  return final.map(x => ({ id: x.id, finding: x.finding, costs: x.costs,
     harm: x.harm, reframe: x.reframe || null, blind: x.blind || '' }));
 };
 
@@ -9783,6 +9982,10 @@ const AREA_OF = {
   no_published_pricing: 'Why choose them',
   no_offer: 'Why choose them', no_lead_magnet: 'Why choose them',
   undifferentiated: 'Why choose them',
+  // The two business-level findings. Their own area, so the sequence
+  // diversifier treats them as a different subject from anything about the
+  // storefront or the reviews — which is the whole reason they exist.
+  hiring_marketing_now: 'Money already committed', paid_traffic_leaks: 'Money already committed',
 };
 
 // ══ SUBJECT LINES, BUILT FROM THE FINDING ════════════════════════════════════
@@ -10224,6 +10427,13 @@ const HARM_LADDER_LAYER = {
   no_lead_magnet:        'OFFER',
 
   // LEADS — whether the people looking ever see them.
+  // A paid click IS a lead they bought, and the leak is on the conversion side
+  // — so paid_traffic_leaks is CONVERSION, not LEADS. Hormozi's point exactly:
+  // a break downstream makes the spend upstream worthless.
+  paid_traffic_leaks:    'CONVERSION',
+  // A marketing hire is a decision about the LEADS layer that has not been
+  // made yet. It is the only rung here about a choice still open.
+  hiring_marketing_now:  'LEADS',
   no_google_listing:     'LEADS',
   absent_from_search:    'LEADS',
   outranked_by_weaker:   'LEADS',
@@ -10305,6 +10515,12 @@ const SELLABLE = {
   // ── 5: this is the pitch ────────────────────────────────────────────────
   site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5,
   coverage_gap: 5,
+  // The two business-level findings. Both are 5 by definition: one is a
+  // retainer competing with a salaried hire the owner is already budgeting
+  // for, the other is paid traffic landing on a route we rebuild. Neither is
+  // anything an owner does himself on a Saturday, which is the distinction
+  // this table exists to make.
+  hiring_marketing_now: 5, paid_traffic_leaks: 5,
   no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
   review_deficit: 5, no_after_hours: 5, review_velocity_drop: 4,
 
@@ -14365,6 +14581,26 @@ const looksLikePractitionerAtGroup = (companyName, website) => {
 const LADDER_OPENER_GATE = 45;
 const LADDER_HARM_FLOOR = 45;
 
+// ══ THE FINDINGS WE CANNOT SELL A FIX FOR ══════════════════════════════════
+// Keyed by rung id, because sellability is a property of the rung and not of
+// how its sentence is worded this week. Each of these is a task the owner
+// performs himself, at no cost, with nobody's help — so an email that OPENS
+// there has nothing behind it worth buying, however true it is.
+//
+// They are not removed. They keep their harm, their place in the ranked list,
+// their row in the audit and their line on the call sheet, and they may still
+// be the SECOND finding. They simply cannot be the sentence a stranger reads
+// first. And if nothing else on the lead qualifies, the block is ignored.
+const NOT_SELLABLE_OPENER = {
+  review_deficit: 'being behind on reviews is fixed by asking his own customers — he tells his crew and it is done, and there is nothing in it for us to be engaged on',
+  not_compounding: 'the fix is asking finished customers for a review, which needs nobody',
+  review_velocity_drop: 'the fix is asking for reviews again — a conversation with his own staff, today, at no cost',
+  no_owner_replies: 'replying to his own reviews is an afternoon of his own time',
+  partial_owner_replies: 'replying to the rest of his reviews is an afternoon of his own time',
+  stale_reviews: 'the fix is asking recent customers to post — free, immediate, and his to do',
+  low_rating: 'a rating is an average of work already done; nothing we sell changes it, and saying so to an owner reads as an insult rather than a finding',
+};
+
 const rankHarms = (m = {}) => {
   const hits = [];
   // ══ A FINDING ABOUT SOMEBODY ELSE'S BUSINESS MODEL ══════════════════════
@@ -14594,6 +14830,27 @@ const rankHarms = (m = {}) => {
     // novel contributes at most 7 points, which was never enough to carry it.
     const _isMinedPattern = h.id === 'review_pain_pattern';
     const _minedBonus = _isMinedPattern ? 10 : 0;
+    // ══ MONEY ALREADY COMMITTED OUTRANKS A FINDING ABOUT HOW HE RUNS ════
+    // The mined bonus above is correct and stays. It was written when the
+    // competition was outranked_by_weaker — one finding the owner would delete
+    // against another — and against THAT it is right.
+    //
+    // It is not right against a SPENDING finding, and on the first lead where
+    // both existed it won: review_pain_pattern 101, paid_traffic_leaks 98. So
+    // the email still opened on his reviews while a Google Ads tag pointing at
+    // a phone-only contact route sat one line below it.
+    //
+    // The two are not the same KIND of fact. A repeating complaint is the best
+    // thing this system produces about how a business runs, and it is still
+    // true next quarter — which is exactly why it does not need to be first. A
+    // posted role and a live ads account are decisions with money behind them
+    // and a date attached, and both expire. Vin: "we can't sell them anything
+    // for reviews." We can sell against a hire he is budgeting for right now.
+    //
+    // 14, not 10, deliberately: it must EXCEED the mined bonus rather than tie
+    // it, or the ordering falls back to harm and the whole adjustment does
+    // nothing on the one lead shape it was written for.
+    const _spendBonus = h.band === 'SPENDING' ? 14 : 0;
     // ══ AN EMERGENCY TRADE HAS A DIFFERENT WORST PROBLEM ══════════════════
     // The ladder's cost lines describe someone comparing three companies at
     // leisure. Midwest Remediation does water damage, and it ranked "no way to
@@ -14628,7 +14885,7 @@ const rankHarms = (m = {}) => {
     // lead. The finding was true; it just had nothing behind it worth buying.
     const _sellPenalty = (5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP;
     const openerScore = _disqualified ? 0
-      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
+      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _spendBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -14703,12 +14960,45 @@ const rankHarms = (m = {}) => {
     // someone already in conversation. It just cannot be the sentence a stranger
     // opens with, to a buyer who was never going to try.
     const _wrongBuyer = _urgAdj <= -20;
+    // ══ WE DO NOT SELL A REVIEW FIX ═══════════════════════════════════════
+    // Vin, 2026-08-14, on a live email whose four touches were ALL about
+    // reviews: "we can't sell them anything for reviews, they don't need our
+    // help with reviews... it should never be what our emails are centred
+    // around". He is right, and it is a business fact rather than a taste one.
+    // Every product this company sells is an engagement: a rebuild, a software
+    // build, a retainer, exit advice. "Ask your customers for reviews" and
+    // "reply to the ones you have" are afternoons of his own time. An email that
+    // opens there has nothing behind it to buy.
+    //
+    // computeSelfFix already exists to catch this and CANNOT, because it matches
+    // the finding's TEXT and the review sentences have been rewritten since
+    // those patterns were written. review_pain_pattern's live sentence — "5 of
+    // your own Google reviews name the same thing" — matches no rule, falls to
+    // the default "assumed to need us", and takes a penalty of ZERO. The
+    // strongest review finding on the ladder is unpenalised by the exact
+    // mechanism built to penalise it.
+    //
+    // So this is keyed by rung ID. Sellability is a property of the RUNG, not
+    // of how its sentence happens to be phrased this week, and a table that
+    // cannot drift is the whole point.
+    //
+    // review_pain_pattern is deliberately NOT here. CLAUDE.md PART 5 records it
+    // as one of only two findings with a reply behind it, and a repeating
+    // complaint about communication is an operations problem we genuinely do
+    // build for. It has to EARN the opener against a sellable finding rather
+    // than win by default, which is what the rest of this change is for.
+    //
+    // Nothing is suppressed. A blocked rung keeps its harm, its rank, its audit
+    // row and its call-sheet line, and if EVERY eligible finding is blocked the
+    // block is ignored — a weaker opener still beats no email.
+    const _notSellable = !!NOT_SELLABLE_OPENER[h.id];
 
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
       // Read by the lead selection below. A blocked rung keeps its harm, its
       // place in the list and its row in the audit; it simply cannot be first.
-      leadBlocked: _dismissible || _wrongBuyer,
-      leadBlockedWhy: _dismissible
+      leadBlocked: _dismissible || _wrongBuyer || _notSellable,
+      leadBlockedWhy: _notSellable ? NOT_SELLABLE_OPENER[h.id]
+        : _dismissible
         ? `only ${m.reviewPainMentions} of the ${m.reviewsRead || '?'} reviews we read name it, and he will do that division before he finishes the sentence`
         : _wrongBuyer
           ? `${m.purchaseUrgency === 'EMERGENCY' ? 'people contact this trade when something has already gone wrong, and nobody compares providers mid-crisis' : 'people research this purchase for weeks and decide long before they make contact'}, so this describes a customer who does not exist here (${_urgAdj} on the urgency table)`
@@ -21350,7 +21640,33 @@ const WEIGHTS = {
     // influence which leads we prioritize. Now it runs on the top leads at FIND
     // time, so the ranking actually reflects it. Ad spend also decays fastest of
     // any signal (7-day half-life) — they could pause the campaign tomorrow.
-    if (firecrawlKey) {
+    // ══ TWELVE PAID SCRAPES A RUN FOR A NUMBER THAT DECIDES NOTHING ═══════
+    // This fires twelve Firecrawl scrapes at facebook.com on every discovery
+    // run, ungated. Its own success line says what it is worth:
+    //
+    //   "Ad Library (Firecrawl): Bullpen Capital -> 0 keyword hits
+    //    (presence-only - not a verified per-advertiser count, won't drive
+    //    recommendation)"
+    //
+    // The RESEARCH-route twin of this call was gated behind AD_LIBRARY_SCRAPE
+    // long ago, with a comment reading "it cannot influence a single decision".
+    // That reasoning applies here identically and this call site was simply
+    // never included in the fix.
+    //
+    // It is not merely wasted. facebook.com is heavily bot-protected, so the
+    // twelve calls land together and trip Firecrawl's rate limiter. Live,
+    // 2026-08-14, in this exact block:
+    //
+    //   FIRECRAWL RATE LIMITED ... backing off 4s (attempt 1/3)
+    //   FIRECRAWL RATE LIMITED ... backing off 8s (attempt 2/3)
+    //   FIRECRAWL RATE LIMITED ... backing off 12s (attempt 3/3)
+    //   FIRECRAWL STILL RATE LIMITED after 3 attempts - this lead's audit is
+    //   INCOMPLETE
+    //
+    // Twenty-four seconds of sleep, a dozen credits, an incomplete audit, and a
+    // throttle carried into the leads that ran next - all to learn a count the
+    // code refuses to act on. Same switch as the other call site.
+    if (firecrawlKey && process.env.AD_LIBRARY_SCRAPE === 'on') {
       const adCheckPool = toEnrich.slice(0, 12).filter(c => c.website);
       if (adCheckPool.length > 0) {
         const adResults = await Promise.allSettled(
@@ -22128,17 +22444,26 @@ const checkBuiltWith = async (domain) => {
   } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false }; }
 };
 
-// Google Ads Transparency page scrape — HEURISTIC ONLY, not reliable.
-// Page-size check produces false positives/negatives. We report it as
-// "possible" never "confirmed", and never build a pitch on it.
-const checkGoogleAds = async (domain) => {
-  try {
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await fetchT(`https://adstransparency.google.com/advertiser?domain=${clean}&region=US`, {}, 8000);
-    const html = await safeText(r);
-    return { hasGoogleAds: html.length > 50000 || html.includes('ad-card'), confirmed: false, heuristic: true };
-  } catch { return { hasGoogleAds: false, confirmed: false, heuristic: true }; }
-};
+// There is deliberately NO checkGoogleAds() in this file. Read why before
+// anyone adds one back.
+// ══ A CHECK THAT RETURNS THE SAME ANSWER FOR EVERY BUSINESS ON EARTH ═══════
+// This fetched adstransparency.google.com and returned
+//   hasGoogleAds: html.length > 50000 || html.includes('ad-card')
+// adstransparency.google.com is a JavaScript application. A raw fetch receives
+// the same app shell for every domain — the advertiser data is loaded by script
+// afterwards — and 'ad-card' is a DOM class that only exists once that script
+// has run. So the length test measures the size of Google's bundle and the
+// class test can never be true. Whatever it answered, it answered for everyone.
+//
+// It cost a fetch with an 8-second timeout on every lead, and two consumers
+// relabelled its output as "Confirmed ad spend" despite its own comment saying
+// never to build a pitch on it.
+//
+// The real signal was already here and is genuinely reliable: an AW- conversion
+// tag in their OWN page source, read by checkBuiltWith from markup we fetch
+// anyway. A business with a Google Ads conversion tag has a Google Ads account.
+// That is a fact about them, from their own site, at no extra cost — and it is
+// the one this file should have been using all along.
 
 const checkFacebookAds = async (name, fbToken) => {
   if (!fbToken) return { hasAds: false, ads: [], confirmed: false };
@@ -22813,6 +23138,35 @@ const pickRankRow = (results) => {
     return { row: rows.find(r => r.kind === 'primary trade') || rows[0],
              note: 'they were not found for any query — absence is the finding and it travels by its own route' };
   }
+  // ══ ABSENT FOR A SERVICE HE PUBLISHES A PAGE ABOUT ════════════════════
+  // absent_from_search carries harm 96 — higher than every review rung on the
+  // ladder — and its test is `rankChecked && rankFound === false`. It reads the
+  // row this function hands back, and this function preferred a FOUND row, so
+  // the rung could only ever fire when a business was missing for its HEAD
+  // term. A business found for "orthodontist in Kansas City" but absent for a
+  // service it publishes a whole page about had that finding measured, logged
+  // as a VISIBILITY GAP, and then made unreachable by this line.
+  //
+  // The earlier note here — "absence travels by its own route" — was right
+  // about the PROMPT and wrong about the LADDER. The prompt block exists; the
+  // ladder route does not, and the ladder is what decides what the email opens
+  // on. The file's own comment calls this "the sharpest SEO fact we can give an
+  // owner", and it has never once been the email.
+  //
+  // It also matters for a reason beyond harm: it is SELLABLE. He cannot fix a
+  // search position by deciding to, and it is the exact thing a retainer does.
+  // A review complaint is neither.
+  //
+  // Only a page HE published counts. Being absent for a service he never claimed
+  // to offer is not a finding about him.
+  const _absentOwn = rows.filter(r => !r.found && r.kind === 'their own service page'
+    && Number.isFinite(Number(r.scanned)) && Number(r.scanned) > 0);
+  if (_absentOwn.length) {
+    const _pick = _absentOwn[0];
+    const _others = rows.filter(r => r !== _pick).map(r => `"${r.query}" (${r.found ? '#' + r.rank : 'absent'})`);
+    return { row: _pick,
+      note: `"${_pick.query}" — they publish a page for this service and do NOT appear in the top ${_pick.scanned} for it. That is harm 96, above every review finding on the ladder, and it is work a retainer does rather than something he fixes by deciding to${_others.length ? `. Passed over: ${_others.join(', ')}` : ''}` };
+  }
   const above = (r) => {
     const n = Number(r.rank) - 1;
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -23325,7 +23679,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         'screenshot@fullPage': _full || null } };
     };
 
-    const [firecrawlRes, fbAdsRes, builtWithRes, googleAdsRes, enrichRes] = await Promise.allSettled([
+    const [firecrawlRes, fbAdsRes, builtWithRes, enrichRes] = await Promise.allSettled([
       scrapeHomepage(),
       // ── AD LIBRARY: OFF BY DEFAULT ──────────────────────────────────────
       // The Firecrawl fallback costs 1 credit and up to 30s on EVERY lead, and it
@@ -23345,7 +23699,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             ? checkAdLibraryViaFirecrawl(company, firecrawlKey)
             : Promise.resolve({ hasAds: false, adCount: 0, confirmed: false, countReliable: false, skipped: true })),
       domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
-      domain ? checkGoogleAds(domain) : Promise.resolve({hasGoogleAds:false}),
       enrichCompany(domain, ninjaPearKey),
     ]);
 
@@ -23571,7 +23924,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const fbAds = fbAdsRes.value || {};
     const enrichment = enrichRes.value || null;
     const builtWith = builtWithRes.value || {};
-    const googleAds = googleAdsRes.value || {};
     const email = emailData; // from browser via browserData
 
     // ═══ CONFIRM WE'RE AUDITING THE RIGHT COMPANY ════════════════════════════
@@ -24498,7 +24850,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // hasGoogleAdsTag is the real field name; `hasAdsTag` does not exist and
       // `adCount` is declared FURTHER DOWN this function, so referencing it here
       // would be a ReferenceError at runtime, not a silent undefined.
-      hasAdsTag: !!(htmlSignals && (htmlSignals.hasGoogleAdsTag || htmlSignals.hasMetaPixel)),
+      //
+      // ══ AND IT WAS READING THE WRONG OBJECT ═════════════════════════════
+      // The comment above is about getting the field NAME right, and the line
+      // under it took both fields off `htmlSignals`, which returns neither.
+      // hasGoogleAdsTag and hasMetaPixel are produced by checkBuiltWith and
+      // live on `builtWith` — every other reader in this file uses
+      // `builtWith.hasGoogleAdsTag`. So this expression has been FALSE on every
+      // lead ever run, and affordability has never once known that a business
+      // is already spending money on ads. A wrong object is invisible in a way
+      // a wrong name is not: no error, no log, just a boolean that is always no.
+      hasAdsTag: !!(builtWith && (builtWith.hasGoogleAdsTag || builtWith.hasMetaPixel)),
       lsaEligible: false,   // lsa is resolved after this point; left out rather than guessed
       trade: customerTrade || verifiedIndustry || req.body.industry || '',
     });
@@ -24702,8 +25064,35 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             : null,
           growthConstraintArg: growthConstraint,
         });
+        // ══ THE BUYING WINDOW, AS A FINDING RATHER THAN A LOG LINE ══════════
+        // Discovery has shipped marketingRoles, jobPostedAt and discoverySignals
+        // through the client and into Supabase for weeks. They reached the audit
+        // prompt as background and stopped there, so "22 of 25 hiring for
+        // marketing" could never become a sentence in an email.
+        const _mktgHireInput = marketingHireFrom(req.body);
+        if (_mktgHireInput.hiringMarketing) {
+          console.log(`\u26a1 BUYING WINDOW [${company}]: hiring ${_mktgHireInput.marketingRoleName || '(role name not shipped)'}`
+            + `${Number.isFinite(_mktgHireInput.jobPostedDaysAgo) ? `, posted ${_mktgHireInput.jobPostedDaysAgo} day(s) ago` : ', NO POSTED DATE — no clock, so this cannot become a finding'} `
+            + `\u2014 the only measurement on this lead with a clock on it.`);
+        }
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
+          // ══ THE TWO BUSINESS-LEVEL SIGNALS, DELIVERED ═════════════════════
+          // Both were measured and neither reached rankHarms, so neither could
+          // ever be said. This is the last hop — the one that has silently
+          // eaten every other measurement in this file.
+          //
+          // adsTagConfirmed requires builtWith.confirmed AND not blocked. A
+          // refused fetch leaves both fields undefined, and `undefined ||
+          // undefined` is falsey — which would read as "no ads tag" rather than
+          // "we could not look". Those are different claims and only one of them
+          // is true.
+          adsTagConfirmed: !!(builtWith && builtWith.confirmed === true && !builtWith.blocked
+            && (builtWith.hasGoogleAdsTag === true || builtWith.hasMetaPixel === true)),
+          paidLeakGap: paidLeakGapFrom(_measured),
+          hiringMarketing: _mktgHireInput.hiringMarketing,
+          jobPostedDaysAgo: _mktgHireInput.jobPostedDaysAgo,
+          marketingRoleName: _mktgHireInput.marketingRoleName,
           scrapeTrustworthy: scrapeTrustworthy,
           siteConfirmedDown: _siteDownVerdict.down === true,
           pageChars: String(content || '').length,
@@ -26376,7 +26765,7 @@ TECH STACK: ${builtWith.blocked || builtWith.confirmed === false ? `\u26d4 NOT S
 - Live Chat: ${builtWith.hasChat === true ? 'Yes (confirmed)' : builtWith.hasChat === false ? 'None detected on page (unverified)' : 'not readable'}`}
 
 ADS:
-- Google Ads: ${(builtWith.blocked || builtWith.confirmed === false) ? '\u26d4 not readable \u2014 our fetch was refused, so make NO claim about whether they run Google Ads' : builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : googleAds.hasGoogleAds ? 'Possibly running (unverified heuristic - do NOT state as fact)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
+- Google Ads: ${(builtWith.blocked || builtWith.confirmed === false) ? '\u26d4 not readable \u2014 our fetch was refused, so make NO claim about whether they run Google Ads' : builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
 - GOOGLE LOCAL SERVICES ADS (LSA): ${lsa.status === 'running_lsa'
   ? `\u2705 THEY ARE RUNNING LSA. Proof: "${String(lsa.evidence).slice(0,140)}" — the "${lsa.marker}" mark is issued only through Local Services Ads. This is the STRONGEST possible qualifying signal we have: they are already paying Google per lead, which means budget exists, intent exists, and the only question is what happens to those leads after they arrive. Lead with what happens AFTER the LSA call comes in — LSA charges per lead, so an unanswered or un-followed-up lead is money already spent and wasted. You MAY state that they run Local Services Ads. You may NOT state or guess their budget, lead volume, cost per lead, or ranking.`
   : lsa.status === 'eligible_ambiguous_badge'
@@ -28835,7 +29224,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // 4 Buckets — enhanced with visual analysis
     const buckets = {
       ACQUISITION: {
-        googleAds: builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : googleAds.hasGoogleAds ? 'Google Ads possibly running (unverified heuristic)' : 'No Google Ads tag on page (they may still run ads — unverified)',
+        googleAds: builtWith.blocked || builtWith.confirmed === false ? 'Not readable — our fetch of their page was refused, so we know NOTHING about their ads' : builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : 'No Google Ads tag on page (they may still run ads — unverified)',
         seoBasics: builtWith.confirmed ? [
           !builtWith.titleTag || builtWith.titleTag.length < 15 ? 'weak/missing title tag' : '',
           !builtWith.hasMetaDesc ? 'no meta description' : '',
@@ -28932,7 +29321,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         triggerEvent: (discoverySignals.rebranding || discoverySignals.recently_acquired || discoverySignals.recently_launched)
           ? `In flux (${discoverySignals.rebranding ? 'rebrand' : discoverySignals.recently_acquired ? 'acquisition' : 'launch'}) — vendors up for grabs, marketing reset needed`
           : '',
-        adSpend: (googleAds.hasGoogleAds || fbAds.hasAds)
+        adSpend: (builtWith.hasGoogleAdsTag || fbAds.hasAds)
           ? 'Confirmed ad spend — leaking revenue if the path to booking is broken'
           : 'No confirmed ad spend',
       },
@@ -29023,7 +29412,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         };
       }
       // Fallback logic when Brain didn't run
-      const hasAdSpend = googleAds.hasGoogleAds || fbAds.hasAds;
+      const hasAdSpend = !!builtWith.hasGoogleAdsTag || !!fbAds.hasAds;
       const hasInfra = builtWith.hasCRM || builtWith.hasPixel;
       const isAIOpportunity = !builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat;
       const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40);
@@ -34200,6 +34589,99 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ RECIPIENT SOURCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ FOUR TOUCHES, ALL ABOUT HIS REVIEWS ════════════════════════════════
+  // Live, 2026-08-14, a personal injury firm. Every touch in the sequence:
+  //
+  //   email 1   5 of your own Google reviews name the same thing
+  //   follow 1  your Google reviews have stopped
+  //   follow 2  businesses with FEWER REVIEWS than yours are ranking above you
+  //   break-up  5 of your own Google reviews name the same thing (again)
+  //
+  // Vin: "we can't sell them anything for reviews, they don't need our help with
+  // reviews... it should never be what our emails are centred around." That is a
+  // business fact, not a preference. Every product here is an engagement — a
+  // rebuild, a build, a retainer, exit advice. "Ask your customers for reviews"
+  // is an afternoon of his own time, so an email opening there has nothing
+  // behind it to buy.
+  try {
+    const _fails = [];
+    // 1. THE SELLABILITY GATE. Keyed by rung id, because computeSelfFix matches
+    // the finding's TEXT and the review sentences have been rewritten since
+    // those patterns were written — review_pain_pattern's live sentence matches
+    // no rule and takes a penalty of zero.
+    for (const id of ['review_deficit', 'not_compounding', 'review_velocity_drop',
+                      'no_owner_replies', 'partial_owner_replies', 'stale_reviews', 'low_rating']) {
+      if (!NOT_SELLABLE_OPENER[id]) _fails.push(`"${id}" can still open an email, and its fix is a task the owner does himself`);
+      if (!HARM_LADDER.some(r => r.id === id)) _fails.push(`"${id}" is not a real rung`);
+    }
+    // review_pain_pattern must NOT be blocked — CLAUDE.md PART 5 records it as
+    // one of only two findings with a reply behind it, and a repeating complaint
+    // about communication is an operations problem we do build for. It has to
+    // EARN the opener, not be banned from it.
+    if (NOT_SELLABLE_OPENER.review_pain_pattern) {
+      _fails.push('review_pain_pattern is blocked from opening — that is one of only two findings with evidence behind it, and blocking it overrides the only evidence this system has');
+    }
+    // 2. IT MUST ACTUALLY BITE. Run the real ladder on a lead whose only
+    // findings are reviews plus one sellable visibility finding.
+    // A DISCRIMINATING lead: low_rating (harm 84, unsellable) sitting above
+    // no_after_hours (74, a build). Without the gate the 84 wins and the email
+    // opens by telling a plumber his rating is low — which we sell nothing for
+    // and which reads as an insult. The first fixture written here had
+    // outranked_by_weaker at 92 on the same lead, so the sellable finding won on
+    // harm alone and the test passed with the gate deliberately removed.
+    const _m = { rating: 3.6, reviewCount: 40, reviewsRead: 40, ownerReplies: 5,
+      booking: 'phone_only', bookingMeasured: true, unreadBooking: false,
+      tradeWord: 'plumber', rankChecked: false };
+    const _h = rankHarms(_m);
+    const _lead = _h.lead;
+    if (!_lead) _fails.push('the discriminating lead produced no opener at all');
+    else if (NOT_SELLABLE_OPENER[_lead.id]) {
+      _fails.push(`the email still opens on "${_lead.id}", which we cannot sell a fix for, while "no_after_hours" — a build — was available on the same lead`);
+    }
+    if (!(_h.byHarm || []).some(x => x.id === 'low_rating')) {
+      _fails.push('the fixture no longer produces the unsellable finding it exists to demote, so it proves nothing');
+    }
+    // But when NOTHING sellable exists the block must be ignored — a weaker
+    // opener beats no email.
+    // The same lead with the sellable finding taken away: everything is blocked,
+    // so the block must be ignored and the unsellable finding leads after all.
+    const _onlyReviews = rankHarms({ rating: 3.6, reviewCount: 40, reviewsRead: 40, ownerReplies: 5,
+      tradeWord: 'plumber', rankChecked: false });
+    if ((_onlyReviews.all || []).length && !_onlyReviews.lead) {
+      _fails.push('a lead whose only findings are unsellable now produces NO opener at all — the block must be ignored when everything is blocked, or the lead is lost entirely');
+    }
+    // 3. THE SEQUENCE MUST VARY BY SUBJECT, NOT BY BAND. All three of the live
+    // findings sit in INVISIBLE, so a band rule had nothing to work with.
+    // EXACTLY the live ladder — all three in the SAME band, which is the whole
+    // point. The first fixture written here also carried a BLOCKS finding, so
+    // the old band rule already sorted it to the front and the test passed with
+    // the subject rule deliberately removed. A fixture that the thing under test
+    // is not needed for proves nothing.
+    const _byHarm = [
+      { id: 'review_pain_pattern', band: 'INVISIBLE', harm: 86, finding: 'a' },
+      { id: 'review_velocity_drop', band: 'INVISIBLE', harm: 72, finding: 'b' },
+      { id: 'outranked_by_weaker', band: 'INVISIBLE', harm: 92, finding: 'c' },
+    ];
+    const _ord = orderFollowUpRungs(_byHarm, 'review_pain_pattern', null, 'INVISIBLE');
+    if (!_ord.length) _fails.push('the follow-up ordering returned nothing');
+    else if (AREA_OF[_ord[0].id] === AREA_OF.review_pain_pattern) {
+      _fails.push(`the first follow-up is "${_ord[0].id}", the same subject as the email he just read (${AREA_OF[_ord[0].id]}) — he does not know what a band is, he knows he has been sent two emails about his reviews`);
+    }
+    // Order-only: nothing may be dropped.
+    if (_ord.length !== 2) _fails.push(`ordering dropped findings: ${_ord.length} of 2 survived — this may reorder, never suppress`);
+    // And with nothing else on the ladder the sequence must be unchanged.
+    const _allSame = orderFollowUpRungs(
+      [{ id: 'review_velocity_drop', band: 'INVISIBLE', harm: 72 }, { id: 'review_deficit', band: 'INVISIBLE', harm: 68 }],
+      'review_pain_pattern', null, 'INVISIBLE');
+    if (_allSame.length !== 2) _fails.push('a lead whose ladder holds only review findings lost touches');
+    if (_fails.length) {
+      console.log(`⛔ SELLABLE OPENER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SELLABLE OPENER CHECK: a finding whose fix is an afternoon of the owner's own time can no longer OPEN an email — it keeps its harm, its rank, its audit row and its call-sheet line, and it may still be the second finding. review_pain_pattern is deliberately not blocked; it has to earn the opener instead of winning by default. And the sequence now varies by SUBJECT rather than by ladder band, because reviews and search visibility are both INVISIBLE — which is how one firm received four touches that were all about his reviews.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SELLABLE OPENER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
   // businesses with fewer reviews ranking above him. The row handed to the audit
@@ -34260,6 +34742,132 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ RANK ROW CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ THE EMAILS WERE ALL ABOUT REVIEWS BECAUSE NOTHING ELSE REACHED ══════
+  // Vin: "most of our emails are about reviews and it's constant... we can't
+  // sell them anything for reviews." He read that as a copy problem. It was a
+  // SUPPLY problem, and the numbers say so plainly: of the nine rungs that
+  // outrank review_pain_pattern, eight are failure states — no site, no
+  // listing, a 404, an expired certificate, a listing marked closed. The ICP is
+  // healthy owner-operated businesses, which have none of them. So the top of
+  // the ladder is empty on a good lead and the review block is what is left.
+  //
+  // Two business-level signals were already being MEASURED and neither had ever
+  // reached rankHarms, so neither could ever be said:
+  //   hiring a marketing person   22 of 25 TheirStack leads, each with a date
+  //   a Google Ads conversion tag read off markup we already hold
+  //
+  // This check asserts three separate things, because each one shipped broken
+  // before in exactly this shape:
+  //   1. the rungs exist and their inputs are DELIVERED, not merely computed
+  //   2. they actually WIN against the review block on a realistic lead
+  //   3. the sequence carries at most ONE review touch out of four
+  try {
+    const _fails = [];
+
+    // ── 1. THE HELPERS SHIP THE FIELDS THE RUNGS READ ──────────────────
+    // marketingHireFrom and paidLeakGapFrom are CALLED here rather than
+    // reimplemented. Five checks passed this session while their bug was live,
+    // every one because the check ran a copy of the code instead of the code.
+    const _now = Date.parse('2026-08-14T12:00:00Z');
+    const _hire = marketingHireFrom({
+      discoverySignals: { hiring_marketing: true },
+      marketingRoles: ['Marketing Manager'],
+      jobPostedAt: '2026-07-31T12:00:00Z',
+    }, _now);
+    if (_hire.hiringMarketing !== true) _fails.push('marketingHireFrom does not read discoverySignals.hiring_marketing');
+    if (_hire.jobPostedDaysAgo !== 14) _fails.push(`the posting age came back ${_hire.jobPostedDaysAgo}, not 14 — the clock is the entire value of this finding`);
+    if (_hire.marketingRoleName !== 'marketing manager') _fails.push(`the role name came back "${_hire.marketingRoleName}"`);
+    // No date means no clock, and no clock means no finding.
+    const _undated = marketingHireFrom({ discoverySignals: { hiring_marketing: true }, marketingRoles: ['Marketing Manager'] }, _now);
+    if (_undated.jobPostedDaysAgo !== null) _fails.push('a posting with no date resolved to a number — that is an invented clock');
+    if (HARM_LADDER.find(r => r.id === 'hiring_marketing_now').test({ ...(_undated), })) {
+      _fails.push('hiring_marketing_now fires with no posting date, so the email would state a buying window nothing measured');
+    }
+    // A refused fetch must not read as "we measured the destination".
+    if (paidLeakGapFrom({}) !== '') _fails.push('paidLeakGapFrom invents a gap from nothing measured');
+    if (!paidLeakGapFrom({ bookingMeasured: true, booking: 'phone_only' })) _fails.push('a measured phone-only route produces no gap sentence');
+
+    // ── 2. THE FIELDS ARRIVE AT THE LADDER ─────────────────────────────
+    // Source scan, because "computed but not passed" is the bug class that has
+    // eaten more work in this file than every other cause combined, and it is
+    // invisible in every log. Split so the scan cannot match its own source.
+    {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_src);
+      let _txt = '';
+      if (_hiM) {
+        let _d = 0;
+        for (let i = _src.indexOf('{', _hiM.index); i < _src.length; i++) {
+          if (_src[i] === '{') _d++;
+          if (_src[i] === '}') { _d--; if (!_d) { _txt = _src.slice(_hiM.index, i + 1); break; } }
+        }
+      }
+      for (const f of ['adsTagConfirmed', 'paidLeak' + 'Gap', 'hiringMarketing', 'jobPostedDaysAgo', 'marketingRoleName']) {
+        if (!new RegExp('^\\s+' + f + ':', 'm').test(_txt)) {
+          _fails.push(`_harmInputs does not forward "${f}" — the rung reading it can never fire on a real lead, and no log will ever say so`);
+        }
+      }
+    }
+
+    // ── 3. THEY BEAT THE REVIEW BLOCK ON A REALISTIC LEAD ──────────────
+    // A DISCRIMINATING fixture. This lead has the full review palette firing —
+    // a repeating complaint in 5 of 150 reviews, a velocity collapse, and no
+    // owner replies — which is exactly the shape that produced four review
+    // emails to Gregory Cox. If either new rung is unwired, review_pain_pattern
+    // at 86 opens and this fails.
+    const _lead = {
+      reviewPainCount: 2, reviewPainTop: 'slow callbacks', reviewPainMentions: 5, reviewsRead: 150,
+      reviewVelocityChecked: true, reviewsRecent90: 0, reviewsPrior90: 4, reviewVelocitySlowing: true,
+      reviewCount: 150, rating: 4.6, ownerReplies: 0,
+      rankChecked: false, tradeWord: 'plumber',
+      booking: 'phone_only', bookingMeasured: true,
+      adsTagConfirmed: true, paidLeakGap: paidLeakGapFrom({ bookingMeasured: true, booking: 'phone_only' }),
+      hiringMarketing: true, jobPostedDaysAgo: 14, marketingRoleName: 'marketing manager',
+    };
+    const _h = rankHarms(_lead);
+    if (!_h.lead) _fails.push('the fixture produced no opener at all');
+    else if (REVIEW_SUBJECT_RUNGS.has(_h.lead.id)) {
+      _fails.push(`the email still opens on "${_h.lead.id}" — a review finding — while a marketing hire posted 14 days ago and a paid funnel leak were both available on the same lead`);
+    }
+    // And the fixture must still be the hard case it claims to be.
+    if (!(_h.byHarm || []).some(x => x.id === 'review_pain_pattern')) {
+      _fails.push('the fixture no longer fires review_pain_pattern, so it proves nothing about beating it');
+    }
+    if (!(_h.byHarm || []).some(x => x.id === 'paid_traffic_leaks')) _fails.push('paid_traffic_leaks did not fire on a lead with a confirmed tag and a measured phone-only route');
+    if (!(_h.byHarm || []).some(x => x.id === 'hiring_marketing_now')) _fails.push('hiring_marketing_now did not fire on a lead hiring a marketing manager 14 days ago');
+
+    // ── 4. ONE REVIEW TOUCH IN FOUR, NOT FOUR ──────────────────────────
+    const _second = (_h.byHarm || []).filter(x => x.id !== _h.lead.id)[0];
+    const _rest = orderFollowUpRungs(_h.byHarm, _h.lead.id, _second && _second.id,
+      String((_h.lead && _h.lead.band) || ''));
+    // The sequence is the opener plus the first three of the ordered rest.
+    const _seq = [_h.lead.id, ...(_rest.slice(0, 3).map(x => x.id))];
+    const _reviewTouches = _seq.filter(id => REVIEW_SUBJECT_RUNGS.has(id)).length;
+    if (_reviewTouches > 1) {
+      _fails.push(`${_reviewTouches} of the 4 touches are about his reviews (${_seq.join(' → ')}) — a stranger reading that sequence learns his reviews are the only thing we looked at`);
+    }
+    // And the quota must not throw the lead away when reviews are ALL we have.
+    const _onlyReviews = rankHarms({
+      reviewPainCount: 2, reviewPainTop: 'slow callbacks', reviewPainMentions: 5, reviewsRead: 150,
+      reviewVelocityChecked: true, reviewsRecent90: 0, reviewsPrior90: 4, reviewVelocitySlowing: true,
+      reviewCount: 150, rating: 4.6, ownerReplies: 0, rankChecked: false, tradeWord: 'plumber',
+    });
+    if (_onlyReviews.lead) {
+      const _orRest = orderFollowUpRungs(_onlyReviews.byHarm, _onlyReviews.lead.id, null,
+        String((_onlyReviews.lead && _onlyReviews.lead.band) || ''));
+      if (!_orRest.length) _fails.push('a lead whose only findings are reviews now produces no follow-ups at all — the quota must demote, never delete, or the lead is lost entirely');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ BUSINESS SIGNAL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ BUSINESS SIGNAL CHECK: the two signals this system already measured and could never say — a marketing role posted ${_hire.jobPostedDaysAgo} days ago, and a Google Ads conversion tag on a site whose only route in is a phone line — now reach the ladder and BEAT the full review palette on a lead where a repeating complaint, a velocity collapse and zero owner replies are all firing. The sequence carries at most one review touch out of four, and on a lead where reviews are genuinely all we found the quota demotes instead of deleting, so no lead is lost. Both helpers are called here rather than reimplemented, and _harmInputs is read from source — the delivery hop, not the computation, is what has silently eaten every other measurement in this file.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BUSINESS SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A MEDIAN CALLED AN AVERAGE, AND THE LARGER HALF OF IT ══════════════
   // review_deficit reported n[Math.floor(n.length / 2)] as what "the businesses
   // ranking above them average". With two businesses above, that index is 1 —
