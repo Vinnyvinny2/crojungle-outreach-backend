@@ -7439,7 +7439,26 @@ const personFromRun = (raw, companyName = '') => {
   // is how a co-owner gets filed as the CFO.
   const seg = t.split(/\s*(?:,|–|—|\||\s-\s)\s*/).map(s => s.trim()).filter(Boolean);
   if (!seg.length) return null;
-  let head = seg[0].replace(HONORIFIC_RE, '').trim();
+  // ── "MEET DR. KURT KAVANAUGH" READ AS NOBODY ────────────────────────────
+  // Live, 2026-08-13: "ROSTER: no owner-level title found. Read 0 name/title
+  // pair(s) from 12078 characters" on a site whose own sitemap lists
+  // /meet-dr-kavanaugh and /meet-dr-zaara-baig. Three paid searches then found
+  // "Owner/Founder" on his own contact page.
+  //
+  // The honorific strip is anchored, and on a team card the honorific is not
+  // first — "Meet Dr. X" is the commonest heading a practice writes. Strip the
+  // heading verb, THEN the honorific. Nothing new can be invented by this: what
+  // remains still has to pass the same strict name pattern, and the headings
+  // that survive it as prose ("Meet Our Team" -> "Our Team", "Meet The Team" ->
+  // "The Team") are already in NOT_A_NAME.
+  const HEADING_VERB_RE = /^(?:meet|about|welcome\s+to|introducing|say\s+hello\s+to)\s+/i;
+  const _noVerb = seg[0].replace(HEADING_VERB_RE, '').trim();
+  // Whether a PERSON marker was present. It decides the eponymous-business case
+  // below, so it is recorded rather than discarded.
+  const _hadHonorific = HONORIFIC_RE.test(_noVerb);
+  let head = _noVerb.replace(HONORIFIC_RE, '').trim();
+  // "Meet Dr. Kurt Kavanaugh" needs BOTH strips; the order above does that in
+  // one pass. A bare "Dr. Kurt Kavanaugh" is unaffected.
   // Credentials glued on with no comma: "Matthew Yip DDS". Never below three
   // words, so a two-word name is untouchable.
   const words = head.split(' ');
@@ -7451,8 +7470,22 @@ const personFromRun = (raw, companyName = '') => {
   // practice. A candidate whose every word already appears in the company name
   // is the company. A family business survives this: "Dusty Hannah" at Hannah
   // Custom Homes keeps "Dusty", which the company name does not contain.
+  // ── AND THE EPONYMOUS BUSINESS, WHICH IS MOST OF THIS PIPELINE ─────────
+  // The guard below rejects a candidate whose every word is already in the
+  // company name. That is right for "Tiffany Springs" at Tiffany Springs Dental
+  // Group — a Kansas City neighbourhood, not a person. It is exactly WRONG for
+  // "Kurt Kavanaugh" at Kurt Kavanaugh Orthodontics, where the overlap is the
+  // single strongest owner signal there is, and this ICP is full of businesses
+  // named after the person who owns them.
+  //
+  // Caught by the boot check on the same live lead that motivated the heading
+  // strip: the strip worked and the guard I had just written threw the result
+  // away. An honorific or a personal credential is the discriminator — a place
+  // name does not carry one — so a run that had one skips the guard.
   const _co = String(companyName || '').toLowerCase();
-  if (_co) {
+  const _credentialed = _hadHonorific || seg.slice(1).some(s => CREDENTIAL_RE.test(s))
+    || words.length !== head.split(' ').length;   // a credential was popped off the end
+  if (_co && !_credentialed) {
     const _cw = new Set(_co.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
     const _nw = head.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
     if (_nw.length && _nw.every(w => _cw.has(w))) return null;
@@ -8802,7 +8835,7 @@ const HARM_LADDER = [
       const t = String(m.tradeWord || '').trim();
       if (m.purchaseUrgency === 'EMERGENCY') {
         return t
-          ? `When somebody needs a ${t} outside office hours, there is no published way to reach them at all`
+          ? `When somebody needs ${anFor(t)} ${t} outside office hours, there is no published way to reach them at all`
           : `Outside office hours there is no published way to reach them at all`;
       }
       // ══ NOT EVERY "THEY" IN A RUNG IS THE OWNER ══════════════════════════
@@ -8821,7 +8854,7 @@ const HARM_LADDER = [
       // boot on any rung that puts a pronoun inside a "Someone who ..." clause,
       // so the next one cannot reach an inbox the way this one did.
       return t
-        ? `Someone deciding at nine at night to hire a ${t} has nowhere to start until the office opens`
+        ? `Someone deciding at nine at night to hire ${anFor(t)} ${t} has nowhere to start until the office opens`
         : `Someone deciding in the evening has nowhere to start until the office opens`;
     },
     // ══ DESCRIBE THE WALL, NOT WHAT SOMEBODY DID AT IT ═══════════════════
@@ -8857,7 +8890,7 @@ const HARM_LADDER = [
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
       return t
-        ? `Someone ready to hire a ${t} cannot book a time — the only route is a form and a wait`
+        ? `Someone ready to hire ${anFor(t)} ${t} cannot book a time — the only route is a form and a wait`
         : `There is no way to book a time — the only option is a form and a wait`;
     },
     costs: 'someone ready to commit has to stop and hope for a reply' },
@@ -9147,7 +9180,7 @@ const HARM_LADDER = [
     // about a website.
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
-      const job = t ? ` before committing to a ${t}` : '';
+      const job = t ? ` before committing to ${anFor(t)} ${t}` : '';
       return `Someone comparing three companies can find no price, no range and no starting point anywhere on the pages we read${job}`;
     },
     // ══ NOT EVERY "THEM" IS THE BUSINESS ═══════════════════════════════════
@@ -9213,7 +9246,7 @@ const HARM_LADDER = [
     // sentence becomes about a custom home builder rather than about websites.
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
-      const who = t ? `a stranger choosing a ${t}` : 'a hesitant stranger';
+      const who = t ? `a stranger choosing ${anFor(t)} ${t}` : 'a hesitant stranger';
       return `Nothing on the site tells ${who} why to pick them over the next name — no guarantee, no named offer, no promise anyone else could not also make`;
     },
     // say() already ends "why to pick them over the next name". Repeating it in
@@ -9442,6 +9475,135 @@ const measurementLooksWrong = (m = {}) => {
 // So: one function, every fallback chain written down once, both callers reading
 // from it. Drift stops being a thing that can happen rather than a thing we
 // keep finding.
+// ══ "A ORTHODONTIST" WENT OUT IN A LIVE EMAIL ══════════════════════════════
+// Six places interpolate a trade word after a bare "a", and the trade is read
+// off the business's own homepage, so it is whatever word they use. Live,
+// 2026-08-13: "before committing to a orthodontist". An email whose whole claim
+// is that somebody looked carefully cannot open with a grammar error a reader
+// notices before the finding.
+//
+// Sound, not spelling. "an hour" and "an HVAC contractor" take AN despite the
+// consonant; "a urologist" and "a uniform" take A despite the vowel, because
+// the u is pronounced "you". The exceptions are listed rather than guessed.
+const AN_DESPITE_CONSONANT = /^(?:hour|honest|honou?r|heir|herb|hvac|mri|x-?ray|seo|rv\b|llc|ll\.?m|md\b|fbi)/i;
+// "un" takes AN except before an i — underground and undertaker do, uniform
+// and unit do not.
+const AN_DESPITE_U = /^(?:up|um|un(?!i)|urb)/i;
+const anFor = (word) => {
+  const s = String(word || '').trim().toLowerCase();
+  if (!s) return 'a';
+  if (AN_DESPITE_CONSONANT.test(s)) return 'an';
+  if (s.startsWith('u')) return AN_DESPITE_U.test(s) ? 'an' : 'a';
+  if (s.startsWith('eu')) return 'a';          // a European, a eulogy
+  return /^[aeio]/.test(s) ? 'an' : 'a';
+};
+
+// ══ REVIEW VELOCITY, AS A FUNCTION THAT CAN BE RUN ═════════════════════════
+// Lifted out of deepReviewMine so the boot check can execute the real thing.
+// It was an inline IIFE, so the check had to REIMPLEMENT the gate to test it —
+// and a reimplementation passes happily while the shipped copy is broken. That
+// has now happened three times in one day in this file, on three different
+// features, and it is the same disease as every "computed but not passed" bug:
+// two things that are supposed to be one.
+//
+// `now` is a parameter so a test can pin the clock instead of building dates
+// relative to the moment it runs.
+const measureReviewVelocity = (timestamps, now = Date.now()) => {
+  const DAY = 86400000, WINDOW = 90;
+  const dates = (Array.isArray(timestamps) ? timestamps : [])
+    .filter(t => Number.isFinite(t))
+    .sort((a, b) => b - a);
+  if (dates.length < 6) return { checked: false, why: `only ${dates.length} review(s) carry a readable date` };
+  const edgeRecent = now - WINDOW * DAY;
+  const edgeEarlier = now - 2 * WINDOW * DAY;
+  const oldestRead = dates[dates.length - 1];
+  if (oldestRead > edgeEarlier) {
+    return { checked: false, truncated: true,
+      why: `the oldest review we read is only ${Math.round((now - oldestRead) / DAY)} days old, so the earlier ${WINDOW}-day window is cut off by our own page size rather than by their history - a comparison here would invent a decline` };
+  }
+  const recent = dates.filter(t => t >= edgeRecent).length;
+  const earlier = dates.filter(t => t < edgeRecent && t >= edgeEarlier).length;
+  // Noise floor. Two against one is not a trend, it is two customers. The
+  // earlier window has to carry enough for its absence to mean something.
+  if (earlier < 4) return { checked: false, why: `only ${earlier} review(s) in the earlier window - too few for a change to mean anything` };
+  const drop = (earlier - recent) / earlier;
+  // ══ A SLOWDOWN HAS TO BE BIGGER THAN RANDOMNESS ═══════════════════════
+  // Live, 2026-08-13, Kurt Kavanaugh Orthodontics: 6 reviews in the last 90
+  // days against 10 in the 90 before. That cleared both gates below — a 40%
+  // drop, four fewer — and became the OPENING SENTENCE of his email.
+  //
+  // It is not a slowdown. Reviews arrive as a Poisson process, and the spread
+  // of a count with mean lambda is sqrt(lambda), so the difference between two
+  // such counts has a standard deviation of sqrt(a+b). Here that is sqrt(16) =
+  // 4 and the observed difference is 4 — EXACTLY ONE standard deviation, the
+  // single most ordinary thing randomness produces. A business with a steady
+  // rate of eight a quarter shows a "40% drop" by luck about a third of the
+  // time.
+  //
+  // Telling an owner his reviews have slowed when the change is chance is the
+  // same failure as the truncated-window artefact guarded against above — that
+  // note calls it "a comparison that would invent a decline" — and it is the
+  // one thing this system may not do. A percentage hides it because a
+  // percentage has no sample size in it.
+  //
+  // Two sigma is the ordinary bar. It keeps every case this feature was built
+  // for — eleven against twenty-six is 2.47, twelve against twenty-six is
+  // 2.27, a full stop from four or more always clears it — and refuses
+  // six-from-ten, two-from-six and three-from-eight, which are noise wearing a
+  // percentage.
+  const sigma = Math.sqrt(recent + earlier);
+  const sigmas = sigma > 0 ? (earlier - recent) / sigma : 0;
+  const distinguishable = sigmas >= 2;
+  return {
+    checked: true, recent, earlier, windowDays: WINDOW, sigmas,
+    // A third down, at least three fewer, AND bigger than chance.
+    slowing: drop >= 0.34 && (earlier - recent) >= 3 && distinguishable,
+    stopped: recent === 0 && distinguishable,
+    growing: recent > earlier,
+    oldestReadDays: Math.round((now - oldestRead) / DAY),
+  };
+};
+
+// ══ WHAT THE FOLLOW-UPS ARE ALLOWED TO SAY ═════════════════════════════════
+// A module-level function, not an inline expression, so the boot check can RUN
+// it. Three checks in this file have now passed while the shipped code was
+// deliberately broken, every one of them because the check reimplemented what
+// it meant to test.
+//
+// Two rules, both order-only. Nothing is suppressed: if the ladder holds
+// nothing else, the sequence is exactly what it was.
+//
+//  1. DO NOT SAY IT TWICE. This list used to exclude the LEAD rung and nothing
+//     else, but email 1 carries TWO findings — the lead and the second claim.
+//     Live on Kurt Kavanaugh Orthodontics, 2026-08-13, follow-up 2 sent back a
+//     sentence email 1 had already sent, word for word, seventeen days later:
+//     "someone comparing three companies can find no price, no range and no
+//     starting point anywhere on the pages we read". SEQUENCE CHECK asserts
+//     "nothing repeats" and could not see it — it tests that the touches have
+//     distinct CTAs and subjects, not distinct FINDINGS.
+//
+//  2. DO NOT SPEND TWO TOUCHES ON THE SAME PART OF THE BUSINESS. Every rung
+//     that describes the BUSINESS rather than the website is a review rung —
+//     review_pain_pattern, review_velocity_drop, review_deficit, low_rating,
+//     no_owner_replies, partial_owner_replies, not_compounding. So on a lead
+//     with a thin website the top of the ladder is reviews, and the sequence
+//     opens on reviews twice. On Kurt: velocity, then deficit. Our CEO's note
+//     on that run was that the emails are too review-focused, and the prospect
+//     simulator said the same thing in the owner's voice.
+//
+//     NOT a ladder reorder — the ladder is not the constraint and reordering it
+//     has failed repeatedly. Email 1 already applies this exact rule to its own
+//     second finding; it simply stopped at the first email.
+const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand) => {
+  const used = new Set([leadId, secondId].filter(Boolean));
+  const pool = (Array.isArray(byHarm) ? byHarm : []).filter(x => x && !used.has(x.id));
+  const bandOf = (h) => String((h && h.band) || '');
+  const fresh = pool.filter(x => bandOf(x) !== String(leadBand || ''));
+  const same  = pool.filter(x => bandOf(x) === String(leadBand || ''));
+  return [...fresh, ...same].map(x => ({ id: x.id, finding: x.finding, costs: x.costs,
+    harm: x.harm, reframe: x.reframe || null, blind: x.blind || '' }));
+};
+
 const resolveMeasurements = ({
   localRank = null, gbpHealth = null, history = null, htmlSignals = null,
   reviewsRead = null, ownerReplyCount = null, deepReviews = null,
@@ -11151,6 +11313,105 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
   } catch (e) { return null; }
 };
 
+// ══ WHAT "THE FINDING IS IN THE FIRST TWELVE WORDS" ACTUALLY MEANS ═════════
+// The rule is right and it came from a real prospect: "If they'd led with 'a
+// business with fewer reviews outranking you for your exact local search term'
+// instead of the review count, I'd have opened this in 30 seconds instead of
+// almost deleting it." Reply rate is decided in the first twelve words.
+//
+// The IMPLEMENTATION was wrong in three ways, and between them they killed the
+// model's draft on both attempts for Kurt Kavanaugh Orthodontics, Window Doctor
+// of Colorado, Sohan & Son's Waterproofing and Oral & Facial Surgery of
+// Oklahoma — every one of which then shipped the composed template instead.
+//
+//  1. IT TESTED FOR WORD BINGO, NOT FOR THE FINDING. It kept every word from
+//     the spine longer than four characters that was not in a stop-list, and
+//     demanded one of them appear verbatim. A writer paraphrases — that is the
+//     job — so "prior" instead of "before" was a rejection.
+//
+//  2. THE STOP-LIST REMOVED THE WORDS THAT CARRY A REVIEW FINDING. "reviews",
+//     "google", "business", "customers" are all stopped. For Kurt's spine —
+//     "their Google reviews have slowed, 6 in the last 90 days against 10 in
+//     the 90 days before that" — what survived as "distinctive" was:
+//
+//         slowed, against, before
+//
+//     Two of those three are prepositions that appear only because of how the
+//     sentence happens to be built. So a review finding was measured against
+//     connectives, which is why review findings failed this gate far more often
+//     than website findings ("no pricing" yields price, range, starting, point).
+//     And the composed template that ships on failure LEADS on the review
+//     finding — which is exactly why every email looked like it was about
+//     reviews.
+//
+//  3. NUMBERS WERE EXCLUDED ENTIRELY by the length > 4 filter. An opening that
+//     stated the exact measured figures — "you had 6 reviews in the last 90
+//     days and 10 in the 90 before" — carried the whole finding and was refused.
+//     A measured figure is the hardest evidence a sentence can contain.
+//
+// So: the opening qualifies if it carries a measured FIGURE or a genuinely
+// distinctive CONTENT word. Function words never count. And because the writer
+// cannot comply with a rule it was never told, the SAME function produces the
+// list that goes into the brief — one source, so the instruction and the test
+// can never drift apart.
+const OPENING_FUNCTION_WORD = /^(?:against|before|after|between|during|through|within|across|around|under|below|since|until|while|where|which|their|there|these|those|about|would|could|should|every|other|another|still|never|always|often|usually|simply|really|actually|currently|recently|almost|nearly|whole|entire|different|separate|single|anyone|someone|somebody|anybody|nothing|something|because|though|although|however|instead|rather|enough|inside|outside|without|beyond|toward|towards|itself|themselves|having|being|doing|going|getting|makes|making|taking|given|gives)$/;
+// The generic nouns that appear in almost every finding. Kept from the original
+// list — these really are undistinctive — but they are no longer the ONLY thing
+// removed, and a figure can now stand in for them.
+const OPENING_GENERIC_NOUN = /^(?:business|businesses|company|companies|website|websites|appears|anywhere|reviews?|reviewers?|google|customers?|clients?|people|owner|pages?|thing|things|names?|mention|mentions|search|searches|online|results?|profile|listing|listings)$/;
+const _NUM_WORD = ['zero','one','two','three','four','five','six','seven','eight','nine','ten',
+  'eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
+
+// Returns { words, figures, all } — every token whose presence in the opening
+// proves the finding is there. `all` is what the brief prints and what the
+// rejection message names.
+const openingTokens = (spine, figures) => {
+  const words = String(spine || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 4 && !OPENING_FUNCTION_WORD.test(w) && !OPENING_GENERIC_NOUN.test(w));
+  const figs = new Set();
+  // If no figure list is supplied, read them out of the spine itself. The
+  // caller having to remember to pass them is precisely how the number half of
+  // this rule would go missing on one of the two call sites, and this file's
+  // dominant bug is a value computed in one place and not passed to another.
+  const _supplied = (Array.isArray(figures) && figures.length)
+    ? figures
+    : (String(spine || '').match(/\d[\d,.]*/g) || []);
+  for (const f of _supplied) {
+    const d = String(f).replace(/[^0-9.]/g, '');
+    if (!d) continue;
+    figs.add(d);
+    // A person writes 2,344. The composer measured 2344. Both are the figure.
+    const whole = d.split('.')[0];
+    if (whole.length > 3) figs.add(whole.replace(/\B(?=(\d{3})+(?!\d))/g, ','));
+    const n = Number(d);
+    // A writer says "six", not "6", at the start of a sentence. That is correct
+    // English and it was being read as the figure being absent.
+    if (Number.isInteger(n) && n >= 0 && n <= 20) figs.add(_NUM_WORD[n]);
+  }
+  const uniq = [...new Set(words)];
+  return { words: uniq, figures: [...figs], all: [...uniq, ...figs] };
+};
+
+// ══ THE BANNED WORDS, IN ONE PLACE, SO THE BRIEF CANNOT UNDER-STATE THEM ═══
+// The gate banned twenty terms and the brief disclosed nine. The undisclosed
+// ones included "impressions", which an ordinary email reaches for — "first
+// impressions" — and "nurture". A draft was refused for a rule the writer was
+// never given, and the rewrite prompt restated no vocabulary rule at all, so
+// the second attempt could only fail the same way.
+//
+// Same principle as openingTokens: the constraint is a fact, so code states it,
+// and the brief is GENERATED from the regex rather than written beside it.
+// Two hand-maintained lists of the same rule is how they came to disagree.
+const EMAIL_JARGON_TERMS = ['pixel', 'retargeting', 'H1', 'meta description', 'schema', 'SEO',
+  'above the fold', 'funnel', 'CRM', 'conversion rate', 'CTA', 'landing page', 'attribution',
+  'impressions', 'nurture', 'optimisation', 'UX', 'leverage', 'unlock', 'synergy'];
+// `synerg` used to sit bare inside \b(...)\b, so it could only match the stem
+// "synerg" — not a word anybody writes. "synergy", "synergies" and
+// "synergistic" all sailed through the most notorious entry on the list for
+// the life of this gate. Found by generating the brief FROM the regex and
+// asserting every disclosed term is one the regex actually tests.
+const EMAIL_JARGON_RE = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg[a-z]*)\b/i;
+
 const writeEmailWithBrain = async (parts, apiKey, company) => {
   if (!apiKey) return null;
   const { first, spine, earned, pattern, reframe, money, count, cta, blind,
@@ -11214,7 +11475,7 @@ const writeEmailWithBrain = async (parts, apiKey, company) => {
   // fewer reviews than yours is ranking above you" for a twenty-year estate
   // lawyer — true, and the voice of a tool that has never met him.
   const who = [
-    trade ? `${first || 'He'} runs a ${trade} business${tenure ? `, ${tenure} years in` : ''}.` : '',
+    trade ? `${first || 'He'} runs ${anFor(trade)} ${trade} business${tenure ? `, ${tenure} years in` : ''}.` : '',
     acquisitionIsReferral
       ? `HOW HE GETS WORK: through relationships and referrals, not people typing into Google. Do not frame this as a search or ranking problem — he will stop reading, and he will be right to.`
       : '',
@@ -11294,8 +11555,9 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
 - THE ASK IS THE LAST SENTENCE. Nothing follows it. A draft that puts the
   question in the middle and keeps explaining afterwards is discarded — he reads
   past it, finishes on a statement, and has nothing to reply to.
-- No marketing words: funnel, CRM, pixel, SEO, conversion rate, landing page,
-  optimisation, leverage, unlock.
+- No marketing words. This list is generated from the check itself, so it is
+  the whole rule and not a summary of it: ${EMAIL_JARGON_TERMS.join(', ')}.
+  "Impressions" is on it in every sense, including "first impressions".
 - THE COUNT IS A NUMBER OF FINDINGS, NOT A NUMBER OF PLACES WE SEARCHED. Never
   write "six places in total", "three different pages", or "everywhere we
   looked". We read a handful of pages and counted separate problems across them.
@@ -11305,6 +11567,20 @@ ${first ? `- Open "${first}, " \u2014 a comma, never a dash \u2014 and then THE 
   found, in his words where possible, inside the first twelve words. Recognition
   is optional and belongs AFTER it; one clause at most, and only if it is a
   measured number rather than praise.` : '- No greeting; open on the finding.'}
+${(() => {
+  // ══ THE RULE THE WRITER WAS NEVER TOLD ═══════════════════════════════════
+  // "Inside the first twelve words" was enforced by a check the writer could not
+  // see: it demanded one of the spine's own words appear verbatim. A writer
+  // paraphrases, so "prior" for "before" was a rejection — twice, on four leads
+  // in the logs, each of which then shipped the composed template.
+  //
+  // The constraint is a FACT, so code states it, exactly as code states the
+  // figures. Same function as the gate, so the instruction and the test cannot
+  // drift apart. This is the difference between a rule and a guessing game.
+  const _t = openingTokens(spine, parts.figures);
+  if (_t.all.length < 3) return '';
+  return `\n- YOUR FIRST TWELVE WORDS MUST CONTAIN AT LEAST ONE OF THESE, and it is\n  checked mechanically: ${_t.all.slice(0, 12).join(', ')}\n  Write the sentence any way you like \u2014 these are not a phrase to copy. They are\n  proof the finding itself is in the opening rather than a preamble about it. A\n  measured number counts, spelled out or in digits.`;
+})()}
 
 110-130 words. The worked example above governs. Match its MOVES, not its facts.
 
@@ -11461,22 +11737,16 @@ const verifyBrainEmail = (body, opts = {}) => {
   // by a generic opener that happens to be short.
   if (opts.spine) {
     const _open = text.split(/\s+/).slice(0, 14).join(' ').toLowerCase();
-    // ══ A GENERIC WORD MUST NOT COUNT AS THE FINDING ═══════════════════
-    // "reviews" was in the allowed set by accident of ordering, so an opener
-    // that spent fourteen words on what WE did — "I went through your website
-    // and your Google reviews carefully this morning" — satisfied the rule
-    // simply by containing the word "reviews". That is the exact shape this
-    // guard exists to stop.
-    //
-    // Stop-words are the words that appear in almost every finding. What is
-    // left is the distinctive part: "construction", "timelines", "outranking",
-    // "guarantee". If none of THOSE is in the opening, the finding is not.
-    const _STOP = /^(their|there|these|those|about|which|while|would|could|should|business|businesses|company|companies|website|websites|appears|anywhere|reviews?|reviewers?|google|customers?|clients?|people|owner|pages?|thing|things|same|names?|mention|mentions)$/;
-    const _key = String(opts.spine).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter(w => w.length > 4 && !_STOP.test(w));
-    const _hit = _key.filter(w => _open.includes(w)).length;
-    if (_key.length >= 3 && _hit === 0) {
-      return { ok: false, why: 'the finding does not appear in the first dozen words — the opening is spent on what we did or on praise, and that is the part that decides whether he reads on' };
+    const _tok = openingTokens(opts.spine, opts.figures);
+    // A figure counts wherever it appears in the opening — "6" inside "6 in
+    // the last 90 days" is the finding. A word must match on a boundary so
+    // "rank" does not satisfy itself out of "franking".
+    const _hitWord = _tok.words.filter(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(_open));
+    const _hitFig = _tok.figures.filter(f => _open.includes(String(f).toLowerCase()));
+    // Enough signal to judge at all. Below this the spine is too generic for
+    // absence to mean anything, exactly as before.
+    if (_tok.all.length >= 3 && !_hitWord.length && !_hitFig.length) {
+      return { ok: false, why: `the finding is not in the first twelve words \u2014 the opening is spent on what we did or on praise, and that is the part that decides whether he reads on. Open with the finding itself. Any ONE of these in the first twelve words satisfies it: ${_tok.all.slice(0, 12).join(', ')}` };
     }
   }
 
@@ -11539,7 +11809,20 @@ const verifyBrainEmail = (body, opts = {}) => {
     // actually holds.
     const NAMES_THE_FIX = [
       [/\b(would|will|could|can)\s+(fix|solve|stop|prevent|handle|catch|sort)\s+(that|this|it|the problem|them)\b/i, 'prescribes a fix'],
-      [/\b(a|an|the|your)\s+[a-z-]{3,20}\s+(system|tool|widget|platform|software|app|layer|service)\b[^.]{0,30}\b(would|will|could|can|fixes|solves|handles)\b/i, 'names a product as the answer'],
+      // ══ "SERVICE" IS NOT A PRODUCT WE SELL, IT IS HALF THE ICP ═══════════
+      // 'service' sat in a list of tech-product nouns — system, tool, widget,
+      // platform, software, app, layer — every one of which really is something
+      // we would be selling. It is also ordinary trade vocabulary, and this
+      // system supplies it: the trade table maps 'tree service' and 'septic
+      // service', both from live discovery categories. Verified against the real
+      // verifier, all three of these were refused as naming a product:
+      //   "your tree service will not come up in the map results"
+      //   "the tree service sitting above you can be reached in one tap"
+      //   "your septic service will not appear in the map results"
+      // The second is outranked_by_weaker describing his COMPETITOR — one of
+      // only two findings CLAUDE.md lists as having earned a reply. The words
+      // were the trade name we handed the writer ourselves.
+      [/\b(a|an|the|your)\s+[a-z-]{3,20}\s+(system|tool|widget|platform|software|app|layer)\b[^.]{0,30}\b(would|will|could|can|fixes|solves|handles)\b/i, 'names a product as the answer'],
       [/\b(what you need is|the fix is|the answer is|the solution is)\b/i, 'states the fix outright'],
       [/\b(a|an|your) (scheduler|booking (system|widget|tool|page)|online booking|chatbot|CRM|automation|autoresponder|response layer|AI (brain|layer|system|assistant)|landing page|funnel)\b/i, 'names the product'],
       // ══ NEVER DESCRIBE OUR OWN WORK ═════════════════════════════════════
@@ -11857,7 +12140,22 @@ const verifyBrainEmail = (body, opts = {}) => {
   // six, and every true number in the email dies with it.
   const COUNT_AS_PLACES = /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:different\s+|separate\s+)?(places?|spots?|locations?|pages?|sections?|areas?)\b/i;
   const _places = text.match(COUNT_AS_PLACES);
-  if (_places) {
+  // ══ ONLY WHEN THE NUMBER IS OUR FINDING COUNT ═════════════════════════
+  // This fired on ANY number followed by places/pages/locations anywhere in the
+  // body, and its message asserts "We never counted places" — which is false
+  // whenever the number is HIS: three locations he operates, two pages that
+  // carry the same headline, four markets he publishes. Those arrive through
+  // originalFindings and marketsSeen, which the evidence block hands the writer
+  // as ASSERTABLE. So a truthful sentence built from data we gave it was
+  // refused with a reason that was itself untrue.
+  //
+  // The rule is about ONE thing: our count of findings being restated as a
+  // count of places we looked. So it fires only when the number IS that count.
+  const _placeNum = _places ? String(_places[0]).match(/\d+|one|two|three|four|five|six|seven|eight|nine|ten/i) : null;
+  const _WORDNUM = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
+  const _placeN = _placeNum ? (Number(_placeNum[0]) || _WORDNUM[String(_placeNum[0]).toLowerCase()] || null) : null;
+  const _ourCount = Number(String(opts.count || '').match(/\d+/) || [NaN]);
+  if (_places && Number.isFinite(_ourCount) && _placeN === _ourCount) {
     return { ok: false, why: `"${_places[0]}" — the count is the number of FINDINGS, not the number of places we searched. We never counted places, and he can check that in one look at his own site.` };
   }
   // The same slip without a noun at all: "everywhere we looked", "across the
@@ -11877,7 +12175,7 @@ const verifyBrainEmail = (body, opts = {}) => {
   }
 
   // ── VOCABULARY THE OWNER WOULD NEVER USE ────────────────────────────────
-  const JARGON = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg)\b/i;
+  const JARGON = EMAIL_JARGON_RE;
   const j = text.match(JARGON);
   if (j) return { ok: false, why: `agency vocabulary — "${j[0]}"` };
 
@@ -11955,7 +12253,24 @@ const verifyBrainEmail = (body, opts = {}) => {
     // built around the noun rather than around the ways of asking for it.
     const MEETING_ASK = /\b(?:jump|hop|get) on (?:a |the )?(?:quick |short |brief )?(?:call|chat|zoom|line)\b|\b(?:set up|schedule|book|grab|find|have|spare) (?:a |some )?(?:quick |short |brief )?(?:call|chat|meeting|zoom|slot)\b|\b(?:time|room|space) for a (?:quick |short |brief )?(?:call|chat|meeting|zoom)\b|\bopen to a (?:quick |short |brief )?(?:call|chat|conversation)\b|\b(?:\d{1,2}|ten|fifteen|twenty|thirty) ?-? ?minutes?\b|\bare you free\b|\bdo you have (?:a )?(?:few )?(?:minutes?|time)\b|\bmy calendar\b|\bwhat does your (?:week|schedule|diary) look like\b|\bworth a (?:quick )?(?:call|chat)\b/i;
     const _ma = text.match(MEETING_ASK);
-    if (_ma) {
+    // ══ A DURATION IS NOT A REQUEST FOR HIS TIME ══════════════════════════
+    // The minutes clause was scoped to the whole body while the rule is about
+    // the ASK. The realistic casualty is a VERBATIM CUSTOMER REVIEW — those
+    // reach the writer inside the ASSERTABLE block as "his own reviewers,
+    // repeated", and a waiting complaint saying "we sat there twenty minutes"
+    // made the draft fail as though we had asked him for a meeting. Quoting a
+    // reviewer's own words is the single most persuasive move this system has.
+    //
+    // A bare duration only asks for his time if it sits in a request. Every
+    // other clause in MEETING_ASK already names the request itself and is
+    // unaffected.
+    const _bareDuration = _ma && /^(?:\d{1,2}|ten|fifteen|twenty|thirty) ?-? ?minutes?$/i.test(String(_ma[0]).trim());
+    const _askContext = /\b(?:call|chat|meeting|zoom|slot|spare|give|grab|find|take|need|got|have)\b/i;
+    const _sentenceWith = String(text).split(/(?<=[.!?])\s+/).find(s => s.includes(_ma ? _ma[0] : '\u0000')) || '';
+    const _quoted = /["\u201c\u201d]/.test(_sentenceWith);
+    if (_ma && _bareDuration && (_quoted || !_askContext.test(_sentenceWith))) {
+      // A duration with nobody asking for anything. Not a meeting request.
+    } else if (_ma) {
       return { ok: false, why: `"${_ma[0].trim()}" — this asks for his time. The only job of this email is to earn a REPLY; asking for a call asks him to decide something he has no reason to decide yet, and it turns an open question he wants answered into an appointment he can decline in one word` };
     }
   }
@@ -11963,10 +12278,39 @@ const verifyBrainEmail = (body, opts = {}) => {
   // ── IT MUST STILL BE ABOUT THE THING WE MEASURED ────────────────────────
   // A fluent email about the wrong subject is worse than a clumsy one about the
   // right subject. At least two content words of the spine must survive.
-  const spineWords = [...contentWords(opts.spine || '')];
-  if (spineWords.length >= 3) {
-    const kept = spineWords.filter(w => text.toLowerCase().includes(w)).length;
-    if (kept < 2) return { ok: false, why: 'drifted off the measured finding — the spine is barely present' };
+  // ══ THE SECOND HIDDEN LEXICAL RULE, AND IT SAID THE OPPOSITE ═══════════
+  // This required at least TWO of the spine's literal content words to appear
+  // as raw substrings anywhere in the body, with no stemming — "reviews" did
+  // not match "review", "slipping" did not match "slipped".
+  //
+  // The brief orders the opposite, three separate times: "Replace it", "The
+  // SENTENCE does not have to survive and should not", and the opening rule's
+  // own new line, "these are not a phrase to copy". So a writer following the
+  // instructions exactly was refused by a rule it was never shown, and the
+  // message — "drifted off the measured finding" — named nothing that would
+  // fix it, so the rewrite failed the same way.
+  //
+  // On the live Kurt Kavanaugh spine the silently-required set was
+  // {google, reviews, slowed, days} while the set the brief PRINTS is
+  // {slowed, 6, six, 10, ten, 90}. They overlap on one word. Fixing the
+  // twelve-word gate alone would have left this one killing the same drafts.
+  //
+  // The guard's PURPOSE is real: a fluent email about the wrong subject is
+  // worse than a clumsy one about the right subject. So it is kept and made
+  // honest — the FACTS must survive, not the wording. A measured figure counts
+  // (the brief already requires the numbers verbatim), and a word counts on its
+  // stem, so a writer may pluralise, tense-shift and reorder freely.
+  {
+    const _tok = openingTokens(opts.spine, opts.figures);
+    const _stem = (w) => String(w).toLowerCase().replace(/(?:ing|ed|es|s)$/, '');
+    const _lower = text.toLowerCase();
+    const _bodyStems = new Set(_lower.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).map(_stem));
+    const _keptWords = _tok.words.filter(w => _bodyStems.has(_stem(w)) || _lower.includes(_stem(w)));
+    const _keptFigs = _tok.figures.filter(f => _lower.includes(String(f).toLowerCase()));
+    const _kept = _keptWords.length + _keptFigs.length;
+    if (_tok.all.length >= 3 && _kept < 2) {
+      return { ok: false, why: `drifted off the measured finding \u2014 the email no longer carries it. At least TWO of these must appear somewhere in the body, in any form and any order: ${_tok.all.slice(0, 12).join(', ')}. Reword freely; keep the fact.` };
+    }
   }
   return { ok: true, body: text };
 };
@@ -13633,7 +13977,18 @@ const TRADE_JOB_VALUE = [
   // than fudged. A law firm matter spans a parking ticket to a wrongful-death
   // suit; there is no honest single figure and pretending otherwise is the same
   // failure in the other direction.
-  { re: /\bdentist|\bdental|\bdds|\bdmd|\borthodon/i, say: 'a single implant or ortho case runs $4k-$7k' },
+  // ══ AN ORTHODONTIST DOES NOT PLACE IMPLANTS ═══════════════════════════
+  // One row covered dentist, dental, DDS, DMD and orthodontist and said "a
+  // single implant or ortho case". Live, 2026-08-13, that sentence went into an
+  // email to an ORTHODONTIST — a specialty that does braces and aligners and
+  // refers implants out to oral surgery. It is the same cross-industry error
+  // already recorded twice in this file for roofing/waterproofing and garage
+  // doors/windows, and it is worse here: naming a procedure he does not perform
+  // tells him immediately that nobody read his site.
+  //
+  // Ortho FIRST, because the general row would otherwise swallow it.
+  { re: /\borthodon|\bbraces\b|\binvisalign|\baligner/i, say: 'a full orthodontic case runs $3k-$7k' },
+  { re: /\bdentist|\bdental|\bdds|\bdmd/i, say: 'a single implant or crown case runs $4k-$7k' },
   // Split from med spa and dermatology, which are a different order of magnitude
   // — the same cross-industry error the trade tables already record for roofing
   // and waterproofing. A botox appointment is not a rhinoplasty.
@@ -13872,10 +14227,41 @@ const buildFactualSpine = (harms, m = {}) => {
     // sending). The data is explicit that a follow-up on a weak point, or one
     // that just bumps, costs more in unsubscribes than it earns in replies — so
     // the follow-up must be able to see the finding's strength and decline.
-    restRungs: (harms.byHarm || [])
-      .filter(x => x.id !== lead.id)
-      .map(x => ({ id: x.id, finding: x.finding, costs: x.costs, harm: x.harm,
-                   reframe: x.reframe || null, blind: x.blind || '' })),
+    // ══ FOLLOW-UP 2 SENT A SENTENCE EMAIL 1 HAD ALREADY SENT ═══════════════
+    // This excluded the LEAD rung and nothing else. But email 1 carries TWO
+    // findings — the lead and _second — so the second one was still sitting in
+    // this list, and on Kurt Kavanaugh Orthodontics (live, 2026-08-13) it came
+    // back as follow-up 2, word for word:
+    //
+    //   email 1:     "Someone comparing three companies can find no price, no
+    //                 range and no starting point anywhere on the pages we read"
+    //   follow-up 2: "someone comparing three companies can find no price, no
+    //                 range and no starting point anywhere on the pages we read"
+    //
+    // Seventeen days apart, identical. The SEQUENCE CHECK asserts "nothing
+    // repeats", and it could not see this because it tests that the four
+    // touches have distinct CTAs and subjects, not that they carry distinct
+    // FINDINGS.
+    //
+    // ══ AND TWO REVIEW FINDINGS OPENED THE FIRST TWO TOUCHES ══════════════
+    // Every rung that describes the BUSINESS rather than the website is a
+    // review rung — review_pain_pattern, review_velocity_drop, review_deficit,
+    // low_rating, no_owner_replies, partial_owner_replies, not_compounding. So
+    // on any lead with a thin website, the top of the ladder is reviews and the
+    // sequence opens on reviews twice. On Kurt: velocity, then deficit. Our own
+    // CEO's note on that run was that the emails are too review-focused, and
+    // the prospect simulator said the same thing in the owner's voice.
+    //
+    // The fix is NOT to reorder the ladder — the ladder is not the constraint
+    // and reordering it has failed repeatedly. It is that a SEQUENCE should not
+    // spend two of its four touches on the same part of the business. Email 1
+    // already applies exactly this rule to its own second finding (_band(h) !==
+    // _band(lead)); it simply stopped at the first email.
+    //
+    // Order-only, and nothing is suppressed: a same-band finding is moved
+    // BEHIND the first differently-banded one, so if the ladder holds nothing
+    // else the sequence is exactly what it was.
+    restRungs: orderFollowUpRungs(harms.byHarm, lead.id, _second && _second.id, _band(lead)),
   };
 };
 
@@ -16247,39 +16633,11 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   // older than the far edge of the earlier window. If it is not, the two
   // windows are not equally observed and NOTHING is claimed. That is the whole
   // difference between a measurement and an artefact of pagination.
-  const velocity = (() => {
-    const DAY = 86400000, WINDOW = 90;
-    const dates = reviews
-      .map(r => (r && r.when ? Date.parse(r.when) : NaN))
-      .filter(t => Number.isFinite(t))
-      .sort((a, b) => b - a);
-    if (dates.length < 6) return { checked: false, why: `only ${dates.length} review(s) carry a readable date` };
-    const now = Date.now();
-    const edgeRecent = now - WINDOW * DAY;
-    const edgeEarlier = now - 2 * WINDOW * DAY;
-    const oldestRead = dates[dates.length - 1];
-    if (oldestRead > edgeEarlier) {
-      return { checked: false, truncated: true,
-        why: `the oldest review we read is only ${Math.round((now - oldestRead) / DAY)} days old, so the earlier ${WINDOW}-day window is cut off by our own page size rather than by their history - a comparison here would invent a decline` };
-    }
-    const recent = dates.filter(t => t >= edgeRecent).length;
-    const earlier = dates.filter(t => t < edgeRecent && t >= edgeEarlier).length;
-    // Noise floor. Two against one is not a trend, it is two customers. The
-    // earlier window has to carry enough for its absence to mean something.
-    if (earlier < 4) return { checked: false, why: `only ${earlier} review(s) in the earlier window - too few for a change to mean anything` };
-    const drop = (earlier - recent) / earlier;
-    return {
-      checked: true, recent, earlier, windowDays: WINDOW,
-      // A third down, and at least three fewer, is the point at which an owner
-      // would recognise it if he counted.
-      slowing: drop >= 0.34 && (earlier - recent) >= 3,
-      stopped: recent === 0,
-      growing: recent > earlier,
-      oldestReadDays: Math.round((now - oldestRead) / DAY),
-    };
-  })();
+  const velocity = measureReviewVelocity(
+    reviews.map(r => (r && r.when ? Date.parse(r.when) : NaN))
+  );
   if (velocity.checked) {
-    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'}. Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'} (${velocity.sigmas.toFixed(2)} sigma; under 2.00 the change cannot be told apart from randomness and NO trend is claimed). Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
   } else {
     console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
   }
@@ -31947,6 +32305,19 @@ app.listen(PORT, () => {
     if (parseTeamRoster('<h3>Tiffany Springs</h3><p>Owner</p>', 'Tiffany Springs Dental Group').length) {
       _inlineBad.push('the company\'s own name was returned as its owner');
     }
+    // ── "MEET DR. X" IS HOW A PRACTICE WRITES A TEAM CARD ─────────────────
+    // Live, 2026-08-13: 0 name/title pairs read from 12,078 characters on a site
+    // whose sitemap lists /meet-dr-kavanaugh and /meet-dr-zaara-baig. Three paid
+    // searches then found "Owner/Founder" on his own contact page.
+    const _meet = parseTeamRoster(
+      '<h3>Meet Dr. Kurt Kavanaugh</h3><p>Owner</p><h3>Meet Our Team</h3><p>Founder</p>',
+      'Kurt Kavanaugh Orthodontics');
+    if (!_meet.some(r => r.name === 'Kurt Kavanaugh' && r.isOwner)) {
+      _inlineBad.push('"Meet Dr. Kurt Kavanaugh" is still read as nobody — the honorific strip is anchored and on a team card the honorific is not first');
+    }
+    if (_meet.some(r => /Our Team|The Team/i.test(r.name))) {
+      _inlineBad.push('stripping the heading verb turned "Meet Our Team" into a person');
+    }
     if (_inlineBad.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_inlineBad.join(' | ')}.`);
     } else if (_missing.length) {
@@ -33219,6 +33590,342 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ JOB POSTING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THREE THINGS A LIVE EMAIL TO AN ORTHODONTIST GOT WRONG ═════════════
+  // Kurt Kavanaugh Orthodontics, 2026-08-13. The email opened:
+  //   "your Google reviews have slowed — 6 in the last 90 days, against 10 in
+  //    the 90 days before that"
+  //   "...before committing to a orthodontist"
+  //   "A single implant or ortho case runs $4k-$7k"
+  //
+  // The first is not true, the second is a grammar error in the opening
+  // paragraph of an email whose entire claim is that somebody looked carefully,
+  // and the third names a procedure an orthodontist does not perform.
+  try {
+    const _fails = [];
+    // 1. A SLOWDOWN MUST BE BIGGER THAN CHANCE, AND THIS RUNS THE REAL GATE.
+    // The first version of this block reimplemented the arithmetic locally and
+    // PASSED with the shipped gate deliberately removed — the third time in one
+    // day a check in this file tested a copy instead of the thing. So the real
+    // measurement is now a function and this calls it.
+    //
+    // Dates are built backwards from a pinned clock so the windows are exact.
+    const _DAY = 86400000, _NOW = Date.UTC(2026, 7, 13);
+    const _dates = (recent, prior) => {
+      const out = [];
+      for (let i = 0; i < recent; i++) out.push(_NOW - (5 + i % 80) * _DAY);        // inside 90
+      for (let i = 0; i < prior; i++) out.push(_NOW - (95 + i % 80) * _DAY);        // 90-180
+      // Three fillers, well outside both windows. They prove the earlier window
+      // is fully observed AND clear the six-date minimum, which a 0-vs-4 case
+      // does not reach on its own — the first version of this fixture failed
+      // for that reason and the failure was in the TEST, not in the gate.
+      out.push(_NOW - 400 * _DAY, _NOW - 420 * _DAY, _NOW - 440 * _DAY);
+      return out;
+    };
+    const _v = (r, p) => measureReviewVelocity(_dates(r, p), _NOW);
+    const _slow = (r, p) => {
+      const v = _v(r, p);
+      if (!v.checked) { _fails.push(`${r} against ${p} did not even measure: ${v.why}`); return false; }
+      if (v.recent !== r || v.earlier !== p) { _fails.push(`window arithmetic is wrong: asked for ${r}/${p}, measured ${v.recent}/${v.earlier}`); return false; }
+      return v.slowing;
+    };
+    const _sig = (r, p) => { const v = _v(r, p); return v.checked ? v.sigmas : 0; };
+    // The live case. 6 vs 10 is exactly 1.00 sigma — the most ordinary outcome
+    // randomness produces — and it became an opening sentence.
+    if (_slow(6, 10)) _fails.push('6 reviews against 10 still reports as a slowdown; that is 1.00 sigma, which a steady business produces by luck about a third of the time, and it opened a live email');
+    if (_slow(2, 6)) _fails.push('2 against 6 still reports as a slowdown (1.41 sigma)');
+    if (_slow(3, 8)) _fails.push('3 against 8 still reports as a slowdown (1.51 sigma)');
+    // And the cases this feature exists for must survive. Both are quoted in
+    // the function's own comment as the motivating example.
+    if (!_slow(11, 26)) _fails.push('eleven against twenty-six no longer reports as a slowdown — that is 2.47 sigma and it is the example this feature was written for');
+    if (!_slow(12, 26)) _fails.push('twelve against twenty-six no longer reports (2.27 sigma)');
+    if (!_slow(40, 100)) _fails.push('forty against a hundred no longer reports (5.07 sigma)');
+    if (!_slow(8, 20)) _fails.push('eight against twenty no longer reports (2.27 sigma)');
+    // A full stop from a real base still clears it.
+    if (_sig(0, 4) < 2) _fails.push('a complete stop from four is no longer distinguishable');
+    // deepReviewMine must go through that same function — if it keeps its own
+    // inline copy, everything above is testing a second implementation again.
+    if (!/const velocity = measureReviewVelocity\(/.test(require('fs').readFileSync(__filename, 'utf8'))) {
+      _fails.push('the review miner is not calling measureReviewVelocity, so it has its own copy of the gate and nothing above describes what ships');
+    }
+    // 2. ARTICLE AGREEMENT, BY SOUND. These are real trade words this pipeline
+    // has read off real homepages.
+    for (const [w, want] of [
+      ['orthodontist', 'an'], ['electrician', 'an'], ['architect', 'an'],
+      ['attorney', 'an'], ['accountant', 'an'], ['optometrist', 'an'],
+      ['engineer', 'an'], ['oral surgeon', 'an'], ['insurance agent', 'an'],
+      ['roofer', 'a'], ['plumber', 'a'], ['dentist', 'a'], ['builder', 'a'],
+      ['cosmetic surgeon', 'a'], ['foundation repair contractor', 'a'],
+      ['urologist', 'a'], ['uniform supplier', 'a'],
+      ['hvac contractor', 'an'], ['upholsterer', 'an'],
+    ]) {
+      const got = anFor(w);
+      if (got !== want) _fails.push(`"${got} ${w}" — it is "${want} ${w}". The trade is read off their own homepage, so it is whatever word they use, and this sits in the opening paragraph`);
+    }
+    if (anFor('') !== 'a' || anFor(null) !== 'a') _fails.push('a missing trade word does not fall back cleanly');
+    // 3. AN ORTHODONTIST DOES NOT PLACE IMPLANTS.
+    const _money = (t) => { const row = TRADE_JOB_VALUE.find(x => x.re.test(t)); return row ? row.say : ''; };
+    const _ortho = _money('orthodontist');
+    if (/implant/i.test(_ortho)) {
+      _fails.push(`an orthodontist is still told "${_ortho}" — implants are oral surgery, and naming a procedure he does not perform tells him nobody read his site`);
+    }
+    if (!/orthodontic/i.test(_ortho)) _fails.push(`an orthodontist gets "${_ortho}", which does not describe orthodontics`);
+    if (!/implant|crown/i.test(_money('dentist'))) _fails.push('a general dentist lost his own figure to the ortho split');
+    if (_money('invisalign provider') === _money('dentist')) { /* fine either way */ }
+    if (_fails.length) {
+      console.log(`⛔ LIVE EMAIL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LIVE EMAIL CHECK: a review slowdown must now be bigger than randomness (two sigma) before it can be stated — six against ten is 1.00 sigma and is refused, while eleven against twenty-six and a full stop still stand; the article agrees with the trade word by sound, so "a orthodontist" cannot go out again; and an orthodontist is quoted an orthodontic case rather than an implant.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LIVE EMAIL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE SEQUENCE SPENT TWO TOUCHES ON ONE FINDING ══════════════════════
+  // Kurt Kavanaugh Orthodontics, live, 2026-08-13. Email 1 carried the review
+  // slowdown and the missing pricing. Follow-up 1 carried the review deficit —
+  // reviews again — and follow-up 2 carried the missing pricing AGAIN, word for
+  // word, seventeen days later.
+  //
+  // Both are structural. Every rung that describes the BUSINESS rather than the
+  // website is a review rung, so on a thin-website lead the ladder's top is
+  // reviews and the sequence opens on reviews twice; and the follow-up pool
+  // excluded only the LEAD rung while email 1 carries two findings.
+  //
+  // This runs the real selector. Reimplementing it here is how three checks in
+  // this file passed today while the shipped code was broken.
+  try {
+    const _fails = [];
+    // Kurt's actual ladder, in his actual order, with the real bands.
+    const KURT = [
+      { id: 'review_velocity_drop', band: 'INVISIBLE', harm: 72, finding: 'reviews slowed' },
+      { id: 'no_pricing',           band: 'BLOCKS',    harm: 66, finding: 'no price anywhere' },
+      { id: 'review_deficit',       band: 'INVISIBLE', harm: 68, finding: 'behind on reviews' },
+      { id: 'partial_owner_replies',band: 'INVISIBLE', harm: 58, finding: 'most reviews unanswered' },
+      { id: 'no_guarantee',         band: 'BLOCKS',    harm: 56, finding: 'no guarantee' },
+    ];
+    const _rest = orderFollowUpRungs(KURT, 'review_velocity_drop', 'no_pricing', 'INVISIBLE');
+    const _ids = _rest.map(r => r.id);
+    if (_ids.includes('review_velocity_drop')) _fails.push('the lead rung is back in the follow-up pool');
+    if (_ids.includes('no_pricing')) {
+      _fails.push('the second finding from email 1 is still in the follow-up pool — that is exactly how follow-up 2 re-sent "no price, no range and no starting point" seventeen days after email 1 said it');
+    }
+    if (_ids[0] !== 'no_guarantee') {
+      _fails.push(`follow-up 1 opens on "${_ids[0]}" — on this lead the first two touches were both review findings, which is the note our CEO gave on this exact run. A different part of the business has to come first when one is available`);
+    }
+    // Order-only: nothing may be dropped.
+    if (_rest.length !== 3) _fails.push(`the pool lost findings: ${_rest.length} of 3 survived — this reorders, it never suppresses`);
+    if (!_ids.includes('review_deficit') || !_ids.includes('partial_owner_replies')) {
+      _fails.push('a same-band finding was removed rather than moved behind');
+    }
+    // With nothing else available the sequence must be exactly what it was.
+    const _only = orderFollowUpRungs(
+      [{ id: 'a', band: 'INVISIBLE', harm: 70 }, { id: 'b', band: 'INVISIBLE', harm: 60 }],
+      'lead', null, 'INVISIBLE');
+    if (_only.map(r => r.id).join(',') !== 'a,b') {
+      _fails.push('when every remaining finding shares the lead band the order changed — with nothing else to offer the sequence must be untouched');
+    }
+    if (orderFollowUpRungs(null, 'x', 'y', 'Z').length !== 0) _fails.push('a missing ladder does not return empty');
+    // And the caller must go through it.
+    if (!/restRungs: orderFollowUpRungs\(/.test(require('fs').readFileSync(__filename, 'utf8'))) {
+      _fails.push('the spine is not using orderFollowUpRungs, so it has its own copy and nothing above describes what ships');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SEQUENCE DIVERSITY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SEQUENCE DIVERSITY CHECK: a finding email 1 already used cannot come back as a follow-up, and a follow-up opens on a different part of the business than the lead did when one is available. Order-only — nothing is suppressed, and when the ladder holds nothing else the sequence is exactly what it was. On Kurt Kavanaugh's real ladder the first two touches were both review findings and follow-up 2 re-sent email 1's pricing sentence verbatim.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SEQUENCE DIVERSITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE GATE THAT SENT EVERY GOOD EMAIL BACK TO THE TEMPLATE ═══════════
+  // From the live logs, both attempts, four separate leads — Kurt Kavanaugh
+  // Orthodontics, Window Doctor of Colorado, Sohan & Son's Waterproofing, Oral
+  // & Facial Surgery of Oklahoma:
+  //
+  //   "BRAIN DRAFT REJECTED: the finding does not appear in the first dozen
+  //    words" ... "REWRITE ALSO REJECTED: [same]" ... "sending the composed
+  //    version"
+  //
+  // The rule is right. The test demanded one of the SPINE'S OWN WORDS appear
+  // verbatim, after stripping words under five letters and a stop-list that
+  // contained "reviews", "google", "business" and "customers". For Kurt's
+  // review-velocity spine the entire required set was:
+  //
+  //     slowed, against, before
+  //
+  // Two prepositions. A writer paraphrases — "prior" for "before" — and was
+  // refused. Numbers were excluded outright by the length filter, so an opening
+  // stating the exact measured figures was refused too.
+  //
+  // Review findings suffered worst, because their subject nouns are the stopped
+  // ones; a pricing finding yields price, range, starting, point. And the
+  // composed template that ships on failure LEADS on the review finding. That is
+  // the mechanism behind "every email is about reviews".
+  try {
+    const _fails = [];
+    const KURT = 'their Google reviews have slowed — 6 in the last 90 days, against 10 in the 90 days before that';
+    const _t = openingTokens(KURT, ['6', '10', '90']);
+    // The connectives must be gone.
+    for (const bad of ['against', 'before', 'after', 'within', 'between']) {
+      if (_t.words.includes(bad)) _fails.push(`"${bad}" still counts as the finding — it is a preposition that is only in the spine because of how the sentence happens to be built`);
+    }
+    if (!_t.words.includes('slowed')) _fails.push('"slowed" — the verb that IS the finding — is no longer required');
+    // Figures count, in both forms a writer would use.
+    for (const want of ['6', 'six', '10', 'ten', '90']) {
+      if (!_t.all.includes(want)) _fails.push(`"${want}" is not accepted as proof the finding is in the opening; a measured figure is the hardest evidence a sentence can carry, and the length filter used to drop every number`);
+    }
+    // A big figure written the way a person writes it.
+    const _big = openingTokens('the businesses at the top of that search average 2344 each', ['2344']);
+    if (!_big.figures.includes('2,344')) _fails.push('2,344 written with a comma is not recognised as the measured 2344');
+    // BEHAVIOUR, through the real verifier. The shape that was rejected twice.
+    const _opts = { spine: KURT, figures: ['6', '10', '90'], money: '', earned: '', count: '', trade: 'orthodontist' };
+    const _good = verifyBrainEmail(
+      'Kurt, six reviews came in over the last ninety days against ten in the ninety before.\n\n' +
+      'A stranger checking whether you are still busy reads the dates, not the total.\n\n' +
+      'I wrote up what we measured. Want it?', _opts);
+    if (!_good.ok) _fails.push(`a paraphrased opening carrying the finding and the figures is STILL rejected: ${_good.why}`);
+    // And the two shapes the rule exists to stop must still be stopped.
+    const _pre = verifyBrainEmail(
+      'Kurt, I went through your website and your Google reviews carefully this morning.\n\n' +
+      'I wanted to share what I noticed.\n\nWant me to send it over?', _opts);
+    if (_pre.ok) _fails.push('an opening spent on what WE did now passes — that is the exact shape this rule exists to stop');
+    const _praise = verifyBrainEmail(
+      'Kurt, you have built something really impressive here and I wanted to reach out.\n\n' +
+      'There is an opportunity worth a look.\n\nWant me to send it?', _opts);
+    if (_praise.ok) _fails.push('an opening spent on praise now passes');
+    // ONE SOURCE. The brief must print the same list the gate tests, or the
+    // writer is being marked against a rule it was told differently.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if ((_code.match(/openingTokens\(/g) || []).length < 3) {
+      _fails.push('openingTokens is not used by both the brief and the gate — two copies of this rule is how the writer ends up marked against something it was never told');
+    }
+    // Split so the scan cannot match its own source. Written whole, this line
+    // found ITSELF and passed with the brief instruction deleted — the same
+    // way the review-deficit scan and the content[0] scan each did earlier.
+    if (!new RegExp('YOUR FIRST TWELVE ' + 'WORDS MUST CONTAIN').test(_src)) {
+      _fails.push('the writer brief never states the required tokens, so the model has to guess which words satisfy an invisible test — which is what it was doing');
+    }
+    if (!new RegExp('Any ONE of these in the ' + 'first twelve words satisfies').test(_src)) {
+      _fails.push('the rejection message does not name the tokens, so the rewrite is told what is wrong but not what would fix it — that is why the second attempt failed identically on all four leads');
+    }
+    if (_fails.length) {
+      console.log(`⛔ OPENING RULE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ OPENING RULE CHECK: the opening qualifies on a measured FIGURE or a genuinely distinctive word — never on a preposition, and numbers count in digits or spelled out. Kurt's required set went from "slowed, against, before" to "slowed, 6, six, 10, ten, 90". A paraphrased opening passes, preamble and praise are still refused, the brief prints the same list the gate tests, and the rejection message names it so a rewrite can act on it.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OPENING RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ FIVE MORE RULES THE WRITER WAS NEVER TOLD ══════════════════════════
+  // Found by an exhaustive audit of the email path after the twelve-word gate
+  // was fixed, then each one adversarially verified by executing the real
+  // verifier. Seven other claimed defects were refuted and are not here.
+  //
+  // They are one disease: THE VERIFIER ENFORCED RULES THE BRIEF NEVER STATED,
+  // AND ITS REJECTION MESSAGES NAMED NOTHING THAT WOULD FIX THEM — so the
+  // rewrite, which is handed only that message, failed the same way every time
+  // and the composed template shipped.
+  try {
+    const _fails = [];
+    const K = 'their Google reviews have slowed — 6 in the last 90 days, against 10 in the 90 days before that';
+    const _o = (over) => ({ spine: K, figures: ['6', '10', '90'], money: '', earned: '', count: '', trade: 'orthodontist', ...over });
+    const P = (b, over) => verifyBrainEmail(b, _o(over));
+
+    // 1. SPINE DRIFT — the blocker. The brief says "Replace it"; the gate
+    // silently demanded two of the spine's literal words, unstemmed.
+    // The audit's own discriminating example. The first draft written here kept
+    // "days" and "against" by accident and satisfied the OLD gate too, so it
+    // proved nothing — verified by restoring the original gate and watching the
+    // check still pass. This one shares NO word with its spine, which is exactly
+    // what "replace the wording" produces and exactly what used to be refused.
+    const _driftSpine = 'Two of your reviews mention timelines slipping';
+    const _reworded =
+      'Kurt, two people who left you feedback describe the same slipped schedule.\n\n' +
+      'That lands in the middle of a five-figure decision, right when someone is trying to move forward.\n\n' +
+      'Was that a one-off, or does it come up on your end?';
+    const _rw = verifyBrainEmail(_reworded, _o({ spine: _driftSpine, figures: ['2'] }));
+    if (!_rw.ok) _fails.push(`a fully reworded draft that keeps every measured figure is still refused: ${_rw.why}`);
+    // But a genuine drift — no figures, no finding — must still be caught.
+    const _drift = P('Kurt, most practices in your position find their marketing is not pulling its weight.\n\n' +
+      'It is usually the same handful of causes.\n\nWorth a look?');
+    if (_drift.ok) _fails.push('an email carrying none of the finding now passes — the drift guard has been removed rather than corrected');
+
+    // 2. "SERVICE" IS THE ICP, NOT A PRODUCT WE SELL. All three of these were
+    // refused as naming a product; the second is outranked_by_weaker describing
+    // his competitor, one of only two findings with a reply behind it.
+    for (const [what, body] of [
+      ['his own trade', 'Dave, your tree service will not come up in the map results when somebody nearby searches for one.\n\nThat decides who gets called before you are in the conversation.\n\nWant the list?'],
+      ['his competitor', 'Dave, the tree service sitting above you can be reached in one tap and you are not on the list at all.\n\nPeople pick from what is in front of them.\n\nWho handles that for you?'],
+      ['a second trade', 'Dave, your septic service will not appear in the map results for anybody searching nearby.\n\nThat is the search a customer actually types.\n\nHad you seen it?'],
+    ]) {
+      const v = verifyBrainEmail(body, { spine: 'they do not come up in the Google map results for tree service',
+        figures: [], money: '', earned: '', count: '', trade: 'tree service' });
+      if (!v.ok && /names a product as the answer/.test(String(v.why))) {
+        _fails.push(`an email about ${what} is still refused as naming a product we sell — "service" is ordinary trade vocabulary and this system supplies it from its own trade table`);
+      }
+    }
+    // A real product pitch must still be refused.
+    // Long enough to clear the 25-word floor, or that gate fires first and this
+    // asserts nothing. The first version was 17 words and did exactly that.
+    const _prod = P('Kurt, six reviews came in over the last ninety days against ten in the ninety before that.\n\n' +
+      'A booking system would fix this in an afternoon and most practices your size already run one.\n\n' +
+      'Want me to send the write-up over?');
+    // Assert it is REFUSED, not which of the eight NAMES_THE_FIX rules fires.
+    // The first version demanded the "names a product" message specifically and
+    // failed because a sibling rule — "would fix this" prescribes a fix — is
+    // matched earlier in the same list. The draft was correctly refused the
+    // whole time; the assertion was wrong, which is its own lesson: a check
+    // that pins the exact wording of a rejection breaks when the gate is
+    // reordered, and reports a regression that did not happen.
+    if (_prod.ok) {
+      _fails.push('"a booking system would fix this in an afternoon" now passes — narrowing the trade-word false positive removed the rule instead of correcting it');
+    }
+
+    // 3. COUNT AS PLACES — fired on HIS numbers and its message asserted
+    // something false about them.
+    const _his = verifyBrainEmail(
+      'Kurt, the same headline appears on three pages of your site, word for word.\n\n' +
+      'Two of them are the pages a search lands on.\n\nWas that deliberate?',
+      { spine: 'the same headline appears on three pages', figures: ['3'], count: '5', money: '', earned: '', trade: 'orthodontist' });
+    if (!_his.ok && /never counted places/.test(String(_his.why))) {
+      _fails.push('a truthful sentence about HIS OWN pages is still refused with "We never counted places" — a message that is itself false whenever the number is his');
+    }
+    // Our finding count restated as places must still be refused.
+    const _ours = verifyBrainEmail(
+      'Kurt, we found problems in five different places across your site.\n\nThat is the pattern.\n\nWant them?',
+      { spine: 'the same headline appears on three pages', figures: [], count: '5', money: '', earned: '', trade: 'orthodontist' });
+    if (_ours.ok) _fails.push('restating OUR finding count as a number of places we searched now passes — that is the claim this rule exists to stop');
+
+    // 4. A DURATION IN A QUOTED REVIEW IS NOT A MEETING REQUEST.
+    const _quote = P('Kurt, one of your reviewers wrote "we sat in the waiting room twenty minutes past our appointment".\n\n' +
+      'Two others say the same thing.\n\nHad that come up?');
+    if (!_quote.ok && /asks for his time/.test(String(_quote.why))) {
+      _fails.push('a verbatim customer review containing a duration is still refused as a request for his time — review quotes are the most persuasive move this system has and they arrive in the ASSERTABLE block');
+    }
+    // A real meeting ask must still be refused.
+    const _meet = P('Kurt, six reviews came in over the last ninety days against ten before.\n\n' +
+      'That is the gap.\n\nGot fifteen minutes for a call this week?');
+    if (_meet.ok) _fails.push('an actual request for fifteen minutes on a call now passes');
+
+    // 5. THE JARGON LIST MUST BE THE WHOLE RULE, NOT A SUMMARY OF IT.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    for (const t of EMAIL_JARGON_TERMS) {
+      if (!EMAIL_JARGON_RE.test(t)) _fails.push(`the brief discloses "${t}" but the gate does not test it`);
+    }
+    for (const t of ['impressions', 'nurture', 'attribution', 'retargeting', 'schema']) {
+      if (!EMAIL_JARGON_TERMS.includes(t)) _fails.push(`the gate bans "${t}" and the brief never tells the writer`);
+    }
+    if (!/EMAIL_JARGON_TERMS\.join/.test(_src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n'))) {
+      _fails.push('the brief writes its own banned-word list instead of generating it from the gate — two hand-kept copies of one rule is how they came to disagree');
+    }
+    if (_fails.length) {
+      console.log(`⛔ HIDDEN RULE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ HIDDEN RULE CHECK: a fully reworded draft that keeps the figures survives the drift gate while a genuine drift is still caught; "your tree service will not come up" and the competitor sentence beside it are no longer read as naming a product we sell, though a real product pitch still is; a count of HIS pages is no longer refused with a reason that was false; a duration inside a quoted review is no longer read as asking for his time, though a real meeting ask still is; and the brief's banned-word list is generated from the gate, so it can no longer disclose nine of twenty.`);
+    }
+  } catch (e) {
+    console.log(`⛔ HIDDEN RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
@@ -35679,6 +36386,13 @@ app.post('/api/compose-email', async (req, res) => {
             pattern: _parts.pattern || '', reframe: _parts.reframe || '',
             money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
             second: _parts.second || '', blind: _parts.blind || '',
+            // ══ THE FIGURES, SO THE OPENING RULE CAN NAME THEM ═══════════
+            // openingTokens treats a measured figure as proof the finding is
+            // in the opening — "you had 6 reviews in the last 90 days" carries
+            // the whole finding. Without this the writer is handed the rule
+            // with the number half missing while the VERIFIER still counts
+            // them, which is the drift this whole change exists to remove.
+            figures: _figs,
             // Who he is, so the email is not written to a generic owner.
             trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
             tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
