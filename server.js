@@ -9619,13 +9619,41 @@ const measureReviewVelocity = (timestamps, now = Date.now()) => {
 //     NOT a ladder reorder — the ladder is not the constraint and reordering it
 //     has failed repeatedly. Email 1 already applies this exact rule to its own
 //     second finding; it simply stopped at the first email.
-const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand) => {
+// ══ BAND IS NOT SUBJECT MATTER ═══════════════════════════════════════════════
+// This diversified by ladder BAND, and INVISIBLE covers reviews AND search
+// visibility. Live, 2026-08-14, a personal injury firm — every one of the four
+// touches was about his reviews:
+//
+//   email 1   5 of your own Google reviews name the same thing
+//   follow 1  your Google reviews have stopped
+//   follow 2  businesses with FEWER REVIEWS than yours are ranking above you
+//   break-up  5 of your own Google reviews name the same thing (again)
+//
+// All three findings sit in INVISIBLE, so `fresh` was empty, `same` supplied
+// everything, and the ordering did nothing at all. The rule was right and the
+// dimension was wrong.
+//
+// AREA_OF already exists and already files all seven review rungs under
+// 'Reputation', separately from 'Being found', 'Google listing' and 'Why
+// choose them'. That is subject matter, which is what a reader experiences —
+// he does not know what a band is, he knows he has been sent four emails about
+// his reviews.
+//
+// Band is kept as the tie-breaker so nothing that used to work stops working.
+// Order-only: a same-subject finding moves BEHIND the first different-subject
+// one, so when the ladder holds nothing else the sequence is exactly what it
+// was.
+const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand, leadId2) => {
   const used = new Set([leadId, secondId].filter(Boolean));
   const pool = (Array.isArray(byHarm) ? byHarm : []).filter(x => x && !used.has(x.id));
   const bandOf = (h) => String((h && h.band) || '');
-  const fresh = pool.filter(x => bandOf(x) !== String(leadBand || ''));
-  const same  = pool.filter(x => bandOf(x) === String(leadBand || ''));
-  return [...fresh, ...same].map(x => ({ id: x.id, finding: x.finding, costs: x.costs,
+  const areaOf = (h) => String((h && AREA_OF[h.id]) || '');
+  const leadArea = String(AREA_OF[leadId] || '');
+  const diffSubject = pool.filter(x => leadArea && areaOf(x) && areaOf(x) !== leadArea);
+  const rest = pool.filter(x => !diffSubject.includes(x));
+  const fresh = rest.filter(x => bandOf(x) !== String(leadBand || ''));
+  const same  = rest.filter(x => bandOf(x) === String(leadBand || ''));
+  return [...diffSubject, ...fresh, ...same].map(x => ({ id: x.id, finding: x.finding, costs: x.costs,
     harm: x.harm, reframe: x.reframe || null, blind: x.blind || '' }));
 };
 
@@ -14365,6 +14393,26 @@ const looksLikePractitionerAtGroup = (companyName, website) => {
 const LADDER_OPENER_GATE = 45;
 const LADDER_HARM_FLOOR = 45;
 
+// ══ THE FINDINGS WE CANNOT SELL A FIX FOR ══════════════════════════════════
+// Keyed by rung id, because sellability is a property of the rung and not of
+// how its sentence is worded this week. Each of these is a task the owner
+// performs himself, at no cost, with nobody's help — so an email that OPENS
+// there has nothing behind it worth buying, however true it is.
+//
+// They are not removed. They keep their harm, their place in the ranked list,
+// their row in the audit and their line on the call sheet, and they may still
+// be the SECOND finding. They simply cannot be the sentence a stranger reads
+// first. And if nothing else on the lead qualifies, the block is ignored.
+const NOT_SELLABLE_OPENER = {
+  review_deficit: 'being behind on reviews is fixed by asking his own customers — he tells his crew and it is done, and there is nothing in it for us to be engaged on',
+  not_compounding: 'the fix is asking finished customers for a review, which needs nobody',
+  review_velocity_drop: 'the fix is asking for reviews again — a conversation with his own staff, today, at no cost',
+  no_owner_replies: 'replying to his own reviews is an afternoon of his own time',
+  partial_owner_replies: 'replying to the rest of his reviews is an afternoon of his own time',
+  stale_reviews: 'the fix is asking recent customers to post — free, immediate, and his to do',
+  low_rating: 'a rating is an average of work already done; nothing we sell changes it, and saying so to an owner reads as an insult rather than a finding',
+};
+
 const rankHarms = (m = {}) => {
   const hits = [];
   // ══ A FINDING ABOUT SOMEBODY ELSE'S BUSINESS MODEL ══════════════════════
@@ -14703,12 +14751,45 @@ const rankHarms = (m = {}) => {
     // someone already in conversation. It just cannot be the sentence a stranger
     // opens with, to a buyer who was never going to try.
     const _wrongBuyer = _urgAdj <= -20;
+    // ══ WE DO NOT SELL A REVIEW FIX ═══════════════════════════════════════
+    // Vin, 2026-08-14, on a live email whose four touches were ALL about
+    // reviews: "we can't sell them anything for reviews, they don't need our
+    // help with reviews... it should never be what our emails are centred
+    // around". He is right, and it is a business fact rather than a taste one.
+    // Every product this company sells is an engagement: a rebuild, a software
+    // build, a retainer, exit advice. "Ask your customers for reviews" and
+    // "reply to the ones you have" are afternoons of his own time. An email that
+    // opens there has nothing behind it to buy.
+    //
+    // computeSelfFix already exists to catch this and CANNOT, because it matches
+    // the finding's TEXT and the review sentences have been rewritten since
+    // those patterns were written. review_pain_pattern's live sentence — "5 of
+    // your own Google reviews name the same thing" — matches no rule, falls to
+    // the default "assumed to need us", and takes a penalty of ZERO. The
+    // strongest review finding on the ladder is unpenalised by the exact
+    // mechanism built to penalise it.
+    //
+    // So this is keyed by rung ID. Sellability is a property of the RUNG, not
+    // of how its sentence happens to be phrased this week, and a table that
+    // cannot drift is the whole point.
+    //
+    // review_pain_pattern is deliberately NOT here. CLAUDE.md PART 5 records it
+    // as one of only two findings with a reply behind it, and a repeating
+    // complaint about communication is an operations problem we genuinely do
+    // build for. It has to EARN the opener against a sellable finding rather
+    // than win by default, which is what the rest of this change is for.
+    //
+    // Nothing is suppressed. A blocked rung keeps its harm, its rank, its audit
+    // row and its call-sheet line, and if EVERY eligible finding is blocked the
+    // block is ignored — a weaker opener still beats no email.
+    const _notSellable = !!NOT_SELLABLE_OPENER[h.id];
 
     hits.push({ id: h.id, band: h.band, harm: harmAdj, harmBase: h.harm, specific: h.specific, novel: h.novel,
       // Read by the lead selection below. A blocked rung keeps its harm, its
       // place in the list and its row in the audit; it simply cannot be first.
-      leadBlocked: _dismissible || _wrongBuyer,
-      leadBlockedWhy: _dismissible
+      leadBlocked: _dismissible || _wrongBuyer || _notSellable,
+      leadBlockedWhy: _notSellable ? NOT_SELLABLE_OPENER[h.id]
+        : _dismissible
         ? `only ${m.reviewPainMentions} of the ${m.reviewsRead || '?'} reviews we read name it, and he will do that division before he finishes the sentence`
         : _wrongBuyer
           ? `${m.purchaseUrgency === 'EMERGENCY' ? 'people contact this trade when something has already gone wrong, and nobody compares providers mid-crisis' : 'people research this purchase for weeks and decide long before they make contact'}, so this describes a customer who does not exist here (${_urgAdj} on the urgency table)`
@@ -21350,7 +21431,33 @@ const WEIGHTS = {
     // influence which leads we prioritize. Now it runs on the top leads at FIND
     // time, so the ranking actually reflects it. Ad spend also decays fastest of
     // any signal (7-day half-life) — they could pause the campaign tomorrow.
-    if (firecrawlKey) {
+    // ══ TWELVE PAID SCRAPES A RUN FOR A NUMBER THAT DECIDES NOTHING ═══════
+    // This fires twelve Firecrawl scrapes at facebook.com on every discovery
+    // run, ungated. Its own success line says what it is worth:
+    //
+    //   "Ad Library (Firecrawl): Bullpen Capital -> 0 keyword hits
+    //    (presence-only - not a verified per-advertiser count, won't drive
+    //    recommendation)"
+    //
+    // The RESEARCH-route twin of this call was gated behind AD_LIBRARY_SCRAPE
+    // long ago, with a comment reading "it cannot influence a single decision".
+    // That reasoning applies here identically and this call site was simply
+    // never included in the fix.
+    //
+    // It is not merely wasted. facebook.com is heavily bot-protected, so the
+    // twelve calls land together and trip Firecrawl's rate limiter. Live,
+    // 2026-08-14, in this exact block:
+    //
+    //   FIRECRAWL RATE LIMITED ... backing off 4s (attempt 1/3)
+    //   FIRECRAWL RATE LIMITED ... backing off 8s (attempt 2/3)
+    //   FIRECRAWL RATE LIMITED ... backing off 12s (attempt 3/3)
+    //   FIRECRAWL STILL RATE LIMITED after 3 attempts - this lead's audit is
+    //   INCOMPLETE
+    //
+    // Twenty-four seconds of sleep, a dozen credits, an incomplete audit, and a
+    // throttle carried into the leads that ran next - all to learn a count the
+    // code refuses to act on. Same switch as the other call site.
+    if (firecrawlKey && process.env.AD_LIBRARY_SCRAPE === 'on') {
       const adCheckPool = toEnrich.slice(0, 12).filter(c => c.website);
       if (adCheckPool.length > 0) {
         const adResults = await Promise.allSettled(
@@ -22812,6 +22919,35 @@ const pickRankRow = (results) => {
   if (!found.length) {
     return { row: rows.find(r => r.kind === 'primary trade') || rows[0],
              note: 'they were not found for any query — absence is the finding and it travels by its own route' };
+  }
+  // ══ ABSENT FOR A SERVICE HE PUBLISHES A PAGE ABOUT ════════════════════
+  // absent_from_search carries harm 96 — higher than every review rung on the
+  // ladder — and its test is `rankChecked && rankFound === false`. It reads the
+  // row this function hands back, and this function preferred a FOUND row, so
+  // the rung could only ever fire when a business was missing for its HEAD
+  // term. A business found for "orthodontist in Kansas City" but absent for a
+  // service it publishes a whole page about had that finding measured, logged
+  // as a VISIBILITY GAP, and then made unreachable by this line.
+  //
+  // The earlier note here — "absence travels by its own route" — was right
+  // about the PROMPT and wrong about the LADDER. The prompt block exists; the
+  // ladder route does not, and the ladder is what decides what the email opens
+  // on. The file's own comment calls this "the sharpest SEO fact we can give an
+  // owner", and it has never once been the email.
+  //
+  // It also matters for a reason beyond harm: it is SELLABLE. He cannot fix a
+  // search position by deciding to, and it is the exact thing a retainer does.
+  // A review complaint is neither.
+  //
+  // Only a page HE published counts. Being absent for a service he never claimed
+  // to offer is not a finding about him.
+  const _absentOwn = rows.filter(r => !r.found && r.kind === 'their own service page'
+    && Number.isFinite(Number(r.scanned)) && Number(r.scanned) > 0);
+  if (_absentOwn.length) {
+    const _pick = _absentOwn[0];
+    const _others = rows.filter(r => r !== _pick).map(r => `"${r.query}" (${r.found ? '#' + r.rank : 'absent'})`);
+    return { row: _pick,
+      note: `"${_pick.query}" — they publish a page for this service and do NOT appear in the top ${_pick.scanned} for it. That is harm 96, above every review finding on the ladder, and it is work a retainer does rather than something he fixes by deciding to${_others.length ? `. Passed over: ${_others.join(', ')}` : ''}` };
   }
   const above = (r) => {
     const n = Number(r.rank) - 1;
@@ -34199,6 +34335,99 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ RECIPIENT SOURCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ FOUR TOUCHES, ALL ABOUT HIS REVIEWS ════════════════════════════════
+  // Live, 2026-08-14, a personal injury firm. Every touch in the sequence:
+  //
+  //   email 1   5 of your own Google reviews name the same thing
+  //   follow 1  your Google reviews have stopped
+  //   follow 2  businesses with FEWER REVIEWS than yours are ranking above you
+  //   break-up  5 of your own Google reviews name the same thing (again)
+  //
+  // Vin: "we can't sell them anything for reviews, they don't need our help with
+  // reviews... it should never be what our emails are centred around." That is a
+  // business fact, not a preference. Every product here is an engagement — a
+  // rebuild, a build, a retainer, exit advice. "Ask your customers for reviews"
+  // is an afternoon of his own time, so an email opening there has nothing
+  // behind it to buy.
+  try {
+    const _fails = [];
+    // 1. THE SELLABILITY GATE. Keyed by rung id, because computeSelfFix matches
+    // the finding's TEXT and the review sentences have been rewritten since
+    // those patterns were written — review_pain_pattern's live sentence matches
+    // no rule and takes a penalty of zero.
+    for (const id of ['review_deficit', 'not_compounding', 'review_velocity_drop',
+                      'no_owner_replies', 'partial_owner_replies', 'stale_reviews', 'low_rating']) {
+      if (!NOT_SELLABLE_OPENER[id]) _fails.push(`"${id}" can still open an email, and its fix is a task the owner does himself`);
+      if (!HARM_LADDER.some(r => r.id === id)) _fails.push(`"${id}" is not a real rung`);
+    }
+    // review_pain_pattern must NOT be blocked — CLAUDE.md PART 5 records it as
+    // one of only two findings with a reply behind it, and a repeating complaint
+    // about communication is an operations problem we do build for. It has to
+    // EARN the opener, not be banned from it.
+    if (NOT_SELLABLE_OPENER.review_pain_pattern) {
+      _fails.push('review_pain_pattern is blocked from opening — that is one of only two findings with evidence behind it, and blocking it overrides the only evidence this system has');
+    }
+    // 2. IT MUST ACTUALLY BITE. Run the real ladder on a lead whose only
+    // findings are reviews plus one sellable visibility finding.
+    // A DISCRIMINATING lead: low_rating (harm 84, unsellable) sitting above
+    // no_after_hours (74, a build). Without the gate the 84 wins and the email
+    // opens by telling a plumber his rating is low — which we sell nothing for
+    // and which reads as an insult. The first fixture written here had
+    // outranked_by_weaker at 92 on the same lead, so the sellable finding won on
+    // harm alone and the test passed with the gate deliberately removed.
+    const _m = { rating: 3.6, reviewCount: 40, reviewsRead: 40, ownerReplies: 5,
+      booking: 'phone_only', bookingMeasured: true, unreadBooking: false,
+      tradeWord: 'plumber', rankChecked: false };
+    const _h = rankHarms(_m);
+    const _lead = _h.lead;
+    if (!_lead) _fails.push('the discriminating lead produced no opener at all');
+    else if (NOT_SELLABLE_OPENER[_lead.id]) {
+      _fails.push(`the email still opens on "${_lead.id}", which we cannot sell a fix for, while "no_after_hours" — a build — was available on the same lead`);
+    }
+    if (!(_h.byHarm || []).some(x => x.id === 'low_rating')) {
+      _fails.push('the fixture no longer produces the unsellable finding it exists to demote, so it proves nothing');
+    }
+    // But when NOTHING sellable exists the block must be ignored — a weaker
+    // opener beats no email.
+    // The same lead with the sellable finding taken away: everything is blocked,
+    // so the block must be ignored and the unsellable finding leads after all.
+    const _onlyReviews = rankHarms({ rating: 3.6, reviewCount: 40, reviewsRead: 40, ownerReplies: 5,
+      tradeWord: 'plumber', rankChecked: false });
+    if ((_onlyReviews.all || []).length && !_onlyReviews.lead) {
+      _fails.push('a lead whose only findings are unsellable now produces NO opener at all — the block must be ignored when everything is blocked, or the lead is lost entirely');
+    }
+    // 3. THE SEQUENCE MUST VARY BY SUBJECT, NOT BY BAND. All three of the live
+    // findings sit in INVISIBLE, so a band rule had nothing to work with.
+    // EXACTLY the live ladder — all three in the SAME band, which is the whole
+    // point. The first fixture written here also carried a BLOCKS finding, so
+    // the old band rule already sorted it to the front and the test passed with
+    // the subject rule deliberately removed. A fixture that the thing under test
+    // is not needed for proves nothing.
+    const _byHarm = [
+      { id: 'review_pain_pattern', band: 'INVISIBLE', harm: 86, finding: 'a' },
+      { id: 'review_velocity_drop', band: 'INVISIBLE', harm: 72, finding: 'b' },
+      { id: 'outranked_by_weaker', band: 'INVISIBLE', harm: 92, finding: 'c' },
+    ];
+    const _ord = orderFollowUpRungs(_byHarm, 'review_pain_pattern', null, 'INVISIBLE');
+    if (!_ord.length) _fails.push('the follow-up ordering returned nothing');
+    else if (AREA_OF[_ord[0].id] === AREA_OF.review_pain_pattern) {
+      _fails.push(`the first follow-up is "${_ord[0].id}", the same subject as the email he just read (${AREA_OF[_ord[0].id]}) — he does not know what a band is, he knows he has been sent two emails about his reviews`);
+    }
+    // Order-only: nothing may be dropped.
+    if (_ord.length !== 2) _fails.push(`ordering dropped findings: ${_ord.length} of 2 survived — this may reorder, never suppress`);
+    // And with nothing else on the ladder the sequence must be unchanged.
+    const _allSame = orderFollowUpRungs(
+      [{ id: 'review_velocity_drop', band: 'INVISIBLE', harm: 72 }, { id: 'review_deficit', band: 'INVISIBLE', harm: 68 }],
+      'review_pain_pattern', null, 'INVISIBLE');
+    if (_allSame.length !== 2) _fails.push('a lead whose ladder holds only review findings lost touches');
+    if (_fails.length) {
+      console.log(`⛔ SELLABLE OPENER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SELLABLE OPENER CHECK: a finding whose fix is an afternoon of the owner's own time can no longer OPEN an email — it keeps its harm, its rank, its audit row and its call-sheet line, and it may still be the second finding. review_pain_pattern is deliberately not blocked; it has to earn the opener instead of winning by default. And the sequence now varies by SUBJECT rather than by ladder band, because reviews and search visibility are both INVISIBLE — which is how one firm received four touches that were all about his reviews.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SELLABLE OPENER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
