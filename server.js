@@ -15565,7 +15565,68 @@ const readMarketClarity = (text, { trade, city } = {}) => {
     // occurrence was counted separately. Repeating a phrase back to an owner
     // twice in one sentence reads as a broken template, not an audit.
     const _uniqGeneric = [...new Set(genericHits.map(g => g.trim().toLowerCase()))];
-    gaps.push(`their copy uses the language of serving everyone \u2014 ${_uniqGeneric.slice(0, 2).map(g => '"' + g + '"').join(' and ')}${_uniqGeneric.length > 2 ? ` and ${_uniqGeneric.length - 2} more` : ''}`);
+    // ══ A ONE-WORD QUOTE IS NOT A QUOTE ══════════════════════════════════
+    // This produced: their copy uses the language of serving everyone —
+    // "everyone". That is a true observation attached to eight characters, and
+    // it failed on both counts at once.
+    //
+    // To the OWNER it says nothing. He reads "everyone" in quotation marks and
+    // has no idea where on his site it is or what is wrong with it.
+    //
+    // To the RANKING it was fatal in a way nobody could see. Positioning rungs
+    // score specific 30, below the bar that decides what may open an email, and
+    // the one route past it is VERIFIABILITY_RULES promoting a sentence that
+    // quotes their own page. That rule requires fifteen characters inside the
+    // quotation marks, deliberately, so a stray adjective cannot promote a
+    // characterisation. "everyone" is eight. So the escape hatch built
+    // specifically for positioning findings could never open for the sentence
+    // it was built for, and no positioning finding has ever led an email.
+    //
+    // The gate is right and the evidence was thin. Quote the PHRASE their page
+    // actually contains: a literal substring of their own text, never
+    // reassembled, so the words in the email are the words on their site and he
+    // finds them by searching his own page for them.
+    const _phraseAround = (hit) => {
+      const at = t.toLowerCase().indexOf(String(hit).toLowerCase());
+      if (at < 0) return '';
+      // Widen to a readable span, then trim to whole words at both ends so the
+      // quote never opens or closes mid-word. Sentence punctuation inside the
+      // window ends it early — a quote that runs across two sentences reads as
+      // stitched together, which is exactly the impression to avoid.
+      let from = Math.max(0, at - 55), to = Math.min(t.length, at + String(hit).length + 55);
+      let span = t.slice(from, to);
+      const lead = span.search(/[.!?\u2014\n]\s/);
+      const hitIn = span.toLowerCase().indexOf(String(hit).toLowerCase());
+      if (lead > -1 && lead < hitIn) span = span.slice(lead + 1);
+      const tail = span.search(/[.!?\n]/);
+      if (tail > -1 && tail > span.toLowerCase().indexOf(String(hit).toLowerCase())) span = span.slice(0, tail);
+      // Strip a partial word at each end ONLY where the window actually cut one.
+      // Cutting unconditionally turned "Our practice is your one-stop shop" into
+      // "practice is your one-stop shop", which starts mid-sentence for no reason.
+      if (from > 0 && !/\s/.test(t[from - 1] || '')) span = span.replace(/^\S*\s+/, '');
+      if (to < t.length && !/\s/.test(t[to] || '')) span = span.replace(/\s+\S*$/, '');
+      span = span.replace(/\s+/g, ' ').replace(/^[\s,;:.\u2014-]+|[\s,;:\u2014-]+$/g, '').trim();
+      // ── AND IT MUST NOT END ON A DANGLING WORD ──────────────────────
+      // Trimming to whole words still produced: "No job too big or small for
+      // our" and "quality service to everyone in the Kansas City". Both are
+      // verbatim and both read as though the sentence was cut off mid-thought,
+      // which tells the reader a machine did the cutting. Drop trailing words
+      // that cannot end an English phrase until one that can is reached.
+      const DANGLING = /\s+(a|an|the|our|your|their|his|her|its|my|and|or|but|for|with|to|of|in|on|at|by|from|as|that|this|these|those|is|are|was|were|be|been|we|you|they|it|all|any|every|no|not|so|if|when|who|which)$/i;
+      for (let i = 0; i < 6 && DANGLING.test(span); i++) span = span.replace(DANGLING, '');
+      span = span.trim();
+      // Must still CONTAIN the phrase after trimming, or we would be quoting
+      // text that no longer demonstrates the finding.
+      return span.toLowerCase().includes(String(hit).toLowerCase()) ? span : '';
+    };
+    const _quoted = _uniqGeneric.map(g => _phraseAround(g)).filter(x => x.length >= 20).slice(0, 2);
+    if (_quoted.length) {
+      gaps.push(`their copy is written for anybody \u2014 ${_quoted.map(q => '"' + q + '"').join(' and ')}`);
+    } else {
+      // No usable span. Fall back to the old wording rather than inventing one:
+      // a short quote is weak evidence, and a fabricated one is unrecoverable.
+      gaps.push(`their copy uses the language of serving everyone \u2014 ${_uniqGeneric.slice(0, 2).map(g => '"' + g + '"').join(' and ')}${_uniqGeneric.length > 2 ? ` and ${_uniqGeneric.length - 2} more` : ''}`);
+    }
   }
 
   // A HERO THAT DESCRIBES THE COMPANY RATHER THAN THE BUYER.
@@ -35353,6 +35414,109 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ VISIBILITY GAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ NO POSITIONING FINDING HAS EVER LED AN EMAIL, AND HERE IS WHY ═══════
+  // Vin named positioning himself as one of the big ones. Hormozi's MARKET and
+  // OFFER layers are the top of his own constraint model. Between them this
+  // ladder has five rungs, and until now only one could open an email.
+  //
+  // They score specific 30-45, below the 60 bar, because "your positioning is
+  // generic" is a sentence anyone could write without looking. That bar is
+  // correct. The escape hatch is correct too: VERIFIABILITY_RULES promotes a
+  // sentence that QUOTES their own page, since he can find those words on his
+  // own site in ten seconds.
+  //
+  // The hatch could never open. It requires fifteen characters inside the
+  // quotation marks — deliberately, so a stray adjective cannot promote a
+  // characterisation — and readMarketClarity was quoting the matched TOKEN:
+  //
+  //   their copy uses the language of serving everyone — "everyone"
+  //
+  // Eight characters. So the rule written specifically to let positioning
+  // findings lead has been unreachable by the only rung that produces one, and
+  // three separate correct mechanisms — the bar, the hatch, the rung — added up
+  // to a finding that could never be said.
+  //
+  // The gate is not the bug. The evidence was. It now quotes the PHRASE their
+  // page contains.
+  //
+  // Named LEADS rather than QUOTE because POSITIONING QUOTE CHECK already
+  // exists further up and asserts the SCORING rule in isolation. That one
+  // passed on every boot for weeks while no positioning finding could lead,
+  // because it tested the rule against a hand-written sentence instead of
+  // against the one the rung actually produces. This runs the real rung on
+  // real copy and asserts the outcome. Two checks, two names, so a failure
+  // says which half broke.
+  try {
+    const _fails = [];
+    const _copy = ('Welcome to Miller Plumbing. We provide quality service to everyone in the '
+      + 'Kansas City metro. No job too big or small for our team. We handle all your '
+      + 'plumbing needs with total commitment and experience you can trust.').repeat(4);
+    const _mc = readMarketClarity(_copy, { trade: 'plumber', city: 'Springfield, MO' });
+    if (String(_mc.band || '').toLowerCase() !== 'undifferentiated') {
+      _fails.push(`copy written for everybody did not read as undifferentiated — got "${_mc.band}"`);
+    }
+    const _rung = HARM_LADDER.find(x => x.id === 'undifferentiated');
+    const _m = { marketClarity: _mc.band, marketClarityGaps: _mc.gaps, tradeWord: 'plumber' };
+    if (!_rung.test(_m)) _fails.push('the positioning rung does not fire on copy its own reader called undifferentiated');
+    const _said = String(_rung.say(_m) || '');
+
+    // ── 1. EVERY QUOTE MUST BE VERBATIM ────────────────────────────────
+    // The single worst error this system can make. A quote the owner cannot
+    // find on his own page kills every true sentence beside it.
+    const _quotes = (_said.match(/"[^"]+"/g) || []).map(q => q.slice(1, -1));
+    if (!_quotes.length) _fails.push(`the positioning finding quotes nothing — "${_said}"`);
+    for (const q of _quotes) {
+      if (!_copy.includes(q)) _fails.push(`the finding quotes "${q}" and those exact words are NOT on the page it was read from`);
+    }
+
+    // ── 2. THE QUOTE MUST CLEAR THE PROMOTION BAR ──────────────────────
+    // Read from VERIFIABILITY_RULES itself rather than restating 15, so the two
+    // cannot drift apart — which is the whole failure being fixed here.
+    const _quoteRule = VERIFIABILITY_RULES.find(r => r[0] === 5);
+    if (!_quoteRule) _fails.push('the quote-promotion rule is gone from VERIFIABILITY_RULES');
+    else if (!_quoteRule[1].test(_said)) {
+      _fails.push(`the positioning finding does not satisfy its own promotion rule — "${_said}". This is exactly the state the file was in: a bar, a hatch and a rung, all correct, adding up to a finding that can never be said.`);
+    }
+
+    // ── 3. AND IT MUST ACTUALLY REACH THE OPENER ───────────────────────
+    const _h = rankHarms(_m);
+    const _u = (_h.byHarm || []).find(x => x.id === 'undifferentiated');
+    if (!_u) _fails.push('the positioning finding did not survive ranking at all');
+    else if (!(Number(_u.opener) > 0)) {
+      _fails.push('the positioning finding is still disqualified from opening — the promotion did not reach the gate');
+    }
+
+    // ── 4. A CHARACTERISATION STILL MAY NOT LEAD ───────────────────────
+    // The bar exists for a reason and must survive this fix. Same rung, same
+    // measurement, but no quote available: it has to stay blocked.
+    const _bare = rankHarms({ marketClarity: 'undifferentiated', marketClarityGaps: ['the top of the page opens on the company rather than on the customer'], tradeWord: 'plumber' });
+    const _bu = (_bare.byHarm || []).find(x => x.id === 'undifferentiated');
+    if (_bu && Number(_bu.opener) > 0) {
+      _fails.push('a positioning finding with no quote in it can now open an email — the 60 bar has been removed rather than satisfied, and "your positioning is generic" is a sentence anyone could send to anyone');
+    }
+
+    // ── 5. NO DANGLING WORD, NO TRAILING PUNCTUATION ───────────────────
+    // "No job too big or small for our" and "...compassion and skill," both
+    // shipped in the first version. Verbatim, and both read as a machine cutting
+    // a sentence in half.
+    for (const q of _quotes) {
+      if (/\s(a|an|the|our|your|and|or|for|with|to|of|in|on|at|by|from|as|that|is|are|we|you|they|it)$/i.test(q)) {
+        _fails.push(`a quote ends on a dangling word — "${q}"`);
+      }
+      if (/[,;:—-]$/.test(q)) _fails.push(`a quote ends on punctuation — "${q}"`);
+      if (q.length < 15) _fails.push(`a quote is ${q.length} characters, below the promotion bar — "${q}"`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ POSITIONING LEADS CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ POSITIONING LEADS CHECK: a positioning finding can open an email for the first time. Hormozi's MARKET and OFFER layers hold five rungs between them and four were structurally unable to lead — not by judgment, but because they score below the 60 bar and the one route past it needs a fifteen-character quote while the finding was quoting the matched token: "everyone", eight characters. Three correct mechanisms adding up to a finding that could never be said. It now quotes the phrase their page contains — "${(_quotes[0] || '').slice(0, 56)}" — verified verbatim against the copy it was read from, with no dangling word or trailing punctuation, and a version of the same finding carrying no quote is still blocked, because "your positioning is generic" is a sentence anyone could send to anyone.`);
+    }
+  } catch (e) {
+    console.log(`⛔ POSITIONING LEADS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
 
 
 
