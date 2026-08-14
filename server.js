@@ -2332,6 +2332,31 @@ app.post('/api/claude', async (req, res) => {
       const _genPrices = ANTHROPIC_PRICES['claude-sonnet-4-6'];
       const _c = (_u.input_tokens || 0) * _genPrices.in + (_u.cache_read_input_tokens || 0) * _genPrices.cacheRead
         + (_u.cache_creation_input_tokens || 0) * _genPrices.cacheWrite + (_u.output_tokens || 0) * _genPrices.out;
+      // ══ SAY WHEN THIS PATH IS WRITING AN EMAIL BLIND ══════════════════════
+      // /api/claude is a raw passthrough: it returns whatever the prompt asks
+      // for, with no writer brief and no verifier at write time. It is the last
+      // resort for a lead the composer cannot serve, and on 2026-08-14 it wrote
+      // the Dr. Shaun Parson email — "funnel" in the subject being sent, our own
+      // process described, and the figure 147 that nothing on the permitted list
+      // held.
+      //
+      // That figure was MEASURED. His own audit displayed it. It was missing
+      // because the permitted list is assembled from a hand-kept subset of the
+      // measurements and the subset had gone stale — seven numbers permitted on
+      // a lead where dozens were measured.
+      //
+      // Nothing here can make this path safe; that is what the composer is for.
+      // But it must never be SILENT about writing blind, and a thin measurement
+      // set is the tell.
+      {
+        const _mn = Object.keys(req.body || {})
+          .filter(k => !['system', 'user', 'apiKey', 'company'].includes(k))
+          .filter(k => { const v = req.body[k]; return v !== null && v !== undefined && v !== ''; });
+        const _looksLikeEmail = /email|subject|write/i.test(String(req.body.system || '').slice(0, 4000));
+        if (_looksLikeEmail && _mn.length < 12) {
+          console.log(`\u26a0 WRITING BLIND [${req.body.company || 'lead'}]: this email is going through the raw passthrough with only ${_mn.length} measurement field(s) attached, so almost every true number about this business will be reported as invented. The composer was not used \u2014 either the lead carries no ladder and none could be rebuilt from its stored measurements, or the client did not send them. Re-run Research rather than editing the email by hand.`);
+        }
+      }
       console.log(`\ud83d\udcb0 GENERATE COST [${req.body.company || 'lead'}]: $${_c.toFixed(4)} | fresh=${_u.input_tokens || 0} cacheRead=${_u.cache_read_input_tokens || 0} cacheWrite=${_u.cache_creation_input_tokens || 0} out=${_u.output_tokens || 0}`
         + `${(_u.cache_read_input_tokens || 0) > 0 ? ' \u267b prompt cache HIT' : ''}`);
     }
@@ -29250,7 +29275,30 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       verifiedCEO, verifiedCEOTitle,
       decisionMaker,
       emailResult,
-      email: email.email,
+      // ══ THE ADDRESS WE RESOLVED, NOT THE ONE WE WERE HANDED ═══════════════
+      // This was `email.email`, and `email` is `emailData` — the object the
+      // BROWSER sent up, declared 5,700 lines earlier as "from browser via
+      // browserData". So the top-level address in the research response was the
+      // client's own prior value echoed straight back, while emailResult beside
+      // it held what this run actually resolved. The client then prefers
+      // `lead.email` over `lead.emailResult`, so a stale address round-trips
+      // forever and the resolver's verdict can never win.
+      //
+      // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: the decision maker
+      // was corroborated FOUR ways at confidence 100 — Shaun Parson, Owner /
+      // Founder — the resolver returned tier 5, "No defensible address found",
+      // score 0, sendable false... and the To field showed danielle@drparson.com.
+      // Both statements were on screen at once and both were faithfully
+      // reporting different objects.
+      //
+      // An address the resolver refused may not be presented as the recipient.
+      // The candidate is not lost — emailResult carries it, with its tier and
+      // the reason — so the screen can still show what we found and why it is
+      // not good enough. What it can no longer do is look like an address to
+      // send to.
+      email: (emailResult && emailResult.sendable === true && emailResult.email)
+        ? emailResult.email
+        : '',
       ownerOnOwnSite: nameOnPage || (decisionMaker && (decisionMaker.sources||[]).some(x => /own_website|website/i.test(x))),
       // Computed ~35 lines above this call and previously never passed in, which is
       // how a "DIFFERENT person" warning coexisted with a 100/100 reachability score.
@@ -34097,6 +34145,60 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ ABSENCE SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ TWO TRUE STATEMENTS ABOUT DIFFERENT OBJECTS, ON ONE SCREEN ═════════
+  // Dr. Shaun Parson Plastic Surgery, live, 2026-08-14. All of this at once:
+  //
+  //   Decision-maker: Shaun Parson (Owner / Founder) — corroborated four ways,
+  //                   confidence 100
+  //   Email:          No defensible address found (0/100)
+  //   To:             danielle@drparson.com
+  //
+  // Nothing was lying. The top-level `email` in the research response was
+  // `email.email`, and `email` is `emailData` — the object the BROWSER sent up.
+  // So the response echoed the client's own prior address back at it, while
+  // emailResult beside it carried what the run actually resolved. The client
+  // then preferred `lead.email` over `lead.emailResult`, so a stale address
+  // round-trips forever and no fresh resolution can ever displace it.
+  //
+  // An address the resolver refused may not be presented as the recipient.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    // The echo must be gone. Split so the scan cannot match its own source.
+    if (new RegExp('email: ' + 'email\\.email,').test(_code)) {
+      _fails.push('the research response still returns the address the BROWSER sent instead of the one this run resolved — a stale address round-trips forever and the resolver can never win');
+    }
+    if (!/email: \(emailResult && emailResult\.sendable === true && emailResult\.email\)/.test(_code)) {
+      _fails.push('the response address is not gated on the resolver saying it is sendable');
+    }
+    // Behaviour: the tier table itself must agree that a refused address is refused.
+    if (EMAIL_TIERS.NONE.sendable !== false || EMAIL_TIERS.NONE.score !== 0) {
+      _fails.push('tier 5 no longer means "no defensible address"');
+    }
+    if (EMAIL_TIERS.PATTERN_INFERRED.sendable !== false) {
+      _fails.push('an inferred pattern is marked sendable — that is the tier that bounces, and a hard bounce is charged to the sending DOMAIN, not to the lead');
+    }
+    for (const t of ['CONFIRMED_SCRAPED', 'SMTP_VERIFIED', 'PATTERN_LEARNED']) {
+      if (EMAIL_TIERS[t].sendable !== true) _fails.push(`${t} is no longer sendable — volume would be paid for in leads`);
+    }
+    // ── THE CLIENT HALF, WHICH LIVES IN ANOTHER REPO ────────────────────────
+    let _note;
+    try {
+      const _idx = require('fs').readFileSync(require('path').join(__dirname, 'index.html'), 'utf8');
+      if (/const email = lead\.email \|\| \(lead\.emailResult/.test(_idx)) {
+        _fails.push('the local index.html still prefers the lead\'s stored address over the resolver\'s verdict, so the To field can still show an address scored 0/100');
+      }
+      _note = ' The local index.html reads the verdict first; it still has to be carried to Netlify by hand.';
+    } catch (e) { void e; _note = ' NOTE: no index.html beside this file, so the client half was NOT verified here.'; }
+    if (_fails.length) {
+      console.log(`⛔ RECIPIENT SOURCE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RECIPIENT SOURCE CHECK: the address in the research response is the one this run RESOLVED, and it is empty unless the resolver called it sendable — so an address scored 0/100 can no longer arrive as the recipient. The candidate is not lost: emailResult still carries it with its tier and the reason, so the screen can say what we found and why it is not good enough.${_note}`);
+    }
+  } catch (e) {
+    console.log(`⛔ RECIPIENT SOURCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
