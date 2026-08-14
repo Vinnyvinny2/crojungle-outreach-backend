@@ -2332,6 +2332,31 @@ app.post('/api/claude', async (req, res) => {
       const _genPrices = ANTHROPIC_PRICES['claude-sonnet-4-6'];
       const _c = (_u.input_tokens || 0) * _genPrices.in + (_u.cache_read_input_tokens || 0) * _genPrices.cacheRead
         + (_u.cache_creation_input_tokens || 0) * _genPrices.cacheWrite + (_u.output_tokens || 0) * _genPrices.out;
+      // ══ SAY WHEN THIS PATH IS WRITING AN EMAIL BLIND ══════════════════════
+      // /api/claude is a raw passthrough: it returns whatever the prompt asks
+      // for, with no writer brief and no verifier at write time. It is the last
+      // resort for a lead the composer cannot serve, and on 2026-08-14 it wrote
+      // the Dr. Shaun Parson email — "funnel" in the subject being sent, our own
+      // process described, and the figure 147 that nothing on the permitted list
+      // held.
+      //
+      // That figure was MEASURED. His own audit displayed it. It was missing
+      // because the permitted list is assembled from a hand-kept subset of the
+      // measurements and the subset had gone stale — seven numbers permitted on
+      // a lead where dozens were measured.
+      //
+      // Nothing here can make this path safe; that is what the composer is for.
+      // But it must never be SILENT about writing blind, and a thin measurement
+      // set is the tell.
+      {
+        const _mn = Object.keys(req.body || {})
+          .filter(k => !['system', 'user', 'apiKey', 'company'].includes(k))
+          .filter(k => { const v = req.body[k]; return v !== null && v !== undefined && v !== ''; });
+        const _looksLikeEmail = /email|subject|write/i.test(String(req.body.system || '').slice(0, 4000));
+        if (_looksLikeEmail && _mn.length < 12) {
+          console.log(`\u26a0 WRITING BLIND [${req.body.company || 'lead'}]: this email is going through the raw passthrough with only ${_mn.length} measurement field(s) attached, so almost every true number about this business will be reported as invented. The composer was not used \u2014 either the lead carries no ladder and none could be rebuilt from its stored measurements, or the client did not send them. Re-run Research rather than editing the email by hand.`);
+        }
+      }
       console.log(`\ud83d\udcb0 GENERATE COST [${req.body.company || 'lead'}]: $${_c.toFixed(4)} | fresh=${_u.input_tokens || 0} cacheRead=${_u.cache_read_input_tokens || 0} cacheWrite=${_u.cache_creation_input_tokens || 0} out=${_u.output_tokens || 0}`
         + `${(_u.cache_read_input_tokens || 0) > 0 ? ' \u267b prompt cache HIT' : ''}`);
     }
@@ -27349,6 +27374,40 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             ? { pattern: String(publicPainSignals[0] || '').split(' — evidence:')[0].trim() }
             : null,
             });
+            // ══ THE WHOLE LADDER INPUT, NOT A GOOGLE-SIDE SNAPSHOT ═══════════
+            // measuredNumbers carries eighteen fields, all of them from Google
+            // or the review pull. _harmInputs carries SIXTY-ONE — every field
+            // any rung reads, including the entire website half: pricing, the
+            // booking path, the offer, the guarantee, the CTA, HTTPS, the
+            // viewport, the copyright year, the mined complaint.
+            //
+            // None of the website half was persisted. It was measured during
+            // Research, read once by the ladder, and dropped — so any lead
+            // reloaded from the database could never rebuild a website finding,
+            // and a rebuild from measuredNumbers alone produced ZERO rungs on a
+            // healthy business. Verified on Dr. Shaun Parson Plastic Surgery,
+            // 2026-08-14: 346 reviews, 4.8, ranked #1, 147 of 150 reviews
+            // answered — nothing on the Google side is wrong with him, so the
+            // only findings that existed were about his site, and none of them
+            // survived storage. The email fell through to /api/claude, a raw
+            // passthrough with no writer brief and no verifier at write time.
+            //
+            // Storing the ladder's own input object fixes that permanently and
+            // future-proofs it: a rung added later reads a field that is already
+            // being persisted, because this is the same object rankHarms is
+            // called with rather than a hand-copied subset of it. Hand-copied
+            // subsets are what measuredNumbers is, and why this was missing.
+            parsed.ladderInputs = _harmInputs && Object.keys(_harmInputs).length ? _harmInputs : null;
+            // ══ NARROW EVERY ABSENCE CLAIM TO WHAT WE OPENED ═════════════════
+            // Applied to the whole audit object before anything reads it, so
+            // the screen, the write-up, the call sheet and the email all get the
+            // narrowed sentence rather than the operator being handed a list of
+            // seven things to correct by hand.
+            {
+              const _pr = (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead : [];
+              const _n = narrowAuditAbsence(parsed, _pr);
+              if (_n) console.log(`\u2702 ABSENCE NARROWED [${company}]: ${_n} claim(s) about the whole site rewritten to the page we actually opened (${_pr.length ? _pr.join(', ') : 'homepage only'}). The prompt already forbade this in words and seven got through on one lead \u2014 narrowing is mechanical and can only make a claim more true.`);
+            }
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
               rating: _mm.rating,
@@ -29216,7 +29275,30 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       verifiedCEO, verifiedCEOTitle,
       decisionMaker,
       emailResult,
-      email: email.email,
+      // ══ THE ADDRESS WE RESOLVED, NOT THE ONE WE WERE HANDED ═══════════════
+      // This was `email.email`, and `email` is `emailData` — the object the
+      // BROWSER sent up, declared 5,700 lines earlier as "from browser via
+      // browserData". So the top-level address in the research response was the
+      // client's own prior value echoed straight back, while emailResult beside
+      // it held what this run actually resolved. The client then prefers
+      // `lead.email` over `lead.emailResult`, so a stale address round-trips
+      // forever and the resolver's verdict can never win.
+      //
+      // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: the decision maker
+      // was corroborated FOUR ways at confidence 100 — Shaun Parson, Owner /
+      // Founder — the resolver returned tier 5, "No defensible address found",
+      // score 0, sendable false... and the To field showed danielle@drparson.com.
+      // Both statements were on screen at once and both were faithfully
+      // reporting different objects.
+      //
+      // An address the resolver refused may not be presented as the recipient.
+      // The candidate is not lost — emailResult carries it, with its tier and
+      // the reason — so the screen can still show what we found and why it is
+      // not good enough. What it can no longer do is look like an address to
+      // send to.
+      email: (emailResult && emailResult.sendable === true && emailResult.email)
+        ? emailResult.email
+        : '',
       ownerOnOwnSite: nameOnPage || (decisionMaker && (decisionMaker.sources||[]).some(x => /own_website|website/i.test(x))),
       // Computed ~35 lines above this call and previously never passed in, which is
       // how a "DIFFERENT person" warning coexisted with a 100/100 reachability score.
@@ -33927,6 +34009,197 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ HIDDEN RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
+  // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
+  // stored harm ladder (harmsRanked=0, problemList=0, 39 field(s))". The server
+  // refused, the client fell back to /api/claude — a raw passthrough with no
+  // writer brief and no verifier at write time — and the email arrived carrying
+  // "funnel" in the subject being sent, "I mapped exactly where the drop
+  // happens" describing our own work, and the figure 147, which nothing on the
+  // permitted list held. The send was blocked afterwards, so the floor held; the
+  // operator was shown a finished-looking email with three defects.
+  //
+  // measuredNumbers was stored the whole time and carries every field the ladder
+  // reads. This asserts the ladder can be rebuilt from it.
+  try {
+    const _fails = [];
+    // Shaun Parson's real numbers, as the audit reported them.
+    const _stored = {
+      measuredNumbers: {
+        reviewCount: 346, rating: 4.8, rank: 1, rankFound: true, scanned: 20,
+        weakerAbove: 0, photoCount: 20, reviewRecencyDays: 29, tenureYears: 20,
+        reviewsRead: 150, ownerReplies: 147, formFieldCount: 4,
+        formFieldCountIsSingleForm: true, reviewsPerYear: 17,
+        tradeWord: 'plastic surgeon', problemCount: 3,
+      },
+      // Exactly the shape that failed: no ladder, no problem list, no spine.
+      harmsRanked: [], problemList: [], factualSpine: null,
+    };
+    // The website half — the part that was never persisted. On Shaun Parson
+    // nothing on the Google side is wrong (346 reviews, 4.8, ranked #1, 147 of
+    // 150 answered), so a rebuild from the snapshot alone returned ZERO rungs
+    // and the lead fell through to the raw model path. These are the fields the
+    // audit actually found problems in.
+    // Real rung inputs, read off no_after_hours' own test. Shaun Parson's
+    // homepage offers a consultation booking or a phone call and nothing else,
+    // which is exactly what this rung measures.
+    _stored.ladderInputs = { ..._stored.measuredNumbers,
+      booking: 'phone_only', bookingMeasured: true, unreadBooking: false };
+    const _r = spineFromStoredAudit(_stored, 'Dr. Shaun Parson Plastic Surgery', 'plastic surgeon');
+    if (!_r || !_r.spine || !_r.spine.claim) {
+      _fails.push(`a lead with NO stored ladder but full stored measurements still produces no spine (reason: ${_r ? _r.reason : 'null'}) — that lead falls through to /api/claude, which has no writer brief and no verifier at write time`);
+    } else {
+      if (_r.source !== 'measurements') _fails.push(`the spine came from "${_r.source}" rather than the measurements — the tier under test did not run`);
+      // The figures the audit displayed must be permitted, or the email is
+      // refused for stating a number we measured and showed on screen.
+      const _figs = (_r.spine.figures || []).join(' ');
+      for (const [n, what] of [['346', 'the review count'], ['147', 'the replies the owner wrote'], ['150', 'the reviews we read']]) {
+        if (!_figs.includes(n)) _fails.push(`${n} — ${what} — is not on the permitted list, so an email stating it is refused as invented. That is the exact rejection this lead got: "UNTRACEABLE FIGURE 147"`);
+      }
+    }
+    // A lead with genuinely nothing stored must still refuse rather than invent.
+    const _empty = spineFromStoredAudit({ harmsRanked: [], problemList: [], measuredNumbers: {} }, 'Nothing Ltd', '');
+    if (_empty && _empty.spine) _fails.push('a lead with no measurements at all now produces a spine — the tier is inventing rather than recovering');
+    // And a stored ladder must still win, since it is what Research chose.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!/const _snap = _storedMeasurements\(/.test(_code)) _fails.push('the measurements tier does not go through the shared normaliser');
+    if (!/const _full = \(audit && audit\.ladderInputs\)/.test(_code)) {
+      _fails.push('the rebuild does not prefer the full stored ladder input over the Google-side snapshot, so a website finding still cannot be recovered');
+    }
+    if (!new RegExp('parsed\\.ladderInputs = ').test(_code)) {
+      _fails.push('Research never stores the ladder input, so nothing can be rebuilt from it on the next lead either');
+    }
+    if ((_code.match(/_storedMeasurements\(/g) || []).length < 2) {
+      _fails.push('the measurement normaliser is not shared by every tier — two hand-kept copies of that translation table is how the two halves of this system came to disagree about reviewRecency');
+    }
+    if (_fails.length) {
+      console.log(`⛔ LADDER REBUILD CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LADDER REBUILD CHECK: a lead carrying measurements but no stored ladder now has the REAL ladder run over them, with both gates applied — so it composes and is verified instead of falling through to the raw model path that has no brief and no verifier. The replies the owner wrote and the reviews we read are on the permitted list, so an email stating them is no longer refused as invented. A lead with nothing stored still refuses.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LADDER REBUILD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ SEVEN ABSENCE CLAIMS ON ONE AUDIT, ALL FLAGGED AND NONE FIXED ══════
+  // Dr. Shaun Parson Plastic Surgery, live, 2026-08-14. The fact-checker caught
+  // every one of them and even wrote the correction — "Reframe as: the homepage
+  // we reviewed leads only to booking or calling" — and nothing applied it, so
+  // the operator was handed seven things to fix by hand on a single lead.
+  //
+  // The prompt already forbids it in words. CLAUDE.md: instructional guards do
+  // not hold. This one is mechanical, and it NARROWS — which can only ever make
+  // a claim more true.
+  try {
+    const _fails = [];
+    const HOME = ['home'];
+    // The real flagged sentences from that audit.
+    for (const [before, mustLose] of [
+      ['The only thing anyone can do when they land on your site is book a consultation or leave.', /your site/i],
+      ['Your site gives her nothing to hold, so she books with whoever does.', /your site/i],
+      ['There is no pricing anywhere on the site.', /on the site/i],
+      ['Nothing across their entire website tells a buyer why to pick them.', /entire website/i],
+    ]) {
+      const r = narrowAbsenceToPagesRead(before, HOME);
+      if (!r.changed) _fails.push(`"${before.slice(0, 50)}..." was left claiming more than we read`);
+      else if (mustLose.test(r.text)) _fails.push(`narrowing did not remove the site-wide scope: "${r.text.slice(0, 70)}"`);
+      else if (!/homepage/i.test(r.text)) _fails.push(`the narrowed sentence does not name the homepage: "${r.text.slice(0, 70)}"`);
+    }
+    // A sentence that is NOT an absence claim must be untouched, byte for byte.
+    const _keep = 'Their site ranks first in Scottsdale and carries 346 reviews at 4.8 stars.';
+    if (narrowAbsenceToPagesRead(_keep, HOME).text !== _keep) {
+      _fails.push('a sentence making no absence claim was rewritten — this may only narrow claims, never edit prose generally');
+    }
+    // An absence claim already scoped to the homepage is untouched.
+    const _already = 'The homepage has no pricing on it.';
+    if (narrowAbsenceToPagesRead(_already, HOME).text !== _already) _fails.push('an already-correct claim was rewritten');
+    // With several pages read, "the site" is a fair description and must stand.
+    const _many = 'There is no pricing anywhere on the site.';
+    if (narrowAbsenceToPagesRead(_many, ['home', 'about', 'services', 'contact']).changed) {
+      _fails.push('a site-wide claim was narrowed on a lead where we read four pages — that under-states what we actually looked at');
+    }
+    // And it must reach the whole audit object, not one named field. The
+    // narrative fields have been renamed twice; a hand-kept list would go stale.
+    const _audit = { situationRead: { headline: 'Your site gives a visitor nothing to compare.' },
+      problemList: [{ finding: 'There is no guarantee anywhere on the website.' }],
+      measuredNumbers: { reviewCount: 346 } };
+    const _n = narrowAuditAbsence(_audit, HOME);
+    if (_n < 2) _fails.push(`walking the audit object narrowed ${_n} claim(s); both the nested headline and the array entry must be reached`);
+    if (/your site/i.test(_audit.situationRead.headline)) _fails.push('a nested narrative field was not reached');
+    if (/the website/i.test(_audit.problemList[0].finding)) _fails.push('an array entry was not reached');
+    if (_audit.measuredNumbers.reviewCount !== 346) _fails.push('the walk altered a measurement');
+    // ── AND IT MUST ACTUALLY BE APPLIED ────────────────────────
+    // The first version of this check tested the function and PASSED with the
+    // call site deleted. That is computed-but-not-passed, the failure this file
+    // has shipped more often than any other, caught here for the fifth time
+    // today. Split so the scan cannot match its own source.
+    const _asrc = require('fs').readFileSync(__filename, 'utf8');
+    const _acode = _asrc.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!new RegExp('narrowAuditAbsence' + '\\(parsed,').test(_acode)) {
+      _fails.push('the narrowing is defined and never applied to the audit — every claim still overreaches and the operator still gets a list of them to fix by hand');
+    }
+    if (_fails.length) {
+      console.log(`⛔ ABSENCE SCOPE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ ABSENCE SCOPE CHECK: a claim about the whole site is narrowed to the page we actually opened, everywhere in the audit including nested fields and arrays; a sentence making no absence claim is returned byte for byte; and on a lead where four pages were read "the site" stands, because there it is a fair description of what we looked at.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ABSENCE SCOPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ TWO TRUE STATEMENTS ABOUT DIFFERENT OBJECTS, ON ONE SCREEN ═════════
+  // Dr. Shaun Parson Plastic Surgery, live, 2026-08-14. All of this at once:
+  //
+  //   Decision-maker: Shaun Parson (Owner / Founder) — corroborated four ways,
+  //                   confidence 100
+  //   Email:          No defensible address found (0/100)
+  //   To:             danielle@drparson.com
+  //
+  // Nothing was lying. The top-level `email` in the research response was
+  // `email.email`, and `email` is `emailData` — the object the BROWSER sent up.
+  // So the response echoed the client's own prior address back at it, while
+  // emailResult beside it carried what the run actually resolved. The client
+  // then preferred `lead.email` over `lead.emailResult`, so a stale address
+  // round-trips forever and no fresh resolution can ever displace it.
+  //
+  // An address the resolver refused may not be presented as the recipient.
+  try {
+    const _fails = [];
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    // The echo must be gone. Split so the scan cannot match its own source.
+    if (new RegExp('email: ' + 'email\\.email,').test(_code)) {
+      _fails.push('the research response still returns the address the BROWSER sent instead of the one this run resolved — a stale address round-trips forever and the resolver can never win');
+    }
+    if (!/email: \(emailResult && emailResult\.sendable === true && emailResult\.email\)/.test(_code)) {
+      _fails.push('the response address is not gated on the resolver saying it is sendable');
+    }
+    // Behaviour: the tier table itself must agree that a refused address is refused.
+    if (EMAIL_TIERS.NONE.sendable !== false || EMAIL_TIERS.NONE.score !== 0) {
+      _fails.push('tier 5 no longer means "no defensible address"');
+    }
+    if (EMAIL_TIERS.PATTERN_INFERRED.sendable !== false) {
+      _fails.push('an inferred pattern is marked sendable — that is the tier that bounces, and a hard bounce is charged to the sending DOMAIN, not to the lead');
+    }
+    for (const t of ['CONFIRMED_SCRAPED', 'SMTP_VERIFIED', 'PATTERN_LEARNED']) {
+      if (EMAIL_TIERS[t].sendable !== true) _fails.push(`${t} is no longer sendable — volume would be paid for in leads`);
+    }
+    // ── THE CLIENT HALF, WHICH LIVES IN ANOTHER REPO ────────────────────────
+    let _note;
+    try {
+      const _idx = require('fs').readFileSync(require('path').join(__dirname, 'index.html'), 'utf8');
+      if (/const email = lead\.email \|\| \(lead\.emailResult/.test(_idx)) {
+        _fails.push('the local index.html still prefers the lead\'s stored address over the resolver\'s verdict, so the To field can still show an address scored 0/100');
+      }
+      _note = ' The local index.html reads the verdict first; it still has to be carried to Netlify by hand.';
+    } catch (e) { void e; _note = ' NOTE: no index.html beside this file, so the client half was NOT verified here.'; }
+    if (_fails.length) {
+      console.log(`⛔ RECIPIENT SOURCE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RECIPIENT SOURCE CHECK: the address in the research response is the one this run RESOLVED, and it is empty unless the resolver called it sendable — so an address scored 0/100 can no longer arrive as the recipient. The candidate is not lost: emailResult still carries it with its tier and the reason, so the screen can say what we found and why it is not good enough.${_note}`);
+    }
+  } catch (e) {
+    console.log(`⛔ RECIPIENT SOURCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
   // businesses with fewer reviews ranking above him. The row handed to the audit
@@ -35947,6 +36220,108 @@ Return ONLY valid JSON, no markdown:
 //                  Falls back to the costliest finding and SAYS SO. That is a
 //                  different rule, and a quieter one would be a lie about how
 //                  the email was chosen.
+// The stored measurements, normalised. Lifted out because THREE tiers of
+// rebuild need them and two hand-kept copies of a translation table is how the
+// two halves of this system came to disagree about reviewRecency in the first
+// place.
+const _storedMeasurements = (audit, tradeWordFallback) => {
+  const raw = (audit && audit.measuredNumbers)
+    || (audit && audit._persisted && audit._persisted.measuredNumbers)
+    || {};
+  return {
+    ...raw,
+    // The lead's own trade, for audits stored before tradeWord was shipped.
+    tradeWord: raw.tradeWord || tradeWordFallback || null,
+    rankFound: raw.rankFound ?? (raw.rank !== null && raw.rank !== undefined),
+    reviewRecency: raw.reviewRecency ?? raw.reviewRecencyDays ?? null,
+    formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
+      ?? (raw.formFieldCount !== null && raw.formFieldCount !== undefined),
+  };
+};
+
+// ══ AN ABSENCE CLAIM MAY NOT EXCEED THE PAGES WE READ ══════════════════════
+// Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery. The fact-checker flagged
+// SEVEN claims on one audit, all the same shape:
+//
+//   "the only thing anyone can do when they land on your site is book a
+//    consultation or leave"        → we read the homepage
+//   "Your site gives her nothing to hold"                → we read the homepage
+//   "No way for a stranger to peek at what makes you different" → homepage
+//
+// The audit prompt already forbids this in words — "PAGES WE ACTUALLY READ: X.
+// Never claim something is missing from a page not on this list" — and seven got
+// through anyway. CLAUDE.md is explicit about why: instructional guards do not
+// hold. The prompt banned post-submission claims nineteen times and every audit
+// produced one. A rule the model is asked to follow is not a rule.
+//
+// The fact-checker even writes the correction — "Reframe as: the homepage we
+// reviewed leads only to booking or calling" — and nothing applies it. So the
+// operator is handed a list of seven things to fix by hand on every lead.
+//
+// This narrows instead of flagging. NARROWING IS ALWAYS SAFE: "your homepage has
+// no pricing" is true wherever "your site has no pricing" was true, and it stays
+// true when the claim was false. It can never widen a claim and can never invent
+// one. Only sentences that BOTH make an absence claim AND scope it to the whole
+// site are touched; everything else is returned byte for byte.
+const narrowAbsenceToPagesRead = (text, pagesRead) => {
+  const src = String(text == null ? '' : text);
+  if (!src) return { text: src, changed: 0 };
+  const read = (Array.isArray(pagesRead) ? pagesRead : []).filter(Boolean).map(String);
+  // With several pages read, "the site" is a fair description of what we looked
+  // at. This only fires when the homepage really was all we opened.
+  if (read.length > 1) return { text: src, changed: 0 };
+  const ABSENCE = /\b(?:no|not|nothing|never|none|missing|absent|lacks?|lacking|without|nowhere|cannot|can'?t|doesn'?t|does not|isn'?t|is not|won'?t|only)\b/i;
+  const SITE = /\b(?:anywhere|nowhere)\s+(?:on|in|across)\s+(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b|\bacross\s+(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b|\bsite[-\s]?wide\b|\b(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b/gi;
+  let changed = 0;
+  const out = src.split(/(?<=[.!?])\s+/).map((s) => {
+    if (!ABSENCE.test(s) || !SITE.test(s)) return s;
+    let touched = false;
+    const rewritten = s.replace(SITE, (m) => {
+      touched = true;
+      const poss = /\byour\b/i.test(m) ? 'your homepage'
+        : /\b(?:their|his|her)\b/i.test(m) ? 'their homepage'
+        : 'the homepage';
+      // "anywhere on the site" -> "anywhere on the homepage", so the sentence
+      // still reads as English rather than losing its preposition.
+      if (/^\s*(?:anywhere|nowhere)/i.test(m)) {
+        const head = m.match(/^\s*(anywhere|nowhere)/i)[1];
+        return `${head} on ${poss}`;
+      }
+      return poss;
+    });
+    if (touched) changed++;
+    return rewritten;
+  }).join(' ');
+  return { text: out, changed };
+};
+
+// Walks every string in the audit and narrows the ones that overreach. Applied
+// to the object rather than to a list of named fields, because the narrative
+// fields have been renamed twice and a hand-kept list of them would go stale in
+// exactly the way measuredNumbers did.
+const narrowAuditAbsence = (obj, pagesRead, depth = 0) => {
+  let changed = 0;
+  if (depth > 6 || obj === null || obj === undefined) return changed;
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      if (typeof obj[i] === 'string') {
+        const r = narrowAbsenceToPagesRead(obj[i], pagesRead);
+        if (r.changed) { obj[i] = r.text; changed += r.changed; }
+      } else if (obj[i] && typeof obj[i] === 'object') changed += narrowAuditAbsence(obj[i], pagesRead, depth + 1);
+    }
+    return changed;
+  }
+  if (typeof obj !== 'object') return changed;
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (typeof v === 'string') {
+      const r = narrowAbsenceToPagesRead(v, pagesRead);
+      if (r.changed) { obj[k] = r.text; changed += r.changed; }
+    } else if (v && typeof v === 'object') changed += narrowAuditAbsence(v, pagesRead, depth + 1);
+  }
+  return changed;
+};
+
 const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   if (!audit) return { spine: null, reason: 'no-audit' };
 
@@ -36026,7 +36401,53 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
     source = 'problemList';
   }
 
-  if (!hits || !hits.length) return { spine: null, reason: 'no-ladder' };
+  // ══ TIER 3 — REBUILD THE LADDER FROM THE MEASUREMENTS THEMSELVES ══════
+  // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and
+  // no stored harm ladder (harmsRanked=0, problemList=0, 39 field(s))". The
+  // server refused to compose, and the CLIENT fell back to /api/claude — a raw
+  // passthrough that takes whatever prompt it is handed. That email was written
+  // with NO writer brief and NO verifier at write time, and it arrived carrying
+  // exactly what those exist to prevent: "funnel" in the subject line of the
+  // variant being sent, "I mapped exactly where the drop happens" describing our
+  // own work, and the figure 147, which nothing on the permitted list held.
+  // COPY VERIFY caught all three afterwards and blocked the send — so the floor
+  // held — but the operator was shown a finished-looking email with three
+  // defects and told to fix them by hand, and a model call was paid for.
+  //
+  // The audit did not need re-running. measuredNumbers is stored on the lead and
+  // carries every field rankHarms reads — reviewCount, rating, rank, scanned,
+  // weakerAbove, photoCount, recency, tenure, reviewsRead, ownerReplies, form
+  // fields, reviewsPerYear and the trade. So the ladder is DERIVABLE, and
+  // deriving it is not an approximation of what fresh Research would choose: it
+  // is the same function over the same numbers, with both gates applied.
+  //
+  // This is the tier that should have existed first. The other two recover a
+  // ladder somebody stored; this one recovers it from what was MEASURED, which
+  // is the thing the ladder was only ever a view of.
+  if (!hits || !hits.length) {
+    // The FULL ladder input if it was stored, falling back to the Google-side
+    // snapshot for leads researched before ladderInputs shipped. The snapshot
+    // alone produces zero rungs on a business whose only problems are on its
+    // website, which is most of them.
+    const _full = (audit && audit.ladderInputs)
+      || (audit && audit._persisted && audit._persisted.ladderInputs) || null;
+    const _snap = _storedMeasurements(audit, tradeWordFallback);
+    const m3 = _full && Object.keys(_full).length
+      ? { ..._snap, ..._full, tradeWord: _full.tradeWord || _snap.tradeWord || tradeWordFallback || null }
+      : _snap;
+    const _any = Object.keys(m3).some(k => m3[k] !== null && m3[k] !== undefined && m3[k] !== '');
+    if (_any) {
+      const h3 = rankHarms(m3);
+      if (h3 && h3.lead) {
+        const s3 = buildFactualSpine(h3, m3);
+        if (s3 && s3.claim) {
+          console.log(`\u267b LADDER REBUILT FROM MEASUREMENTS [${company}]: no ladder was stored on this lead, but its measurements were \u2014 so the real ladder was run over them and both gates applied. This is what a fresh Research would open on, not an approximation, and nothing was re-measured or re-paid for. Leading on: "${String(s3.claim).slice(0, 80)}". Without this the client falls through to the raw model path, which has no writer brief and no verifier at write time.`);
+          return { spine: s3, source: 'measurements', gated: !!h3.leadIsGated, count: (h3.all || []).length, reason: null };
+        }
+      }
+    }
+    return { spine: null, reason: 'no-ladder' };
+  }
 
   const byHarm = [...hits].sort((a, b) => b.harm - a.harm);
   let lead = null;
@@ -36049,18 +36470,7 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   // The permitted figures. measuredNumbers is shipped whole by Research; the
   // three names below differ between the two halves of the system and are
   // translated here rather than left to fall silently null.
-  const raw = audit.measuredNumbers
-    || (audit._persisted && audit._persisted.measuredNumbers)
-    || {};
-  const m = {
-    ...raw,
-    // The lead's own trade, for audits stored before tradeWord was shipped.
-    tradeWord: raw.tradeWord || tradeWordFallback || null,
-    rankFound: raw.rankFound ?? (raw.rank !== null && raw.rank !== undefined),
-    reviewRecency: raw.reviewRecency ?? raw.reviewRecencyDays ?? null,
-    formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
-      ?? (raw.formFieldCount !== null && raw.formFieldCount !== undefined),
-  };
+  const m = _storedMeasurements(audit, tradeWordFallback);
 
   const spine = buildFactualSpine(harms, m);
   // ══ SAY WHICH OF THE THREE ELEMENTS THIS EMAIL WILL HAVE ═══════════════════
