@@ -27349,6 +27349,30 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             ? { pattern: String(publicPainSignals[0] || '').split(' — evidence:')[0].trim() }
             : null,
             });
+            // ══ THE WHOLE LADDER INPUT, NOT A GOOGLE-SIDE SNAPSHOT ═══════════
+            // measuredNumbers carries eighteen fields, all of them from Google
+            // or the review pull. _harmInputs carries SIXTY-ONE — every field
+            // any rung reads, including the entire website half: pricing, the
+            // booking path, the offer, the guarantee, the CTA, HTTPS, the
+            // viewport, the copyright year, the mined complaint.
+            //
+            // None of the website half was persisted. It was measured during
+            // Research, read once by the ladder, and dropped — so any lead
+            // reloaded from the database could never rebuild a website finding,
+            // and a rebuild from measuredNumbers alone produced ZERO rungs on a
+            // healthy business. Verified on Dr. Shaun Parson Plastic Surgery,
+            // 2026-08-14: 346 reviews, 4.8, ranked #1, 147 of 150 reviews
+            // answered — nothing on the Google side is wrong with him, so the
+            // only findings that existed were about his site, and none of them
+            // survived storage. The email fell through to /api/claude, a raw
+            // passthrough with no writer brief and no verifier at write time.
+            //
+            // Storing the ladder's own input object fixes that permanently and
+            // future-proofs it: a rung added later reads a field that is already
+            // being persisted, because this is the same object rankHarms is
+            // called with rather than a hand-copied subset of it. Hand-copied
+            // subsets are what measuredNumbers is, and why this was missing.
+            parsed.ladderInputs = _harmInputs && Object.keys(_harmInputs).length ? _harmInputs : null;
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
               rating: _mm.rating,
@@ -33927,6 +33951,78 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ HIDDEN RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
+  // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
+  // stored harm ladder (harmsRanked=0, problemList=0, 39 field(s))". The server
+  // refused, the client fell back to /api/claude — a raw passthrough with no
+  // writer brief and no verifier at write time — and the email arrived carrying
+  // "funnel" in the subject being sent, "I mapped exactly where the drop
+  // happens" describing our own work, and the figure 147, which nothing on the
+  // permitted list held. The send was blocked afterwards, so the floor held; the
+  // operator was shown a finished-looking email with three defects.
+  //
+  // measuredNumbers was stored the whole time and carries every field the ladder
+  // reads. This asserts the ladder can be rebuilt from it.
+  try {
+    const _fails = [];
+    // Shaun Parson's real numbers, as the audit reported them.
+    const _stored = {
+      measuredNumbers: {
+        reviewCount: 346, rating: 4.8, rank: 1, rankFound: true, scanned: 20,
+        weakerAbove: 0, photoCount: 20, reviewRecencyDays: 29, tenureYears: 20,
+        reviewsRead: 150, ownerReplies: 147, formFieldCount: 4,
+        formFieldCountIsSingleForm: true, reviewsPerYear: 17,
+        tradeWord: 'plastic surgeon', problemCount: 3,
+      },
+      // Exactly the shape that failed: no ladder, no problem list, no spine.
+      harmsRanked: [], problemList: [], factualSpine: null,
+    };
+    // The website half — the part that was never persisted. On Shaun Parson
+    // nothing on the Google side is wrong (346 reviews, 4.8, ranked #1, 147 of
+    // 150 answered), so a rebuild from the snapshot alone returned ZERO rungs
+    // and the lead fell through to the raw model path. These are the fields the
+    // audit actually found problems in.
+    // Real rung inputs, read off no_after_hours' own test. Shaun Parson's
+    // homepage offers a consultation booking or a phone call and nothing else,
+    // which is exactly what this rung measures.
+    _stored.ladderInputs = { ..._stored.measuredNumbers,
+      booking: 'phone_only', bookingMeasured: true, unreadBooking: false };
+    const _r = spineFromStoredAudit(_stored, 'Dr. Shaun Parson Plastic Surgery', 'plastic surgeon');
+    if (!_r || !_r.spine || !_r.spine.claim) {
+      _fails.push(`a lead with NO stored ladder but full stored measurements still produces no spine (reason: ${_r ? _r.reason : 'null'}) — that lead falls through to /api/claude, which has no writer brief and no verifier at write time`);
+    } else {
+      if (_r.source !== 'measurements') _fails.push(`the spine came from "${_r.source}" rather than the measurements — the tier under test did not run`);
+      // The figures the audit displayed must be permitted, or the email is
+      // refused for stating a number we measured and showed on screen.
+      const _figs = (_r.spine.figures || []).join(' ');
+      for (const [n, what] of [['346', 'the review count'], ['147', 'the replies the owner wrote'], ['150', 'the reviews we read']]) {
+        if (!_figs.includes(n)) _fails.push(`${n} — ${what} — is not on the permitted list, so an email stating it is refused as invented. That is the exact rejection this lead got: "UNTRACEABLE FIGURE 147"`);
+      }
+    }
+    // A lead with genuinely nothing stored must still refuse rather than invent.
+    const _empty = spineFromStoredAudit({ harmsRanked: [], problemList: [], measuredNumbers: {} }, 'Nothing Ltd', '');
+    if (_empty && _empty.spine) _fails.push('a lead with no measurements at all now produces a spine — the tier is inventing rather than recovering');
+    // And a stored ladder must still win, since it is what Research chose.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!/const _snap = _storedMeasurements\(/.test(_code)) _fails.push('the measurements tier does not go through the shared normaliser');
+    if (!/const _full = \(audit && audit\.ladderInputs\)/.test(_code)) {
+      _fails.push('the rebuild does not prefer the full stored ladder input over the Google-side snapshot, so a website finding still cannot be recovered');
+    }
+    if (!new RegExp('parsed\\.ladderInputs = ').test(_code)) {
+      _fails.push('Research never stores the ladder input, so nothing can be rebuilt from it on the next lead either');
+    }
+    if ((_code.match(/_storedMeasurements\(/g) || []).length < 2) {
+      _fails.push('the measurement normaliser is not shared by every tier — two hand-kept copies of that translation table is how the two halves of this system came to disagree about reviewRecency');
+    }
+    if (_fails.length) {
+      console.log(`⛔ LADDER REBUILD CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LADDER REBUILD CHECK: a lead carrying measurements but no stored ladder now has the REAL ladder run over them, with both gates applied — so it composes and is verified instead of falling through to the raw model path that has no brief and no verifier. The replies the owner wrote and the reviews we read are on the permitted list, so an email stating them is no longer refused as invented. A lead with nothing stored still refuses.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LADDER REBUILD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ THE LEAD THAT MEASURED ITS OWN BEST FINDING THREE TIMES AND BINNED IT ══
   // John P. Goodman DDS ran four real Places searches. Three of them found
   // businesses with fewer reviews ranking above him. The row handed to the audit
@@ -35947,6 +36043,25 @@ Return ONLY valid JSON, no markdown:
 //                  Falls back to the costliest finding and SAYS SO. That is a
 //                  different rule, and a quieter one would be a lie about how
 //                  the email was chosen.
+// The stored measurements, normalised. Lifted out because THREE tiers of
+// rebuild need them and two hand-kept copies of a translation table is how the
+// two halves of this system came to disagree about reviewRecency in the first
+// place.
+const _storedMeasurements = (audit, tradeWordFallback) => {
+  const raw = (audit && audit.measuredNumbers)
+    || (audit && audit._persisted && audit._persisted.measuredNumbers)
+    || {};
+  return {
+    ...raw,
+    // The lead's own trade, for audits stored before tradeWord was shipped.
+    tradeWord: raw.tradeWord || tradeWordFallback || null,
+    rankFound: raw.rankFound ?? (raw.rank !== null && raw.rank !== undefined),
+    reviewRecency: raw.reviewRecency ?? raw.reviewRecencyDays ?? null,
+    formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
+      ?? (raw.formFieldCount !== null && raw.formFieldCount !== undefined),
+  };
+};
+
 const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   if (!audit) return { spine: null, reason: 'no-audit' };
 
@@ -36026,7 +36141,53 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
     source = 'problemList';
   }
 
-  if (!hits || !hits.length) return { spine: null, reason: 'no-ladder' };
+  // ══ TIER 3 — REBUILD THE LADDER FROM THE MEASUREMENTS THEMSELVES ══════
+  // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and
+  // no stored harm ladder (harmsRanked=0, problemList=0, 39 field(s))". The
+  // server refused to compose, and the CLIENT fell back to /api/claude — a raw
+  // passthrough that takes whatever prompt it is handed. That email was written
+  // with NO writer brief and NO verifier at write time, and it arrived carrying
+  // exactly what those exist to prevent: "funnel" in the subject line of the
+  // variant being sent, "I mapped exactly where the drop happens" describing our
+  // own work, and the figure 147, which nothing on the permitted list held.
+  // COPY VERIFY caught all three afterwards and blocked the send — so the floor
+  // held — but the operator was shown a finished-looking email with three
+  // defects and told to fix them by hand, and a model call was paid for.
+  //
+  // The audit did not need re-running. measuredNumbers is stored on the lead and
+  // carries every field rankHarms reads — reviewCount, rating, rank, scanned,
+  // weakerAbove, photoCount, recency, tenure, reviewsRead, ownerReplies, form
+  // fields, reviewsPerYear and the trade. So the ladder is DERIVABLE, and
+  // deriving it is not an approximation of what fresh Research would choose: it
+  // is the same function over the same numbers, with both gates applied.
+  //
+  // This is the tier that should have existed first. The other two recover a
+  // ladder somebody stored; this one recovers it from what was MEASURED, which
+  // is the thing the ladder was only ever a view of.
+  if (!hits || !hits.length) {
+    // The FULL ladder input if it was stored, falling back to the Google-side
+    // snapshot for leads researched before ladderInputs shipped. The snapshot
+    // alone produces zero rungs on a business whose only problems are on its
+    // website, which is most of them.
+    const _full = (audit && audit.ladderInputs)
+      || (audit && audit._persisted && audit._persisted.ladderInputs) || null;
+    const _snap = _storedMeasurements(audit, tradeWordFallback);
+    const m3 = _full && Object.keys(_full).length
+      ? { ..._snap, ..._full, tradeWord: _full.tradeWord || _snap.tradeWord || tradeWordFallback || null }
+      : _snap;
+    const _any = Object.keys(m3).some(k => m3[k] !== null && m3[k] !== undefined && m3[k] !== '');
+    if (_any) {
+      const h3 = rankHarms(m3);
+      if (h3 && h3.lead) {
+        const s3 = buildFactualSpine(h3, m3);
+        if (s3 && s3.claim) {
+          console.log(`\u267b LADDER REBUILT FROM MEASUREMENTS [${company}]: no ladder was stored on this lead, but its measurements were \u2014 so the real ladder was run over them and both gates applied. This is what a fresh Research would open on, not an approximation, and nothing was re-measured or re-paid for. Leading on: "${String(s3.claim).slice(0, 80)}". Without this the client falls through to the raw model path, which has no writer brief and no verifier at write time.`);
+          return { spine: s3, source: 'measurements', gated: !!h3.leadIsGated, count: (h3.all || []).length, reason: null };
+        }
+      }
+    }
+    return { spine: null, reason: 'no-ladder' };
+  }
 
   const byHarm = [...hits].sort((a, b) => b.harm - a.harm);
   let lead = null;
@@ -36049,18 +36210,7 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   // The permitted figures. measuredNumbers is shipped whole by Research; the
   // three names below differ between the two halves of the system and are
   // translated here rather than left to fall silently null.
-  const raw = audit.measuredNumbers
-    || (audit._persisted && audit._persisted.measuredNumbers)
-    || {};
-  const m = {
-    ...raw,
-    // The lead's own trade, for audits stored before tradeWord was shipped.
-    tradeWord: raw.tradeWord || tradeWordFallback || null,
-    rankFound: raw.rankFound ?? (raw.rank !== null && raw.rank !== undefined),
-    reviewRecency: raw.reviewRecency ?? raw.reviewRecencyDays ?? null,
-    formFieldCountIsSingleForm: raw.formFieldCountIsSingleForm
-      ?? (raw.formFieldCount !== null && raw.formFieldCount !== undefined),
-  };
+  const m = _storedMeasurements(audit, tradeWordFallback);
 
   const spine = buildFactualSpine(harms, m);
   // ══ SAY WHICH OF THE THREE ELEMENTS THIS EMAIL WILL HAVE ═══════════════════
