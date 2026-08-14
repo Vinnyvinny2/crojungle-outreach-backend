@@ -8146,6 +8146,53 @@ const checkHttpsSupport = async (website) => {
 // Deliberately strict patterns: "guarantee" in a nav item is not a guarantee, and
 // "call today" is not urgency. A false offer gap would be a claim about their
 // business that they could disprove by pointing at their own page. Tested 8/8.
+// ══ THE REVENUE LINE ALMOST NOBODY IN THIS ICP HAS BUILT ════════════════════
+// Jay Abraham's three levers: more customers, higher transaction value, more
+// frequency. Everything else in this file measures the first one. Nothing has
+// ever measured the third, and for a HEALTHY business it is usually the only
+// one left — a practice ranking well with good reviews and a working site does
+// not have a traffic problem, it has a repeat-revenue problem.
+//
+// This is also the finding that survives Vin's test hardest. A membership plan
+// is not a website tweak and not something an owner does on a Saturday: it is
+// pricing, an offer, a signup path, billing and a retention sequence. It is a
+// build, and the money is recurring, which is the shape of a retainer.
+//
+// WHAT IT DELIBERATELY DOES NOT DO. It never claims they have no such offer
+// because we did not see one. Absence is claimed ONLY when we read enough of
+// their site to have found it — the EXISTS BUT UNREAD lesson, which cost this
+// system an email telling an attorney with a Reviews page that he had no
+// reviews on his site. Under that bar it returns unknown, and unknown produces
+// no finding at all.
+//
+// The vocabulary is the OWNER'S, not ours: plan, membership, club, agreement,
+// subscription, retainer. Nobody in this ICP writes "recurring revenue model"
+// on their website and nobody would recognise it in an email either.
+const RECURRING_OFFER_RE = /\b(membership|memberships|member(?:s)? (?:plan|program|club)|maintenance (?:plan|agreement|program|contract)|service (?:plan|agreement|contract)|care (?:plan|club)|wellness plan|protection plan|annual (?:plan|agreement|contract)|monthly (?:plan|membership|program)|subscription|subscribe and save|retainer|loyalty (?:program|club)|VIP (?:club|program|membership)|priority (?:service|customer) (?:plan|program)|dental savings plan|concierge (?:plan|membership|program))\b/i;
+
+// Trades where a recurring offer is standard practice, so its ABSENCE is a real
+// gap rather than a category mistake. A one-off remodel or a personal-injury
+// case does not have a maintenance plan and telling that owner he is missing
+// one would prove we do not understand his business — which costs more than
+// saying nothing at all. Kept narrow on purpose.
+const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition|plumb|electric|pest|exterminat|lawn|landscap|irrigation|pool|septic|chimney|gutter|roof|window clean|janitor|clean(ing|ers)|dent(al|ist)|orthodont|periodont|vet(erinar)?|animal (hospital|clinic)|chiroprac|physical therapy|med ?spa|aesthetic|derm|salon|barber|gym|fitness|pilates|yoga|massage|accounting|bookkeep|cpa|payroll|managed (it|services)|msp|security (system|monitor)|alarm|water treatment|softener)\b/i;
+
+const readRecurringOffer = ({ text, trade, pagesRead } = {}) => {
+  const t = String(text || '');
+  const applies = RECURRING_NORMAL_TRADES.test(String(trade || ''));
+  if (!applies) return { checked: false, why: 'a recurring plan is not standard in this trade, so its absence says nothing about them' };
+  // Enough of their site to be entitled to an absence claim. Two pages and 3,000
+  // characters is the floor: a homepage alone is not grounds to say a business
+  // does not sell something, and a plan usually lives on a services page.
+  const pages = Number(pagesRead) || 0;
+  if (t.length < 3000 || pages < 2) {
+    return { checked: false, why: `only ${pages} page(s) and ${t.length} characters were read — not enough of their site to claim they do not offer one` };
+  }
+  const hit = t.match(RECURRING_OFFER_RE);
+  return { checked: true, applies: true, hasRecurring: !!hit, evidence: hit ? hit[0] : '', pagesRead: pages };
+};
+
+
 const readOfferStrength = (text) => {
   const t = String(text || '').toLowerCase();
   if (t.length < 200) return { checked: false };
@@ -9355,6 +9402,36 @@ const HARM_LADDER = [
   //
   // Neither is a complaint about their website. Both are about money the owner
   // has already decided to spend, which is the only kind of finding a five-figure
+  // ── EVERY JOB STARTS FROM ZERO ───────────────────────────────────────
+  // The one finding here that is about how the business MAKES money rather
+  // than how it is found. On a healthy lead it is often the only thing left:
+  // ranks fine, reviews fine, site fine, and every dollar has to be won again
+  // from a stranger next month.
+  //
+  // harm 76 — real and large, and below the visibility findings because those
+  // cost him work he is trying to win today while this is work he has never
+  // tried to win. novel 82: he knows what a maintenance plan is; almost none of
+  // them has done the arithmetic on not having one. delegable 10 — pricing, an
+  // offer, a signup path, billing and a retention sequence is not a task, it is
+  // a build, which is exactly why it is worth an engagement.
+  //
+  // Only fires where the trade normally has one AND we read enough of their
+  // site to be entitled to say they do not. Both gates live in
+  // readRecurringOffer, so this cannot claim absence from a thin scrape.
+  { harm: 76, specific: 88, novel: 82, delegable: 10, weFix: 95, band: 'OFFER_GAP', id: 'no_recurring_offer',
+    blind: 'a revenue line that was never set up produces no number, so there is nothing anywhere to notice the absence of',
+    reframe: 'the work is already done and the relationship ends at the invoice',
+    test: (m) => m.recurringChecked === true && m.hasRecurringOffer === false,
+    say: (m) => {
+      const a = audienceOf(m.tradeWord);
+      // "every case they DO" reads wrong for a dentist and "every visit they
+      // do" reads wrong for a vet. Dropping the verb makes one sentence that
+      // is right in all seven registers.
+      return `Nothing on their site sells a plan, membership or agreement — every ${a.job} starts from zero and ends at the invoice`;
+    },
+    costs: (m) => `a ${audienceOf(m.tradeWord).buyer} they have already won has no reason to come back on a schedule, so the same work has to be sold again next time` },
+
+
   // ── INVISIBLE FOR THE WORK THEY MOST WANT ────────────────────────────
   // Two or more, deliberately. At exactly one absent service, absent_from_search
   // already says it better and with the query named — and firing both would put
@@ -10181,6 +10258,8 @@ const AREA_OF = {
   // being absent across a service list are different subjects to an owner, and
   // the sequence diversifier should be able to use both.
   service_invisibility: 'The services they sell',
+  // Its own area: this is about how the business earns, not how it is found.
+  no_recurring_offer: 'How the money repeats',
 };
 
 // ══ SUBJECT LINES, BUILT FROM THE FINDING ════════════════════════════════════
@@ -10630,6 +10709,9 @@ const HARM_LADDER_LAYER = {
   // made yet. It is the only rung here about a choice still open.
   hiring_marketing_now:  'LEADS',
   service_invisibility:  'LEADS',
+  // Hormozi's OFFER layer, which until now held three rungs and could
+  // effectively never lead an email.
+  no_recurring_offer:    'OFFER',
   no_google_listing:     'LEADS',
   absent_from_search:    'LEADS',
   outranked_by_weaker:   'LEADS',
@@ -10719,6 +10801,8 @@ const SELLABLE = {
   hiring_marketing_now: 5, paid_traffic_leaks: 5,
   // 5: invisible across a service line is a build, not an afternoon.
   service_invisibility: 5,
+  // 5: pricing, an offer, a signup path, billing and a retention sequence.
+  no_recurring_offer: 5,
   no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
   review_deficit: 5, no_after_hours: 5, review_velocity_drop: 4,
 
@@ -23614,6 +23698,10 @@ const _runResearchInner = async (req, res) => {
   let growthConstraint = { checked: false };
   let allowedConsequences = { checked: false, lines: [] };
   let leadMagnet = { checked: false };
+  // Hoisted with offerStrength and leadMagnet for the same reason: the audit
+  // prompt and the ladder inputs both read it, and both run after the block it
+  // is assigned in. Declared below its use, tdz.js caught it immediately.
+  let recurringOffer = { checked: false, why: 'not measured on this lead' };
   let marketClarity = { checked: false };
   let phoneConsistency = { checked: false };
   // Carried from the facts builder to the response, because the harm ladder
@@ -25072,6 +25160,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // talking to a salesperson? Measured from the same full-site text.
     leadMagnet = readLeadMagnet(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+    // Abraham's frequency lever — the only one of his three this file has never
+    // measured, and usually the only gap left on a business with nothing wrong.
+    // pagesRead is passed so the absence gate is about what we ACTUALLY opened,
+    // not about how much text happened to come back.
+    recurringOffer = readRecurringOffer({
+      text: [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
+      trade: customerTrade || verifiedIndustry || req.body.industry || '',
+      pagesRead: (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead.length : 0,
+    });
+    console.log(`RECURRING REVENUE [${company}]: ${recurringOffer.checked
+      ? (recurringOffer.hasRecurring
+          ? 'they already sell one \u2014 "' + recurringOffer.evidence + '" \u2014 no absence claim permitted'
+          : 'NONE on ' + recurringOffer.pagesRead + ' page(s) read, in a trade where a plan is standard. Every job starts from zero.')
+      : recurringOffer.why}`);
     // MARKET — the top of Hormozi's hierarchy, measured from their own copy.
     // ── PHONE ────────────────────────────────────────────────────────────
     // Google's own listing first, then a tel: link, then their site copy.
@@ -25392,6 +25494,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           servicePagesChecked: _svcGap.checked,
           servicePagesInvisible: _svcGap.invisible,
           serviceInvisibleNames: _svcGap.names,
+          // Abraham's frequency lever. recurringChecked is a GATE, not a value:
+          // without it, `hasRecurringOffer === false` on a lead we never
+          // measured would read as "they have no plan" rather than "we did not
+          // look", and that is a false absence claim about their own site — the
+          // single most damaging thing this system can put in an email.
+          recurringChecked: recurringOffer.checked === true,
+          hasRecurringOffer: recurringOffer.checked === true ? recurringOffer.hasRecurring : null,
           hiringMarketing: _mktgHireInput.hiringMarketing,
           jobPostedDaysAgo: _mktgHireInput.jobPostedDaysAgo,
           marketingRoleName: _mktgHireInput.marketingRoleName,
@@ -35516,6 +35625,106 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ POSITIONING LEADS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ THE ONLY GROWTH LEVER THIS FILE HAS NEVER MEASURED ══════════════════
+  // Jay Abraham's three: more customers, higher transaction value, more
+  // frequency. Every other rung in this ladder is the first one. On a healthy
+  // business — ranking fine, reviews fine, site fine — frequency is usually the
+  // only gap left, and it is the one that pays a retainer: a membership plan is
+  // pricing, an offer, a signup path, billing and a retention sequence, which is
+  // a build and not a Saturday morning.
+  //
+  // Two gates, and both must hold, because this rung makes an ABSENCE claim
+  // about the owner's own website — the class of error that once told an
+  // attorney with a Reviews page that he had no reviews on his site.
+  try {
+    const _fails = [];
+    const _body = ('We install and repair furnaces and air conditioners across the metro. '
+      + 'Free estimates. Our technicians are certified and insured.').repeat(30);
+
+    // ── 1. IT FIRES WHERE A PLAN IS STANDARD AND THERE IS NONE ─────────
+    const _gap = readRecurringOffer({ text: _body, trade: 'hvac contractor', pagesRead: 4 });
+    if (!_gap.checked || _gap.hasRecurring !== false) {
+      _fails.push(`an HVAC company with no plan on four pages read did not produce the finding — ${JSON.stringify(_gap).slice(0, 120)}`);
+    }
+    // ── 2. AND NOT WHERE THEY ALREADY SELL ONE ─────────────────────────
+    // Telling an owner he has no membership plan when his own site sells one is
+    // the whole email dead in one sentence.
+    for (const _phrase of ['Ask about our Comfort Club maintenance plan.', 'Join our membership today.',
+                           'Annual service agreement available.', 'Monthly subscription pricing.']) {
+      const _has = readRecurringOffer({ text: _body + ' ' + _phrase, trade: 'hvac contractor', pagesRead: 4 });
+      if (!_has.checked || _has.hasRecurring !== true) {
+        _fails.push(`a site saying "${_phrase}" still reads as having no plan — that is a false absence claim about their own page`);
+      }
+    }
+    // ── 3. A THIN SCRAPE MAY NOT CLAIM ABSENCE ─────────────────────────
+    const _thin = readRecurringOffer({ text: _body, trade: 'hvac contractor', pagesRead: 1 });
+    if (_thin.checked !== false) _fails.push('one page read is enough to claim a business sells no plan — it is not');
+    // ── 4. NOR MAY A TRADE WHERE NOBODY HAS ONE ────────────────────────
+    // "You have no maintenance plan" to a personal injury firm proves we do not
+    // understand the business, which costs more than saying nothing.
+    for (const _t of ['personal injury lawyer', 'custom home builder', 'plastic surgeon', 'kitchen remodeling']) {
+      const _wrong = readRecurringOffer({ text: _body, trade: _t, pagesRead: 6 });
+      if (_wrong.checked !== false) _fails.push(`"${_t}" is treated as a trade that normally sells a recurring plan`);
+    }
+    // ── 5. UNMEASURED IS NOT "THEY HAVE NONE" ──────────────────────────
+    // hasRecurringOffer must be null, never false, when nothing was measured.
+    const _rung = HARM_LADDER.find(x => x.id === 'no_recurring_offer');
+    if (_rung.test({ recurringChecked: false, hasRecurringOffer: false })) {
+      _fails.push('the rung fires on a lead we never measured — unmeasured would be stated as a fact about their site');
+    }
+    if (_rung.test({ hasRecurringOffer: null })) _fails.push('the rung fires with nothing measured at all');
+
+    // ── 6. IT REACHES THE LADDER ───────────────────────────────────────
+    {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_src);
+      let _txt = '';
+      if (_hiM) {
+        let _d = 0;
+        for (let i = _src.indexOf('{', _hiM.index); i < _src.length; i++) {
+          if (_src[i] === '{') _d++;
+          if (_src[i] === '}') { _d--; if (!_d) { _txt = _src.slice(_hiM.index, i + 1); break; } }
+        }
+      }
+      for (const f of ['recurring' + 'Checked', 'hasRecurring' + 'Offer']) {
+        if (!new RegExp('^\\s+' + f + ':', 'm').test(_txt)) _fails.push(`_harmInputs does not forward "${f}"`);
+      }
+      // ══ AND UNMEASURED MUST ARRIVE AS null, NOT false ═════════════════
+      // Asserted on the delivery EXPRESSION, because the rung's own
+      // recurringChecked gate masks this one: replacing the ternary with
+      // `!!recurringOffer.hasRecurring` sends false on a lead nobody measured,
+      // the rung still refuses to fire, and every behavioural assertion above
+      // passes. That is defence in depth working and a check reciting rather
+      // than verifying, and this file's own law is that a check which cannot
+      // fail is not a check. Falsifying this one caught exactly that.
+      if (!/hasRecurringOffer:\s*recurringOffer\.checked === true \? recurringOffer\.hasRecurring : null/.test(_txt)) {
+        _fails.push('hasRecurringOffer no longer arrives as null when nothing was measured — "we did not look" would be delivered as "they do not have one", and the only thing standing between that and a false claim about the owner\'s own website would be a single gate on another field');
+      }
+    }
+
+    // ── 7. AND IT SPEAKS EACH TRADE ────────────────────────────────────
+    const _byTrade = {};
+    for (const _t of ['hvac contractor', 'dentist', 'veterinary clinic']) {
+      const _lead = { recurringChecked: true, hasRecurringOffer: false, tradeWord: _t };
+      _byTrade[_t] = _rung.say(_lead);
+      const _c = costsOf(_rung, _lead);
+      if (/\bthey do starts\b/.test(_byTrade[_t])) _fails.push(`"${_t}" reads "every ${_t === 'dentist' ? 'case' : 'visit'} they do", which is not how anyone says it`);
+      if (!_c) _fails.push(`"${_t}" produced no so-what line`);
+    }
+    if (_byTrade['dentist'] === _byTrade['hvac contractor']) {
+      _fails.push('a dentist and an HVAC company receive the identical sentence, so the register is not reaching this rung');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ RECURRING REVENUE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RECURRING REVENUE CHECK: the only one of Abraham's three growth levers this file has never measured is now a finding, and it is the one that is usually all that is left on a business with nothing wrong. It fires on a trade where a plan is standard and none appears across the pages we actually opened; it refuses on a site that already sells one, on a one-page scrape, on a trade where nobody has a plan — a personal injury firm, a custom home builder — and on any lead where it was never measured, because "we did not look" and "they do not have one" are different claims and only one is true. A dentist reads "every case starts from zero", an HVAC company "every job", a vet "every visit".`);
+    }
+  } catch (e) {
+    console.log(`⛔ RECURRING REVENUE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
 
 
 
