@@ -8599,6 +8599,47 @@ const confirmBrokenPage = async (broken, fcKey) => {
 // among the things that are novel and checkable. A dead booking page wins because
 // it is all three. Rank loses on novelty alone, not on importance. And a stale
 // copyright year loses on cost, however novel and checkable it is.
+// ══ THE NUMBER THE LOGS CALL "THE RETAINER PITCH" ═══════════════════════════
+// Live, on every lead where it fires:
+//
+//   ★ VISIBILITY GAP [company]: invisible for 4 of 6 searches checked —
+//     including services they publish a dedicated page for. This is the
+//     retainer pitch, in their own words.
+//
+// The log line is right. We buy up to six Places searches per lead, one per
+// service the business publishes a page about, we count how many of them they
+// are absent from, we print that count, we call it the retainer pitch — and it
+// has never reached the harm ladder, so it has never once been sayable in an
+// email. Computed, logged, named as the most valuable thing on the lead, and
+// dropped one hop before the only thing that could use it.
+//
+// This is the finding for a HEALTHY business. Nothing is broken: the site is
+// fine, the listing is fine, the reviews are fine, and they are still invisible
+// for the work they most want. A defect scan has nothing to say about that
+// business. A gap does.
+//
+// SCOPE, DELIBERATELY NARROW. Only rows whose kind is their own service page
+// count. The head term is a different and stronger finding that already has a
+// rung, and the published-service-area row is about geography, not services.
+// Counting those here would inflate the number with things it does not mean.
+const serviceVisibilityGap = (lv) => {
+  const rows = (lv && Array.isArray(lv.results) ? lv.results : [])
+    .filter(r => r && r.kind === 'their own service page');
+  const missing = rows.filter(r => !r.found);
+  return {
+    checked: rows.length,
+    invisible: missing.length,
+    // The service itself, recovered from the query we actually ran. "mommy
+    // makeover in Leawood, KS" -> "mommy makeover". Taken from the query rather
+    // than from the slug so the words in the email are the words we searched:
+    // if those two ever drift, the owner runs the search we quoted and finds
+    // something else, and every true sentence beside it dies with that one.
+    names: missing.map(r => String(r.query || '').replace(/\s+in\s+[^,]+(,\s*[A-Z]{2})?\s*$/i, '').trim())
+      .filter(Boolean),
+  };
+};
+
+
 // ══ WHO WE ARE ACTUALLY WRITING TO ══════════════════════════════════════════
 // Vin: "if we are talking to a plumber use language a plumber uses, if we are
 // targeting a surgeon then surgeon talk... but even if they run a $15M business
@@ -9314,6 +9355,39 @@ const HARM_LADDER = [
   //
   // Neither is a complaint about their website. Both are about money the owner
   // has already decided to spend, which is the only kind of finding a five-figure
+  // ── INVISIBLE FOR THE WORK THEY MOST WANT ────────────────────────────
+  // Two or more, deliberately. At exactly one absent service, absent_from_search
+  // already says it better and with the query named — and firing both would put
+  // two sentences about the same search in one email. At two or more this
+  // becomes a different and much stronger claim: not "you missed one", but a
+  // pattern across the services they chose to build pages for.
+  //
+  // harm 91: below absent_from_search (96), because being invisible for the head
+  // term is their whole trade and this is a part of it. Above review_pain_pattern
+  // (86), because it is money leaving on searches they are already trying to win.
+  //
+  // novel 88 — he has never run these searches. Owners search their own head
+  // term constantly and almost never search their individual services, which is
+  // exactly why the gap survives.
+  // delegable 20 — he cannot hand "we are invisible for four of our services"
+  // to anyone without it becoming a project, which is the point.
+  { harm: 91, specific: 95, novel: 88, delegable: 20, weFix: 95, band: 'INVISIBLE', id: 'service_invisibility',
+    blind: 'an owner searches his own trade name and finds himself. Nobody searches their own service list one line at a time, so the gap never shows up from inside',
+    reframe: 'the work they most want to be found for is the work nobody can find them for',
+    test: (m) => Number(m.servicePagesChecked) >= 2 && Number(m.servicePagesInvisible) >= 2
+      && Array.isArray(m.serviceInvisibleNames) && m.serviceInvisibleNames.length >= 2,
+    say: (m) => {
+      const n = Number(m.servicePagesInvisible), of = Number(m.servicePagesChecked);
+      const names = (m.serviceInvisibleNames || []).slice(0, 2).map(x => keepSpan(String(x)));
+      return `They publish a page for ${of} services and do not come up in the Google map results for ${n} of them — including ${names.join(' and ')}`;
+    },
+    costs: (m) => `every ${audienceOf(m.tradeWord).buyer} searching for that exact work is choosing from a list they are not on`,
+    // A named service is a whole product line, so the money is the trade's own
+    // job value rather than a generic loss. Left to the composer, which already
+    // holds tradeJobValue and attaches it to the findings that carry a figure.
+  },
+
+
   // engagement can sit on top of.
 
   // ── THE ONLY FINDING IN THIS FILE WITH A CLOCK ON IT ──────────────────
@@ -10103,6 +10177,10 @@ const AREA_OF = {
   // diversifier treats them as a different subject from anything about the
   // storefront or the reviews — which is the whole reason they exist.
   hiring_marketing_now: 'Money already committed', paid_traffic_leaks: 'Money already committed',
+  // Its own area, not 'Search visibility': being absent for the head term and
+  // being absent across a service list are different subjects to an owner, and
+  // the sequence diversifier should be able to use both.
+  service_invisibility: 'The services they sell',
 };
 
 // ══ SUBJECT LINES, BUILT FROM THE FINDING ════════════════════════════════════
@@ -10551,6 +10629,7 @@ const HARM_LADDER_LAYER = {
   // A marketing hire is a decision about the LEADS layer that has not been
   // made yet. It is the only rung here about a choice still open.
   hiring_marketing_now:  'LEADS',
+  service_invisibility:  'LEADS',
   no_google_listing:     'LEADS',
   absent_from_search:    'LEADS',
   outranked_by_weaker:   'LEADS',
@@ -10638,6 +10717,8 @@ const SELLABLE = {
   // anything an owner does himself on a Saturday, which is the distinction
   // this table exists to make.
   hiring_marketing_now: 5, paid_traffic_leaks: 5,
+  // 5: invisible across a service line is a build, not an afternoon.
+  service_invisibility: 5,
   no_google_listing: 5, review_pain_pattern: 5, low_rating: 5, not_compounding: 5,
   review_deficit: 5, no_after_hours: 5, review_velocity_drop: 4,
 
@@ -14945,8 +15026,25 @@ const rankHarms = (m = {}) => {
     // corrupt the audit and the call sheet too. Only the OPENER moves, and only
     // for a pattern verified across multiple reviews with its quotes checked.
     // novel contributes at most 7 points, which was never enough to carry it.
-    const _isMinedPattern = h.id === 'review_pain_pattern';
-    const _minedBonus = _isMinedPattern ? 10 : 0;
+    // ══ THE BONUS IS GONE. THE EVIDENCE IT WAS BUILT ON CHANGED. ═══════
+    // It was +10 to review_pain_pattern, and the reasoning above it was sound
+    // when it was written: on Comfort-Air a mined complaint at harm 86 lost to
+    // outranked_by_weaker at 92, and the email went out in the shape of every
+    // SEO email that owner has ever deleted. Against THAT, the bonus was right.
+    //
+    // It is not right against a named service he sells. service_invisibility
+    // has the identical property the bonus was rewarding — nobody writes "you
+    // do not come up for mommy makeover or breast augmentation" without having
+    // looked — and the bonus was taking the opener from it anyway, 101 to 97.
+    //
+    // Vin, twice: "we can't sell them anything for reviews... it should never
+    // be what our emails are centred around. It's definitely a good tiny fact
+    // or add on." An add-on does not get a head start on the opener.
+    //
+    // Nothing is blocked. review_pain_pattern keeps harm 86 — sixth of 39 rungs
+    // — so on a lead where it genuinely is the best thing we found, it still
+    // leads. It simply stops jumping findings that beat it on their own merits.
+    const _minedBonus = 0;
     // ══ MONEY ALREADY COMMITTED OUTRANKS A FINDING ABOUT HOW HE RUNS ════
     // The mined bonus above is correct and stays. It was written when the
     // competition was outranked_by_weaker — one finding the owner would delete
@@ -14964,9 +15062,11 @@ const rankHarms = (m = {}) => {
     // and a date attached, and both expire. Vin: "we can't sell them anything
     // for reviews." We can sell against a hire he is budgeting for right now.
     //
-    // 14, not 10, deliberately: it must EXCEED the mined bonus rather than tie
-    // it, or the ordering falls back to harm and the whole adjustment does
-    // nothing on the one lead shape it was written for.
+    // 14 was chosen to exceed a +10 mined bonus that has since been removed.
+    // It is kept at 14 rather than retuned: paid_traffic_leaks at 93 and
+    // hiring_marketing_now at 90 must both clear service_invisibility at 91,
+    // because a hire he is budgeting for right now and a live ads account
+    // both have a date on them and a ranking gap does not.
     const _spendBonus = h.band === 'SPENDING' ? 14 : 0;
     // ══ AN EMERGENCY TRADE HAS A DIFFERENT WORST PROBLEM ══════════════════
     // The ladder's cost lines describe someone comparing three companies at
@@ -25193,6 +25293,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // prompt as background and stopped there, so "22 of 25 hiring for
         // marketing" could never become a sentence in an email.
         const _mktgHireInput = marketingHireFrom(req.body);
+    // localVisibility holds every rank row we bought on this lead. On a lead
+    // where the rank check never ran it is null, and serviceVisibilityGap
+    // returns zeros — which the rung reads as "no finding", never as "invisible
+    // for zero services". Unmeasured is not the same as measured-and-fine, and
+    // this file has shipped that confusion before.
+    const _svcGap = serviceVisibilityGap(localVisibility);
+    if (_svcGap.invisible >= 2) {
+      console.log(`\u2605 VISIBILITY GAP IS NOW A FINDING [${company}]: invisible for ${_svcGap.invisible} of ${_svcGap.checked} service page(s) \u2014 ${_svcGap.names.slice(0, 3).join(', ')}. This number has been printed on every lead for weeks and could not be said in an email until now.`);
+    }
         if (_mktgHireInput.hiringMarketing) {
           console.log(`\u26a1 BUYING WINDOW [${company}]: hiring ${_mktgHireInput.marketingRoleName || '(role name not shipped)'}`
             + `${Number.isFinite(_mktgHireInput.jobPostedDaysAgo) ? `, posted ${_mktgHireInput.jobPostedDaysAgo} day(s) ago` : ', NO POSTED DATE — no clock, so this cannot become a finding'} `
@@ -25213,6 +25322,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           adsTagConfirmed: !!(builtWith && builtWith.confirmed === true && !builtWith.blocked
             && (builtWith.hasGoogleAdsTag === true || builtWith.hasMetaPixel === true)),
           paidLeakGap: paidLeakGapFrom(_measured),
+          // ══ THE VISIBILITY GAP, FINALLY DELIVERED ═════════════════════════
+          // We buy up to six Places searches per lead to compute this, print it
+          // as "★ VISIBILITY GAP ... This is the retainer pitch, in their own
+          // words", and then never handed it to the only thing that can turn a
+          // measurement into a sentence. Derived through serviceVisibilityGap so
+          // the boot check runs the shipping code rather than a copy of it.
+          servicePagesChecked: _svcGap.checked,
+          servicePagesInvisible: _svcGap.invisible,
+          serviceInvisibleNames: _svcGap.names,
           hiringMarketing: _mktgHireInput.hiringMarketing,
           jobPostedDaysAgo: _mktgHireInput.jobPostedDaysAgo,
           marketingRoleName: _mktgHireInput.marketingRoleName,
@@ -35117,6 +35235,125 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ PLAIN ENGLISH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ THE RETAINER PITCH, PRINTED ON EVERY LEAD, SAYABLE ON NONE ══════════
+  // Live, on every lead where it fires:
+  //
+  //   ★ VISIBILITY GAP [company]: invisible for 4 of 6 searches checked —
+  //     including services they publish a dedicated page for. This is the
+  //     retainer pitch, in their own words.
+  //
+  // We buy up to six Places searches per lead to produce that number. We print
+  // it. We call it the retainer pitch. And it had never reached rankHarms, so
+  // it could not appear in an email — the same last-hop failure that ate the
+  // competitor's name, the buying window and the ads tag.
+  //
+  // It matters more than any of those, because it is the finding for a HEALTHY
+  // business. Nothing is broken — good site, good listing, good reviews — and
+  // they are still invisible for the work they most want. A defect scan has
+  // nothing to say about that business, and a defect scan is what this ladder
+  // was until today.
+  try {
+    const _fails = [];
+    // ── 1. THE HELPER, RUN — NOT REIMPLEMENTED ──────────────────────────
+    // The shape checkLocalVisibility actually returns, including the two row
+    // kinds that must NOT be counted.
+    const _lv = { checked: true, results: [
+      { kind: 'primary trade', found: true, rank: 3, scanned: 20, query: 'plastic surgeon in Leawood, KS' },
+      { kind: 'their own service page', found: false, scanned: 20, query: 'mommy makeover in Leawood, KS' },
+      { kind: 'their own service page', found: false, scanned: 20, query: 'breast augmentation in Leawood, KS' },
+      { kind: 'their own service page', found: true, rank: 9, scanned: 20, query: 'facelift surgery in Leawood, KS' },
+      { kind: 'published service area', found: false, scanned: 20, query: 'plastic surgeon in Overland Park, KS' },
+    ] };
+    const _g = serviceVisibilityGap(_lv);
+    if (_g.checked !== 3) _fails.push(`counted ${_g.checked} service pages, not 3 — the head term or the service-area row is being counted as a service`);
+    if (_g.invisible !== 2) _fails.push(`counted ${_g.invisible} invisible, not 2`);
+    if (_g.names.join('|') !== 'mommy makeover|breast augmentation') {
+      _fails.push(`the service names came back as "${_g.names.join('|')}" — the city must be stripped, and the words must be the ones we searched`);
+    }
+    // Nothing measured must produce nothing, never a zero that reads as a fact.
+    const _none = serviceVisibilityGap(null);
+    if (_none.checked !== 0 || _none.invisible !== 0 || _none.names.length) {
+      _fails.push('a lead where the rank check never ran does not come back empty');
+    }
+
+    // ── 2. IT ARRIVES AT THE LADDER ─────────────────────────────────────
+    {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_src);
+      let _txt = '';
+      if (_hiM) {
+        let _d = 0;
+        for (let i = _src.indexOf('{', _hiM.index); i < _src.length; i++) {
+          if (_src[i] === '{') _d++;
+          if (_src[i] === '}') { _d--; if (!_d) { _txt = _src.slice(_hiM.index, i + 1); break; } }
+        }
+      }
+      for (const f of ['servicePages' + 'Checked', 'servicePages' + 'Invisible', 'serviceInvisible' + 'Names']) {
+        if (!new RegExp('^\\s+' + f + ':', 'm').test(_txt)) {
+          _fails.push(`_harmInputs does not forward "${f}" — the number stays a log line forever`);
+        }
+      }
+    }
+
+    // ── 3. IT BEATS THE REVIEW BLOCK ────────────────────────────────────
+    // The healthy-business lead: ranks #3, 194 reviews at 4.6, replies on most,
+    // and a repeating complaint in its reviews. Before today this lead produced
+    // exactly two findings and both were about reviews.
+    const _healthy = {
+      tradeWord: 'plastic surgeon', rankChecked: true, rankFound: true, rank: 3, scanned: 20,
+      servicePagesChecked: _g.checked, servicePagesInvisible: _g.invisible, serviceInvisibleNames: _g.names,
+      reviewCount: 194, rating: 4.6, reviewsRead: 150, ownerReplies: 120,
+      reviewPainCount: 2, reviewPainTop: 'slow callbacks', reviewPainMentions: 5,
+    };
+    const _h = rankHarms(_healthy);
+    if (!_h.lead) _fails.push('the healthy-business lead produced no opener at all');
+    else if (_h.lead.id !== 'service_invisibility') {
+      _fails.push(`the healthy business still opens on "${_h.lead.id}" while it is invisible for 2 of the 3 services it publishes a page about`);
+    }
+    if (!(_h.byHarm || []).some(x => x.id === 'review_pain_pattern')) {
+      _fails.push('the fixture no longer fires review_pain_pattern, so it proves nothing about outranking it');
+    }
+    // The sentence must name the services. A count with no name is the generic
+    // SEO email every owner deletes.
+    const _said = String((_h.lead && _h.lead.finding) || '');
+    if (!/mommy makeover/.test(_said) || !/breast augmentation/.test(_said)) {
+      _fails.push(`the finding does not name the services — "${_said}"`);
+    }
+    // And it must speak the trade.
+    if (!/\bpatient\b/.test(String((_h.lead && _h.lead.costs) || ''))) {
+      _fails.push(`the so-what does not use the trade's word for a buyer — "${(_h.lead && _h.lead.costs) || ''}"`);
+    }
+
+    // ── 4. ONE ABSENT SERVICE IS NOT THIS FINDING ───────────────────────
+    // At exactly one, absent_from_search says it better and with the query
+    // named. Firing both would put two sentences about the same search in one
+    // email, which is how the review sequence read.
+    const _one = rankHarms({ ..._healthy, servicePagesInvisible: 1, serviceInvisibleNames: ['mommy makeover'] });
+    if ((_one.byHarm || []).some(x => x.id === 'service_invisibility')) {
+      _fails.push('a single absent service fires the aggregate finding, which then duplicates absent_from_search in the same email');
+    }
+
+    // ── 5. THE MINED BONUS IS ACTUALLY GONE ─────────────────────────────
+    // It was +10 to review_pain_pattern and it was taking the opener from this
+    // finding 101 to 97. Asserted on the ranking, not on the source, because a
+    // constant can be renamed and still be applied.
+    const _both = rankHarms({ ..._healthy });
+    const _si = (_both.byHarm || []).find(x => x.id === 'service_invisibility');
+    const _rp = (_both.byHarm || []).find(x => x.id === 'review_pain_pattern');
+    if (_si && _rp && _rp.opener >= _si.opener) {
+      _fails.push(`review_pain_pattern still scores ${_rp.opener} against service_invisibility's ${_si.opener} — the mined bonus is still being applied somewhere`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ VISIBILITY GAP CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ VISIBILITY GAP CHECK: the number the logs have been calling "the retainer pitch" for weeks is now a finding. A healthy business — ranks #3, 194 reviews at 4.6, replies on most of them — used to produce exactly two findings and both were about its reviews; it now opens on "${String((_h.lead && _h.lead.finding) || '').slice(0, 96)}". Only their own service pages are counted, never the head term or the service area; a single absent service is left to absent_from_search rather than duplicated; a lead where the rank check never ran produces nothing rather than a zero; and the +10 that let a mined review complaint outrank this 101 to 97 is gone, asserted on the ranking rather than on the source.`);
+    }
+  } catch (e) {
+    console.log(`⛔ VISIBILITY GAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
 
 
   // ══ A MEDIAN CALLED AN AVERAGE, AND THE LARGER HALF OF IT ══════════════
