@@ -501,11 +501,15 @@ const SELF_FIX_RULES = [
   // 5 = one conversation with his own staff, today, at no cost.
   [5, /\breviews? (?:across|per|a year)|review velocity|nothing.{0,25}compound|does not compound|asks? (?:for|customers for) (?:a )?reviews?\b/i,
       'asking finished customers for a review needs nobody — he tells his crew and it is done'],
-  [5, /\bno(?:t one)? (?:of the )?\d*\s*reviews?.{0,30}(?:repl(?:y|ies)|answered|response)|no owner repl|never replied to (?:a )?review\b/i,
+  [5, /\bno(?:t one)? (?:of the )?\d*\s*reviews?.{0,30}(?:repl(?:y|ies)|answered|response)|\d+ of the \d+ reviews.{0,20}repl|no owner repl|never replied to (?:a )?review\b/i,
       'replying to his own reviews is an afternoon of his own time'],
-  [4, /\bno photos?|photo count|\d+ photos?\b.{0,20}profile|missing (?:hours|description) on\b/i,
+  // Re-anchored to the live say() wording: the sentences now say "listing …
+  // photos on it" and "listing has no opening hours on it"; the old patterns
+  // required "profile" / "hours not listed" and matched nothing — the exact
+  // drift the review_pain note below already concedes.
+  [4, /\bno photos?|photo count|\d+ photos?\b.{0,20}(?:profile|listing|on it)|missing (?:hours|description) on\b/i,
       'uploading photos or filling in profile fields is self-serve and free'],
-  [4, /\bhours (?:are )?(?:not listed|missing)|no business description\b/i,
+  [4, /\bhours (?:are )?(?:not listed|missing)|no opening hours|no business description\b/i,
       'a Google profile field he can fill in himself in minutes'],
   // 1-2 = he cannot resolve this without help he does not have.
   [1, /\brank|ranking|#\d+ of \d+|map pack|competitors? (?:above|ahead)|fewer reviews than|absent from (?:the )?search|not in (?:the )?top\b/i,
@@ -1707,6 +1711,18 @@ const checkFabrications = (text, measured = {}) => {
 // The Approve button stayed enabled on emails carrying claims the comment says
 // the email dies on contact over.
 const BLOCKING_FLAG = /^(?:ABSENCE CLAIM|UNTRACEABLE FIGURE|WRONG TENURE|INVENTED TENURE|INVENTED FREQUENCY|INVENTED COMPETITOR ACTION|INVENTED ALGORITHM MECHANICS|INVENTED COMPETITOR DETAIL|INVENTED COMPETITOR COUNT|INVENTED COMPETITOR AVAILABILITY|INVENTED COMPARISON|INVENTED TIMELINE|INVENTED DURATION|POST-CONTACT CLAIM|BACKEND CLAIM|OUTCOME CLAIM|BEHAVIOUR CLAIM|PROSPECT CLAIM|COMPETITOR CLAIM|ROUNDED PAST THE TRUTH|ALL-FIVE-STAR CLAIM|CLAIM ABOUT A COMPETITOR|claims post-submission|claims reviews)/i;
+
+// ══ HOISTED so the FACT-CHECK GATE boot check can test the SHIPPING regex ══
+// The check used to define a hand-kept duplicate and assert against that —
+// character-identical today, and free to drift green forever. Two hand-kept
+// copies of one rule is the disease this file condemns; there is now one.
+const CRITICAL_FACT_RE = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bfactually backwards\b|\bthe opposite of the finding\b|\bcontradicts?\b|\bcontradiction\b|\bMISMATCH\b|\bMISALIGNMENT\b|\bdirectly contradict/i;
+
+// Hoisted for the same reason as CRITICAL_FACT_RE directly above: the
+// BLOCKED-NOT-DEAD boot check used to assert against its own private copy of
+// this pattern, which could drift green forever. One regex, shared by the
+// shipping detector and the check that claims to test it.
+const BOT_CHALLENGE_RE = /cloudflare|cf-ray|challenge-platform|just a moment|checking your browser|captcha|are you a robot|access denied|ddos|incapsula|imperva|akamai|bot detection|enable javascript/i;
 
 const splitFlags = (flags = []) => {
   const blocking = [], advisory = [];
@@ -6667,6 +6683,15 @@ const isCatchAllDomain = async (domain, verifierKey) => {
     const first = res.valid === true || res.catchAll === true;
     await new Promise(r => setTimeout(r, 400));
     const res2 = await _probe();
+    // A failed SECOND probe must not hand the verdict to one sample. The
+    // banner above says the two probes MUST AGREE, and the verifier timing out
+    // on hardened domains — the documented common failure — is precisely when
+    // res2 errors. Deciding and caching from res alone fired the single-sample
+    // path exactly where two samples matter most.
+    if (res2.error) {
+      console.log(`Catch-all probe [${domain}]: second probe errored (${res2.error}) — one sample may not decide, recording UNKNOWN and not caching.`);
+      return null;
+    }
     if (!res2.error) {
       const second = res2.valid === true || res2.catchAll === true;
       if (first !== second) {
@@ -8623,7 +8648,7 @@ const verifySiteReallyDown = async (website) => {
       // system can say: instantly checkable, instantly false, and it ends the
       // conversation with the one person we wanted to talk to.
       const _b = String(body || '');
-      const _blocked = _b.length < 2000 && /cloudflare|cf-ray|challenge-platform|just a moment|checking your browser|captcha|are you a robot|access denied|ddos|incapsula|imperva|akamai|bot detection|enable javascript/i.test(_b);
+      const _blocked = _b.length < 2000 && BOT_CHALLENGE_RE.test(_b);
       if (_blocked) {
         return { down: null, blocked: true, workingUrl: url,
           why: `${url} answered with ${_b.length} characters carrying a bot-challenge marker. Their site is up and refusing US, not returning nothing to visitors. NO dead-site claim is permitted on this lead.` };
@@ -8901,7 +8926,7 @@ const marketingHireFrom = (body = {}, now = Date.now()) => {
     // Lower-cased so the sentence reads as prose, and truncated so a job board's
     // 90-character title cannot run away with the opening line.
     marketingRoleName: hiring && roles.length
-      ? String(roles[0]).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 42)
+      ? String(roles[0]).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 42).replace(/\s+\S{1,3}$/, '')
       : '',
   };
 };
@@ -9098,7 +9123,11 @@ const HARM_LADDER = [
     // Visible to every prospect who reads the reviews, measured directly, and
     // owners consistently do not realise how it reads. Scott replies to 37 of 40
     // and it is the best thing about his profile; the inverse is a real finding.
-    test: (m) => Number(m.reviewsRead || 0) >= 15 && Number(m.ownerReplies || 0) === 0,
+    // typeof-first on the reply count: if Apify renames the owner-reply field,
+    // reviews still parse and ownerReplies silently arrives null — and "Not one
+    // of the N reviews has a reply" is a false absence claim on every lead
+    // with 15+ reviews. The same Apify silent-failure class PART 4 documents.
+    test: (m) => Number(m.reviewsRead || 0) >= 15 && typeof m.ownerReplies === 'number' && m.ownerReplies === 0,
     say: (m) => `Not one of the ${m.reviewsRead} reviews we read has a reply from the business`,
     // The reframe above already says "a stranger reading reviews sees a business
      // that does not answer". This used to repeat it nearly verbatim, and the
@@ -9732,7 +9761,7 @@ const HARM_LADDER = [
   { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
     blind: 'the total goes up every year, so it reads as growth. The rate against the years traded is the part nobody works out',
     reframe: 'people comparing companies read the reviews first, and a thin record reads as a thin business',
-    test: (m) => (m.tenureYears || 0) >= 8 && (m.reviewsPerYear || 99) < 4,
+    test: (m) => (m.tenureYears || 0) >= 8 && (typeof m.reviewsPerYear === 'number' && Number.isFinite(m.reviewsPerYear) ? m.reviewsPerYear : 99) < 4,
     // ══ STATE THE TWO MEASUREMENTS, NOT THE DIVISION ══════════════════════
     // "— about 1.9 a year" was flagged by the fact-checker on three consecutive
     // live runs, each time for the same reason: it presents arithmetic as if it
@@ -9818,7 +9847,7 @@ const HARM_LADDER = [
     say: (m) => {
       const g = (Array.isArray(m.marketClarityGaps) ? m.marketClarityGaps : [])
         .find(x => /"/.test(String(x || '')));
-      return g ? upper1(keepSpan(String(g))) : 'The copy does not name who the business is for';
+      return g ? keepSpan(upper1(String(g))) : 'The copy does not name who the business is for';
     },
     // "on their own ... applies to them" is the STRANGER, not the owner, so the
     // second-person rewrite turned it into "a stranger has to work out on YOUR
@@ -10011,7 +10040,7 @@ const measurementLooksWrong = (m = {}) => {
 const AN_DESPITE_CONSONANT = /^(?:hour|honest|honou?r|heir|herb|hvac|mri|x-?ray|seo|rv\b|llc|ll\.?m|md\b|fbi)/i;
 // "un" takes AN except before an i — underground and undertaker do, uniform
 // and unit do not.
-const AN_DESPITE_U = /^(?:up|um|un(?!i)|urb)/i;
+const AN_DESPITE_U = /^(?:up|um|un(?!i)|urb|urg)/i;
 const anFor = (word) => {
   const s = String(word || '').trim().toLowerCase();
   if (!s) return 'a';
@@ -10431,7 +10460,10 @@ const SUBJECTS_FOR = {
   outranked_by_weaker:  ['your reviews are broken', 'your reviews are not working', 'smaller shops are above you'],
   // Mike's subject test: could someone who WORKS there have sent it. A colleague
   // who noticed the company missing from a nearby market writes exactly this.
-  coverage_gap:         ['we are not showing up there', 'nothing in half your area', 'you are missing from two towns'],
+  // "half your area" and "two towns" were counts nobody measured — the rung
+  // fires at one absent market. Nothing verifies a subject against the
+  // measurements, so the subject must not state a number at all.
+  coverage_gap:         ['we are not showing up there', 'missing from a town you serve', 'your coverage has a hole'],
   wrong_gbp_category:   ['google has your category wrong', 'your category is wrong'],
   no_google_listing:    ['you have no google listing', 'you are not on the map'],
   // "your door closes at 5" was here, and it states a closing time nobody
@@ -10446,7 +10478,11 @@ const SUBJECTS_FOR = {
   long_form:            ['your form asks for too much', 'your form is too long'],
   stale_copyright:      ['your footer still says {year}', 'your site still says {year}'],
   placeholder_text:     ['your site has dummy text on it', 'placeholder text is live'],
-  dead_blog:            ['your blog stopped in {year}', 'nothing new since {year}'],
+  // {postyear}, not {year}: the shared token fills copyrightYear FIRST, so a
+  // site with a current copyright and a blog dead since 2019 got "your blog
+  // stopped in 2026" — the one-token-two-measurements class the {n} note
+  // below records shipping as "40 years, 10 reviews".
+  dead_blog:            ['your blog stopped in {postyear}', 'nothing new since {postyear}'],
   stale_reviews:        ['your reviews stopped', 'your last review is old'],
   thin_profile:         ['your listing looks bare', 'your google page is empty', 'nothing on your listing'],
   low_rating:           ['your rating is {rating}', 'your star line is hurting you'],
@@ -10489,6 +10525,7 @@ const buildSubjects = (lead, m = {}) => {
     .map(t => t
       .replace('{city}', city || '')
       .replace('{year}', String(m.copyrightYear || m.newestPostYear || ''))
+      .replace('{postyear}', String(m.newestPostYear || ''))
       .replace('{rating}', String(m.rating || ''))
       // The complaint his own reviewers repeated, as the subject. Clipped to a
       // few words because a subject over ~40 characters is truncated on a phone,
@@ -11036,13 +11073,13 @@ const REFERRAL_ADJUST = {
 // fabricated, and it needs no verification pass. The brain is not involved.
 // Trailing \\b broke on suffixes — "orthodont\\b" cannot match "orthodontist".
 // Prefixes are left open so the stem matches whatever follows.
-const EMERGENCY_TRADES = /\b(restoration|remediation|water damage|fire damage|flood|mold|storm damage|disaster|biohazard|trauma clean|sewage|septic|plumb|drain|rooter|hvac|heating|cooling|air condition|furnace|boiler|water heater|electric|locksmith|tow|wrecker|emergency|24.?hour|garage door|appliance repair|well pump|board.?up|tree (removal|service)|pest control|glass repair|windshield|urgent care)/i;
+const EMERGENCY_TRADES = /\b(restoration|remediation|water damage|fire damage|flood|mold|storm damage|disaster|biohazard|trauma clean|sewage|septic|plumb|drain|rooter|hvac|heating|cooling|air condition|furnace|boiler|water heater|electric|locksmith|tow(?!n)|wrecker|emergency|24.?hour|garage door|appliance repair|well pump|board.?up|tree (removal|service)|pest control|glass repair|windshield|urgent care)/i;
 // ══ ELECTIVE SURGERY IS THE MOST CONSIDERED PURCHASE THERE IS ═════════════
 // "lasik surgery" returned UNKNOWN, so a business whose patients research for
 // weeks got the default after-hours harm of 81 and an email about booking
 // widgets. Elective medical, veterinary and legal work all belong here: the
 // buyer compares providers, reads reviews, and decides before making contact.
-const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|lasik|vision correction|ophthalmolog|optometr|eye (care|surgery|center)|dermatolog|chiropract|physical therapy|fertility|ivf|bariatric|hair (transplant|restoration)|weight loss|surgeon|surgery|clinic|practice|cpa|accountant|accounting|bookkeep|tax|attorney|lawyer|law firm|legal|financial advis|wealth|insurance agen|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|siding|general contractor|home builder|pool service|photograph|wedding|catering|event plan|private school|tutoring|driving school)/i;
+const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|lasik|vision correction|ophthalmolog|optometr|eye (care|surgery|center)|dermatolog|chiropract|physical therapy|fertility|ivf|bariatric|hair (transplant|restoration)|weight loss|surgeon|surgery|clinic|practice|cpa|accountant|accounting|bookkeep|tax(?!i)|attorney|lawyer|law firm|legal|financial advis|wealth|insurance agen|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|siding|general contractor|home builder|pool service|photograph|wedding|catering|event plan|private school|tutoring|driving school)/i;
 
 const purchaseUrgency = (trade) => {
   const t = String(trade || '').toLowerCase();
@@ -13218,7 +13255,7 @@ const EMAIL_SKELETONS = [
       // recognition proves we looked. The finding is the evidence underneath
       // both. Leading on the finding, which is what this did, gives him a
       // scanner output and makes him supply the meaning himself.
-      `${first ? first + ', ' : ''}${insight ? (first ? insight.charAt(0).toLowerCase() + insight.slice(1) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? lower1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
+      `${first ? first + ', ' : ''}${insight ? (first ? lower1(insight) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? lower1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
       a space and calling it ONCE punctuated only the last one. Live on Dr Craig
       Wooten: "...is the one a stranger comparing three companies will find A
       practice that asks for a quote before a patient is ready usually stays..."
@@ -13436,6 +13473,15 @@ const _convertPerson = (t) => String(t || '')
   .replace(/\bhe is\b/g, "you're").replace(/\bHe is\b/g, "You're")
   .replace(/\bhimself\b/g, 'yourself')
   .replace(/\bhe\b/g, 'you').replace(/\bHe\b/g, 'You')
+  // The she/her rules were simply missing — a headline about a female owner
+  // shipped in third person in an email addressed to her by name, the exact
+  // wrong-merge-field failure the he/his comment above documents.
+  .replace(/\bshe has\b/g, 'you have').replace(/\bShe has\b/g, 'You have')
+  .replace(/\bshe is\b/g, "you're").replace(/\bShe is\b/g, "You're")
+  .replace(/\bherself\b/g, 'yourself')
+  .replace(/\bhers\b/g, 'yours')
+  .replace(/\bher\b/g, 'your').replace(/\bHer\b/g, 'Your')
+  .replace(/\bshe\b/g, 'you').replace(/\bShe\b/g, 'You')
   .replace(/\bhim\b/g, 'you').replace(/\bHim\b/g, 'You')
   // ══ "THE REPUTATION" IS HIS REPUTATION ═══════════════════════════════════
   // The situation-read headline is written about the business in the third
@@ -13533,7 +13579,15 @@ const composeEmail = (spine, opts = {}) => {
       // These say the same thing and do work: they frame the two he has read as
       // a sample rather than a list, which is what makes it a management
       // question instead of a to-do.
-      const r = Math.max(1, n - 2);
+      // n-2 can be 0 when both findings are already named; Math.max(1,...) then
+    // INVENTED a third finding ("There's one more.") that was never measured —
+    // a false claim composed by code on the path whose premise is that nothing
+    // composed can be false. No remainder, no count line.
+      // Returns an ARRAY of candidate forms — the first version of this fix
+      // returned '' here and the picker indexed into a string, which rendered a
+      // literal "undefined" paragraph. The fuzzer caught it within one run.
+      const r = n - 2;
+      if (r < 1) return [''];
       return r === 1
         ? [`There's one more.`, `Those are 2 of ${n}.`, `And one more after that.`]
         : [`There are ${r} more.`, `Those are 2 of ${n}.`, `${r} more after those.`];
@@ -13857,7 +13911,9 @@ const composeEmail = (spine, opts = {}) => {
   const _words = _wc(body);
   // The reason-to-care sentence. Either survives; both is now deliberately never.
   const _hasWhy = !!(costs || reframe || pattern || money);
-  const _hasAsk = /[?]/.test(body) || !!cta;
+  // cta always resolves to a non-empty default, so `|| !!cta` could never be
+    // false — a check that cannot fail. The body either asks or it does not.
+    const _hasAsk = /[?]/.test(body);
   const _thin = !fact || !_hasWhy || !_hasAsk || _words < HARD_FLOOR;
   if (_thin) {
     const _absent = [!fact && 'a measured finding', !_hasWhy && 'any reason it matters to him',
@@ -14277,7 +14333,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
     // reused across two touches in the live sequence — caught by SEQUENCE CHECK
     // as "two touches close on the same specific ask", which is the automation
     // tell the check exists to find.
-    cta = { text: 'Worth a look at the other two?', kind: 'writeup_short' };
+    cta = { text: 'Worth a look at the others?', kind: 'writeup_short' };
   }
   // Subject: this finding's own line, a DIFFERENT one from the first email so the
   // follow-up opens a new angle rather than repeating the subject he already
@@ -14310,7 +14366,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
     .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
   const subject = subs.length
     ? subs[(Math.abs(_seed) + ordinal) % subs.length]
-    : lower1(String(rung.finding)).slice(0, 46).replace(/[\s—-]+$/, '');
+    : lower1(String(rung.finding)).slice(0, 30).replace(/\s+\S*$/, '').replace(/[\s—-]+$/, '');
   // Body: fact, its reframe, its cost, its money — the same four the first email
   // carries, in a tighter shape because a follow-up should be shorter.
   // ══ A DIFFERENT DOORWAY EACH TOUCH ═══════════════════════════════════════
@@ -14602,7 +14658,9 @@ const TRADE_JOB_VALUE = [
   // contractor" could be either trade, and no figure is always safe where a
   // wrong one never is.
   { re: /\bbasement (?:remodel|refinish|finish|conversion)|\bfinished basement/i, say: 'a basement finish-out runs $20k-$70k' },
-  { re: /\bkitchen (?:and|&) bath|\bkitchen remodel|\bbath(?:room)? remodel|\bremodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
+  // Bare \bremodel caught "Exterior Remodeling", "Roofing & Remodeling" and
+  // quoted them a kitchen figure — the recorded orthodontist/garage-door class.
+  { re: /\bkitchen (?:and|&) bath|\bkitchen remodel|\bbath(?:room)? remodel/i, say: 'a kitchen or bathroom remodel runs $15k-$80k' },
   // ══ A GARAGE DOOR IS NOT A WINDOW ═════════════════════════════════════════
   // Rose Garage Door Solutions was told "a window or siding job runs $8k-$40k"
   // in email one and again in follow-up one. The bare word `door` in the exterior
@@ -14616,7 +14674,7 @@ const TRADE_JOB_VALUE = [
   // it. Specific trades are matched BEFORE the broad exterior bucket, and `door`
   // is no longer a bare alternative.
   { re: /\bgarage door|\boverhead door|\bdock door|\broll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
-  { re: /\bwindow|\bsiding|\bexterior|\bentry door|\bpatio door|\breplacement door/i, say: 'a window or siding job runs $8k-$40k' },
+  { re: /\bwindow(?!\s?(?:clean|tint|treat|wash))|\bsiding|\bexterior|\bentry door|\bpatio door|\breplacement door/i, say: 'a window or siding job runs $8k-$40k' },
   // ══ AND WATERPROOFING IS NOT ROOFING ══════════════════════════════════════
   // The note directly above diagnosed this exact class for `door`, fixed that
   // one instance, and never searched for the next. `/\broof/i` is a bare
@@ -14690,8 +14748,12 @@ const TRADE_JOB_VALUE = [
   { re: /\bveterinar|\banimal hospital/i, say: 'a surgical case runs $1k-$5k' },
   { re: /\bassisted living|\bsenior (?:living|care)|\bmemory care/i, say: 'one resident is several thousand dollars a month' },
   // Professional services
-  { re: /\battorney|\blaw (?:firm|office)|\blegal|\besq\b/i, say: 'a single matter runs several thousand dollars' },
-  { re: /\bcpa|\baccount(?:ant|ing)|\bbookkeep|\btax/i, say: 'an annual engagement runs several thousand dollars' },
+  // Removed. The decision block above this table rules that a law matter has
+  // no honest single figure ("a parking ticket to a wrongful-death suit") and
+  // that pretending otherwise is the tell that kills the email — and then this
+  // row shipped exactly that sentence. No row means no money line, which is
+  // the honest outcome the comment already chose.
+  { re: /\bcpa|\baccount(?:ant|ing)|\bbookkeep|\btax(?!i)/i, say: 'an annual engagement runs several thousand dollars' },
   { re: /\binsurance/i, say: 'one policy is years of renewal commission' },
   // `broker` is a job title, not an industry. A bare alternative here caught
   // `mortgage broker` and `freight broker` and told a trucking company its
@@ -15130,7 +15192,11 @@ const rankHarms = (m = {}) => {
     //
     // Only CONVERSION-side harms scale this way. A visibility problem does not
     // get worse because you are visible \u2014 that is a contradiction.
-    const CONVERSION_SIDE = new Set(['broken_page', 'dead_link', 'ads_to_broken', 'no_https',
+    // dead_link and ads_to_broken were never rung ids — two inert entries in a
+    // set whose own sibling comment warns that a list matching nothing is worse
+    // than no list. paid_traffic_leaks is deliberately NOT here: its traffic is
+    // paid, not map-rank-derived, so rank-based scaling would be the wrong dial.
+    const CONVERSION_SIDE = new Set(['broken_page', 'no_https',
       'phone_mismatch', 'tap_to_call_broken', 'no_after_hours', 'long_form',
       'form_only_no_booking', 'no_website_on_profile']);
     let harmAdj = h.harm;
@@ -15801,7 +15867,12 @@ const readMarketClarity = (text, { trade, city } = {}) => {
 
   // GEOGRAPHIC SPECIFICITY beyond a single mention in the footer.
   if (city) {
-    const cityCount = (low.match(new RegExp(String(city).toLowerCase().replace(/[^a-z ]/g, ''), 'g')) || []).length;
+    // Both sides through the same transform: the city was stripped of
+    // punctuation ("St. Louis" -> "st louis") and searched in copy that kept
+    // it, so every punctuated or hyphenated metro counted 0 and the false gap
+    // "their own city barely appears" fired mechanically.
+    const _lowFlat = low.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ');
+    const cityCount = (_lowFlat.match(new RegExp(String(city).toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim(), 'g')) || []).length;
     if (cityCount >= 3) signals.push(`${city} appears ${cityCount} times \u2014 they have claimed a place, not just listed an address`);
     else if (cityCount <= 1) gaps.push(`their own city barely appears in their copy, so nothing tells a local searcher this is a business near them`);
   }
@@ -16385,7 +16456,7 @@ const measureBusinessHistory = ({ foundedYear, reviewCount, reviewRating, review
       findings.push({
         kind: 'proof_accumulation',
         layer: 'LEADS',
-        finding: `${tenure} years in business and ${reviews} public reviews \u2014 about ${perYear < 1 ? 'one review every ' + Math.round(1 / perYear) + ' years' : perYear.toFixed(1) + ' a year'}. The work is being done; it is not turning into proof anyone can find.`,
+        finding: `${tenure} years in business and ${reviews} public reviews \u2014 about ${perYear > 0 && perYear < 1 ? 'one review every ' + Math.round(1 / perYear) + ' years' : perYear > 0 ? perYear.toFixed(1) + ' a year' : 'none that anyone can find'}. The work is being done; it is not turning into proof anyone can find.`,
         why: `A business this old should have a body of public evidence working for it. At this rate every new customer starts from almost nothing, which means ${tenure} years of completed jobs are doing no selling.`,
         evidence: `${reviews} reviews measured on their Google profile; founded ${foundedYear} per their own site.`,
       });
@@ -16729,7 +16800,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     // noun — so it is safe to repair rather than flag.
     const _despace = (t) => String(t == null ? '' : t)
       .replace(/(\d)([A-Za-z])/g, '$1 $2')
-      .replace(/([a-z])([A-Z][a-z])/g, '$1 $2')
+      .replace(/([a-z]{2})([A-Z][a-z])/g, '$1 $2')
       .replace(/\s{2,}/g, ' ')
       .trim();
     for (const k of ['headline', 'read', 'background', 'whatHeNeeds', 'askOnTheCall']) {
@@ -17135,7 +17206,7 @@ const measureGrowthConstraint = ({
                 ? `just 1 of the ${_above} businesses ranked above them has FEWER reviews`
                 : `${weakerAbove} of the ${_above} businesses ranked above them have FEWER reviews`;
             return `${_frame}, and they still sit at #${rank}. ${rank <= (_above + 1) / 2 ? 'They ARE in the results, in the middle of them' : 'They ARE in the results; they are near the bottom of them'}, and people choose from the top of a list. \u26a0 OUR NUMBER AND HIS SCREEN DO NOT MATCH. We read the Places API, which returns organic results only. What he sees has SPONSORED listings above them, so his count is always one or two higher than ours \u2014 verified live: we measured a Cincinnati dentist at #9 and counting on the actual page put her at #10, because of one ad. NEVER put the raw digit in an email as something he can count. Say the band \u2014 "in the middle of the first twenty", "not in the top few" \u2014 which survives the ads being there. The digit stays here for the call sheet.
-\u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} with ${_above} above them, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \\u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \\u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
+\u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} with ${_above} above them, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
       : (weakerAbove > 0)
         // Same NaN as the evidence block: when the position was suppressed for
@@ -17738,7 +17809,14 @@ const painFromGoogleReviews = async (companyName, placeId, placesKey, apiKey, fc
     return { signals: [], summary: '' };
   }
   const corpus = pool.map((r, i) => `Review ${i + 1}${r.rating ? ` (${r.rating} stars)` : ''}: ${r.text}`).join('\n\n');
-  const corpusFlat = corpus.toLowerCase().replace(/\s+/g, ' ');
+  // ══ BOTH SIDES THROUGH THE SAME TRANSFORM ═══════════════════════════════
+  // The quote side strips punctuation ([^a-z0-9 ]) and this side did not, so
+  // any reviewer sentence with a contraction — "didn't show" — could never
+  // match its own source and was dropped as unverifiable. Byte-for-byte the
+  // bug documented and fixed in deepReviewMine; the fix never reached this
+  // fallback path, which is exactly the one that runs when the deep mine
+  // cannot.
+  const corpusFlat = corpus.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ');
 
   try {
     const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
@@ -26877,7 +26955,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const hasAds = (adCount > 0 && adCountReliable) || !!builtWith.hasGoogleAdsTag;
 
       // FIRE 1 — Paying for traffic they cannot measure.
-      if (hasAds && adCountReliable && adCount > 0 && adCount < 500 && !builtWith.hasMetaPixel) {
+      // hasMetaPixel === false is a measurement; null is a refused/failed fetch
+      // and may not become "NO Meta pixel installed" — the page-full-of-false
+      // class, on the fire the prompt labels critical.
+      if (hasAds && adCountReliable && adCount > 0 && adCount < 500 && builtWith.hasMetaPixel === false && builtWith.confirmed === true) {
         fires.push({
           severity: 'critical',
           fire: `${adCount} paid ads running with NO Meta pixel installed`,
@@ -26895,14 +26976,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       }
 
       // FIRE 2 — Paying for traffic that lands somewhere it cannot convert.
-      if (hasAds && !hasCTA) {
+      // hasCTA falls back to a regex over content; with a blocked or empty page
+      // that regex returns false having measured nothing. Fire only when either
+      // the vision read answered or there was real page text to scan.
+      if (hasAds && !hasCTA && ((typeof visualAnalysis?.hasVisibleCTA === 'boolean') || String(content || '').length > 500)) {
         fires.push({
           severity: 'critical',
           fire: `Paid traffic landing on a page with no call-to-action`,
           cost: 'They are renting attention and then giving it away. A visitor who WANTS to act has nowhere to click.',
         });
       }
-      if (hasAds && !builtWith.hasEmailCapture && !builtWith.hasBooking) {
+      if (hasAds && builtWith.confirmed === true && builtWith.hasEmailCapture === false && builtWith.hasBooking === false) {
         fires.push({
           severity: 'high',
           fire: 'Paid traffic with no email capture and no booking tool',
@@ -26921,7 +27005,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       }
 
       // FIRE 4 — No CRM. Every lead they generate leaks out the side.
-      if (hasAds && !builtWith.hasCRM) {
+      if (hasAds && builtWith.confirmed === true && builtWith.hasCRM === false) {
         fires.push({
           severity: 'high',
           fire: 'Running paid ads with no CRM detected',
@@ -26956,7 +27040,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const _staleSite = builtWith.copyrightYear && builtWith.copyrightYear < 2021;
     const _weakSite = !hasCTA || _staleSite || (visualAnalysis && (visualAnalysis.heroIsBlank || /dated/i.test(visualAnalysis.designObservation || '') || visualAnalysis.overallConversionReadiness === 'weak'));
     const _hasAds = (fbAds.adCount || 0) > 0 || !!builtWith.hasGoogleAdsTag;
-    const _underMarketed = !!_psig.under_marketed || !!_psig.local_owner_operated || req.body.discoverySource === 'google_places';
+    // _underMarketed was computed here and read by nothing — the DEMAND branch
+    // below already covers the under-marketed shape in its final else. A dead
+    // signal invites the next reader to assume it gates something. Removed.
     // Careers-page hiring signals must be declared BEFORE the flags that read them.
     const _careersOps = !!(careers && careers.opsRoles && careers.opsRoles.length > 0);
     const _careersMktg = !!(careers && careers.mktgRoles && careers.mktgRoles.length > 0);
@@ -27104,7 +27190,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     if (_financialSignal) _eligible.push('Wall Street-backed Financial Advisory — clean up revenue, margins & cash flow to fund growth or maximize exit valuation' + (_exitSignal ? ' (they are preparing to exit — valuation is the emotional lever)' : ''));
     if (_eligible.length === 0) _eligible.push('End-to-End Marketing / Ads Management OR Website Rebuild — audit the site and lead with the sharper of the two');
 
-const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}${sitePages.ownerStory ? `\\n\\n\\u2550\\u2550\\u2550 THE OWNER WROTE THIS ABOUT HIMSELF \\u2550\\u2550\\u2550\\n${sitePages.ownerStory}${sitePages.storyQuote ? `\\nHis exact words: \\u201c${sitePages.storyQuote}\\u201d` : '\\n(No verifiable direct quote \\u2014 reference the story, do NOT put words in his mouth.)'}\\nUSE THIS. It is the strongest personalisation available and almost nobody cold-emailing him will have read it. ONE short specific line near the top that could only have been written by someone who actually read his About page \\u2014 the trade he learned, who taught him, the years in business, the licence he earned, why he started.\\nHOW: reference it plainly, then connect it to what is being lost. \\u2018You learned the trade from your father and you have been at it 23 years \\u2014 and the site is quietly handing that reputation to whoever answers the phone first.\\u2019\\nHARD RULES: never flatter for its own sake (\\u2018what an inspiring story\\u2019) \\u2014 that reads as fake and is worse than silence. Never quote a sentence he did not write. Never invent a detail the story does not contain. ONE reference only; twice makes it a tactic. If the About page is corporate boilerplate rather than his own voice, skip it entirely.` : ''}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n${(() => {
+const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOMEPAGE \u2550\u2550\u2550\n${sitePages ? `Pages read: ${sitePages.pagesRead.join(', ')}. Booking mechanism: ${sitePages.booking === 'online_booking' ? 'REAL self-serve online booking exists \u2014 do NOT claim they have no booking tool' : sitePages.booking === 'form' ? 'a form that submits and waits for a callback \u2014 they capture the lead but the customer waits' : sitePages.booking === 'phone_only' ? 'PHONE ONLY \u2014 if nobody answers, the customer is gone' : 'no booking path found on the pages we read'}. ${sitePages.services.length ? `What they actually sell: ${sitePages.services.slice(0,6).join(', ')}.` : ''}${sitePages.prices.length ? ` \u2705 THEIR OWN PUBLISHED PRICES: ${sitePages.prices.map(p => p.amount + ' (' + p.what + ')').join('; ')}. These are printed on their own website, so you MAY use them in the pitch arithmetic \u2014 they are the strongest and safest dollar figures available. Example of the right use: \u2018at your posted rate, one additional booking a month covers this several times over.\u2019` : ' No published pricing found \u2014 do NOT guess what they charge.'}${sitePages.ownerStory ? `\n\n\u2550\u2550\u2550 THE OWNER WROTE THIS ABOUT HIMSELF \u2550\u2550\u2550\n${sitePages.ownerStory}${sitePages.storyQuote ? `\nHis exact words: \u201c${sitePages.storyQuote}\u201d` : '\n(No verifiable direct quote \u2014 reference the story, do NOT put words in his mouth.)'}\nUSE THIS. It is the strongest personalisation available and almost nobody cold-emailing him will have read it. ONE short specific line near the top that could only have been written by someone who actually read his About page \u2014 the trade he learned, who taught him, the years in business, the licence he earned, why he started.\nHOW: reference it plainly, then connect it to what is being lost. \u2018You learned the trade from your father and you have been at it 23 years \u2014 and the site is quietly handing that reputation to whoever answers the phone first.\u2019\nHARD RULES: never flatter for its own sake (\u2018what an inspiring story\u2019) \u2014 that reads as fake and is worse than silence. Never quote a sentence he did not write. Never invent a detail the story does not contain. ONE reference only; twice makes it a tactic. If the About page is corporate boilerplate rather than his own voice, skip it entirely.` : ''}` : 'Only the homepage was read \u2014 be careful about claiming something does not exist. Say what you SAW on the homepage, not what the business lacks.'}\n\n${(() => {
   // ══ WHAT DISCOVERY ALREADY KNEW AND NEVER TOLD THE BRAIN ════════════════
   // Find learns real things before a penny is spent — which markets a business
   // comes back in, which it does NOT, whether it has a website at all, whether
@@ -27248,7 +27334,7 @@ SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact
   htmlSignals.hasMetaDescription === false ? '- No meta description on the page — a missing description means search engines improvise the snippet, lowering click-through. Measured from the HTML.' : '',
 ].filter(Boolean).join('\n') || '- Site technicals look clean (HTTPS, mobile viewport, tap-to-call, reasonable form length all present) — do NOT invent a technical problem here.' : 'Homepage HTML not captured for this lead — make NO claims about their SSL, mobile setup, form length, or page tags.'}${htmlSignals && htmlSignals.checked && [htmlSignals.isHttps===false, htmlSignals.hasViewport===false, htmlSignals.hasTelLink===false, htmlSignals.hasForm&&htmlSignals.formFieldCount>=8].some(Boolean) ? '\n→ These are \"get the click / capture the lead\" leaks: cheap to state, impossible to dispute, and directly tied to whether a visitor becomes a customer. Prefer them over anything soft.' : ''}
 
-OFFER STRENGTH (MEASURED from every page we read \u2014 these are facts about their own copy, not opinions, and each is checkable by the owner in ten seconds): ${offerStrength && offerStrength.checked ? (offerStrength.gapCount ? offerStrength.gaps.map(g => '- ' + g).join('\\n') + `\\n\u2192 THESE ARE HORMOZI'S OFFER LAYER AND THEY OUTRANK EVERY TACTIC BELOW THEM. Market and offer sit above leads, conversion and retention in leverage: a business with no guarantee, no urgency and a generic ask is competing on price against everyone in its trade, and no amount of traffic or page-speed fixes that. Score at least one of these as a candidate finding \u2014 they have historically been ignored in favour of smaller technical items, which is exactly the mistake this instruction exists to stop. They are also durable: unlike a missing link, an owner cannot close an offer gap in ten minutes, so it survives the ten-minute test.` : 'Their offer looks unusually complete for a local business \u2014 a guarantee, real urgency and a named ask are all present. Do NOT invent an offer problem.') : 'Offer strength not measured for this lead \u2014 make NO claim about their guarantee, urgency or offer.'}
+OFFER STRENGTH (MEASURED from every page we read \u2014 these are facts about their own copy, not opinions, and each is checkable by the owner in ten seconds): ${offerStrength && offerStrength.checked ? (offerStrength.gapCount ? offerStrength.gaps.map(g => '- ' + g).join('\n') + `\n\u2192 THESE ARE HORMOZI'S OFFER LAYER AND THEY OUTRANK EVERY TACTIC BELOW THEM. Market and offer sit above leads, conversion and retention in leverage: a business with no guarantee, no urgency and a generic ask is competing on price against everyone in its trade, and no amount of traffic or page-speed fixes that. Score at least one of these as a candidate finding \u2014 they have historically been ignored in favour of smaller technical items, which is exactly the mistake this instruction exists to stop. They are also durable: unlike a missing link, an owner cannot close an offer gap in ten minutes, so it survives the ten-minute test.` : 'Their offer looks unusually complete for a local business \u2014 a guarantee, real urgency and a named ask are all present. Do NOT invent an offer problem.') : 'Offer strength not measured for this lead \u2014 make NO claim about their guarantee, urgency or offer.'}
 HOW THE SITE PERFORMS FOR THEIR REAL VISITORS (Google's own field data, mobile, last 28 days): ${realSpeed.checked ? (realSpeed.hasFieldData ? (realSpeed.isProblem ? realSpeed.findings.map(f => '- ' + f).join('\n') + `\n\u2192 THIS IS THE HARDEST NUMBER IN THE AUDIT. It is not our opinion and not a lab simulation \u2014 it is Google's record of what HIS OWN visitors experienced on their phones over the last 28 days. He can verify it in ten seconds at pagespeed.web.dev. Use it plainly and in his units: a phone visitor waiting is a customer deciding.` : `Their site performs FINE for real mobile visitors (${realSpeed.overall}). Do NOT claim a speed or performance problem \u2014 we measured it and there isn't one. Saying otherwise is a false claim he can disprove instantly.`) : realSpeed.why) : 'NOT MEASURED \u2014 make no claim about site speed, load time, or mobile performance.'}
 SOCIAL PRESENCE (read from links on their own site \u2014 we did NOT open the profiles): ${socialPresence.checked ? (socialPresence.count ? `They link: ${socialPresence.platforms.join(', ')}. \u26d4 We have NOT looked at those profiles. Say NOTHING about how often they post, follower counts, engagement, or whether a page is abandoned \u2014 none of that was measured and all of it is instantly checkable by him.` : `No social profile is linked anywhere on the pages we read.${socialPresence.gaps.length ? ' ' + socialPresence.gaps.join(' ') : ''}`) : 'NOT MEASURED \u2014 make no claim about their social presence.'}
 MARKET \u2014 THE TOP OF HORMOZI'S HIERARCHY (MEASURED from their own copy): ${marketClarity.checked ? (marketClarity.isConstraint ? marketClarity.gaps.map(g => '- ' + g).join('\n') + `\n\u2192 THIS OUTRANKS EVERY LAYER BELOW IT. Per Hormozi, who a business is for determines the value of every tactic underneath: a stranger who cannot tell in five seconds whether this is for him leaves, and no ranking or response speed recovers him. It is also the most durable thing on the list \u2014 a competitor copies a guarantee in an afternoon and cannot copy a decision about who you serve.\n\u2192 IT PASSES BOTH TESTS. He cannot close it in ten minutes, and he cannot delegate it: deciding who the business is for is the owner's decision and nobody else's.\n\u2192 WRITE IT AS WHAT IT COSTS, NOT AS A COPY NOTE. \u2717 "your messaging is too generic" (a task for whoever writes the website). \u2713 "a homeowner comparing three contractors has nothing on your page telling him you are the one for his situation, so he picks on price."` : `Their positioning reads as ${marketClarity.band}${marketClarity.signals.length ? ' \u2014 ' + marketClarity.signals.join('; ') : ''}. Do NOT claim they speak to everyone or that their targeting is generic \u2014 we measured that they do name who they are for.`) : 'Market clarity NOT measured on this lead \u2014 make NO claim about who they target or whether their positioning is generic.'}
@@ -27812,7 +27898,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // from. If the site has no phone, the copy cannot talk about tapping
           // one — in any phrasing, including ones nobody has thought of yet.
           try {
-            const _siteHasTel = !!(htmlSignals && htmlSignals.checked && htmlSignals.tel);
+            // extractHtmlSignals returns hasTelLink; .tel exists nowhere, so
+            // this was false on every lead and the NO-PHONE-ON-THAT-PAGE risk
+            // fired falsely on sites with a perfectly good tappable number —
+            // the noise class that teaches operators to skim past real flags.
+            const _siteHasTel = !!(htmlSignals && htmlSignals.checked && htmlSignals.hasTelLink);
             const _phoneFromSite = !!(phoneResult && phoneResult.source && phoneResult.source !== 'google_business_profile');
             // `siteAudit` has never existed in this file \u2014 the variable is
             // `sitePages`. This line has been throwing "siteAudit is not defined"
@@ -28269,7 +28359,11 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // the log stops making it look like a copy problem.
             const _brainHasPain = /\breview(s|ers)?\b[^.]{0,60}\b(same|repeat|keep|again|mention)|customers keep writing/i.test(
               String(parsed.pitchAngle || '') + ' ' + String(parsed.situationRead && parsed.situationRead.headline || ''));
-            const _ladderHasPain = ((_harmsForResponse.byHarm || []).some(h => h && h.id === 'review_pain_pattern'));
+            // _harmsForResponse carries harmsRanked (the mapped copy), not
+            // byHarm (a key of the raw rankHarms result) — so this was always
+            // false and the DATA MISMATCH alarm told the operator to re-run
+            // healthy leads whose ladder DID hold the review pattern.
+            const _ladderHasPain = ((_harmsForResponse.harmsRanked || []).some(h => h && h.id === 'review_pain_pattern'));
             if (_brainHasPain && !_ladderHasPain) {
               console.log(`\u26d4 DATA MISMATCH [${company}]: the audit is describing a repeating complaint in their reviews and the ladder has no review-pain finding at all. Those two were built from different review pulls \u2014 almost always a cached brain response replayed against a fresh mine that came back empty or truncated. The email will follow the ladder, which is correct, but it will open on the weakest finding available while the strongest one sits in the audit above it. RE-RUN RESEARCH once the review pull is healthy.`);
             }
@@ -28603,6 +28697,10 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 // Both readers move together or neither does.
                 parsed.problemCount = parsed.problemList.length;
                 if (parsed.factualSpine) parsed.factualSpine.problemCount = parsed.problemList.length;
+                // The allowlist reads measuredNumbers; a count updated in two
+                // places and not the third flags the email's own correct count
+                // as unmeasured.
+                if (parsed.measuredNumbers) parsed.measuredNumbers.problemCount = parsed.problemList.length;
                 console.log(`\u{1F50E} INTO THE AUDIT [${company}]: ${_rows.length} finding(s) quoting their own pages added to the findings section, at the top. Until now that section rendered the ladder alone \u2014 the same 35 sentences with different numbers in them on every lead \u2014 and these, the only rows nobody else's audit could produce, were verified and then dropped on the floor. Count moved to ${parsed.problemCount} in both the audit and the email.`);
               }
             }
@@ -29255,6 +29353,17 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // rediscover it. That is the "computed but not passed" shape this
             // system has lost fields to five separate times.
             businessModel: parsed.businessModel || null,
+            // ══ THE RANKED FINDINGS NEVER LEFT THE SERVER ═════════════════
+            // The response assembles candidateFindings and leadSignal FROM
+            // brainAudit (lines ~30455/30463), and this literal never carried
+            // either — so the client persisted [] and null on every lead, the
+            // call sheet's ranked candidates ran on nothing, and the brain-
+            // gate emptiness test silently degraded to recommendedProduct
+            // alone. ladderWinner: same class, computed and never delivered.
+            candidateFindings: Array.isArray(parsed.candidateFindings) ? parsed.candidateFindings : [],
+            leadSignal: parsed.leadSignal || null,
+            leadSignalReason: parsed.leadSignalReason || null,
+            ladderWinner: parsed.ladderWinner || null,
             // The email writer argues FROM these. RESPONSE CHECK caught them
             // being persisted but never delivered — the exact "computed but not
             // passed" shape that has cost this system five fields.
@@ -29705,7 +29814,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             // MISMATCH, MISALIGNMENT and "backwards". Those are added, and the
             // pattern is proved at boot against real flags in both directions so
             // it can never silently stop matching again.
-            const _CRITICAL = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bfactually backwards\b|\bthe opposite of the finding\b|\bcontradicts?\b|\bcontradiction\b|\bMISMATCH\b|\bMISALIGNMENT\b|\bdirectly contradict/i;
+            const _CRITICAL = CRITICAL_FACT_RE;
             const _criticalFlags = _realFlags.filter(f => _CRITICAL.test(f));
             if (_criticalFlags.length) {
               // ══ THIS FIELD BLOCKS EVERY LATER COMPOSE ═══════════════════════
@@ -29765,6 +29874,31 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             // corrected list, not the raw one.
             critique.flaggedClaims = _realFlags;
             critique.clearedCount = _cleared;
+            // ══ THE RESPONSE OBJECT WAS BUILT 500 LINES AGO ═══════════════
+            // brainAudit is an explicit literal snapshotted BEFORE this fact-
+            // check block runs, so everything this block just decided was
+            // dying right here:
+            //   · the withdrawal set parsed.composedEmail = null and the
+            //     response still shipped the withdrawn email — the client
+            //     prefers exactly that field, so an email whose central claim
+            //     the checker just proved false kept its Approve button
+            //   · _criticalFactCheck never reached the client, so the red
+            //     "Not sendable as written" panel and the compose-time gate
+            //     that read it were dead end-to-end
+            //   · the cleared-flag filter corrected the CONSOLE and not the
+            //     UI badge, which kept showing raw counts on clean audits —
+            //     the exact live failure the filter's own comment records
+            // Four instances of "computed but not passed", inside the block
+            // whose comments document that class. Sync everything this block
+            // decided onto the object the browser actually receives.
+            brainAudit.composedEmail = parsed.composedEmail || null;
+            if (parsed._criticalFactCheck) brainAudit._criticalFactCheck = parsed._criticalFactCheck;
+            if (parsed._internalOnlyFactCheck) brainAudit._internalOnlyFactCheck = parsed._internalOnlyFactCheck;
+            if (parsed._composedEmailWithdrawn) brainAudit._composedEmailWithdrawn = true;
+            if (brainAudit.critique) {
+              brainAudit.critique.flaggedClaims = _realFlags;
+              brainAudit.critique.clearedCount = _cleared;
+            }
           } catch(e) {
             // ══ "NON-FATAL" WAS DOING A LOT OF WORK HERE ═══════════════════════
             // The did-not-run guard above lives INSIDE this try. When the critique
@@ -30173,7 +30307,11 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         reason,
         screenshotUrl: screenshotUrl || null, // still return screenshot so user can verify website
         partialData: {
-          email: email.email||'',
+          // Same gate as the main response: an address the resolver refused
+          // (sendable === false) may not round-trip through the 422 path either
+          // — the client's To chain prefers lead.email, so one ungated emit
+          // resurrects a blocked address forever.
+          email: (emailResult && emailResult.sendable === false) ? '' : (email.email || ''),
           founderName: email.founderName||'',
         }
       });
@@ -30510,7 +30648,12 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       rateLimited: (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0,
       ownerEmailMatch,
       ownerEmailMatchReason,
-      email: email.email||'',
+      // Gated like the sibling emit above: the resolver's explicit refusal wins
+      // over whatever address the browser sent up. Without this, two of the
+      // three response exits re-supplied a refused address and the client's
+      // fallback chain put it straight back in the To field — the documented
+      // Dr. Shaun Parson failure, fixed on one exit of three.
+      email: (emailResult && emailResult.sendable === false) ? '' : (email.email || ''),
       // ══ THE ADDRESS WAS RESOLVED AND THE NAME WAS NOT ═══════════════════
       // email.founderName is whatever the address engine last held, which on a
       // swap is HUNTER'S contact, not the person we decided to write to.
@@ -33079,9 +33222,10 @@ app.listen(PORT, () => {
   // we wanted. Checked at boot in both directions, because being too eager here
   // would suppress a genuinely dead site — which is a real and valuable finding.
   try {
+    // The SHIPPING regex, not a private copy — same repair as FACT-CHECK GATE.
     const _isBlocked = (b) => {
       const _b = String(b || '');
-      return _b.length < 2000 && /cloudflare|cf-ray|challenge-platform|just a moment|checking your browser|captcha|are you a robot|access denied|ddos|incapsula|imperva|akamai|bot detection|enable javascript/i.test(_b);
+      return _b.length < 2000 && BOT_CHALLENGE_RE.test(_b);
     };
     const _mustBlock = [
       '<html><head><title>Just a moment...</title></head><body><div class="cf-browser-verification">Checking your browser</div></body></html>',
@@ -33125,7 +33269,10 @@ app.listen(PORT, () => {
       'marketing jargon banned in the email voice — rewrite in the owner\u2019s words',
       'This framing implies a problem when the measured fact is that their newest review is recent.',
     ];
-    const _re = /\bCRITICAL\b|must be corrected|major factual error|does not appear anywhere in the (raw )?evidence|is a fabrication|\d+(?:\.\d+)?x overstatement|overstatement and must|\binverts? the (actual )?ratio\b|\bis backwards\b|\bfactually backwards\b|\bthe opposite of the finding\b|\bcontradicts?\b|\bcontradiction\b|\bMISMATCH\b|\bMISALIGNMENT\b|\bdirectly contradict/i;
+    // The SHIPPING regex, not a hand-kept copy. The duplicate this replaced
+    // was character-identical and free to drift green forever — narrow the
+    // real classifier and this check now fails, which is its entire job.
+    const _re = CRITICAL_FACT_RE;
     const _missed = _mustBlock.filter(f => !_re.test(f));
     const _overblocked = _mustPass.filter(f => _re.test(f));
     if (_missed.length) {
@@ -37050,14 +37197,14 @@ app.listen(PORT, () => {
                        'reviewPain', 'deepPain', 'localRank'];
     const _absent = _required.filter(f => !new RegExp('(^|[^A-Za-z0-9_.])' + f + '\\s*:', 'm').test(_lit));
     if (!_lit) {
-      console.log(`\u26a0 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
+      console.log(`\u26d4 RESPONSE CHECK: could not locate the brainAudit literal to verify it. If the composer stops reaching Generate, check that every measured field is named there.`);
     } else if (_absent.length) {
       console.log(`\u26d4 RESPONSE CHECK: ${_absent.length} measured field(s) are computed but never sent to the browser \u2014 ${_absent.join(', ')}. Generate will fall back to the model and the log will still say EMAIL COMPOSED, because composing and delivering are different things.`);
     } else {
       console.log(`\u2713 RESPONSE CHECK: all ${_required.length} measured fields \u2014 spine, ladder, problems, subjects, reframes, figures and the composed email \u2014 are named in the response the browser receives.`);
     }
   } catch (e) {
-    console.log(`\u26a0 RESPONSE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+    console.log(`\u26d4 RESPONSE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A LEAD ENTERED AT A DEEP PAGE MUST STILL FIND THE SITE ROOT ══════════
@@ -37767,64 +37914,6 @@ app.post('/api/send-to-hunter', async (req, res) => {
             || _local === (_firstName + _lastName[0])
             || _local === (_firstName[0] + '' + _lastName[0]);
         }
-        // ══ AN UNVERIFIED MAILBOX MUST NOT ENTER THE SEQUENCE ═════════════
-        // Two hard bounces, both from addresses this system itself labelled
-        // unproven. joseph@jbarnthousemd.com came back "550 5.1.10
-        // RESOLVER.ADR.RecipientNotFound"; amaka@amakaaesthetics.com the same.
-        //
-        // A hard bounce is charged to the SENDING domain, not the lead. On one
-        // mailbox at 25/day, a handful of these is a reputation problem long
-        // before it is a lead problem — and the reputation is the only asset
-        // here that cannot be rebuilt in an afternoon.
-        //
-        // The tier already records exactly what evidence we have. Tier 1 is
-        // published on their own site, tier 2 a mail server confirming the
-        // mailbox exists. Anything weaker is a pattern we believe in, and belief
-        // is what bounced. Verify it and it promotes itself; until then the lead
-        // stays workable by phone and Mike loses nothing.
-        // ══ VERIFY, DO NOT REFUSE ════════════════════════════════════════
-        // The first version of this blocked every tier-3 address. That is safe
-        // and it is too blunt: grantrenne@grantrenne.com and bchong@
-        // anthonysylvan.com are both tier 3 and both delivered fine. Only
-        // joseph@jbarnthousemd.com bounced. Blocking all three to stop one costs
-        // two real leads out of a queue already paid for.
-        //
-        // Verification resolves the uncertainty instead of assuming the worst.
-        // One check per uncertain address, half a Hunter credit, and the answer
-        // is a fact rather than a policy:
-        //
-        //   valid    → promote and send. It is now confirmed, not believed.
-        //   invalid  → block. This is the joseph@ case, caught before it lands.
-        //   unknown  → SEND. Catch-all domains cannot be verified at all, and
-        //              refusing every catch-all would silently delete a large
-        //              slice of the pipeline for no evidence.
-        //
-        // If no verifier key is configured the lead sends as it did before — the
-        // gate is an improvement on the default, never a new way to lose leads.
-        const _tier = Number(lead.emailTier || (lead.emailMeta && lead.emailMeta.tier) || 0);
-        let _verified = lead.smtpVerified === true || _tier === 1 || _tier === 2;
-        if (_tier > 2 && !_verified) {
-          const _vKey = req.body.verifierKey || process.env.MYEMAILVERIFIER_KEY || '';
-          if (_vKey) {
-            try {
-              const _v = await verifyEmailSMTP(lead.email, _vKey);
-              if (_v && _v.invalid) {
-                console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 the mail server says ${lead.email} does not exist. This is the joseph@jbarnthousemd.com case caught before it lands: that one came back 550 RecipientNotFound after we sent it, and a hard bounce is charged to the sending domain. The lead is still workable by phone.`);
-                results.failed.push({
-                  name: lead.name, email: lead.email,
-                  reason: `${lead.email} was checked and the mail server says the mailbox does not exist. Find another address or work it by phone.`,
-                });
-                continue;
-              }
-              if (_v && _v.valid) {
-                _verified = true;
-                console.log(`\u2713 HUNTER [${lead.name}]: ${lead.email} was inferred, and the mail server confirms it exists. Sending as a verified address rather than a believed one \u2014 half a credit to turn a guess into a fact.`);
-              } else {
-                console.log(`\u2139 HUNTER [${lead.name}]: ${lead.email} could not be verified either way${_v && _v.catchAll ? ' (catch-all domain \u2014 the server accepts everything, so nothing can be proven)' : ''}. Sending: refusing every unverifiable address would delete a large part of the pipeline on no evidence.`);
-              }
-            } catch (e) { void e; }
-          }
-        }
         if (!_namedInMailbox) {
           console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 the email is addressed to "${parts.join(' ')}" but the mailbox is ${lead.email}, which is built from a different name. An audit written at owner altitude, delivered to someone else, is the one delivery error that cannot be undone. Re-run Research on this lead to resolve the decision-maker, then send.`);
           results.failed.push({
@@ -37832,6 +37921,73 @@ app.post('/api/send-to-hunter', async (req, res) => {
             reason: `Greeting names ${parts.join(' ')} but the mailbox (${lead.email}) belongs to someone else — re-run Research`,
           });
           continue;
+        }
+      }
+      // ══ MOVED OUT OF THE NAME GUARD — IT WAS ONLY VERIFYING SOME SENDS ══
+      // This block sat inside `if (_looksPersonal && _firstName && _lastName)`,
+      // which exists to serve the greeting-vs-mailbox test above. So a tier-3
+      // pattern-built address skipped SMTP verification whenever the mailbox
+      // was company-named, generic, or the contact had no parsed surname.
+      // amaka@amakaaesthetics.com — one of the two hard bounces this gate was
+      // written for — is a company-named mailbox, so the motivating case
+      // itself bypassed the gate. Verification now runs for EVERY lead in the
+      // batch; the name guard above remains exactly as narrow as it was.
+        // ══ AN UNVERIFIED MAILBOX MUST NOT ENTER THE SEQUENCE ═════════════
+      // Two hard bounces, both from addresses this system itself labelled
+      // unproven. joseph@jbarnthousemd.com came back "550 5.1.10
+      // RESOLVER.ADR.RecipientNotFound"; amaka@amakaaesthetics.com the same.
+      //
+      // A hard bounce is charged to the SENDING domain, not the lead. On one
+      // mailbox at 25/day, a handful of these is a reputation problem long
+      // before it is a lead problem — and the reputation is the only asset
+      // here that cannot be rebuilt in an afternoon.
+      //
+      // The tier already records exactly what evidence we have. Tier 1 is
+      // published on their own site, tier 2 a mail server confirming the
+      // mailbox exists. Anything weaker is a pattern we believe in, and belief
+      // is what bounced. Verify it and it promotes itself; until then the lead
+      // stays workable by phone and Mike loses nothing.
+      // ══ VERIFY, DO NOT REFUSE ════════════════════════════════════════
+      // The first version of this blocked every tier-3 address. That is safe
+      // and it is too blunt: grantrenne@grantrenne.com and bchong@
+      // anthonysylvan.com are both tier 3 and both delivered fine. Only
+      // joseph@jbarnthousemd.com bounced. Blocking all three to stop one costs
+      // two real leads out of a queue already paid for.
+      //
+      // Verification resolves the uncertainty instead of assuming the worst.
+      // One check per uncertain address, half a Hunter credit, and the answer
+      // is a fact rather than a policy:
+      //
+      //   valid    → promote and send. It is now confirmed, not believed.
+      //   invalid  → block. This is the joseph@ case, caught before it lands.
+      //   unknown  → SEND. Catch-all domains cannot be verified at all, and
+      //              refusing every catch-all would silently delete a large
+      //              slice of the pipeline for no evidence.
+      //
+      // If no verifier key is configured the lead sends as it did before — the
+      // gate is an improvement on the default, never a new way to lose leads.
+      const _tier = Number(lead.emailTier || (lead.emailMeta && lead.emailMeta.tier) || 0);
+      let _verified = lead.smtpVerified === true || _tier === 1 || _tier === 2;
+      if (_tier > 2 && !_verified) {
+        const _vKey = req.body.verifierKey || process.env.MYEMAILVERIFIER_KEY || '';
+        if (_vKey) {
+          try {
+            const _v = await verifyEmailSMTP(lead.email, _vKey);
+            if (_v && _v.invalid) {
+              console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 the mail server says ${lead.email} does not exist. This is the joseph@jbarnthousemd.com case caught before it lands: that one came back 550 RecipientNotFound after we sent it, and a hard bounce is charged to the sending domain. The lead is still workable by phone.`);
+              results.failed.push({
+                name: lead.name, email: lead.email,
+                reason: `${lead.email} was checked and the mail server says the mailbox does not exist. Find another address or work it by phone.`,
+              });
+              continue;
+            }
+            if (_v && _v.valid) {
+              _verified = true;
+              console.log(`\u2713 HUNTER [${lead.name}]: ${lead.email} was inferred, and the mail server confirms it exists. Sending as a verified address rather than a believed one \u2014 half a credit to turn a guess into a fact.`);
+            } else {
+              console.log(`\u2139 HUNTER [${lead.name}]: ${lead.email} could not be verified either way${_v && _v.catchAll ? ' (catch-all domain \u2014 the server accepts everything, so nothing can be proven)' : ''}. Sending: refusing every unverifiable address would delete a large part of the pipeline on no evidence.`);
+            }
+          } catch (e) { void e; }
         }
       }
 
