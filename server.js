@@ -9549,10 +9549,19 @@ const HARM_LADDER = [
     reframe: 'the work they most want to be found for is the work nobody can find them for',
     test: (m) => Number(m.servicePagesChecked) >= 2 && Number(m.servicePagesInvisible) >= 2
       && Array.isArray(m.serviceInvisibleNames) && m.serviceInvisibleNames.length >= 2,
+    // ══ "2 OF THEM" BECAME "2 OF YOU" ═════════════════════════════════════
+    // toSecondPerson rewrites they/them into you/your because the subject of a
+    // rung sentence is the business. Here "them" was the SERVICES, and the live
+    // rewrite produced "do not come up in the Google map results for 2 of you"
+    // — in both variants and the break-up. Found by reading a composed email,
+    // not by any gate: every gate checks facts, none checks referents.
+    // Restructured so every pronoun refers to the business and the rewrite is
+    // correct by construction: "for 2 of those — X and Y — they do not come up"
+    // rewrites to "you do not come up", which is exactly right.
     say: (m) => {
       const n = Number(m.servicePagesInvisible), of = Number(m.servicePagesChecked);
       const names = (m.serviceInvisibleNames || []).slice(0, 2).map(x => keepSpan(String(x)));
-      return `They publish a page for ${of} services and do not come up in the Google map results for ${n} of them — including ${names.join(' and ')}`;
+      return `They publish a page for ${of} services, and for ${n} of those — ${names.join(' and ')} — they do not come up in the Google map results`;
     },
     costs: (m) => `every ${audienceOf(m.tradeWord).buyer} searching for that exact work is choosing from a list they are not on`,
     // A named service is a whole product line, so the money is the trade's own
@@ -13455,7 +13464,8 @@ const composeEmail = (spine, opts = {}) => {
   const first = greetingName(opts.founderName);
   const fact = toSecondPerson(spine.claim);
   // The second finding, converted like the first. Empty on most leads.
-  const second = toSecondPerson(String(spine.secondClaim || '').trim());
+  // let: the variant trade-off below may blank it (see second && costs).
+  let second = toSecondPerson(String(spine.secondClaim || '').trim());
   let costs = toSecondPerson(spine.costs || '');
   // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
   // The reframes are written as clauses and stored without a full stop —
@@ -13642,7 +13652,20 @@ const composeEmail = (spine, opts = {}) => {
   // perform best. The second finding IS the additional evidence; the cost line
   // restates what the first one already implies. The finding is the stronger
   // sentence because it is measured, so the cost goes.
-  if (second && costs) costs = '';
+  // ══ AND THE TRADE-OFF IS WHAT MAKES A/B REAL ON THESE LEADS ═══════════
+  // Blanking costs unconditionally here meant that on a lead with a second
+  // finding and no usable reframe, variant A and variant B rendered the same
+  // body and the composer's own ONE SHAPE warning fired — the A/B split
+  // measuring noise on exactly the two-finding leads it matters most for.
+  // The word-count rule stands (two findings plus a cost line is one element
+  // too many); WHICH element goes now alternates: variant A keeps the second
+  // finding, variant B keeps the so-what. Both stay inside the budget, and the
+  // two variants finally test something real — evidence breadth against harm
+  // translation.
+  if (second && costs) {
+    if ((Number(opts.variantIndex) || 0) % 2 === 0) costs = '';
+    else second = '';
+  }
   // == CHOSEN AFTER costs IS FINAL, NOT BEFORE ==============================
   // This block used to sit ~50 lines earlier, so it tested `costs` while it was
   // still populated and then the two lines above blanked it. The skeleton that
@@ -14343,9 +14366,14 @@ const composeBreakup = (spine, opts) => {
   const _wc = (x) => (x ? String(x).trim().split(/\s+/).filter(Boolean).length : 0);
   const _full = _claim.replace(/[.\s]+$/, '');
   const _first = _claim.split(/\s+[—–-]\s+|,\s+(?:so|which|and)\b/)[0].trim().replace(/[.\s]+$/, '');
-  const _short = _wc(_full) <= 24 ? _full : _first;
+  // 30, was 24. The service-invisibility claim runs 27 words, and at 24 the
+  // split kept "You publish a page for 4 services" — the half with no finding
+  // in it, the exact failure the comment above records for the review claim.
+  // A break-up carrying one 30-word sentence is still a short email; a break-up
+  // carrying half a sentence is a broken one.
+  const _short = _wc(_full) <= 30 ? _full : _first;
   const _w = _wc(_short);
-  const _usable = _w >= 4 && _w <= 24 ? _short : '';
+  const _usable = _w >= 4 && _w <= 30 ? _short : '';
   return {
     // The subject followed the body - "closing the loop" on all 40. It stays
     // soft, because a break-up subject that shouts is exactly what the research
@@ -14444,11 +14472,18 @@ const composeFullEmail = (spine, opts = {}) => {
       // one avoids everything already asked. Computed here so the two follow-ups
       // never collide with each other, not just with the first email.
       const used = new Set([cta.kind]);
-      const f1 = (spine.restRungs && spine.restRungs[0] && (spine.restRungs[0].harm || 0) >= LADDER_HARM_FLOOR)
-        ? composeFollowUp(spine.restRungs[0], spine, opts, 1, used) : null;
+      // ══ A DECLINED FINDING MUST NOT LEAVE A HOLE ═════════════════════
+      // This indexed restRungs[0] and restRungs[1] positionally, so when the
+      // first candidate sat under the harm floor the sequence shipped with NO
+      // follow-up 1 and a populated follow-up 2 — a hole at the step the
+      // comment above calls the highest-replying in the sequence. Live on the
+      // healthy-dentist shape: undifferentiated (44) was declined at slot one
+      // and review velocity rendered at slot two behind an empty day 3.
+      // Declining a weak finding is right; the next one shifts UP.
+      const _eligible = (spine.restRungs || []).filter(r => r && (r.harm || 0) >= LADDER_HARM_FLOOR);
+      const f1 = _eligible[0] ? composeFollowUp(_eligible[0], spine, opts, 1, used) : null;
       if (f1 && f1.ctaKind) used.add(f1.ctaKind);
-      const f2 = (spine.restRungs && spine.restRungs[1] && (spine.restRungs[1].harm || 0) >= LADDER_HARM_FLOOR)
-        ? composeFollowUp(spine.restRungs[1], spine, opts, 2, used) : null;
+      const f2 = _eligible[1] ? composeFollowUp(_eligible[1], spine, opts, 2, used) : null;
       return { followUp1: f1, followUp2: f2 };
     })(),
     breakup: composeBreakup(spine, opts),
