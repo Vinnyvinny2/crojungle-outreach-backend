@@ -10296,6 +10296,20 @@ const SUBJECTS_FOR = {
   //
   // His words: broken \u00b7 down \u00b7 dead \u00b7 not working \u00b7 stuck \u00b7 nothing \u00b7 nobody
   // Under 30 characters, lowercase, possessive wherever it fits.
+  // ══ THE FOUR RUNGS BUILT TODAY, WHICH SHIPPED WITH NO SUBJECT AT ALL ════
+  // Found by the strategy audit, not by a gate: buildSubjects returns [] for an
+  // id with no entry here, composeBrainEmail refuses an opener with no subject,
+  // and every one of today's findings — the visibility gap, the recurring plan,
+  // the marketing hire, the ads leak — would have won the ranking and then died
+  // at compose time on the first live lead. The ladder and this table are two
+  // lists that must agree, and nothing said so; SUBJECT COVERAGE CHECK now does.
+  //
+  // Same rules as the rest: under 30 characters, lowercase, his words,
+  // possessive where it fits, sendable by someone who works there.
+  service_invisibility: ['your services are not showing', 'half your services are hidden', 'nobody finds your best work'],
+  no_recurring_offer:   ['every job starts from zero', 'your work does not repeat', 'one and done every time'],
+  hiring_marketing_now: ['about the role you posted', 'before you make that hire', 'your marketing opening'],
+  paid_traffic_leaks:   ['your ad clicks hit a wall', 'paying for clicks that stall', 'your ads lead to a phone line'],
   broken_page:          ['your booking page is broken', 'your booking page is down'],
   site_empty:           ['your site is down', 'your site loads nothing'],
   listing_closed:       ['google says you are closed', 'your listing says closed'],
@@ -13765,6 +13779,15 @@ const CTA_BY_FINDING = {
   // Something is broken. Accountability, not a pitch: the finding itself can be
   // forwarded and fixed in five minutes without us ever hearing back, so the ask
   // has to be the one thing that cannot.
+  // ══ THE FOUR RUNGS BUILT TODAY ═══════════════════════════════════════
+  // Found in the same audit pass as the missing subjects: all four fell to the
+  // generic write-up close, so the strongest openers in the ladder ended on the
+  // weakest sentence. Each ask below is a question only the owner can answer —
+  // Mike's bar — and none of them names a product.
+  service_invisibility: 'priority',   // which service he most wants more of
+  no_recurring_offer:   'process',    // "has it just never come up?" fits a plan exactly
+  hiring_marketing_now: 'hire',       // what the hire is supposed to fix
+  paid_traffic_leaks:   'ads',        // who owns the ad spend
   broken_page: 'accountability', site_empty: 'accountability', no_https: 'accountability',
   expired_certificate: 'accountability', tap_to_call_broken: 'accountability',
   no_mobile_viewport: 'accountability', placeholder_text: 'accountability',
@@ -13859,6 +13882,20 @@ const CTA_TEXT = {
   change: { text: 'Did something change around then \u2014 a person, a process, the kind of work coming in?', kind: 'change',
     alts: ['Do you know what changed around then?',
            'Was there something around then \u2014 a person leaving, a process, the kind of work coming in?'] },
+  // Which of the invisible services he most wants more of. Google cannot answer
+  // it, a foreman cannot answer it, and the answer IS the retainer scope.
+  priority: { text: 'Which of those is the work you most want more of?', kind: 'priority',
+    alts: ['Of those, which is the one you actually want more of?',
+           'Which of those would you most want the phone ringing for?'] },
+  // The hire: budget committed, direction not chosen. The question hands him
+  // the real decision without arguing against the hire.
+  hire: { text: 'What\u2019s the plan for what they\u2019d work on first?', kind: 'hire',
+    alts: ['Do you already know what they\u2019d take on first?',
+           'What\u2019s the first thing that hire is supposed to fix?'] },
+  // Ownership of the ad spend, same shape as the site accountability ask.
+  ads: { text: 'Who\u2019s looking after the ads side for you at the moment?', kind: 'ads',
+    alts: ['Is anyone watching the ads spend, or does it run on its own?',
+           'Who owns the ads at the moment \u2014 you, or someone outside?'] },
   // ══ NEVER ASK FOR SOMETHING HE CAN GET HIMSELF ═══════════════════════════
   // "Want the list of who's ranking above you?" offers him a Google search. He
   // can run it in ten seconds and does not need us, so the ask has no value and
@@ -35724,6 +35761,50 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ RECURRING REVENUE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ A RUNG WITH NO SUBJECT IS AN EMAIL THAT DIES AT COMPOSE TIME ═════════
+  // Found by a strategy audit, not by any gate: the four rungs built today —
+  // the visibility gap, the recurring plan, the marketing hire, the ads leak —
+  // had no entry in SUBJECTS_FOR. buildSubjects returns [] for a missing id,
+  // the composer refuses an opener with no subject, and CTA_FOR quietly fell
+  // back to the generic close. So the strongest openers in the ladder would
+  // have WON the ranking on a live lead and then produced no email at all.
+  //
+  // The ladder, the subject table and the ask table are three lists that must
+  // agree, maintained in three different places, and nothing said so. The CTA
+  // half even printed a ⚠ warning at every boot — which was filtered out of
+  // every log read, because a warning that cannot fail a boot is scenery. This
+  // is a ⛔, because a missing subject does not degrade the email, it kills it.
+  try {
+    const _fails = [];
+    // A rich fixture, so templates whose placeholders need a measurement can
+    // resolve. A rung whose every template drops on THIS lead has no subject in
+    // exactly the case it was built to win.
+    const _m = {
+      tradeWord: 'dentist', city: 'Kansas City, MO', copyrightYear: 2019, newestPostYear: 2020,
+      rating: 3.9, painTheme: 'long wait times', gbpCategory: 'dentist', tenureYears: 18,
+      reviewCount: 194, photoCount: 3, formFieldCount: 9,
+    };
+    for (const h of HARM_LADDER) {
+      const subs = buildSubjects({ id: h.id }, _m).filter(Boolean);
+      if (!subs.length) _fails.push(`"${h.id}" resolves to zero subject lines — it can win the ranking and then no email can be composed`);
+    }
+    // And the ask table: every rung must map to a real ask, so no opener ends
+    // on the generic write-up line.
+    for (const h of HARM_LADDER) {
+      const kind = CTA_BY_FINDING[h.id];
+      if (!kind) _fails.push(`"${h.id}" has no ask of its own — its email closes on the generic write-up line`);
+      else if (!CTA_TEXT[kind]) _fails.push(`"${h.id}" maps to ask kind "${kind}" which does not exist in CTA_TEXT`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ SUBJECT COVERAGE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SUBJECT COVERAGE CHECK: all ${HARM_LADDER.length} rungs resolve to at least one subject line on a realistic lead and every one maps to a real ask — the ladder, the subject table and the ask table are three lists that must agree, and until now nothing said so. The four rungs built today had no subject at all: they would have won the ranking on a live lead and produced no email, and their asks fell to the generic close behind a ⚠ warning that cannot fail a boot.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SUBJECT COVERAGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
 
 
 
