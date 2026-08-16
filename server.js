@@ -1293,7 +1293,12 @@ const verifyFiguresTrace = (text, measured = {}) => {
     if (!Number.isFinite(n)) continue;
     if (n < 3) continue;                                  // rhetorical
     if (n >= 1900 && n <= 2100) continue;                 // a year
-    if (allowed.has(Math.round(n))) continue;             // traced
+    // Integers keep the rounding tolerance (allowed stores rounded values);
+    // a DECIMAL must match a measured decimal exactly. Math.round here let a
+    // wrong rating pass: measured 4.4 stored {4, 4.4}, copy saying "4.1"
+    // rounded to 4 and was treated as traced — a first-line figure the owner
+    // knows by heart, off by three tenths, and no other guard checks it.
+    if (allowed.has(n)) continue;                         // traced
     // Is it attached to something about their business, or just prose?
     const around = unquoted.slice(Math.max(0, m.index - 45), m.index + 45);
     if (!/\b(review|star|rank|position|result|photo|field|year|patient|client|customer|case|matter|job|call|enquir|inquir|form|page|listing|competitor|practice|firm|percent|%)\w*/i.test(around)) continue;
@@ -1688,7 +1693,20 @@ const checkFabrications = (text, measured = {}) => {
 // real feedback that makes the email worse, not false. Those stay advisory,
 // because blocking on style would train the operator to override the block, and
 // then the blocking ones stop working too.
-const BLOCKING_FLAG = /^(?:ABSENCE CLAIM|UNTRACEABLE FIGURE|WRONG TENURE|INVENTED TENURE|INVENTED FREQUENCY|INVENTED COMPETITOR ACTION|INVENTED ALGORITHM MECHANICS|INVENTED COMPETITOR DETAIL|POST-CONTACT CLAIM|BACKEND CLAIM|claims post-submission|claims reviews)/i;
+// ══ THE LIST MUST MATCH ITS OWN BULLETS ═══════════════════════════════════
+// The definition above and this list disagreed. Flags produced in this file
+// that meet the bullets and fell to advisory anyway:
+//   ROUNDED PAST THE TRUTH        bullet 2 verbatim — contradicts a measurement
+//   ALL-FIVE-STAR CLAIM           bullet 2 — a rating contradiction he has read
+//   PROSPECT / COMPETITOR CLAIM,  the Parke Gordon sentence that motivated the
+//   INVENTED TIMELINE             shared battery trips exactly these three, and
+//                                 none of them blocked
+//   OUTCOME / BEHAVIOUR CLAIM     bullet 5 — what happens after contact
+//   INVENTED COMPETITOR COUNT / COMPARISON / AVAILABILITY, CLAIM ABOUT A
+//   COMPETITOR'S PAGE, INVENTED DURATION — bullets 4 and 6.
+// The Approve button stayed enabled on emails carrying claims the comment says
+// the email dies on contact over.
+const BLOCKING_FLAG = /^(?:ABSENCE CLAIM|UNTRACEABLE FIGURE|WRONG TENURE|INVENTED TENURE|INVENTED FREQUENCY|INVENTED COMPETITOR ACTION|INVENTED ALGORITHM MECHANICS|INVENTED COMPETITOR DETAIL|INVENTED COMPETITOR COUNT|INVENTED COMPETITOR AVAILABILITY|INVENTED COMPARISON|INVENTED TIMELINE|INVENTED DURATION|POST-CONTACT CLAIM|BACKEND CLAIM|OUTCOME CLAIM|BEHAVIOUR CLAIM|PROSPECT CLAIM|COMPETITOR CLAIM|ROUNDED PAST THE TRUTH|ALL-FIVE-STAR CLAIM|CLAIM ABOUT A COMPETITOR|claims post-submission|claims reviews)/i;
 
 const splitFlags = (flags = []) => {
   const blocking = [], advisory = [];
@@ -2385,8 +2403,16 @@ app.post('/api/claude', async (req, res) => {
           // sequence looks like \u2014 which is exactly why "we found something wrong"
           // reads as spam when it is vague and as research when it is specific.
           try {
+            // ══ BOTH FIELD SHAPES, LIKE THE SIBLING GATE ═══════════════
+            // verifyGeneratedCopy tolerates .pitch || .body because both occur
+            // in real model output. This list read only .pitch — so whenever
+            // the model emitted body, the fabrication battery, the figure
+            // trace and spineWasUsed all ran on text missing BOTH main
+            // variants, and spineWasUsed could false-flag "WROTE ITS OWN
+            // FACT" because the spine words lived in variants it never saw.
             const _all = [
-              _parsed.variantA && _parsed.variantA.pitch, _parsed.variantB && _parsed.variantB.pitch,
+              _parsed.variantA && (_parsed.variantA.pitch || _parsed.variantA.body),
+              _parsed.variantB && (_parsed.variantB.pitch || _parsed.variantB.body),
               _parsed.followUp1 && _parsed.followUp1.body, _parsed.followUp2 && _parsed.followUp2.body,
             ].filter(Boolean).join(' ');
             _copyFlags = _copyFlags.concat(checkUnsendable(_all, req.body.company || ''));
@@ -2421,8 +2447,15 @@ app.post('/api/claude', async (req, res) => {
             // have sent one without knowing which. Needs no vocabulary, so it
             // catches classes no keyword list covers.
             try {
-              const _vA = String((req.body.variantA && req.body.variantA.body) || req.body.bodyA || '');
-              const _vB = String((req.body.variantB && req.body.variantB.body) || req.body.bodyB || '');
+              // ══ THE FRESH OUTPUT, NOT THE REQUEST ═══════════════════
+              // This read req.body — the request the browser sent to GENERATE
+              // the variants, which carries no variants on a normal call — so
+              // the two-variants-must-agree check silently skipped on every
+              // generate. The Steve Parker disagreement it was built for
+              // ("No one builds it better" vs "Quality Comes First") lives in
+              // _parsed, the model's response, like every other check here.
+              const _vA = String((_parsed.variantA && (_parsed.variantA.pitch || _parsed.variantA.body)) || '');
+              const _vB = String((_parsed.variantB && (_parsed.variantB.pitch || _parsed.variantB.body)) || '');
               if (_vA && _vB) {
                 variantsDisagree(_vA, _vB).forEach(f => _copyFlags.push(f));
               }
@@ -2804,7 +2837,13 @@ const getSizeOnly = async (companyName) => {
     const empPatterns = [
       /([0-9,]+)\s*(?:to|[-–])\s*([0-9,]+)\s*employees/i,
       /([0-9,]+)\+?\s*employees/i,
-      /employs?\s+([0-9,]+)/i,
+      // Magnitude BEFORE the bare number: "employs 2.1 million people" matched
+      // the bare pattern as "employs 2", m[0] contained neither magnitude word,
+      // and a Wikipedia-documented giant passed the size gate as a 2-person
+      // SMB. The magnitude variant is matched first, and the bare pattern now
+      // refuses a number that a decimal-plus-magnitude follows.
+      /employs?\s+(?:about |approximately |over |more than |some |around )?([0-9]+(?:\.[0-9]+)?)\s*(?:thousand|million)/i,
+      /employs?\s+([0-9,]+)(?![\d,]*\.?[0-9]*\s*(?:thousand|million))/i,
       /workforce\s+of\s+([0-9,]+)/i,
       /([0-9]+(?:\.[0-9]+)?)\s*(?:thousand|million)\s*employees/i,
     ];
@@ -4431,11 +4470,18 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   const NEW_PER_QUERY = parseInt(process.env.GP_NEW_PER_QUERY || '4', 10);
   let pagesBought = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
-    // Recorded before the request so a failed query does not silently become a
-    // market we claim not to have searched.
+    // ══ RECORDED ONLY AFTER A RESPONSE ACTUALLY ARRIVES ═════════════════
+    // This used to record BEFORE the request, and its comment argued that was
+    // the safe direction. It is exactly backwards. marketsAbsent is derived as
+    // searched-minus-seen, so a query that timed out or errored still counted
+    // as a market we LOOKED at — and every lead in the category then carried
+    // "absent from Denver" as a measured fact when the Denver query simply
+    // failed. A market we never got an answer from is a market we did not
+    // search; claiming NOT to have searched is the failure that costs nothing,
+    // claiming a false absence is the one PART 3 forbids. The push now sits
+    // after the response parses clean, inside the loop below.
     if (!citiesSearchedByCat.has(cat.label)) citiesSearchedByCat.set(cat.label, []);
     const _searchedForCat = citiesSearchedByCat.get(cat.label);
-    if (!_searchedForCat.includes(city)) _searchedForCat.push(city);
     try {
       // pageToken carries the query forward. Google requires the ORIGINAL request
       // body to be resent alongside it, so textQuery stays on every page.
@@ -4453,6 +4499,9 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       _pagesHere++;
       const d = await r.json();
       if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) { _stop = true; break; } break; }
+      // The answer arrived and parsed with no error: NOW this city counts as
+      // searched for this category. (Idempotent across pages of one query.)
+      if (!_searchedForCat.includes(city)) _searchedForCat.push(city);
       // Counted per page so the decision to buy the next one is about THIS page.
       let _newHere = 0;
       for (const p of (d.places || [])) {
@@ -4563,7 +4612,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
           placeId: p.id || null,
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
-          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \\u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
+          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
           signals: { local_owner_operated: true, ...(cat.ownerRisk ? { consolidation_risk: true } : {}), ...(marketingGap ? { under_marketed: true } : {}) },
         };
         seen.set(domainKey, _lead);
@@ -4702,13 +4751,24 @@ const searchSBALoans = async () => {
 
         // Try to pull the loan amount for context (optional)
         const amtMatch = title.match(/\$[\d,\.]+\s*(?:million|[MKB])?/i);
+        // ══ THE AGE COMES FROM THE FEED, NOT FROM A CONSTANT ══════════
+        // signalAgeDays was hardcoded to 14 and freshness to 'hot' on every
+        // lead — the exact defect the TheirStack comment documents as fixed
+        // there ("the age was hard-coded to 7 days on every lead"), still
+        // live in this lane. Google News RSS returns items months old, and a
+        // stale loan stamped "hot, 14 days" puts an invented recency into the
+        // reach-window language. The item carries its own pubDate; read it,
+        // and when it will not parse say nothing rather than something false.
+        const _pub = (item.match(/<pubDate>([^<]+)<\/pubDate>/) || [])[1] || '';
+        const _pubT = _pub ? Date.parse(_pub) : NaN;
+        const _age = Number.isFinite(_pubT) ? Math.max(0, Math.floor((Date.now() - _pubT) / 86400000)) : null;
         results.push({
           name,
           source: 'sba_loan',
           signals: { sba_funded: true, needs_revenue_growth: true },
           jobTitle: `Just secured an SBA loan${amtMatch ? ` (${amtMatch[0]})` : ''} \u2014 growth capital allocated, 60-90 day window`,
-          signalFreshness: 'hot',
-          signalAgeDays: 14,
+          signalFreshness: _age !== null && _age <= 21 ? 'hot' : _age !== null ? 'warm' : 'unknown',
+          signalAgeDays: _age,
         });
       });
     } catch (e) { console.log('SBA query failed:', e.message); }
@@ -4856,9 +4916,30 @@ const scrapeGoogleNews = async () => {
     { q: '"acquired" OR "new owner" small business OR "family business" 2026 growth', type: 'new_owner' },
   ];
 
+  // ══ THE MAP MUST COVER THE QUERIES ABOVE IT ═══════════════════════════
+  // Five of the eight types those queries actually produce had no entry here —
+  // growth_pain, exit_prep, new_sales_leader, new_ops_leader, new_owner — so
+  // the highest-intent news leads (exit-prep is "motivated, has money"; a new
+  // VP of Sales "will buy lead generation immediately") shipped with
+  // signals: {} and were indistinguishable from generic news. Meanwhile four
+  // entries mapped types no query produces. Every key below now exists in
+  // SIGNAL_DEFS, so the weights and half-lives written for these exact signals
+  // finally receive them.
+  //
+  // funding is deliberately NOT raised_funding any more. That key sits in
+  // BUYING_WINDOW_KEYS as a HARD measured window, and its comment says the
+  // soft news-scraped signals do not belong there — a misattributed headline
+  // was handing a lead a false "measured buying window", the one class of
+  // error that list exists to prevent. SEC EDGAR keeps raised_funding (a real
+  // Form D filing); a headline gets the soft context flag.
   const signalMap = {
     hire: { hiring_marketing: true },
-    funding: { raised_funding: true },
+    funding: { news_funding_headline: true, needs_marketing: true },
+    growth_pain: { growth_pain: true },
+    exit_prep: { preparing_for_exit: true },
+    new_sales_leader: { new_sales_leader: true },
+    new_ops_leader: { new_ops_leader: true },
+    new_owner: { new_owner: true },
     rebrand: { rebranding: true, needs_marketing: true },
     expansion: { expanding: true },
     acquisition: { recently_acquired: true, needs_marketing: true },
@@ -20969,7 +21050,7 @@ const scoreReachability = (c) => {
     score += 6; reasons.push('Local owner-operated business — the owner runs the shop and reads their own email');
   }
   if (sig.preparing_for_exit || c.source === 'for_sale') {
-    if (c.brokerPosted) reasons.push('For-sale via broker — a middleman sits between us and the owner');
+    if (c.brokerPosted || (c.signals && c.signals.brokerPosted)) reasons.push('For-sale via broker \u2014 a middleman sits between us and the owner');
     else { score += 8; reasons.push('Owner is personally selling — maximally motivated and directly reachable'); }
   }
   if (sig.founder_venting) { score += 6; reasons.push('Owner publicly asking for help — in the weeds and clearly reachable'); }
@@ -22562,7 +22643,10 @@ const WEIGHTS = {
           triage = Math.max(30, Math.min(Math.round(base), 97));
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
-          triage = c.brokerPosted ? 72 : 84;
+          // brokerPosted is written inside signals{}; the top-level read meant
+          // every brokered listing took the owner-direct 84, over-ranking the
+          // majority of BizBuySell inventory as maximally reachable.
+          triage = (c.brokerPosted || (c.signals && c.signals.brokerPosted)) ? 72 : 84;
         } else if (s.sba_funded || c.source === 'sba_loan') {
           // Just took growth capital, must deploy it — small biz owner, reachable.
           triage = 80;
@@ -22861,7 +22945,11 @@ const checkBuiltWith = async (domain) => {
       })(),
       confirmed: true,
     };
-  } catch { return { hasCRM:false, hasEmailMarketing:false, hasPixel:false, hasVideo:false, hasChat:false, hasGoogleAdsTag:false, hasMetaPixel:false, confirmed:false }; }
+  // A thrown fetch (timeout, DNS, proxy) is the same epistemic state as the
+  // blocked path above: we could not look. Returning false here let a
+  // downstream reader assert "NO analytics of any kind on the page" off our
+  // own failed request — the documented page-full-of-false class.
+  } catch { return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null, hasGoogleAdsTag:null, hasMetaPixel:null, confirmed:false }; }
 };
 
 // There is deliberately NO checkGoogleAds() in this file. Read why before
@@ -23399,8 +23487,16 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
       // "charlotte-nc" -> "Charlotte". A trailing two-letter state is dropped so
       // the query reads the way a customer would type it.
       const parts = m[1].split('-').filter(Boolean);
-      if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) parts.pop();
-      const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      // ══ THE STATE IS NOT OPTIONAL — AND THE SLUG CARRIED IT ═══════════
+      // This popped the trailing state and searched the bare town, re-creating
+      // the documented Sheridan CO/WY failure for exactly one query per lead —
+      // with both wrong-town guards deliberately disabled (no coordinates on a
+      // remote-market search, by design). Keep the state as a ", ST" suffix:
+      // checkLocalRank's own parser reads that form, and "Fort Mill, SC"
+      // cannot be resolved to a Fort Mill in another state.
+      let _st = '';
+      if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) _st = String(parts.pop()).toUpperCase();
+      const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') + (_st ? `, ${_st}` : '');
       const key = city.toLowerCase();
       if (!city || city.length < 3 || seen.has(key) || key === homeCity) continue;
       seen.add(key);
@@ -23733,7 +23829,13 @@ const _runResearchInner = async (req, res) => {
   //
   // Kept only when this run cannot measure at all (no Apify token, no placeId),
   // where an older reading is better than nothing and the audit says as much.
-  let publicPainSignals = (req.body.apifyToken && req.body.placeId)
+  // The mine reads its token as (keys && keys.apifyToken) || req.body.apifyToken
+  // and resolves a missing placeId from the website later — this guard tested
+  // only the two body fields, so whenever the token arrived inside keys{} (its
+  // PRIMARY location per the comment above) last run's pain signals were seeded
+  // as this run's, and the length===0 gate then blocked the fresh mine. The
+  // Justin Doyle failure, still alive on both of those paths.
+  let publicPainSignals = (((keys && keys.apifyToken) || req.body.apifyToken) && (req.body.placeId || req.body.website))
     ? []
     : (req.body.publicPainSignals || []);
   // Declared HERE, not inside the deep-audit block, because the Brain prompt sits
@@ -24476,11 +24578,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // mine, GBP health and review recency all already handle "no placeId" by
     // reporting not-checked and making no claim.
     let effectivePlaceId = req.body.placeId || '';
+    // Whether ANY route to a listing was even attempted on this run. Without
+    // this, a lead with no key/website/company skipped the lookup entirely and
+    // placeSearched still read true — so "no Google Business Profile" (harm 97)
+    // could fire on a business nobody looked up. Absence claims require that we
+    // actually looked; this is the "a lookup ran" half of that sentence.
+    let _placeLookupRan = !!req.body.placeId;
     // Read the key from env directly: the local `placesKey` const is declared
     // further down this handler, so referencing it here is a temporal-dead-zone
     // crash. Same value, no ordering dependency.
     const _placesKeyEarly = process.env.GOOGLE_PLACES_KEY || '';
     if (!effectivePlaceId && _placesKeyEarly && company && website) {
+      _placeLookupRan = true;
       const _pl = await resolvePlaceId({
         companyName: company, website,
         location: req.body.location || '', placesKey: _placesKeyEarly,
@@ -25046,7 +25155,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // email is written at owner altitude; a staff member reads it as
           // something to forward, and the conversation ends in a queue.
           const _rightPerson = emailResult.builtForDecisionMaker === true;
-          if (!email.email || emailResult.tier <= 2 || _rightPerson) {
+          // ══ AND A BLOCKED ADDRESS MAY NOT COME BACK ═══════════════════
+          // The truncation block above blanks email.email and sets
+          // sendable=false — and `!email.email` was then TRUE precisely
+          // because it had just been blanked, so this line wrote the blocked
+          // scrape artefact straight back. Two of the three response sites
+          // emit email.email verbatim, so "oe@…" travelled to the client as
+          // the lead's contact address with only the sendable flag standing
+          // between it and a send.
+          if (emailResult.sendable !== false && (!email.email || emailResult.tier <= 2 || _rightPerson)) {
             if (_rightPerson && email.email && email.email !== emailResult.email) {
               console.log(`\u21c4 EMAIL SWAPPED [${company}]: the address on file (${email.email}) belongs to ${emailResult.replacesPersonNamed || 'someone else at this company'}, not to the decision-maker. Using ${emailResult.email}, built from that same confirmed pattern. It is not SMTP-verified \u2014 but an unverified address for the person who decides beats a verified one for somebody who does not.`);
             }
@@ -25231,7 +25348,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // Google's own listing first, then a tel: link, then their site copy.
     phoneResult = findPhoneNumber({
       gbpPhone: (gbpHealth && gbpHealth.phone) || req.body.phone || '',
-      pageHtml: content,
+      // content is Firecrawl MARKDOWN — href="tel:..." cannot occur in it, so
+      // the "they made it clickable on purpose" source was dead at this call
+      // site while rawHtml sat unused in the same scope, reproducing the
+      // NO-NUMBER-ON-FILE failure the function was written to end.
+      pageHtml: (typeof rawHtml === 'string' && rawHtml) ? rawHtml : content,
       pageText: [content, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
       companyName: company,
     });
@@ -25559,9 +25680,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           scrapeTrustworthy: scrapeTrustworthy,
           siteConfirmedDown: _siteDownVerdict.down === true,
           pageChars: String(content || '').length,
-          businessStatus: gbpHealth && gbpHealth.businessStatus,
+          // fetchGBPHealth returns `status` (status: d.businessStatus || null);
+          // no businessStatus field exists on it, so this was undefined on every
+          // lead and the listing_closed rung could never fire — a business Google
+          // marks CLOSED survived only as a text line in gbpHealth.gaps. The boot
+          // fixtures hand-build the field, which is why every check passed.
+          businessStatus: gbpHealth && gbpHealth.status,
           hasPlace: !!effectivePlaceId,
-          websiteOnProfile: true,
+          // Was the literal `true` while fetchGBPHealth measured hasWebsiteLink
+          // one variable away — so no_website_on_profile (harm 88) was
+          // structurally unreachable on every lead ever run. Only claim false
+          // when the profile was actually read and the link measured absent.
+          websiteOnProfile: !(gbpHealth && gbpHealth.checked && gbpHealth.hasWebsiteLink === false),
           phoneMismatch: !!(phoneConsistency && phoneConsistency.finding),
           googlePhone: phoneConsistency && phoneConsistency.googlePhone,
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
@@ -25664,7 +25794,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           //
           // So the only honest version: claim absence when a lookup ran and NO
           // source anywhere holds review evidence for them.
-          placeSearched: !(
+          placeSearched: _placeLookupRan && !(
             Number(localRank && localRank.ours && localRank.ours.reviews) > 0
             || Number(reviewsRead) > 0
             || Number(gbpHealth && gbpHealth.reviewCount) > 0
@@ -26072,7 +26202,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             : `${localRank.weakerAbove} business(es) ranking above them have FEWER reviews \u2014 the count above them is NOT known on this lead, so say the durable form ("businesses with fewer reviews than yours are ranking above you") and never a ratio.`);
         }
         if (localRank.topRivals && localRank.topRivals.length) push(`Ranking above them: ${localRank.topRivals.slice(0,3).map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}`);
-      } else if (localRank && localRank.checked) push(`NOT in the top ${Number.isFinite(Number(localRank.scanned)) ? localRank.scanned : 'twenty'} for their primary trade`);
+      // The picked row can be an absent SERVICE-PAGE row on a lead that ranks
+      // #3 for its head term (that preference is deliberate — see pickRankRow).
+      // Calling that "their primary trade" fed a false statement to the
+      // situation read. State the query that was actually absent.
+      } else if (localRank && localRank.checked) push(`NOT in the top ${Number.isFinite(Number(localRank.scanned)) ? localRank.scanned : 'twenty'} for ${localRank.query ? `"${localRank.query}"${localRank.kind === 'their own service page' ? ' — a service they publish a page for; their head term may still rank' : ''}` : 'their primary trade'}`);
       if (localRank && localRank.ours) push(`${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}\u2605`);
       if (gbpHealth && gbpHealth.checked) {
         // Same non-existent field. The situation read has never been told how
@@ -26086,7 +26220,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (sitePages && sitePages.booking) push(`Booking path: ${sitePages.booking}${htmlSignals && htmlSignals.checked && htmlSignals.formFieldCount ? ` (${htmlSignals.formFieldCount}-field form)` : ''}`);
       if (sitePages && sitePages.services && sitePages.services.length) push(`What they sell: ${sitePages.services.slice(0,6).join(', ')}`);
       if (sitePages && sitePages.ownerStory) push(`The owner's own story: ${String(sitePages.ownerStory).slice(0,260)}`);
-      if (offerStrength && offerStrength.checked) push(`Offer: guarantee=${!!offerStrength.hasGuarantee}, urgency=${!!offerStrength.hasUrgency}, only ask is generic=${!!offerStrength.genericAskOnly}`);
+      // readOfferStrength returns { guarantee, urgency, genericOnly } — the
+      // hasGuarantee/hasUrgency/genericAskOnly names read here existed nowhere,
+      // so every situation read was told "guarantee=false, urgency=false" —
+      // including on a business whose homepage says satisfaction guaranteed. A
+      // false absence fact, fed to the narrative model, on every lead.
+      if (offerStrength && offerStrength.checked) push(`Offer: guarantee=${!!offerStrength.guarantee}, urgency=${!!offerStrength.urgency}, only ask is generic=${!!offerStrength.genericOnly}`);
       // ══ THE ONE UNWIRED SIGNAL WORTH WIRING ══════════════════════════════
       // Five signals are measured, shown in the audit panel, and never reach the
       // brain: CRM detection, analytics, social proof, CTA-above-fold and LSA.
@@ -26119,7 +26258,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           ? `Local Services Ads: they ARE running them \u2014 the Google Guaranteed badge appears on their own site. That is a paid channel they already spend on, so cost per lead is a number they watch.`
           : `Local Services Ads: their trade is ELIGIBLE for Google Guaranteed and no badge appears on their site. \u26a0 Many advertisers never display the badge, so make NO claim about whether they run it \u2014 the finding is that the channel exists above the map pack in their category, and it is worth asking whether anyone owns it. This is the one measurement here about money rather than markup.`);
       }
-      if (marketClarity && marketClarity.checked) push(`Positioning read: ${marketClarity.verdict}${marketClarity.reasons && marketClarity.reasons.length ? ' \u2014 ' + marketClarity.reasons.join('; ') : ''}`);
+      if (marketClarity && marketClarity.checked) push(`Positioning read: ${marketClarity.verdict}${marketClarity.gaps && marketClarity.gaps.length ? ' \u2014 ' + marketClarity.gaps.join('; ') : ''}`);
       if (socialPresence && socialPresence.count) push(`Social channels linked: ${socialPresence.platforms.join(', ')}`);
       if (Number.isFinite(verifiedEmployees) && verifiedEmployees > 0) push(`${verifiedEmployees} employees`);
       // extractHtmlSignals returns isHttps / hasViewport / hasTitle. Reading
@@ -26175,7 +26314,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // elsewhere; referencing them would have thrown a ReferenceError that the
       // surrounding try/catch swallows, killing the entire synthesis silently.
       // That is the same failure class as every other one this week.
-      if (valueEquation && valueEquation.checked) push(`How hard they are to buy from: ${valueEquation.shape}${Number.isFinite(valueEquation.delay) ? ` (delay ${valueEquation.delay}/5, effort ${valueEquation.effort}/5, confidence ${valueEquation.likelihood}/5)` : ''}${valueEquation.frictions && valueEquation.frictions.length ? ' \u2014 friction: ' + valueEquation.frictions.join('; ') : ''}`);
+      if (valueEquation && valueEquation.checked) push(`How hard they are to buy from: ${valueEquation.shape}${Number.isFinite(valueEquation.delay) ? ` (delay ${valueEquation.delay}/5, effort ${valueEquation.effort}/5, confidence ${valueEquation.likelihood}/5)` : ''}${valueEquation.friction && valueEquation.friction.length ? ' \u2014 friction: ' + valueEquation.friction.join('; ') : ''}`);
       if (affordability && affordability.verdict) push(`Can they pay: ${affordability.verdict}${affordability.concerns && affordability.concerns.length ? ' | concern: ' + affordability.concerns.join('; ') : ''}`);
 
       if (F.length >= 6) {
@@ -26314,7 +26453,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // That matters because the grade is what a human skims. "Personal-pattern"
     // reads as "we worked out their convention"; on a catch-all domain it means
     // "we picked one and nothing can bounce". Same string, very different bet.
-    const _isCatchAllAddr = !!(email.catchAll || /catch-all/i.test(String(email.label || '')));
+    // The server-side resolution carries its label on emailResult; email is the
+    // browser's object and never gets .label/.catchAll from this run — so every
+    // server-resolved catch-all graded as "B — personal-pattern" (the exact
+    // Deirdre Taylor bug the comment above documents as fixed).
+    const _isCatchAllAddr = !!(email.catchAll || /catch-all/i.test(String(email.label || '')) || /catch-all/i.test(String((emailResult && emailResult.label) || '')));
     const emailGrade = !emailAddr ? 'none'
       : _isCatchAllAddr ? 'C — catch-all domain, delivery certain but the mailbox is unconfirmed'
       : isPersonalPattern && ownerTitle ? 'A — personal email of owner-level contact'
@@ -26706,7 +26849,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           cost: 'Every dollar of that ad spend is unmeasurable. They cannot tell a winning ad from a losing one, cannot retarget a single visitor, and cannot optimize anything. They are flying completely blind.',
         });
       }
-      if (hasAds && !builtWith.hasPixel) {
+      // Measured absence only: null means the fetch failed or was blocked, and
+      // "paying for ads with no analytics" may not be built on our own outage.
+      if (hasAds && builtWith.hasPixel === false && builtWith.confirmed === true) {
         fires.push({
           severity: 'critical',
           fire: 'Paying for ads with NO analytics of any kind on the page',
