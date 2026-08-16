@@ -1020,7 +1020,7 @@ const measuredScoreFor = (findingText, m = {}) => {
     return { id: 'broken_page', ...MEASURED_SIGNAL_SCORES.broken_page };
   }
   if (/phone|number/.test(t) && m.phoneMismatch === true) return { id: 'phone_mismatch', ...MEASURED_SIGNAL_SCORES.phone_mismatch };
-  if (/photo/.test(t) && Number.isFinite(Number(m.photoCount)) && Number(m.photoCount) < 5) {
+  if (/photo/.test(t) && typeof m.photoCount === 'number' && Number.isFinite(m.photoCount) && m.photoCount < 5) {
     return { id: 'thin_profile', ...MEASURED_SIGNAL_SCORES.thin_profile };
   }
   if (/review/.test(t) && Number(m.reviewRecency) > 365) return { id: 'stale_reviews', ...MEASURED_SIGNAL_SCORES.stale_reviews };
@@ -8954,8 +8954,14 @@ const HARM_LADDER = [
   { harm: 72, specific: 96, novel: 90, delegable: 20, weFix: 80, band: 'INVISIBLE', id: 'review_velocity_drop',
     blind: 'reviews still arrive, so nothing looks broken. Only the rate changed, and nobody counts rates',
     reframe: 'proof of recent work is what a stranger checks first, and it goes stale faster than most owners expect',
+    // typeof-first for the two counts: Number(null) is 0 and 0 is finite, so a
+    // null window here would have printed "against null in the 90 days before
+    // that". The producer sets both counts whenever it sets the checked flag, so
+    // this is defence in depth — but the thin_profile rung proved this exact
+    // trap reaches live audits, and a typeof check costs nothing.
     test: (m) => m.reviewVelocityChecked === true && m.reviewVelocitySlowing === true
-      && Number.isFinite(Number(m.reviewsRecent90)) && Number.isFinite(Number(m.reviewsPrior90)),
+      && typeof m.reviewsRecent90 === 'number' && Number.isFinite(m.reviewsRecent90)
+      && typeof m.reviewsPrior90 === 'number' && Number.isFinite(m.reviewsPrior90),
     say: (m) => Number(m.reviewsRecent90) === 0
       ? `their Google reviews have stopped — none in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`
       : `their Google reviews have slowed — ${m.reviewsRecent90} in the last 90 days, against ${m.reviewsPrior90} in the 90 days before that`,
@@ -9372,7 +9378,16 @@ const HARM_LADDER = [
     // the same finding.
     //
     // Require a real number. No measurement, no finding.
-    test: (m) => Number.isFinite(Number(m.photoCount)) && Number(m.photoCount) < 5,
+    //
+    // ══ AND Number.isFinite(Number(x)) DOES NOT REQUIRE ONE ══════════════
+    // Number(null) is 0 and 0 is finite, so a lead whose profile was read but
+    // whose photo count came back null still fired this rung — and the email
+    // said "Their Google listing has null photos on it". That exact sentence
+    // is quoted in the Property Masters note further up as something that
+    // already reached a live audit. The guard the comment above describes was
+    // never the guard the code performed: it must be typeof-first, because a
+    // typeof check is the only one Number() cannot launder null through.
+    test: (m) => typeof m.photoCount === 'number' && Number.isFinite(m.photoCount) && m.photoCount < 5,
     say: (m) => `Their Google listing has ${m.photoCount} photo${m.photoCount === 1 ? '' : 's'} on it`,
     costs: 'the listing is the first thing a searcher sees and it is nearly empty' },
 
@@ -35804,6 +35819,67 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ SUBJECT COVERAGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ Number() LAUNDERS null INTO A FINITE ZERO ═══════════════════════════
+  // Third confirmed instance of this exact trap, found by an adversarial sweep
+  // rather than by a failure report:
+  //
+  //   (m.photoCount || 0) < 5              the original, fixed months ago
+  //   Number.isFinite(Number(null))        the "fix" — which is TRUE, because
+  //                                        Number(null) is 0 and 0 is finite
+  //
+  // So thin_profile still fired on an unmeasured photo count and said "Their
+  // Google listing has null photos on it" — the exact sentence the Property
+  // Masters note further up records as having reached a live audit. The guard
+  // the comment described was never the guard the code performed. Only typeof
+  // stops it, because typeof is the one check Number() cannot launder through.
+  //
+  // This check runs EVERY rung against adversarial fixtures — empty, all-null,
+  // and the nastiest one: producer flags set true with their numbers null — and
+  // fails the boot if any rung fires or throws. A new rung with this bug cannot
+  // reach a lead.
+  try {
+    const _fails = [];
+    const _nullAll = {};
+    for (const k of ['tradeWord','city','rank','reviewCount','rating','reviewsRead','ownerReplies',
+      'photoCount','copyrightYear','newestPostYear','formFieldCount','tenureYears','reviewsPerYear',
+      'reviewRecency','servicePagesChecked','servicePagesInvisible','jobPostedDaysAgo',
+      'reviewsRecent90','reviewsPrior90','aboveReviewsAvg','aboveReviewsN']) _nullAll[k] = null;
+    const _fixtures = [
+      ['empty', {}],
+      ['all-null', _nullAll],
+      // Flags without numbers: the shape a partial producer failure would ship.
+      ['flags-true-numbers-null', {
+        reviewVelocityChecked: true, reviewVelocitySlowing: true, reviewsRecent90: null, reviewsPrior90: null,
+        recurringChecked: true, hasRecurringOffer: null,
+        hiringMarketing: true, jobPostedDaysAgo: null, marketingRoleName: 'x',
+        adsTagConfirmed: true, paidLeakGap: '',
+        servicePagesChecked: null, servicePagesInvisible: null, serviceInvisibleNames: null,
+        bookingMeasured: true, booking: null,
+        photoCount: null, formFieldCountIsSingleForm: true, formFieldCount: null,
+      }],
+    ];
+    for (const [name, m] of _fixtures) {
+      for (const h of HARM_LADDER) {
+        let on = false;
+        try { on = !!h.test(m); }
+        catch (e) { _fails.push(`[${name}] ${h.id}.test THROWS: ${e.message}`); continue; }
+        if (on) {
+          let said = '';
+          try { said = String(h.say(m) || ''); } catch (e) { said = '(say throws)'; }
+          _fails.push(`[${name}] ${h.id} fires on unmeasured data and would say "${said.slice(0, 70)}"`);
+        }
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ NULL LAUNDERING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ NULL LAUNDERING CHECK: all ${HARM_LADDER.length} rungs stay silent on three adversarial fixtures — empty, every measurement null, and producer flags set true with their numbers null. Number(null) is 0 and 0 is finite, so Number.isFinite(Number(x)) is not a measurement guard; thin_profile carried exactly that hole under a comment saying "require a real number" and would have said "null photos" on any lead whose profile read came back empty. Only typeof survives Number()'s laundering, and any new rung that forgets fails this boot.`);
+    }
+  } catch (e) {
+    console.log(`⛔ NULL LAUNDERING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
 
 
 
