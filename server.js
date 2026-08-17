@@ -125,6 +125,36 @@ const hunterSerial = (fn) => {
   return run;
 };
 
+// ══ TWO LEADS AT ONCE IS WHAT TRIPS FIRECRAWL ═══════════════════════════════
+// Live, 2026-08-17: two research jobs ran concurrently and BOTH logged
+//   FIRECRAWL RATE LIMITED ... 4s / 8s / 12s
+//   FIRECRAWL STILL RATE LIMITED after 3 attempts — this lead's audit is
+//   INCOMPLETE
+// followed by three firecrawlScrape timeouts. Each lead fires a homepage
+// scrape, a map, a screenshot and up to seven page reads; two leads overlap
+// into a burst the plan's per-minute limit refuses. The backoff already in
+// place is per-REQUEST and cannot help, because the requests it is spacing are
+// competing with another lead's requests.
+//
+// Same shape as hunterSerial directly above, and the same fix: one global
+// chain with a small gap, so the whole process makes at most one Firecrawl
+// request at a time. Sequential is the right trade here — a scrape takes 3-5s
+// and the alternative is a burst that costs credits AND returns nothing.
+// FC_MIN_GAP_MS is tunable without a deploy.
+const FC_MIN_GAP_MS = parseInt(process.env.FC_MIN_GAP_MS || '350', 10);
+let _fcChain = Promise.resolve();
+const fcSerial = (fn) => {
+  const run = _fcChain.then(async () => {
+    const out = await fn();
+    await new Promise(r => setTimeout(r, FC_MIN_GAP_MS));
+    return out;
+  });
+  // Keep the chain alive even if one call throws, or every later call is
+  // stranded — the failure hunterSerial's own comment records.
+  _fcChain = run.then(() => {}, () => {});
+  return run;
+};
+
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
 
@@ -2565,11 +2595,11 @@ app.post('/api/scrape', async (req, res) => {
   try {
     const { url, firecrawlKey } = req.body;
     if (!url || !firecrawlKey) return res.status(400).json({ error: 'URL and key required' });
-    const r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+    const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
-    }, 15000);
+    }, 15000));
     const d = await safeJson(r);
     res.json({ markdown: (d.data?.markdown || '').slice(0, 5000) });
   } catch(e) { res.json({ markdown: '' }); }
@@ -5451,7 +5481,23 @@ const parseLLMJSON = (raw) => {
       return v;
     } catch { /* next strategy */ }
   }
-  console.log(`JSON UNRECOVERABLE: ${t.slice(0, 200).replace(/\s+/g, ' ')}`);
+  // ══ FIFTEEN OF THESE PRINTED NOTHING AT ALL ═══════════════════════════
+  // Live, 2026-08-17: "JSON UNRECOVERABLE:" with an empty payload, fifteen
+  // times across two leads, starting at 18:02. The real cause —
+  // "Anthropic credit balance is low" — was printed ONCE, at 18:04, two
+  // minutes and two ruined audits later. Every model-derived reading in
+  // between (the domain confirmation, and therefore the trade, and therefore
+  // the entire local-rank half of the ladder) died silently.
+  //
+  // An empty string is not malformed JSON. It is NO RESPONSE, which has a
+  // different cause and a different fix, and the line must say which it is
+  // looking at rather than printing a blank and returning null.
+  const _t = String(t || '').trim();
+  if (!_t) {
+    console.log(`JSON UNRECOVERABLE: the model returned NOTHING to parse — an empty body, not malformed output. That is an API-level failure (credits, rate limit, refusal or timeout), not a formatting problem, and every reading derived from this call is now missing rather than wrong. Check the BRAIN ERROR / MODEL DECLINED line for the cause.`);
+  } else {
+    console.log(`JSON UNRECOVERABLE: ${_t.slice(0, 200).replace(/\s+/g, ' ')}`);
+  }
   return null;
 };
 
@@ -5672,7 +5718,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   const _hit = _MAP_CACHE.get(_mk);
   if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) { fcNote(false, 'map', _mk); return _hit.urls; }
   try {
-    const r = await fetchT('https://api.firecrawl.dev/v1/map', {
+    const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/map', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       // NO `search` FILTER. The cache is keyed by hostname, so whichever caller ran
@@ -5685,7 +5731,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       // Fetch the whole sitemap once; every caller filters it locally, as they
       // already do. One map call per domain instead of three.
       body: JSON.stringify({ url, limit }),
-    }, 20000);
+    }, 20000));
     const d = await r.json();
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true;
@@ -5757,7 +5803,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
   // meter reported 2 for a call that actually cost 5.
   fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
   try {
-    const r = await fetchT('https://api.firecrawl.dev/v1/search', {
+    const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5765,7 +5811,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
         limit,
         ...(scrapeContent ? { scrapeOptions: { formats: ['markdown'], onlyMainContent: true } } : {}),
       }),
-    }, 30000);
+    }, 30000));
     const d = await r.json();
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true;
@@ -5991,7 +6037,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
   }
 
   try {
-    const submit = await fetchT('https://api.firecrawl.dev/v1/batch/scrape', {
+    const submit = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/batch/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -6020,7 +6066,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
         removeBase64Images: true,
         maxAge: FC_CACHE_MS,
       }),
-    }, 20000);
+    }, 20000));
     const sub = await submit.json();
     if (isCreditError(sub, submit.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true;
@@ -6042,9 +6088,9 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
     let data = null;
     for (let attempt = 0; Date.now() < deadline; attempt++) {
       await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 3000));
-      const poll = await fetchT(`https://api.firecrawl.dev/v1/batch/scrape/${jobId}`, {
+      const poll = await fcSerial(() => fetchT(`https://api.firecrawl.dev/v1/batch/scrape/${jobId}`, {
         headers: { 'Authorization': `Bearer ${fcKey}` },
-      }, 15000);
+      }, 15000));
       const pd = await poll.json();
       if (pd && (pd.status === 'completed' || pd.status === 'complete')) { data = pd.data || []; break; }
       if (pd && pd.status === 'failed') { console.log('BATCH: job failed — falling back to individual scrapes'); return out; }
@@ -6108,7 +6154,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     // bill a request it refused to serve.
     let r, d;
     for (let attempt = 0; attempt < 3; attempt++) {
-      r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+      r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
         // ══ MUST MATCH THE BATCH, INCLUDING THE IMAGE ══════════════════════
@@ -6123,7 +6169,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         // where the proof is. That mistake already told an electrician he had no
         // social proof on a page carrying 221 Google reviews.
         body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true }),
-      }, timeout);
+      }, timeout));
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
       FIRECRAWL_RATE_LIMIT_HITS++;
@@ -6166,11 +6212,11 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     // nothing, so this costs one extra call only on pages that already failed.
     if (!_md) {
       try {
-        const r2 = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+        const r2 = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge }),
-        }, Math.min(timeout, 30000));
+        }, Math.min(timeout, 30000)));
         const d2 = await r2.json();
         const _md2 = d2.data?.markdown || d2.markdown || '';
         if (_md2) {
@@ -7559,6 +7605,57 @@ const CREDENTIAL_RE = /^(?:(?:[A-Za-z]\.){2,6}|(?:D\.?D\.?S|D\.?M\.?D|D\.?V\.?M|
 // DeVries are people rather than unparseable.
 const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?(?:\s+[A-Z][a-z'’-]{1,20})?\s+[A-Z][a-z'’-]{0,25}(?:[A-Z][a-z'’-]{1,20})?)$/;
 
+// ══ "GOOGLE REVIEWS" WENT OUT AS THE OWNER'S NAME ═══════════════════════════
+// Live, 2026-08-17, Mac Brian Doors & Window Installation. The site header
+// carries a "Leave us a review" widget. The roster parser read "Google Reviews"
+// as a person and the company tagline as his title:
+//
+//   ROSTER: their own team page names 1 person — Google Reviews is
+//           "Your Trusted Partner in Home Improvements"
+//   DM:     Google Reviews (Your Trusted Partner in Home Improvements)
+//
+// and the composed email opened: "Google, there is no way to book a time."
+// It also SETTLED the decision-maker, so the web, licence and registry lookups
+// were skipped — the parser was confident enough to stop looking.
+//
+// personFromRun carries a comment saying headings like "Our Team" "are already
+// in NOT_A_NAME". They are not: NOT_A_NAME is a local const inside
+// parseTeamRoster and this function has never been able to see it. A comment
+// claiming a guard the code does not perform — the same shape as thin_profile's
+// "require a real number".
+//
+// So the blocklist moves to module scope, next to the pattern it guards, and is
+// enforced HERE, at the single normaliser every roster path passes through.
+// Three rules, each narrow enough to be safe on real names:
+//   1. a first word no human is named  — nobody is called Google or Yelp
+//   2. a last word no human is surnamed — "Reviews", "Form", "Us"
+//   3. the exact phrase, for pairs both of whose words are ordinary
+// "Page" is deliberately NOT in rule 2: Larry Page is a real surname, and
+// "Facebook Page" is already caught by rule 1.
+const NOT_A_PERSON_FIRST = new Set(['google', 'yelp', 'facebook', 'instagram', 'twitter',
+  'linkedin', 'youtube', 'tiktok', 'nextdoor', 'angi', 'angies', 'houzz', 'thumbtack',
+  'trustpilot', 'pinterest', 'bbb', 'yellowpages', 'foursquare', 'tripadvisor', 'porch']);
+const NOT_A_PERSON_LAST = new Set(['reviews', 'review', 'testimonials', 'form', 'forms',
+  'us', 'more', 'here', 'now', 'today', 'quote', 'estimate', 'appointment', 'appointments',
+  'booking', 'bookings', 'hours', 'directions', 'menu', 'faq', 'faqs', 'gallery',
+  'specials', 'financing', 'careers', 'portfolio', 'blog', 'news', 'services', 'service',
+  'team', 'staff', 'story', 'mission', 'values', 'history', 'process', 'policy']);
+const NOT_A_PERSON_PHRASE = new Set(['about us', 'our team', 'the team', 'our story',
+  'contact us', 'our people', 'leadership team', 'our staff', 'get started', 'our process',
+  'our mission', 'our values', 'our history', 'read more', 'learn more', 'view all',
+  'see more', 'find us', 'call us', 'email us', 'visit us', 'follow us', 'our work',
+  'case studies', 'our services', 'why choose', 'meet our', 'privacy policy', 'terms of',
+  'home page', 'main menu', 'site map', 'free consultation', 'book now', 'schedule now']);
+const looksLikeAPerson = (name) => {
+  const t = String(name || '').toLowerCase().replace(/[^a-z' -]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  const w = t.split(' ');
+  if (NOT_A_PERSON_PHRASE.has(t)) return false;
+  if (NOT_A_PERSON_FIRST.has(w[0])) return false;
+  if (NOT_A_PERSON_LAST.has(w[w.length - 1])) return false;
+  return true;
+};
+
 const personFromRun = (raw, companyName = '') => {
   let t = String(raw || '').trim();
   if (!t || t.length > 110) return null;
@@ -7596,6 +7693,10 @@ const personFromRun = (raw, companyName = '') => {
   while (words.length > 2 && CREDENTIAL_RE.test(words[words.length - 1])) words.pop();
   head = words.join(' ');
   if (!ROSTER_NAME_RE.test(head)) return null;
+  // The pattern says "this is shaped like a name". This says "and it is not a
+  // platform, a page heading or a button" — which is what "Google Reviews"
+  // was, on a page that also happened to look like a team page.
+  if (!looksLikeAPerson(head)) return null;
   // ── THEIR OWN NAME IS NOT A PERSON ──────────────────────────────────────
   // "Tiffany Springs" satisfies every name rule ever written, and it is the
   // practice. A candidate whose every word already appears in the company name
@@ -24209,12 +24310,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const t0 = Date.now();
         let r;
         try {
-          r = await fetchT('https://api.firecrawl.dev/v1/scrape', {
+          r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: target, formats, onlyMainContent: false, waitFor,
               maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
-          }, timeout);
+          }, timeout));
         } catch (e) {
           const ms = Date.now() - t0;
           console.log(`FIRECRAWL NO ANSWER [${kind}] ${target} — nothing came back within ${ms}ms (${e.message}). The request may still be running on their side.`);
@@ -24995,7 +25096,30 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // The lead-source field is a hint: fine for routing, never for a claim. With
           // it removed, checkLocalRankStable already refuses on an empty industry, so
           // no rank finding exists rather than a wrong one.
-          industry: customerTrade || verifiedIndustry || '',
+          // ══ AND A THIRD SOURCE, BECAUSE THE FIRST TWO ARE MODEL CALLS ══
+          // Live, 2026-08-17, both leads in the run:
+          //   DOMAIN MATCH: unclear (low) —          (empty reason)
+          //   LOCAL RANK: skipped — no industry on this lead
+          // customerTrade and verifiedIndustry BOTH come from the domain
+          // confirmation model call. Anthropic credits ran low, every model
+          // call returned unparsable output, and with no trade the whole
+          // visibility half of the ladder went dark: outranked_by_weaker,
+          // absent_from_search, coverage_gap and service_invisibility are all
+          // structurally impossible without a query. Green Hills produced 3
+          // findings and opened on "81 reviews across 30 years".
+          //
+          // The rule above — never build a claim on a lead-source guess — was
+          // written for ENRICHMENT industry codes ("real-estate" for a
+          // foundation repair company). A Google Places category is not that
+          // kind of guess: it is the label on the query that FOUND the
+          // business, and Google returned them under it. That is evidence of
+          // the same class as reading the trade off their homepage.
+          //
+          // So it is accepted ONLY from the Places lane and only when both
+          // model-derived reads are empty — never from enrichment, news or
+          // job-board lanes, where the Ram Jack failure lives.
+          industry: customerTrade || verifiedIndustry
+            || (discoverySource === 'google_places' ? String(req.body.industry || '').trim() : ''),
           location: req.body.location || '',
           placesKey, sitemapUrls: _siteUrls,
           // Their OWN coordinates, read off their Google Place record by
@@ -36296,6 +36420,101 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ NULL LAUNDERING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ THE FIRST LIVE RUN OF THE REBUILT SYSTEM ════════════════════════════
+  // Mac Brian Doors & Window Installation, 2026-08-17. The composed email
+  // opened: "Google, there is no way to book a time." The site header carries a
+  // "Leave us a review" widget; the roster parser read "Google Reviews" as the
+  // owner and the company tagline as his job title — then SETTLED the
+  // decision-maker on it and skipped every paid verification lookup.
+  //
+  // Green Hills, same run: the domain-confirmation model call returned nothing
+  // (Anthropic credits), so no trade was resolved, so LOCAL RANK was skipped,
+  // so four findings — outranked_by_weaker, absent_from_search, coverage_gap,
+  // service_invisibility — were structurally impossible. Three findings
+  // survived and the email opened on "81 reviews across 30 years".
+  //
+  // Both leads also hit FIRECRAWL STILL RATE LIMITED and shipped incomplete.
+  try {
+    const _fails = [];
+
+    // ── 1. A PLATFORM IS NOT A PERSON ──────────────────────────────────
+    for (const _junk of ['Google Reviews', 'Yelp Reviews', 'Facebook Page', 'Contact Form',
+                         'Leave Us', 'Our Team', 'Read More', 'Book Now', 'Free Estimate',
+                         'Google Reviews, Your Trusted Partner in Home Improvements']) {
+      const _p = personFromRun(_junk, 'Mac Brian Doors & Window Installation');
+      if (_p) _fails.push(`"${_junk}" is accepted as a person named "${_p.name}" — that is the name a live email opened with`);
+    }
+    // And it must not have become a name filter that eats real owners.
+    for (const [_raw, _want] of [['Dr. Kurt Kavanaugh', 'Kurt Kavanaugh'],
+                                 ['Stephen Davis, MD', 'Stephen Davis'],
+                                 ['Dusty Hannah, Owner', 'Dusty Hannah'],
+                                 ['Larry Page, President', 'Larry Page'],
+                                 ['Maria Gonzalez', 'Maria Gonzalez']]) {
+      const _p = personFromRun(_raw, 'Some Company LLC');
+      if (!_p || _p.name !== _want) _fails.push(`a real owner was lost: "${_raw}" -> ${_p ? `"${_p.name}"` : 'null'}, expected "${_want}"`);
+    }
+    // The guard has to live where BOTH roster paths pass, not in one function's
+    // local scope — which is exactly how the old NOT_A_NAME set, whose comment
+    // personFromRun still cited, was invisible to personFromRun.
+    if (typeof looksLikeAPerson !== 'function') _fails.push('looksLikeAPerson is not at module scope, so only one roster path can use it');
+
+    // ── 2. THE TRADE MUST SURVIVE A FAILED MODEL CALL ──────────────────
+    {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (!new RegExp("discoverySource === 'google_" + "places' \\? String\\(req\\.body\\.industry").test(_code)) {
+        _fails.push('the local-rank query has no non-model source for the trade — when the domain-confirmation call fails, every rank finding dies and only the review block is left');
+      }
+      // ...and ONLY from the Places lane. An enrichment industry code is the
+      // Ram Jack failure ("real-estate" for a foundation repair company).
+      if (/industry: customerTrade \|\| verifiedIndustry \|\| String\(req\.body\.industry/.test(_code)) {
+        _fails.push('the trade falls back to req.body.industry from ANY lane — that is the Ram Jack failure, where a lead-source guess became a measured rank claim');
+      }
+    }
+
+    // ── 3. NO FIRECRAWL CALL MAY BYPASS THE LIMITER ────────────────────
+    // Two concurrent leads burst past the plan's per-minute limit; a per-request
+    // backoff cannot help, because the requests it spaces compete with another
+    // lead's. One unwrapped call site restores the burst.
+    {
+      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _all = [...(_code.matchAll(/(\w+)\(\s*(?:\(\) => )?fetchT\(\s*['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))];
+      const _direct = [...(_code.matchAll(/await fetchT\(\s*['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))]
+        .map(m => m[1])
+        // The credit-balance endpoint is deliberately NOT serialised: it is a
+        // single user-initiated call and queueing it behind a research run's
+        // scrapes would make a balance check hang for a minute.
+        .filter(u => !/^team\/credit-usage/.test(u));
+      if (_direct.length) _fails.push(`${_direct.length} Firecrawl call(s) bypass fcSerial — ${_direct.join(', ')}`);
+      if (_all.length < 6) _fails.push(`only ${_all.length} Firecrawl call sites are wrapped; the scrape, map, search and batch paths should all be`);
+      if (typeof fcSerial !== 'function') _fails.push('fcSerial does not exist');
+    }
+
+    // ── 4. AN EMPTY MODEL RESPONSE MUST SAY WHAT IT MEANS ──────────────
+    // Fifteen "JSON UNRECOVERABLE:" lines printed a blank payload while the
+    // real cause was announced once, two minutes later.
+    {
+      const _seen = [];
+      const _orig = console.log;
+      console.log = (...a) => { _seen.push(a.join(' ')); };
+      try { parseLLMJSON(''); parseLLMJSON('{not json'); } finally { console.log = _orig; }
+      const _empty = _seen.find(l => /JSON UNRECOVERABLE/.test(l) && /NOTHING to parse/.test(l));
+      if (!_empty) _fails.push('an empty model response still logs a blank JSON UNRECOVERABLE line, which is indistinguishable from malformed output and names no cause');
+      const _malformed = _seen.find(l => /JSON UNRECOVERABLE/.test(l) && /not json/.test(l));
+      if (!_malformed) _fails.push('genuinely malformed output no longer shows what it was');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ LIVE RUN CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LIVE RUN CHECK: the four faults from the first live run of the rebuilt system cannot recur. A platform, a page heading or a button can no longer be read as the owner — "Google Reviews" opened a real email — while Dr. Kurt Kavanaugh, Stephen Davis MD and Larry Page all still parse. The local-rank query keeps a non-model source for the trade, so a failed audit call no longer takes the entire visibility half of the ladder down with it, and that source is the Places category only, never an enrichment guess. Every Firecrawl call is serialised through one chain, because two concurrent leads burst past a per-minute limit that no per-request backoff can space. And an empty model response now says it is an API failure with nothing to parse, instead of printing a blank line fifteen times while the real cause stayed silent for two minutes.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LIVE RUN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
 
 
 
