@@ -8356,7 +8356,15 @@ const countNamedStaff = (text) => {
   // A credential or a role immediately following a capitalised full name.
   const re = /\b([A-Z][a-z]{1,15})\s+([A-Z][a-zA-Z'’\-]{2,20})\b\s*(?:,|\u2014|-|\||\n)?\s*(?:M\.?D|D\.?D\.?S|D\.?M\.?D|D\.?O|D\.?C|D\.?V\.?M|O\.?D|C\.?P\.?A|Esq|R\.?N|L\.?P\.?N|P\.?A|PhD|Attorney|Partner|Associate|Paralegal|Hygienist|Assistant|Manager|Director|Coordinator|Technician|Consultant|Advisor|Agent|Estimator|Foreman|Owner|Founder|President|Principal)\b/g;
   let m;
+  // "Our Project Manager" matched as a person named "Our Project" and
+  // "Quality Service Manager" as "Quality Service" — the separator before the
+  // role word is optional, so any Capitalised pair in front of one counted as
+  // staff and inflated the affordability score. Real first names are never
+  // these words; the conservative direction (undercount a real team) is the
+  // one this function's own banner commits to.
+  const NOT_A_FIRST_NAME = /^(?:our|your|the|their|his|her|its|a|an|best|top|quality|premier|elite|certified|licensed|trusted|expert|professional|senior|junior|lead|head|chief|new|meet|contact|about|dedicated|experienced|friendly|local|family)$/i;
   while ((m = re.exec(t)) !== null) {
+    if (NOT_A_FIRST_NAME.test(m[1])) continue;
     const name = `${m[1]} ${m[2]}`.toLowerCase();
     if (name.length > 5) seen.add(name);
     if (seen.size > 60) break;
@@ -8387,8 +8395,16 @@ const readAffordability = ({
   //    because they wrote it.
   if (publishedPrices > 0 && Array.isArray(priceStrings) && priceStrings.length) {
     const nums = priceStrings.map(p => {
-      const n = String(p).replace(/[^0-9.]/g, '');
-      return n ? parseFloat(n) : 0;
+      // ══ A RANGE IS TWO NUMBERS, NOT ONE ═══════════════════════════════
+      // Stripping every non-digit turned "$1,500–3,000" into "15003000" and
+      // the affordability read reported "they publish prices up to
+      // $15,003,000". Internal-only, but it moves the who-gets-a-send
+      // decision this read exists for. Parse each number in the string
+      // separately and take the largest — for "$1,500–3,000" that is 3000,
+      // which is the honest top of their own range.
+      const _matches = String(p).match(/\d[\d,]*(?:\.\d+)?/g) || [];
+      const _vals = _matches.map(x => parseFloat(x.replace(/,/g, ''))).filter(v => Number.isFinite(v) && v > 0);
+      return _vals.length ? Math.max(..._vals) : 0;
     }).filter(n => n > 0);
     const top = nums.length ? Math.max(...nums) : 0;
     if (top >= 5000)      { points += 3; signals.push(`they publish prices up to $${top.toLocaleString()} \u2014 a single sale is already five figures or close to it`); }
@@ -12643,6 +12659,16 @@ const verifyBrainEmail = (body, opts = {}) => {
   // table, not from his books.
   const permitted = new Set();
   (opts.figures || []).forEach(f => NUMBER_TOKENS(f).forEach(n => permitted.add(n)));
+  // ══ WHAT THE BRIEF OFFERS, THE VERIFIER MUST ACCEPT ═══════════════════
+  // buildEmailEvidence hands the writer an ASSERT block — published prices
+  // ("safe to use in arithmetic"), market counts, verified reviewer quotes —
+  // and this allowlist knew nothing about it, so a draft that used exactly
+  // what it was invited to use was refused as "figures we never measured" and
+  // fell back to the flat template. Two lists, one meaning, maintained apart:
+  // the recorded disease. The call sites pass the SAME assertable lines the
+  // writer saw, so the brief and the allowlist cannot drift again. Everything
+  // in that block is measured by construction — that is what the A list IS.
+  NUMBER_TOKENS(String(opts.evidenceAssert || '')).forEach(n => permitted.add(n));
   NUMBER_TOKENS(opts.money || '').forEach(n => permitted.add(n));
   NUMBER_TOKENS(opts.spine || '').forEach(n => permitted.add(n));
   NUMBER_TOKENS(opts.earned || '').forEach(n => permitted.add(n));
@@ -17511,7 +17537,16 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   // The line it must not cross: a business that genuinely has nine reviews and
   // returns five is fine. The signal is the RATIO against a large profile.
   {
-    const _total = Number(meta.totalReviews || 0);
+    // ══ THE HINT WAS DOCUMENTED AS THE GUARD AND NEVER READ ═══════════════
+    // placeTotalHint is the review count Google's own Place record reported —
+    // its parameter comment says it exists "to recognise a truncated dataset"
+    // — and the guard below relied solely on meta.totalReviews, parsed out of
+    // the SAME suspect response. A throttled run whose rows lack reviewsCount
+    // makes _total 0, the ratio test skips, and the exact documented
+    // 5-of-116 failure passes as real again. The independent count is the
+    // whole point of having one: take the larger of the two, so a response
+    // that under-reports its own size cannot vouch for itself.
+    const _total = Math.max(Number(meta.totalReviews || 0), Number(placeTotalHint || 0));
     const _got = items.length;
     if (_total >= 25 && _got > 0 && _got <= 8 && _got < _total * 0.25) {
       return { checked: false, truncated: true,
@@ -17615,10 +17650,12 @@ const fetchApifyReviews = async (opts) => {
 // reviews, WITH counts. "Eleven of your reviews mention the same callback delay" is
 // the deepest "how do they know THIS" hit there is. ~2 credits — only on leads we
 // will actually send to (owner found + Places), so the spend lands where it pays off.
-const deepReviewMine = async (companyName, placeId, apifyToken, apiKey) => {
+const deepReviewMine = async (companyName, placeId, apifyToken, apiKey, placeTotalHint = 0) => {
   if (!placeId || !apifyToken || !apiKey) return { read: 0, why: 'no placeId, Apify token or Anthropic key' };
   try {
-    const rv = await fetchApifyReviews({ placeId, apifyToken, companyName });
+    // placeTotalHint rides through to the truncation guard — without this hop
+    // the guard compares against a default 0 and the wire is dead.
+    const rv = await fetchApifyReviews({ placeId, apifyToken, companyName, placeTotalHint });
     // NOT MEASURED is a first-class outcome. It must never collapse into "clean".
     if (!rv.checked) return { read: 0, why: rv.why };
     const md = rv.reviews.map(r =>
@@ -24855,7 +24892,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       }
       if (effectivePlaceId && apifyToken && apiKey && publicPainSignals.length === 0) {
         try {
-          const deep = await deepReviewMine(company, effectivePlaceId, apifyToken, apiKey);
+          // Google's own review count for this place, from the profile read —
+          // the independent number the truncation guard needs, so a throttled
+          // Apify response cannot vouch for its own completeness.
+          const deep = await deepReviewMine(company, effectivePlaceId, apifyToken, apiKey,
+            Number((gbpHealth && gbpHealth.reviewCount) || req.body.reviewCount || 0));
           // Capture engagement BEFORE the branch chain: whether the owner answers
           // strangers is useful regardless of whether a pain pattern was found.
           if (deep && typeof deep.read === 'number' && deep.read > 0) {
@@ -33787,19 +33828,68 @@ app.listen(PORT, () => {
       if (_src[k] === ']') { _d--; if (!_d) { _le = k + 1; break; } }
     }
     const _ladder = _src.slice(_la, _le);
-    for (const m of _ladder.matchAll(/m\.([A-Za-z_$][\w$]*)\s*(?:\|\|\s*''\s*\)?\s*)?===\s*'([A-Za-z_]{3,})'/g)) {
-      const field = m[1], want = m[2];
-      // Every string literal assigned to that field name anywhere in the file.
-      const emitted = new Set();
-      for (const e of _src.matchAll(new RegExp(`${field}\\s*[:=]\\s*'([A-Za-z_]{3,})'`, 'g'))) emitted.add(e[1]);
-      for (const e of _src.matchAll(new RegExp(`\\bband\\s*=\\s*[^;]*?'([a-z_]{3,})'`, 'g'))) {
-        if (/marketClarity/.test(field)) emitted.add(e[1]);
+    // ══ THE PRODUCER'S OWN BODY, NEVER THE WHOLE FILE ══════════════════
+    // Two failed designs preceded this one, both falsified by reintroducing
+    // the casing bug this check memorializes and watching it stay green:
+    //   1. scan the whole file — a boot-check FIXTURE carrying the same
+    //      field:value stood in for the producer;
+    //   2. scan everything before a boundary marker — checks and fixtures
+    //      interleave with production code all through the file, so no
+    //      positional slice separates them.
+    // So the values a field can hold are read from the body of the function
+    // that actually produces it, named explicitly. A tested field with no
+    // entry here fails the boot rather than passing unexamined — the map can
+    // never silently go stale.
+    const _PRODUCER_OF = {
+      booking: 'measureBookingPath',
+      purchaseUrgency: 'purchaseUrgency',
+      marketClarity: 'readMarketClarity',
+    };
+    const _fnBody = (name) => {
+      const at = _src.indexOf(`const ${name} = `);
+      if (at < 0) return '';
+      // Brace-match from the arrow, not from the first `{` — a destructured
+      // parameter like ({ trade, city } = {}) closed the match at the end of
+      // the PARAMETER LIST and returned a body with no code in it. Caught by
+      // falsifying this check: the casing revert failed the boot for the
+      // wrong reason ("emits no string literals").
+      const arrow = _src.indexOf('=>', at);
+      if (arrow < 0) return '';
+      let d2 = 0, started = false;
+      for (let k = _src.indexOf('{', arrow); k < _src.length; k++) {
+        if (_src[k] === '{') { d2++; started = true; }
+        if (_src[k] === '}') { d2--; if (started && !d2) return _src.slice(at, k + 1); }
       }
-      if (!emitted.size) continue;                       // nothing to compare against
+      return '';
+    };
+    // (?<!typeof ) — a typeof guard compares against 'number'/'string', which
+    // no producer emits and no producer should; those are type tests, not
+    // value tests, and the hardened empty-set rule fired on all of them on
+    // its first boot.
+    for (const m of _ladder.matchAll(/(?<!typeof )m\.([A-Za-z_$][\w$]*)\s*(?:\|\|\s*''\s*\)?\s*)?===\s*'([A-Za-z_]{3,})'/g)) {
+      const field = m[1], want = m[2];
+      const _prodName = _PRODUCER_OF[field];
+      if (!_prodName) { _bad.push(`a rung tests ${field} === '${want}' and ${field} has no entry in the producer map — name its producer so the comparison can be verified`); continue; }
+      const _body = _fnBody(_prodName);
+      if (!_body) { _bad.push(`the producer of ${field} (${_prodName}) no longer exists — the rung compares against a value nothing can emit`); continue; }
+      // Every string literal in the producer's body. The body is the complete
+      // universe of what the function can return, so a want outside it means
+      // the test can never be true.
+      const emitted = new Set();
+      for (const lit of _body.matchAll(/'([A-Za-z_]{3,})'/g)) emitted.add(lit[1]);
+      if (!emitted.size) { _bad.push(`the producer of ${field} (${_prodName}) emits no string literals at all — the rung's comparison cannot be verified and cannot be true`); continue; }
       if (emitted.has(want)) continue;                   // satisfiable
       // Case-insensitive match means the ONLY difference is casing — that is the bug.
       const ci = [...emitted].find(x => x.toUpperCase() === want.toUpperCase());
       if (ci) _bad.push(`a rung tests ${field} === '${want}' and the producer emits '${ci}'`);
+      // ══ A VALUE NOBODY EMITS IS THE SAME SILENCE ══════════════════════
+      // The old rules reported only the casing twin. A comparison against a
+      // value that no producer emits AT ALL — a renamed enum, a typo in the
+      // rung — fell through both branches and passed. With fixtures excluded
+      // and the producer scan complete, an unmatched value IS "this test
+      // cannot be true": deliberately reintroducing the casing bug passed
+      // this check green until this branch existed.
+      else _bad.push(`a rung tests ${field} === '${want}' and no producer emits that value (producers emit: ${[...emitted].slice(0, 5).join(', ')})`);
     }
     if (_bad.length) {
       console.log(`⛔ RUNG VALUE CHECK: ${_bad.join(' | ')}. The test can never be true, so that rung is silent on every lead and no log says so — which is exactly how the positioning finding stayed missing while three separate fixes were made downstream of it.`);
@@ -38813,10 +38903,18 @@ app.post('/api/compose-email', async (req, res) => {
               || (audit._persisted && audit._persisted.growthConstraint && audit._persisted.growthConstraint.layer) || '',
             bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
           }, req.body.apiKey, company);
+          // The exact assertable lines the writer's brief contained — derived
+          // from the same evidence object, so the brief and the allowlist are
+          // one list read twice rather than two lists maintained apart.
+          const _evAssert = (() => {
+            try { return (buildEmailEvidence(_parts.evidence || {}).assertable || []).join(' '); }
+            catch (e) { return ''; }
+          })();
           const _v = _written ? verifyBrainEmail(_written, {
             spine: _spineTxt, figures: _figs, money: _parts.money || '',
             earned: _parts.earned || '', count: _parts.count || '',
             trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+            evidenceAssert: _evAssert,
             ..._rankOpt,
           }) : { ok: false, why: 'model returned nothing' };
           if (_v.ok) {
@@ -38874,6 +38972,7 @@ app.post('/api/compose-email', async (req, res) => {
                   spine: _spineTxt, figures: _figs, money: _parts.money || '',
                   earned: _parts.earned || '', count: _parts.count || '',
                   trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+                  evidenceAssert: _evAssert,
                   ..._rankOpt,
                 });
                 if (_v2.ok) _fixed = _v2.body;
