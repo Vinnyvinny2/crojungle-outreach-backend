@@ -1196,26 +1196,103 @@ const findCausalPairs = (cands) => {
 //
 // So the list lives here once and both sites read it. Adding a pattern now
 // protects the email by construction rather than by somebody remembering.
+//
+// ══ IT HAPPENED A THIRD TIME, ON THE PATH THAT NOW SHIPS ═══════════════════
+// 2026-08-17. Green Hills went out with "You're searching your own name and
+// seeing yourself first — that's a different result from what someone typing
+// 'plastic surgeon near me' is actually seeing." Both halves are invented: we
+// never watched Stephen Davis search anything, and "near me" is not a query any
+// rank check here can run, so no measurement we hold describes it.
+//
+// The two rules for it were added to THIS table — and the email did not come
+// from either call site. When the brain started writing the email itself, a
+// THIRD battery was born inside verifyBrainEmail, and that is the only gate the
+// shipped body passes through. So the table above was, once again, the strong
+// list pointed at text nobody sends, and the recurrence was invisible because
+// the fix "went in" and tested clean on the wrong function.
+//
+// Two changes make that structurally impossible rather than remembered:
+//   1. verifyBrainEmail now reads this table as well as its own, so a family
+//      added here is refused on the path that actually reaches a human.
+//   2. Every row carries a THIRD element: a live sample that the row's own regex
+//      must match. SHARED CLAIM BATTERY CHECK feeds each sample through BOTH
+//      gates at boot and fails if either lets it through — so a new row cannot
+//      be added without proving it is live on both paths, and a gate cannot be
+//      unhooked without every row lighting up at once.
+// The extra element is ignored by both destructuring loops, which read [re, why].
 const BACKEND_CLAIM_PATTERNS = [
-  [/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'BACKEND CLAIM: asserts what happens after a form submit, which we never tested'],
-  [/\bno auto-?reply\b|\bno (confirmed )?(autoresponder|automatic (reply|response))\b/i, 'BACKEND CLAIM: we never submit the form, so an auto-reply cannot be ruled out'],
-  [/\bdisappears? forever\b|\bthat lead is gone\b/i, 'BACKEND CLAIM: asserts an outcome inside their systems'],
-  [/\bno one (ever )?(sees|responds|answers)\b.{0,30}\bsubmit/i, 'BACKEND CLAIM: what happens after a form submit'],
-  [/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'BACKEND CLAIM: nothing responds after submission - never tested'],
-  [/\b(nobody|no one|no-one|nothing|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back|is there|is listening)\b/i, 'BACKEND CLAIM: nobody answers - we never rang them'],
-  [/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'BACKEND CLAIM: asserts the fate of a submission we never made'],
-  [/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'PROSPECT CLAIM: states what the prospect already did - invented'],
-  [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'COMPETITOR CLAIM: claims a competitor responded first - no such data exists'],
-  [/\bby (the time|morning|monday|friday|tomorrow)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'INVENTED TIMELINE of a deal being lost'],
-  [/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'INVENTED COMPETITOR COUNT'],
-  [/\b(is|are|'?s|'?re) (gone|lost)\b/i, 'OUTCOME CLAIM: states the visitor is gone or lost - never observed'],
-  [/\bnever (hear from|hears from|see|sees) them again\b/i, 'OUTCOME CLAIM: states they never return - unknowable'],
+  [/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'BACKEND CLAIM: asserts what happens after a form submit, which we never tested', "and he waits for a callback"],
+  [/\bno auto-?reply\b|\bno (confirmed )?(autoresponder|automatic (reply|response))\b/i, 'BACKEND CLAIM: we never submit the form, so an auto-reply cannot be ruled out', "there is no auto-reply"],
+  [/\bdisappears? forever\b|\bthat lead is gone\b/i, 'BACKEND CLAIM: asserts an outcome inside their systems', "that lead is gone"],
+  [/\bno one (ever )?(sees|responds|answers)\b.{0,30}\bsubmit/i, 'BACKEND CLAIM: what happens after a form submit', "no one ever sees it after they submit"],
+  [/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'BACKEND CLAIM: nothing responds after submission - never tested', "nothing answers"],
+  [/\b(nobody|no one|no-one|nothing|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back|is there|is listening)\b/i, 'BACKEND CLAIM: nobody answers - we never rang them', "nobody picks up"],
+  [/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'BACKEND CLAIM: asserts the fate of a submission we never made', "it goes unanswered"],
+  [/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'PROSPECT CLAIM: states what the prospect already did - invented', "they've already hired someone"],
+  [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'COMPETITOR CLAIM: claims a competitor responded first - no such data exists', "whoever called them back first"],
+  [/\bby (the time|morning|monday|friday|tomorrow)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'INVENTED TIMELINE of a deal being lost', "by Friday the job is already gone"],
+  [/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'INVENTED COMPETITOR COUNT', "two other companies"],
+  [/\b(is|are|'?s|'?re) (gone|lost)\b/i, 'OUTCOME CLAIM: states the visitor is gone or lost - never observed', "the visitor is gone"],
+  [/\bnever (hear from|hears from|see|sees) them again\b/i, 'OUTCOME CLAIM: states they never return - unknowable', "you never hear from them again"],
   // ── NEW, FROM THE 2026-07-30 EMAILS THAT SHIPPED GREEN ──────────────────
-  [/\b(is|are)?\s?n'?t (hearing|going to hear) (back |from )/i, 'BACKEND CLAIM: asserts they will not hear back - response behaviour we never tested'],
-  [/\bno instant (reply|response)\b/i, 'BACKEND CLAIM: "no instant reply" - we never submitted, so this is unknowable'],
-  [/\bgone before (morning|the next|tomorrow)\b/i, 'OUTCOME CLAIM: asserts the submission is lost overnight'],
-  [/\bdoes ?n'?t finish it\b|\bnever finishes? (it|the form)\b/i, 'BEHAVIOUR CLAIM: asserts what their visitors did with the form'],
-  [/\bmore than most (mortgage|loan|bank) applications?\b/i, 'INVENTED COMPARISON: we never measured what other applications ask for'],
+  [/\b(is|are)?\s?n'?t (hearing|going to hear) (back |from )/i, 'BACKEND CLAIM: asserts they will not hear back - response behaviour we never tested', "he isn't hearing back from anyone"],
+  [/\bno instant (reply|response)\b/i, 'BACKEND CLAIM: "no instant reply" - we never submitted, so this is unknowable', "there is no instant reply"],
+  [/\bgone before (morning|the next|tomorrow)\b/i, 'OUTCOME CLAIM: asserts the submission is lost overnight', "gone before morning"],
+  [/\bdoes ?n'?t finish it\b|\bnever finishes? (it|the form)\b/i, 'BEHAVIOUR CLAIM: asserts what their visitors did with the form', "he doesn't finish it"],
+  [/\bmore than most (mortgage|loan|bank) applications?\b/i, 'INVENTED COMPARISON: we never measured what other applications ask for', "more than most mortgage applications"],
+  // ── NEW, FROM THE 2026-08-17 LIVE RUN ─────────────────────────────────
+  // Green Hills shipped: "You're searching your own name and seeing yourself
+  // first — that's a different result from what someone typing 'plastic
+  // surgeon near me' is actually seeing."
+  //
+  // Two inventions in one sentence and both passed every gate. We never
+  // observed Stephen Davis searching anything, and "plastic surgeon near me"
+  // is not the query we measured — we measured "plastic surgeon in Nashville,
+  // TN". The simulator deleted the email and named exactly this: "they haven't
+  // given me any actual data — just a theory."
+  //
+  // Every existing rule in this table guards claims about his CUSTOMERS. None
+  // guarded a claim about the OWNER, which is stranger to receive: he knows
+  // whether he did the thing, and being told he did it when he did not is the
+  // fastest possible way to lose him.
+  //
+  // Narrow on purpose. A QUESTION about his experience is the entire point of
+  // the ask ("Have you noticed that gap?"), and a hedged read is allowed
+  // everywhere else in this system, so both are excluded below — only a bare
+  // present-tense assertion that he is performing an action is refused.
+  [/\byou(?:'re| are) (?:searching|googling|typing|checking|looking up|seeing|watching|reading|scrolling|browsing)\b/i,
+    'OWNER BEHAVIOUR CLAIM: states what the owner himself is doing or seeing right now, which we have never observed. He knows whether he did it, and being told he did when he did not loses him on the spot. Ask it instead, or mark it as a guess', "You're searching your own name and seeing yourself first"],
+  [/\bwhen you (?:search|google|type|check|look up)\b(?![^.?!]*\?)/i,
+    'OWNER BEHAVIOUR CLAIM: asserts what he sees when he searches — we never watched him search, and the result he gets is personalised in ways we cannot measure', "When you search for that phrase you see yourself at the top."],
+  // The query itself has to be the one we ran. "near me" is a phrase no rank
+  // check in this file can measure: it resolves differently for every device.
+  [/\b(?:searching|typing|types?|search(?:es|ed)?|googl\w+)[^.?!]{0,30}["“']?[a-z .]{3,40}near me\b/i,
+    'UNMEASURABLE QUERY: "near me" resolves differently for every device and location, so no rank we measured can describe it. Name the query we actually searched', "someone typing plastic surgeon near me is seeing a different list"],
+  // ── THE COMPLAINT WAS ABOUT HIM AND THE EMAIL SAID IT ABOUT THEM ───────
+  // Mac Brian, live. Mined from his own reviews: "Communication delays and
+  // unresponsiveness after quote approval" — his customers complaining that HE
+  // went quiet. The email came back "customers going quiet after quote
+  // approval". The roles are swapped, and the swap turns the one finding we can
+  // prove into an accusation against the people who left the reviews.
+  //
+  // He reads that and knows we did not read his reviews, because the complaint
+  // is his to answer and we handed it to him as somebody else's fault. It is a
+  // worse failure than an invention: an invention is a stranger guessing, this
+  // is a stranger who looked and got it backwards.
+  //
+  // The rule generalises past the inversion, and that is the point. We have
+  // never observed one customer of one business do anything. Reviews tell us
+  // what a customer SAID; nothing anywhere in this pipeline tells us that they
+  // went quiet, stopped replying or walked away. Any sentence putting a customer
+  // in the subject position of a silence verb is invented, whichever direction
+  // it points. The same verbs about HIM stay legal, because that is the half his
+  // reviewers actually wrote down.
+  [/\b(?:customers?|clients?|homeowners?|patients?|prospects?|buyers?|callers?|leads?|people|they|folks)\s+(?:\w+\s+){0,2}(?:go|goes|going|went|end(?:s|ed)? up)\s+(?:quiet|silent|dark|cold)\b/i,
+    'CUSTOMER BEHAVIOUR CLAIM: says his customers went quiet. We have never watched one customer of one business do anything — reviews tell us what somebody SAID, never what they did next. And when the mined complaint is that HE went quiet, this reverses the one finding we can prove and hands his own reviewers the blame',
+    "customers going quiet after quote approval"],
+  [/\b(?:customers?|clients?|homeowners?|patients?|prospects?|buyers?|callers?|leads?|people|they|folks)\s+(?:\w+\s+){0,2}stop(?:s|ped)?\s+(?:responding|replying|answering|calling|returning|following up)\b/i,
+    'CUSTOMER BEHAVIOUR CLAIM: states that his customers stopped responding. Nothing in this system observes a customer after the review they left, and if the complaint we mined is about HIS responsiveness this states the exact opposite of the evidence',
+    "clients stop responding once the quote goes out"],
 ];
 
 // ══ THE UNSENDABLE TEST, APPLIED TO THE BODY ════════════════════════════════
@@ -11745,9 +11822,21 @@ THE SHAPE:
 Three or four sentences. 50-90 words. Nothing else.
 
 WHAT "MAKES IT MATTER" MEANS. Not "that's costing you leads" — that is your
-conclusion and he can argue with it. Put him in the moment instead: "that's in
-the middle of a five-figure decision, when someone's trying to move forward."
-He finishes the thought himself, which is why it lands.
+conclusion and he can argue with it. Put him in the moment instead, and let him
+finish the thought himself. That is why it lands.
+
+THIS LINE IS BUILT FROM HIS FINDING. IT IS NOT A PHRASE YOU CARRY IN.
+Every example in this brief shows a SHAPE. Borrowing the WORDS of one is the
+fastest way to make this email look automated, and it is refused before it can
+send. On one afternoon two of these went out — one to a remodeler, one to a
+surgeon — and both said "in the middle of a five-figure decision, when someone's
+trying to move forward". Two trades, two different findings, one identical
+sentence. Both readers deleted it.
+
+The test is one question: could this line be pasted, unchanged, into an email to
+a different business? If yes it is the wrong line. Name the moment THIS finding
+creates — the thing his customer is doing when they hit the exact wall you
+measured. Ten words out of his situation beat twenty out of anyone's.
 
 THE FINDING GOES IN THE FIRST TWELVE WORDS.
 
@@ -11768,8 +11857,8 @@ SO:
    word thirty. He has already decided by then.
 
 \u2713 "Grant, seven of your 68 reviews say the same thing \u2014 crews not calling back,
-   or long waits between the quote and the start date. That's in the middle of a
-   five-figure decision, right when someone is trying to move forward. Does that
+   or long waits between the quote and the start date. That's the
+   stretch between handing over a deposit and seeing a crew on site. Does that
    come up much on your end?"
    The finding is the first thing he reads. The recognition, if it earns a place
    at all, comes AFTER \u2014 and one clause is plenty.
@@ -11814,6 +11903,97 @@ WHAT KILLS IT:
 
 VOICE: plain words, no marketing vocabulary, no flattery he did not earn. Warm
 because you actually looked \u2014 not because you are being nice.`;
+
+// ══ THE BRIEF'S OWN EXAMPLES CAME BACK AS THE EMAIL ══════════════════════════
+// Both live sends on 2026-08-17 carried the same sentence:
+//   Mac Brian:   "That's right in the middle of a five-figure remodel decision,
+//                 when someone's trying to move forward and..."
+//   Green Hills: "That's right in the middle of a five-figure decision, when
+//                 someone's trying to move forward..."
+// Two different trades, two different findings, one identical clause. Vin read
+// them and said the emails were "the same old emails weve always had".
+//
+// It is not a model failure. That sentence is IN THE BRIEF, twice — once as the
+// prose answer to "what makes it matter" and once inside the ✓ example. We
+// handed the writer a finished sentence and it used it, which is what an example
+// is for. The brief's own rule two screens earlier says a sentence that would fit
+// any business is a template and a template is what an automated sequence looks
+// like; the model answer for the middle beat was exactly such a sentence.
+//
+// So the guard is not "ban this phrase". It is: NOTHING IN THE BRIEF MAY COME
+// BACK AS COPY. The ban list is DERIVED from MIKE_VOICE_FOR_EMAIL at load, so
+// rewriting the brief rewrites the guard and the two can never drift — the
+// failure that put the same clause in both emails cannot be reintroduced by
+// editing the prompt, which is the only place it can come from.
+//
+// Only quoted spans with NO digit in them are collected. An exemplar carrying a
+// measurement cannot be parroted usefully — the figure gate refuses it the
+// moment it appears without a matching measurement — and those are the examples
+// we WANT the writer to imitate the shape of. What is dangerous is the reusable
+// abstraction with nothing of his in it, and that is precisely the set with no
+// numbers.
+// Deliberately generous. These words carry no identity, so requiring them to
+// match would let a leak through on one dropped article, and counting them as
+// hits would flag ordinary English.
+const EXEMPLAR_STOP = new Set(['the', 'and', 'but', 'for', 'you', 'your', 'his', 'her', 'its', 'that', 'this',
+  'they', 'them', 'their', 'with', 'from', 'has', 'have', 'had', 'was', 'were', 'are', 'not', 'all', 'any',
+  'can', 'will', 'would', 'been', 'when', 'what', 'who', 'how', 'why', 'out', 'off', 'one', 'two', 'get',
+  'got', 'own', 'now', 'yet', 'him', 'she', 'him', 'our', 'ours', 'yours', 'about', 'into', 'over', 'than']);
+
+const BRIEF_EXEMPLARS = (() => {
+  const out = [];
+  const seen = new Set();
+  // Double quotes only. An apostrophe is not a delimiter, and treating it as one
+  // produced spans that straddled two unrelated paragraphs — a ban list built from
+  // text that appears nowhere in the brief as a sentence, which is how a guard
+  // starts refusing ordinary English.
+  //
+  // And SENTENCES inside each span, not the span. The ✓ example is one quotation
+  // carrying both the finding (with its numbers) and the stock clause; judging the
+  // whole span on "does it contain a digit" let the clause ride along inside it.
+  for (const m of String(MIKE_VOICE_FOR_EMAIL || '').matchAll(/["“]([^"“”]{25,320})["”]/g)) {
+    for (const raw of String(m[1]).split(/(?<=[.!?])\s+/)) {
+      const s = raw.replace(/\s+/g, ' ').trim();
+      if (!s || /\d/.test(s)) continue;
+      const words = s.toLowerCase().replace(/[^a-z' ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !EXEMPLAR_STOP.has(w));
+      if (words.length < 6) continue;
+      const key = words.join(' ');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ text: s, words });
+    }
+  }
+  return out;
+})();
+
+// A leak is not verbatim quoting — the model rewords as it copies. "that's in the
+// middle of a five-figure decision, when someone's trying to move forward" came
+// back as "That's right in the middle of a five-figure remodel decision, when
+// someone's trying to move forward", which shares every content word and no
+// substring long enough for a naive match.
+//
+// So: slide a window over the body's content words the length of the exemplar
+// plus a little slack, and ask whether that window holds most of the exemplar's
+// words. Local, order-insensitive, insertion-tolerant, and it cannot fire on an
+// email that merely happens to reuse three or four of the same ordinary words in
+// different places.
+const exemplarLeak = (body) => {
+  const w = String(body || '').toLowerCase().replace(/[^a-z' ]/g, ' ').split(/\s+/)
+    .filter(x => x.length > 2 && !EXEMPLAR_STOP.has(x));
+  if (w.length < 6) return null;
+  for (const ex of BRIEF_EXEMPLARS) {
+    const need = new Set(ex.words);
+    const span = ex.words.length + 5;
+    for (let i = 0; i + 1 <= w.length; i++) {
+      const win = new Set(w.slice(i, i + span));
+      let hit = 0;
+      for (const x of need) if (win.has(x)) hit++;
+      if (hit / need.size >= 0.8) return ex.text;
+      if (i + span > w.length) break;
+    }
+  }
+  return null;
+};
 
 
 
@@ -12915,6 +13095,36 @@ const verifyBrainEmail = (body, opts = {}) => {
       if (_hit && OPINION_MARKERS.test(_hit)) continue;
     }
     return { ok: false, why: `${why} — "${m[0].slice(0, 40)}"` };
+  }
+  // ── AND THE SHARED TABLE, WHICH THIS GATE NEVER READ ────────────────────
+  // BACKEND_CLAIM_PATTERNS is the file's canonical fabrication list and it was
+  // wired to the AUDIT checker and to verifyGeneratedCopy — the two functions
+  // that read text nobody sends any more. The brain writes the body now, this
+  // is its only gate, and it carried a private list that had drifted eight
+  // families behind: "isn't hearing back", "no instant reply", "gone before
+  // morning", "by Friday they've already", "doesn't finish it", the invented
+  // mortgage comparison, and the two owner-behaviour claims that shipped to
+  // Green Hills on 2026-08-17.
+  //
+  // Absolute, with no OPINABLE escape, and that is deliberate. Every family in
+  // the shared table is a completed event, a claim about what happens inside
+  // their systems, or a query we never ran. The rule this file already states:
+  // a marker makes a JUDGEMENT sayable and has never made a FACT sayable. "My
+  // read is you're searching your own name" is still an assertion about
+  // something he knows and we do not.
+  for (const [_re, _why] of BACKEND_CLAIM_PATTERNS) {
+    const _m = text.match(_re);
+    if (_m) return { ok: false, why: `${String(_why).split(/[:\u2014]/)[0].trim()} — "${_m[0].slice(0, 40)}"` };
+  }
+
+  // ── AND NOTHING FROM THE BRIEF MAY COME BACK AS COPY ────────────────────
+  // Both live sends on 2026-08-17 carried the brief's own model answer for the
+  // middle beat, word for word, to two different trades. Refused rather than
+  // warned: the writer gets the reason and one more attempt, and a rewrite of
+  // one sentence is cheaper than an email that reads like a mail merge.
+  {
+    const _leak = exemplarLeak(text);
+    if (_leak) return { ok: false, why: `reuses an EXAMPLE from the brief instead of writing from this lead — "${_leak.slice(0, 60)}". The examples show the SHAPE. This line has to name the moment HIS measured finding creates, and if it could be pasted into an email to another business unchanged it is the wrong line` };
   }
   const pc = detectPostContactClaims(text);
   if (pc.length) return { ok: false, why: String(pc[0]).slice(0, 90) };
@@ -23747,6 +23957,57 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
       // cannot be resolved to a Fort Mill in another state.
       let _st = '';
       if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) _st = String(parts.pop()).toUpperCase();
+      // ══ THE SLUG IS A PAGE TITLE, NOT A CITY ═══════════════════════════
+      // Live, 2026-08-17, Mac Brian Doors. Their sitemap publishes local-SEO
+      // landing pages — /carpentry-services-in-raymore,
+      // /lees-summit-carpentry-services — and this title-cased the whole slug,
+      // so the "market" became "Carpentry Services In Raymore". We then bought
+      // a Places search for
+      //     door and window installation in Carpentry Services In Raymore
+      // which is not a query any human types, and pickRankRow chose that row as
+      // the FINDING over a real #1-of-20 head-term placing. Follow-up 1 read:
+      //     "iCare Home Repair ranks above you for 'door and window
+      //      installation in Carpentry Services In Raymore' with 11 reviews
+      //      against your 69."
+      // Johnny reads that and knows a machine wrote it. It is the same class as
+      // the Ram Jack "real estate in Louisville" failure — a garbage query
+      // becoming a measured rank becoming a sentence — and it survived because
+      // the query was built from OUR OWN parse rather than from a lead source.
+      //
+      // The service+city page is the commonest shape a local business publishes,
+      // so the city has to be extracted from the phrase rather than assumed to
+      // be the whole of it. Strip the trade words from both ends, drop a
+      // connecting "in", and require what remains to look like a place name.
+      const _SLUG_SERVICE = new Set(['service', 'services', 'repair', 'repairs', 'installation',
+        'installations', 'install', 'replacement', 'replacements', 'contractor', 'contractors',
+        'contracting', 'company', 'companies', 'near', 'me', 'best', 'top', 'local', 'affordable',
+        'professional', 'expert', 'experts', 'pro', 'pros', 'quality', 'cheap', 'emergency',
+        'residential', 'commercial', 'carpentry', 'roofing', 'roofer', 'roofers', 'plumbing',
+        'plumber', 'plumbers', 'hvac', 'heating', 'cooling', 'air', 'conditioning', 'electrical',
+        'electrician', 'electricians', 'painting', 'painters', 'painter', 'window', 'windows',
+        'door', 'doors', 'siding', 'fence', 'fencing', 'deck', 'decks', 'patio', 'concrete',
+        'landscaping', 'lawn', 'tree', 'cleaning', 'cleaners', 'restoration', 'remodeling',
+        'remodel', 'renovation', 'renovations', 'construction', 'builder', 'builders', 'flooring',
+        'floors', 'gutter', 'gutters', 'insulation', 'masonry', 'paving', 'pest', 'control',
+        'pool', 'pools', 'septic', 'solar', 'garage', 'dental', 'dentist', 'dentists', 'medical',
+        'law', 'legal', 'attorney', 'attorneys', 'lawyer', 'lawyers', 'surgery', 'surgeon']);
+      while (parts.length && _SLUG_SERVICE.has(parts[0].toLowerCase())) parts.shift();
+      while (parts.length && _SLUG_SERVICE.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+      // A connecting "in" survives at either end of "…-services-in-raymore".
+      while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[0])) parts.shift();
+      while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[parts.length - 1])) parts.pop();
+      // What is left must look like a place: US city names run one to three
+      // words. Anything longer is still a page title and no query is worth
+      // buying for it — silence costs a data point, a nonsense query costs the
+      // lead.
+      if (!parts.length || parts.length > 3) continue;
+      if (parts.some(w => _SLUG_SERVICE.has(String(w).toLowerCase()))) continue;
+      // And a page word is not a place. "/locations/about-our-company" survived
+      // the trade strip as "About Our", which would have bought a search for
+      // "door installation in About Our".
+      const _NOT_A_CITY = /^(?:about|our|us|we|contact|home|index|page|pages|blog|news|team|staff|privacy|terms|faq|faqs|gallery|portfolio|reviews|review|testimonials|careers|jobs|sitemap|search|more|all|other|area|areas|region|regions|map|maps)$/i;
+      if (parts.some(w => _NOT_A_CITY.test(String(w)))) continue;
+
       const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') + (_st ? `, ${_st}` : '');
       const key = city.toLowerCase();
       if (!city || city.length < 3 || seen.has(key) || key === homeCity) continue;
@@ -27770,6 +28031,50 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         // single largest avoidable line on the Anthropic bill.
         const _evidenceText = (msgContent.find(c => c && c.type === 'text') || {}).text || '';
         const _hasShot = msgContent.some(c => c && c.type === 'image');
+        // ══ WHAT THE BILL IS ACTUALLY MADE OF ══════════════════════════════
+        // BRAIN COST reports `fresh`, `cacheRead` and `cacheWrite` and nothing
+        // about their composition, so every conversation about the Anthropic
+        // bill has been an argument between guesses: the images, the evidence
+        // block, the interpolated instructions. Three sessions have proposed
+        // cuts to different ones of those, and not one of them was measured.
+        //
+        // The three parts are separable and none of them needs the API to tell
+        // us. The system block is BRAIN_STATIC and it is cached. The user text
+        // is one string we are holding. The images are billed on their PIXELS,
+        // not their bytes — the API resizes the long edge to 1568 before
+        // tokenising, so a 1280x7800 full-page render is not the 10M-pixel
+        // monster it looks like, and the estimate has to model that or it
+        // overstates by an order of magnitude and gets the images cut for
+        // nothing.
+        //
+        // Estimates, and they say so. ~4 chars per token is right for English
+        // prose to within a few percent; w*h/750 is Anthropic's own published
+        // image formula. Printed next to the real `fresh` on the same run, so
+        // the estimate can be checked against the meter rather than trusted.
+        try {
+          const _imgs = msgContent.filter(c => c && c.type === 'image');
+          const _fit = (w, h) => { const s = Math.min(1, 1568 / Math.max(w, h)); return [Math.round(w * s), Math.round(h * s)]; };
+          let _imgTok = 0;
+          for (const _im of _imgs) {
+            let _d = null;
+            try { _d = _pngDims(Buffer.from(String((_im.source && _im.source.data) || ''), 'base64')); } catch (e) { void e; }
+            if (_d && _d.w && _d.h) { const [w, h] = _fit(_d.w, _d.h); _imgTok += Math.round((w * h) / 750); }
+            else _imgTok += 1600;   // unreadable: assume a full-page render rather than under-report
+          }
+          const _txtTok = Math.round(_evidenceText.length / 4);
+          const _sysTok = Math.round(String(BRAIN_STATIC || '').length / 4);
+          const _p = ANTHROPIC_PRICES[BRAIN_MODEL] || ANTHROPIC_PRICES['claude-sonnet-4-6'];
+          const _d$ = (t, rate) => `$${(t * rate).toFixed(4)}`;
+          console.log(`\u{1F9FE} BRAIN INPUT [${company}]: system ${_sysTok.toLocaleString()} tok CACHED (${_d$(_sysTok, _p.cacheRead)} on a hit, ${_d$(_sysTok, _p.cacheWrite)} to write) `
+            + `| evidence text ${_txtTok.toLocaleString()} tok FRESH EVERY LEAD (${_d$(_txtTok, _p.in)}) `
+            + `| ${_imgs.length} image(s) ≈${_imgTok.toLocaleString()} tok FRESH EVERY LEAD (${_d$(_imgTok, _p.in)}). `
+            + `Everything after "system" is billed at full rate on every single lead — that is where a cut actually lands. Compare these against fresh= on the BRAIN COST line below.`);
+        } catch (e) {
+          // Loud on purpose. A silent catch here means the one line telling us
+          // where the bill comes from simply stops appearing, and its absence
+          // reads exactly like a run that did not reach the brain at all.
+          console.log(`\u26d4 BRAIN INPUT BREAKDOWN COULD NOT RUN [${company}] — ${(e && e.message) || e}. The cost split is unmeasured for this lead.`);
+        }
         const _auditKey = auditCacheKey(_evidenceText, _hasShot);
         const _cachedAudit = readAuditCache(_auditKey);
         if (_cachedAudit) {
@@ -35328,7 +35633,7 @@ app.listen(PORT, () => {
     const _driftSpine = 'Two of your reviews mention timelines slipping';
     const _reworded =
       'Kurt, two people who left you feedback describe the same slipped schedule.\n\n' +
-      'That lands in the middle of a five-figure decision, right when someone is trying to move forward.\n\n' +
+      'That is the week they are deciding whether to keep waiting or call somebody new.\n\n' +
       'Was that a one-off, or does it come up on your end?';
     const _rw = verifyBrainEmail(_reworded, _o({ spine: _driftSpine, figures: ['2'] }));
     if (!_rw.ok) _fails.push(`a fully reworded draft that keeps every measured figure is still refused: ${_rw.why}`);
@@ -36676,6 +36981,157 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 QUIZ ASK CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ ONE FABRICATION TABLE, AND EVERY GATE MUST ACTUALLY READ IT ════════
+  // The same failure has now happened three times: a fabrication family is
+  // caught, the rule is added to BACKEND_CLAIM_PATTERNS, and the text that
+  // reaches a human goes through a DIFFERENT function that never reads it.
+  // 2026-07-30 it was verifyGeneratedCopy running eight of twenty patterns.
+  // 2026-08-17 it was verifyBrainEmail — the brain writes the body now, that is
+  // its only gate, and the two owner-behaviour rules written the same afternoon
+  // for the exact sentence Green Hills shipped tested clean against a function
+  // that no longer sends anything.
+  //
+  // Reviewing for this does not work, because the fix looks correct in the diff
+  // and the test passes. So every row carries a live SAMPLE, and this check
+  // pushes all of them through BOTH gates. Three ways it fails, all of them the
+  // real failure and not a proxy for it:
+  //   · a row with no sample — a family nobody proved is live anywhere
+  //   · a sample its own regex does not match — a rule that cannot fire
+  //   · a sample either gate lets through — the drift, named, at boot
+  // And the base email with no claim in it must PASS, or every refusal above is
+  // just the length rule and this check proves nothing.
+  try {
+    const _fails = [];
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid ? mid + ' ' : ''}That is the kind of thing that repeats when nobody owns it, and it is the part a stranger can see from outside.\n\nDo you know what changed around then?`;
+    // "two other companies" and "by Friday" carry number words; the figure gate
+    // would refuse them for a reason that has nothing to do with the family, so
+    // the small counts every sample can reach are permitted here on purpose.
+    const _base = { spine: '8 of your 42 Google reviews name the same delay',
+      figures: ['8', '42', '2', '3', 'two', 'three', 'several'] };
+    const _clean = verifyBrainEmail(_mk(''), _base);
+    if (!_clean.ok) {
+      _fails.push(`the control email with no claim in it is refused (${_clean.why}) — every refusal below would be that, not the battery`);
+    }
+    let _n = 0;
+    for (const _row of BACKEND_CLAIM_PATTERNS) {
+      const [_re, _why, _sample] = _row;
+      const _label = String(_why).split(/[:—]/)[0].trim().slice(0, 46);
+      if (typeof _sample !== 'string' || !_sample.trim()) {
+        _fails.push(`"${_label}" carries no sample — nothing proves it is live on either gate`);
+        continue;
+      }
+      _n++;
+      if (!_re.test(_sample)) {
+        _fails.push(`"${_label}" does not match its own sample "${_sample.slice(0, 40)}" — the rule cannot fire`);
+        continue;
+      }
+      const _v = verifyBrainEmail(_mk(_sample), _base);
+      if (_v.ok) {
+        _fails.push(`BRAIN GATE lets "${_sample.slice(0, 44)}" through — that is the path the email actually ships on`);
+      } else {
+        // Refused for the RIGHT reason. Every rule in both batteries quotes the
+        // text it matched, so if the sample is nowhere in the refusal we were
+        // saved by the word count or the figure list and the family is untested.
+        const _quoted = String(_v.why).match(/"([^"]+)"/);
+        if (!_quoted || !_sample.toLowerCase().includes(_quoted[1].toLowerCase().slice(0, 12))) {
+          _fails.push(`BRAIN GATE refused "${_sample.slice(0, 34)}" for an unrelated reason (${String(_v.why).slice(0, 60)}) — the family itself is still untested`);
+        }
+      }
+      const _g = verifyGeneratedCopy({ variantA: { body: _mk(_sample) } });
+      if (!_g.flags.length) {
+        _fails.push(`COPY GATE lets "${_sample.slice(0, 44)}" through`);
+      }
+    }
+    // A battery that refuses our own asks is worse than no battery: it sends
+    // every real email into the fallback template and looks like a model
+    // failure. The asks are the only copy in this file we write ourselves.
+    for (const _entry of Object.values(CTA_TEXT || {})) {
+      for (const _t of [_entry && _entry.text, ...((_entry && _entry.alts) || [])].filter(Boolean)) {
+        for (const [_re, _why] of BACKEND_CLAIM_PATTERNS) {
+          if (_re.test(_t)) _fails.push(`our own ask "${String(_t).slice(0, 40)}" trips "${String(_why).split(/[:—]/)[0].trim()}"`);
+        }
+      }
+    }
+    if (_n < 20) _fails.push(`only ${_n} of ${BACKEND_CLAIM_PATTERNS.length} rows are testable — the table is not being read`);
+    if (_fails.length) {
+      console.log(`⛔ SHARED CLAIM BATTERY CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ SHARED CLAIM BATTERY CHECK: all ${_n} fabrication families carry a live sample, every sample matches its own rule, and both gates refuse all ${_n} — the brain writer that actually sends the email included, which is the one that let the Green Hills "you're searching your own name" and "near me" sentences through. The control email with no claim passes, and none of the ${BACKEND_CLAIM_PATTERNS.length} rules fire on any ask we write ourselves.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SHARED CLAIM BATTERY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BRIEF'S EXAMPLES CAME BACK AS THE EMAIL, TO TWO TRADES ═════════
+  // 2026-08-17. A remodeler and a plastic surgeon received the same sentence on
+  // the same afternoon — "in the middle of a five-figure decision, when someone's
+  // trying to move forward" — because that sentence is the brief's model answer
+  // for the middle beat. Vin read both and said they were the same emails we have
+  // always sent. He was right, and the cause was not the model: we handed it a
+  // finished sentence and it used it.
+  //
+  // The ban list is DERIVED from MIKE_VOICE_FOR_EMAIL, so rewriting the brief
+  // rewrites the guard. This check holds that wiring in place from three sides —
+  // the derivation, the two bodies that actually shipped, and the control that
+  // proves a real email still passes. The last one is the one that matters: a
+  // guard built from the prompt could quietly grow until it refuses everything,
+  // and every draft would fall back to the assembled template with no error
+  // anywhere, which is exactly how this pipeline fails silently.
+  try {
+    const _fails = [];
+    if (BRIEF_EXEMPLARS.length < 3) {
+      _fails.push(`only ${BRIEF_EXEMPLARS.length} exemplar(s) were derived from the brief — the extractor is not reading it, so nothing is banned`);
+    }
+    // Normalised, because the extractor collapses whitespace and the brief wraps
+    // its examples across lines — comparing against the raw text asserts nothing
+    // except that the brief is hard-wrapped.
+    const _brief = String(MIKE_VOICE_FOR_EMAIL || '').replace(/\s+/g, ' ');
+    for (const _ex of BRIEF_EXEMPLARS) {
+      if (!_brief.includes(_ex.text)) _fails.push(`"${_ex.text.slice(0, 40)}" is banned but appears nowhere in the brief — the list has drifted from the prompt it is supposed to mirror`);
+    }
+    // The two bodies that went out. Not a paraphrase of them.
+    const _shipped = [
+      ['Mac Brian', "Brian, four of your reviews describe the same wait between the deposit and the first day on site.\n\nThat's right in the middle of a five-figure remodel decision, when someone's trying to move forward.\n\nDoes that come up much on your end?"],
+      ['Green Hills', "Stephen, a practice with far fewer reviews than yours sits above you for the search your patients actually run.\n\nThat's right in the middle of a five-figure decision, when someone's trying to move forward.\n\nHave you noticed that gap?"],
+    ];
+    const _o = { spine: 'four of your reviews describe the same wait', figures: ['4', 'four'], money: '', earned: '', count: '', trade: 'remodeler' };
+    for (const [_who, _body] of _shipped) {
+      if (!exemplarLeak(_body)) _fails.push(`the ${_who} body that actually shipped is not detected as a brief leak`);
+      const _v = verifyBrainEmail(_body, _o);
+      if (_v.ok) _fails.push(`the ${_who} body that actually shipped still passes the gate it shipped through`);
+    }
+    // Every derived exemplar, in an otherwise valid email.
+    const _mk = (mid) => `Michael, 8 of your 42 Google reviews name the same delay.\n\n${mid}\n\nDo you know what changed around then?`;
+    for (const _ex of BRIEF_EXEMPLARS) {
+      if (!exemplarLeak(_mk(_ex.text))) _fails.push(`"${_ex.text.slice(0, 40)}" is on the list and is not caught when it appears in a body`);
+    }
+    // The control. A real finding, in this system's own voice, must survive.
+    const _real = verifyBrainEmail(
+      'Michael, 8 of your 42 Google reviews name the same delay between the deposit and the first crew on site.\n\n' +
+      'That is the stretch where a homeowner has already committed money and has nothing to look at but a calendar.\n\n' +
+      'Do you know what changed around then?',
+      { spine: '8 of your 42 Google reviews name the same delay', figures: ['8', '42'], money: '', earned: '', count: '', trade: 'remodeler' });
+    if (!_real.ok) _fails.push(`a real lead-specific email is refused (${_real.why}) — the guard has grown past the brief and every draft will fall back to the template`);
+    // Our own asks are written here, not by the model. If one of them reads as a
+    // leak, every email dies at the last line.
+    let _asks = 0;
+    for (const _entry of Object.values(CTA_TEXT || {})) {
+      for (const _t of [_entry && _entry.text, ...((_entry && _entry.alts) || [])].filter(Boolean)) {
+        _asks++;
+        const _hit = exemplarLeak(_mk('That is the stretch where a homeowner has already committed money.').replace('Do you know what changed around then?', _t));
+        if (_hit) _fails.push(`our own ask "${String(_t).slice(0, 38)}" reads as a brief leak ("${_hit.slice(0, 34)}")`);
+      }
+    }
+    if (_asks < 8) _fails.push(`only ${_asks} asks were tested — the table is not being read`);
+    if (_fails.length) {
+      console.log(`⛔ BRIEF LEAK CHECK: ${_fails.slice(0, 5).join(' | ')}${_fails.length > 5 ? ` | +${_fails.length - 5} more` : ''}.`);
+    } else {
+      console.log(`✓ BRIEF LEAK CHECK: ${BRIEF_EXEMPLARS.length} example sentence(s) are derived from the brief itself and refused as copy, so rewriting the prompt rewrites the guard and the two cannot drift. Both bodies that shipped on 2026-08-17 carrying "in the middle of a five-figure decision" are caught by name. A lead-specific email and all ${_asks} of our own asks still pass — the examples are a shape to follow, not a phrase bank to draw from.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BRIEF LEAK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
