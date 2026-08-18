@@ -133,8 +133,11 @@ simulator then reads it as the owner and returns reply / ignore / delete.
 - `INTERNAL_ONLY_RUNGS` — the seven review-METRIC rungs. Measured, scored,
   ranked, in the audit and on the call sheet; never in an email. Reviews are how
   we read the business, not what we say to the owner
+- `plainEnglishFaults` / `readingGrade` — the readability gate over the ladder's
+  own sentences. The five sentences retired for being unreadable are kept in
+  `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 131 boot checks at the bottom, each documenting the live failure that caused it
+- 132 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -148,6 +151,18 @@ simulator then reads it as the owner and returns reply / ignore / delete.
 ---
 
 # PART 3 — THE RULES THAT ARE NOT NEGOTIABLE
+
+**A sentence he cannot read is not a true sentence.** Eleven gates ask whether a
+claim is TRUE and, until 2026-08-18, none asked whether the owner could read it.
+The result was a live email whose every phrase had been chosen to survive a
+fabrication gate — "set up to track Google Ads clicks", "the first page of the
+map results", "a paid position stops the day the budget does" — and which Vin
+read as *"jargon, I don't even understand it fully."* Precision nobody can
+collect on is not precision: he cannot check a fact he cannot parse.
+`READABLE FINDING CHECK` measures reading grade, abstract subjects, dangling
+pronouns and agency phrasing on every sentence the ladder can send, scoring OUR
+words only — his trade name and the search in quotes are his own vocabulary.
+Ceiling is grade 12; the honest build now tops out at 10.2.
 
 **Nothing false may reach a prospect.** Every number in an email traces to a
 measurement in `permittedFigures`. Vin's governing principle, in his words:
@@ -462,7 +477,7 @@ node scopecheck.js server.js            # a name used outside the block it was d
 node fetchtest.js                       # the one helper all 60 outbound calls use
 node fuzzcore.js 20000                  # 11 gates, in-process
 node fuzz.js 500                        # composes emails over HTTP
-PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 131 boot checks
+PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 132 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -536,7 +551,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 131 boot checks and the comments above
+and caused none of this week's failures. The 132 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
@@ -546,6 +561,15 @@ gap in the same layer. The ladder is not the constraint.
 **Do not tune the email prompt further** until real replies exist to tune against.
 It has been rebuilt four times in two days on the evidence of a simulator that
 contradicts itself.
+
+**Do not buy precision with words he cannot read.** Every unreadable phrase in
+this system was written to satisfy a truth gate, and each one was a correct local
+decision. Three of them in one sentence produced an email its own author could
+not explain. When the exact wording is unsayable in plain English, the honest
+move is a plain sentence with the uncertainty stated out loud — "you're paying
+for clicks the three names above you get for nothing, **if those ads are live**"
+— not a vaguer sentence that hides it. The conditional is also a reply: it asks
+him something only he knows.
 
 ## index.html IS in this repo now (2026-08-18), and still deploys by hand
 

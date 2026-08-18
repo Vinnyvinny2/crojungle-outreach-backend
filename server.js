@@ -9866,7 +9866,16 @@ const HARM_LADDER = [
     // that is both true and sellable: the thing deciding that search is not the
     // thing he already has more of. That is the sentence that makes the finding
     // a conversation about what IS deciding it, which is what we sell.
-    reframe: 'a map position is decided by a dozen things at once, and the businesses winning it are rarely winning it on the strength of the work',
+    // Plain-language pass. The first attempt at this correction read "a map
+    // position is decided by a dozen things at once, and the businesses winning
+    // it are rarely winning it on the strength of the work" — an abstract
+    // subject, a count nobody can check, and two clauses before the point
+    // arrives. It says one simple thing and it should say it simply. This
+    // version also answers the question the finding leaves hanging, which is the
+    // whole reason it was rewritten: an owner who reads "somebody with fewer
+    // reviews is above you" and gets no explanation supplies the one every SEO
+    // email has trained him to supply, and that one is wrong.
+    reframe: 'Google cannot tell who does the better job, so that is never what puts one name above another',
     // ══ THIS IS TRUE AT EVERY POSITION, SO IT MUST NOT REQUIRE ONE ══════════
     // The old test demanded rank > 5. Two consequences, both live:
     //
@@ -9915,17 +9924,25 @@ const HARM_LADDER = [
     say: (m) => {
       const names = Array.isArray(m.weakerNames) ? m.weakerNames : [];
       const ours = Number(m.ourReviews);
+      // "ranks above them ... with 60 reviews against their 62" made the owner do
+      // the comparison himself and left the point implicit. "Comes up above" is
+      // how a person says it out loud, and naming the gap — fewer than they have
+      // — puts the whole finding in the first ten words instead of the last four.
       if (names.length && Number.isFinite(ours)) {
         const top = names[0];
         const more = names.length - 1;
-        return `${top.name} ranks above them for "${m.rankQuery}" with ${top.reviews} review${top.reviews === 1 ? '' : 's'} against their ${ours}`
+        return `${top.name} comes up above them for "${m.rankQuery}" with fewer reviews than they have — ${top.reviews} against ${ours}`
           + (more > 0 ? `, and ${more} other${more === 1 ? '' : 's'} above them also have fewer` : '');
       }
       return Number(m.weakerAbove) === 1
-        ? `A business with fewer reviews than theirs is ranking above them in the Google map results for "${m.rankQuery}"`
-        : `Businesses with fewer reviews than theirs are ranking above them in the Google map results for "${m.rankQuery}"`;
+        ? `A business with fewer reviews than theirs comes up above them when somebody searches "${m.rankQuery}"`
+        : `Businesses with fewer reviews than theirs come up above them when somebody searches "${m.rankQuery}"`;
     },
-    costs: 'the reputation is real and it is not reaching the people searching right now' },
+    // "the reputation is real and it is not reaching the people searching right
+    // now" opens on an abstract noun, and the skeleton that wraps a cost line in
+    // "right now" made it end on the words it started against. This names the
+    // person instead, which is what a cost line is for.
+    costs: 'somebody looking for exactly this is picking from the names above them' },
 
   { harm: 48, specific: 85, novel: 40, delegable: 75, weFix: 95, band: 'INVISIBLE', id: 'thin_profile',
     blind: 'the dashboard shows him fields and a completeness bar, never what a searcher actually sees',
@@ -10142,7 +10159,16 @@ const HARM_LADDER = [
     // The precision is unchanged. It still claims only that the tracking is
     // installed, never that a campaign is running today — which is all an AW-
     // tag in their page source actually proves.
-    say: (m) => `Their site is set up to track Google Ads clicks, and ${keepSpan(String(m.paidLeakGap))}`,
+    // ══ AND "SET UP TO TRACK" WAS STILL JARGON ══════════════════════════
+    // The comment above records this sentence being rewritten once already,
+    // from "wired to a Google Ads CONVERSION TAG" to this, because the first
+    // version was agency vocabulary. It went from jargon to quieter jargon:
+    // "set up to track clicks" describes a mechanism, and an owner does not
+    // think about his site in terms of mechanisms. READABLE FINDING CHECK
+    // caught this rung on its first run, on the day its sibling was rewritten
+    // by hand — which is the whole argument for having the gate rather than
+    // the intention.
+    say: (m) => `Their site has Google Ads tracking on it, and ${keepSpan(String(m.paidLeakGap))}`,
     costs: 'every click they pay for arrives somewhere it cannot be acted on' },
 
   // ── PAYING FOR THE SEARCH THEY ARE NOT WINNING ───────────────────────
@@ -10187,7 +10213,38 @@ const HARM_LADDER = [
   // to the person currently running it.
   { harm: 94, specific: 93, novel: 74, delegable: 20, weFix: 95, band: 'SPENDING', id: 'paying_for_a_search_they_lose',
     blind: 'the ads dashboard reports on the ads. Nothing in it shows him where he stands in the results underneath them, so the two numbers have never been on one screen',
-    reframe: 'a paid position stops the day the budget does, and the one underneath it does not',
+    // ══ THE FIRST VERSION OF THIS WAS TRUE AND UNREADABLE ═════════════════
+    // Vin, on the first email this rung composed: "this email copy is jargon, I
+    // don't even understand it fully. We need to be giving the so-what and these
+    // emails need to be easily readable for all business owners, smart or dumb."
+    //
+    // He is right and it is worth being precise about HOW it went wrong, because
+    // the cause was not carelessness. Every phrase in the old version was chosen
+    // to survive a fabrication gate:
+    //
+    //   "set up to track Google Ads clicks"  bounded so it could not be read as
+    //                                        "a campaign is running today"
+    //   "the first page of the map results"  bounded so it could not be read as
+    //                                        the organic list
+    //   "not near the top"                   a band, because the digit moves
+    //   "a paid position stops the day the
+    //    budget does, and the one underneath
+    //    it does not"                        an abstract general truth, so it
+    //                                        could not be a claim about him
+    //
+    // Four correct decisions producing one sentence nobody can read. And the
+    // middle one is not even accurate in his terms: the map shows THREE names,
+    // so "on the first page but not near the top" describes something he will
+    // never see. Precision bought at the cost of comprehension is not precision;
+    // it is a sentence that cannot be checked because it cannot be understood.
+    //
+    // Everything below says the same measured things in the words an owner uses.
+    // "the top three" is what the map actually shows him and it is stable at
+    // every position outside it, so it is both plainer AND more exact than the
+    // band it replaces. The conditional in the cost line is where the real
+    // uncertainty lives — the tag proves the account, not today's campaign — and
+    // stating it plainly invites the reply rather than hiding from it.
+    reframe: 'an ad only works while somebody keeps paying for it',
     // rankChecked is the "did we look?" gate. rankFound false is the strongest
     // case (not in the pack at all) and must not be excluded by requiring a
     // number; rank is only consulted when it exists.
@@ -10196,15 +10253,18 @@ const HARM_LADDER = [
           || (typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank > 3)),
     say: (m) => {
       const q = String(m.rankQuery || '').trim();
-      const forQ = q ? ` for "${keepSpan(q)}"` : '';
+      const when = q ? `when somebody searches "${keepSpan(q)}"` : 'when somebody searches for what they do';
+      // Outside the top three is one band, not two. Google shows three names on
+      // the map and then a "more places" link, so "not in the top three" is the
+      // thing he can look at, and it is equally true at position 4 and at 19 —
+      // which is exactly why it survives both re-measurement and the
+      // personalisation of his own search.
       const band = (m.rankFound === false)
-        ? `they do not come up in the map results${forQ} at all`
-        : (Number(m.rank) <= 10
-            ? `they are on the first page of the map results${forQ} but not near the top`
-            : `they are near the bottom of the map results${forQ}`);
-      return `Their site is set up to track Google Ads clicks, and ${band}`;
+        ? `${when} they do not come up at all`
+        : `${when} they are not in the top three`;
+      return `Their site has Google Ads tracking on it, and ${band}`;
     },
-    costs: 'the position they are paying to rent is the one three businesses are holding for nothing' },
+    costs: 'they are paying for clicks that the three names above them get for nothing, if those ads are live' },
 
   // ── ONE CHANNEL PAID FOR, THE OTHER NOT WIRED AT ALL ─────────────────
   // Vin: "are their ads mainly social? Waste of money if they want true ROI."
@@ -10230,11 +10290,16 @@ const HARM_LADDER = [
   // about how money is allocated rather than about work he is losing today.
   { harm: 70, specific: 90, novel: 76, delegable: 30, weFix: 95, band: 'SPENDING', id: 'social_spend_no_search',
     blind: 'the two channels are two different logins and nobody has ever opened them side by side to ask which one the customer was actually using',
-    reframe: 'one channel interrupts somebody who was not looking, and the other answers somebody already typing the thing they sell',
+    // Plain-language pass, 2026-08-18. This said "one channel interrupts somebody
+    // who was not looking, and the other answers somebody already typing the
+    // thing they sell" — two abstract "channels" and a "the other" with no noun
+    // attached to it. The point is a good one and it survives being said in the
+    // words the owner already uses for the two products by name.
+    reframe: 'Facebook ads reach people who were not looking, and Google answers the ones already typing what a business sells',
     test: (m) => m.adsReadable === true && m.tagManager === false
       && m.metaPixel === true && m.googleAdsTag === false,
-    say: () => 'The pages we read carry Facebook and Instagram ad tracking and no Google Ads tracking at all',
-    costs: 'the people already searching for this are answered by whoever paid to be there' },
+    say: () => 'Their site has Facebook and Instagram ad tracking on it, and nothing for Google',
+    costs: 'somebody who is already searching for this is the easiest customer there is to win' },
 
 
   // ══ WHAT THEIR OWN CUSTOMERS WROTE DOWN, MORE THAN ONCE ═══════════════════
@@ -10276,7 +10341,7 @@ const HARM_LADDER = [
   // in front of Mike, which is where they were always worth the most.
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
     blind: 'the people it happened to wrote it down in public and never said it to his face, so nothing inside the business ever shows it to him',
-    reframe: 'what customers repeat about a business in public becomes what it is known for, long before anybody inside hears it said twice',
+    reframe: 'a business gets known for whatever its customers keep saying about it',
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
     // The mined complaint is the reviewers' words, not ours. keepSpan registers
     // it so the second-person rewrite leaves it alone - see toSecondPerson. It
@@ -10297,15 +10362,21 @@ const HARM_LADDER = [
       const theme = keepSpan(String(m.reviewPainTop).toLowerCase());
       // The fault leads and the corroboration follows it. "Publicly" is true of
       // every source this could have come from and gives away none of them.
+      // "publicly" and "described" are both a syllable heavier than they need
+      // to be. "In public" and "said" carry the identical meaning and drop the
+      // sentence two reading grades.
       return (Number.isFinite(n) && n >= 3)
-        ? `${theme} — ${n} different people have described the same thing publicly, so it is a pattern rather than one bad week`
-        : `${theme} — and more than one person has described it publicly, so it is not one bad week`;
+        ? `${theme} — ${n} different people have said the same thing in public, so it is a pattern and not one bad week`
+        : `${theme} — and more than one person has said it in public, so it is not one bad week`;
     },
     // "a stranger comparing three companies" was in the reframe too, so both
      // sentences opened on the same five words. This states the exposure instead:
      // present tense, public, and it stops at the wall rather than narrating what
      // the reader then does.
-    costs: 'it is on the record, in public, in front of everybody still deciding' },
+    // toSecondPerson turned "it is on the record" into "it is on your record",
+    // which is not a thing anybody says. Naming the person who reads it is both
+    // plainer and a sharper cost.
+    costs: 'anyone thinking about calling reads that first' },
 
   // ══ NO PRICE ANYWHERE ON THE SITE ════════════════════════════════════════
   // pricingMeasured is the "did we look?" gate: a null prices array means the
@@ -10395,7 +10466,13 @@ const HARM_LADDER = [
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
       const who = t ? `a stranger choosing ${anFor(t)} ${t}` : 'a hesitant stranger';
-      return `Nothing on the site tells ${who} why to pick them over the next name — no guarantee, no named offer, no promise anyone else could not also make`;
+      // ══ 33 WORDS IN ONE BREATH ═══════════════════════════════════════
+      // Every word here was already plain and the sentence was still the
+      // hardest to read in the whole ladder, because it lists three absences
+      // after making its point. The list adds nothing he did not get from the
+      // first half — he knows what is not on his own site — and it costs him
+      // the fifteen words where his attention actually is.
+      return `Nothing on the site tells ${who} why to pick them instead of the next name on the list`;
     },
     // say() already ends "why to pick them over the next name". Repeating it in
      // the cost line put the same five words twice in one short email.
@@ -11073,12 +11150,21 @@ const SUBJECTS_FOR = {
   // REGISTER CHECK fails the boot on vocabulary that does not match the finding,
   // and a subject about reviews on a spend finding is exactly what it exists to
   // stop.
-  paying_for_a_search_they_lose: ['paying for a spot you already lost', 'you are renting that position',
-                                  'buying clicks under three other names', 'the ads are covering for something',
-                                  'what happens when the budget stops', 'you are paying to be found'],
-  social_spend_no_search: ['nothing wired for the search side', 'all feed, no search',
-                           'the people already looking for you', 'one channel is not set up',
-                           'who picked the channel', 'you are covering half of it'],
+  // "you are renting that position" was the live subject and Vin's first words
+  // about it were that he did not fully understand the email. A subject line is
+  // six words with no context in front of them, so it is the one place where an
+  // abstract noun costs the most: "that position" means nothing to a man who has
+  // not read the body yet. Every option below is something he could say to his
+  // wife over dinner.
+  paying_for_a_search_they_lose: ['you are not in the top three', 'who runs your google ads',
+                                  'three names are above you', 'paying for clicks you could get free',
+                                  'your ads and your ranking', 'not in the top three on google'],
+  // Same pass. "nothing wired for the search side", "all feed, no search" and
+  // "who picked the channel" are all agency shorthand — the reader has to know
+  // what a channel is before the subject means anything.
+  social_spend_no_search: ['facebook yes, google no', 'the people already searching for you',
+                           'nothing set up for google', 'half the customers are covered',
+                           'facebook is only half of it', 'who set up your ads'],
   broken_page:          ['your booking page is broken', 'your booking page is down'],
   site_empty:           ['your site is down', 'your site loads nothing'],
   listing_closed:       ['google says you are closed', 'your listing says closed'],
@@ -14744,8 +14830,32 @@ const composeEmail = (spine, opts = {}) => {
   // skeleton already declares which elements it cannot render without.
   const _vary = Math.abs(String(opts.company || opts.founderName || '')
     .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0));
+  // ══ A COIN FLIP DECIDED WHETHER HE READ THE MONEY OR A MAXIM ══════════
+  // Vin, on the first email this produced: "we need to be giving the so what."
+  // He was reading a lead where the so-what had been dropped by the line below.
+  //
+  // The pair being chosen between is not two of a kind. The reframe is a general
+  // truth about how people behave — true of every business in the trade, and the
+  // same words on every lead that fires the rung. The cost line is what the
+  // finding is costing THIS owner. On most rungs either will carry the "so
+  // what?" and alternating them is the right call.
+  //
+  // On a SPENDING rung it is not. The whole finding is money he has already
+  // decided to spend, so "you are paying for clicks the three names above you
+  // get for nothing" IS the point, and "an ad only works while somebody keeps
+  // paying for it" is the wrapper around it. Toback Law hashed even, the cost
+  // line went, and the email closed on the maxim.
+  //
+  // The word budget is unchanged — still exactly one of the two. What is lost is
+  // cross-lead variation on two of forty-one rungs, and that is bought back by
+  // the skeleton choice and a six-option subject pool.
+  const _leadBand = (() => {
+    try { return String((HARM_LADDER.find(x => x.id === spine.claimId) || {}).band || ''); }
+    catch (e) { void e; return ''; }
+  })();
   if (reframe && costs) {
-    if (_vary % 2 === 0) costs = ''; else reframe = '';
+    if (_leadBand === 'SPENDING') reframe = '';
+    else if (_vary % 2 === 0) costs = ''; else reframe = '';
   }
   if (insight && costs) costs = '';
   // ══ TWO FINDINGS AND A COST LINE IS ONE ELEMENT TOO MANY ════════════════
@@ -14767,6 +14877,35 @@ const composeEmail = (spine, opts = {}) => {
   if (second && costs) {
     if ((Number(opts.variantIndex) || 0) % 2 === 0) costs = '';
     else second = '';
+  }
+  // ══ TWO RULES, EACH CORRECT, TOGETHER LEAVING NO "SO WHAT" AT ALL ══════
+  // Both blocks above drop one element to stay inside the word budget, and
+  // neither knows about the other. On a SPENDING lead with a second finding they
+  // both fired: the block above this one dropped the cost line for variant A,
+  // the block above that dropped the reframe because a spending finding should
+  // lead with money — and variant A went out as fact, second fact, count, ask.
+  // No so-what of any kind, which is the exact thing Vin had just said was
+  // missing, arriving by a route neither rule could see.
+  //
+  // The budget is not the problem and is not relaxed. The PRIORITY was wrong: a
+  // second measured finding is worth less than telling him what the first one is
+  // costing him. So when the two rules have between them removed every "so
+  // what", the cost line comes back and the second finding goes instead. Still
+  // exactly two elements after the fact, and every email carries a reason the
+  // fact matters.
+  // Three conditions, and the fuzzer found both of the ones I had missed on the
+  // first attempt, over 2,139 composed emails:
+  //   !insight   the insight line IS a so-what — written across every signal
+  //              rather than about one finding — and `insight && costs` above
+  //              blanks the cost line precisely because it repeats it. Restoring
+  //              it there put the same point in the email twice: 5 leads flagged
+  //              "same long phrase repeated in one email".
+  //   no endSentence  the skeletons terminate `costs` themselves. Terminating it
+  //              here too produced "calls whoever answers first.." on 41 leads.
+  //              The normal path assigns it raw, so this one must too.
+  if (!reframe && !costs && !insight && second) {
+    const _restored = toSecondPerson(spine.costs || '');
+    if (_restored) { costs = _restored; second = ''; }
   }
   // == CHOSEN AFTER costs IS FINAL, NOT BEFORE ==============================
   // This block used to sit ~50 lines earlier, so it tested `costs` while it was
@@ -15867,6 +16006,108 @@ const tradeJobValue = (tradeWord) => {
 // about record-keeping. "The ones who leave never come back" is a claim about
 // people we never watched, and no amount of true framing around it makes it
 // sayable. Every line in the ladder is asserted against this at boot.
+// ══ EVERY SENTENCE WAS TRUE AND THE OWNER COULD NOT READ IT ═════════════════
+// Vin, 2026-08-18, on the first email the new spend rung composed:
+//
+//   "this email copy is jargon i dont even understand it fully ... we need to be
+//    giving the so what and these emails need to be easily readbale for all
+//    business owners smart or dumb"
+//
+// The email he was reading was this:
+//
+//   David, your site is set up to track Google Ads clicks, and you're on the
+//   first page of the map results for "estate planning attorney in tampa" but
+//   not near the top.
+//   ...
+//   A paid position stops the day the budget does, and the one underneath it
+//   does not.
+//
+// Every phrase in it was chosen to survive a fabrication gate, and the result is
+// unreadable. That is the failure mode this file did not have a name for: there
+// are eleven gates asking "is this TRUE" and none asking "can he READ it". A
+// sentence he cannot understand cannot be checked by him either, so the
+// precision those phrasings bought is precision nobody can collect on.
+//
+// ══ WHAT IS MEASURED, AND WHAT IS DELIBERATELY NOT ═════════════════════
+// Only OUR words are scored. The trade name, the search query in quotes, a
+// competitor's company name and the mined complaint are the owner's own
+// vocabulary — he reads "estate planning attorney" instantly, and it is seven
+// syllables. The first version of this scan did not strip them and its worst
+// offenders were the sentences that named his business most specifically, which
+// is exactly backwards. Naming the trade is the thing this ladder was rewritten
+// to do more of.
+//
+// Three faults, each one a real defect in the live email above:
+//   GRADE      a reading-grade ceiling. Measured across every email-facing rung
+//              sentence: p50 6.7, p90 9.7, max 11. 12 is one grade of headroom
+//              above the honest build, and the two sentences retired for this
+//              scored 12.4 and 14.1.
+//   ABSTRACT   the sentence opens on a nominalisation — "a paid position", "the
+//              spend", "his visibility" — so it is about a concept rather than
+//              about a person or a thing he can point at.
+//   DANGLING   "the one underneath it", "the other" — a pronoun standing in for
+//              a noun the reader has to go back and reconstruct.
+//
+// Phrase blacklist is separate from EMAIL_JARGON_TERMS on purpose: these contain
+// no single jargon WORD, which is why the existing term gate passed all of them.
+// "Google map results" is deliberately NOT on it — an owner has seen the map with
+// three names on it and reads that fine; what he cannot read is "the first page
+// of the map results", which is also not a thing Google shows him.
+const OWNER_VOCAB = (t, trade, mined) => String(t || '')
+  .replace(/"[^"]*"/g, ' X ')
+  .replace(/\u0001[^\u0001]*\u0001/g, ' X ')        // keepSpan-protected spans, if present
+  .split(String(mined || '\u0000')).join(' X ')
+  .replace(new RegExp(String(trade || 'zzzzzzzz').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), ' X ')
+  .replace(/\b(?:[A-Z][a-z]+(?:\s*&\s*|\s+)){1,5}[A-Z][a-z]+\b/g, ' X ')
+  .replace(/\s{2,}/g, ' ').trim();
+
+const SYLLABLES = (w) => {
+  let s = String(w).toLowerCase().replace(/[^a-z]/g, '');
+  if (!s) return 0;
+  if (s.length <= 3) return 1;
+  s = s.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '').replace(/^y/, '');
+  return (s.match(/[aeiouy]{1,2}/g) || ['x']).length;
+};
+
+// Flesch-Kincaid grade level. Standard formula, so the number means the same
+// thing here as it does everywhere else and nobody has to trust a bespoke score.
+const readingGrade = (t) => {
+  const sentences = String(t || '').split(/[.;!?]+/).map(x => x.trim()).filter(Boolean);
+  const words = String(t || '').match(/[A-Za-z'\u2019-]+/g) || [];
+  if (!words.length || !sentences.length) return 0;
+  const sy = words.reduce((a, w) => a + SYLLABLES(w), 0);
+  return Math.round((0.39 * (words.length / sentences.length) + 11.8 * (sy / words.length) - 15.59) * 10) / 10;
+};
+
+const PLAIN_GRADE_CEILING = 12;
+// Unambiguous nominalisations only. "reach", "record", "traffic", "reputation"
+// and "budget" were all in the first version and all produced false positives —
+// "before they ever reach the site" is a verb, and "most local traffic is mobile"
+// is how anybody would say it. A gate that cries wolf is a gate the next person
+// switches off.
+const PLAIN_ABSTRACT = /\b(position|positions|presence|visibility|spend|conversion|conversions|exposure|footprint|funnel|allocation|placement|awareness|acquisition|pipeline|the channel|one channel|each channel)\b/i;
+const PLAIN_DANGLING = /\b(?:the|that|this) (?:one|other|former|latter)\b(?!\s+[a-z]{3,})/i;
+const PLAIN_PHRASES = /\b(paid position|set up to track|map pack|local pack|organic results|click[- ]through|impression share|conversion rate|ad spend|channel mix|first page of the map)\b/i;
+
+// Returns the faults, so a caller can name them rather than just fail.
+const plainEnglishFaults = (sentence, { trade = '', mined = '' } = {}) => {
+  const ours = OWNER_VOCAB(sentence, trade, mined);
+  if (!ours) return [];
+  const out = [];
+  const g = readingGrade(ours);
+  if (g > PLAIN_GRADE_CEILING) out.push(`reads at grade ${g} — past ${PLAIN_GRADE_CEILING}, which is where an owner stops and re-reads`);
+  const _p = String(sentence || '').match(PLAIN_PHRASES);
+  if (_p) out.push(`"${_p[0]}" is how an agency says it, not how he says it`);
+  // Opening clause only: an abstract noun later in a sentence usually has a
+  // concrete subject already carrying it.
+  const _open = ours.split(/[,\u2014-]/)[0] || '';
+  const _a = _open.match(PLAIN_ABSTRACT);
+  if (_a) out.push(`opens on "${_a[0]}" — the sentence is about a concept rather than about him or his customer`);
+  const _d = String(sentence || '').match(PLAIN_DANGLING);
+  if (_d) out.push(`"${_d[0]}" makes the reader go back and work out what it stands for`);
+  return out;
+};
+
 const BLIND_OUTCOME = /\b(?:los(?:e|es|ing|t)|miss(?:ed|es|ing)?|elsewhere|never (?:hear|hears|call|calls|return|returns|come|comes)|chose|choose|chooses|pick|picks|picked|book|books|booked|hire|hires|hired|walk(?:s|ed)? away|give(?:s)? up|go(?:es)? (?:to|with)|instead)\b/i;
 const BLIND_VISIBILITY = /\b(?:record|records|recorded|notice|noticed|see|sees|seen|show|shows|shown|showing|look|looks|read|reads|report|reports|signal|trace|count|counts|counted|tabulat\w*|announce|announces|register|registers|registering|visible|invisible|dashboard|nobody|nothing)\b/i;
 const blindLineSafe = (raw) => {
@@ -37517,6 +37758,129 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ REVIEWS ARE INTERNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ ELEVEN GATES ASK IF IT IS TRUE. NONE ASKED IF HE CAN READ IT. ═══════
+  // Named READABLE FINDING CHECK and not PLAIN ENGLISH anything: there is
+  // already a PLAIN ENGLISH CHECK a few hundred lines up and it does a
+  // different job — it bans a list of agency TERMS. This one measures whether
+  // a sentence with no banned term in it can still be read, which is how
+  // "a paid position stops the day the budget does" passed that gate.
+  // See plainEnglishFaults for the email that caused this and Vin's words about
+  // it. The short version: every phrase in that email was chosen to survive a
+  // fabrication gate, and the owner could not understand the result.
+  //
+  // This is the gate for the other half. It runs on the ladder's OWN sentences,
+  // which is where LADDER JARGON CHECK already established the right side of the
+  // wall to stand on — the model's prose has a plain-English gate and the
+  // code-assembled findings had none, so the one sentence every email is built
+  // around had never been read by anything.
+  //
+  // Coverage here is genuinely complete rather than sampled: the rung sentences
+  // are static, so checking all of them at boot checks every sentence any lead
+  // can ever be sent.
+  try {
+    const _fails = [];
+    // A lead with everything firing, so every rung produces its real sentence
+    // rather than a placeholder.
+    const _m = {
+      tradeWord: 'estate planning attorney', rankChecked: true, rankFound: true, rank: 7, scanned: 20,
+      rankQuery: 'estate planning attorney in tampa', weakerAbove: 1, ourReviews: 62,
+      weakerNames: [{ name: 'Tampa Estate Planning & Probate Attorneys', reviews: 60 }],
+      reviewCount: 62, rating: 3.6, reviewsRead: 62, ownerReplies: 0, aboveReviewsN: 3, aboveReviewsAvg: 600,
+      reviewPainCount: 2, reviewPainTop: 'poor communication and delayed responses', reviewPainMentions: 4,
+      reviewRecency: 400, tenureYears: 20, reviewsPerYear: 2, photoCount: 2,
+      reviewVelocityChecked: true, reviewsRecent90: 1, reviewsPrior90: 9, reviewVelocitySlowing: true,
+      adsReadable: true, googleAdsTag: true, metaPixel: true, tagManager: false,
+      bookingMeasured: true, booking: 'form', pricingMeasured: true, pricesPublished: 0,
+      servicePagesChecked: 3, servicePagesInvisible: 2, serviceInvisibleNames: ['probate', 'trust administration'],
+      recurringChecked: true, hasRecurringOffer: false, datedSite: true,
+      adsTagConfirmed: true, paidLeakGap: 'the only way to act on it is a form and a wait for someone to reply',
+    };
+    const _r = rankHarms(_m);
+    let _scored = 0, _worst = { g: -1, id: '', t: '' };
+    for (const h of (_r.all || [])) {
+      // An internal-only rung is never read by an owner, so it is not judged by
+      // a gate about whether an owner can read it. Its sentence still has to be
+      // true — every fabrication gate still covers it — and it still has to be
+      // clear enough for the call sheet, which is a different reader.
+      if (h.emailBlocked) continue;
+      for (const [field, txt] of [['finding', h.finding], ['costs', h.costs], ['reframe', h.reframe]]) {
+        const t = String(txt || '').trim();
+        if (!t) continue;
+        _scored++;
+        const _g = readingGrade(OWNER_VOCAB(t, _m.tradeWord, _m.reviewPainTop));
+        if (_g > _worst.g) _worst = { g: _g, id: `${h.id}.${field}`, t };
+        for (const why of plainEnglishFaults(t, { trade: _m.tradeWord, mined: _m.reviewPainTop })) {
+          _fails.push(`[${h.id}.${field}] ${why} — "${t.slice(0, 72)}"`);
+        }
+      }
+    }
+    if (_scored < 20) _fails.push(`only ${_scored} sentence(s) were scored — the fixture stopped firing rungs and this check is measuring nothing`);
+
+    // ══ AND THE GATE HAS TO ACTUALLY REJECT THE SENTENCES IT WAS BUILT FOR ══
+    // Three checks in this file have passed while the code they guard was
+    // deliberately broken. These are the exact strings Vin could not read, kept
+    // as negative fixtures: if any of them starts passing, this gate has been
+    // loosened and nobody noticed, and the wording can come straight back.
+    const _mustFail = [
+      ['the live spend sentence', 'Their site is set up to track Google Ads clicks, and they are on the first page of the map results for "estate planning attorney in tampa" but not near the top'],
+      ['the live so-what', 'a paid position stops the day the budget does, and the one underneath it does not'],
+      ['the first rank reframe', 'a map position is decided by a dozen things at once, and the businesses winning it are rarely winning it on the strength of the work'],
+      ['the two-channel reframe', 'one channel interrupts somebody who was not looking, and the other answers somebody already typing the thing they sell'],
+      ['the 33-word offer line', 'Nothing on the site tells a stranger choosing an estate planning attorney why to pick them over the next name — no guarantee, no named offer, no promise anyone else could not also make'],
+    ];
+    for (const [label, s] of _mustFail) {
+      if (!plainEnglishFaults(s, { trade: _m.tradeWord, mined: _m.reviewPainTop }).length) {
+        _fails.push(`${label} now PASSES this gate — it was retired because an owner could not read it, and nothing is stopping it coming back`);
+      }
+    }
+    // And it must not reject a sentence that is genuinely plain, or the next
+    // person switches it off rather than fixing anything.
+    for (const s of ['Their site has Google Ads tracking on it, and when somebody searches "estate planning attorney in tampa" they are not in the top three',
+                     'an ad only works while somebody keeps paying for it',
+                     'Google cannot tell who does the better job, so that is never what puts one name above another',
+                     'anyone thinking about calling reads that first']) {
+      const _f = plainEnglishFaults(s, { trade: _m.tradeWord, mined: _m.reviewPainTop });
+      if (_f.length) _fails.push(`a plain sentence was rejected — "${s.slice(0, 56)}" (${_f[0]})`);
+    }
+
+    // ══ AND EVERY EMAIL HAS TO SAY WHY THE FACT MATTERS ════════════════
+    // Vin's other half: "we need to be giving the so what." Two independent
+    // word-budget rules had between them stripped every so-what from variant A
+    // on a spending lead — see the comment on the restore in composeEmail. This
+    // asserts the outcome rather than the rule, on the exact lead shape where
+    // both rules fire, because the bug was invisible in each rule on its own.
+    try {
+      const _sp = buildFactualSpine(_r, _m);
+      if (!_sp || !_sp.claim) _fails.push('the fixture produced no spine, so the so-what assertion below is measuring nothing');
+      else {
+        // No insight line on this fixture, deliberately: the insight is itself a
+        // so-what, so a fixture carrying one could not tell whether the restore
+        // works or whether the insight was covering for it.
+        const _e = composeFullEmail(_sp, { company: 'Toback Law', founderName: 'David', measured: _m });
+        const _lead = _r.lead || {};
+        // A so-what is present when the body carries the rung's cost line or its
+        // reframe. Matched on a distinctive slice rather than the whole string,
+        // because toSecondPerson rewrites the pronouns on the way through.
+        const _frag = (s) => String(s || '').replace(/^(?:they|their|them)\b\s*/i, '').split(' ').slice(1, 6).join(' ').toLowerCase();
+        const _cf = _frag(_lead.costs), _rf = _frag(_lead.reframe);
+        for (const v of ['variantA', 'variantB']) {
+          const b = String((_e[v] || {}).body || '').toLowerCase();
+          if (!b) { _fails.push(`${v} did not render at all on the fixture`); continue; }
+          const _has = (_cf && b.includes(_cf)) || (_rf && b.includes(_rf));
+          if (!_has) _fails.push(`${v} carries the finding and no reason it matters — "${String((_e[v] || {}).body || '').replace(/\s+/g, ' ').slice(0, 90)}"`);
+        }
+      }
+    } catch (e) { _fails.push(`the so-what assertion threw — ${(e && e.message) || e}`); }
+
+    if (_fails.length) {
+      console.log(`⛔ READABLE FINDING CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ READABLE FINDING CHECK: all ${_scored} sentence(s) an owner can actually be sent read at grade ${PLAIN_GRADE_CEILING} or below (worst is ${_worst.g}, ${_worst.id}), none opens on an abstract noun, none leaves a pronoun for the reader to reconstruct, and none uses agency phrasing that contains no jargon word. Scored on OUR words only — his trade, the search in quotes, a competitor's name and the mined complaint are his own vocabulary and he reads them instantly. The five sentences retired for being unreadable are kept as negative fixtures and all five still fail. And both variants of a composed email carry a reason the fact matters \u2014 two word-budget rules that could not see each other had been stripping every so-what from one of them.`);
+    }
+  } catch (e) {
+    console.log(`⛔ READABLE FINDING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE JARGON GATE NEVER LOOKED AT THE FINDINGS THEMSELVES ═════════════
