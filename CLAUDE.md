@@ -121,7 +121,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
 
 - `fetchT` (~line 131) — every outbound call in the system goes through it. See
   the note in PART 6 about why a defect here reads as "that API is flaky"
-- `HARM_LADDER` (~line 9300) — 39 rungs, each with `test`, `say`, `costs`, and
+- `HARM_LADDER` (~line 9300) — 41 rungs, each with `test`, `say`, `costs`, and
   scores for harm / specific / novel / delegable / weFix / sellable
 - `resolveMeasurements` — everything the ladder reads
 - `rankHarms` — ordering, with adjustments for purchase urgency, referral
@@ -130,8 +130,11 @@ simulator then reads it as the owner and returns reply / ignore / delete.
 - `buildEmailEvidence` — splits what the writer may **ASSERT** from what is
   **CONTEXT**. This split is the safety: more information without it is more room
   to invent
+- `INTERNAL_ONLY_RUNGS` — the seven review-METRIC rungs. Measured, scored,
+  ranked, in the audit and on the call sheet; never in an email. Reviews are how
+  we read the business, not what we say to the owner
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 63 boot checks at the bottom, each documenting the live failure that caused it
+- 131 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -213,8 +216,10 @@ Largest gap. It is a Find-layer problem, not a copy problem.
 
 ## 2. The findings sit three levels below what is sold
 
-39 rungs now, classified: 8 reviews, 14 website mechanics and intake, 5 Google
-listing fields, 5 search visibility, 4 positioning/offer, 3 operations. Mike sells
+41 rungs now, classified: 8 reviews (SEVEN OF THEM INTERNAL-ONLY — see the
+second correction below), 14 website mechanics and intake, 5 Google listing
+fields, 5 search visibility, 4 positioning/offer, 3 operations, 4 money already
+committed. Mike sells
 revenue and operations. The distance between "your pricing page is missing" and a
 $10k/mo retainer is what the owner experiences as *so what*.
 
@@ -248,10 +253,76 @@ was mostly two mechanical faults on top of it, both now fixed:
 Measured across the three leads of the 2026-08-18 run: 3 review touches of 12,
 down from 8 of 12; review-worded subjects 1, down from 7.
 
+**Second correction, same day — reviews are INTELLIGENCE, not copy.** The three
+fixes above reduced how often reviews appeared. They did not answer the real
+question, which Vin put like this: *"reviews are more of an internal sign for us
+into their business. I don't think we should be mentioning them directly
+externally — that's like giving our cards away in poker. We should definitely
+reference the findings externally, not actually mention where they came from."*
+
+He is describing two jobs the system had collapsed into one:
+
+| | |
+|---|---|
+| **INTELLIGENCE** | 150 mined reviews, the reply rate, the arrival rate against years traded, the newest date. The cheapest read we get on how a business actually runs, and what Mike should have in front of him on the call. |
+| **COPY** | a sentence a stranger reads. Here the same material is actively harmful: there is nothing to sell, it hands over our method, and it asserts a theory of his business that is false. |
+
+So there are now three mechanisms, each closing a route the other two cannot:
+
+- **`INTERNAL_ONLY_RUNGS`** — the seven review-metric rungs (`review_deficit`,
+  `not_compounding`, `review_velocity_drop`, `no_owner_replies`,
+  `partial_owner_replies`, `stale_reviews`, `low_rating`) are measured, scored,
+  ranked, written into the audit and put on the call sheet, and can never reach
+  an email. Stronger than `NOT_SELLABLE_OPENER`, which barred only the first
+  line and let all seven take follow-up slots two, three and four.
+- **The two review-derived findings we DO send were rewritten to state the thing
+  itself.** `review_pain_pattern` now leads with the fault — *"quotes that never
+  come back — 6 different people have described the same thing publicly"* —
+  never with where it was read. Its blind line, reframe and subject fallbacks
+  were all naming reviews too and all three were rewritten.
+- **`verifyBrainEmail` refuses a review word the MODEL introduced.** The audit is
+  full of reviews and should be; this is the only gate between that and the
+  inbox. A review word is permitted in the body only if the same word appears in
+  something CODE assembled — the spine, the recognition line, or the ASSERT
+  list. That keeps the one sentence built on review counts on purpose (see the
+  ranking finding below) and refuses everything else.
+
+`REVIEWS ARE INTERNAL CHECK` fails the boot if any of the three drift apart.
+
+**And the system believed reviews drive Google rank.** Vin: *"it seems like the
+system believes reviews are what make your rank higher. Google factors many
+things — answer rate etc."* He was right and the cause was one clause in the
+research brief, sent to the brain on every lead: *"Google reviews are also what
+local rank is computed from."* That is false — the local pack weighs relevance,
+distance and prominence together, and reviews are one input among many. One wrong
+sentence in the brief made every audit downstream read reviews as the lever that
+moves rank, which is why four consecutive runs produced review-shaped emails. The
+clause now says the opposite and says why: if a business with fewer reviews ranks
+above them, the correct conclusion is that reviews are demonstrably NOT deciding
+that search — something else is, and naming the gap is the sellable conversation.
+`outranked_by_weaker`'s reframe carries the same correction into the email.
+
 Still true, and still the real ceiling: the site-derived rungs all share "did we
 look?" absence guards, so a thin Firecrawl scrape silences them together while the
 review and rank rungs — fed by Places and Apify, which never fail together — keep
 firing. Fix the input supply and the balance improves on its own.
+
+**Two new SPENDING rungs, 2026-08-18**, both from data we already pay for:
+
+- **`paying_for_a_search_they_lose`** (harm 94) — a Google Ads conversion tag in
+  their own page source AND a measured map position outside the top three. Vin's
+  own framing: *"we see you're running ads and still not in the top 3 — this is
+  like flushing money down the toilet."* Bounded three ways: the tag proves an
+  ads ACCOUNT, never a live campaign; the position is stated as a BAND, never a
+  digit, because the digit moves between runs; and no cause is named for the
+  position. Two facts he can check in a minute, and the contradiction does the
+  work.
+- **`social_spend_no_search`** (harm 70) — Meta pixel present, no Google Ads
+  tracking on the pages we read. An absence claim, so it carries two gates: we
+  must have actually read the markup, and a Google Tag Manager container must be
+  ABSENT — a GTM container can hold an ads tag we cannot see, and telling an
+  owner he is not doing something he is plainly doing is the fastest way to lose
+  him. `hasTagManager` was added to the site fingerprint for this.
 
 Measurable and not being measured, each closer to the product:
 - **Duplicate Google listings** — splits reviews and ranking, invisible to the
@@ -259,6 +330,19 @@ Measurable and not being measured, each closer to the product:
 - **Mobile page speed** — free via PageSpeed API, never called.
 - **Careers page** — built, rarely fires, closest available signal to what Mike
   sells.
+
+**What Vin asked for that is NOT built, and why.** Reported honestly rather than
+approximated:
+- **"Are their ads going to landing pages?"** We cannot see an ad's destination
+  URL from anything we buy. `paid_traffic_leaks` covers the adjacent measurable
+  fact — they run ads and the only published route in is a phone line or a form.
+- **Traffic → conversion math** (*"x traffic × average conversion × price point
+  = x per month"*). We have no traffic source; SimilarWeb and Semrush are paid.
+  Any number here would be invented, which is the one thing this system does not
+  do. The permitted money move is already in the brief: state the value of ONE
+  job in their trade and let him multiply.
+- **Google LSA / organic placement** — we measure the map pack only. Adding
+  either is a new paid data source, not a code change.
 
 ## 3. Deliverability is unproven
 
@@ -346,10 +430,17 @@ Only two things have real evidence behind them. Everything else is inference.
 exist to find. Every lead where the miner found a repeating complaint sat between
 4.3 and 4.8, and both emails that earned a reply came from inside that band.
 
-**Review pain wins.** All three replies came from `review_pain_pattern` or
-`outranked_by_weaker` — a complaint in the owner's own reviews, or a named
-competitor above him. Emails opening on missing pricing, no guarantee or no lead
-magnet get deleted, and the owners say why: *"that's not how I get customers."*
+**Review pain wins — but say the fault, never the source.** All three replies
+came from `review_pain_pattern` or `outranked_by_weaker` — a complaint in the
+owner's own reviews, or a named competitor above him. Emails opening on missing
+pricing, no guarantee or no lead magnet get deleted, and the owners say why:
+*"that's not how I get customers."*
+
+Read that carefully, because it is the finding that is proven and not the
+wording. What earns the reply is an operational fault several of his customers
+walked into — a quote that stalls, a callback nobody makes. Reviews are where we
+READ it. From 2026-08-18 the sentence states the fault and never the source, and
+the seven rungs that are only review METRICS never leave the building at all.
 
 The wider pattern behind both: a finding lands when it **contradicts something the
 owner did on purpose** — his customers said it twice, two things he set up
@@ -371,7 +462,7 @@ node scopecheck.js server.js            # a name used outside the block it was d
 node fetchtest.js                       # the one helper all 60 outbound calls use
 node fuzzcore.js 20000                  # 11 gates, in-process
 node fuzz.js 500                        # composes emails over HTTP
-PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 130 boot checks
+PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 131 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -445,7 +536,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 63 boot checks and the comments above
+and caused none of this week's failures. The 131 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
