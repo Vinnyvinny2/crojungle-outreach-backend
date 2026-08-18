@@ -111,7 +111,7 @@ Google profile.
 measurement and writes the narrative. Produces `originalFindings` (quotes from
 their actual copy) and a `situationRead`.
 
-**GENERATE** — the harm ladder ranks 33 measured findings, `buildFactualSpine`
+**GENERATE** — the harm ladder ranks 39 measured findings, `buildFactualSpine`
 assembles one verified sentence, and the writer turns it into an email. A prospect
 simulator then reads it as the owner and returns reply / ignore / delete.
 
@@ -121,7 +121,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
 
 - `fetchT` (~line 131) — every outbound call in the system goes through it. See
   the note in PART 6 about why a defect here reads as "that API is flaky"
-- `HARM_LADDER` (~line 7900) — 33 rungs, each with `test`, `say`, `costs`, and
+- `HARM_LADDER` (~line 9300) — 39 rungs, each with `test`, `say`, `costs`, and
   scores for harm / specific / novel / delegable / weFix / sellable
 - `resolveMeasurements` — everything the ladder reads
 - `rankHarms` — ordering, with adjustments for purchase urgency, referral
@@ -213,20 +213,47 @@ Largest gap. It is a Find-layer problem, not a copy problem.
 
 ## 2. The findings sit three levels below what is sold
 
-27 of 33 ladder rungs describe a **website**. Mike sells revenue and operations.
-The distance between "your pricing page is missing" and "$30k retainer" is what the
-owner experiences as *so what*.
+39 rungs now, classified: 8 reviews, 14 website mechanics and intake, 5 Google
+listing fields, 5 search visibility, 4 positioning/offer, 3 operations. Mike sells
+revenue and operations. The distance between "your pricing page is missing" and a
+$10k/mo retainer is what the owner experiences as *so what*.
 
-The six rungs that describe the BUSINESS: `review_pain_pattern`, `not_compounding`,
-`review_deficit`, `low_rating`, `no_owner_replies`, `partial_owner_replies`.
-
-**Every reply came from those, or from `outranked_by_weaker`. Zero from a
+**Every reply came from a review rung or from `outranked_by_weaker`. Zero from a
 storefront finding.**
 
+**Correction, 2026-08-18 — why the emails kept reading as being about reviews.**
+This was diagnosed for weeks as a supply problem (too few business rungs) and it
+was mostly two mechanical faults on top of it, both now fixed:
+
+- `outranked_by_weaker` is a RANKING finding and two of its three subject lines
+  said "your reviews are broken". A construction company and a plastic surgeon
+  received the identical pair on one afternoon. The headline also contradicted its
+  own body, whose point is that the business above them has FEWER reviews.
+  `SUBJECT REGISTER CHECK` now fails the boot on review vocabulary attached to a
+  non-review finding.
+- The one-review-touch quota counted rung IDs and DEFERRED extras to the end of
+  the array, where they shipped anyway — a no-op whenever the non-review pool was
+  empty. It now runs on the four rendered touches. A touch counts as a review
+  touch when the finding is about reviews or the subject says so, and deliberately
+  NOT when a non-review finding merely cites a review count: "a business with
+  fewer reviews than yours is ranking above you" is the sentence Chuck Jenkins
+  said would have made him open the email, and an earlier version of this quota
+  spent the budget on it and deleted the real review finding behind it.
+- And the follow-up pool was sorted by raw harm. `NOT_SELLABLE_OPENER` bars seven
+  review rungs from LEADING while `SELLABLE` scores those same rungs 5, so they
+  take none of the 44-point penalty, sit at the top of `byHarm`, and take slots
+  two, three and four. Barred from the opener, first in line for everything after
+  it. Follow-ups now prefer findings we can sell against.
+
+Measured across the three leads of the 2026-08-18 run: 3 review touches of 12,
+down from 8 of 12; review-worded subjects 1, down from 7.
+
+Still true, and still the real ceiling: the site-derived rungs all share "did we
+look?" absence guards, so a thin Firecrawl scrape silences them together while the
+review and rank rungs — fed by Places and Apify, which never fail together — keep
+firing. Fix the input supply and the balance improves on its own.
+
 Measurable and not being measured, each closer to the product:
-- **Review velocity trend** — dates are already in the Apify response, never
-  computed. "Eight reviews in the last 90 days against two in the previous 90" is a
-  business stalling, and the owner feels it as a quiet phone.
 - **Duplicate Google listings** — splits reviews and ranking, invisible to the
   owner, risky to fix alone, and explains the outranked finding.
 - **Mobile page speed** — free via PageSpeed API, never called.
@@ -340,10 +367,16 @@ node --check server.js                  # syntax
 node tdz.js server.js                   # reads before declaration — MUST be 0
 node dupkeys.js server.js               # duplicate object keys — MUST be 0
 node dupkeys.js index.html              # MUST be 0
+node scopecheck.js server.js            # a name used outside the block it was declared in
 node fetchtest.js                       # the one helper all 60 outbound calls use
 node fuzzcore.js 20000                  # 11 gates, in-process
 node fuzz.js 500                        # composes emails over HTTP
-PORT=4000 timeout 30 node server.js     # 63 boot checks — all must print ✓
+PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 130 boot checks
+#   The heap cap is not optional. Render's ceiling is near 256MB and on
+#   2026-08-18 a build that booted fine here crash-looped there — 47 boot
+#   checks had each grown a private readFileSync of this 2.9MB file. Every
+#   gate was green on a build that could not start. BOOT MEMORY prints the
+#   settled heap; BOOT HEAP CHECK fails the build above 200MB.
 ```
 
 Every one of these now **exits non-zero on failure**, so they can be chained and
@@ -423,13 +456,16 @@ gap in the same layer. The ladder is not the constraint.
 It has been rebuilt four times in two days on the evidence of a simulator that
 contradicts itself.
 
-## index.html is not in this repo
+## index.html IS in this repo now (2026-08-18), and still deploys by hand
 
-The backend deploys to Render from this repo. The frontend deploys to Netlify from
-somewhere else, so `index.html` has to be carried over by hand — which is why
-`dupkeys.js index.html` needs a copy of it sitting in this directory to run at all.
-Getting it into a repo (this one or its own) is worth doing: it is half the system
-and currently has no version history that this checklist can see.
+It was locally ignored for the life of the project — half the system with no
+version history. It is tracked here from 2026-08-18, so `dupkeys.js index.html`
+always has something to read and every change is reviewable.
+
+It still deploys to Netlify BY HAND. Nothing about tracking it changes that, so a
+client-side fix is dark until the file is dragged into Netlify — and the server
+half of the same fix will already be live, which is the shape that makes a bug
+look intermittent. When a change touches both, say so plainly in the handover.
 
 ---
 
