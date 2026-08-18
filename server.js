@@ -3636,6 +3636,19 @@ const hasMeasuredBuyingWindow = (sig) =>
 // Which window it is, for the log and for the pitch. Marketing outranks ops:
 // a company hiring both is a retainer lead that also has ops pain, never the
 // other way round — see the Eat Right Atlanta note above classifyJobTitle.
+// Pure, boot-testable: the honest age of the discovery signal in days.
+// An explicit client-computed age wins; otherwise derived from the raw date the
+// source recorded (TheirStack's jobPostedAt, EDGAR's signalDate). Garbage and
+// future dates return null — "not measured", never a guess.
+const signalAgeFrom = (body, now) => {
+  const _now = Number.isFinite(now) ? now : Date.now();
+  const _explicit = Number(body && body.signalAgeDays);
+  if (Number.isFinite(_explicit) && _explicit >= 0) return Math.round(_explicit);
+  const _raw = (body && (body.signalDate || body.jobPostedAt)) || null;
+  if (!_raw) return null;
+  const _d = Math.floor((_now - new Date(_raw).getTime()) / 864e5);
+  return Number.isFinite(_d) && _d >= 0 ? _d : null;
+};
 const buyingWindowKind = (sig) => {
   if (!hasMeasuredBuyingWindow(sig)) return '';
   if (sig.hiring_marketing || sig.hiring_marketing_multi) return 'retainer';
@@ -4968,10 +4981,20 @@ const searchSECEdgar = async () => {
         return null; // investment fund, not an operating business
       }
 
+      // ══ THE RAISE WAS A DISPLAY STRING AND NOTHING ELSE ══════════════
+      // The amount and the filing date lived only inside jobTitle, so the
+      // audit prompt, the reachWindow clock and the call sheet all saw a lead
+      // whose entire origin story was one unparseable label. reachWindow's own
+      // comment says it: "Post-raise measured from WHEN? Nothing here knows."
+      // The date is in the search hit. Carry it as data and the honest-age
+      // machinery downstream starts working without another change.
+      const _filed = src.file_date || src.fileDate || src.filed_at || (Array.isArray(src.file_type) ? null : null) || null;
       return {
         name: name.trim(),
         source: 'sec_edgar',
         signals: { raised_funding: true },
+        raiseAmount: Number(amount) || null,
+        signalDate: _filed,
         jobTitle: `Form D filing${amount ? ` — $${Number(amount).toLocaleString()} raise` : ' — recently raised'}`,
       };
     }).filter(Boolean);
@@ -5273,13 +5296,17 @@ most, what it costs him \u2014 is untouched by this. Only the retelling is.
 const BRAIN_STATIC = `${FACT_DISCIPLINE}
 
 
-CROJungle offerings (full-service — can combine):
-- Website Rebuild ($50k+): homepage conversion failures, weak positioning, no CTA — full rebuild only
-- End-to-End Marketing / Ads Management ($10k-$35k/month): running ads but leaking revenue, needs someone owning the whole path from search to booked customer
-- AI Brain ($40k-$70k): no marketing intelligence layer, disconnected systems, no automation
-- Custom AI Software Build ($40k-$100k+): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — recommend ONLY when there is a CONFIRMED manual-labor signal (multiple ops job postings). Never default to it.
-- Revenue Growth / CRO Retainer ($10k-$35k/month): confirmed traffic but poor conversion, ongoing optimization
+CROJungle offerings — two brands, one team (CRO Jungle = marketing, Dev Jungle = software), premium tier. Floors from the founders' sales playbook, 2026-08:
+- Website Rebuild (CRO Jungle — $35k floor, ~$70k typical, uncapped; precedent near $1M): homepage conversion failures, weak positioning, no CTA — full rebuild only, with an AI CMS backend (describe it, never name it — it has no public name)
+- End-to-End Marketing / Ads Management (CRO Jungle retainer — from $10k/month excluding ad spend, no cap): running ads but leaking revenue, needs someone owning the whole path from search to booked customer
+- Revenue Growth / CRO Retainer (CRO Jungle — from $10k/month): confirmed traffic but poor conversion, ongoing optimization
+- AI Brain (Dev Jungle AI integration — from $20k, well into six figures): no marketing intelligence layer, disconnected systems, no automation; also the fit for a business flat-footed in AI or stalled mid-integration
+- Custom AI Software Build (Dev Jungle — from $20k, practical cap ~$1M): manual/repetitive labor (customer service, data entry, scheduling, bookkeeping) that software can replace — recommend ONLY when there is a CONFIRMED manual-labor signal (multiple ops job postings). Never default to it. The pitch frame is anti-SaaS: they stack subscriptions that never quite fit; we build exactly what the business needs and they own it.
 - Exit / Valuation Advisory (via Wall Street-backed partner): for companies preparing to sell — increase revenue AND advise on valuation/M&A. Nobody else offers this combination.
+
+TIER SIGNAL (say it in one line — it routes the sales call): if this business can plausibly support the floors above, say "tier: premium plausible"; if it clearly cannot, say "tier: below premium floors — fast-track candidate" — a staff-sold lower tier exists (sites from $5k, entry retainers from $3,250/mo), so a small business is a routed lead, not a dead one. Do NOT recommend lower-tier products yourself; your recommendation targets premium fit only.
+BRAND ROUTE: funeral homes and cemeteries go through the Memorabl sub-brand — when the trade is death care, say so; it changes who fronts the conversation.
+PRICING RULE (absolute): these floors are conversational, for the CALL. Our prices never appear in any email, any subject line, or any text a prospect could read.
 
 DOLLAR-FIGURE RULE: job posting counts are FACTS; salary totals derived from them are ESTIMATES. Any labor-cost dollar figure MUST be framed as an estimate ("est.", "roughly") and must show its basis. Never present a derived number as a measured one.
 
@@ -5635,8 +5662,33 @@ const rankUrlsByIntent = (urls, re, limit = 4, opts = {}) => {
   // A hint must be its own path SEGMENT ("/about", "/our-team"), not a fragment
   // buried inside a long article slug. Segments are split on / - _ so
   // "/meet-the-team" still matches while "...-about-infertility" no longer does.
+  //
+  // ══ THE ≤4-WORD CAP WAS NOT A BOUNDARY ═══════════════════════════════════
+  // The infertility fix capped the slug at four words and then ran the same
+  // unanchored regex over the whole hyphenated segment. "myths-facts-about-
+  // latisse" is exactly four words and contains "about", so a Latisse FAQ was
+  // bought as a leadership page on a live run — the same failure the cap was
+  // built for, one word shorter. And a plain word-boundary is no better:
+  // "about" IS a whole word in that slug. What separates a leadership slug from
+  // a content slug that mentions a hint word is POSITION — real ones lead with
+  // the hint (about-us, meet-our-staff, team, leadership) or are a two-word
+  // possessive (our-team, the-team). "pain-management" and "case-history" put
+  // the hint word second with a non-possessive first word, and so does every
+  // content slug that has ever slipped through.
   const hintIsASegment = (path) => path.split('/').filter(Boolean)
-    .some(seg => seg.split(/[-_]/).length <= 4 && re.test(seg));
+    .some(seg => {
+      const words = seg.split(/[-_]/).filter(Boolean);
+      if (!words.length || words.length > 4) return false;
+      // Leftmost match must sit at the START of the slug (or right after a
+      // possessive prefix). Position, not presence: "meet-our-staff", "our-story"
+      // and "who-we-are" all lead with their hint; "myths-facts-about-latisse",
+      // "pain-management" and "case-history" never do.
+      const m = seg.match(re);
+      if (!m) return false;
+      if (m.index === 0) return true;                       // about-us, our-story, who-we-are
+      const pfx = seg.match(/^(?:our|the|my)[-_]/i);
+      return !!pfx && m.index === pfx[0].length;              // our-team, the-team
+    });
   return (urls || [])
     .filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u))
     .filter(u => {
@@ -7350,6 +7402,16 @@ const looksLikeRealName = (n) => {
 // looked at the homepage. This records what this function actually read so the
 // gate can ask the real question.
 let _lastLeadershipTextLen = 0;
+// Pure so the boot check can execute it. True when both name tokens appear in
+// the corroboration text — which INCLUDES the business name, because a business
+// named after its owner corroborates that owner all by itself and Places gave
+// us that name, not the model.
+const nameCorroborated = (name, companyName, corpus) => {
+  const flat = (String(companyName || '') + ' ' + String(corpus || '')).toLowerCase().replace(/\s+/g, ' ');
+  const np = String(name || '').toLowerCase().split(/\s+/).filter(Boolean);
+  return np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]);
+};
+
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
   if (!website || !apiKey || !fcKey) return null;
   try {
@@ -7557,10 +7619,21 @@ ${corpus}` }]
       console.log(`DM/brain [${companyName}]: no owner-level person named on their site (model found none, and no owner sentence in the page text either)`);
       return null;
     }
-    // Anti-hallucination: their name must literally be in what we scraped.
-    const flat = corpus.toLowerCase().replace(/\s+/g, ' ');
-    const np = String(parsed.name).toLowerCase().split(/\s+/).filter(Boolean);
-    if (!(np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]))) {
+    // Anti-hallucination: their name must literally be in what we scraped —
+    // OR in the business name itself.
+    //
+    // ══ THE GATE REJECTED THE NAME THE PROMPT TOLD IT TO FIND ══════════════
+    // The prompt shows the model the company name and says a surname match
+    // against it is near-conclusive ("If a person's last name appears in the
+    // company name ... report them with high confidence"). This gate then
+    // checked the proposed name against the scraped pages ALONE. A practice
+    // literally named "Dr. Chad Robbins" — whose staff pages list nurses, not
+    // the surgeon — had "Chad Robbins" REJECTED as hallucinated on a live run,
+    // and the pipeline went on to buy ~8 paid searches to rediscover the name
+    // sitting in the lead record the whole time. Eponymous businesses are the
+    // COMMON case in this ICP: doctors, lawyers, contractors. The company name
+    // is not a hallucination risk — we did not generate it, Google Places did.
+    if (!nameCorroborated(parsed.name, companyName, corpus)) {
       console.log(`DM/brain [${companyName}]: "${parsed.name}" not present in source — REJECTED as hallucinated`);
       return null;
     }
@@ -9014,25 +9087,25 @@ const AUDIENCE_REGISTER = [
   // Veterinary before medical: a vet's patient is the animal and his BUYER is
   // the owner, so "patient" would be the one word in the table that is wrong.
   { re: /\bvet(erinar\w*)?\b|\banimal (hospital|clinic)|\bpet (clinic|hospital|care)/i,
-    buyer: 'client', job: 'visit', peer: 'practice', peers: 'practices' },
+    buyer: 'client', job: 'visit', peer: 'practice', peers: 'practices', ask: 'booking a visit' },
   { re: /\bdent(al|ist\w*)|\borthodont|\bendodont|\bperiodont|\bprosthodont|\boral surg/i,
-    buyer: 'patient', job: 'case', peer: 'practice', peers: 'practices' },
+    buyer: 'patient', job: 'case', peer: 'practice', peers: 'practices', ask: 'booking a consultation' },
   { re: /\bsurg\w*|\bmed(ical|icine)?\b|\bphysician|\bdoctor|\bclinic|\bderm\w*|\bplastic|\bcosmetic|\baesthetic|\bmed ?spa|\blasik|\bchiroprac\w*|\bphysical therapy|\bpodiatr|\bfertility|\bobgyn|\bpsychiatr|\bhealth ?care|\bwellness/i,
-    buyer: 'patient', job: 'procedure', peer: 'practice', peers: 'practices' },
+    buyer: 'patient', job: 'procedure', peer: 'practice', peers: 'practices', ask: 'booking a consultation' },
   { re: /\blaw\b|\blegal\b|\battorney|\blawyer|\bcounsel\b|\bparalegal|\blitigat/i,
-    buyer: 'client', job: 'case', peer: 'firm', peers: 'firms' },
+    buyer: 'client', job: 'case', peer: 'firm', peers: 'firms', ask: 'calling the office' },
   { re: /\bcpa\b|\baccount(ing|ant)|\bbookkeep|\btax\b|\bfinancial (advis|plan)|\bwealth|\bfiduciar|\binsurance|\badvisory\b/i,
-    buyer: 'client', job: 'account', peer: 'firm', peers: 'firms' },
+    buyer: 'client', job: 'account', peer: 'firm', peers: 'firms', ask: 'calling the office' },
   { re: /\breal(tor| estate)|\bbroker(age)?\b|\bmortgage|\btitle (company|agency)|\bproperty manage/i,
-    buyer: 'client', job: 'sale', peer: 'firm', peers: 'firms' },
+    buyer: 'client', job: 'sale', peer: 'firm', peers: 'firms', ask: 'calling the office' },
   { re: /\brestaurant|\bcaf[eé]\b|\bbakery|\bbar\b|\bbrewery|\bdiner|\bcatering|\bsalon\b|\bbarber|\bgym\b|\bfitness|\bstudio\b|\bboutique|\bretail\b|\bhotel|\bresort/i,
-    buyer: 'customer', job: 'visit', peer: 'place', peers: 'places' },
+    buyer: 'customer', job: 'visit', peer: 'place', peers: 'places', ask: 'calling' },
   // B2B / software last among the specifics: a "solutions" or "systems" business
   // sells deals, not jobs, and the person deciding is a buyer rather than a
   // customer. Deliberately narrow — these words appear inside trade names too,
   // which is why the trade families above are matched first.
   { re: /\bsaas\b|\bsoftware\b|\bb2b\b|\bagency\b|\bconsult(ing|ancy)|\bstaffing|\brecruit|\bmanaged (it|services)|\bmsp\b|\blogistics|\bwholesale|\bdistribut(or|ion)|\bmanufactur/i,
-    buyer: 'buyer', job: 'deal', peer: 'company', peers: 'companies' },
+    buyer: 'buyer', job: 'deal', peer: 'company', peers: 'companies', ask: 'asking for pricing' },
 ];
 
 // The safe default. Every business has customers and every business does jobs,
@@ -9041,7 +9114,11 @@ const AUDIENCE_REGISTER = [
 // `peer` is what he calls a business like his own. Without it a surgeon reads
 // "a patient comparing three COMPANIES", which is the exact register mistake
 // this table exists to prevent — right noun for the buyer, wrong one for him.
-const AUDIENCE_DEFAULT = { buyer: 'customer', job: 'job', peer: 'company', peers: 'companies' };
+// `ask` is the smallest step a stranger can take with this business — it
+// finishes "there is nothing to take away short of ...". A patient books a
+// consultation; nobody asks a surgeon for a quote, and that one word was the
+// tell in a live follow-up that the sentence was written for a contractor.
+const AUDIENCE_DEFAULT = { buyer: 'customer', job: 'job', peer: 'company', peers: 'companies', ask: 'asking for a quote' };
 
 const audienceOf = (trade) => {
   const t = String(trade || '').trim();
@@ -9050,7 +9127,7 @@ const audienceOf = (trade) => {
   // The plural is STATED, not computed. Appending 's' produced "three
   // companys" on the first run — a spelling mistake in a cold email is the
   // cheapest possible way to prove a machine wrote it.
-  return hit ? { buyer: hit.buyer, job: hit.job, peer: hit.peer, peers: hit.peers, measured: true }
+  return hit ? { buyer: hit.buyer, job: hit.job, peer: hit.peer, peers: hit.peers, ask: hit.ask || AUDIENCE_DEFAULT.ask, measured: true }
              : { ...AUDIENCE_DEFAULT, measured: false };
 };
 
@@ -9078,6 +9155,21 @@ const costsOf = (rung, m) => {
     try { return String(c(m || {}) || '').trim(); } catch (e) { void e; return ''; }
   }
   return String(c || '').trim();
+};
+
+// Same contract as costsOf, for the same reason: `reframe` may now be a
+// function of the measurements (four of them carry the audience register), and
+// thirteen places read the field. Every reader that touches a RAW rung goes
+// through here, so no reader can ever receive a function body where a sentence
+// belongs. Resolved once in rankHarms for the normal path — these extra sites
+// are the recovery paths that reach back into HARM_LADDER directly.
+const reframeOf = (rung, m) => {
+  if (!rung) return '';
+  const r = rung.reframe;
+  if (typeof r === 'function') {
+    try { return String(r(m || {}) || '').trim(); } catch (e) { void e; return ''; }
+  }
+  return String(r || '').trim();
 };
 
 
@@ -9405,10 +9497,20 @@ const HARM_LADDER = [
     // sentence a surgeon reads.
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
+      // ══ "AT ALL" CLAIMED A SURFACE WE CANNOT SEE ═════════════════════════
+      // Every input to this rung is read off their WEBSITE. The Google Business
+      // Profile fetch carries no booking field — Reserve with Google and the
+      // Maps "Book" button are structurally invisible to us — so "no published
+      // way in AT ALL" was an absence claim about a surface we never looked at.
+      // The prospect simulator, reading as Dr. Chad Robbins, caught it on a
+      // live run: "they don't know that my patients book through Google Maps."
+      // The owner knows his own booking works, so the overclaim discredits the
+      // true finding standing next to it. Scope every branch to the site, the
+      // way measureBookingPath's own why-strings already do.
       if (m.purchaseUrgency === 'EMERGENCY') {
         return t
-          ? `When somebody needs ${anFor(t)} ${t} outside office hours, there is no published way to reach them at all`
-          : `Outside office hours there is no published way to reach them at all`;
+          ? `When somebody needs ${anFor(t)} ${t} outside office hours, their website offers no way to reach them`
+          : `Outside office hours their website offers no way to reach them`;
       }
       // ══ NOT EVERY "THEY" IN A RUNG IS THE OWNER ══════════════════════════
       // This read "...that THEY want a ${t}...", where "they" is the customer
@@ -9425,9 +9527,13 @@ const HARM_LADDER = [
       // instead. RUNG PRONOUN CHECK at the bottom of this file now fails the
       // boot on any rung that puts a pronoun inside a "Someone who ..." clause,
       // so the next one cannot reach an inbox the way this one did.
+      // "the website", not "their website": this sentence lives inside a
+      // hypothetical-customer clause, where RUNG PRONOUN CHECK bans pronouns
+      // outright — the rewriter cannot tell the customer's pronouns from the
+      // business's, and Toby Oberer got told he wants to hire himself.
       return t
-        ? `Someone deciding at nine at night to hire ${anFor(t)} ${t} has nowhere to start until the office opens`
-        : `Someone deciding in the evening has nowhere to start until the office opens`;
+        ? `Someone deciding at nine at night to hire ${anFor(t)} ${t} finds nothing on the website to start with until the office opens`
+        : `Someone deciding in the evening finds nothing on the website to start with until the office opens`;
     },
     // ══ DESCRIBE THE WALL, NOT WHAT SOMEBODY DID AT IT ═══════════════════
     // "has nowhere to go" is an outcome — it says what a person did after
@@ -9438,7 +9544,7 @@ const HARM_LADDER = [
     // the operator that flags are noise.
     //
     // What we DID measure: the only published route is a phone line with hours.
-    costs: (m) => `outside those hours a ${audienceOf(m.tradeWord).buyer} has no published way in at all` },
+    costs: (m) => `outside those hours the site gives a ${audienceOf(m.tradeWord).buyer} no way to take even a first step` },
 
   { harm: 52, specific: 92, novel: 50, delegable: 70, weFix: 95, band: 'BLOCKS', id: 'long_form',
     blind: 'an abandoned form records nothing. Only the completed ones are ever counted',
@@ -9876,7 +9982,7 @@ const HARM_LADDER = [
   // is measured, not estimated.
   { harm: 86, specific: 98, novel: 72, delegable: 20, weFix: 85, band: 'INVISIBLE', id: 'review_pain_pattern',
     blind: 'he has read every one of these. Nobody tabulates their own reviews looking for the same words twice, and that is the only way this shows up',
-    reframe: 'a stranger comparing three companies reads the reviews before anything else',
+    reframe: (m) => `a stranger comparing three ${audienceOf(m.tradeWord).peers} reads the reviews before anything else`,
     test: (m) => (m.reviewPainCount || 0) >= 1 && !!m.reviewPainTop && (m.reviewsRead || 0) >= 10,
     // The mined complaint is the reviewers' words, not ours. keepSpan registers
     // it so the second-person rewrite leaves it alone - see toSecondPerson. It
@@ -9927,7 +10033,7 @@ const HARM_LADDER = [
     say: (m) => {
       const t = String(m.tradeWord || '').trim();
       const job = t ? ` before committing to ${anFor(t)} ${t}` : '';
-      return `Someone comparing three companies can find no price, no range and no starting point anywhere on the pages we read${job}`;
+      return `Someone comparing three ${audienceOf(m.tradeWord).peers} can find no price, no range and no starting point anywhere on the pages we read${job}`;
     },
     // ══ NOT EVERY "THEM" IS THE BUSINESS ═══════════════════════════════════
     // toSecondPerson rewrites every "them" to "you", which is right for the
@@ -9954,7 +10060,7 @@ const HARM_LADDER = [
 
   { harm: 64, specific: 95, novel: 75, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'not_compounding',
     blind: 'the total goes up every year, so it reads as growth. The rate against the years traded is the part nobody works out',
-    reframe: 'people comparing companies read the reviews first, and a thin record reads as a thin business',
+    reframe: (m) => `people comparing ${audienceOf(m.tradeWord).peers} read the reviews first, and a thin record reads as a thin business`,
     test: (m) => (m.tenureYears || 0) >= 8 && (typeof m.reviewsPerYear === 'number' && Number.isFinite(m.reviewsPerYear) ? m.reviewsPerYear : 99) < 4,
     // ══ STATE THE TWO MEASUREMENTS, NOT THE DIVISION ══════════════════════
     // "— about 1.9 a year" was flagged by the fact-checker on three consecutive
@@ -9976,7 +10082,7 @@ const HARM_LADDER = [
   // ── OPINION ─────────────────────────────────────────────────────────────
   { harm: 56, specific: 45, novel: 20, delegable: 20, weFix: 95, band: 'OPINION', id: 'no_offer',
     blind: 'an absence reports nothing. Nothing on a page shows what is not on the page',
-    reframe: 'when nothing separates two companies, people choose on price',
+    reframe: (m) => `when nothing separates two ${audienceOf(m.tradeWord).peers}, people choose on price`,
     test: (m) => m.guarantee === false && m.namedOffer === false,
     // ══ A CATEGORY LABEL IS NOT A FINDING ═══════════════════════════════
     // `say: () =>` takes no arguments, so this sentence is identical on every
@@ -10009,13 +10115,13 @@ const HARM_LADDER = [
     // what "not ready yet" actually means for this business — weeks of research
     // for a considered purchase, versus nothing at all for an emergency trade.
     say: (m) => (m.purchaseUrgency === 'CONSIDERED'
-      ? `Someone weeks away from deciding has no reason to leave a name — there is nothing to take away short of asking for a quote`
-      : `There is nothing on the site to take away short of asking for a quote, so everyone not ready to call today leaves with nothing`),
+      ? `Someone weeks away from deciding has no reason to leave a name — there is nothing to take away short of ${audienceOf(m.tradeWord).ask}`
+      : `There is nothing on the site to take away short of ${audienceOf(m.tradeWord).ask}, so everyone not ready to call today leaves with nothing`),
     costs: (m) => `every ${audienceOf(m.tradeWord).buyer} not ready to commit today leaves with nothing` },
 
   { harm: 44, specific: 30, novel: 15, delegable: 15, weFix: 95, band: 'OPINION', id: 'undifferentiated',
     blind: 'his own copy reads clearly to him because he knows what he means by it. It is the stranger reading it cold who sees nothing to hold on to',
-    reframe: 'when nothing separates two companies, people choose on price',
+    reframe: (m) => `when nothing separates two ${audienceOf(m.tradeWord).peers}, people choose on price`,
     // ══ A CASE MISMATCH KEPT THIS RUNG SILENT FOR ITS ENTIRE LIFE ═══════
     // readMarketClarity returns `band = score >= 2 ? 'specific' : score >= 0 ?
     // 'partial' : 'undifferentiated'` — lowercase, always. This tested
@@ -13586,13 +13692,22 @@ const EMAIL_SKELETONS = [
     // Fact first. The most direct, and the right shape when the fact is alarming.
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
-      // ══ INSIGHT, RECOGNITION, THEN THE PROOF ═══════════════════════════
-      // Order matters and it is the whole argument. The insight names what is
-      // going on — the thing he feels and has never said out loud. The
-      // recognition proves we looked. The finding is the evidence underneath
-      // both. Leading on the finding, which is what this did, gives him a
-      // scanner output and makes him supply the meaning himself.
-      `${first ? first + ', ' : ''}${insight ? (first ? lower1(insight) : upper1(insight)) + '.' : ''}${insight && earned ? ' ' + upper1(earned) + '.' : (earned ? (first ? lower1(earned) : upper1(earned)) + '.' : '')}${(insight || earned) ? ' ' + upper1(fact) : (first ? lower1(fact) : upper1(fact))}.${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
+      // ══ THE FINDING GOES FIRST. EVERYTHING ELSE EARNS ITS PLACE AFTER ══
+      // This template used to render insight, then recognition, then the fact —
+      // and its comment defended that order as "the whole argument". The
+      // evidence says otherwise, three times over: the brief's own first law
+      // (the finding in the first twelve words, 80% of reply-rate decided
+      // there), Chuck Jenkins verbatim ("if they'd led with the finding INSTEAD
+      // OF THE REVIEW COUNT, I'd have opened this in 30 seconds instead of
+      // almost deleting it"), and the brain path's own gate, which mechanically
+      // refuses a draft whose first fourteen words carry no spine word. Chad
+      // Robbins got "453 reviews at 4.9 stars" as sentence one on a live send —
+      // this exact skeleton. So: fact first. Recognition follows as the
+      // contrast that makes the fact bite ("That is with 453 reviews at 4.9
+      // stars."), which is where the reply-earning Michael email carried it,
+      // and the insight lands after both, when he already knows what it is
+      // explaining.
+      `${first ? first + ', ' : ''}${first ? lower1(fact) : upper1(fact)}.${earned ? ' ' + (/^\d/.test(earned) ? 'That is with ' + earned : upper1(earned)) + '.' : ''}${insight ? ' ' + upper1(insight) + '.' : ''}${second ? '\n\n' + upper1(second) + '.' : ''}\n\n${/* endSentence terminates the END of a string, so joining three sentences with
       a space and calling it ONCE punctuated only the last one. Live on Dr Craig
       Wooten: "...is the one a stranger comparing three companies will find A
       practice that asks for a quote before a patient is ready usually stays..."
@@ -13925,9 +14040,16 @@ const composeEmail = (spine, opts = {}) => {
       // literal "undefined" paragraph. The fuzzer caught it within one run.
       const r = n - 2;
       if (r < 1) return [''];
+      // ══ EVERY FORM NAMES WHAT IT COUNTS ═══════════════════════════════
+      // Two of these three had no referent, and the skeletons place this
+      // paragraph directly after the money sentence. Live: "A single surgical
+      // case runs $6k-$15k. Four more after those." — which reads as four more
+      // surgical CASES, a five-figure claim we never made, invented by
+      // adjacency rather than by words. "Like these" pins the count to the
+      // findings he just read, whatever sentence came before.
       return r === 1
-        ? [`There's one more.`, `Those are 2 of ${n}.`, `And one more after that.`]
-        : [`There are ${r} more.`, `Those are 2 of ${n}.`, `${r} more after those.`];
+        ? [`There's one more like these.`, `Those are 2 of ${n}.`, `And one more like them after that.`]
+        : [`There are ${r} more like these.`, `Those are 2 of ${n}.`, `${r} more like these after those two.`];
     })() : [
       // ══ THE COUNT MUST NOT PUT THE PROBLEM SOMEWHERE IT IS NOT ════════
       // "There are 4 of these on your site." went out under findings that are
@@ -14611,10 +14733,10 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
   const costs = rung.costs ? endSentence(toSecondPerson(rung.costs)) : '';
   // The finding's own reframe — its "so what" — recovered from the ladder if the
   // rung did not carry one, exactly as the first email does.
-  let reframe = rung.reframe;
+  let reframe = typeof rung.reframe === 'string' ? rung.reframe : '';
   if (!reframe && rung.id) {
     const _r = HARM_LADDER.find(x => x.id === rung.id);
-    if (_r && _r.reframe) reframe = _r.reframe;
+    if (_r) reframe = reframeOf(_r, { tradeWord: (opts && opts.tradeWord) || (spine && spine.tradeWord) || '' });
   }
   reframe = reframe ? endSentence(reframe) : '';
   // ══ DON'T SAY THE SAME THING TWICE IN ONE EMAIL ══════════════════════════
@@ -15903,7 +16025,7 @@ const rankHarms = (m = {}) => {
       // written without knowing which rung would win. So each rung carries its
       // own — a general truth about how PEOPLE behave, never a claim about this
       // business's systems, which is the line the fabrication guards draw.
-      reframe: h.reframe || null });
+      reframe: reframeOf(h, m) || null });
   }
   // ══ CHECKABILITY IS A GATE, NOT A RANKING ═══════════════════════════════
   // Ordering by opener alone was wrong, and wrong in a way that shows up
@@ -15990,7 +16112,23 @@ const rankHarms = (m = {}) => {
   if (_blocked.length && _openable.length) {
     console.log(`\u21a9 NOT THE OPENER [${_blocked[0].id}]: ${_blocked[0].leadBlockedWhy}. It stays in the audit and can still be the second finding; the email opens on "${String(_openable[0].finding).slice(0, 60)}" instead.`);
   }
-  const lead = _openable[0] || eligible[0] || byOpener[0] || null;
+  // ══ THE FALLBACK WAS A TUNNEL UNDER EVERY BLOCK ═════════════════════════
+  // Grant Renne, live, 2026-08-17: mentions=2 parsed correctly, _dismissible
+  // fired, the rung was leadBlocked — and it OPENED the email anyway, because
+  // every eligible finding on that lead was a blocked review rung and
+  // eligible[0] does not look at the flag. The NOT-THE-OPENER log stayed silent
+  // too (it only prints when something openable exists), so the override was
+  // invisible. Before surrendering to a blocked finding, try a half-gate
+  // unblocked one: a modest TRUE finding he cannot dismiss with arithmetic
+  // beats a "pattern" he divides away before finishing the sentence. The
+  // blocked rung is still the very last resort, because a weak opener still
+  // beats no email at all.
+  const _halfGate = byOpener.find(h => !h.leadBlocked
+    && (h.opener || 0) >= OPENER_GATE / 2 && (h.harm || 0) >= HARM_FLOOR / 2);
+  const lead = _openable[0] || _halfGate || eligible[0] || byOpener[0] || null;
+  if (lead && lead.leadBlocked) {
+    console.log(`\u26a0 BLOCKED RUNG LEADS ANYWAY [${lead.id}]: ${lead.leadBlockedWhy || 'blocked from leading'} — but nothing else on this lead clears even half the opener gate, so it leads as the last resort. This lead is weak for email and the operator should read it before approving.`);
+  }
   return { all: hits, byHarm, byOpener, eligible,
     lead,                           // what the EMAIL opens with
     leadIsGated: !!eligible.length, // did it clear the believability gate
@@ -18050,9 +18188,24 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
       return false;
     };
     const dropped = [];
+    // ══ THE MINER'S LABEL IS COPY, AND IT SHIPPED LOOKING LIKE A LABEL ══════
+    // The prompt asks for "short operational pain" and the model answers in
+    // category-speak: "Crew scheduling delays after initial inspection/quote".
+    // That string is the single most-travelled sentence in the system — it
+    // becomes the spine claim, the audit's top finding, the subject line and
+    // the break-up email, which shipped the slash construction verbatim to a
+    // live inbox on 2026-08-17. Nobody writes "inspection/quote" in an email to
+    // a stranger. One door, one repair: normalise it where it is accepted, so
+    // every reader downstream gets prose. (The quote in sg.evidence is the
+    // reviewer's own words and is deliberately untouched.)
+    const humanizeLabel = (t) => String(t || '')
+      .replace(/\s*\/\s*/g, ' or ')          // inspection/quote -> inspection or quote
+      .replace(/\s*&\s*/g, ' and ')
+      .replace(/\s+/g, ' ').trim();
     const signals = (parsed.signals || [])
       .filter(sg => (sg.count || 0) >= 2)
       .filter(sg => { const ok = quoteExists(sg.evidence); if (!ok) dropped.push(sg.pain); return ok; })
+      .map(sg => ({ ...sg, pain: humanizeLabel(sg.pain) }))
       .map(sg => ({
         // ══ DIVIDE BY WHAT WE READ, NOT BY THE WHOLE PROFILE ══════════════
         // This reported the count against the FULL review total while only ever
@@ -20493,8 +20646,23 @@ const findBusinessesForSale = async (fcKey, apiKey) => {
     // Now: ONE query instead of two, 3 results instead of 5, and the pages are
     // actually read. 2 credits for the search + 3 for the pages = 5 a run, versus
     // the 4 previously spent to guarantee nothing.
+    // ══ ONE SITE, ONE NATIONAL QUERY, WAS THE WHOLE LANE ══════════════════
+    // BizBuySell has no API, but a search engine has indexed every broker
+    // network — so the "BizBuySell alternative" is not another scraper, it is
+    // widening THIS search. Two changes:
+    //   1. Four listing networks instead of one, rotated one per day, so a
+    //      single blocked or thin site no longer means the lane reads dead.
+    //   2. Half the runs target a metro WE ACTUALLY WORK from the discovery
+    //      list, because a national query returns listings we cannot service
+    //      and mostly anonymized ones at that. Day-seeded, not random: the
+    //      same day retries the same query, and successive days sweep the map.
+    const _sites = ['bizbuysell.com', 'bizquest.com', 'businessesforsale.com', 'dealstream.com'];
+    const _daySeed = Math.floor(Date.now() / 864e5);
+    const _site = _sites[_daySeed % _sites.length];
+    const _metro = GP_CITIES[_daySeed % GP_CITIES.length];
     const queries = [
-      'site:bizbuysell.com business for sale established cash flow owner retiring',
+      `site:${_site} business for sale established cash flow owner retiring`,
+      `site:${_site} "${_metro.replace(/ [A-Z]{2}$/, '')}" business for sale owner`,
     ];
     const batches = await Promise.all(
       queries.map(q => firecrawlSearch(fcKey, q, 3, true).catch(() => []))
@@ -20570,8 +20738,17 @@ ${corpus}` }]
       catch { console.log('For-sale: JSON unrepairable, skipping run'); return []; }
     }
 
-    const out = (parsed.listings || [])
-      .filter(l => l.name && l.name.length > 3)
+    // ══ AN ANONYMOUS LISTING IS INTEL, NOT A LEAD ═════════════════════════
+    // "Established HVAC company in Texas" cannot be researched, matched to a
+    // Places record, or emailed — it used to enter the pipeline anyway and die
+    // downstream after spending research effort on a business with no name.
+    // Identifiable listings become leads; the rest are counted and logged so
+    // the lane's real yield is visible.
+    const _all = (parsed.listings || []).filter(l => l.name && l.name.length > 3);
+    const _anon = _all.filter(l => l.identifiable === false);
+    if (_anon.length) console.log(`For-sale: ${_anon.length} anonymized listing(s) held back (no name to research) — ${_anon.map(l => `${l.industry || '?'} in ${l.location || '?'}`).slice(0, 3).join('; ')}`);
+    const out = _all
+      .filter(l => l.identifiable !== false)
       .map(l => ({
         name: l.name,
         website: '',
@@ -26947,8 +27124,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // this route, so today the age is always absent and the line says so rather
     // than inventing one. The moment the client sends it, this states a measured
     // number of days and nothing else changes.
-    const _sigAgeRaw = Number(req.body.signalAgeDays);
-    const _sigAge = Number.isFinite(_sigAgeRaw) && _sigAgeRaw >= 0 ? Math.round(_sigAgeRaw) : null;
+    // The client has never computed signalAgeDays — but the RAW DATE now
+    // travels (jobPostedAt from TheirStack, signalDate from EDGAR's filing),
+    // and an age derived from a date we hold is a measurement, not a guess.
+    // Garbage dates produce NaN and fall through to "not measured" — the same
+    // honest default as before.
+    const _sigAge = signalAgeFrom(req.body);
     const _ageNote = _sigAge === null
       ? 'age of this signal NOT measured — do not state or imply how long ago it happened'
       : `the signal is ${_sigAge} day${_sigAge === 1 ? '' : 's'} old`;
@@ -27870,18 +28051,29 @@ RECENT NEWS TRIGGERS: ${companyTriggers.length > 0 ? '\n' + companyTriggers.map(
 SOURCE SIGNAL: ${req.body.sourceSignal || 'Not specified'}
 
 ═══ THE BUYING WINDOW WE ARE INTERCEPTING (this determines the ENTIRE pitch) ═══
-${(req.body.buyingLane === 'software' && !hasMeasuredBuyingWindow(req.body.discoverySignals)) ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
-: req.body.buyingLane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
+${!_lane ? `NO BUYING WINDOW WAS MEASURED ON THIS LEAD. No job posting, no funding event, no exit signal \u2014 nothing tells us they have already decided to spend money. Do NOT imply they are hiring, expanding, or shopping. The entire pitch rests on what the audit measured about their business, and that is enough.`
+: _lane === 'both' ? `⚡ PERFECT STORM — they are hiring manual ops roles AND a marketing person AT THE SAME TIME.
 They have allocated budget on BOTH fronts and committed on NEITHER. This is the strongest possible position.
 THE PITCH: they are about to spend ~$125k/year on two hires (one to do repetitive work software handles, one junior marketer). CROJ replaces the first with a build and the second with a senior team — for less, and it compounds.
 Lead with whichever is bleeding more money. Do NOT pitch both products in one email — name the sharper fire, and let the call surface the rest.`
-: req.body.buyingLane === 'retainer' ? `📣 THE RETAINER WINDOW — they posted a MARKETING role.
+: _lane === 'funding' ? `💰 THE FUNDING WINDOW — they filed a Form D: this business just RAISED PRIVATE CAPITAL${Number(req.body.raiseAmount) > 0 ? ` ($${Number(req.body.raiseAmount).toLocaleString()} offering)` : ''}.
+${(() => { const _d = Number(req.body.signalAgeDays); return Number.isFinite(_d) && _d >= 0 ? `The filing is ${Math.round(_d)} day(s) old — a measured date, safe to state.` : 'The filing DATE was not measured on this lead — do NOT state or imply how recent the raise is.'; })()}
+New capital gets allocated in the months after a raise: budgets open, hires get made, and growth targets arrive with the money. This is the high end of the ICP — a business that just took investor money is EXPECTED to spend on growth, and a marketing engine or a system build is exactly what that money is for.
+THE PITCH: they now have both the budget and the mandate. Frame the audit's sharpest finding as the thing standing between the capital they raised and the growth they raised it for. Do NOT mention the SEC, the form, or the amount in the email itself — the owner knows what he filed; quoting it back reads as surveillance. It shapes the CALL, not the copy.`
+: _lane === 'retainer' ? `📣 THE RETAINER WINDOW — they posted a MARKETING role.${(() => {
+  const _mh = marketingHireFrom(req.body);
+  const _roles = Array.isArray(req.body.marketingRoles) ? req.body.marketingRoles.filter(Boolean).slice(0, 3) : [];
+  const _snip = String(req.body.jobSnippet || '').replace(/\s+/g, ' ').trim().slice(0, 700);
+  return `
+${_roles.length ? `THE ROLE(S), VERBATIM FROM THEIR POSTING: ${_roles.join(' | ')}.` : ''}${_mh && Number.isFinite(_mh.jobPostedDaysAgo) ? ` Posted ${_mh.jobPostedDaysAgo} day(s) ago — a measured date, safe to state.` : ' The posting DATE was not measured — do not state how long it has been up.'}${_snip ? `
+FROM THE POSTING ITSELF (their own words about what they want — quote it where it sharpens the finding, it is corpus): "${_snip}"` : ''}`;
+})()}
 THIS IS THE MOST IMPORTANT THING TO UNDERSTAND ABOUT THIS LEAD:
 They have ALREADY DECIDED to spend money on marketing. The budget is allocated (~$70k/yr). What they have NOT decided is HOW to spend it. We are not asking them to open their wallet — it is already open.
 THE PITCH: "You're about to hire one junior marketer for $70k. For that money you can have a senior team — strategy, ads, creative, and the technology behind it — that has already done this." A single junior hire cannot run strategy, build the path to a booking, produce creative, AND manage spend. A team can.
 This maps to the CEO's ICP #3 and #4 — CROJungle's CORE PRODUCT. Do NOT pitch a software build here unless the audit turns up an overwhelming ops problem.
 The strongest proof point here is Sean, a plumbing company ($140k on $4k in one month, ~30x over 8 months) — it is exactly the "one marketing hire vs. a team" comparison, in dollars. Describe him only as "a plumbing company"; never name him and never invent surrounding detail.`
-: (manualRoleCount >= 2) ? `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
+: (_lane === 'software' || manualRoleCount >= 2) ? `🔧 THE SOFTWARE WINDOW — they posted manual/repetitive OPS roles.
 They have already identified the problem and allocated the budget (~$55k/yr per role). They have started a hiring process but have NOT yet committed.
 THE PITCH: "You're about to pay a human $55k a year, every year, to do work software does once and then does forever." Name the exact roles. Do the math on the loaded salary. This maps to ICP #2 — the $40k-$100k+ custom build.
 The strongest proof point is the seasonal business (relief + profit) for an owner-operator, or Kraft Heinz if they are larger and more technical.`
@@ -27891,7 +28083,7 @@ FIRST, LEVERAGE. If your top two are within 2 points, the one on the HIGHER Horm
 SECOND, UNDENIABILITY. If they are still level after that, the higher VERIFIABLE score wins \u2014 the one he can confirm on his phone in ten seconds. A finding he checks and confirms buys credibility for every other sentence in the email.
 NEITHER RULE OVERRULES A CLEAR WINNER. Three or more points ahead wins on its own merit, whatever layer it sits on. These only decide ties, which is exactly where the arbitrariness was.`}.
 CRITICAL: Do NOT default to a software/AI build. This lead did not post ops roles, so there is NO evidence they are drowning in manual labor. Pitch ONLY what the SITE AND AD AUDIT actually reveal. For a local owner-operated business the answer is almost always one of two things:
-  1) WEBSITE REBUILD ($50k+) — if the site is dated, has no clear CTA, weak positioning, or looks like it predates 2021. Note: a standalone landing page is NOT one of our products and must never be recommended or priced as the offering. Describing dedicated conversion pages as part of a full rebuild is fine — just never present one as the product itself.
+  1) WEBSITE REBUILD ($35k floor, ~$70k typical) — if the site is dated, has no clear CTA, weak positioning, or looks like it predates 2021. Note: a standalone landing page is NOT one of our products and must never be recommended or priced as the offering. Describing dedicated conversion pages as part of a full rebuild is fine — just never present one as the product itself.
   2) END-TO-END MARKETING / ADS RETAINER — if they are running ads, have a thin/under-managed online presence, or are clearly under-marketed for their size.
 Recommend AI Software or AI Brain ONLY if the audit surfaces a genuine, confirmed operational or systems gap — never as a default. Lead with the single sharpest confirmed problem from the audit.`}
 
@@ -31248,6 +31440,21 @@ app.post('/api/research', runResearch);
 // Storage is in-process and deliberately so: a Render dyno restart loses in-flight
 // jobs, which is correct — a half-finished audit should be re-run, not resurrected.
 const _jobs = new Map();          // id -> { status, startedAt, finishedAt, company, result, error, httpStatus, progress }
+// How many research runs may WORK at once. Two is the measured safe number on
+// the current Firecrawl plan — three at once is what made two runs stop midway
+// and report nothing. When the plan is upgraded for 40-lead batches, raise this
+// with the env var rather than editing code: the queue design already holds at
+// any value, because a queued lead's clock only starts when its work does.
+const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '2', 10) || 2);
+
+// Pure, so the boot check can execute the exact decision the poller makes.
+// A job's 8 minutes are 8 minutes of WORK: a job still queued has spent none of
+// them, however long ago it was submitted.
+const researchKillVerdict = (job, now) => {
+  if (!job || job.status !== 'running') return false;
+  if (job.phase !== 'running') return false;
+  return (now - (job.startedWorkAt || job.startedAt)) > 8 * 60 * 1000;
+};
 const JOB_TTL_MS = 30 * 60 * 1000;
 const JOB_MAX = 200;
 
@@ -31270,6 +31477,7 @@ const _sweepJobs = () => {
       if (workAge > 10 * 60 * 1000) {
         j.status = 'error';
         j.phase = 'dead';
+        j.workDone = true;
         j.finishedAt = now;
         j.error = 'This run stopped reporting and was cleared after 10 minutes so it would stop holding a slot. Re-run this lead.';
         console.log(`\u26d4 JOB ${id} [${j.company}]: STALE \u2014 still marked running after ${Math.round(workAge / 60000)} minutes with no result. Cleared so the next lead can start. This is the fault that made single leads fail with nothing else running.`);
@@ -31299,6 +31507,18 @@ const _captureRes = (job) => {
         job.status = 'error';
         job.error = (payload && (payload.reason || payload.error)) || `HTTP ${code}`;
         job.result = payload;   // 422 brain-failure still carries a usable reason + screenshot
+      } else if (job.status === 'error') {
+        // ══ THE WORK FINISHED AFTER THE KILL ═══════════════════════════════
+        // The poller or the timer already declared this job dead and the client
+        // has stopped polling. The research still completed — every credit was
+        // spent — and this used to overwrite the error with 'done' so the kill
+        // and the completion each told a different story. Keep the error status
+        // the client saw, carry the result anyway (a stray re-poll can still
+        // collect it), and say loudly that the credits bought a real answer:
+        // the immediate re-run is nearly free because every cache is warm.
+        job.result = payload;
+        job.lateResult = true;
+        console.log(`\u26a0 JOB ${job.id} [${job.company}]: LATE RESULT \u2014 research finished AFTER the job was declared dead. The measurements are cached, so re-running this lead now costs almost nothing.`);
       } else {
         job.status = 'done';
         job.result = payload;
@@ -31369,8 +31589,13 @@ app.post('/api/research-async', (req, res) => {
   //
   // Queue rather than refuse: the work still happens, just in order, and the
   // client contract is unchanged \u2014 it polls and gets a result either way.
-  const _runningNow = [..._jobs.values()].filter(j => j.status === 'running' && j.phase === 'running' && j.id !== id).length;
-  if (_runningNow >= 2) {
+  // Counts pending WORK, not the status string: a job the poller declared dead
+  // keeps making Firecrawl calls until runResearch returns, and counting it as
+  // free admitted a queued lead early — true concurrency crept past the cap,
+  // which is the exact burst the cap exists to prevent. workDone is set in the
+  // .finally, the one place that fires however the work ends.
+  const _runningNow = [..._jobs.values()].filter(j => j.phase === 'running' && j.workDone !== true && j.id !== id).length;
+  if (_runningNow >= RESEARCH_CONCURRENCY) {
     console.log(`JOB ${id} [${job.company}]: QUEUED \u2014 ${_runningNow} already running. Three at once is what made two runs stop mid-way and report nothing. This starts when a slot frees.`);
   }
   console.log(`JOB ${id} [${job.company}]: accepted — running in background, client will poll`);
@@ -31404,8 +31629,15 @@ app.post('/api/research-async', (req, res) => {
   const _waitForSlot = async () => {
     let waited = 0;
     // Counts only jobs actually WORKING. Queued jobs no longer block each other.
-    const busy = () => [..._jobs.values()].filter(j => j.status === 'running' && j.phase === 'running' && j.id !== id).length;
-    while ((_sweepJobs(), busy()) >= 2 && waited < 15 * 60 * 1000) {
+    const busy = () => [..._jobs.values()].filter(j => j.phase === 'running' && j.workDone !== true && j.id !== id).length;
+    // Two hours, not fifteen minutes. The short valve existed to stop a stuck
+    // queue from starving jobs forever — but under a 40-lead batch it fired on
+    // EVERY lead still queued at minute fifteen and dumped them into
+    // simultaneous execution, recreating the exact three-at-once burst the
+    // queue was built to end. With the kill-clock measuring work (not queue
+    // time) and workDone releasing slots however a job ends, waiting is safe;
+    // the long valve only remains for a truly wedged process.
+    while ((_sweepJobs(), busy()) >= RESEARCH_CONCURRENCY && waited < 120 * 60 * 1000) {
       // Sweep on every pass: a job that died while this one waited must release
       // its slot here, not only when the next lead happens to be submitted.
       if (waited === 0) console.log(`JOB ${id} [${job.company}]: waiting for a slot \u2014 ${busy()} run(s) working. Its 8-minute clock has NOT started; it begins when the work does.`);
@@ -31424,7 +31656,7 @@ app.post('/api/research-async', (req, res) => {
       _armTimeout();
       return runResearch(req, _captureRes(job));
     })
-    .finally(() => clearTimeout(_jobTimer))
+    .finally(() => { job.workDone = true; clearTimeout(_jobTimer); })
     .catch((e) => {
       job.status = 'error';
       job.error = e && e.message ? e.message : String(e);
@@ -31444,14 +31676,25 @@ app.get('/api/research-job/:id', (req, res) => {
   }
   const elapsedMs = (job.finishedAt || Date.now()) - job.startedAt;
   if (job.status === 'running') {
-    // A run that has genuinely stopped making progress must surface as an error
-    // rather than polling forever — the exact failure this queue exists to end.
-    if (elapsedMs > 8 * 60 * 1000) {
+    // ══ TWO CLOCKS, AND THE WRONG ONE DID THE KILLING ═══════════════════════
+    // The queue's whole design is that a lead waiting for a slot has NOT started
+    // its 8 minutes — the submit log even says so. The setTimeout above honours
+    // that: it is armed at work-start. This poller did not: it measured from
+    // SUBMISSION and killed on the same 8-minute number, so the third lead of
+    // any batch burned its entire budget standing in the queue and was declared
+    // dead before its first Firecrawl call. Doc Tony, live, 2026-08-17: research
+    // "exceeded 8 minutes" having never begun, one lead of three lost, and the
+    // error blamed Firecrawl rate limiting — a diagnosis pointing at the wrong
+    // continent. A queued job is never killed here; a working job is killed on
+    // time actually WORKED. Under a 40-lead batch the queue wait is the COMMON
+    // case, so before this fix batch mode would have killed lead 3 through 40.
+    const workedMs = job.phase === 'running' ? (Date.now() - (job.startedWorkAt || job.startedAt)) : 0;
+    if (researchKillVerdict(job, Date.now())) {
       job.status = 'error';
-      job.error = 'Research exceeded 8 minutes and was abandoned. This usually means Firecrawl is rate-limiting or the site never responded.';
+      job.error = 'Research worked for 8 minutes without finishing and was stopped. Everything already measured was still paid for and is cached, so a re-run is cheap. The usual cause is a site that never responds or Firecrawl rate-limiting mid-run.';
       job.finishedAt = Date.now();
     }
-    return res.json({ status: job.status, elapsedMs, error: job.error || null });
+    return res.json({ status: job.status, phase: job.phase || 'running', elapsedMs, workedMs, error: job.error || null });
   }
   return res.json({
     status: job.status,
@@ -31816,7 +32059,7 @@ app.listen(PORT, () => {
       // this whole gate exists to prevent. Resolved against a fixture instead.
       const _c = costsOf(h, _OUTCOME_FIXTURE);
       if (_c) _sentences.push([h.id, _c]);
-      if (typeof h.reframe === 'string') _sentences.push([h.id, h.reframe]);
+      { const _rf = reframeOf(h, _OUTCOME_FIXTURE); if (_rf) _sentences.push([h.id, _rf]); }
     }
     const _bad = [];
     for (const [id, t] of _sentences) {
@@ -36240,7 +36483,7 @@ app.listen(PORT, () => {
       const parts = [];
       try { parts.push(String((typeof h.say === 'function' ? h.say(_m) : h.say) || '')); } catch (e) { void e; }
       parts.push(costsOf(h, _m));
-      parts.push(String(h.reframe || ''));
+      parts.push(reframeOf(h, _m));
       for (const t of parts) {
         if (!t) continue;
         _checked++;
@@ -37134,6 +37377,217 @@ app.listen(PORT, () => {
     console.log(`⛔ BRIEF LEAK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ TWO WAYS ONE LEAD'S OWNER LOOKUP BURNED CREDITS IT DID NOT NEED ═════
+  // Both from the same live run, both silent, both presenting as "research is
+  // slow and expensive" rather than as bugs.
+  //
+  // 1. A Latisse FAQ was bought as a leadership page. The slug guard capped
+  //    content slugs at four words and then substring-matched the hint list, so
+  //    "myths-facts-about-latisse" — four words, contains "about" — walked in.
+  //    Position is the real boundary: leadership slugs LEAD with their hint.
+  // 2. "Chad Robbins" was rejected as hallucinated by a practice NAMED
+  //    "Dr. Chad Robbins", because the corroboration corpus was the scraped
+  //    pages alone and his staff pages name his nurses, not him. The rejection
+  //    then bought ~8 paid searches to rediscover the lead record's own name.
+  try {
+    const _fails = [];
+    const _urls = [
+      'https://x.com/myths-facts-about-latisse', 'https://x.com/meet-our-staff',
+      'https://x.com/about-us', 'https://x.com/our-team', 'https://x.com/our-story',
+      'https://x.com/who-we-are', 'https://x.com/pain-management', 'https://x.com/case-history',
+      'https://x.com/questions-about-botox', 'https://x.com/company-history',
+      'https://x.com/meet-the-team', 'https://x.com/blog/how-to-talk-to-your-partner-about-infertility',
+    ];
+    const _picked = rankUrlsByIntent(_urls, LEADERSHIP_URL_HINTS, 12);
+    for (const _bad of ['myths-facts-about-latisse', 'pain-management', 'case-history', 'questions-about-botox', 'partner-about-infertility']) {
+      if (_picked.some(u => u.includes(_bad))) _fails.push(`"${_bad}" is still bought as a leadership page`);
+    }
+    for (const _good of ['meet-our-staff', 'about-us', 'our-team', 'our-story', 'who-we-are', 'company-history', 'meet-the-team']) {
+      if (!_picked.some(u => u.includes(_good))) _fails.push(`"${_good}" — a real leadership slug — is no longer matched`);
+    }
+    if (!nameCorroborated('Chad Robbins', 'Dr. Chad Robbins', 'our nurse injectors are Amy and Beth')) {
+      _fails.push('an owner the business is NAMED AFTER is still rejected as hallucinated');
+    }
+    if (nameCorroborated('Jane Smith', 'Dr. Chad Robbins', 'our nurse injectors are Amy and Beth')) {
+      _fails.push('an invented name passes corroboration — the gate is gone, not widened');
+    }
+    if (nameCorroborated('Chad', 'Dr. Chad Robbins', '')) {
+      _fails.push('a single-token name passes — two tokens were always required');
+    }
+    if (_fails.length) {
+      console.log(`⛔ DM SPEND CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ DM SPEND CHECK: a hint word buried mid-slug no longer buys a scrape — the hint must LEAD the slug (or follow our/the/my) — while all seven real leadership shapes still match; and an owner the business is named after corroborates without a paid search, while an invented name is still refused. Both from the 2026-08-17 run: a Latisse FAQ scraped as a leadership page, and "Chad Robbins" rejected by "Dr. Chad Robbins".`);
+    }
+  } catch (e) {
+    console.log(`⛔ DM SPEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A LEAD WAS KILLED FOR TIME IT SPENT STANDING IN LINE ════════════════
+  // Doc Tony, live, 2026-08-17: third lead of three, queued behind two working
+  // runs, declared "exceeded 8 minutes and was abandoned" without ever making a
+  // call — and the error text blamed Firecrawl. The submit path even logged
+  // "its 8-minute clock has NOT started", and the poller then measured from
+  // submission anyway. Two clocks, one promise, one of them lying. Under a
+  // 40-lead batch the queue wait is the COMMON case: the old poller would have
+  // killed every lead from the third onward.
+  try {
+    const _fails = [];
+    const _now = 100 * 60 * 1000;
+    const _min = 60 * 1000;
+    // Queued for 30 minutes: never killed — its work has not begun.
+    if (researchKillVerdict({ status: 'running', phase: 'queued', startedAt: _now - 30 * _min }, _now)) {
+      _fails.push('a QUEUED job is still killed on time-in-queue — the Doc Tony failure verbatim');
+    }
+    // Submitted long ago, working for only 2 minutes: alive.
+    if (researchKillVerdict({ status: 'running', phase: 'running', startedAt: _now - 30 * _min, startedWorkAt: _now - 2 * _min }, _now)) {
+      _fails.push('a job WORKING for 2 minutes is killed because it was submitted 30 minutes ago');
+    }
+    // Genuinely stuck: working 9 minutes — killed, the guard still guards.
+    if (!researchKillVerdict({ status: 'running', phase: 'running', startedAt: _now - 9 * _min, startedWorkAt: _now - 9 * _min }, _now)) {
+      _fails.push('a job that has WORKED past 8 minutes is no longer killed — the hang guard is gone, not fixed');
+    }
+    // Finished jobs are never re-killed.
+    if (researchKillVerdict({ status: 'done', phase: 'running', startedAt: 0, startedWorkAt: 0 }, _now)) {
+      _fails.push('a finished job is killed');
+    }
+    // ══ AND A KILLED JOB MUST KEEP ITS SLOT WHILE IT STILL WORKS ══════════
+    // The poller flips status to 'error' but runResearch keeps making paid
+    // calls until it returns. Counting slots by the status string admitted a
+    // queued lead early and true concurrency crept past the cap. The slot
+    // count now keys on workDone — set in the .finally, the one line that runs
+    // however the work ends — and this asserts the wire from source, because
+    // the closures are not reachable from here.
+    const _qsrc = require('fs').readFileSync(__filename, 'utf8');
+    const _busySites = (_qsrc.match(/_jobs\.values\(\)\]\.filter\(j => j\.phase === 'running' && j\.workDone !== true/g) || []).length;
+    if (_busySites < 2) _fails.push(`only ${_busySites} of 2 slot-count sites key on pending WORK — a poller-killed job frees its slot while still making paid calls`);
+    if (!/\.finally\(\(\) => \{ job\.workDone = true;/.test(_qsrc)) _fails.push('nothing sets workDone when the work ends — every slot would leak permanently');
+    if (_fails.length) {
+      console.log(`⛔ QUEUE CLOCK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ QUEUE CLOCK CHECK: the 8-minute research budget is 8 minutes of WORK — a queued lead is never killed for waiting, a working lead is measured from its first call, and a genuinely hung run is still stopped. The batch path depends on this: with 40 leads and ${RESEARCH_CONCURRENCY} working slot(s), queue wait is the common case and the old clock would have killed every lead from the third onward.`);
+    }
+  } catch (e) {
+    console.log(`⛔ QUEUE CLOCK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ TWO MENTIONS IN SIXTY-EIGHT REVIEWS OPENED A LIVE EMAIL ═════════════
+  // Grant Renne, 2026-08-17. The mentions floor fired exactly as designed —
+  // mentions=2 parsed from the live pain string, rung marked leadBlocked — and
+  // the email opened on it anyway, because every eligible finding on the lead
+  // was a blocked review rung and the fallback chain read eligible[0] without
+  // looking at the flag. The design said "barred from LEADING"; the fallback
+  // said "unless it is convenient". An owner does that division before he
+  // finishes the sentence: 66 of 68 people were happy, and a stranger went
+  // looking for his two worst reviews.
+  try {
+    const _fails = [];
+    const _base = {
+      reviewPainCount: 1, reviewPainTop: 'slow callbacks after the quote',
+      reviewsRead: 68, reviewCount: 68, rating: 4.9, ownerReplies: 0,
+      rankChecked: false, tradeWord: 'foundation repair',
+    };
+    // An anecdote (2 mentions) with a SELLABLE alternative: the alternative
+    // leads. The first draft of this check used a 9-field form as the
+    // alternative and failed its own boot — long_form's opener is 12, crushed
+    // by the sellable table on purpose (an owner shortens his own form in an
+    // afternoon), so it cannot clear even the half gate and the check was
+    // demanding a rung lead that the design forbids from leading. The
+    // alternative has to be one this company can actually sell against, which
+    // is what the real Grant lead had too (a quotable positioning line, a
+    // review deficit against the top of his search).
+    const _withAlt = rankHarms({ ..._base, reviewPainMentions: 2,
+      hiringMarketing: true, jobPostedDaysAgo: 14, marketingRoleName: 'marketing manager' });
+    if (_withAlt.lead && _withAlt.lead.id === 'review_pain_pattern') {
+      _fails.push('2-of-68 still opens the email when a marketing hire posted 14 days ago is sitting right there — the fallback tunnel is back');
+    }
+    if (!_withAlt.lead) _fails.push('the lead with an alternative produced no opener at all');
+    // A real pattern (5 mentions), nothing else on the lead: review pain leads
+    // — the floor must not become a ban.
+    const _realPattern = rankHarms({ ..._base, reviewPainMentions: 5 });
+    if (!_realPattern.lead || _realPattern.lead.id !== 'review_pain_pattern') {
+      _fails.push(`5 mentions no longer leads (led: ${_realPattern.lead && _realPattern.lead.id}) — the floor has become a ban, which throws away the one finding PART 5 credits with every reply`);
+    }
+    // An anecdote and NOTHING else: it still leads, loudly, as the last resort.
+    const _alone = rankHarms({ ..._base, reviewPainMentions: 2 });
+    if (!_alone.lead) _fails.push('a lead whose only finding is a 2-mention anecdote now produces no email at all — blocked was never supposed to mean silenced');
+    if (_fails.length) {
+      console.log(`⛔ REVIEW ANECDOTE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ REVIEW ANECDOTE CHECK: a 2-mention review anecdote can no longer open an email past a half-gate alternative — the marketing-hire signal leads instead — while a genuine 5-mention pattern still leads, and a lead with nothing else still gets its email (with a ⚠ in the log naming it weak). The mentions floor now actually holds through the fallback chain that bypassed it live on Grant Renne.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW ANECDOTE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE REASON THE LEAD EXISTS MUST REACH THE BRAIN ═════════════════════
+  // A TheirStack lead exists BECAUSE the company is hiring a marketer; an EDGAR
+  // lead because it just raised. For the system's whole life that origin story
+  // was flattened before the audit: the prompt's buying-window block branched
+  // on req.body.buyingLane — a hard-coded client default of 'software' — while
+  // the CORRECTED lane sat one screen up, computed and then used only in a log
+  // line. EDGAR had no branch at all, so a funding lead was framed as "no
+  // confirmed hiring signal"; the raise amount and the filing date existed only
+  // inside a display string; and reachWindow's clock had never once received a
+  // date ("nothing has ever sent it" — its own comment).
+  try {
+    const _fails = [];
+    const _day = 864e5, _now = 1000 * _day;
+    // The honest age, from every door it can arrive through.
+    if (signalAgeFrom({ jobPostedAt: new Date(_now - 14 * _day).toISOString() }, _now) !== 14) {
+      _fails.push('a TheirStack posting date does not yield its measured age');
+    }
+    if (signalAgeFrom({ signalDate: new Date(_now - 30 * _day).toISOString() }, _now) !== 30) {
+      _fails.push("an EDGAR filing date does not yield its measured age — the raise clock is still 'measured from WHEN? Nothing here knows'");
+    }
+    if (signalAgeFrom({ signalAgeDays: 7, jobPostedAt: new Date(_now - 90 * _day).toISOString() }, _now) !== 7) {
+      _fails.push('an explicit client-computed age no longer wins over the derived one');
+    }
+    if (signalAgeFrom({ signalDate: 'not a date' }, _now) !== null) _fails.push('a garbage date yields an age instead of "not measured"');
+    if (signalAgeFrom({ signalDate: new Date(_now + 5 * _day).toISOString() }, _now) !== null) _fails.push('a FUTURE date yields an age — that is a fabricated clock');
+    if (signalAgeFrom({}, _now) !== null) _fails.push('no date at all yields an age');
+    // The funding lane resolves.
+    if (buyingWindowKind({ raised_funding: true }) !== 'funding') {
+      _fails.push('raised_funding no longer resolves to the funding lane');
+    }
+    // The wires, read from source the way MEASUREMENT DELIVERY CHECK does —
+    // each of these is a hop that was silently dropped for the system's whole
+    // life, so each is asserted by name.
+    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _bw = _src.indexOf('THE BUYING WINDOW WE ARE INTERCEPTING');
+    const _bwBlock = _bw > 0 ? _src.slice(_bw, _bw + 6000) : '';
+    if (!_bwBlock) _fails.push('the buying-window block is gone from the audit prompt');
+    if (/req\.body\.buyingLane\s*===/.test(_bwBlock)) {
+      _fails.push("the audit prompt still branches on req.body.buyingLane — the client's hard-coded 'software' default — instead of the corrected lane");
+    }
+    if (!/_lane === 'funding'/.test(_bwBlock)) _fails.push('the prompt has no funding branch, so an EDGAR lead is still framed as "no confirmed hiring signal"');
+    if (!/_lane === 'retainer'/.test(_bwBlock)) _fails.push('the prompt does not branch the retainer lane on the corrected value');
+    if (!/marketingRoles/.test(_bwBlock)) _fails.push('the retainer branch no longer names the posted role(s)');
+    if (!/jobSnippet/.test(_bwBlock)) _fails.push("the retainer branch no longer carries the posting text — the owner's own words about what he thinks is broken");
+    // The for-sale lane: no longer one national query against one site, and an
+    // anonymized listing can no longer enter the pipeline as an unresearchable
+    // lead. Source-read, because the function spends real credits when run.
+    const _fs = _src.indexOf('const findBusinessesForSale');
+    const _fsBlock = _fs > 0 ? _src.slice(_fs, _fs + 9000) : '';
+    if (!/bizquest\.com/.test(_fsBlock) || !/businessesforsale\.com/.test(_fsBlock)) {
+      _fails.push('the for-sale lane is back to a single listing site — one blocked site reads as a dead lane');
+    }
+    if (!/GP_CITIES/.test(_fsBlock)) _fails.push('the for-sale lane no longer targets the metros we actually work');
+    if (!/identifiable !== false/.test(_fsBlock)) _fails.push('anonymized for-sale listings enter the pipeline again — they cannot be researched or emailed');
+    const _edgar = _src.indexOf("source: 'sec_edgar',\r\n        signals: { raised_funding: true },");
+    const _edgarBlock = _edgar > 0 ? _src.slice(_edgar, _edgar + 400) : '';
+    if (!/raiseAmount/.test(_edgarBlock) || !/signalDate/.test(_edgarBlock)) {
+      _fails.push('the EDGAR source no longer emits raiseAmount/signalDate as data — the raise is a display string again');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SOURCE STORY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SOURCE STORY CHECK: the reason a lead exists now reaches the audit. The prompt branches on the CORRECTED lane (a funding branch included, with the amount as data and a do-not-quote-it rule), the retainer branch names the posted roles and carries the posting text, and the signal clock accepts a real date from either source — 14 days from a posting, 30 from a filing — while garbage, future and absent dates all stay "not measured".`);
+    }
+  } catch (e) {
+    console.log(`⛔ SOURCE STORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
   // Every lead logs "no measured buying window", thirty-plus in a row, with
   // Adzuna, BizBuySell, EDGAR and Google News all wired and all silent. So an
@@ -37490,7 +37944,7 @@ app.listen(PORT, () => {
       if (!said) continue;
       _checked++;
       const _seen = new Set();
-      for (const g of _grams([said, h.reframe || '', costsOf(h, _m)].join(' . '))) {
+      for (const g of _grams([said, reframeOf(h, _m), costsOf(h, _m)].join(' . '))) {
         if (_seen.has(g)) { _dup.push(`${h.id}: "${g}"`); break; }
         _seen.add(g);
       }
@@ -39110,7 +39564,7 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
           harm: Number(h.harm) || 0,
           opener: Number(h.opener) || 0,
           band: h.band || null,
-          reframe: h.reframe || (_rung && _rung.reframe) || null,
+          reframe: (typeof h.reframe === 'string' && h.reframe) || reframeOf(_rung, (audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {})) || null,
         };
       });
     source = 'harmsRanked';
@@ -39250,7 +39704,7 @@ app.post('/api/compose-email', async (req, res) => {
       const _m0 = audit.measuredNumbers || (audit._persisted && audit._persisted.measuredNumbers) || {};
       if (!useSpine.reframe && useSpine.claimId) {
         const _r = HARM_LADDER.find(x => x.id === useSpine.claimId);
-        if (_r && _r.reframe) useSpine = { ...useSpine, reframe: _r.reframe };
+        if (_r) { const _rf = reframeOf(_r, _m0 || {}); if (_rf) useSpine = { ...useSpine, reframe: _rf }; }
       }
       // ══ THE TRADE IS THE FACT; THE MONEY IS A LOOKUP ══════════════════════
       // This only computed a figure when the spine had none, so a stored jobValue
@@ -39306,7 +39760,7 @@ app.post('/api/compose-email', async (req, res) => {
               finding: h.finding,
               costs: h.costs || null,
               harm: Number(h.harm) || 0,
-              reframe: h.reframe || (_rung && _rung.reframe) || null,
+              reframe: (typeof h.reframe === 'string' && h.reframe) || reframeOf(_rung, _m0 || {}) || null,
             };
           })
           .sort((a, b) => b.harm - a.harm);
@@ -39625,7 +40079,15 @@ app.post('/api/compose-email', async (req, res) => {
             // between them — instead of measuring prose against a template.
             if (composed.variantB) {
               composed.variantB = { ...composed.variantB, body: _brainBody, writtenBy: 'brain' };
+              // Both arms now share one body on purpose, so the split test
+              // measures the SUBJECT. Said on the object, not only in a
+              // comment, so the screen can stop presenting it as a body test.
+              composed.abTest = 'subject-only';
             }
+            // Provenance travels with the email. The screen was printing
+            // "no model wrote any part of this email" over a body the model
+            // wrote, because the only record of who wrote it was a server log.
+            composed.brainWriter = { wrote: true };
             sessionAttachEmail(company, composed.variantA.subject, _brainBody, '');
             console.log(`\u270d\ufe0f BRAIN WROTE IT [${company}]: every figure traced to a measurement, no post-contact claim, the finding survived. The facts are the composer's; the sentences are not.`);
           } else {
@@ -39639,7 +40101,7 @@ app.post('/api/compose-email', async (req, res) => {
             // The rewrite faces the SAME verifier. A second failure falls back
             // exactly as before, so this can only turn a rejected draft into a
             // passing one; it cannot lower the floor.
-            let _fixed = null;
+            let _fixed = null, _retryWhy = null;
             try {
               const _r2 = await rewriteEmailWithBrain(_parts, req.body.apiKey, company, _written, _v.why);
               if (_r2) {
@@ -39651,7 +40113,10 @@ app.post('/api/compose-email', async (req, res) => {
                   ..._rankOpt,
                 });
                 if (_v2.ok) _fixed = _v2.body;
-                else console.log(`\u270d\ufe0f REWRITE ALSO REJECTED [${company}]: ${_v2.why}. Two attempts is enough — sending the composed version.`);
+                else {
+                  _retryWhy = String(_v2.why || '');
+                  console.log(`\u270d\ufe0f REWRITE ALSO REJECTED [${company}]: ${_v2.why}. Two attempts is enough — sending the composed version.`);
+                }
               }
             } catch (e) { void e; }
             if (_fixed) {
@@ -39660,15 +40125,28 @@ app.post('/api/compose-email', async (req, res) => {
               // ships must not be the one the model never touched.
               if (composed.variantB) {
                 composed.variantB = { ...composed.variantB, body: _tidy(_fixed), writtenBy: 'brain' };
+                composed.abTest = 'subject-only';
               }
+              composed.brainWriter = { wrote: true, retried: true, firstRefusal: String(_v.why || '') };
               sessionAttachEmail(company, composed.variantA.subject, _fixed, '');
               console.log(`\u270d\ufe0f REWRITTEN AND ACCEPTED [${company}]: the first draft was refused — ${String(_v.why).slice(0, 90)} — and the corrected version passes every check. This lead would previously have dropped to the composed template.`);
             } else {
+            // The reason the model's draft died has only ever reached a server
+            // log. The operator judging "same old emails" was looking at the
+            // composed fallback with nothing on screen saying so or why — so the
+            // writer's failures read as the writer having no talent. The reason
+            // now rides the response and the client shows it.
+            composed.brainWriter = { wrote: false, why: String(_v.why || ''), retryWhy: _retryWhy };
             console.log(`\u270d\ufe0f BRAIN DRAFT REJECTED [${company}]: ${_v.why}. Sending the composed version instead \u2014 the floor is the email we would have sent anyway.`);
             }
           }
         }
-      } catch (e) { console.log(`Email writer skipped: ${e && e.message}`); }
+      } catch (e) {
+        console.log(`Email writer skipped: ${e && e.message}`);
+        // Only when nothing better was recorded — an exception AFTER a
+        // successful write must not relabel the email as unwritten.
+        if (composed && !composed.brainWriter) composed.brainWriter = { wrote: false, why: `writer error \u2014 ${String(e && e.message || e).slice(0, 140)}` };
+      }
       // ══ THE LOG MUST SAY WHO WROTE IT ═══════════════════════════════════
       // This printed "No model call, no tokens" on the very email the line above
       // reported the brain had written. The provenance label is the one thing in
