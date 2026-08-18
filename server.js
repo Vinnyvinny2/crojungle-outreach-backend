@@ -5219,6 +5219,34 @@ const _MAP_TTL_MS = 10 * 60 * 1000;
 // In-memory on purpose: a Render deploy clears it, and a deploy is exactly when
 // a fresh audit is wanted.
 const crypto = require('crypto');
+
+// ══ FORTY-SEVEN COPIES OF THIS FILE, IN MEMORY, AT ONCE ══════════════════════
+// The boot checks that read their own source did it independently: 47 separate
+// readFileSync(__filename) calls, each materialising the whole ~2.9MB file. That
+// is ~140MB of strings before anything else, and it is WORSE than the raw total
+// because V8 represents `big.slice(a, b)` as a SlicedString holding a pointer to
+// its parent — so every check that kept a slice kept its entire 2.9MB copy alive
+// with it. Nothing freed until boot finished.
+//
+// It fit locally and died on Render, which caps the heap near 256MB: the deploy
+// of 2026-08-18 crashed at "Reached heap limit Allocation failed" immediately
+// after LIVE STORE CHECK, restarted, crashed again — a boot loop, so /api/research
+// never answered and the UI fell straight back to "Run Research" with no error to
+// read. The three checks added that day were not the fault; they were the last
+// three of forty-seven.
+//
+// One read, cached. The source-reading checks are a real technique — reading the
+// wire instead of trusting it is what MEASUREMENT DELIVERY CHECK does and it has
+// caught genuine dead code — so the fix is to make the technique cheap rather
+// than to remove it. releaseSelfSource() drops the cache once the checks are done,
+// because after boot nothing needs it and a long-lived dyno should not hold 3MB
+// forever.
+let _selfSourceCache = null;
+const selfSource = () => {
+  if (_selfSourceCache === null) _selfSourceCache = require('fs').readFileSync(__filename, 'utf8');
+  return _selfSourceCache;
+};
+const releaseSelfSource = () => { _selfSourceCache = null; };
 const AUDIT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const _auditCache = new Map();   // hash -> { at, payload }
 
@@ -31855,7 +31883,7 @@ app.listen(PORT, () => {
     // loudly if any request to the Anthropic endpoint bypasses the wrapper. A
     // cost figure that silently omits calls is how a 12-cent lead reads as six.
     try {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _total = (_src.match(/https:\/\/api\.anthropic\.com\/v1\/messages/g) || []).length;
       const _wrapped = (_src.match(/anthropicFetch\('https:\/\/api\.anthropic\.com/g) || []).length;
       // The wrapper's own definition mentions the URL zero times, so total should
@@ -32403,7 +32431,7 @@ app.listen(PORT, () => {
     // The defaults are lifted out of this file's own source so the check can
     // never drift from the filter again. If the constants are renamed or moved,
     // this fails loudly rather than quietly testing nothing.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _num = (name) => {
       const m = new RegExp(name + "[^;]*?:\\s*([0-9.]+);").exec(_src);
       return m ? Number(m[1]) : NaN;
@@ -32755,7 +32783,7 @@ app.listen(PORT, () => {
     // any function this check can call.
     let _argOk = true, _argWhy = '';
     try {
-      const _self = require('fs').readFileSync(__filename, 'utf8');
+      const _self = selfSource();
       const _uses = (_self.match(/reviewPainArg:/g) || []).length;
       const _bad = _self.match(_stale);
       if (_bad) { _argOk = false; _argWhy = `a call site still passes ${_bad[1]}, which is declared inside a block that has closed by then`; }
@@ -32794,7 +32822,7 @@ app.listen(PORT, () => {
   // resolveMeasurements returns. A rung reading a field nothing delivers is
   // silent forever, and silence is the one failure no log reports.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _code = _src.replace(/^\s*\/\/.*$/gm, '');
 
     // What the rungs read. Sliced from the real ladder text so it cannot drift.
@@ -32902,7 +32930,7 @@ app.listen(PORT, () => {
   // This version reads the REAL detectLSA and the REAL source text. It cannot
   // pass by testing a copy of itself.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _fails = [];
     // 1. The real function's shape. If a future edit reintroduces `checked` or
     //    `running`, the readers below are fine; if it REMOVES `status`, they
@@ -34004,7 +34032,7 @@ app.listen(PORT, () => {
   // They repair foundations. That field became the search query, the query became
   // a measured rank, and the rank became a sentence in an email.
   try {
-    const _src = String(require('fs').readFileSync(__filename, 'utf8'));
+    const _src = String(selfSource());
     const _leaks = (_src.match(/industry: customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
       + (_src.match(/tradeWord: customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
       + (_src.match(/let _trade = customerTrade \|\| verifiedIndustry \|\| req\.body\.industry/g) || []).length
@@ -34034,7 +34062,7 @@ app.listen(PORT, () => {
   // to hold more than one page, and every page is labelled.
   try {
     const _CORPUS_MIN = 20000;
-    const _src = String(require('fs').readFileSync(__filename, 'utf8'));
+    const _src = String(selfSource());
     const _sliceMatch = _src.match(/sitePages\.rawText\.slice\(0,\s*(\d+)\)/);
     const _cap = _sliceMatch ? Number(_sliceMatch[1]) : 0;
     const _labelled = /=== PAGE: \$\{p\.key\.toUpperCase\(\)\}/.test(_src);
@@ -34403,7 +34431,7 @@ app.listen(PORT, () => {
   // that describes their own town supplies it, and the two sources that read
   // their Place record actually request the field.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _fails = [];
     if (!/const auditLocalVisibility = async \(\{[^}]*bizLat/.test(_src)) {
       _fails.push('auditLocalVisibility does not accept bizLat/bizLng, so no caller can supply them');
@@ -34456,7 +34484,7 @@ app.listen(PORT, () => {
   // name that is permanently null is not a guard, it is a deletion, and it is
   // invisible in every log because the log reads something else.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _dead = [];
     // Every `let NAME = null;` / `let NAME = { checked: false };` in the file.
     for (const m of _src.matchAll(/^\s*let\s+([A-Za-z_$][\w$]*)\s*=\s*(?:null|\{\s*checked:\s*false\s*\})\s*;/gm)) {
@@ -34491,7 +34519,7 @@ app.listen(PORT, () => {
   // producers actually emit, case-sensitively, and reports a comparison that no
   // producer can satisfy.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    const _src = selfSource().replace(/^\s*\/\/.*$/gm, '');
     const _bad = [];
     const _la = _src.indexOf('const HARM_LADDER');
     let _d = 0, _le = _la;
@@ -34706,7 +34734,7 @@ app.listen(PORT, () => {
     // rank. Five fixes have shipped dead in this file for exactly that reason,
     // and the gap is invisible in every log. So: every verify inside the compose
     // route must carry it.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     // Assembled at runtime on purpose. Written as one literal, this check finds
     // ITSELF — it sits earlier in the file than the route it is reading, so
     // indexOf returns the position of its own search string and the slice
@@ -34829,7 +34857,7 @@ app.listen(PORT, () => {
     if (_hit !== _harms[0].finding) _fails.push(`a wish that clearly points at a measured finding resolved to ${_hit ? '"' + String(_hit).slice(0, 40) + '"' : 'nothing'} \u2014 then the writer is told only to "lead on something else", which is the weakest possible instruction`);
     if (simWantsWhichHarm('a real number', _harms)) _fails.push('a vague wish resolved to a measured finding \u2014 pointing the writer at a finding the simulator never meant is worse than pointing it at none');
     // And the wish must not reach the writer as text, at all.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     // Same trap as the compose-route slice above: written as one literal this
     // finds itself, slices its own text, sees the word wouldReply in its own
     // assertions and reports the bug it was written to prove absent.
@@ -34858,7 +34886,7 @@ app.listen(PORT, () => {
   // changes, no log moves, and the only evidence is the emails all sounding
   // alike, which takes a batch to see.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _i = _src.indexOf('const writeEmailWithBrain');
     const _j = _src.indexOf('const NUMBER_TOKENS', _i);
     // Comments stripped. The comments in that function QUOTE the instructions
@@ -34994,7 +35022,7 @@ app.listen(PORT, () => {
     // "content[0]" inside log prose in this very block. A source scan that can
     // match its own text is the harness-that-lies class, and this session has
     // now produced four of them.
-    const _src = require('fs').readFileSync(__filename, 'utf8')
+    const _src = selfSource()
       .replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/`(?:\\.|[^`\\])*`/g, '``').replace(/'(?:\\.|[^'\\\n])*'/g, "''");
     // Only an actual READ counts \u2014 `content[0].text`, never the phrase.
@@ -35071,7 +35099,7 @@ app.listen(PORT, () => {
       if (/Overhead/.test(_generic)) _fails.push('the rung names a competitor it was not given');
     }
     // THE WIRE. The rung reads m.<field>; _harmInputs is assembled by hand.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     // ══ A FIXED WINDOW, FOR THE THIRD TIME TODAY ═══════════════════════
     // Written as slice(_hi2, _hi2 + 9000). The field it looks for sits 10,209
     // characters into that literal, so the check reported a wire it had just
@@ -35118,7 +35146,7 @@ app.listen(PORT, () => {
   // here rather than being noticed on a call.
   try {
     const _fails = [];
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _rw = _src.indexOf('const reachWindow = discoverySignals');
     if (_rw < 0) _fails.push('reachWindow could not be located, so nothing was checked');
     else {
@@ -35194,7 +35222,7 @@ app.listen(PORT, () => {
   // check cannot pass on a source that merely looks symmetrical.
   try {
     const _fails = [];
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _i = _src.indexOf('const quoteExists = (q) => {');
     if (_i < 0) _fails.push('quoteExists could not be located, so nothing was checked');
     else {
@@ -35263,7 +35291,7 @@ app.listen(PORT, () => {
       }
     }
     // THE WIRE, both halves. A resolver nothing feeds is the bug that shipped.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _cf = _src.indexOf('const composeFollowUp = (rung, spine, opts, ordinal');
     const _cfBlk = _cf > -1 ? _src.slice(_cf, _cf + 4000) : '';
     if (!_cfBlk) _fails.push('composeFollowUp could not be located');
@@ -35326,7 +35354,7 @@ app.listen(PORT, () => {
   // rate on this run was 0 of 4, so it is off by default.
   try {
     const _fails = [];
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     if (/Math\.max\(30000, perPageTimeoutMs\)/.test(_src)) {
       _fails.push('the whole-job deadline is still derived from the per-page timeout and floored at 30s \u2014 that is the 85 seconds');
     }
@@ -35374,7 +35402,7 @@ app.listen(PORT, () => {
   //      now, and an unmeasured tall PNG fails the WHOLE vision request.
   try {
     const _fails = [];
-    const _srcAll = require('fs').readFileSync(__filename, 'utf8');
+    const _srcAll = selfSource();
     // Whole-line comments only. A trailing-comment stripper has to understand
     // regex literals — `/^http:\/\//i` contains a literal `//` — and a stripper
     // that gets that wrong deletes real code and fails a check that should pass.
@@ -35468,7 +35496,7 @@ app.listen(PORT, () => {
   // have caught the original on the day it was written.
   try {
     const _fails = [];
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     if (!Array.isArray(BUYING_WINDOW_KEYS) || !BUYING_WINDOW_KEYS.length) {
       _fails.push('BUYING_WINDOW_KEYS is empty');
     }
@@ -35592,7 +35620,7 @@ app.listen(PORT, () => {
     }, _joined);
     if (_invented.ok) _fails.push('a sentence the owner never wrote verified against his posting');
 
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
     if (!/const jobSnippet = String\(req\.body\.jobSnippet/.test(_code)) {
       _fails.push('the research route never reads req.body.jobSnippet');
@@ -35679,7 +35707,7 @@ app.listen(PORT, () => {
     if (_sig(0, 4) < 2) _fails.push('a complete stop from four is no longer distinguishable');
     // deepReviewMine must go through that same function — if it keeps its own
     // inline copy, everything above is testing a second implementation again.
-    if (!/const velocity = measureReviewVelocity\(/.test(require('fs').readFileSync(__filename, 'utf8'))) {
+    if (!/const velocity = measureReviewVelocity\(/.test(selfSource())) {
       _fails.push('the review miner is not calling measureReviewVelocity, so it has its own copy of the gate and nothing above describes what ships');
     }
     // 2. ARTICLE AGREEMENT, BY SOUND. These are real trade words this pipeline
@@ -35760,7 +35788,7 @@ app.listen(PORT, () => {
     }
     if (orderFollowUpRungs(null, 'x', 'y', 'Z').length !== 0) _fails.push('a missing ladder does not return empty');
     // And the caller must go through it.
-    if (!/restRungs: orderFollowUpRungs\(/.test(require('fs').readFileSync(__filename, 'utf8'))) {
+    if (!/restRungs: orderFollowUpRungs\(/.test(selfSource())) {
       _fails.push('the spine is not using orderFollowUpRungs, so it has its own copy and nothing above describes what ships');
     }
     if (_fails.length) {
@@ -35829,7 +35857,7 @@ app.listen(PORT, () => {
     if (_praise.ok) _fails.push('an opening spent on praise now passes');
     // ONE SOURCE. The brief must print the same list the gate tests, or the
     // writer is being marked against a rule it was told differently.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
     if ((_code.match(/openingTokens\(/g) || []).length < 3) {
       _fails.push('openingTokens is not used by both the brief and the gate — two copies of this rule is how the writer ends up marked against something it was never told');
@@ -35943,7 +35971,7 @@ app.listen(PORT, () => {
     if (_meet.ok) _fails.push('an actual request for fifteen minutes on a call now passes');
 
     // 5. THE JARGON LIST MUST BE THE WHOLE RULE, NOT A SUMMARY OF IT.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     for (const t of EMAIL_JARGON_TERMS) {
       if (!EMAIL_JARGON_RE.test(t)) _fails.push(`the brief discloses "${t}" but the gate does not test it`);
     }
@@ -36013,7 +36041,7 @@ app.listen(PORT, () => {
     const _empty = spineFromStoredAudit({ harmsRanked: [], problemList: [], measuredNumbers: {} }, 'Nothing Ltd', '');
     if (_empty && _empty.spine) _fails.push('a lead with no measurements at all now produces a spine — the tier is inventing rather than recovering');
     // And a stored ladder must still win, since it is what Research chose.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
     if (!/const _snap = _storedMeasurements\(/.test(_code)) _fails.push('the measurements tier does not go through the shared normaliser');
     if (!/const _full = \(audit && audit\.ladderInputs\)/.test(_code)) {
@@ -36085,7 +36113,7 @@ app.listen(PORT, () => {
     // call site deleted. That is computed-but-not-passed, the failure this file
     // has shipped more often than any other, caught here for the fifth time
     // today. Split so the scan cannot match its own source.
-    const _asrc = require('fs').readFileSync(__filename, 'utf8');
+    const _asrc = selfSource();
     const _acode = _asrc.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
     if (!new RegExp('narrowAuditAbsence' + '\\(parsed,').test(_acode)) {
       _fails.push('the narrowing is defined and never applied to the audit — every claim still overreaches and the operator still gets a list of them to fix by hand');
@@ -36116,7 +36144,7 @@ app.listen(PORT, () => {
   // An address the resolver refused may not be presented as the recipient.
   try {
     const _fails = [];
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
     // The echo must be gone. Split so the scan cannot match its own source.
     if (new RegExp('email: ' + 'email\\.email,').test(_code)) {
@@ -36290,7 +36318,7 @@ app.listen(PORT, () => {
     if (!_absent.row) _fails.push('a not-found row must still be handed back — absence travels by its own route and the object is still read');
     // Both call sites must go through it. Two copies of a selection rule 140
     // lines apart is how one of them keeps the old behaviour forever.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     if (/localRank = lv2?\.results\.find\(/.test(_src)) {
       _fails.push('a call site still selects the rank row inline instead of through pickRankRow');
     }
@@ -36356,7 +36384,7 @@ app.listen(PORT, () => {
     // eaten more work in this file than every other cause combined, and it is
     // invisible in every log. Split so the scan cannot match its own source.
     {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_src);
       let _txt = '';
       if (_hiM) {
@@ -36529,7 +36557,7 @@ app.listen(PORT, () => {
     // field would put JavaScript source into an email. Source scan, split so it
     // cannot match its own text.
     {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
       const _raw = [...(_code.matchAll(new RegExp('HARM_LADDER' + '\\.find\\([^)]*\\)\\.costs', 'g')))];
       if (_raw.length) _fails.push(`${_raw.length} place(s) read a rung's costs field directly instead of through costsOf`);
@@ -36590,7 +36618,7 @@ app.listen(PORT, () => {
 
     // ── 2. IT ARRIVES AT THE LADDER ─────────────────────────────────────
     {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_src);
       let _txt = '';
       if (_hiM) {
@@ -36818,7 +36846,7 @@ app.listen(PORT, () => {
 
     // ── 6. IT REACHES THE LADDER ───────────────────────────────────────
     {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _hiM = /_harmInputs = \{\s*[\r\n]/.exec(_src);
       let _txt = '';
       if (_hiM) {
@@ -37009,7 +37037,7 @@ app.listen(PORT, () => {
 
     // ── 2. THE TRADE MUST SURVIVE A FAILED MODEL CALL ──────────────────
     {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
       if (!new RegExp("discoverySource === 'google_" + "places' \\? String\\(req\\.body\\.industry").test(_code)) {
         _fails.push('the local-rank query has no non-model source for the trade — when the domain-confirmation call fails, every rank finding dies and only the review block is left');
@@ -37026,7 +37054,7 @@ app.listen(PORT, () => {
     // backoff cannot help, because the requests it spaces compete with another
     // lead's. One unwrapped call site restores the burst.
     {
-      const _src = require('fs').readFileSync(__filename, 'utf8');
+      const _src = selfSource();
       const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
       const _all = [...(_code.matchAll(/(\w+)\(\s*(?:\(\) => )?fetchT\(\s*['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))];
       const _direct = [...(_code.matchAll(/await fetchT\(\s*['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))]
@@ -37106,7 +37134,7 @@ app.listen(PORT, () => {
     if (summariseAboveReviews(null, 10).n !== 0) _fails.push('a missing competitor list does not return silence');
     // And the count must reach the rung, or the fix is computed and never passed
     // — the failure mode this file has shipped more often than any other.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     // Split so the scan cannot match its own source. Written whole, this line
     // found itself and reported the bug it exists to detect — the same way the
     // content[0] scan once counted three hits inside its own success message.
@@ -37160,7 +37188,7 @@ app.listen(PORT, () => {
       else _cls.fixed.push(h.id);
     }
     // The ceiling: text-bearing fields actually delivered to the ladder.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _m = /_harmInputs = \{\s*[\r\n]/.exec(_src);
     let _textFields = [];
     if (_m) {
@@ -37458,7 +37486,7 @@ app.listen(PORT, () => {
     // count now keys on workDone — set in the .finally, the one line that runs
     // however the work ends — and this asserts the wire from source, because
     // the closures are not reachable from here.
-    const _qsrc = require('fs').readFileSync(__filename, 'utf8');
+    const _qsrc = selfSource();
     const _busySites = (_qsrc.match(/_jobs\.values\(\)\]\.filter\(j => j\.phase === 'running' && j\.workDone !== true/g) || []).length;
     if (_busySites < 2) _fails.push(`only ${_busySites} of 2 slot-count sites key on pending WORK — a poller-killed job frees its slot while still making paid calls`);
     if (!/\.finally\(\(\) => \{ job\.workDone = true;/.test(_qsrc)) _fails.push('nothing sets workDone when the work ends — every slot would leak permanently');
@@ -37553,7 +37581,7 @@ app.listen(PORT, () => {
     // The wires, read from source the way MEASUREMENT DELIVERY CHECK does —
     // each of these is a hop that was silently dropped for the system's whole
     // life, so each is asserted by name.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _bw = _src.indexOf('THE BUYING WINDOW WE ARE INTERCEPTING');
     const _bwBlock = _bw > 0 ? _src.slice(_bw, _bw + 6000) : '';
     if (!_bwBlock) _fails.push('the buying-window block is gone from the audit prompt');
@@ -37586,6 +37614,57 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ SOURCE STORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BOOT THAT KILLED THE WHOLE APP ══════════════════════════════════
+  // 2026-08-18, live: "Reached heap limit Allocation failed — JavaScript heap
+  // out of memory", immediately after LIVE STORE CHECK, on every restart. Render
+  // caps the heap near 256MB, so the process crash-looped and /api/research
+  // never answered — which on screen was a spinner that fell back to "Run
+  // Research" with no error anywhere. No lead could run at all.
+  //
+  // The cause was the source-reading checks. Reading our own wire instead of
+  // trusting it is a genuinely good technique and it has caught real dead code,
+  // but each check had grown its own readFileSync(__filename): 47 of them, each
+  // materialising ~2.9MB, and V8 keeps a sliced string's ENTIRE parent alive, so
+  // every check that kept a slice kept its whole copy. ~140MB before the ladder
+  // fixtures had even run. It fit locally, where the heap is bigger, which is
+  // why every gate was green on a build that could not boot in production.
+  //
+  // Two things are asserted here, and the second is the one that matters: a
+  // headroom figure alone would drift silently as checks are added, so the
+  // structural rule — ONE read, shared — is asserted from source as well.
+  try {
+    const _fails = [];
+    const _src = selfSource();
+    // Counts CALLS, not mentions. The first version matched bare
+    // "readFileSync(__filename" and found three: the one real call, the word in
+    // the comment above it, and its own regex literal. A check that reads itself
+    // and reports the reading is the purest form of a check that cannot pass.
+    // The full call form appears only in code; the escaped regex source below is
+    // not byte-equal to it, so this cannot match itself.
+    const _reads = (_src.match(/require\('fs'\)\.readFileSync\(__filename/g) || []).length;
+    if (_reads > 1) {
+      _fails.push(`${_reads} separate reads of this file — each one is ~${Math.round(_src.length / 1048576 * 10) / 10}MB and V8 keeps the parent alive behind every slice taken from it. Route them through selfSource()`);
+    }
+    if (!/const selfSource = \(\) =>/.test(_src)) _fails.push('selfSource() is gone — nothing shares the one copy');
+    if (!/releaseSelfSource\(\);/.test(_src)) _fails.push('nothing releases the cached source after the checks, so a long-lived dyno holds it forever');
+    // Headroom against the ceiling that actually killed us. Sampled HERE, part
+    // way through the checks and before the cache is released, so it is a
+    // conservative reading of a rising curve rather than the final figure —
+    // BOOT MEMORY at the end prints that one. Both are wanted: this fails the
+    // build, that one is the number to read when it does.
+    const _heapMB = Math.round(process.memoryUsage().heapUsed / 1048576);
+    if (_heapMB > 200) {
+      _fails.push(`boot leaves ${_heapMB}MB on the heap and Render's ceiling is near 256MB — this is how close the crash-loop was, and the next few checks would restart it`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ BOOT HEAP CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ BOOT HEAP CHECK: every source-reading check shares ONE copy of this file (there were 47 independent reads, ~140MB, and Render's heap ceiling is near 256MB — the 2026-08-18 deploy crash-looped on exactly this and no lead could run), the copy is released once the checks are done, and boot settles at ${_heapMB}MB.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BOOT HEAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
@@ -37700,7 +37779,7 @@ app.listen(PORT, () => {
       _fails.push('the strongest true blind line in the ladder is refused by its own gate');
     }
     // THE WIRE. Computed and not delivered is the way this fails silently.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _fnI = _src.indexOf('const writeEmailWithBrain');
     const _fnJ = _src.indexOf('const NUMBER_TOKENS', _fnI);
     const _fn = (_fnI > -1 && _fnJ > -1) ? _src.slice(_fnI, _fnJ).replace(/^\s*\/\/.*$/gm, '') : '';
@@ -37782,7 +37861,7 @@ app.listen(PORT, () => {
     }
     // THE WIRE. This one is source-read because the merge sits deep inside the
     // audit route, after verification, where no unit test can reach it.
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     // ══ A FIXED WINDOW IS A CHECK THAT CHANGES MEANING AS THE FILE GROWS ══
     // Written as slice(_at, _at + 3400) this failed on its first run, because
     // the block it reads is 3,358 characters long and the line it was looking
@@ -37979,7 +38058,7 @@ app.listen(PORT, () => {
     const _wrong = _notMail.filter(e => isMailboxShape(e)).map(e => `${e} accepted`)
       .concat(_mail.filter(e => !isMailboxShape(e)).map(e => `${e} rejected`));
 
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _sites = [
       ['the site scraper', /const clean = \[\.\.\.found\]\.filter\(e => isMailboxShape\(e\)/],
       ['the reachability route', /\.filter\(isMailboxShape\)/],
@@ -38084,7 +38163,7 @@ app.listen(PORT, () => {
   // a rung again — which reads like the safe thing to do, because the comment
   // above toSecondPerson said so for a week.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _la = _src.indexOf('const HARM_LADDER');
     let _d = 0, _le = _la;
     for (let i = _src.indexOf('[', _la); i < _src.length; i++) {
@@ -38115,7 +38194,7 @@ app.listen(PORT, () => {
   // depends on is written somewhere as well as read. It cannot be satisfied by
   // a test that lies, because it is not looking at a test.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     const _stores = ['SENT_RECIPIENTS', 'SENT_DOMAINS', '_SCRAPE_CACHE', '_MAP_CACHE', 'EMPTY_SCRAPE_MEMORY'];
     const _dead = _stores.filter((n) => {
       const reads = new RegExp(`\\b${n}\\.(?:has|get)\\s*\\(`).test(_src);
@@ -38179,7 +38258,7 @@ app.listen(PORT, () => {
     // them resolves to.
     const _unanchored = [];
     try {
-      const _tsrc = require('fs').readFileSync(__filename, 'utf8');
+      const _tsrc = selfSource();
       for (const _marker of ['const TRADE_JOB_VALUE = [', 'const LSA_TRADE_ALIASES = [']) {
         const _a = _tsrc.indexOf(_marker);
         if (_a < 0) { _unanchored.push(`${_marker} missing`); continue; }
@@ -38385,7 +38464,7 @@ app.listen(PORT, () => {
   // Reading the literal out of our own source is the only check that works here:
   // there is no runtime signal to test, because the failure IS the absence.
   try {
-    const _src = require('fs').readFileSync(__filename, 'utf8');
+    const _src = selfSource();
     // ══ A FIXED WINDOW IS A CHECK THAT CHANGES MEANING AS THE FILE GROWS ══
     // This sliced 6000 characters from the start of the literal. Adding a long
     // comment INSIDE the object pushed reviewPain, deepPain and localRank past
@@ -38550,6 +38629,16 @@ app.listen(PORT, () => {
   }
   const _missing = _FEATURES.filter(([, t]) => t !== 'function').map(([n]) => n);
   if (_missing.length) console.log(`\u26d4 STALE BUILD \u2014 ${_missing.join(', ')} are not in this server.js. Anything depending on them will silently do nothing. Deploy the current file before reading any result from this run.`);
+  // Every source-reading check has run. Drop the cached copy of this file so a
+  // long-lived dyno is not holding 3MB of its own text forever — and log the
+  // heap, because the boot that died on Render died silently as far as the UI
+  // was concerned: crash, restart, crash, and /api/research simply never
+  // answered. A number here turns the next memory regression into a line you
+  // can read instead of a lead that quietly fails to run.
+  releaseSelfSource();
+  const _mb = (n) => Math.round(n / 1048576);
+  const _mem = process.memoryUsage();
+  console.log(`\u{1F9E0} BOOT MEMORY: heap ${_mb(_mem.heapUsed)}MB used of ${_mb(_mem.heapTotal)}MB, rss ${_mb(_mem.rss)}MB. Render caps the heap near 256MB and a boot that exceeds it restarts forever \u2014 which is exactly what "no leads run at all" looked like from the screen. Every check that reads this file now shares ONE copy of it; there were 47.`);
 });
 
 // ── DIAGNOSTICS — tests all sources at once ───────────────

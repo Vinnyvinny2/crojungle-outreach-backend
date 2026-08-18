@@ -57,7 +57,7 @@ parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent
 encodeURI decodeURI globalThis undefined NaN Infinity eval
 Uint8Array Int8Array Uint16Array Int16Array Uint32Array Int32Array
 Float32Array Float64Array ArrayBuffer DataView TextEncoder TextDecoder
-process require module exports __dirname __filename Buffer
+process require module exports __dirname __filename Buffer global
 arguments this super
 `.trim().split(/\s+/));
 
