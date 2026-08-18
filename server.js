@@ -14522,6 +14522,37 @@ const composeEmail = (spine, opts = {}) => {
   // The second finding, converted like the first. Empty on most leads.
   // let: the variant trade-off below may blank it (see second && costs).
   let second = toSecondPerson(String(spine.secondClaim || '').trim());
+  // ══ THE SAME SEARCH, QUOTED TWICE, TWO SENTENCES APART ════════════════
+  // Live shape as soon as two ranking-side findings could both be sayable:
+  //
+  //   David, your site is set up to track Google Ads clicks, and you're on the
+  //   first page of the map results for "estate planning attorney in tampa"
+  //   but not near the top.
+  //
+  //   Tampa Estate Planning & Probate Attorneys ranks above you for "estate
+  //   planning attorney in tampa" with 60 reviews against your 62.
+  //
+  // Both sentences are true, both are measured, and the second one restates
+  // eleven words the first already spent. An owner does not read that as
+  // thorough; he reads it as a machine that does not know it already said it —
+  // the same small wrongness the whitespace pass exists for, one level up.
+  //
+  // Order-only and text-only: nothing is dropped and no claim changes. The
+  // clause naming the query is removed from the SECOND sentence, because the
+  // first one has already established which search is being talked about, and
+  // "Tampa Estate Planning ranks above you with 60 reviews against your 62"
+  // says everything the longer version did.
+  if (fact && second) {
+    const _q = String(fact).match(/"([^"]{4,80})"/);
+    if (_q && second.includes(_q[0])) {
+      const _tightened = second
+        .replace(new RegExp('\\s+(?:for|in)\\s+' + _q[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      // Only take it if the clause actually came out AND the sentence survived.
+      if (_tightened && !_tightened.includes(_q[0]) && _tightened.split(' ').length >= 6) second = _tightened;
+    }
+  }
   let costs = toSecondPerson(spine.costs || '');
   // ══ A SENTENCE HAS TO END ═════════════════════════════════════════════════
   // The reframes are written as clauses and stored without a full stop —
