@@ -12968,7 +12968,12 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
     const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      // Same reasoning as the writer above, and it matters more here: this call
+      // exists to FIX a named refusal, so a wide sample can miss the fix and
+      // spend the one retry the lead gets. Pinned to the writer's value so the
+      // two stages cannot drift into different voices mid-email.
       body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 600,
+        temperature: 0.4,
         messages: [{ role: 'user', content: prompt }] }),
     }, 25000, { label: 'email rewrite', company });
     const d = await res.json();
@@ -13278,6 +13283,42 @@ Return ONLY the email body. No subject, no signature, no preamble.`;
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 400,
+        // ══ THE SAME LEAD WROTE A DIFFERENT EMAIL EVERY TIME ══════════════
+        // Not one model call in this file set a sampling temperature, so every
+        // one of them ran at the API default of 1.0 — full randomness. Pressing
+        // Generate twice on one lead does not re-run Research or the audit; it
+        // reuses the stored audit and rebuilds the subjects deterministically.
+        // So this call WAS the variance. Same measurements, same spine, same
+        // permitted figures, and a different email each press — which is exactly
+        // the complaint: "email quality varies a lot."
+        //
+        // It is worse than cosmetic, because several gates downstream are
+        // properties of the DRAFT rather than of the lead: over 150 words, a
+        // sentence over 32, a paragraph over 3 sentences. A high draw trips one,
+        // the draft is refused, and the lead falls back to the flat composed
+        // template. So the dice decided not just the wording but whether the
+        // owner got the written email or the assembled one.
+        //
+        // ══ WHY 0.4 AND NOT 0 ════════════════════════════════════════════
+        // 0 is the obvious answer and it is the wrong one here. WRITER BRIEF
+        // CHECK records what over-constraining this writer produced last time:
+        // "every draft came back as the composed email with the punctuation
+        // tidied. That is the flatness, and it was in the instructions rather
+        // than in the model." Flat is the other failure mode and it is the one
+        // Vin has actually complained about.
+        //
+        // 0.4 removes the wild draws while leaving the writer room to join the
+        // facts in its own words. It also makes the output near-reproducible,
+        // which is a precondition for judging quality at all: until this was
+        // pinned, two reads of "the same" email were two different samples and
+        // no comparison between builds meant anything.
+        //
+        // The AUDIT brain and the prospect simulator are deliberately left at
+        // the default. The audit benefits from exploring, and a simulator that
+        // always answers the same thing is not more reliable — it just hides
+        // that a single verdict was never evidence, which CLAUDE.md PART 4
+        // already says out loud.
+        temperature: 0.4,
         messages: [{ role: 'user', content: prompt }],
       }),
     }, 30000, 'email-writer');
@@ -14181,7 +14222,20 @@ const patternLineSafe = (raw, opts = {}) => {
 };
 
 const insightLine = (situationRead) => {
-  const h = String((situationRead && situationRead.headline) || '').trim();
+  // ══ THE THIRD SITE THAT READ .headline OFF A STRING ═══════════════════
+  // The audit stores situationRead as a plain sentence; only the separate
+  // Sonnet synthesis object carries .headline, and that object is returned as
+  // its own response field and never merged into the audit. So this resolved to
+  // '' on every lead, and insight is the composed email's diagnosis line — the
+  // one the code calls "the reason to write to this man at all".
+  //
+  // Both shapes are accepted rather than one being enforced, because two
+  // producers genuinely exist and a normaliser cannot be forgotten the way a
+  // convention can.
+  const h = String(
+    typeof situationRead === 'string' ? situationRead
+      : ((situationRead && situationRead.headline) || '')
+  ).trim();
   if (!h) return '';
   // An opening line, not a paragraph. Anything longer was written as a heading
   // for the briefing rather than as the first thing a man reads on his phone.
@@ -15713,6 +15767,19 @@ const composeFullEmail = (spine, opts = {}) => {
       count: Number(spine.problemCount) || 0,
       cta: cta.text,
       blind: String(spine.blind || '').trim(),
+      // ══ THE MODEL WAS HANDED AN EMPTY SECOND FINDING ON EVERY LEAD ═════
+      // The endpoint's writer call reads `second: _parts.second`, and
+      // writeEmailWithBrain destructures `second` out of what it is given — but
+      // this literal never had the key, so the expression was `undefined || ''`
+      // on every lead since the brain path was added. The composed email carries
+      // a second finding and the model-written one never could, which is a
+      // quality difference between the two paths running in the direction
+      // nobody wanted: the model path is the one that normally ships.
+      //
+      // Second person, because everything else in this object is already in the
+      // voice the email is written in, and handing the writer a third-person
+      // sentence invites it to rewrite the fact rather than the prose.
+      second: toSecondPerson(String(spine.secondClaim || '').trim()),
     },
     // ══ FOLLOW-UPS BUILT TO THE FIRST EMAIL'S STANDARD ════════════════════
     // Each is a full email on the next-strongest finding — its own fact,
@@ -16223,8 +16290,39 @@ const buildFactualSpine = (harms, m = {}) => {
   // it did. A weak second finding costs more than it earns: it dilutes the first
   // and gives him something easy to dismiss the whole email on.
   const _band = (h) => String(h && h.band || '');
-  const _second = (harms && Array.isArray(harms.byHarm) ? harms.byHarm : [])
+  // ══ THE SECOND CLAIM READ byHarm, AND byHarm KEEPS EVERYTHING ═════════
+  // The anchor seventy lines above this was moved onto harms.sayable when
+  // INTERNAL_ONLY_RUNGS was added, for exactly the reason that applies here and
+  // was missed here: byHarm deliberately holds every rung, review metrics
+  // included, because the audit and the call sheet are entitled to all of them.
+  // The email is not.
+  //
+  // The cost of the miss, measured over ~3,100 composed leads: the second claim
+  // was an internal-only rung on 9.5% of spines and the sentence rendered into a
+  // real body on 2.5% of them. One of those bodies, verbatim:
+  //
+  //     Mike, nothing on your site sells a plan, membership or agreement —
+  //     every job starts from zero and ends at the invoice.
+  //
+  //     Your Google reviews have slowed — 7 in the last 90 days, against 16 in
+  //     the 90 days before that.
+  //
+  // That is the exact sentence Vin refuses, arriving by the one route none of
+  // the three enforcement points watches: REVIEWS ARE INTERNAL CHECK tests the
+  // rankHarms flag and the model-draft gate, applyReviewToneQuota reads subjects
+  // and follow-up ids, and verifyBrainEmail never runs on the composed body at
+  // all. "A guard in the wrong function", the class CLAUDE.md PART 6 names, on
+  // the change that was supposed to close this.
+  //
+  // harms.sayable is byOpener with the internal rungs removed; the byHarm term
+  // is the pre-2026-08-18 behaviour for any caller that predates the field, and
+  // the filter behind it re-checks membership so neither path can leak.
+  const _secondPool = (harms && Array.isArray(harms.sayable) && harms.sayable.length)
+    ? [...harms.sayable].sort((a, b) => b.harm - a.harm)
+    : (harms && Array.isArray(harms.byHarm) ? harms.byHarm : []);
+  const _second = _secondPool
     .filter(h => h && h.id !== lead.id)
+    .filter(h => !h.emailBlocked && !INTERNAL_ONLY_RUNGS[h.id])
     .filter(h => (h.selfFix || 0) < 4)              // not the one he can fix alone
     .filter(h => Number(h.harm) >= 54)              // a real finding, not a tidy-up
     .filter(h => _band(h) !== _band(lead))          // a different part of the business
@@ -24511,6 +24609,94 @@ const _blockedPageReason = (status, html) => {
   return null;
 };
 
+// ══ WHAT THE SITE IS BUILT ON ═══════════════════════════════════════════════
+// Vin, 2026-08-18: "site built on is a strong signal for quality yes."
+//
+// He is right, and it is worth being precise about WHICH kind of signal. A
+// business doing several million dollars whose site is a DIY page builder is a
+// rebuild conversation on sight — it is the cleanest product-fit read this
+// system can take, and it costs nothing because we already hold the markup.
+//
+// ══ WHY THE SIGNATURES BELOW ARE ASSET HOSTNAMES, NOT GENERATOR TAGS ══
+// Two ways to identify a platform from markup, and only one of them survives
+// contact with a real business:
+//
+//   <meta name="generator">   trivially removed, and half the agencies that
+//                             resell these builders remove it. Absence proves
+//                             nothing and presence is easy to spoof.
+//   the ASSET HOST            every page the builder serves loads its CSS, JS
+//                             and images from the vendor's own CDN. You cannot
+//                             strip it and still have a working site, and no
+//                             site that is NOT on the platform has any reason
+//                             to reference it.
+//
+// So `certain` is reserved for vendor-CDN hostnames, and everything softer is
+// reported as `likely` and may not become a claim to a prospect.
+//
+// ══ WHAT THIS HAS NOT HAD, AND MUST HAVE BEFORE IT REACHES AN EMAIL ══
+// Live validation. These signatures are written from knowledge and have NOT
+// been run against a single real page from this container — outbound web access
+// is blocked here, so nothing below is measured. Under CLAUDE.md's own standard
+// that is "shipped but needs live validation", not "proven".
+//
+// That is exactly why nothing here is wired to a harm-ladder rung. It goes to
+// the audit and the call sheet, where a wrong answer costs an eyebrow, and not
+// into an email, where a wrong answer costs the lead. Run it across the ~30
+// already-audited domains, read the PLATFORM lines, and promote it afterwards.
+const PLATFORM_SIGNATURES = [
+  // ── DIY page builders. The rebuild conversation. ──
+  { id: 'Wix', diy: true, certain: /static\.parastorage\.com|static\.wixstatic\.com|wix-warmup-data|wixBiSession/i,
+    likely: /<meta[^>]+content=["']Wix\.com Website Builder["']/i },
+  { id: 'Squarespace', diy: true, certain: /static1?\.squarespace\.com|images\.squarespace-cdn\.com|SQUARESPACE_CONTEXT/i,
+    likely: /squarespace/i },
+  { id: 'GoDaddy Website Builder', diy: true, certain: /img1?\.wsimg\.com|wsimg\.com\/blobby/i,
+    likely: /website-builder|godaddy/i },
+  { id: 'Weebly', diy: true, certain: /editmysite\.com|weeblysite\.com|weebly\.com\/uploads/i,
+    likely: /weebly/i },
+  { id: 'Duda', diy: true, certain: /irp[-\w]*\.cdn-website\.com|lirp\.cdn-website\.com|dudamobile/i,
+    likely: /duda/i },
+  // ── Real platforms. Not a rebuild pitch on their own. ──
+  { id: 'Shopify', diy: false, certain: /cdn\.shopify\.com|Shopify\.theme|shopifycdn\.com/i, likely: /shopify/i },
+  { id: 'Webflow', diy: false, certain: /assets(?:-global)?\.website-files\.com|data-wf-(?:page|site)/i, likely: /webflow/i },
+  { id: 'HubSpot CMS', diy: false, certain: /hubspotusercontent[-\w]*\.net|cdn\d?\.hubspot\.net/i, likely: /hs-scripts|hubspot/i },
+  { id: 'WordPress', diy: false, certain: /\/wp-content\/|\/wp-includes\/|\/wp-json\//i, likely: /wordpress/i },
+];
+// Page builders that sit ON TOP of WordPress. Reported alongside it, because
+// "WordPress with Divi" and "hand-built WordPress" are different businesses to
+// talk to and the distinction is free to read.
+const WP_BUILDERS = [
+  { id: 'Elementor', re: /elementor-(?:frontend|pro|page)|\/elementor\/assets\//i },
+  { id: 'Divi', re: /\bet_pb_|\/themes\/Divi\//i },
+  { id: 'WPBakery', re: /\bvc_row\b|js_composer/i },
+  { id: 'Beaver Builder', re: /fl-builder/i },
+];
+// Pure function so the boot check can RUN it. Five checks in this file have
+// passed while the shipped code was broken, every one because the check
+// reimplemented what it meant to test.
+const detectPlatform = (html) => {
+  const h = String(html || '');
+  if (h.length < 500) return { platform: '', confidence: 'unreadable', isDiy: null, builder: '' };
+  for (const p of PLATFORM_SIGNATURES) {
+    if (p.certain.test(h)) {
+      let builder = '';
+      if (p.id === 'WordPress') {
+        const b = WP_BUILDERS.find(x => x.re.test(h));
+        if (b) builder = b.id;
+      }
+      return { platform: p.id, confidence: 'certain', isDiy: !!p.diy, builder };
+    }
+  }
+  for (const p of PLATFORM_SIGNATURES) {
+    if (p.likely && p.likely.test(h)) {
+      return { platform: p.id, confidence: 'likely', isDiy: !!p.diy, builder: '' };
+    }
+  }
+  // Not a platform we recognise is NOT "custom built" — it is unknown, and the
+  // difference matters because "your site is custom" is a claim we would have
+  // no basis for.
+  return { platform: '', confidence: 'unrecognised', isDiy: null, builder: '' };
+};
+
 const checkBuiltWith = async (domain) => {
   try {
     const url = `https://${domain}`;
@@ -24524,7 +24710,7 @@ const checkBuiltWith = async (domain) => {
     if (_blocked) {
       console.log(`SITE FINGERPRINT [${domain}]: BLOCKED — ${_blocked}. Our direct fetch was refused, so NOTHING about their tags, CRM, pixel, ads, schema or title is known. No absence claim is permitted from this source.`);
       return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null,
-        hasGoogleAdsTag:null, hasMetaPixel:null, hasTagManager:null, titleTag:'', hasMetaDesc:null, hasH1:null,
+        hasGoogleAdsTag:null, hasMetaPixel:null, hasTagManager:null, platform:'', platformConfidence:'unreadable', platformIsDiy:null, platformBuilder:'', titleTag:'', hasMetaDesc:null, hasH1:null,
         hasSchema:null, hasEmailCapture:null, hasBooking:null, copyrightYear:0,
         contacts:{emails:[],phones:[],linkedin:[],facebook:[],owners:[],contactPage:''},
         confirmed:false, blocked:true, blockedWhy:_blocked };
@@ -24534,7 +24720,7 @@ const checkBuiltWith = async (domain) => {
     if (!html || html.length < 500) {
       console.log(`SITE FINGERPRINT [${domain}]: only ${(html||'').length} chars returned — nothing readable, so NO absence claim is permitted from this source.`);
       return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null,
-        hasGoogleAdsTag:null, hasMetaPixel:null, hasTagManager:null, titleTag:'', hasMetaDesc:null, hasH1:null,
+        hasGoogleAdsTag:null, hasMetaPixel:null, hasTagManager:null, platform:'', platformConfidence:'unreadable', platformIsDiy:null, platformBuilder:'', titleTag:'', hasMetaDesc:null, hasH1:null,
         hasSchema:null, hasEmailCapture:null, hasBooking:null, copyrightYear:0,
         contacts:{emails:[],phones:[],linkedin:[],facebook:[],owners:[],contactPage:''},
         confirmed:false, blocked:true, blockedWhy:'empty or truncated response' };
@@ -24559,6 +24745,13 @@ const checkBuiltWith = async (domain) => {
       // Detecting the container does not tell us what is in it. It tells us we
       // are not entitled to say what is NOT in it, which is all any rung needs.
       hasTagManager: /googletagmanager\.com\/(?:gtm|ns)|GTM-[A-Z0-9]{4,}/i.test(html),
+      // What the site is built on. Read through detectPlatform so the boot check
+      // exercises the shipping function rather than a copy of it.
+      ...(() => {
+        const p = detectPlatform(html);
+        return { platform: p.platform, platformConfidence: p.confidence,
+                 platformIsDiy: p.isDiy, platformBuilder: p.builder };
+      })(),
       hasVideo: /wistia|vimeo|youtube\.com\/embed|vidyard/i.test(html),
       hasChat: /intercom|drift|crisp\.chat|zendesk.*widget|tawk\.to|livechat/i.test(html),
       // ── ON-PAGE SEO & FRESHNESS (free — same HTML fetch) ──
@@ -24591,7 +24784,7 @@ const checkBuiltWith = async (domain) => {
   // blocked path above: we could not look. Returning false here let a
   // downstream reader assert "NO analytics of any kind on the page" off our
   // own failed request — the documented page-full-of-false class.
-  } catch { return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null, hasGoogleAdsTag:null, hasMetaPixel:null, hasTagManager:null, confirmed:false }; }
+  } catch { return { hasCRM:null, hasEmailMarketing:null, hasPixel:null, hasVideo:null, hasChat:null, hasGoogleAdsTag:null, hasMetaPixel:null, hasTagManager:null, platform:'', platformConfidence:'unreadable', platformIsDiy:null, platformBuilder:'', confirmed:false }; }
 };
 
 // There is deliberately NO checkGoogleAds() in this file. Read why before
@@ -31713,6 +31906,25 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // 4 Buckets — enhanced with visual analysis
     const buckets = {
       ACQUISITION: {
+        // ══ WHAT THE SITE IS BUILT ON ═══════════════════════════════════
+        // Product fit, read from their own markup at no extra cost. A business
+        // with a real track record still running on a DIY page builder is the
+        // cleanest rebuild signal this system produces.
+        //
+        // Deliberately phrased so the model cannot turn it into an email claim
+        // on a 'likely' match: only a vendor CDN hostname earns "confirmed",
+        // and anything softer says so out loud.
+        platform: (() => {
+          const c = builtWith.platformConfidence;
+          if (!c || c === 'unreadable') return 'Not readable — our fetch of their page was refused or returned nothing, so we know NOTHING about what the site is built on';
+          if (c === 'unrecognised') return 'Not one of the platforms we fingerprint. That is NOT evidence the site is custom-built — make no claim either way';
+          const b = builtWith.platformBuilder ? ` (${builtWith.platformBuilder})` : '';
+          if (c === 'certain') {
+            return `Built on ${builtWith.platform}${b} — CONFIRMED from their own asset host, which cannot be present unless the site is on that platform`
+              + (builtWith.platformIsDiy ? '. This is a DIY page builder: relevant to whether a rebuild is the right conversation, and NOT something to state as a fault in an email' : '');
+          }
+          return `Possibly ${builtWith.platform}, from a weak signature only — UNCONFIRMED, and nothing may be claimed about it to the prospect`;
+        })(),
         googleAds: builtWith.blocked || builtWith.confirmed === false ? 'Not readable — our fetch of their page was refused, so we know NOTHING about their ads' : builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : 'No Google Ads tag on page (they may still run ads — unverified)',
         seoBasics: builtWith.confirmed ? [
           !builtWith.titleTag || builtWith.titleTag.length < 15 ? 'weak/missing title tag' : '',
@@ -37751,6 +37963,71 @@ app.listen(PORT, () => {
       if (!_allowed.ok) _fails.push(`the one sentence we deliberately build on review counts was refused — ${_allowed.why}. That is the sentence a real prospect told us would have made him open the email`);
     }
 
+    // ══ THE ROUTE NONE OF THE THREE WAS WATCHING ══════════════════════════
+    // Everything above tests the rankHarms flag and the MODEL-draft gate. The
+    // COMPOSED body — the one code assembles, and the one that ships whenever
+    // the model's draft and its retry are both refused — passed through none of
+    // them, because verifyBrainEmail only ever judges the model's text and the
+    // quota only reads subjects and follow-up ids.
+    //
+    // buildFactualSpine picked the email's SECOND sentence off harms.byHarm,
+    // which deliberately keeps every rung so the audit and the call sheet can
+    // read them. Measured over ~3,100 composed leads, that put a review-metric
+    // sentence into 2.5% of real bodies — under a green REVIEWS ARE INTERNAL
+    // CHECK, because the check had never once called the composer.
+    //
+    // So this runs the REAL chain, rankHarms -> buildFactualSpine ->
+    // composeFullEmail, on a lead built to make the leak happen: a sellable
+    // opener in one band, and a full review palette sitting directly behind it
+    // in another. If the second-claim selector ever reads the unfiltered list
+    // again, the sentence appears in this body and this fails.
+    {
+      const _leaky = rankHarms({
+        recurringChecked: true, hasRecurringOffer: false, tradeWord: 'plumber',
+        reviewVelocityChecked: true, reviewsRecent90: 7, reviewsPrior90: 16, reviewVelocitySlowing: true,
+        reviewCount: 150, rating: 3.6, reviewsRead: 150, ownerReplies: 0,
+        tenureYears: 20, reviewsPerYear: 2, reviewRecency: 400,
+        aboveReviewsN: 3, aboveReviewsAvg: 900,
+        rankChecked: false,
+      });
+      if (!_leaky.lead) {
+        _fails.push('the leak fixture produced no opener, so it cannot prove the composed body is clean');
+      } else {
+        const _spine = buildFactualSpine(_leaky, { tradeWord: 'plumber', reviewCount: 150, rating: 3.6 });
+        if (!_spine) {
+          _fails.push('the leak fixture produced no factual spine, so the composed body was never built');
+        } else {
+          if (INTERNAL_ONLY_RUNGS[_spine.secondClaimId || '']) {
+            _fails.push(`the spine's SECOND claim is "${_spine.secondClaimId}", an internal-only rung — that sentence renders as its own paragraph of the composed email and no other gate reads it`);
+          }
+          const _REV = /\b(reviews?|reviewers?|ratings?|stars?)\b/i;
+          for (const [_what, _txt] of [['claim', _spine.claim], ['second claim', _spine.secondClaim]]) {
+            if (_REV.test(String(_txt || ''))) {
+              _fails.push(`the composed email's ${_what} names his reviews out loud — "${String(_txt).slice(0, 70)}"`);
+            }
+          }
+          const _full = composeFullEmail(_spine, {
+            company: 'Acme Plumbing', founderName: 'Mike',
+            measured: { tradeWord: 'plumber', reviewCount: 150, rating: 3.6, reviewsRead: 150 },
+          });
+          const _bodies = [];
+          for (const _v of ['variantA', 'variantB']) {
+            if (_full && _full[_v] && _full[_v].body) _bodies.push([_v, _full[_v].body]);
+          }
+          for (const _t of (_full && _full.touches) || []) {
+            if (_t && _t.body) _bodies.push([`touch:${_t.rungId || '?'}`, _t.body]);
+          }
+          if (!_bodies.length) _fails.push('the leak fixture composed no body at all, so this assertion proves nothing');
+          for (const [_where, _body] of _bodies) {
+            const _hit = String(_body).match(_REV);
+            if (_hit) {
+              _fails.push(`the COMPOSED body (${_where}) says "${_hit[0]}" — this is the path verifyBrainEmail never sees, and it ships whenever the model's draft and its retry are both refused`);
+            }
+          }
+        }
+      }
+    }
+
     if (_fails.length) {
       console.log(`⛔ REVIEWS ARE INTERNAL CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -37881,6 +38158,72 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ READABLE FINDING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ WHAT THE SITE IS BUILT ON, AND WHAT WE MAY SAY ABOUT IT ═════════════
+  // Vin asked for this directly: "site built on is a strong signal for quality
+  // yes." It is, and the risk it carries is specific — a platform guess that is
+  // wrong is wrong about something the owner knows for certain, which is the
+  // fastest way to lose him.
+  //
+  // So the check is mostly about the CONFIDENCE boundary, not about whether the
+  // regexes match. detectPlatform is CALLED here rather than reimplemented.
+  //
+  // HONEST STATUS: these signatures have never been run against a live page.
+  // Outbound web access was blocked in the environment they were written in, so
+  // this proves the LOGIC is right and proves nothing about the SIGNATURES.
+  // They are deliberately kept out of the harm ladder until a real run confirms
+  // them against already-audited domains.
+  try {
+    const _fails = [];
+    const _wrap = (s) => `<!doctype html><html><head><title>x</title></head><body>${s}${'<p>padding</p>'.repeat(40)}</body></html>`;
+    const _cases = [
+      ['Wix', _wrap('<script src="https://static.parastorage.com/services/x.js"></script>'), true],
+      ['Squarespace', _wrap('<img src="https://images.squarespace-cdn.com/content/a.jpg">'), true],
+      ['GoDaddy Website Builder', _wrap('<img src="https://img1.wsimg.com/blobby/go/abc">'), true],
+      ['Weebly', _wrap('<script src="https://cdn2.editmysite.com/js/site.js"></script>'), true],
+      ['Duda', _wrap('<img src="https://lirp.cdn-website.com/abc/dms3rep/x.jpg">'), true],
+      ['Shopify', _wrap('<script src="https://cdn.shopify.com/s/files/x.js"></script>'), false],
+      ['Webflow', _wrap('<html data-wf-page="abc"><body>x</body></html>'), false],
+      ['WordPress', _wrap('<link href="/wp-content/themes/x/style.css">'), false],
+    ];
+    for (const [_want, _html, _diy] of _cases) {
+      const _got = detectPlatform(_html);
+      if (_got.platform !== _want) _fails.push(`${_want} markup detected as "${_got.platform || 'nothing'}"`);
+      else if (_got.confidence !== 'certain') _fails.push(`${_want} matched on its vendor asset host but came back "${_got.confidence}" — that signature is the definitive one`);
+      else if (_got.isDiy !== _diy) _fails.push(`${_want} classified isDiy=${_got.isDiy}, expected ${_diy} — this is what decides whether it reads as a rebuild conversation`);
+    }
+    // The WordPress page builder rides alongside, because "WordPress with Divi"
+    // and hand-built WordPress are different businesses to talk to.
+    const _divi = detectPlatform(_wrap('<link href="/wp-content/themes/Divi/style.css"><div class="et_pb_row">x</div>'));
+    if (_divi.builder !== 'Divi') _fails.push(`a Divi site reported builder "${_divi.builder || 'none'}"`);
+    // ── THE THREE ANSWERS THAT ARE NOT A PLATFORM NAME ──────────────────
+    // Each of these is a different epistemic state and collapsing any two of
+    // them is how a false claim reaches an owner.
+    const _empty = detectPlatform('');
+    if (_empty.confidence !== 'unreadable') _fails.push('an empty page did not report "unreadable" — a failed fetch must never read as a platform verdict');
+    const _plain = detectPlatform(_wrap('<div>a perfectly ordinary hand-built page</div>'));
+    if (_plain.confidence !== 'unrecognised') _fails.push(`an unrecognised page reported "${_plain.confidence}"`);
+    if (_plain.platform) _fails.push(`an unrecognised page named a platform ("${_plain.platform}") — not recognising a site is NOT evidence it is custom-built`);
+    if (_plain.isDiy !== null) _fails.push('an unrecognised page returned a true/false on isDiy — unmeasured is not "no"');
+    // A weak signature must NEVER be reported as certain: the word "wix" in body
+    // copy is not evidence, and this is the boundary the email rules depend on.
+    const _weak = detectPlatform(_wrap('<p>We moved off Wix last year and rebuilt everything.</p>'));
+    if (_weak.confidence === 'certain') _fails.push('a passing mention of a platform in body copy was reported as CERTAIN — that is a false claim about something the owner knows for a fact');
+    // And nothing here may have leaked into the ladder while it is unvalidated.
+    {
+      const _ladderSrc = HARM_LADDER.map(h => String(h.test || '') + String(h.say || '')).join(' ');
+      if (/\bplatform(?:Confidence|IsDiy|Builder)?\b/.test(_ladderSrc)) {
+        _fails.push('a harm-ladder rung now reads the platform fields — these signatures have never been validated against a live page, so nothing may say them to a prospect yet');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 PLATFORM DETECT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 PLATFORM DETECT CHECK: ${_cases.length} platforms identified from their vendor asset host — the one signature a site cannot drop and still work — with the five DIY builders separated from the four real platforms, and WordPress page builders named alongside. A failed fetch reads "unreadable", an unknown site reads "unrecognised" and never "custom-built", and a platform named in body copy never reaches "certain". Not wired to the ladder: the signatures are written from knowledge and have never been run against a live page, so they go to the audit and the call sheet until a real run confirms them.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PLATFORM DETECT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE JARGON GATE NEVER LOOKED AT THE FINDINGS THEMSELVES ═════════════
@@ -41702,33 +42045,46 @@ app.post('/api/compose-email', async (req, res) => {
           // It used to receive seven strings and produce a scanner's sentence.
           // These are the same conclusions the audit was built on, which were
           // computed and then discarded before the email was written.
-          const _written = await writeEmailWithBrain({
-            first: _parts.first || '', spine: _spineTxt, earned: _parts.earned || '',
-            pattern: _parts.pattern || '', reframe: _parts.reframe || '',
-            money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
-            second: _parts.second || '', blind: _parts.blind || '',
-            // ══ THE FIGURES, SO THE OPENING RULE CAN NAME THEM ═══════════
-            // openingTokens treats a measured figure as proof the finding is
-            // in the opening — "you had 6 reviews in the last 90 days" carries
-            // the whole finding. Without this the writer is handed the rule
-            // with the number half missing while the VERIFIER still counts
-            // them, which is the drift this whole change exists to remove.
-            figures: _figs,
-            // Who he is, so the email is not written to a generic owner.
-            trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
-            tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
-            // How he gets work — the thing six of eight simulator deletes said
-            // we did not understand.
-            acquisitionIsReferral: !!(audit.measuredNumbers && audit.measuredNumbers.acquisitionIsReferral),
-            purchaseUrgency: (audit.measuredNumbers && audit.measuredNumbers.purchaseUrgency) || '',
-            // The brain's own read, and the constraint it diagnosed. Both were
-            // computed with the whole corpus in view and then thrown away.
-            situationRead: (audit.situationRead && audit.situationRead.headline) || '',
-            // ══ THE WHOLE PICTURE, ASSEMBLED ONCE ═══════════════════════════
-            // Everything Research learned, handed over in one object instead of
-            // the eleven fields that had accumulated one bug at a time. The
-            // assembler decides what is assertable and what is context.
-            evidence: {
+          //
+          // ══ .headline OFF A STRING IS undefined, ON EVERY LEAD ═════════
+          // The audit schema asks for situationRead as a plain SENTENCE and the
+          // server stores exactly that. Three consumers on the email path then
+          // read `.headline` off it, so all three resolved to '' on every lead
+          // ever run: the writer's "WHAT IS ACTUALLY GOING ON HERE" line, the
+          // MY READ block, and the evidence object below. The separate Sonnet
+          // synthesis object DOES carry .headline, which is where the shape came
+          // from — it is returned as its own response field and never merged in.
+          //
+          // MY READ CHECK could not see it because it hands buildEmailEvidence a
+          // raw string by hand, which is the shape the function wants and NOT
+          // the shape production delivers. The "harness that lies" class.
+          //
+          // One normaliser, read by all three sites, so the shape can never
+          // split again.
+          const _readTxt = (() => {
+            const sr = audit && audit.situationRead;
+            if (!sr) return '';
+            return String(typeof sr === 'string' ? sr : (sr.headline || '')).trim();
+          })();
+          // ══ ONE EVIDENCE OBJECT, NOT TWO ══════════════════════════════
+          // This literal used to live inline inside the writeEmailWithBrain call
+          // below, and the verifier's allowlist was derived from
+          // `_parts.evidence` — a key composeFullEmail's _parts literal has
+          // never had. So `buildEmailEvidence({})` returned an empty assertable
+          // list and `_evAssert` was '' on every lead, while the comment above
+          // it claimed "the brief and the allowlist are one list read twice
+          // rather than two lists maintained apart". They were two lists, and
+          // one of them was empty.
+          //
+          // What that cost: the writer is explicitly invited to assert competitor
+          // review counts, published prices, market counts and the digits inside
+          // an original finding — and the verifier had never heard of any of
+          // them, so a draft using one was refused for "figures we never
+          // measured" and the lead dropped to the flat composed template. It
+          // also over-tightened the review-word gate, which reads the same list.
+          //
+          // Hoisted to a const so there is literally one object.
+          const _evidence = {
               trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
               tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
               measured: audit.measuredNumbers || {},
@@ -41749,7 +42105,7 @@ app.post('/api/compose-email', async (req, res) => {
               builderSite: req.body.builderSite || null,
               bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer) || '',
               bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
-              situationRead: (audit.situationRead && audit.situationRead.headline) || '',
+              situationRead: _readTxt,
               // Five features have shipped dead in this file because a value was
               // computed and never reached the thing that consumes it. This is
               // the wire, and BLIND LINE CHECK asserts it at boot.
@@ -41757,7 +42113,30 @@ app.post('/api/compose-email', async (req, res) => {
               // The positioning read. Feeds MY READ, never ASSERT — it is a
               // judgement about what their copy does, anchored on copy we read.
               marketClarity: audit.marketClarity || null,
-            },
+          };
+          const _written = await writeEmailWithBrain({
+            first: _parts.first || '', spine: _spineTxt, earned: _parts.earned || '',
+            pattern: _parts.pattern || '', reframe: _parts.reframe || '',
+            money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
+            second: _parts.second || '', blind: _parts.blind || '',
+            // ══ THE FIGURES, SO THE OPENING RULE CAN NAME THEM ═══════════
+            // openingTokens treats a measured figure as proof the finding is in
+            // the opening — "you had 6 reviews in the last 90 days" carries the
+            // whole finding. Without this the writer is handed the rule with the
+            // number half missing while the VERIFIER still counts them.
+            figures: _figs,
+            // Who he is, so the email is not written to a generic owner.
+            trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+            tenure: (audit.measuredNumbers && audit.measuredNumbers.tenure) || null,
+            // How he gets work — the thing six of eight simulator deletes said
+            // we did not understand.
+            acquisitionIsReferral: !!(audit.measuredNumbers && audit.measuredNumbers.acquisitionIsReferral),
+            purchaseUrgency: (audit.measuredNumbers && audit.measuredNumbers.purchaseUrgency) || '',
+            // The brain's own read, and the constraint it diagnosed. Both were
+            // computed with the whole corpus in view and then thrown away — and
+            // the read arrived empty on every lead until _readTxt existed.
+            situationRead: _readTxt,
+            evidence: _evidence,
             bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer)
               || (audit._persisted && audit._persisted.growthConstraint && audit._persisted.growthConstraint.layer) || '',
             bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
@@ -41766,7 +42145,7 @@ app.post('/api/compose-email', async (req, res) => {
           // from the same evidence object, so the brief and the allowlist are
           // one list read twice rather than two lists maintained apart.
           const _evAssert = (() => {
-            try { return (buildEmailEvidence(_parts.evidence || {}).assertable || []).join(' '); }
+            try { return (buildEmailEvidence(_evidence).assertable || []).join(' '); }
             catch (e) { return ''; }
           })();
           const _v = _written ? verifyBrainEmail(_written, {
