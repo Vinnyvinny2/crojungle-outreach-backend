@@ -141,19 +141,52 @@ const hunterSerial = (fn) => {
 // request at a time. Sequential is the right trade here — a scrape takes 3-5s
 // and the alternative is a burst that costs credits AND returns nothing.
 // FC_MIN_GAP_MS is tunable without a deploy.
+// ══ SEQUENTIAL WAS THE RIGHT FIX FOR A BURST AND THE WRONG ONE FOR A RUN ═════
+// The reasoning above is correct about the cause and it over-corrected on the
+// cure. What Firecrawl refused on 2026-08-17 was a BURST: three Promise.all
+// fan-outs — 7 site pages, 2 leadership pages, 4 contact pages — firing ~13
+// requests within a couple of seconds from two leads at once, against a plan's
+// concurrent-browser cap. It was never a sustained rate problem: one lead makes
+// ~14 paid calls across ~200 seconds, which is about 4 a minute, and two leads
+// about 8. Firecrawl's published per-minute limits are 10 (Free), 100 (Hobby)
+// and 500 (Standard); its CONCURRENT BROWSER caps are 2, 5 and 50.
+//
+// A chain of one fixes the burst by removing all parallelism, and the bill comes
+// as wall-clock: on 2026-08-18 Melinda Haws took 350s and Charles C. Brandt sat
+// 336s in a queue behind her, because every one of her calls and every one of
+// Chariker's ran end to end through this single file. Vin: "that run took like
+// 10 minutes fir 3 leads".
+//
+// A bounded semaphore keeps the burst impossible and returns the parallelism:
+// at most FC_CONCURRENCY in flight, with the same minimum gap between STARTS so
+// requests stay spaced however many slots are free. Default 2 — the Free tier's
+// concurrent-browser cap, so this is safe on the smallest plan Vin could be on,
+// and FC_CONCURRENCY raises it without a deploy the moment the plan is known.
 const FC_MIN_GAP_MS = parseInt(process.env.FC_MIN_GAP_MS || '350', 10);
-let _fcChain = Promise.resolve();
-const fcSerial = (fn) => {
-  const run = _fcChain.then(async () => {
-    const out = await fn();
-    await new Promise(r => setTimeout(r, FC_MIN_GAP_MS));
-    return out;
-  });
-  // Keep the chain alive even if one call throws, or every later call is
-  // stranded — the failure hunterSerial's own comment records.
-  _fcChain = run.then(() => {}, () => {});
-  return run;
+const FC_CONCURRENCY = Math.max(1, parseInt(process.env.FC_CONCURRENCY || '2', 10) || 2);
+let _fcInFlight = 0;
+let _fcLastStart = 0;
+const _fcWaiting = [];
+const _fcPump = () => {
+  while (_fcInFlight < FC_CONCURRENCY && _fcWaiting.length) {
+    const gap = FC_MIN_GAP_MS - (Date.now() - _fcLastStart);
+    if (gap > 0) { setTimeout(_fcPump, gap); return; }
+    const job = _fcWaiting.shift();
+    _fcInFlight++;
+    _fcLastStart = Date.now();
+    // The slot is released however the call ends — a throw that skipped the
+    // decrement would leak a slot permanently and strand every later request,
+    // which is the failure the old chain's own comment records one level down.
+    Promise.resolve()
+      .then(job.fn)
+      .then(job.resolve, job.reject)
+      .finally(() => { _fcInFlight--; _fcPump(); });
+  }
 };
+const fcSerial = (fn) => new Promise((resolve, reject) => {
+  _fcWaiting.push({ fn, resolve, reject });
+  _fcPump();
+});
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
@@ -5943,7 +5976,30 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       // already do. One map call per domain instead of three.
       body: JSON.stringify({ url, limit }),
     }, 20000));
-    const d = await r.json();
+    let d = await r.json();
+    // ══ MAP HAD NO THROTTLE HANDLING AT ALL ═══════════════════════════════
+    // firecrawlScrape backs off on a 429; /map and /search never looked. A
+    // throttled map returns no links, and forty lines below that empty answer
+    // is CACHED FOR TEN MINUTES as "we asked and there was nothing" — so one
+    // throttle poisons every later caller on that domain (owner finder, site
+    // audit, careers, rank) and each of them reports a confident absence. That
+    // is the same class as reading a Firecrawl refusal as an empty page, with a
+    // cache in front of it.
+    if (isRateLimited(d, r.status)) {
+      FIRECRAWL_RATE_LIMIT_HITS++;
+      console.log(`\u23f3 FIRECRAWL RATE LIMITED (map) on ${_mk} — one 4s backoff, then a single retry. A throttled map must never be cached: it reads as "this site has no pages" to four other callers.`);
+      await new Promise(res => setTimeout(res, 4000));
+      const r2 = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/map', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, limit }),
+      }, 20000));
+      d = await r2.json();
+      if (isRateLimited(d, r2.status)) {
+        console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED (map) on ${_mk} — returning empty WITHOUT caching, so the next caller asks again instead of inheriting a false "no pages".`);
+        return [];
+      }
+    }
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true;
       console.log('🔴 FIRECRAWL OUT OF CREDITS (map)');
@@ -38063,6 +38119,95 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ SENTENCE ECHO CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ EVERY FIRECRAWL CALL IN THE PROCESS GOES THROUGH ONE GATE ═══════════
+  // fcSerial wraps all eight call sites — scrape, map, search, batch submit and
+  // poll, fcAsk, and /api/scrape. CLAUDE.md names this class from fetchT: "a
+  // shared helper is 60 bugs at once", and a defect here presents as "Firecrawl
+  // is flaky", never as a bug in our code.
+  //
+  // It was a strict one-at-a-time chain, which fixed the 2026-08-17 burst by
+  // removing all parallelism and billed it back as wall-clock: 350s for one
+  // lead, 336s queued for the next. It is now a bounded semaphore, and three
+  // properties have to hold or the cure is worse than the disease:
+  //   · the cap is never exceeded          — or the burst returns
+  //   · a throw releases its slot          — or the whole process wedges
+  //   · starts stay spaced by the gap      — or a fan-out is still a burst
+  // Executed here rather than reasoned about, because the failure mode of the
+  // third one is silent and only visible under load.
+  // Async, because the gate it tests is. Everything else at boot is
+  // synchronous, so this one line resolves after the checks below it print —
+  // the ordering in the log is not the ordering of the file.
+  void (async () => {
+  try {
+    const _fails = [];
+    const _t0 = Date.now();
+    let _peak = 0, _live = 0;
+    const _starts = [];
+    const _job = (ms, boom) => async () => {
+      _live++; _peak = Math.max(_peak, _live); _starts.push(Date.now());
+      await new Promise(r => setTimeout(r, ms));
+      _live--;
+      if (boom) throw new Error('deliberate');
+      return ms;
+    };
+    // ── A CHECK THAT HANGS IS A CHECK THAT CANNOT FAIL ─────────────────────
+    // Falsified by deleting the slot release: the gate wedged exactly as it
+    // should and this check printed NOTHING — the await never returned, so the
+    // worst failure the gate has (every Firecrawl call in the process hanging
+    // forever) produced silence instead of a red line. Bounded now, and the
+    // timeout IS the finding.
+    const _out = await Promise.race([
+      Promise.all(Array.from({ length: 10 }, (_, i) => fcSerial(_job(30, i === 2 || i === 6)).catch(() => 'threw'))),
+      new Promise(r => setTimeout(() => r('STRANDED'), 15000)),
+    ]);
+    if (_out === 'STRANDED') {
+      _fails.push('10 calls did not finish in 15s — a slot is leaking, and in production that wedges every Firecrawl call in the process with no error anywhere');
+    } else {
+      if (_out.length !== 10) _fails.push(`${_out.length} of 10 calls settled — the rest are stranded`);
+      if (_out.filter(x => x === 'threw').length !== 2) _fails.push('a throwing call did not reject its caller');
+    }
+    // ── AND AN ABSOLUTE CEILING, NOT ONLY THE CONFIGURED ONE ───────────────
+    // Falsified by setting FC_CONCURRENCY to 99: the check PASSED, reporting
+    // "never more than 99 in flight". It compared the measurement against the
+    // same constant under test, so raising the constant raised the bar and the
+    // assertion could not fail. Firecrawl's concurrent-browser caps are 2
+    // (Free), 5 (Hobby), 50 (Standard); above 5 here is a misconfiguration that
+    // recreates the 2026-08-17 burst whatever the environment says.
+    if (_peak > FC_CONCURRENCY) _fails.push(`${_peak} calls were in flight against a cap of ${FC_CONCURRENCY} — the burst that made Firecrawl refuse two leads is back`);
+    if (FC_CONCURRENCY > 5) _fails.push(`FC_CONCURRENCY is ${FC_CONCURRENCY}; Firecrawl serves 2 concurrent browsers on Free and 5 on Hobby, so this fans out past what the plan can answer`);
+    if (_peak > 5) _fails.push(`${_peak} calls were in flight — past every plan's concurrent-browser cap regardless of configuration`);
+    // ── WHAT IS MEASURED HERE IS NOT WHAT THE GATE CONTROLS ────────────────
+    // The gate spaces the moment it RELEASES a call; this array records the
+    // moment the call's body RUNS, one microtask later. Under a busy event loop
+    // — and boot is the busiest this process ever gets — that lag is real: the
+    // first observed gap came in at 310ms against a 350ms setting while every
+    // later one was exactly 350. The gate was correct and the ruler was wrong.
+    //
+    // The lag can only ever make requests FURTHER apart in wall-clock terms, so
+    // 20% of tolerance costs nothing and keeps the assertion meaningful: a
+    // genuine spacing failure is a fan-out firing several calls in the same
+    // millisecond, which is two orders of magnitude past this.
+    const _gaps = _starts.slice(1).map((s, i) => s - _starts[i]);
+    const _floor = Math.round(FC_MIN_GAP_MS * 0.8);
+    const _tooClose = _gaps.filter(g => g < _floor).length;
+    if (_tooClose) _fails.push(`${_tooClose} start(s) came less than ${_floor}ms after the one before — gaps were [${_gaps.join(', ')}] — the spacing that keeps a fan-out from becoming a burst is not holding`);
+    // The slot must survive the throws: if a rejection leaked a slot, this hangs
+    // rather than resolving, so the timeout is the assertion.
+    const _after = await Promise.race([
+      fcSerial(async () => 'alive'),
+      new Promise(r => setTimeout(() => r('WEDGED'), 3000)),
+    ]);
+    if (_after !== 'alive') _fails.push('the gate stopped accepting work after two throws — every later Firecrawl call in the process would hang');
+    if (_fails.length) {
+      console.log(`⛔ FIRECRAWL GATE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIRECRAWL GATE CHECK: 10 calls through the real gate with 2 of them throwing — never more than ${FC_CONCURRENCY} in flight, every start at least ${_floor}ms after the last (the ${FC_MIN_GAP_MS}ms setting, less the microtask the body waits on), both throws returned to their caller, and the gate still accepts work afterwards. It ran in ${Date.now() - _t0}ms against ~${10 * 30 + 10 * FC_MIN_GAP_MS}ms strictly serial, which is the 350s-per-lead this replaced.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIRECRAWL GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
 
   // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
   // Every lead logs "no measured buying window", thirty-plus in a row, with
