@@ -141,19 +141,52 @@ const hunterSerial = (fn) => {
 // request at a time. Sequential is the right trade here — a scrape takes 3-5s
 // and the alternative is a burst that costs credits AND returns nothing.
 // FC_MIN_GAP_MS is tunable without a deploy.
+// ══ SEQUENTIAL WAS THE RIGHT FIX FOR A BURST AND THE WRONG ONE FOR A RUN ═════
+// The reasoning above is correct about the cause and it over-corrected on the
+// cure. What Firecrawl refused on 2026-08-17 was a BURST: three Promise.all
+// fan-outs — 7 site pages, 2 leadership pages, 4 contact pages — firing ~13
+// requests within a couple of seconds from two leads at once, against a plan's
+// concurrent-browser cap. It was never a sustained rate problem: one lead makes
+// ~14 paid calls across ~200 seconds, which is about 4 a minute, and two leads
+// about 8. Firecrawl's published per-minute limits are 10 (Free), 100 (Hobby)
+// and 500 (Standard); its CONCURRENT BROWSER caps are 2, 5 and 50.
+//
+// A chain of one fixes the burst by removing all parallelism, and the bill comes
+// as wall-clock: on 2026-08-18 Melinda Haws took 350s and Charles C. Brandt sat
+// 336s in a queue behind her, because every one of her calls and every one of
+// Chariker's ran end to end through this single file. Vin: "that run took like
+// 10 minutes fir 3 leads".
+//
+// A bounded semaphore keeps the burst impossible and returns the parallelism:
+// at most FC_CONCURRENCY in flight, with the same minimum gap between STARTS so
+// requests stay spaced however many slots are free. Default 2 — the Free tier's
+// concurrent-browser cap, so this is safe on the smallest plan Vin could be on,
+// and FC_CONCURRENCY raises it without a deploy the moment the plan is known.
 const FC_MIN_GAP_MS = parseInt(process.env.FC_MIN_GAP_MS || '350', 10);
-let _fcChain = Promise.resolve();
-const fcSerial = (fn) => {
-  const run = _fcChain.then(async () => {
-    const out = await fn();
-    await new Promise(r => setTimeout(r, FC_MIN_GAP_MS));
-    return out;
-  });
-  // Keep the chain alive even if one call throws, or every later call is
-  // stranded — the failure hunterSerial's own comment records.
-  _fcChain = run.then(() => {}, () => {});
-  return run;
+const FC_CONCURRENCY = Math.max(1, parseInt(process.env.FC_CONCURRENCY || '2', 10) || 2);
+let _fcInFlight = 0;
+let _fcLastStart = 0;
+const _fcWaiting = [];
+const _fcPump = () => {
+  while (_fcInFlight < FC_CONCURRENCY && _fcWaiting.length) {
+    const gap = FC_MIN_GAP_MS - (Date.now() - _fcLastStart);
+    if (gap > 0) { setTimeout(_fcPump, gap); return; }
+    const job = _fcWaiting.shift();
+    _fcInFlight++;
+    _fcLastStart = Date.now();
+    // The slot is released however the call ends — a throw that skipped the
+    // decrement would leak a slot permanently and strand every later request,
+    // which is the failure the old chain's own comment records one level down.
+    Promise.resolve()
+      .then(job.fn)
+      .then(job.resolve, job.reject)
+      .finally(() => { _fcInFlight--; _fcPump(); });
+  }
 };
+const fcSerial = (fn) => new Promise((resolve, reject) => {
+  _fcWaiting.push({ fn, resolve, reject });
+  _fcPump();
+});
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
@@ -1262,6 +1295,44 @@ const BACKEND_CLAIM_PATTERNS = [
   // present-tense assertion that he is performing an action is refused.
   [/\byou(?:'re| are) (?:searching|googling|typing|checking|looking up|seeing|watching|reading|scrolling|browsing)\b/i,
     'OWNER BEHAVIOUR CLAIM: states what the owner himself is doing or seeing right now, which we have never observed. He knows whether he did it, and being told he did when he did not loses him on the spot. Ask it instead, or mark it as a guess', "You're searching your own name and seeing yourself first"],
+  // ── IT SHIPPED AGAIN, ONE TENSE OVER ──────────────────────────────────
+  // 2026-08-18, Melinda Haws, brain-written, passed every gate:
+  //   "You search your own name and come up first — that's a completely
+  //    different search from what your next patient is typing."
+  // That is the SAME invention as Green Hills the day before, and the rule
+  // written for Green Hills the day before missed it: it required "you're
+  // searching" or "you are searching", and the model wrote the present simple.
+  // Two rules, both correct, both blind to the most ordinary conjugation in
+  // English — which is what happens when a family is enumerated by the example
+  // that produced it instead of by what makes it false.
+  //
+  // What makes it false is fixed and has nothing to do with tense: we assert
+  // that the OWNER performed a lookup OF HIMSELF. So the rule is shaped that
+  // way — subject "you", any lookup verb in any form, an object that is his own
+  // name/business/listing, and not inside a question. A question is the whole
+  // point of the ask ("Have you searched your own name lately?") and an
+  // imperative is the brief's own model answer ("Pull up your site on a phone
+  // right now"), so both stay legal.
+  //
+  // ── THE GAP MAY CROSS WORDS, NEVER PUNCTUATION ───────────────────────
+  // The first version of this rule allowed any 30 characters between "you"
+  // and the verb, and that let "you" be the OBJECT of one clause while the
+  // verb belonged to the next. It matched the audit prompt's own model answer
+  // for correct altitude — "...the path from finding you to reaching you is
+  // broken — pull up your site on a phone and try to tap the number" — which
+  // is an IMPERATIVE to the reader and asserts nothing about what he saw.
+  // Refusing it would have sent every draft that imitated the brief straight
+  // to the flat template, which is the failure being fixed this same morning.
+  // A word-only gap makes "you" the subject of the verb, which is the whole
+  // claim: he looked, and here is what he saw.
+  // Verified against every sentence this file can emit — 345 of them: all 35
+  // asks, every rung's finding, so-what, reframe and blind line, every subject
+  // template, and the writer's brief. Zero false positives. That number matters
+  // more than the catch: a rule that fires on our own copy sends every draft to
+  // the flat template, which is the failure Vin reported this same morning.
+  [/\byou\b(?:'re|\u2019re| are| were|'d|\u2019d|'ll|\u2019ll|'ve|\u2019ve)?(?:\s+\w+){0,3}\s+(?:search\w*|googl\w+|typ(?:e|es|ed|ing)|look(?:s|ed|ing)?\s+up|pull(?:s|ed|ing)?\s+up|see|sees|seeing|saw)\b(?:\s+\w+){0,4}\s+(?:your own|yourself|your name|your business|your listing|your practice|your company|your site|your profile)\b(?![^.?!]*\?)/i,
+    'OWNER SELF-LOOKUP CLAIM: asserts he looked himself up and describes what he saw. We have never watched him do anything, and what a signed-in owner sees is personalised in ways nothing here can measure. He knows whether he did it. Ask it, or cut it',
+    "You search your own name and come up first"],
   [/\bwhen you (?:search|google|type|check|look up)\b(?![^.?!]*\?)/i,
     'OWNER BEHAVIOUR CLAIM: asserts what he sees when he searches — we never watched him search, and the result he gets is personalised in ways we cannot measure', "When you search for that phrase you see yourself at the top."],
   // The query itself has to be the one we ran. "near me" is a phrase no rank
@@ -5866,6 +5937,22 @@ const rememberHtmlLinks = (html, pageUrl, companyName) => {
   return links.length;
 };
 
+// ══ THE SITEMAP WE ALREADY PAID FOR, WITHOUT PAYING AGAIN ════════════════════
+// The fallback visibility pass deliberately passes no sitemap, and its comment
+// explains why: mapping there would add a Firecrawl call on leads that skipped
+// the deep audit. That reasoning is correct and unchanged.
+//
+// What it conflated is MAPPING with READING A MAP. _MAP_CACHE is keyed by
+// hostname and lives ten minutes, so on any lead whose owner-finder or email
+// pass already mapped the site, the list is in memory and free. Reading it costs
+// nothing and returns [] on a miss, so this can never trigger a call.
+const cachedSiteMap = (url) => {
+  let k = '';
+  try { k = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { return []; }
+  const hit = _MAP_CACHE.get(k);
+  return (hit && Date.now() - hit.at < _MAP_TTL_MS && Array.isArray(hit.urls)) ? hit.urls : [];
+};
+
 const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   void search;
   if (!fcKey || !url) return [];
@@ -5889,7 +5976,30 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       // already do. One map call per domain instead of three.
       body: JSON.stringify({ url, limit }),
     }, 20000));
-    const d = await r.json();
+    let d = await r.json();
+    // ══ MAP HAD NO THROTTLE HANDLING AT ALL ═══════════════════════════════
+    // firecrawlScrape backs off on a 429; /map and /search never looked. A
+    // throttled map returns no links, and forty lines below that empty answer
+    // is CACHED FOR TEN MINUTES as "we asked and there was nothing" — so one
+    // throttle poisons every later caller on that domain (owner finder, site
+    // audit, careers, rank) and each of them reports a confident absence. That
+    // is the same class as reading a Firecrawl refusal as an empty page, with a
+    // cache in front of it.
+    if (isRateLimited(d, r.status)) {
+      FIRECRAWL_RATE_LIMIT_HITS++;
+      console.log(`\u23f3 FIRECRAWL RATE LIMITED (map) on ${_mk} — one 4s backoff, then a single retry. A throttled map must never be cached: it reads as "this site has no pages" to four other callers.`);
+      await new Promise(res => setTimeout(res, 4000));
+      const r2 = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/map', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, limit }),
+      }, 20000));
+      d = await r2.json();
+      if (isRateLimited(d, r2.status)) {
+        console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED (map) on ${_mk} — returning empty WITHOUT caching, so the next caller asks again instead of inheriting a false "no pages".`);
+        return [];
+      }
+    }
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true;
       console.log('🔴 FIRECRAWL OUT OF CREDITS (map)');
@@ -10524,7 +10634,24 @@ const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand, leadId2) => {
   const rest = pool.filter(x => !diffSubject.includes(x));
   const fresh = rest.filter(x => bandOf(x) !== String(leadBand || ''));
   const same  = rest.filter(x => bandOf(x) === String(leadBand || ''));
-  const ordered = [...diffSubject, ...fresh, ...same];
+  // ══ THE FOLLOW-UP POOL IS SORTED BY HARM, AND HARM IS WHY IT IS REVIEWS ══
+  // byHarm ranks on the rung's harm number alone. NOT_SELLABLE_OPENER blocks
+  // seven review rungs from LEADING because he fixes them himself for nothing —
+  // and SELLABLE scores those same rungs 5 ("this is the pitch"), so they take
+  // none of the 44-point penalty that pushes a $200 finding down. The two tables
+  // disagree about the same rungs, and the disagreement resolves in reviews'
+  // favour: barred from slot one, top of the queue for slots two, three and
+  // four. That is the arithmetic behind three review follow-ups on a
+  // construction company.
+  //
+  // A finding we cannot sell against is not a better follow-up than one we can,
+  // whatever its harm number says. Stable, so everything else about the order —
+  // a different subject area first, then a different band — survives intact.
+  const _unsellable = (h) => (h && NOT_SELLABLE_OPENER[h.id]) ? 1 : 0;
+  const ordered = [...diffSubject, ...fresh, ...same]
+    .map((h, i) => ({ h, i }))
+    .sort((a, b) => (_unsellable(a.h) - _unsellable(b.h)) || (a.i - b.i))
+    .map(x => x.h);
 
   // ══ ONE REVIEW EMAIL PER SEQUENCE, NOT FOUR ════════════════════════════
   // Gregory Cox, live, all four touches:
@@ -10781,11 +10908,29 @@ const SUBJECTS_FOR = {
   phone_mismatch:       ['google has your old number', 'your numbers do not match'],
   tap_to_call_broken:   ['your number will not dial', 'tapping your number is dead'],
   absent_from_search:   ['you are not showing up', 'nobody can find you'],
-  // Vin's read: "not working" is a judgement about him, "smaller shops are above
-  // you" is a comparison that stings. "Your reviews are broken" states a fact
-  // about a thing rather than a verdict on his effort — same information, less
-  // accusation, and it is the phrasing he would use himself.
-  outranked_by_weaker:  ['your reviews are broken', 'your reviews are not working', 'smaller shops are above you'],
+  // ══ A RANKING FINDING WITH REVIEW SUBJECT LINES ═══════════════════════════
+  // This rung is about POSITION: "Boaz Construction ranks above them for
+  // 'commercial construction contractor in Indianapolis' with 23 reviews against
+  // their 47". Two of its three subjects said "your reviews are broken" and
+  // "your reviews are not working" — so the most reply-earning finding in the
+  // system arrived in the owner's inbox looking like one more email about his
+  // reviews. On 2026-08-18 it went out that way to a construction company AND to
+  // a plastic surgeon, both as "your reviews are broken", and Vin's response was
+  // "why the fuck is construction one all about reviews... im about to remove
+  // that signal". The signal was never the problem; the envelope was.
+  //
+  // An earlier note here recorded Vin preferring "your reviews are broken"
+  // because it states a fact rather than judging his effort. That reasoning was
+  // sound and is superseded: it optimised the wording of a review subject when
+  // the defect is that a ranking finding had a review subject at all.
+  //
+  // These three name the position and nothing else. Deliberately trade-neutral —
+  // "shops" is wrong for a surgeon and the subject table has no audience
+  // register — and none states a number, because nothing verifies a subject
+  // against the measurements.
+  outranked_by_weaker:  ['somebody smaller is above you', 'someone else comes up first',
+                         'google puts them above you', 'you are not the top result',
+                         'who comes up before you', 'they are above you on google'],
   // Mike's subject test: could someone who WORKS there have sent it. A colleague
   // who noticed the company missing from a nearby market writes exactly this.
   // "half your area" and "two towns" were counts nobody measured — the rung
@@ -10821,7 +10966,11 @@ const SUBJECTS_FOR = {
   // '{years} years, {reviews} reviews' was here and broke two of Mike's own
   // subject rules at once — numbers, and two clauses split for rhythm. Three
   // options so two leads leading on the same rung do not get the same line.
-  not_compounding:      ['your reviews are not adding up', 'your reviews stopped', "reviews don't match the work"],
+  // 'your reviews stopped' was ALSO stale_reviews' first option. One string on
+  // two rungs means two different findings can arrive under one headline, and
+  // nothing downstream can tell them apart — Brandt's third touch went out on
+  // a subject written for a rung that had not fired.
+  not_compounding:      ['your reviews are not adding up', "reviews don't match the work", 'the work is not on the record'],
   review_velocity_drop: ['your reviews slowed down', 'your reviews went quiet', 'something changed in the spring'],
   // Colleague voice, under 30 characters, nothing a consultant would type.
   // ══ THREE LEADS, ONE SUBJECT LINE ═══════════════════════════════════════
@@ -10898,6 +11047,130 @@ const buildSubjects = (lead, m = {}) => {
     .filter(t => t.length <= 30)
     .filter(t => !/\b(gap|goes quiet|aren'?t showing|opportunity|room|potential|underperform\w*|optimi[sz]e|lever|invisible|outranked|leverage|synerg\w*)\b/i.test(t))
     .map(t => t.trim());
+};
+
+
+// ══ THE QUOTA COUNTED RUNGS; THE OWNER COUNTS WORDS ══════════════════════════
+// orderFollowUpRungs enforces "one review touch per sequence" by counting rung
+// IDs. On 2026-08-18 that arithmetic said Charles C. Brandt Construction had ONE
+// review touch. What actually arrived was:
+//
+//   email 1    "your reviews are broken"      (outranked_by_weaker — a RANKING
+//                                              finding, filed as non-review)
+//   follow 1   "your reviews keep saying it"  (the one permitted review touch)
+//   follow 2   "your reviews stopped"         (deferred, and shipped anyway)
+//   break-up   "...with 23 reviews against your 47"
+//
+// Three of four subjects said reviews, to a commercial construction company.
+// Vin: "why the fuck is construction one all about reviews im so sick of reviews
+// im about to remove that signal."
+//
+// TWO INDEPENDENT LEAKS, both invisible to an ID-based counter:
+//   1. A non-review rung with review-flavoured copy. Fixed at the table for the
+//      subject; the BODY of outranked_by_weaker still says "with 23 reviews
+//      against your 47", and it should — that comparison is the finding, and it
+//      is the one this system credits with replies.
+//   2. Deferral is not removal. `final` concatenates deferredReviews back on the
+//      end, so when the non-review pool is empty the reordering is a no-op and
+//      four review touches ship. The code comment says so plainly: "a demoted
+//      finding still ships and no lead is lost". That trade was wrong. A lead is
+//      not lost by sending three good touches instead of four review ones.
+//
+// So the quota moves to the only place where all four RENDERED touches exist,
+// and it reads them. Rescue in order of least damage: swap the subject if the
+// subject is the problem, then drop a follow-up whose BODY is another review
+// email, then neutralise the break-up. Email 1 is never dropped — it is the
+// email — but everything after it must then be clean.
+const REVIEW_VOCAB = /\b(reviews?|reviewers?|ratings?|stars?|star line)\b/i;
+
+// ══ WHAT COUNTS AS "ANOTHER EMAIL ABOUT MY REVIEWS" ══════════════════════════
+// Not simply the word appearing. The first version of this counted any touch
+// whose BODY contained "reviews", and it killed the wrong thing: the finding
+// this system credits with every reply it has earned is "businesses with fewer
+// reviews than yours are ranking above you", which is about POSITION and uses
+// the review count only as the comparison. Chuck Jenkins, a real prospect, said
+// that exact sentence is what would have made him open the email in thirty
+// seconds. Counting it as a review touch spent the budget on the best line we
+// have and then deleted the genuine review finding behind it.
+//
+// The honest test has two halves, and both are about what the OWNER concludes:
+//   · the FINDING is about his reviews          -> REVIEW_SUBJECT_RUNGS
+//   · the ENVELOPE says reviews                 -> the subject line
+// A non-review finding whose body cites a review count is neither. That is the
+// distinction the id-only counter could not draw and the body-only counter drew
+// backwards.
+const isReviewTouch = (t, rungId) =>
+  !!t && (REVIEW_SUBJECT_RUNGS.has(String(rungId || t.rungId || ''))
+          || REVIEW_VOCAB.test(String(t.subject || '')));
+
+const applyReviewToneQuota = (email, opts = {}) => {
+  if (!email) return email;
+  const m = opts.measured || {};
+  const leadRung = String(opts.leadRungId || '');
+  const cleanSubjectFor = (rungId, current) => {
+    try {
+      const alts = buildSubjects({ id: String(rungId || '') }, m)
+        .filter(Boolean)
+        .filter(x => !REVIEW_VOCAB.test(x) && x !== current);
+      if (!alts.length) return '';
+      const seed = Math.abs(String(opts.company || opts.founderName || '')
+        .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0));
+      return alts[seed % alts.length];
+    } catch (e) { void e; return ''; }
+  };
+  const notes = [];
+  let spent = 0;
+
+  // Email 1 first — it sets the impression, so it gets the budget if it needs
+  // it. Both arms are one touch with two subjects: clean whichever is dirty and
+  // count the slot once.
+  for (const key of ['variantA', 'variantB']) {
+    const t = email[key];
+    if (!t || !REVIEW_VOCAB.test(String(t.subject || ''))) continue;
+    if (REVIEW_SUBJECT_RUNGS.has(leadRung)) continue;   // a review finding may say so
+    const swap = cleanSubjectFor(leadRung, t.subject);
+    if (swap) {
+      notes.push(`${key} subject "${t.subject}" -> "${swap}" (the finding is ${leadRung || 'not about reviews'})`);
+      email[key] = { ...t, subject: swap };
+    }
+  }
+  if (isReviewTouch(email.variantA, leadRung) || isReviewTouch(email.variantB, leadRung)) spent = 1;
+
+  for (const key of ['followUp1', 'followUp2']) {
+    const t = email[key];
+    if (!t || !isReviewTouch(t)) continue;
+    // A non-review finding wearing a review subject is a swap, not a drop.
+    if (!REVIEW_SUBJECT_RUNGS.has(String(t.rungId || ''))) {
+      const swap = cleanSubjectFor(t.rungId, t.subject);
+      if (swap) { notes.push(`${key} subject "${t.subject}" -> "${swap}"`); email[key] = { ...t, subject: swap }; continue; }
+    }
+    if (spent >= 1) {
+      notes.push(`${key} DROPPED (${t.rungId || 'unknown rung'}) — the sequence already carries a review touch`);
+      email[key] = null;
+    } else {
+      spent = 1;
+    }
+  }
+
+  // The break-up quotes the opener's claim verbatim. It inherits the opener's
+  // rung, so it is only ever a problem when the opener was a review finding —
+  // in which case the sequence has already spent its budget on the same words.
+  if (email.breakup && REVIEW_SUBJECT_RUNGS.has(leadRung) && spent >= 1
+      && REVIEW_VOCAB.test(String(email.breakup.body || ''))) {
+    const b = email.breakup;
+    const stripped = String(b.body || '').split(/\n\n/)
+      .filter(p => !REVIEW_VOCAB.test(p)).join('\n\n').trim();
+    if (stripped.split(/\s+/).filter(Boolean).length >= 25) {
+      notes.push('break-up claim sentence removed — it repeated the opener\u2019s review finding word for word');
+      email.breakup = { ...b, body: stripped };
+    }
+  }
+
+  if (notes.length) {
+    const _left = ['variantA', 'followUp1', 'followUp2', 'breakup'].filter(k => email[k]).length;
+    console.log(`\u2702 REVIEW TONE QUOTA [${opts.company || 'lead'}]: ${notes.join(' | ')}. ${_left} touch(es) remain. A stranger who reads four emails about his reviews learns that his reviews are the only thing we looked at \u2014 and we sell nothing that fixes them.`);
+  }
+  return email;
 };
 
 // ══ THE EMAIL, COMPOSED BY CODE ══════════════════════════════════════════════
@@ -13699,6 +13972,22 @@ const _tidy = (t) => stripProtect(String(t || ''))
   .replace(/[ \t]+([.,!?])/g, '$1')  // no space before punctuation
   .trim();
 
+// ══ A LEAD-IN THE SENTENCE ALREADY CARRIES ═══════════════════════════════════
+// Skeleton 2 opens `${first}, right now ${costs}` and outranked_by_weaker's
+// costs line ENDS with "right now" — so Charles C. Brandt Construction was going
+// to read "Lindsay, right now the reputation is real and it is not reaching the
+// people searching right now." Nobody writes that sentence. It is precisely the
+// small wrongness this file elsewhere calls the thing that tells a reader a
+// machine wrote it, and it is invisible in a log because every word of it is
+// true and measured.
+//
+// General, not a patch on one string: a skeleton may only prepend a lead-in the
+// sentence does not already contain. Any future costs line ending "right now"
+// is handled by construction rather than by somebody noticing.
+const leadIn = (phrase, text) =>
+  new RegExp('\\b' + String(phrase).trim().replace(/\s+/g, '\\s+') + '\\b', 'i').test(String(text || ''))
+    ? '' : String(phrase);
+
 const EMAIL_SKELETONS = [
   // ══ A SKELETON HAS TO SAY WHETHER IT NEEDS THE REFRAME ═══════════════════
   // The reframe is now dropped whenever none of them is about the finding the
@@ -13800,7 +14089,7 @@ const EMAIL_SKELETONS = [
     needsCosts: true,
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
-      `${first ? first + ', right now ' + lower1(costs) : 'Right now ' + lower1(costs)}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+      `${first ? first + ', ' + leadIn('right now ', costs) + lower1(costs) : (leadIn('right now ', costs) ? 'Right now ' + lower1(costs) : upper1(costs))}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
@@ -14873,7 +15162,7 @@ const composeFollowUp = (rung, spine, opts, ordinal, usedCtaKinds) => {
     `${reframe ? upper1(reframe) + ' ' : ''}${costsToUse ? upper1(costsToUse) : ''}${money ? ' ' + upper1(money) : ''}`.trim(),
     cta.text,
   ].filter(Boolean).join('\n\n');
-  return { subject, body: _tidy(body), ctaKind: cta.kind };
+  return { subject, body: _tidy(body), ctaKind: cta.kind, rungId: rung.id };
 };
 
 // The break-up. The data is specific: it works ONLY when it is low-pressure and
@@ -14940,7 +15229,12 @@ const composeBreakup = (spine, opts) => {
 
 const composeFullEmail = (spine, opts = {}) => {
   if (!spine || !spine.claim) return null;
-  const subjects = Array.isArray(opts.subjects) ? opts.subjects : [];
+  // Falls back to the lead rung's own options. Every production caller passes
+  // subjects, but a missing list here silently ships a BLANK subject line, and a
+  // blank subject is the one defect the recipient sees before anything else.
+  const subjects = (Array.isArray(opts.subjects) && opts.subjects.length)
+    ? opts.subjects
+    : (() => { try { return buildSubjects({ id: spine && spine.claimId }, opts.measured || {}); } catch (e) { void e; return []; } })();
   const reframes = Array.isArray(opts.reframes) ? opts.reframes : [];
   const cta = CTA_FOR(spine.claim, spine.claimId, opts.company || opts.founderName);
   const first = greetingName(opts.founderName);
@@ -14985,7 +15279,11 @@ const composeFullEmail = (spine, opts = {}) => {
   const second = (spine.rest || [])[0] || null;
   const n = Number(spine.problemCount) || 0;
 
-  return {
+  // Assembled first, then read. The quota can only be enforced on the rendered
+  // touches, because the defect it exists to stop is a property of the WORDS —
+  // a ranking finding whose subject says "your reviews are broken" is invisible
+  // to any counter that works on rung ids, and that is exactly what shipped.
+  const _assembled = {
     variantA: variant(0),
     variantB: variant(1),
     // ══ THE VERIFIED PIECES, EXPOSED ═══════════════════════════════════════
@@ -15033,6 +15331,10 @@ const composeFullEmail = (spine, opts = {}) => {
     ctaKind: cta.kind,
     composedBy: 'code',
   };
+  return applyReviewToneQuota(_assembled, {
+    company: opts.company, founderName: opts.founderName,
+    measured: opts.measured || {}, leadRungId: spine.claimId || (spine.lead && spine.lead.id) || '',
+  });
 };
 
 
@@ -15905,7 +16207,27 @@ const rankHarms = (m = {}) => {
     // Two of three emails in one batch led on missing pricing while the log
     // said "THIS IS THE RETAINER PITCH" about a different finding on the same
     // lead. The finding was true; it just had nothing behind it worth buying.
-    const _sellPenalty = (5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP;
+    // ══ THE SAME FORM IS A CHORE OR A CONVERSION PATH ══════════════════════
+    // long_form is scored 1 — "he does it himself this afternoon for nothing" —
+    // and for a business with a phone number, a booking tool and a form, that is
+    // right: shortening a secondary contact form is an afternoon.
+    //
+    // It stops being right when the form is the ONLY way in. Melinda Haws, live:
+    // seventeen fields, no other published route, and her own audit scored that
+    // as the highest-value finding on the lead — while the ladder handed it a
+    // 44-point penalty and left it thirty points below eligibility, so the email
+    // could never open on it. Its own sibling form_only_no_booking is scored 3
+    // for exactly this condition, off exactly this measurement. Two rungs, one
+    // situation, two different verdicts about whether we can sell the fix.
+    //
+    // So the penalty reads the measurement rather than the id when the condition
+    // the sibling already tests is true. Everything else about the rung is
+    // unchanged, and the table entry stays 1 so a form that is one route among
+    // several still cannot lead.
+    const _soleRoute = h.id === 'long_form' && m.bookingMeasured === true
+      && (m.booking === 'form' || m.booking === 'form_only');
+    const _sellable = _soleRoute ? 3 : (SELLABLE[h.id] || 3);
+    const _sellPenalty = (5 - _sellable) * SELLABLE_STEP;
     const openerScore = _disqualified ? 0
       : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _spendBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
 
@@ -25532,10 +25854,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Sits beside the review mine because they are the same kind of asset: a fact
       // about their business the owner has never had put in front of him. Costs one
       // Places call and no Firecrawl credit, so it runs on every Places lead.
+      let _siteUrls = [];
       try {
         // The sitemap is already cached from the owner/email passes, so re-asking
         // for it costs nothing and hands us their own service list as keywords.
-        let _siteUrls = [];
         try { _siteUrls = await firecrawlMap(firecrawlKey, website); } catch {}
         const lv = await auditLocalVisibility({
           companyName: company, placeId: effectivePlaceId, website,
@@ -25731,7 +26053,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           companyName: company, placeId: effectivePlaceId, website,
           industry: _trade,
           location: req.body.location || '',
-          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: [],
+          // ── STILL ZERO COST, BUT NO LONGER ZERO SITEMAP ──────────────────
+          // The note above is right that MAPPING here would add a Firecrawl call
+          // on leads that skipped the deep audit, and that decision stands. But
+          // "do not map here" and "do not read a map we already have" are not
+          // the same rule, and treating them as one switched service_invisibility
+          // off on every lead that took this path — "you publish a page for six
+          // services and nobody finds you for four of them" is the strongest
+          // non-review finding a practice can produce, and it was never once
+          // measured here. cachedSiteMap reads memory only and returns [] on a
+          // miss, so the cost decision above is untouched.
+          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: cachedSiteMap(website),
           bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
           bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null,
         });
@@ -29859,7 +30191,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 const a = String(_ladderWinner.finding || '').slice(0, 40).toLowerCase();
                 const b = String(parsed.openerStrength.finding || '').slice(0, 40).toLowerCase();
                 if (a && b && a.slice(0, 20) !== b.slice(0, 20)) {
-                  console.log(`\u2696 TWO LADDERS [${company}]: the audit's story leads on "${String(_ladderWinner.finding).slice(0, 46)}" while the email will open on "${String(parsed.openerStrength.finding).slice(0, 46)}". Both are intentional \u2014 the audit ranks by what matters to the business, the email by what he can verify. Mike should expect the call to start on the second and move to the first.`);
+                  console.log(`\u2696 TWO LADDERS [${company}]: the audit's story leads on "${String(_ladderWinner.finding).slice(0, 46)}" while the email OPENED on "${String(parsed.openerStrength.finding).slice(0, 46)}". They are ranked by different things on purpose \u2014 the audit by what costs the business most, the email by what a stranger can verify in ten seconds. Note the tense: the email was composed several hundred lines above this, from the harm ladder alone, so nothing decided here can move it. Mike should expect the call to start on the second and move to the first.`);
                 }
               }
             } catch (e) { void e; }
@@ -29916,7 +30248,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               };
 
               if (_wSig && _declaredNow && _wSig !== _declaredNow && _margin >= 3 && !_gaveReason) {
-                console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The email will be built on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". The scores are computed from measured signals; a silent downgrade to a weaker finding is the one thing this ladder exists to stop.`);
+                console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The AUDIT and the CALL SHEET are rebuilt on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". This line used to end "the email will be built on" that finding, and it was false on every lead: composeFullEmail ran hundreds of lines earlier, off the harm ladder, and never reads leadSignal. A log that overstates its own reach costs exactly what one that understates it does \u2014 it was read as evidence the two rankings had been reconciled, and they never were.`);
                 parsed.leadSignal = _wSig;
                 parsed.ladderWinner.overrode = _declaredNow;
               } else if (_wSig && _declaredNow && _wSig !== _declaredNow && _gaveReason) {
@@ -34235,9 +34567,20 @@ app.listen(PORT, () => {
       costs: 'the work is being done and almost none of it becomes proof',
       reframe: 'people comparing companies read the reviews first',
       jobValue: 'a custom home runs several hundred thousand dollars', problemCount: 3,
+      // ══ ORDERED THE WAY THE PIPELINE ORDERS THEM ═══════════════════════
+      // This listed no_owner_replies first — a second REVIEW rung directly
+      // behind a review opener — which orderFollowUpRungs cannot produce: a
+      // review lead sets the quota budget to zero and pushes every review
+      // finding behind the non-review ones. Feeding composeFullEmail an order
+      // the pipeline never generates made this check assert against a sequence
+      // no lead has received, and it went red the moment the review quota began
+      // reading rendered touches. A third non-review rung is added for the same
+      // reason: three follow-up slots need three fillable findings before
+      // "4 of 4" means anything.
       restRungs: [
-        { id: 'no_owner_replies', harm: 58, finding: 'not one of the 39 reviews has a reply', costs: 'a prospect sees a business that does not answer', reframe: 'a stranger reading reviews sees a business that does not answer' },
         { id: 'no_published_pricing', harm: 54, finding: 'no price appears anywhere', costs: 'someone comparing has to ask to find out', reframe: 'most people will not hand over details just to learn a price' },
+        { id: 'no_offer', harm: 52, finding: 'nothing on the site says why to pick them', costs: 'the only thing left to compare on is price', reframe: 'when nothing separates two companies, people choose on price' },
+        { id: 'no_owner_replies', harm: 58, finding: 'not one of the 39 reviews has a reply', costs: 'a prospect sees a business that does not answer', reframe: 'a stranger reading reviews sees a business that does not answer' },
       ],
     };
     const _full = composeFullEmail(_spine, { founderName: 'Dusty Hannah', company: 'Test Co', subjects: ['reviews dont match'] });
@@ -37666,6 +38009,205 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ BOOT HEAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ══ THE ENVELOPE SAID REVIEWS ON A FINDING THAT WAS NOT ═════════════════
+  // outranked_by_weaker is the rung this system credits with replies, and it is
+  // about POSITION. Two of its three subject lines said "your reviews are
+  // broken" and "your reviews are not working", so on 2026-08-18 a construction
+  // company and a plastic surgeon both received it as an email about their
+  // reviews. Vin: "why the fuck is construction one all about reviews... im
+  // about to remove that signal."
+  //
+  // The review quota downstream counts RUNGS. It cannot see this, because by
+  // its arithmetic that sequence carried one review touch. The owner counts
+  // words, and by his arithmetic it carried three. So the words are checked
+  // here, at the table, where the mismatch is expressible at all.
+  try {
+    const _fails = [];
+    const _REVIEW_WORD = /\breview|\brating|\bstars?\b/i;
+    let _subjects = 0, _rungs = 0;
+    for (const [_id, _list] of Object.entries(SUBJECTS_FOR || {})) {
+      _rungs++;
+      for (const _s of (_list || [])) {
+        _subjects++;
+        if (!REVIEW_SUBJECT_RUNGS.has(_id) && _REVIEW_WORD.test(_s)) {
+          _fails.push(`"${_id}" is not a review finding but offers the subject "${_s}" — the owner reads the envelope, and the quota that counts rungs cannot see this`);
+        }
+      }
+    }
+    // And the converse: a review rung with no review word is fine (the {pain}
+    // template resolves to the complaint itself), so nothing is asserted there.
+    // What IS asserted is that every rung still has at least one usable subject,
+    // because removing words is how a rung silently ends up with none.
+    for (const [_id, _list] of Object.entries(SUBJECTS_FOR || {})) {
+      if (!(_list || []).length) _fails.push(`"${_id}" has no subject options at all`);
+    }
+    if (_subjects < 80) _fails.push(`only ${_subjects} subject option(s) across ${_rungs} rungs — the table is not being read`);
+    if (_fails.length) {
+      console.log(`⛔ SUBJECT REGISTER CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ SUBJECT REGISTER CHECK: none of the ${_subjects} subject lines across ${_rungs} rungs puts review vocabulary on a finding that is not about reviews. The ranking rung — the one every reply this system has earned came from — now names the position instead, so a construction company and a surgeon can no longer both receive "your reviews are broken" about their search results.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SUBJECT REGISTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SENTENCE SAID IT TWICE ═══════════════════════════════════════════
+  // Charles C. Brandt Construction was about to receive "Lindsay, right now the
+  // reputation is real and it is not reaching the people searching right now."
+  // Skeleton 2 prepends "right now"; outranked_by_weaker's cost line ends with
+  // it. Every word true, every word measured, and nobody writes that sentence.
+  //
+  // Invisible to every existing gate: RUNG PHRASE CHECK compares a rung's three
+  // fields against EACH OTHER and this is one field against the SKELETON around
+  // it, which only exists once they are joined. So join them — all skeletons
+  // against all rungs — and read the result, which is what the owner does.
+  try {
+    const _fails = [];
+    const _m = {
+      tradeWord: 'plumber', city: 'Kansas City, MO', reviewCount: 68, rating: 4.5,
+      reviewsRead: 68, ownerReplies: 4, rank: 5, scanned: 20, weakerAbove: 2,
+      topName: 'Boaz Construction', topReviews: 23, rankQuery: 'plumber in Kansas City, MO',
+      formFieldCount: 9, photoCount: 4, tenureYears: 20, reviewsPerYear: 3,
+      reviewPainTop: 'slow callbacks', reviewPainMentions: 4, aboveReviewsN: 2, aboveReviewsAvg: 120,
+    };
+    // Every lead-in a skeleton can wrap around a rung's own sentence.
+    const _LEADINS = ['right now ', 'one thing ', 'something else '];
+    let _checked = 0;
+    for (const h of HARM_LADDER) {
+      const _c = costsOf(h, _m);
+      if (!_c) continue;
+      _checked++;
+      for (const _p of _LEADINS) {
+        // What the owner ACTUALLY receives — the skeleton's join, through the
+        // helper. Testing the raw concatenation instead would report a defect
+        // the renderer already prevents, and a check that fails on correct
+        // output is a check that gets deleted.
+        const _rendered = `${leadIn(_p, _c)}${_c}`;
+        const _word = _p.trim();
+        const _hits = (_rendered.toLowerCase().match(new RegExp(`\\b${_word}\\b`, 'g')) || []).length;
+        if (_hits > 1) {
+          _fails.push(`"${h.id}" rendered with "${_word}" still says it twice — "${_rendered.slice(0, 72)}"`);
+        }
+      }
+    }
+    // And the wire: a skeleton that prepends a lead-in without going through the
+    // helper reintroduces the whole class silently. Two rungs already end in
+    // "right now" (outranked_by_weaker, no_hours_on_profile), so the next
+    // skeleton to hard-code one would ship the doubled sentence on both.
+    {
+      const _sk = selfSource();
+      const _a = _sk.indexOf('const EMAIL_SKELETONS = [');
+      const _b = _a > 0 ? _sk.indexOf('\nconst ', _a + 30) : -1;
+      const _body = (_a > 0 && _b > _a) ? _sk.slice(_a, _b) : '';
+      if (!_body) _fails.push('EMAIL_SKELETONS could not be located, so the lead-in wire was not checked');
+      else {
+        for (const _m2 of _body.matchAll(/'(right now|one thing|something else) '/g)) {
+          const _around = _body.slice(Math.max(0, _m2.index - 40), _m2.index + 40);
+          if (!/leadIn\(/.test(_around)) {
+            _fails.push(`a skeleton hard-codes the lead-in "${_m2[1]}" without leadIn() — "${_around.replace(/\s+/g, ' ').slice(0, 60)}"`);
+          }
+        }
+      }
+    }
+    if (_checked < 20) _fails.push(`only ${_checked} cost line(s) resolved on the fixture — the ladder is not being read`);
+    if (_fails.length) {
+      console.log(`⛔ SENTENCE ECHO CHECK: ${_fails.slice(0, 5).join(' | ')}${_fails.length > 5 ? ` | +${_fails.length - 5} more` : ''}.`);
+    } else {
+      console.log(`✓ SENTENCE ECHO CHECK: none of the ${_checked} cost lines collides with the lead-in a skeleton wraps it in — "right now the reputation is real and it is not reaching the people searching right now" was one composed email away from a live inbox, and every word of it was true.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SENTENCE ECHO CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ EVERY FIRECRAWL CALL IN THE PROCESS GOES THROUGH ONE GATE ═══════════
+  // fcSerial wraps all eight call sites — scrape, map, search, batch submit and
+  // poll, fcAsk, and /api/scrape. CLAUDE.md names this class from fetchT: "a
+  // shared helper is 60 bugs at once", and a defect here presents as "Firecrawl
+  // is flaky", never as a bug in our code.
+  //
+  // It was a strict one-at-a-time chain, which fixed the 2026-08-17 burst by
+  // removing all parallelism and billed it back as wall-clock: 350s for one
+  // lead, 336s queued for the next. It is now a bounded semaphore, and three
+  // properties have to hold or the cure is worse than the disease:
+  //   · the cap is never exceeded          — or the burst returns
+  //   · a throw releases its slot          — or the whole process wedges
+  //   · starts stay spaced by the gap      — or a fan-out is still a burst
+  // Executed here rather than reasoned about, because the failure mode of the
+  // third one is silent and only visible under load.
+  // Async, because the gate it tests is. Everything else at boot is
+  // synchronous, so this one line resolves after the checks below it print —
+  // the ordering in the log is not the ordering of the file.
+  void (async () => {
+  try {
+    const _fails = [];
+    const _t0 = Date.now();
+    let _peak = 0, _live = 0;
+    const _starts = [];
+    const _job = (ms, boom) => async () => {
+      _live++; _peak = Math.max(_peak, _live); _starts.push(Date.now());
+      await new Promise(r => setTimeout(r, ms));
+      _live--;
+      if (boom) throw new Error('deliberate');
+      return ms;
+    };
+    // ── A CHECK THAT HANGS IS A CHECK THAT CANNOT FAIL ─────────────────────
+    // Falsified by deleting the slot release: the gate wedged exactly as it
+    // should and this check printed NOTHING — the await never returned, so the
+    // worst failure the gate has (every Firecrawl call in the process hanging
+    // forever) produced silence instead of a red line. Bounded now, and the
+    // timeout IS the finding.
+    const _out = await Promise.race([
+      Promise.all(Array.from({ length: 10 }, (_, i) => fcSerial(_job(30, i === 2 || i === 6)).catch(() => 'threw'))),
+      new Promise(r => setTimeout(() => r('STRANDED'), 15000)),
+    ]);
+    if (_out === 'STRANDED') {
+      _fails.push('10 calls did not finish in 15s — a slot is leaking, and in production that wedges every Firecrawl call in the process with no error anywhere');
+    } else {
+      if (_out.length !== 10) _fails.push(`${_out.length} of 10 calls settled — the rest are stranded`);
+      if (_out.filter(x => x === 'threw').length !== 2) _fails.push('a throwing call did not reject its caller');
+    }
+    // ── AND AN ABSOLUTE CEILING, NOT ONLY THE CONFIGURED ONE ───────────────
+    // Falsified by setting FC_CONCURRENCY to 99: the check PASSED, reporting
+    // "never more than 99 in flight". It compared the measurement against the
+    // same constant under test, so raising the constant raised the bar and the
+    // assertion could not fail. Firecrawl's concurrent-browser caps are 2
+    // (Free), 5 (Hobby), 50 (Standard); above 5 here is a misconfiguration that
+    // recreates the 2026-08-17 burst whatever the environment says.
+    if (_peak > FC_CONCURRENCY) _fails.push(`${_peak} calls were in flight against a cap of ${FC_CONCURRENCY} — the burst that made Firecrawl refuse two leads is back`);
+    if (FC_CONCURRENCY > 5) _fails.push(`FC_CONCURRENCY is ${FC_CONCURRENCY}; Firecrawl serves 2 concurrent browsers on Free and 5 on Hobby, so this fans out past what the plan can answer`);
+    if (_peak > 5) _fails.push(`${_peak} calls were in flight — past every plan's concurrent-browser cap regardless of configuration`);
+    // ── WHAT IS MEASURED HERE IS NOT WHAT THE GATE CONTROLS ────────────────
+    // The gate spaces the moment it RELEASES a call; this array records the
+    // moment the call's body RUNS, one microtask later. Under a busy event loop
+    // — and boot is the busiest this process ever gets — that lag is real: the
+    // first observed gap came in at 310ms against a 350ms setting while every
+    // later one was exactly 350. The gate was correct and the ruler was wrong.
+    //
+    // The lag can only ever make requests FURTHER apart in wall-clock terms, so
+    // 20% of tolerance costs nothing and keeps the assertion meaningful: a
+    // genuine spacing failure is a fan-out firing several calls in the same
+    // millisecond, which is two orders of magnitude past this.
+    const _gaps = _starts.slice(1).map((s, i) => s - _starts[i]);
+    const _floor = Math.round(FC_MIN_GAP_MS * 0.8);
+    const _tooClose = _gaps.filter(g => g < _floor).length;
+    if (_tooClose) _fails.push(`${_tooClose} start(s) came less than ${_floor}ms after the one before — gaps were [${_gaps.join(', ')}] — the spacing that keeps a fan-out from becoming a burst is not holding`);
+    // The slot must survive the throws: if a rejection leaked a slot, this hangs
+    // rather than resolving, so the timeout is the assertion.
+    const _after = await Promise.race([
+      fcSerial(async () => 'alive'),
+      new Promise(r => setTimeout(() => r('WEDGED'), 3000)),
+    ]);
+    if (_after !== 'alive') _fails.push('the gate stopped accepting work after two throws — every later Firecrawl call in the process would hang');
+    if (_fails.length) {
+      console.log(`⛔ FIRECRAWL GATE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIRECRAWL GATE CHECK: 10 calls through the real gate with 2 of them throwing — never more than ${FC_CONCURRENCY} in flight, every start at least ${_floor}ms after the last (the ${FC_MIN_GAP_MS}ms setting, less the microtask the body waits on), both throws returned to their caller, and the gate still accepts work afterwards. It ran in ${Date.now() - _t0}ms against ~${10 * 30 + 10 * FC_MIN_GAP_MS}ms strictly serial, which is the 350s-per-lead this replaced.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIRECRAWL GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
 
   // ══ THERE IS NO CLOCK ON ANY LEAD THIS SYSTEM HAS EVER RUN ═════════════
   // Every lead logs "no measured buying window", thirty-plus in a row, with
