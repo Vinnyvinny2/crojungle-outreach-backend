@@ -1281,12 +1281,23 @@ const BACKEND_CLAIM_PATTERNS = [
   // imperative is the brief's own model answer ("Pull up your site on a phone
   // right now"), so both stay legal.
   //
+  // ── THE GAP MAY CROSS WORDS, NEVER PUNCTUATION ───────────────────────
+  // The first version of this rule allowed any 30 characters between "you"
+  // and the verb, and that let "you" be the OBJECT of one clause while the
+  // verb belonged to the next. It matched the audit prompt's own model answer
+  // for correct altitude — "...the path from finding you to reaching you is
+  // broken — pull up your site on a phone and try to tap the number" — which
+  // is an IMPERATIVE to the reader and asserts nothing about what he saw.
+  // Refusing it would have sent every draft that imitated the brief straight
+  // to the flat template, which is the failure being fixed this same morning.
+  // A word-only gap makes "you" the subject of the verb, which is the whole
+  // claim: he looked, and here is what he saw.
   // Verified against every sentence this file can emit — 345 of them: all 35
   // asks, every rung's finding, so-what, reframe and blind line, every subject
   // template, and the writer's brief. Zero false positives. That number matters
   // more than the catch: a rule that fires on our own copy sends every draft to
   // the flat template, which is the failure Vin reported this same morning.
-  [/\byou\b(?:'re|\u2019re| are| were|'d|\u2019d|'ll|\u2019ll|'ve|\u2019ve)?[^.?!]{0,30}?\b(?:search\w*|googl\w+|typ(?:e|es|ed|ing)|look(?:s|ed|ing)?\s+up|pull(?:s|ed|ing)?\s+up|see|sees|seeing|saw)\b[^.?!]{0,28}?\b(?:your own|yourself|your name|your business|your listing|your practice|your company|your site|your profile)\b(?![^.?!]*\?)/i,
+  [/\byou\b(?:'re|\u2019re| are| were|'d|\u2019d|'ll|\u2019ll|'ve|\u2019ve)?(?:\s+\w+){0,3}\s+(?:search\w*|googl\w+|typ(?:e|es|ed|ing)|look(?:s|ed|ing)?\s+up|pull(?:s|ed|ing)?\s+up|see|sees|seeing|saw)\b(?:\s+\w+){0,4}\s+(?:your own|yourself|your name|your business|your listing|your practice|your company|your site|your profile)\b(?![^.?!]*\?)/i,
     'OWNER SELF-LOOKUP CLAIM: asserts he looked himself up and describes what he saw. We have never watched him do anything, and what a signed-in owner sees is personalised in ways nothing here can measure. He knows whether he did it. Ask it, or cut it',
     "You search your own name and come up first"],
   [/\bwhen you (?:search|google|type|check|look up)\b(?![^.?!]*\?)/i,
@@ -5891,6 +5902,22 @@ const rememberHtmlLinks = (html, pageUrl, companyName) => {
     console.log(`\u26d3 LINKS HARVESTED [${companyName}]: ${links.length} internal link(s) read out of markup we had already fetched, at no cost. If the sitemap comes back empty these are used instead of guessing fixed paths, which bills a 404 as a fetch.`);
   }
   return links.length;
+};
+
+// ══ THE SITEMAP WE ALREADY PAID FOR, WITHOUT PAYING AGAIN ════════════════════
+// The fallback visibility pass deliberately passes no sitemap, and its comment
+// explains why: mapping there would add a Firecrawl call on leads that skipped
+// the deep audit. That reasoning is correct and unchanged.
+//
+// What it conflated is MAPPING with READING A MAP. _MAP_CACHE is keyed by
+// hostname and lives ten minutes, so on any lead whose owner-finder or email
+// pass already mapped the site, the list is in memory and free. Reading it costs
+// nothing and returns [] on a miss, so this can never trigger a call.
+const cachedSiteMap = (url) => {
+  let k = '';
+  try { k = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { return []; }
+  const hit = _MAP_CACHE.get(k);
+  return (hit && Date.now() - hit.at < _MAP_TTL_MS && Array.isArray(hit.urls)) ? hit.urls : [];
 };
 
 const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
@@ -10551,7 +10578,24 @@ const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand, leadId2) => {
   const rest = pool.filter(x => !diffSubject.includes(x));
   const fresh = rest.filter(x => bandOf(x) !== String(leadBand || ''));
   const same  = rest.filter(x => bandOf(x) === String(leadBand || ''));
-  const ordered = [...diffSubject, ...fresh, ...same];
+  // ══ THE FOLLOW-UP POOL IS SORTED BY HARM, AND HARM IS WHY IT IS REVIEWS ══
+  // byHarm ranks on the rung's harm number alone. NOT_SELLABLE_OPENER blocks
+  // seven review rungs from LEADING because he fixes them himself for nothing —
+  // and SELLABLE scores those same rungs 5 ("this is the pitch"), so they take
+  // none of the 44-point penalty that pushes a $200 finding down. The two tables
+  // disagree about the same rungs, and the disagreement resolves in reviews'
+  // favour: barred from slot one, top of the queue for slots two, three and
+  // four. That is the arithmetic behind three review follow-ups on a
+  // construction company.
+  //
+  // A finding we cannot sell against is not a better follow-up than one we can,
+  // whatever its harm number says. Stable, so everything else about the order —
+  // a different subject area first, then a different band — survives intact.
+  const _unsellable = (h) => (h && NOT_SELLABLE_OPENER[h.id]) ? 1 : 0;
+  const ordered = [...diffSubject, ...fresh, ...same]
+    .map((h, i) => ({ h, i }))
+    .sort((a, b) => (_unsellable(a.h) - _unsellable(b.h)) || (a.i - b.i))
+    .map(x => x.h);
 
   // ══ ONE REVIEW EMAIL PER SEQUENCE, NOT FOUR ════════════════════════════
   // Gregory Cox, live, all four touches:
@@ -16107,7 +16151,27 @@ const rankHarms = (m = {}) => {
     // Two of three emails in one batch led on missing pricing while the log
     // said "THIS IS THE RETAINER PITCH" about a different finding on the same
     // lead. The finding was true; it just had nothing behind it worth buying.
-    const _sellPenalty = (5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP;
+    // ══ THE SAME FORM IS A CHORE OR A CONVERSION PATH ══════════════════════
+    // long_form is scored 1 — "he does it himself this afternoon for nothing" —
+    // and for a business with a phone number, a booking tool and a form, that is
+    // right: shortening a secondary contact form is an afternoon.
+    //
+    // It stops being right when the form is the ONLY way in. Melinda Haws, live:
+    // seventeen fields, no other published route, and her own audit scored that
+    // as the highest-value finding on the lead — while the ladder handed it a
+    // 44-point penalty and left it thirty points below eligibility, so the email
+    // could never open on it. Its own sibling form_only_no_booking is scored 3
+    // for exactly this condition, off exactly this measurement. Two rungs, one
+    // situation, two different verdicts about whether we can sell the fix.
+    //
+    // So the penalty reads the measurement rather than the id when the condition
+    // the sibling already tests is true. Everything else about the rung is
+    // unchanged, and the table entry stays 1 so a form that is one route among
+    // several still cannot lead.
+    const _soleRoute = h.id === 'long_form' && m.bookingMeasured === true
+      && (m.booking === 'form' || m.booking === 'form_only');
+    const _sellable = _soleRoute ? 3 : (SELLABLE[h.id] || 3);
+    const _sellPenalty = (5 - _sellable) * SELLABLE_STEP;
     const openerScore = _disqualified ? 0
       : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _spendBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
 
@@ -25734,10 +25798,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Sits beside the review mine because they are the same kind of asset: a fact
       // about their business the owner has never had put in front of him. Costs one
       // Places call and no Firecrawl credit, so it runs on every Places lead.
+      let _siteUrls = [];
       try {
         // The sitemap is already cached from the owner/email passes, so re-asking
         // for it costs nothing and hands us their own service list as keywords.
-        let _siteUrls = [];
         try { _siteUrls = await firecrawlMap(firecrawlKey, website); } catch {}
         const lv = await auditLocalVisibility({
           companyName: company, placeId: effectivePlaceId, website,
@@ -25933,7 +25997,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           companyName: company, placeId: effectivePlaceId, website,
           industry: _trade,
           location: req.body.location || '',
-          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: [],
+          // ── STILL ZERO COST, BUT NO LONGER ZERO SITEMAP ──────────────────
+          // The note above is right that MAPPING here would add a Firecrawl call
+          // on leads that skipped the deep audit, and that decision stands. But
+          // "do not map here" and "do not read a map we already have" are not
+          // the same rule, and treating them as one switched service_invisibility
+          // off on every lead that took this path — "you publish a page for six
+          // services and nobody finds you for four of them" is the strongest
+          // non-review finding a practice can produce, and it was never once
+          // measured here. cachedSiteMap reads memory only and returns [] on a
+          // miss, so the cost decision above is untouched.
+          placesKey: process.env.GOOGLE_PLACES_KEY || '', sitemapUrls: cachedSiteMap(website),
           bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
           bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null,
         });
@@ -30061,7 +30135,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 const a = String(_ladderWinner.finding || '').slice(0, 40).toLowerCase();
                 const b = String(parsed.openerStrength.finding || '').slice(0, 40).toLowerCase();
                 if (a && b && a.slice(0, 20) !== b.slice(0, 20)) {
-                  console.log(`\u2696 TWO LADDERS [${company}]: the audit's story leads on "${String(_ladderWinner.finding).slice(0, 46)}" while the email will open on "${String(parsed.openerStrength.finding).slice(0, 46)}". Both are intentional \u2014 the audit ranks by what matters to the business, the email by what he can verify. Mike should expect the call to start on the second and move to the first.`);
+                  console.log(`\u2696 TWO LADDERS [${company}]: the audit's story leads on "${String(_ladderWinner.finding).slice(0, 46)}" while the email OPENED on "${String(parsed.openerStrength.finding).slice(0, 46)}". They are ranked by different things on purpose \u2014 the audit by what costs the business most, the email by what a stranger can verify in ten seconds. Note the tense: the email was composed several hundred lines above this, from the harm ladder alone, so nothing decided here can move it. Mike should expect the call to start on the second and move to the first.`);
                 }
               }
             } catch (e) { void e; }
@@ -30118,7 +30192,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               };
 
               if (_wSig && _declaredNow && _wSig !== _declaredNow && _margin >= 3 && !_gaveReason) {
-                console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The email will be built on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". The scores are computed from measured signals; a silent downgrade to a weaker finding is the one thing this ladder exists to stop.`);
+                console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The AUDIT and the CALL SHEET are rebuilt on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". This line used to end "the email will be built on" that finding, and it was false on every lead: composeFullEmail ran hundreds of lines earlier, off the harm ladder, and never reads leadSignal. A log that overstates its own reach costs exactly what one that understates it does \u2014 it was read as evidence the two rankings had been reconciled, and they never were.`);
                 parsed.leadSignal = _wSig;
                 parsed.ladderWinner.overrode = _declaredNow;
               } else if (_wSig && _declaredNow && _wSig !== _declaredNow && _gaveReason) {
