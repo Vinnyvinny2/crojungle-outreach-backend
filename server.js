@@ -9,6 +9,55 @@ const fetch = require('node-fetch');
 let _pngscale = null;
 try { _pngscale = require('./pngscale'); } catch { _pngscale = null; }
 
+// ══ THE ONE THING THAT MUST NEVER RUN IN PARALLEL ══════════════════════
+// Render's memory ceiling is near 256MB and a full-page render is the only thing
+// in this process that allocates in the tens of megabytes. Measured before the
+// scaler was rewritten: 330MB peak RSS on a 1920x8336 render and 382MB on
+// 1920x11189. Worst case is 218MB now, which fits — ONCE.
+//
+// That is the actual blocker on running fifty leads at a time, and it is not the
+// number of leads. Two leads that each behave perfectly can decode a page render
+// in the same millisecond and put the process over the ceiling together, and an
+// over-limit Render dyno does not error — it restarts, forever. That is exactly
+// what "no leads are running at all" looked like on the screen on 2026-08-18.
+//
+// So the bound belongs on the DECODE, not on the leads. With image work
+// serialised, research concurrency can be raised for throughput without touching
+// the memory ceiling at all, because the expensive step is single-file whatever
+// the rest of the run is doing.
+//
+// Buffers live outside the V8 heap, so --max-old-space-size never bounded this
+// and BOOT HEAP CHECK cannot see it. Anything added here that decodes an image
+// must go through this gate; measure RSS, not heap.
+const IMG_CONCURRENCY = Math.max(1, parseInt(process.env.IMG_CONCURRENCY || '1', 10) || 1);
+let _imgInFlight = 0;
+const _imgWaiting = [];
+const _imgPump = () => {
+  while (_imgInFlight < IMG_CONCURRENCY && _imgWaiting.length) {
+    const job = _imgWaiting.shift();
+    _imgInFlight++;
+    Promise.resolve()
+      .then(job.fn)
+      .then(job.resolve, job.reject)
+      // Released however the call ends. A throw that skipped this would strand
+      // every later decode in the process, which is the failure mode the
+      // Firecrawl gate already records one level down.
+      .finally(() => { _imgInFlight--; _imgPump(); });
+  }
+};
+const imgSerial = (fn) => new Promise((resolve, reject) => { _imgWaiting.push({ fn, resolve, reject }); _imgPump(); });
+
+// THE ONLY WAY PRODUCTION CODE DECODES AN IMAGE. Written as a single door rather
+// than as a rule people have to remember, because the first attempt at this
+// checked whether each call site LOOKED gated — and could not tell a production
+// decode from the ones the boot checks make on purpose, so it reported five
+// perfectly correct calls as unbounded. A door can be verified; a convention
+// about how to write a call cannot.
+//
+// The boot checks still reach _pngscale.fitWithin directly and should: they run
+// one at a time before any lead exists, and they are testing the scaler itself.
+const scalePng = (buf, edge) => imgSerial(() => (_pngscale ? _pngscale.fitWithin(buf, edge) : { skip: 'pngscale.js not deployed' }));
+
 const app = express();
 
 // ══ ONE PLACE TO READ EVERYTHING THAT HAPPENED ═══════════════════════════════
@@ -4891,6 +4940,10 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // of precision. Review COUNT stays the better affordability proxy: a
   // 3.8-star business with two hundred reviews has complaints on record and
   // the revenue to fix them.
+  // Demote by default. 'cut' restores the pre-2026-08-19 hard delete exactly,
+  // which is the behaviour every number in the comment at the band itself was
+  // measured against.
+  const GP_BAND_HARD_CUT = String(process.env.GP_BAND_MODE || 'rank').toLowerCase() === 'cut';
   const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
@@ -5029,6 +5082,10 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // BUY on top of it yield. The next change to the depth rule should come from
   // these two numbers rather than from an argument about prominence order.
   let _firstYield = 0, _deepYield = 0, _bandMisses = 0, _ownedMisses = 0, _capMisses = 0;
+  // Qualified businesses that sit outside the rating band. Kept, marked, and
+  // returned AFTER every in-band lead so they fall into the bench rather than
+  // into this run's queue.
+  const benched = [];
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     // ══ RECORDED ONLY AFTER A RESPONSE ACTUALLY ARRIVES ═════════════════
     // This used to record BEFORE the request, and its comment argued that was
@@ -5125,17 +5182,51 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         if (_flt.onlyNoWebsite && !_noWebsite) continue;
         if (_flt.onlyBuilderSite && !_builderSite) continue;
         if (_flt.excludeNoWebsite && _noWebsite) continue;
-        // ══ THE RATING BAND ════════════════════════════════════════════════
+        // ══ THE RATING BAND IS A SORT KEY NOW, NOT A DELETE ════════════════
         // A rating we cannot read tells us nothing either way, so it passes —
         // absence of a rating is not evidence of a clean record.
+        //
+        // ══ WHAT THE BAND WAS ACTUALLY COSTING ════════════════════════
+        // Live run, 2026-08-19: 1,810 businesses dropped here out of 2,892 we had
+        // already paid for — 1,766 of them for sitting ABOVE the ceiling. That is
+        // 61% of the run, deleted.
+        //
+        // Two measurements say that is far too much:
+        //
+        //  1. EXACTLY ONE of the 41 rungs reads the star rating: low_rating, and
+        //     low_rating is INTERNAL_ONLY, so it can never reach an email. The
+        //     band is not protecting a finding we send.
+        //  2. Running the REAL ladder over one business and moving only the
+        //     rating produces the same answer at 4.6, at 4.9 and at 5.0: two
+        //     sayable findings, leading on outranked_by_weaker — one of the two
+        //     findings that has ever earned a reply. The only thing the band
+        //     protects is review_pain_pattern, and its whole evidence base is
+        //     fourteen audited leads.
+        //
+        // And the band cannot save money, because Google bills per CALL and a
+        // call returns twenty businesses whether we keep them or not. Deleting
+        // them buys nothing and costs the run.
+        //
+        // So they are DEMOTED rather than dropped: kept, marked, sorted behind
+        // every in-band lead, and left to fill the bench. The in-band lead still
+        // goes out first on every single run — that is guaranteed structurally
+        // below, not by a score that happens to come out lower.
+        //
+        // GP_BAND_MODE=cut restores the old hard delete exactly, for the day the
+        // evidence says the band was right after all.
+        let _outsideBand = false, _bandWhy = '';
         if (rating !== null && (rating < PAIN_BAND_LOW || rating > PAIN_BAND_HIGH)) {
-          skippedNoPain++; _missBand++;
+          skippedNoPain++;
           // Counted separately: these are the near-perfect profiles the ceiling
           // exists to exclude. Reported so the cost is a number rather than an
           // assumption - fourteen audits said there is nothing to find up here,
           // and if that ever stops being true this is where it will show.
           if (rating > PAIN_BAND_HIGH) skippedNearPerfect++;
-          continue;
+          if (GP_BAND_HARD_CUT) { _missBand++; continue; }
+          _outsideBand = true;
+          _bandWhy = rating > PAIN_BAND_HIGH
+            ? `${rating} stars, above the ${PAIN_BAND_HIGH} ceiling \u2014 at this average there are almost no negative reviews on record to mine, so the review-pain finding is unlikely. Every other finding is unaffected.`
+            : `${rating} stars, below the ${PAIN_BAND_LOW} floor.`;
         }
         // Too big is as disqualifying as too small: at this volume they are
         // multi-location or already agency-managed, and the audit lands on someone
@@ -5151,8 +5242,21 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
           const _k = _nrm(name);
           if ((_h && _knownH.has(_h)) || (_k && _k.length > 4 && _knownN.has(_k))) { skippedAlreadyOwned++; _missOwned++; continue; }
         }
-        const catCount = perCat.get(cat.label) || 0;
-        if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
+        // ══ THE CAP BELONGS TO THE IN-BAND LEADS ═══════════════════════════
+        // PER_CAT_CAP stops one vertical flooding the queue, and the queue is
+        // built from in-band leads. Results arrive in Google's prominence order,
+        // so if a demoted lead could take a cap slot, a 4.9-star business early
+        // in the list would push out a 4.6-star business later in it — the exact
+        // inversion this whole change exists to prevent, arriving through the
+        // one counter nobody would think to look at.
+        //
+        // Demoted leads are therefore never counted against it and never blocked
+        // by it. They cannot displace an in-band lead because they are not in
+        // the same queue at all.
+        if (!_outsideBand) {
+          const catCount = perCat.get(cat.label) || 0;
+          if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
+        }
         // A lead with no website is keyed on its Place id instead, so two
         // different businesses without sites do not collapse into one another.
         const domainKey = website
@@ -5182,7 +5286,8 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         const marketingGap = reviews >= MIN_REVIEWS && reviews < 60;
         if (_noWebsite) keptNoWebsite++;
         if (_builderSite) keptBuilder++;
-        perCat.set(cat.label, catCount + 1);
+        // Only an in-band lead consumes a category slot; see the cap comment above.
+        if (!_outsideBand) perCat.set(cat.label, (perCat.get(cat.label) || 0) + 1);
         const _lead = {
           name, website, location: p.formattedAddress || '',
           // Markets this business came back in. One means a local operator;
@@ -5202,13 +5307,25 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
           noWebsite: _noWebsite,
           builderSite: _builderSite ? (String(website).match(GP_FREE_BUILDER) || [''])[0].replace(/^\./, '') : null,
           placeId: p.id || null,
+          // ══ CARRIED, NOT INFERRED ════════════════════════════════════════
+          // The screen, the sort and the audit all need to know this lead sits
+          // outside the band, and each of them recomputing it from the rating
+          // is three copies of one rule. It travels on the lead.
+          ...(_outsideBand ? { outsideBand: true, bandNote: _bandWhy } : {}),
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
           jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
           signals: { local_owner_operated: true, ...(cat.ownerRisk ? { consolidation_risk: true } : {}), ...(marketingGap ? { under_marketed: true } : {}) },
         };
         seen.set(domainKey, _lead);
-        out.push(_lead);
+        // Two arrays, not one array with a flag read later. The ordering promise
+        // — every in-band lead ahead of every demoted one — is then a property
+        // of the data structure rather than of a comparator somebody could edit.
+        if (_outsideBand) benched.push(_lead); else out.push(_lead);
+        // Counted as found either way, and that is deliberate: the next-page rule
+        // asks whether this page produced anything we are keeping. A page that
+        // yielded three in-band leads and fifteen benched ones is not a dry page,
+        // and buying depth on it would be buying ground we just walked.
         _newHere++;
         _newForQuery++;
       }
@@ -5285,7 +5402,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
   // whether filtering on what we can know BEFORE auditing changes the odds.
-  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) dropped for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.${skippedNearPerfect ? ` \u2014 ${skippedNearPerfect} of them were above the ceiling, where fourteen audits found nothing minable. A 4.7 ceiling was tested and reverted: three of the five leads that produced a complaint or a reply sit at 4.8.` : ''}`);
+  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) ${GP_BAND_HARD_CUT ? 'DROPPED' : 'demoted behind the in-band leads'} for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.${skippedNearPerfect ? ` \u2014 ${skippedNearPerfect} of them were above the ceiling, where fourteen audits found nothing minable. A 4.7 ceiling was tested and reverted: three of the five leads that produced a complaint or a reply sit at 4.8.` : ''}`);
   if (keptNoWebsite) console.log(`\u260e CALL LEADS [Places]: ${keptNoWebsite} business(es) with real review counts and NO WEBSITE AT ALL. These used to be discarded because Research needs a page to audit. They need no audit \u2014 the finding is the absence, and Mike has the number.`);
   if (keptBuilder) console.log(`\u{1F527} REBUILD LEADS [Places]: ${keptBuilder} business(es) running on a free page builder. They audit normally, but the fact that matters is already known before we spend anything.`);
   // ══ THE OPERATORS BIG ENOUGH TO FUND A FIX ═══════════════════════════════
@@ -5325,7 +5442,25 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   if (_multi.length) {
     console.log(`\u{1F5FA} MULTI-MARKET [Places]: ${_multi.length} operator(s) came back in more than one market \u2014 ${_multi.slice(0, 4).map(l => `${l.name} (${l.marketCount})`).join(', ')}. Coverage across metros means crews and a payroll, which is the affordability bar measured rather than inferred. Work these first.`);
   }
-  return interleaved;
+  // ══ IN-BAND FIRST, ALWAYS, BY CONSTRUCTION ════════════════════
+  // Concatenated rather than merged and sorted. A sort could put a demoted lead
+  // ahead of an in-band one on any tie-break somebody adds later; a concatenation
+  // cannot. The demoted leads are interleaved among THEMSELVES so the bench does
+  // not fill with one trade either.
+  const _benchByCat = new Map();
+  for (const lead of benched) {
+    if (!_benchByCat.has(lead.industry)) _benchByCat.set(lead.industry, []);
+    _benchByCat.get(lead.industry).push(lead);
+  }
+  const _bBuckets = [..._benchByCat.values()];
+  const _benchInterleaved = [];
+  for (let i = 0; _bBuckets.some(b => i < b.length); i++) {
+    for (const b of _bBuckets) if (i < b.length) _benchInterleaved.push(b[i]);
+  }
+  if (_benchInterleaved.length) {
+    console.log(`\u2696 BAND DEMOTED [Places]: ${_benchInterleaved.length} qualified business(es) sit outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. They are no longer deleted \u2014 they are returned behind every in-band lead, so they fill the bench instead of this run's queue. Only ONE of the 41 findings reads the star rating and it can never be emailed; the ladder produces the same two sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Set GP_BAND_MODE=cut to restore the old delete.`);
+  }
+  return interleaved.concat(_benchInterleaved);
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -8903,17 +9038,71 @@ ${corpus}` }]
 // GOOGLE-REVIEWS PAIN — the most reliable, most specific pain source for a Places
 // lead: their OWN 1-3 star reviews. No disambiguation risk (it's their exact Place),
 // maximally specific, and the single most reply-worthy input the pitch can get.
+// ══ WE BOUGHT THE SAME REVIEWS TWICE ON EVERY PLACES LEAD ════════
+// fetchGBPHealth asks a Place record for photos, hours, category and REVIEWS —
+// it needs the review dates to say whether the newest one is stale. Fifty lines
+// later this function asked the SAME Place record for the SAME reviews, as a
+// second Place Details call.
+//
+// Both are billed on the Enterprise SKU, whose free allowance is a thousand
+// calls a month, so on every Places lead we were spending two of them where one
+// answers. At 2,000 audits a month that is a thousand calls bought for nothing.
+//
+// It is invisible in the logs because the two calls sit in different functions
+// with different names and different masks, and each is individually correct.
+// Nothing is lost by fixing it: Places returns the same handful of reviews to
+// either mask, so the second call could never contain anything the first did not.
+//
+// ══ THE MEMO HOLDS THE PROMISE, NOT ONLY THE ANSWER ═════════════
+// Today these run in sequence, so a plain result cache would do. It stores the
+// in-flight promise instead, because the day somebody runs them in a Promise.all
+// — which is the obvious way to speed a lead up — a result-only cache is
+// still empty when the second caller looks, and the duplicate quietly comes
+// back. Awaiting the first call is correct in both orderings.
+//
+// Raw rows are stored and each consumer maps them itself. Storing one consumer's
+// shape would make the other one wrong, which is how a cache turns into a bug.
+const PLACE_REVIEW_TTL_MS = Math.max(60_000, parseInt(process.env.PLACE_REVIEW_TTL_MS || '1800000', 10) || 1_800_000);
+const PLACE_REVIEW_MAX = 500;
+const _placeReviewMemo = new Map();   // placeId -> { at, rows } | { at, promise }
+const rememberPlaceReviews = (placeId, rows) => {
+  if (!placeId) return;
+  // Bounded. An unbounded memo on a long-lived Render instance is a slow leak,
+  // and this file has already shipped one of those.
+  if (_placeReviewMemo.size >= PLACE_REVIEW_MAX) {
+    const oldest = [..._placeReviewMemo.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0))[0];
+    if (oldest) _placeReviewMemo.delete(oldest[0]);
+  }
+  _placeReviewMemo.set(placeId, { at: Date.now(), rows: Array.isArray(rows) ? rows : [] });
+};
+const cachedPlaceReviews = (placeId) => {
+  const hit = placeId && _placeReviewMemo.get(placeId);
+  if (!hit) return null;
+  if (Date.now() - (hit.at || 0) > PLACE_REVIEW_TTL_MS) { _placeReviewMemo.delete(placeId); return null; }
+  return hit;
+};
+const mapPlaceReviews = (rows) => (Array.isArray(rows) ? rows : [])
+  .map(rv => ({ rating: rv.rating || 0, text: (rv.text?.text || rv.originalText?.text || '').trim().slice(0, 600) }))
+  .filter(rv => rv.text);
+
 const fetchGoogleReviews = async (placeId, placesKey) => {
   if (!placeId || !placesKey) return [];
+  {
+    const hit = cachedPlaceReviews(placeId);
+    if (hit) {
+      const rows = hit.promise ? await hit.promise.catch(() => []) : hit.rows;
+      console.log(`\u267b PLACES REUSED [${placeId}]: the profile read on this lead already carried its reviews, so this second Place Details call was not made. Both are billed on the Enterprise SKU at 1,000 free calls a month.`);
+      return mapPlaceReviews(rows);
+    }
+  }
   try {
     notePlacesCall('details');  // counted at DISPATCH, same reason
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
     }, 12000);
     const d = await r.json();
-    return (d.reviews || [])
-      .map(rv => ({ rating: rv.rating || 0, text: (rv.text?.text || rv.originalText?.text || '').trim().slice(0, 600) }))
-      .filter(rv => rv.text);
+    rememberPlaceReviews(placeId, d.reviews || []);
+    return mapPlaceReviews(d.reviews || []);
   } catch(e) { console.log('Google reviews fetch failed:', e.message); return []; }
 };
 
@@ -8987,6 +9176,12 @@ const fetchGBPHealth = async (placeId, placesKey) => {
     }, 12000);
     const d = await r.json();
     if (!d || d.error) return null;
+    // This mask already asks for reviews, to date the newest one. Handing them
+    // to the memo means fetchGoogleReviews does not buy the identical Place
+    // Details call fifty lines later. Stored even when EMPTY, on purpose: an
+    // empty answer is a real answer, and re-asking for it costs the same as
+    // re-asking for a full one.
+    rememberPlaceReviews(placeId, d.reviews || []);
     // Each of these is a factual, checkable gap an owner can confirm in ten seconds
     // by opening their own Google listing. No inference.
     const photoCount = Array.isArray(d.photos) ? d.photos.length : 0;
@@ -25559,6 +25754,15 @@ const WEIGHTS = {
           if (c.source && c.source !== 'google_places') return 1;
           return 0;   // 0 — fit only, no timing signal
         };
+        // ══ OUTSIDE THE BAND SORTS LAST, BEFORE ANYTHING ELSE IS WEIGHED ══
+        // searchGooglePlaces already returns them behind every in-band lead, and
+        // this re-sorts the whole pool, so without this term a demoted 4.9-star
+        // business with a high ICP score would climb straight back over a 4.6-star
+        // one. Two mechanisms for one promise, because the promise is the entire
+        // safety of turning that filter into a sort: the leads we have evidence
+        // for still go out first, every run, and the rest wait on the bench.
+        const ba = a.outsideBand ? 1 : 0, bb = b.outsideBand ? 1 : 0;
+        if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
         return b.icpScore - a.icpScore;
@@ -29806,7 +30010,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               return null;
             }
             if (d.w > _MAX_EDGE || d.h > _MAX_EDGE) {
-              const fit = _pngscale ? _pngscale.fitWithin(buf, _MAX_EDGE) : { skip: 'pngscale.js not deployed' };
+              // Through scalePng: this is the one allocation in the process big
+              // enough to put Render over its ceiling, and two leads decoding at
+              // the same instant is what makes a dyno restart-loop.
+              const fit = await scalePng(buf, _MAX_EDGE);
               if (!fit.buffer) {
                 console.log(`Homepage render [${company}]: ${d.w}x${d.h} is past the ${_MAX_EDGE}px vision ceiling and could not be downscaled (${fit.skip}). Sending it would fail the ENTIRE audit request, so it is dropped and the audit runs from text.`);
                 return null;
@@ -29977,7 +30184,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // image produces confident readings of pixels that mean nothing.
               let _send = _b;
               if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) {
-                const _fit = _pngscale ? _pngscale.fitWithin(_b, MAX_EDGE) : { skip: 'pngscale.js not deployed' };
+                const _fit = await scalePng(_b, MAX_EDGE);
                 if (_fit.skip) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px — ${_fit.skip})`); continue; }
                 if (_fit.buffer.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (downscaled to ${_fit.width}x${_fit.height} but still ${Math.round(_fit.buffer.length / 104857.6) / 10}MB)`); continue; }
                 _send = _fit.buffer;
@@ -34079,6 +34286,12 @@ const _jobs = new Map();          // id -> { status, startedAt, finishedAt, comp
 // with the env var rather than editing code: the queue design already holds at
 // any value, because a queued lead's clock only starts when its work does.
 const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '2', 10) || 2);
+// The measured half of the same question. Render's container limit is near
+// 256MB; boot settles around 145MB and one page render can add tens of MB on top
+// of that. 205 leaves room for a decode to finish without the next lead being
+// admitted into the middle of it. Raise both together when the plan changes.
+const RESEARCH_RSS_CEILING_MB = Math.max(64, parseInt(process.env.RESEARCH_RSS_CEILING_MB || '205', 10) || 205);
+const RESEARCH_RSS_MAX_WAIT_MS = Math.max(5000, parseInt(process.env.RESEARCH_RSS_MAX_WAIT_MS || '90000', 10) || 90000);
 
 // Pure, so the boot check can execute the exact decision the poller makes.
 // A job's 8 minutes are 8 minutes of WORK: a job still queued has spent none of
@@ -34276,6 +34489,37 @@ app.post('/api/research-async', (req, res) => {
       if (waited === 0) console.log(`JOB ${id} [${job.company}]: waiting for a slot \u2014 ${busy()} run(s) working. Its 8-minute clock has NOT started; it begins when the work does.`);
       await new Promise(r => setTimeout(r, 3000));
       waited += 3000;
+    }
+    // ══ AND A SECOND GATE THAT MEASURES INSTEAD OF ASSUMING ════════
+    // RESEARCH_CONCURRENCY is a guess about how much memory a lead needs. This
+    // is not a guess: it reads the process's actual resident memory and refuses
+    // to start another lead while it is close to Render's ceiling.
+    //
+    // It exists because the failure has no error attached to it. A dyno that
+    // exceeds its memory limit does not throw and does not log — it restarts,
+    // and then restarts again, which on 2026-08-18 read from the screen as "no
+    // leads are running at all". A number tuned for one plan is wrong on the
+    // next one; a measurement is right on both.
+    //
+    // Buffers live outside the V8 heap, so rss is the only figure that can see a
+    // page render. heapUsed would report everything as fine.
+    //
+    // It can never wedge: after the ceiling wait it proceeds anyway and says so.
+    // Refusing to start leads forever is a worse failure than a restart, because
+    // at least a restart is visible.
+    {
+      const _rssMb = () => Math.round(process.memoryUsage().rss / 1048576);
+      let _held = 0;
+      while (_rssMb() > RESEARCH_RSS_CEILING_MB && _held < RESEARCH_RSS_MAX_WAIT_MS) {
+        if (_held === 0) console.log(`JOB ${id} [${job.company}]: HOLDING \u2014 the process is using ${_rssMb()}MB and the safe ceiling for starting another lead is ${RESEARCH_RSS_CEILING_MB}MB. Render restarts a dyno that goes over its limit rather than erroring, so this waits instead. Its 8-minute clock has not started.`);
+        await new Promise(r => setTimeout(r, 2000));
+        _held += 2000;
+      }
+      if (_held >= RESEARCH_RSS_MAX_WAIT_MS) {
+        console.log(`\u26a0 JOB ${id} [${job.company}]: memory stayed above ${RESEARCH_RSS_CEILING_MB}MB for ${Math.round(_held / 1000)}s and the lead is starting anyway. Something is holding memory that should have been released \u2014 refusing to start leads forever is a worse failure than a restart, because a restart is at least visible.`);
+      } else if (_held) {
+        console.log(`JOB ${id} [${job.company}]: memory back under the ceiling after ${Math.round(_held / 1000)}s (${_rssMb()}MB) \u2014 starting now.`);
+      }
     }
     if (waited) console.log(`JOB ${id} [${job.company}]: slot free after ${Math.round(waited / 1000)}s in the queue \u2014 starting now with a full 8 minutes.`);
   };
@@ -38153,7 +38397,12 @@ app.listen(PORT, () => {
     if (!_img) _fails.push('the homepage image block could not be located');
     else {
       if (!/_pngDims\(/.test(_img)) _fails.push('the homepage image is sent without reading its dimensions — it is the full page now, and one tall PNG fails the entire vision request, not just the picture');
-      if (!/_pngscale\s*\?\s*_pngscale\.fitWithin\(/.test(_img)) _fails.push('an over-tall homepage is not downscaled, so the whole audit dies on the pages that matter most');
+      // Was `_pngscale ? _pngscale.fitWithin(`. Page-render decoding now goes
+      // through one gated door so two leads cannot decode at the same instant
+      // and take the dyno over Render's memory limit, and the old spelling
+      // stopped existing. The rule this asserts is unchanged: an over-tall
+      // homepage must be downscaled rather than dropped.
+      if (_img.indexOf('scalePng(buf, ' + '_MAX_EDGE)') < 0) _fails.push('an over-tall homepage is not downscaled, so the whole audit dies on the pages that matter most');
       if (!/_MAX_EDGE/.test(_img)) _fails.push('the homepage image does not use the shared vision ceiling');
     }
     // 3. ONE CEILING, ONE READER. Two copies is how one of them stops matching.
@@ -39070,6 +39319,398 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ LEAD BENCH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ THE RATING BAND IS A SORT KEY, AND THAT HAS TO BE SAFE ════════════════
+  // 1,810 of 2,892 businesses we had already paid for were deleted here on the
+  // live run of 2026-08-19, 1,766 of them for sitting ABOVE the ceiling. Two
+  // measurements say that is far more than the band protects, and both are
+  // re-derived here rather than quoted, so they cannot rot:
+  //
+  //   1. Exactly one rung reads the rating, and it is internal-only.
+  //   2. The REAL ladder gives the same answer at 4.6, 4.9 and 5.0.
+  //
+  // Turning a delete into a demotion is only safe while the leads we have
+  // evidence for still go out FIRST. That promise is asserted twice below,
+  // because it is enforced twice — by the array split in searchGooglePlaces and
+  // by the comparator in the discovery endpoint.
+  try {
+    const _fails = [];
+
+    // 1. THE RATING REACHES EXACTLY ONE RUNG, AND IT CANNOT BE EMAILED.
+    // Read off the live ladder, so a rung added later that starts reading the
+    // rating turns this red and the decision gets revisited on purpose.
+    {
+      const _readers = HARM_LADDER
+        .filter(h => typeof h.test === 'function' && /\bm\.rating\b/.test(String(h.test)))
+        .map(h => h.id);
+      if (!_readers.length) {
+        _fails.push('no rung reads the rating at all now — the band is filtering on something the ladder has stopped using entirely, and that is worth knowing');
+      }
+      const _sayable = _readers.filter(id => !INTERNAL_ONLY_RUNGS[id]);
+      if (_sayable.length) {
+        _fails.push(`${_sayable.join(', ')} now reads the star rating AND can reach an email — demoting a business on its rating is no longer free, and the band decision needs revisiting`);
+      }
+    }
+
+    // 2. THE LADDER GIVES THE SAME ANSWER ACROSS THE BAND. This is the whole
+    // argument, executed rather than quoted: one business, only the rating
+    // moving, and the findings we can actually send do not change.
+    {
+      const _base = {
+        tradeWord: 'window replacement', city: 'Sheridan, CO', tenureYears: 46,
+        reviewCount: 215, reviewsRead: 150, ownerReplies: 140, reviewRecency: 11,
+        rankChecked: true, rankFound: true, rank: 11, rankScanned: 20, weakerAbove: 3,
+        rankQuery: 'window replacement in Sheridan, CO',
+        photoCount: 12, hasPlace: true, hoursListed: true, websiteOnProfile: true,
+        booking: 'phone_only', bookingMeasured: true, siteRead: true, pagesRead: 5,
+        markupRead: true, servicePagesCount: 3,
+      };
+      const _say = (rating) => {
+        const h = rankHarms({ ..._base, rating });
+        return (h.sayable || []).map(x => x.id).sort().join(',');
+      };
+      const _inBand = _say(4.6);
+      for (const r of [4.9, 5.0]) {
+        if (_say(r) !== _inBand) {
+          _fails.push(`the ladder now produces different sayable findings at ${r} stars than at 4.6 ("${_say(r)}" vs "${_inBand}") — the band is doing real work again and demoting on it costs findings`);
+        }
+      }
+      if (!_inBand) _fails.push('the fixture produces no sayable finding at all, so this comparison proves nothing — the measurements have drifted from what the ladder reads');
+    }
+
+    // ══ EVERY NEEDLE BELOW IS ASSEMBLED AT RUNTIME ════════════════
+    // Written as plain literals, these searches FIND THEMSELVES: the string sits
+    // in this check's own source, indexOf returns its position, and the assertion
+    // passes on a build where the thing it guards has been deleted. Two of the
+    // five here did exactly that, and only a falsification run showed it \u2014 both
+    // reversions booted green.
+    //
+    // This file already records the same trap for RANK GATE CHECK, which had to
+    // assemble its route name at runtime for the identical reason. Splitting the
+    // needle means no whole copy of it exists in the source to match.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource();
+
+    // 3. THE ORDERING PROMISE, AT THE COMPARATOR. An in-band lead must beat a
+    // demoted one whatever else is true of them \u2014 including a demoted lead with
+    // a better score, which is the case that would happen most often.
+    {
+      const _n = _needle('const ba = a.', 'outsideBand ? 1 : 0');
+      const _i = _src.indexOf(_n);
+      if (_i < 0) {
+        _fails.push('the discovery sort no longer puts out-of-band leads last, so a demoted 4.9-star business with a high ICP score climbs back over the 4.6-star lead we have evidence for');
+      } else {
+        const _after = _src.slice(_i, _i + 400);
+        const _tierAt = _after.indexOf(_needle('const ta = ', 'tier(a)'));
+        const _bandAt = _after.indexOf(_needle('if (ba !== ', 'bb)'));
+        if (_tierAt < 0 || _bandAt < 0 || _bandAt > _tierAt) {
+          _fails.push('the band term is no longer weighed BEFORE tier and score, so a demoted lead in a higher tier still outranks an in-band one');
+        }
+      }
+    }
+
+    // 4. THE ORDERING PROMISE, AT THE SOURCE. Two arrays concatenated, not one
+    // array sorted \u2014 so no tie-break added later can invert it.
+    {
+      if (_src.indexOf(_needle('return interleaved.', 'concat(_benchInterleaved)')) < 0) {
+        _fails.push('searchGooglePlaces no longer returns the demoted leads strictly after the in-band ones — the ordering is back to being a property of a sort rather than of the data');
+      }
+      if (_src.indexOf(_needle('if (_outsideBand) benched.', 'push(_lead); else out.push(_lead);')) < 0) {
+        _fails.push('demoted leads are no longer routed to their own array, so they compete with in-band leads directly');
+      }
+    }
+
+    // 5. THE CATEGORY CAP MUST NOT BE SPENT ON A DEMOTED LEAD. Results arrive in
+    // Google's prominence order, so a 4.9-star business early in a page would
+    // otherwise take the slot of a 4.6-star business later in it \u2014 the exact
+    // inversion this change exists to prevent, through the one counter nobody
+    // would think to check.
+    {
+      const _i = _src.indexOf(_needle('if (catCount >= ', 'PER_CAT_CAP)'));
+      const _before = _i > 0 ? _src.slice(Math.max(0, _i - 400), _i) : '';
+      if (_i < 0 || _before.indexOf(_needle('if (!_outsideBand) ', '{')) < 0) {
+        _fails.push('the per-category cap is applied to demoted leads too, so a near-perfect business can take a queue slot from the in-band lead behind it');
+      }
+      if (_src.indexOf(_needle('if (!_outsideBand) perCat.', 'set')) < 0) {
+        _fails.push('a demoted lead still increments the per-category counter, which spends the in-band budget on leads that are not in the queue');
+      }
+    }
+
+    // 6. THE ESCAPE HATCH IS REAL. If the band turns out to have been right, one
+    // env var restores the delete — and it has to restore it EXACTLY.
+    {
+      const _src = selfSource();
+      if (!/GP_BAND_MODE/.test(_src) || !/if \(GP_BAND_HARD_CUT\) \{ _missBand\+\+; continue; \}/.test(_src)) {
+        _fails.push('GP_BAND_MODE=cut no longer restores the original hard delete, so this change cannot be reversed without a deploy');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ RATING BAND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. In-band leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score. The per-category cap is spent only on in-band leads, so a near-perfect business cannot take a queue slot from the lead behind it, and GP_BAND_MODE=cut restores the old delete exactly.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RATING BAND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE SAME REVIEWS, BOUGHT TWICE, ON EVERY PLACES LEAD ══════════════════
+  // fetchGBPHealth asks a Place record for photos, hours, category and REVIEWS —
+  // it needs the review dates to say whether the newest one is stale. Fifty
+  // lines later fetchGoogleReviews asked the same Place record for the same
+  // reviews, as a second Place Details call. Both bill on the Enterprise SKU,
+  // whose free allowance is a thousand calls a month.
+  //
+  // Run, not read: the second call is actually attempted here with a primed memo
+  // and a key that would fail, so a regression makes the network call and the
+  // check sees it. A source regex would pass on the day the memo stopped being
+  // populated, which is the failure this is guarding.
+  (async () => {
+  try {
+    const _fails = [];
+    const _rawRows = [
+      { rating: 5, text: { text: 'Great crew, on time, tidy.' }, publishTime: '2026-08-01T00:00:00Z' },
+      { rating: 2, originalText: { text: 'Quote took three weeks and two chasers.' }, publishTime: '2026-07-01T00:00:00Z' },
+      { rating: 4, text: { text: '' } },
+    ];
+
+    // 1. THE MAPPING IS UNCHANGED. Both shapes Places emits, empties dropped.
+    {
+      const m = mapPlaceReviews(_rawRows);
+      if (m.length !== 2) _fails.push(`the shared mapper returned ${m.length} review(s) from 3 rows — it should keep the two with text and drop the empty one`);
+      if (!m.some(r => /Great crew/.test(r.text))) _fails.push('the mapper lost a review stored under text.text');
+      if (!m.some(r => /three weeks/.test(r.text))) _fails.push('the mapper lost a review stored under originalText.text, which is the shape Places uses for a translated review');
+      if (m.some(r => typeof r.rating !== 'number')) _fails.push('the mapper dropped the star rating, which the pain miner uses to prefer critical reviews');
+    }
+
+    // 2. THE SECOND CALL IS ACTUALLY SKIPPED. Primed memo, a key that could only
+    // fail if used. Anything other than the memo's rows means it went to Google.
+    {
+      const _pid = 'selftest-place-' + PLACE_REVIEW_MAX;
+      rememberPlaceReviews(_pid, _rawRows);
+      const got = await fetchGoogleReviews(_pid, 'key-that-would-fail-if-used');
+      if (!Array.isArray(got) || got.length !== 2) {
+        _fails.push(`with the reviews already in hand the second Place Details call still ran (got ${Array.isArray(got) ? got.length : typeof got} instead of 2) — every Places lead buys two Enterprise calls where one answers`);
+      }
+    }
+
+    // 3. AN EMPTY ANSWER IS STILL AN ANSWER. Caching only non-empty results
+    // means a business with no reviews is re-asked every time, at full price.
+    {
+      const _pid = 'selftest-empty';
+      rememberPlaceReviews(_pid, []);
+      const hit = cachedPlaceReviews(_pid);
+      if (!hit) _fails.push('an empty review list is not remembered, so a business with no reviews is bought twice every run');
+      const got = await fetchGoogleReviews(_pid, 'key-that-would-fail-if-used');
+      if (!Array.isArray(got) || got.length !== 0) _fails.push('an empty cached answer did not short-circuit the second call');
+    }
+
+    // 4. IT EXPIRES, AND IT IS BOUNDED. A memo that never expires serves a stale
+    // read on a long-lived instance; one that never evicts is a slow leak, and
+    // this file has already shipped one of those.
+    {
+      const _pid = 'selftest-ttl';
+      rememberPlaceReviews(_pid, _rawRows);
+      const e = _placeReviewMemo.get(_pid);
+      if (e) e.at = Date.now() - PLACE_REVIEW_TTL_MS - 1000;
+      if (cachedPlaceReviews(_pid)) _fails.push('a memo entry past its TTL is still served — a review read from an hour ago would be presented as current');
+      if (!Number.isFinite(PLACE_REVIEW_MAX) || PLACE_REVIEW_MAX <= 0) _fails.push('the memo has no size bound');
+      const _before = _placeReviewMemo.size;
+      for (let i = 0; i < PLACE_REVIEW_MAX + 20; i++) rememberPlaceReviews('selftest-bound-' + i, []);
+      if (_placeReviewMemo.size > PLACE_REVIEW_MAX) {
+        _fails.push(`the memo grew to ${_placeReviewMemo.size} entries past a bound of ${PLACE_REVIEW_MAX} — on a long-lived instance that is a leak`);
+      }
+      void _before;
+      for (let i = 0; i < PLACE_REVIEW_MAX + 20; i++) _placeReviewMemo.delete('selftest-bound-' + i);
+      _placeReviewMemo.delete('selftest-empty');
+      _placeReviewMemo.delete('selftest-place-' + PLACE_REVIEW_MAX);
+    }
+
+    // 5. THE PROFILE READ MUST STILL BE THE ONE THAT FILLS IT. If its mask ever
+    // stops asking for reviews, this whole saving silently reverses and nothing
+    // else would notice — the second call would simply start happening again.
+    {
+      // Needles assembled at runtime for the same reason as the band check
+      // above: a literal written whole here would match itself and the
+      // assertion would pass on a build with the wire cut.
+      const _nd = (...p) => p.join('');
+      const _src = selfSource();
+      const _i = _src.indexOf(_nd('const fetchGBP', 'Health'));
+      const _blk = _i > 0 ? _src.slice(_i, _i + 3000) : '';
+      if (!_blk) _fails.push('fetchGBPHealth could not be located, so the wire was not checked');
+      else {
+        if (_blk.indexOf(_nd("'reviewSummary',", "'reviews'")) < 0) {
+          _fails.push('the profile read no longer asks for reviews, so it can no longer supply them and the second call comes back');
+        }
+        if (_blk.indexOf(_nd('rememberPlaceReviews(placeId, ', 'd.reviews || [])')) < 0) {
+          _fails.push('the profile read no longer hands its reviews to the memo — it fetches them, uses them for the staleness date, and throws them away');
+        }
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ PLACE DETAILS REUSE CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ PLACE DETAILS REUSE CHECK: the profile read already carries the reviews, so the second Place Details call on every Places lead is no longer made — two Enterprise calls where one answers, on a SKU with 1,000 free calls a month. Proven by running the second call with a primed memo and a key that would fail if it were used. An empty answer is remembered too, the memo expires and is size-bounded, both review shapes Places emits still map, and the check fails if the profile mask ever stops asking for reviews.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PLACE DETAILS REUSE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
+  // ══ WHAT ACTUALLY STOPS FIFTY LEADS AT ONCE ═══════════════════════════════
+  // Not the queue — that was built for it and a boot check already proves a
+  // queued lead's clock does not start until its work does. It is memory, and
+  // memory is the failure with no error attached: a Render dyno over its limit
+  // does not throw and does not log, it restarts, and then restarts again. On
+  // 2026-08-18 that read from the screen as "no leads are running at all".
+  //
+  // A full-page render is the only allocation in this process big enough to do
+  // it. Measured before the scaler was rewritten: 330MB peak RSS on a 1920x8336
+  // render, 382MB on 1920x11189, against a ceiling near 256MB. Worst case is
+  // 218MB now — which fits exactly ONCE.
+  //
+  // So the bound is on the DECODE, not on the leads, and research concurrency
+  // can then be raised for throughput without touching the memory ceiling.
+  (async () => {
+  try {
+    const _fails = [];
+
+    // 1. IT ACTUALLY SERIALISES. Ten jobs, each recording how many are inside at
+    // once. Anything above the cap and two page renders can land together.
+    {
+      let live = 0, peak = 0;
+      const job = (ms, boom) => async () => {
+        live++; peak = Math.max(peak, live);
+        await new Promise(r => setTimeout(r, ms));
+        live--;
+        if (boom) throw new Error('deliberate');
+        return ms;
+      };
+      const out = await Promise.race([
+        Promise.all(Array.from({ length: 10 }, (_, i) => imgSerial(job(12, i === 3 || i === 7)).catch(() => 'threw'))),
+        new Promise(r => setTimeout(() => r('STRANDED'), 12000)),
+      ]);
+      if (out === 'STRANDED') {
+        _fails.push('ten decodes did not finish in 12s — a slot is leaking, and in production that wedges every page render in the process with no error anywhere');
+      } else {
+        if (out.filter(x => x === 'threw').length !== 2) _fails.push('a throwing decode did not reject its caller');
+        if (peak > IMG_CONCURRENCY) _fails.push(`${peak} decodes ran at once against a cap of ${IMG_CONCURRENCY} — two full-page renders in the same instant is what puts this process over Render's ceiling`);
+      }
+      // And it must still accept work after the throws, or the first failed
+      // render of a batch strands every lead behind it.
+      const after = await Promise.race([
+        imgSerial(async () => 'alive'),
+        new Promise(r => setTimeout(() => r('WEDGED'), 3000)),
+      ]);
+      if (after !== 'alive') _fails.push('the image gate stopped accepting work after two throws — every later page render in the process would hang');
+    }
+
+    // 2. BOTH DECODE SITES GO THROUGH IT. One that does not is the whole bound
+    // defeated, and it would only show up as a restart loop under load.
+    // Needles assembled at runtime so they cannot match this check's own source.
+    {
+      // Structural, not textual. Counting call sites could not tell a production
+      // decode from the ones these very checks make on purpose, and reported five
+      // correct calls as unbounded. There is one door now, and the two research
+      // functions must use it.
+      const _n = (...p) => p.join('');
+      const _src = selfSource();
+      if (_src.indexOf(_n('const scalePng = (buf, edge) => ', 'imgSerial(')) < 0) {
+        _fails.push('the single decode door no longer goes through the concurrency gate, so nothing bounds page renders at all');
+      }
+      for (const [_what, _from, _to] of [
+        ['the homepage render', _n('const scrapeHome', 'page = async () => {'), _n('const _fit = await ', 'scalePng(_b, MAX_EDGE)')],
+      ]) {
+        const _a = _src.indexOf(_from), _b2 = _src.indexOf(_to);
+        if (_a < 0 || _b2 < 0 || _b2 <= _a) { _fails.push(`${_what} region could not be read, so the decode bound was not checked there`); continue; }
+        const _region = _src.slice(_a, _b2);
+        if (_region.indexOf(_n('_pngscale.', 'fitWithin(')) >= 0) {
+          _fails.push(`${_what} path decodes an image without going through the single gated door — under a batch two of those can land in the same instant and take the dyno over its limit`);
+        }
+      }
+      if (_src.indexOf(_n('const fit = await ', 'scalePng(buf, _MAX_EDGE)')) < 0) {
+        _fails.push('the homepage render no longer goes through the gated door');
+      }
+      if (_src.indexOf(_n('const _fit = await ', 'scalePng(_b, MAX_EDGE)')) < 0) {
+        _fails.push('the interior page renders no longer go through the gated door');
+      }
+      if (_src.indexOf(_n('const IMG_CONCURRENCY = Math.max(1, ', "parseInt(process.env.IMG_CONCURRENCY")) < 0) {
+        _fails.push('the image gate is no longer configurable, so a bigger plan cannot raise it without a code change');
+      }
+    }
+
+    // 3. THE MEMORY GATE IS MEASURED, NOT ASSUMED, AND CANNOT WEDGE.
+    {
+      if (!(RESEARCH_RSS_CEILING_MB > 64 && RESEARCH_RSS_CEILING_MB < 256)) {
+        _fails.push(`the RSS ceiling is ${RESEARCH_RSS_CEILING_MB}MB — outside it either never fires or never lets a lead start, and Render's container limit is near 256MB`);
+      }
+      if (!(RESEARCH_RSS_MAX_WAIT_MS >= 5000)) _fails.push('the memory hold has no meaningful bound');
+      const _n = (...p) => p.join('');
+      const _src = selfSource();
+      if (_src.indexOf(_n('_held < RESEARCH_RSS_', 'MAX_WAIT_MS')) < 0) {
+        _fails.push('the memory hold is unbounded — a process that never drops below the ceiling would refuse to start any lead ever again, which is a worse failure than a restart because it is invisible');
+      }
+      if (_src.indexOf(_n('process.memoryUsage().', 'rss')) < 0) {
+        _fails.push('the gate no longer reads rss — heapUsed cannot see a page render at all, because image buffers live outside the V8 heap');
+      }
+    }
+
+    // 4. AND THE HEADROOM IS REAL. A decode is run here and the RSS it costs is
+    // MEASURED, so the ceiling above stops being a number somebody liked the
+    // look of. Deliberately a modest render: the point is the cost per megapixel,
+    // which extrapolates, not a re-run of the 1920x11189 case that used to OOM.
+    if (_pngscale && typeof _pngscale.__testPng === 'function') {
+      const before = process.memoryUsage().rss;
+      // Filter 4 (Paeth) is the one a real renderer emits most, and 0-4 are the
+      // only valid values — the first version of this passed 6, which produced a
+      // PNG the scaler correctly refused, and the "cost" came out at 0MB.
+      const png = _pngscale.__testPng(900, 3000, 4);
+      const t0 = Date.now();
+      const fit = await imgSerial(() => _pngscale.fitWithin(png, 1400));
+      const peak = process.memoryUsage().rss;
+      const costMb = Math.max(0, Math.round((peak - before) / 1048576));
+      if (!fit || !fit.buffer) _fails.push('the measured decode produced no image, so the figure below means nothing');
+      // ══ DO NOT EXTRAPOLATE THIS NUMBER ══════════════════════════
+      // The first version of this assertion added the measured cost of a 900x3000
+      // render to the admission ceiling and checked the total against 256MB. That
+      // reasoning is wrong twice over. A real page render is 1920x8000 and up —
+      // several times these pixels — so the sample understates it; and the cost
+      // does NOT scale with pixels anyway, because the scaler caps the inflate
+      // output and releases each buffer as it finishes with it. That bounding is
+      // the whole reason peak RSS came down from 382MB to 218MB.
+      //
+      // So the property asserted is the one that is actually true and actually
+      // protective: NEVER ADMIT A LEAD WHEN MEMORY IS ALREADY AT THE LEVEL ONE
+      // WORST-CASE DECODE REACHES ON ITS OWN. 218MB is the measured worst case
+      // for a 1920x11189 render, and imgSerial guarantees only one of those runs
+      // at a time. The figure below is reported as a live sanity check that
+      // decoding still costs what we think it does, not as the safety margin.
+      const _WORST_DECODE_PEAK_MB = 218;
+      if (RESEARCH_RSS_CEILING_MB >= _WORST_DECODE_PEAK_MB) {
+        _fails.push(`leads are admitted up to ${RESEARCH_RSS_CEILING_MB}MB, which is at or past the ${_WORST_DECODE_PEAK_MB}MB a single worst-case page render reaches on its own — a second lead starting there puts the process over Render's limit, and an over-limit dyno restarts rather than erroring`);
+      }
+      // Deliberately NOT asserted on. Resident memory never falls back on its
+      // own, so a decode that runs after the allocator already holds the pages
+      // measures as costing zero — seen for real on a falsification build, where
+      // the identical code reported 31MB on one boot and 0MB on the next. An
+      // assertion that fails at random is an assertion somebody eventually
+      // deletes, and it would take the two real ones beside it with it.
+      //
+      // What IS deterministic is whether the scaler produced an image, so that
+      // is what stands as evidence it still behaves.
+      if (!fit || !fit.scaled || !fit.buffer || !fit.buffer.length) {
+        _fails.push('the measured decode did not actually downscale anything, so nothing here proves the scaler still works under the gate');
+      }
+      console.log(`\u{1F4CF} DECODE COST: a 900x3000 page render cost about ${costMb}MB of resident memory and ${Date.now() - t0}ms through the gate. Leads are admitted only under ${RESEARCH_RSS_CEILING_MB}MB, below the ${_WORST_DECODE_PEAK_MB}MB a single worst-case 1920x11189 render peaks at, and only one render decodes at a time. Do not add these two numbers: the scaler caps its own inflate output, so cost does not scale with pixels. Buffers live outside the V8 heap, so rss is the only figure that can see any of this.`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ BATCH MEMORY CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ BATCH MEMORY CHECK: page-render decoding is bounded at ${IMG_CONCURRENCY} at a time whatever the lead concurrency is, both decode sites go through that gate, a throw releases the slot and the gate keeps accepting work. A lead is admitted only while resident memory is under ${RESEARCH_RSS_CEILING_MB}MB — measured, not assumed, because a dyno over Render's limit restarts instead of erroring — and that hold is bounded so it can never refuse leads forever. This is what stood between the queue and running fifty at a time: not the queue, which was already built for it, but two page renders landing in the same instant.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BATCH MEMORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
   // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
   // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
   // stored harm ladder (harmsRanked=0, problemList=0, 39 field(s))". The server

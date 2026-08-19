@@ -779,6 +779,106 @@ const finalLeadScore = (discoveryScore, reachability, researchBonus) => {
   return Math.max(1, Math.min(97, Math.round(0.55 * d + 0.45 * r)));
 };
 
+
+// ══ ONE RESEARCH REQUEST, BUILT IN ONE PLACE ════════════════════════════════
+// There were two, written by hand, and on 2026-08-19 they disagreed about
+// seventeen fields. Pressing "Run Research" sent neither the rating, the review
+// count, the phone, the multi-market coverage nor the lead channel; the
+// discovery path sent all of those and none of the browser measurements, the
+// prior verified email, or the confirmed owner.
+//
+// So the audit a lead received depended on which button was pressed, and a
+// re-run could come back WORSE than the original while looking like a refresh.
+// marketsSeen and marketsAbsent are the clearest case: nothing downstream can
+// work them out, so the coverage-gap finding simply could not exist on any lead
+// re-run from the detail view.
+//
+// That is this project's dominant bug class stated exactly — a value computed in
+// one place and never passed to the thing that consumes it — and the only shape
+// that cannot have it is one builder with every caller going through it.
+// clientcheck.js fails the build if a second one appears.
+//
+// `lead` is the row as stored; `extra` is the handful of things that genuinely
+// differ per call and cannot be read off it.
+const buildResearchBody = (lead, settings, extra) => {
+  const L = lead || {}, S = settings || {}, X = extra || {};
+  return {
+    company: L.name || L.company || '',
+    website: X.website || L.website || '',
+    apiKey: S.apiKey,
+    keys: {
+      firecrawlKey: S.firecrawlKey,
+      apifyToken: S.apifyToken,
+      fbToken: S.fbToken,
+      hunterKey: S.hunterKey,
+      ninjaPearKey: S.ninjaPearKey,
+      companiesApiKey: S.companiesApiKey,
+      verifierKey: S.verifierKey,
+    },
+    // A re-run must actually re-run: the backend keeps a contact cache for
+    // owner, email and revenue and skips those paid lookups on a hit. Live on
+    // Hannah Custom Homes the run logged "CACHE HIT: owner — skipping paid
+    // lookups", so the team-page roster never ran and a shipped fix looked
+    // unshipped. Only the deliberate re-run path sets this.
+    forceRefresh: !!X.forceRefresh,
+    buyingLane: L.buyingLane || 'software',
+    // The trade. Missing from the re-run path entirely while discovery sent it,
+    // so anything keyed on industry silently degraded on every re-run: the
+    // licence-registry search built its queries without a trade, and the Local
+    // Services Ads check could not classify the business at all.
+    industry: L.industry || L.verifiedIndustry || '',
+    location: L.location || '',
+    placeId: L.placeId || '',
+    phone: L.phone || '',
+    // ── THE FIVE THE RE-RUN PATH NEVER SENT ────────────────────────────────
+    // Nothing downstream can recover any of these. A request without them does
+    // not degrade, it deletes: marketsSeen and marketsAbsent ARE the coverage
+    // finding, and leadChannel is what routes a business with no website to
+    // Mike's phone instead of to an audit that has nothing to read.
+    marketsSeen: L.marketsSeen || [],
+    marketsAbsent: L.marketsAbsent || [],
+    marketCount: L.marketCount || 1,
+    noWebsite: !!L.noWebsite,
+    builderSite: L.builderSite || null,
+    leadChannel: L.leadChannel || 'email',
+    reviewCount: L.reviewCount || null,
+    rating: L.rating || null,
+    // Free pre-spend guess, computed here when the lead predates the field, so
+    // the cheap prediction can be graded against the paid answer.
+    reachPredict: (L.reachPredict != null)
+      ? L.reachPredict
+      : (() => { try { return predictReach(L.name, L.website).score; } catch (e) { return null; } })(),
+    // What we already proved about this domain. Run 1 SMTP-verified a mailbox;
+    // the server holds that in memory, Render restarts, and run 2 guessed a
+    // different local part off a wobbly catch-all probe.
+    priorEmail: (L.emailResult && L.emailResult.email) || L.email || null,
+    priorEmailTier: (L.emailResult && L.emailResult.tier) || null,
+    priorEmailPattern: (L.emailResult && L.emailResult.pattern) || null,
+    stackCombo: L.stackCombo || null,
+    signalAgeDays: L.signalAgeDays != null ? L.signalAgeDays : null,
+    signalDate: L.signalDate || null,
+    raiseAmount: L.raiseAmount != null ? L.raiseAmount : null,
+    jobSnippet: L.jobSnippet || '',
+    jobPostingUrl: L.jobPostingUrl || '',
+    jobPostedAt: L.jobPostedAt || null,
+    marketingRoles: L.marketingRoles || [],
+    opsRoles: L.opsRoles || [],
+    marketingChannels: L.marketingChannels || [],
+    discoverySignals: L.signals || {},
+    discoverySource: L.source || '',
+    discoveryReason: L.jobTitle || L.newsHeadline || '',
+    manualRoleCount: L.manualRoleCount || 0,
+    manualCategories: L.manualCategories || 0,
+    icpProfile: L.icpProfile || '',
+    verifiedEmployees: L.verifiedEmployees || null,
+    verifiedCEO: L.verifiedCEO || null,
+    verifiedCEOTitle: L.verifiedCEOTitle || null,
+    publicPainSignals: L.publicPainSignals || [],
+    // Measured in the browser, so it can only come from the caller.
+    browserData: X.browserData || null,
+  };
+};
+
 const researchViaQueue = async (body, opts) => {
   const o = opts || {};
   // RESUME: poll a job that was already accepted, instead of starting a new one.
@@ -2308,91 +2408,8 @@ function FindView({
       // Step 3: Run research — Brain must succeed or we show failure state
       // Job queue instead of one long request — see researchViaQueue. Same
       // response shape, so everything below this call is unchanged.
-      const r = await researchViaQueue({
-          company: company.name,
-          website,
-          keys: {
-            firecrawlKey: settings.firecrawlKey,
-            apifyToken: settings.apifyToken,
-            hunterKey: settings.hunterKey,
-            fbToken: settings.fbToken,
-            ninjaPearKey: settings.ninjaPearKey,
-            companiesApiKey: settings.companiesApiKey,
-            verifierKey: settings.verifierKey
-          },
-          apiKey: settings.apiKey,
-          // `lead` is CREATED further down this same block, so reading it here
-          // is a temporal dead zone throw, not an undefined. Optional chaining
-          // does not help: `lead?.x` still has to resolve `lead` first, and a
-          // const before its initialiser throws "Cannot access before
-          // initialization". On this path the only lane that can exist is the
-          // one the discovery step attached to `company`.
-          buyingLane: company.buyingLane || 'software',
-          // THE TRADE. A comment on the Re-run path claims the discovery path already
-          // sent this. It did not. findOwnerViaLicense and the LSA classifier both
-          // route on it, so every freshly discovered lead was researched blind.
-          industry: company.industry || company.verifiedIndustry || '',
-          phone: company.phone || '',
-          // GOOGLE PLACE ID — this is the expensive one. Server-side it gates
-          // findOwnerInReviewReplies AND findOwnerViaReviewReplies, both of which
-          // return null immediately without it, plus the whole review-based pain
-          // engine. At an owner-operated local business the person replying to
-          // reviews IS the owner, which makes it the single best-matched source we
-          // have for this ICP — and omitting this one field kept it dark on every
-          // lead that came through discovery.
-          placeId: company.placeId || '',
-          // ══ WHAT FIND ALREADY KNEW ═══════════════════════════════════════
-          // Find learns the shape of a business before a penny is spent — the
-          // markets it comes back in, the markets it does NOT, whether it has a
-          // website at all. None of it reached Research, which read only
-          // placeId and industry off the lead.
-          marketsSeen: company.marketsSeen || [],
-          marketsAbsent: company.marketsAbsent || [],
-          marketCount: company.marketCount || 1,
-          noWebsite: !!company.noWebsite,
-          builderSite: company.builderSite || null,
-          leadChannel: company.leadChannel || 'email',
-          reviewCount: company.reviewCount || null,
-          rating: company.rating || null,
-          verifiedEmployees: company.verifiedEmployees || null,
-          // FREE PRE-SPEND GUESS, graded against the paid result server-side. Neither
-          // call site ever sent it, so `PREDICT CHECK ... cannot grade this lead`
-          // fired on every lead and the prediction-vs-outcome loop has never once run.
-          reachPredict: company.reachPredict != null ? company.reachPredict : null,
-          // ══ WHAT THE JOB POSTING ACTUALLY SAID ═══════════════════════════
-          // The find stage now keeps the role titles, the posting date, the
-          // posting URL and the description. None of it reached Research,
-          // because this payload is a hand-written allowlist and nobody added
-          // them — the same shape as placeId and industry before them.
-          //
-          // signalAgeDays in particular: the server has read req.body.signalAgeDays
-          // since the reach-window fix, and NOTHING has ever sent it, so the
-          // window language has never once had a real number to work from.
-          //
-          // jobSnippet is the owner describing, unprompted and in his own words,
-          // what he thinks is broken. It is the only text of that kind this
-          // system can obtain, and it still has to pass the same quote
-          // verification as anything else before it can reach an email.
-          signalAgeDays: company.signalAgeDays != null ? company.signalAgeDays : null,
-          // The raw DATE travels too: the server derives an honest age from it
-          // when signalAgeDays was never computed, which is every lead so far.
-          signalDate: company.signalDate || null,
-          raiseAmount: company.raiseAmount != null ? company.raiseAmount : null,
-          jobSnippet: company.jobSnippet || '',
-          jobPostingUrl: company.jobPostingUrl || '',
-          jobPostedAt: company.jobPostedAt || null,
-          marketingRoles: company.marketingRoles || [],
-          opsRoles: company.opsRoles || [],
-          marketingChannels: company.marketingChannels || [],
-          discoverySignals: company.signals || {},
-          discoverySource: company.source || '',
-          location: company.location || '',
-          discoveryReason: company.jobTitle || company.newsHeadline || '',
-          manualRoleCount: company.manualRoleCount || 0,
-          manualCategories: company.manualCategories || 0,
-          icpProfile: company.icpProfile || '',
-          stackCombo: company.stackCombo || null
-      });
+      // ONE builder, shared with the re-run path — see buildResearchBody.
+      const r = await researchViaQueue(buildResearchBody(company, settings, { website }));
       const researchData = await r.json();
 
       // Step 4: Check if Brain failed
@@ -4412,113 +4429,15 @@ function ResearchView({
       // Job queue instead of one long request. The AbortController still works —
       // it now cancels the polling loop rather than a socket the browser may have
       // throttled in a background tab.
-      const r = await researchViaQueue({
-          company: lead.name,
-          website,
-          apiKey: settings.apiKey,
-          // ══ A RE-RUN HAS TO ACTUALLY RE-RUN ═══════════════════════════════
-          // The backend keeps a contact cache for owner, email and revenue, and
-          // skips those lookups on a hit. Its own comment says «"Re-run
-          // Research" (forceRefresh) bypasses it» — but forceRefresh appeared
-          // nowhere in this file, so the flag was never sent and the cache could
-          // never be bypassed from the interface.
-          //
-          // Live on Hannah Custom Homes: the run logged "CACHE HIT: owner —
-          // skipping paid lookups", which meant the owner lookup never ran, which
-          // meant the team-page roster never ran. The fix that reads "Dusty
-          // Hannah — CO-OWNER/CEO" off their own page was deployed and skipped.
-          //
-          // A button labelled Re-run Research that reuses a cached owner is the
-          // same failure as a Regenerate button that returns a cached email: it
-          // makes shipped work look unshipped. This is the deliberate re-run
-          // path, so it pays for fresh lookups.
-          forceRefresh: true,
-          keys: {
-            firecrawlKey: settings.firecrawlKey,
-            apifyToken: settings.apifyToken,
-            fbToken: settings.fbToken,
-            hunterKey: settings.hunterKey,
-            ninjaPearKey: settings.ninjaPearKey,
-            companiesApiKey: settings.companiesApiKey,
-            verifierKey: settings.verifierKey
-          },
-          buyingLane: lead.buyingLane || 'software',
-          // THE TRADE. This was missing from the re-run path entirely while the
-          // discovery path sent it, so anything keyed on industry silently degraded
-          // on every "Re-run Research": the licence-registry search built its
-          // queries without a trade, and the Local Services Ads check could not
-          // classify the business at all (which is why a water-damage restoration
-          // company — one of the most competitive LSA categories there is — was
-          // reporting "Not an LSA category").
-          industry: lead.industry || '',
-          // Same free pre-spend guess as the discovery path. Without it the server
-          // logs "no reachPredict sent from the client — cannot grade this lead" and
-          // we never learn whether the cheap prediction agrees with the paid answer.
-          // ══ BACKFILL SO THE PREDICTOR CAN ACTUALLY BE GRADED ══════════════
-          // Every lead in the pipeline was discovered before reachPredict was
-          // persisted, so all 160 of them carry null and every PREDICT CHECK
-          // reported "LEGACY LEAD \u2014 nothing to grade". The prediction only needs
-          // the name and the website, both of which this lead already has, so
-          // compute it now rather than losing another run's worth of evidence.
-          //
-          // This is the same function the Find path uses, not a copy of it.
-          // ══ SEND BACK WHAT WE ALREADY PROVED ABOUT THIS DOMAIN ════════════
-          // Run 1 SMTP-verified deirdre@dtaylorcpa.com — the mail server itself
-          // confirmed that mailbox exists, which is the strongest evidence short
-          // of a reply. The server holds that in an in-process Map, Render
-          // restarted, and run 2 had to guess again. It guessed a different local
-          // part off a wobbly catch-all probe and the lead dropped from 95 to 72.
-          //
-          // The result was persisted on the lead the whole time. Nobody was
-          // sending it back. A verified address is not something to rediscover.
-          priorEmail: (lead.emailResult && lead.emailResult.email) || lead.email || null,
-          priorEmailTier: (lead.emailResult && lead.emailResult.tier) || null,
-          priorEmailPattern: (lead.emailResult && lead.emailResult.pattern) || null,
-          reachPredict: (lead.reachPredict != null)
-            ? lead.reachPredict
-            : (() => { try { return predictReach(lead.name, lead.website).score; } catch (e) { return null; } })(),
-          stackCombo: lead.stackCombo || null,
-          // ══ WHAT THE JOB POSTING ACTUALLY SAID ═══════════════════════════
-          // The find stage now keeps the role titles, the posting date, the
-          // posting URL and the description. None of it reached Research,
-          // because this payload is a hand-written allowlist and nobody added
-          // them — the same shape as placeId and industry before them.
-          //
-          // signalAgeDays in particular: the server has read req.body.signalAgeDays
-          // since the reach-window fix, and NOTHING has ever sent it, so the
-          // window language has never once had a real number to work from.
-          //
-          // jobSnippet is the owner describing, unprompted and in his own words,
-          // what he thinks is broken. It is the only text of that kind this
-          // system can obtain, and it still has to pass the same quote
-          // verification as anything else before it can reach an email.
-          signalAgeDays: lead.signalAgeDays != null ? lead.signalAgeDays : null,
-          signalDate: lead.signalDate || null,
-          raiseAmount: lead.raiseAmount != null ? lead.raiseAmount : null,
-          jobSnippet: lead.jobSnippet || '',
-          jobPostingUrl: lead.jobPostingUrl || '',
-          jobPostedAt: lead.jobPostedAt || null,
-          marketingRoles: lead.marketingRoles || [],
-          opsRoles: lead.opsRoles || [],
-          marketingChannels: lead.marketingChannels || [],
-          discoverySignals: lead.signals || {},
-          discoverySource: lead.source || '',
-          location: lead.location || '',
-          placeId: lead.placeId || '',
-          discoveryReason: lead.jobTitle || lead.newsHeadline || '',
-          manualRoleCount: lead.manualRoleCount || 0,
-          manualCategories: lead.manualCategories || 0,
-          icpProfile: lead.icpProfile || '',
-          verifiedEmployees: lead.verifiedEmployees || null,
-          verifiedCEO: lead.verifiedCEO || null,
-          verifiedCEOTitle: lead.verifiedCEOTitle || null,
-          publicPainSignals: lead.publicPainSignals || [],
-          browserData: {
-            pageSpeed,
-            emailData,
-            companyData
-          }
-      }, {
+      // ONE builder, shared with the discovery path. See buildResearchBody:
+      // these two requests used to be written by hand and disagreed about
+      // seventeen fields, so a re-run could come back worse than the original
+      // while looking like a refresh.
+      const r = await researchViaQueue(buildResearchBody(lead, settings, {
+        website,
+        forceRefresh: true,   // the deliberate re-run path pays for fresh lookups
+        browserData: { pageSpeed, emailData, companyData },
+      }), {
         signal: _ac.signal,
         resumeJobId: resumeJobId || null,
         // Persist the moment the server accepts it. If the view unmounts a second

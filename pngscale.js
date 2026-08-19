@@ -357,46 +357,54 @@ function fitWithin(buf, maxEdge = 7800) {
   return { buffer: outBuf, width: dw, height: dh, scaled: true, from: `${h.width}x${h.height}` };
 }
 
-module.exports = { fitWithin, readHeader };
+module.exports = { fitWithin, readHeader, __testPng: (w, h, ft) => mkTestPng(w, h, 2, ft == null ? 4 : ft).png };
 
 // ── SELF TEST ────────────────────────────────────────────────────────────────
 // Round-trips real PNGs through every filter type and asserts the output is a
 // valid PNG under the ceiling whose pixels still resemble the input. Run it
 // before trusting a single image this produces.
+// ══ ONE PNG BUILDER, SHARED BY THE SELF-TEST AND THE SERVER ══════════════
+// The self-test built its own fixtures inside its own block, so nothing else
+// could make one. BATCH MEMORY CHECK needs a real page render to MEASURE what
+// a decode costs in resident memory — the number that decides how many leads
+// may run at once — and a second builder written beside this one would be a
+// second thing to keep in step. Hoisted instead.
+const mkTestPng = (w, hgt, colorType, filterType) => {
+  const ch = colorType === 2 ? 3 : 4;
+  const stride = w * ch;
+  const px = Buffer.alloc(stride * hgt);
+  for (let y = 0; y < hgt; y++) for (let x = 0; x < w; x++) {
+    const o = y * stride + x * ch;
+    px[o] = (x * 7) & 0xff; px[o + 1] = (y * 3) & 0xff; px[o + 2] = ((x + y) * 5) & 0xff;
+    if (ch === 4) px[o + 3] = 255;
+  }
+  // Apply the requested filter so the decoder is exercised, not just filter 0.
+  const raw = Buffer.alloc((stride + 1) * hgt);
+  for (let y = 0; y < hgt; y++) {
+    raw[y * (stride + 1)] = filterType;
+    for (let i = 0; i < stride; i++) {
+      const cur = px[y * stride + i];
+      const a = i >= ch ? px[y * stride + i - ch] : 0;
+      const b = y > 0 ? px[(y - 1) * stride + i] : 0;
+      const c = y > 0 && i >= ch ? px[(y - 1) * stride + i - ch] : 0;
+      let v;
+      if (filterType === 0) v = cur;
+      else if (filterType === 1) v = cur - a;
+      else if (filterType === 2) v = cur - b;
+      else if (filterType === 3) v = cur - ((a + b) >> 1);
+      else { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+             v = cur - (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
+      raw[y * (stride + 1) + 1 + i] = v & 0xff;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(hgt, 4);
+  ihdr[8] = 8; ihdr[9] = colorType;
+  return { png: Buffer.concat([SIG, chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]), px, ch };
+};
+
 if (require.main === module && process.argv[2] === '--selftest') {
-  const mk = (w, hgt, colorType, filterType) => {
-    const ch = colorType === 2 ? 3 : 4;
-    const stride = w * ch;
-    const px = Buffer.alloc(stride * hgt);
-    for (let y = 0; y < hgt; y++) for (let x = 0; x < w; x++) {
-      const o = y * stride + x * ch;
-      px[o] = (x * 7) & 0xff; px[o + 1] = (y * 3) & 0xff; px[o + 2] = ((x + y) * 5) & 0xff;
-      if (ch === 4) px[o + 3] = 255;
-    }
-    // Apply the requested filter so the decoder is exercised, not just filter 0.
-    const raw = Buffer.alloc((stride + 1) * hgt);
-    for (let y = 0; y < hgt; y++) {
-      raw[y * (stride + 1)] = filterType;
-      for (let i = 0; i < stride; i++) {
-        const cur = px[y * stride + i];
-        const a = i >= ch ? px[y * stride + i - ch] : 0;
-        const b = y > 0 ? px[(y - 1) * stride + i] : 0;
-        const c = y > 0 && i >= ch ? px[(y - 1) * stride + i - ch] : 0;
-        let v;
-        if (filterType === 0) v = cur;
-        else if (filterType === 1) v = cur - a;
-        else if (filterType === 2) v = cur - b;
-        else if (filterType === 3) v = cur - ((a + b) >> 1);
-        else { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
-               v = cur - (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
-        raw[y * (stride + 1) + 1 + i] = v & 0xff;
-      }
-    }
-    const ihdr = Buffer.alloc(13);
-    ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(hgt, 4);
-    ihdr[8] = 8; ihdr[9] = colorType;
-    return { png: Buffer.concat([SIG, chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]), px, ch };
-  };
+  const mk = mkTestPng;
 
   let pass = 0, fail = 0;
   const ok = (name, cond, detail) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name + (detail ? ' — ' + detail : '')); } };
