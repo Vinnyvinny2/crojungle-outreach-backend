@@ -434,6 +434,96 @@ smallest number that means anything.
 Both Apify and Firecrawl were out of credits at the end of the last session. **Any
 judgement about email quality made on those runs is invalid.**
 
+## 6. The same business measures as two different businesses — FIXED 2026-08-19
+
+The ladder is a calculator: identical measurements produce an identical email
+every time. So "email quality varies a lot" was never the ladder. It was four
+places where a second look at one business returned different numbers, plus a
+writer running at full randomness. All five are closed and guarded by
+`MEASUREMENT STABILITY CHECK`, which was falsified against a build with each fix
+reverted.
+
+- **The writer had no temperature**, so every model call ran at the API default
+  of 1.0. Pressing Generate twice on one lead does not re-research anything — it
+  reuses the stored audit — so that call *was* the variance. Worse than wording:
+  several gates are properties of the DRAFT (over 150 words, a sentence over 32),
+  so the draw decided whether the owner got the written email or the flat
+  template. Pinned to 0.4 on the writer and its rewrite. Deliberately not 0:
+  `WRITER BRIEF CHECK` records that over-constraining this writer produced "the
+  composed email with the punctuation tidied", which is the flatness. The audit
+  brain and the prospect simulator are left at the default on purpose.
+- **Suppressing an unstable rank removed the traffic damper too.** Eight
+  conversion-side rungs scale harm by position; when rank was stripped for the
+  copy, `Number(null)` was 0 and 0 is finite, so a null rank read as position
+  ZERO and `broken_page` scored **99 against a base of 95**. The care mechanism
+  was promoting findings past both ladder floors. Position now travels as
+  `rankForScoring`, which no rung sentence may read.
+- **Absence was decided on one Places draw.** `absent_from_search` is harm 96 and
+  `checkLocalRankStable` returned early whenever the first sample missed, so the
+  strongest sentence in the system was the only measurement with no second look.
+- **The service-page searches hung on `rank > 5`** — samples of 5 and 6 skipped
+  them, 4 and 5 bought them — and those three queries are the only source of
+  `service_invisibility`.
+- **The Apify truncation guard had an absolute cap of 8 rows**, so 20 reviews
+  from a 116-review profile passed as a complete read.
+
+## 7. The audit was blind on leads where we were holding five pictures
+
+Claude Reynolds, live: Firecrawl returned the homepage as a **palette PNG**,
+`pngscale.js` read only RGB and RGBA, and the caller treated a missing homepage
+as fatal — so four already-paid-for interior renders went in the bin with it.
+`BRAIN INPUT: 0 image(s)`.
+
+The scaler now reads every shape a renderer emits (palette 1/2/4/8-bit with PLTE
+and tRNS, greyscale, greyscale+alpha, RGB, RGBA) and still refuses interlaced and
+16-bit by name. A missing homepage no longer discards the interiors; every image
+is labelled; and the prompt line claiming a screenshot was attached is computed
+from the message actually sent, not from a URL — on that lead it told the model a
+screenshot was attached while another line of the same prompt correctly said
+there was none.
+
+**And the scaler was already an OOM risk.** Measured peak RSS was **330MB on a
+1920x8336 render and 382MB on 1920x11189**, against Render's ~256MB. Buffers live
+outside the V8 heap, so `--max-old-space-size` never bounded them and
+`BOOT HEAP CHECK` could not see them. Worst case is now 218MB. **If you add
+anything that decodes an image, measure RSS, not heap.**
+
+`SCREENSHOT SCALER CHECK` builds eight PNG shapes and pushes them through the
+real function. Nothing in this file had ever executed `fitWithin` — the only
+guard was a source-regex asserting the call site exists, and it passed on the run
+that lost every image.
+
+## 8. Why every audit reads the same
+
+`originalFindings` are the only thing that differs between two audits, and the
+historical survival rate is ~11%. The corpus they are verified against was
+`sitePages.rawText || trustedContent` — an **OR**, so the HOMEPAGE dropped out of
+the corpus the moment any interior page was scraped. Five of the eight worked
+examples in the prompt quote the homepage. A finding quoting their own homepage
+tagline was therefore dropped as "does not appear on any page we read".
+
+Mined review evidence is now in the corpus too: a review-derived finding was
+being checked against web pages it could never appear on, which is a category
+error rather than a threshold. Nothing is loosened — the rule is still "we hold
+the words you are quoting".
+
+## 9. Cost — and a correction about the cache
+
+`cacheRead=0` on a BRAIN COST line does **not** mean the cache is broken. That
+line's own text says "cache WRITTEN (first call — reads are 10% from here)", and
+`BRAIN_STATIC` is 64,000 characters with exactly one interpolation
+(`FACT_DISCIPLINE`, itself static), so the cached prefix is byte-identical across
+leads and the cache works. Read the whole log line before concluding.
+
+The real cost shape, from a live lead at **$0.1148 across 8 calls**:
+- the brain audit is **66%** of it — 31,228 fresh input tokens, of which
+  **22,040 is evidence text sent uncached on every lead**
+- the other seven calls total ~$0.039
+
+So the lever is the size of the evidence block and the number of calls, not the
+cache. Cutting evidence trades directly against audit quality, so it is a
+decision to take deliberately rather than a bug to fix.
+
 ---
 
 # PART 5 — WHAT IS PROVEN
@@ -477,7 +567,12 @@ node scopecheck.js server.js            # a name used outside the block it was d
 node fetchtest.js                       # the one helper all 60 outbound calls use
 node fuzzcore.js 20000                  # 11 gates, in-process
 node fuzz.js 500                        # composes emails over HTTP
-PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 132 boot checks
+node pngscale.js --selftest             # 21 assertions on the screenshot scaler
+#   This was NOT in the gate list for the life of the project, and nothing in
+#   server.js ever executed fitWithin either — the only guard was a source regex
+#   asserting the CALL SITE exists, which passed on the run that lost every
+#   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
+PORT=4000 timeout 180 node --max-old-space-size=256 server.js   # 135 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
