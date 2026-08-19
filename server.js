@@ -185,7 +185,29 @@ const FC_CONCURRENCY = Math.max(1, parseInt(process.env.FC_CONCURRENCY || '2', 1
 //
 // So the gate is constructible. Production holds one instance; the check builds
 // its own and can no longer be affected by, or affect, a running batch.
-const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS } = {}) => {
+// ══ AND THE CHECK HAS TO MEASURE THE GATE, NOT THE EVENT LOOP ════
+// Deployed, 2026-08-19, on a build where the gate was provably correct:
+//
+//   FIRECRAWL GATE CHECK: 1 start(s) came less than 280ms after the one before
+//   — gaps were [95, 350, 350, 350, 351, 350, 351, 351, 350]
+//
+// Every gap after the first is the 350ms setting to the millisecond. Only the
+// first is short, and it is short because the check timed the moment each job's
+// BODY ran, which is a microtask after the gate released it. Boot is the busiest
+// this process ever gets — a hundred and thirty-odd checks running — so the
+// first body was starved for a quarter of a second while the second was not, and
+// the difference between the two lags showed up as a short gap.
+//
+// The previous attempt at this added 20% of tolerance and wrote a comment
+// explaining why the ruler was wrong. Tolerance is not a fix: it left a check
+// that still fires on a correct gate, on the one line an operator reads as "the
+// throttle is broken", and CLAUDE.md's rule is that a message overstating its
+// own severity costs exactly what one understating it costs.
+//
+// So the gate reports its own dispatch times. Production passes no callback and
+// behaves identically; the check passes one and measures what the gate DID,
+// which lets the assertion drop the tolerance and test the exact setting.
+const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, onStart = null } = {}) => {
   let inFlight = 0;
   let lastStart = 0;
   const waiting = [];
@@ -196,6 +218,9 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS } =
       const job = waiting.shift();
       inFlight++;
       lastStart = Date.now();
+      // The spacing this gate promises is between THESE moments. Anything that
+      // measures later than this is measuring the event loop as well.
+      if (onStart) { try { onStart(lastStart); } catch (e) { void e; } }
       // The slot is released however the call ends — a throw that skipped the
       // decrement would leak a slot permanently and strand every later request,
       // which is the failure the old chain's own comment records one level down.
@@ -1420,6 +1445,62 @@ const BACKEND_CLAIM_PATTERNS = [
     'CUSTOMER BEHAVIOUR CLAIM: states that his customers stopped responding. Nothing in this system observes a customer after the review they left, and if the complaint we mined is about HIS responsiveness this states the exact opposite of the evidence',
     "clients stop responding once the quote goes out"],
 ];
+
+// ══ THE WRITER WAS BEING JUDGED ON THIRTEEN RULES AND TOLD ABOUT THREE ════
+// Live, 2026-08-19. Aire-Flo Heating: BRAIN DRAFT REJECTED for RANKING CAUSATION,
+// then REWRITE ALSO REJECTED for OWNER SELF-LOOKUP CLAIM. Neither family appears
+// anywhere in the brief the writer was handed. Two attempts spent failing rules
+// it was never given, and the lead shipped the flat composed template — which is
+// the output Vin has called garbage every time he has seen it.
+//
+// This is the SAME disease HIDDEN RULE CHECK was built for, one table over. That
+// check's own words: "two hand-kept copies of one rule is how they came to
+// disagree." The brief hand-wrote a three-line summary of post-contact claims
+// beside a table that had grown to twenty-seven rows in thirteen families, and
+// the eight families added since — ranking causation, owner behaviour, owner
+// self-lookup, customer behaviour, the unmeasurable "near me" query, the invented
+// timeline, the invented comparison, the prospect claim — were enforced in
+// silence.
+//
+// So the brief is GENERATED from the table, exactly as the banned-word list is
+// generated from EMAIL_JARGON_RE. One source. The disclosure cannot fall behind
+// the gate again, because adding a row to the table adds a line to the brief.
+//
+// Grouped by family and stating every distinct shape inside it, because the
+// family name alone under-states BACKEND CLAIM, which is nine different
+// sentences. The banned SAMPLES are deliberately NOT disclosed: the brief's
+// positive examples have come back as copy verbatim in live sends (exemplarLeak
+// exists for exactly that), and there is no reason to believe a negative example
+// primes any less.
+let _claimBriefCache = null;
+const claimFamilyBrief = () => {
+  if (_claimBriefCache !== null) return _claimBriefCache;
+  const fam = new Map();
+  for (const row of BACKEND_CLAIM_PATTERNS) {
+    const s = String(row[1] || '').replace(/\s+/g, ' ').trim();
+    if (!s) continue;
+    // A row's `why` is "FAMILY: what makes it false" — except for the three
+    // oldest rows, which are a bare sentence in caps. Both shapes are read
+    // rather than one being enforced, because rewriting live rejection messages
+    // to fit a formatter is how a true message becomes a tidy one.
+    const i = s.indexOf(':');
+    const looksFamily = i > 0 && i < 40 && s.slice(0, i) === s.slice(0, i).toUpperCase();
+    const name = looksFamily ? s.slice(0, i).trim() : '';
+    const rule = looksFamily ? s.slice(i + 1).trim() : s;
+    // The first clause only. The rest of each `why` is the history of the live
+    // send that produced it, which the writer does not need and pays for.
+    const first = rule.split(/(?<=[.]) |\u2014| - /)[0].trim().replace(/[.,;]+$/, '');
+    const key = name || first;
+    if (!fam.has(key)) fam.set(key, { name, shapes: [] });
+    if (first && !fam.get(key).shapes.includes(first)) fam.get(key).shapes.push(first);
+  }
+  const lines = [];
+  for (const [, v] of fam) {
+    lines.push(`- ${v.name ? `${v.name}: ` : ''}${v.shapes.join('; ')}`);
+  }
+  _claimBriefCache = lines.join('\n');
+  return _claimBriefCache;
+};
 
 // ══ THE UNSENDABLE TEST, APPLIED TO THE BODY ════════════════════════════════
 // Mike's framework already carries this rule for subject lines: every subject
@@ -13104,33 +13185,107 @@ above, inside an opinion or outside one.\n${R.map(x => `\u2022 ${x}`).join('\n')
 // THE FLOOR DOES NOT MOVE. The retry faces the SAME verifier with the same
 // rules; a second failure falls back exactly as before. This can only convert a
 // rejected draft into a passing one — it cannot lower the bar.
-const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
-  if (!apiKey || !draft || !why) return null;
+// ══ THE SHAPE LIMITS, WHERE BOTH THE GATE AND THE BRIEFS CAN READ THEM ══
+// verifyBrainEmail hard-coded 150, 25, 32, 3 and 45 inline, and the rewrite
+// prompt told the model "50-90 words". Neither number was near the gate, and the
+// model was being asked to cut a correctly-sized email in half on the one path
+// whose job is to rescue it. A limit stated in two places is a limit that
+// disagrees with itself; there is only one copy now.
+const EMAIL_WORD_CEILING = 150;
+const EMAIL_WORD_FLOOR = 25;
+const EMAIL_SENTENCE_MAX_WORDS = 32;
+const EMAIL_PARA_MAX_SENTENCES = 3;
+const EMAIL_OPEN_PARA_MAX_WORDS = 45;
+
+// ══ THE SECOND ATTEMPT WAS HANDED ONE SENTENCE AND NO FACTS ══════════════════
+// `parts` has been the first argument of this function for its whole life and
+// the prompt below never read it. The rewrite got the draft and one rejection
+// reason; the permitted numbers, the finding, the ask, the banned vocabulary and
+// the twelve-word opening tokens were all sitting in that argument, unused.
+//
+// What that cost, from the 2026-08-19 run:
+//
+//   Big Ben's Tree Service   first draft refused for a 5-sentence paragraph.
+//                            The rewrite then invented "40" — it was told
+//                            "every number must be one we measured" and shown
+//                            none of them. Flat template shipped.
+//   Aire-Flo Heating         first draft refused for RANKING CAUSATION, the
+//                            rewrite for OWNER SELF-LOOKUP CLAIM. Neither rule
+//                            appeared in either prompt. Flat template shipped.
+//
+// And the one shape instruction it DID carry was wrong: "50-90 words" against a
+// gate that refuses under 25 and over 150, and a writer brief that asks for
+// 110-130. So every rewrite was told to cut the email roughly in half, on the
+// one path whose entire purpose is to save a draft that was the right length.
+//
+// Everything below is generated from the same functions the verifier uses. Not
+// one rule here is hand-copied, which is the only thing that stops it drifting.
+// Same reason as buildWriterBrief above: a prompt assembled inside the API
+// call cannot be executed by a check, and a check that reads source instead of
+// running the function is the one that passed on the run that lost every image.
+const buildRewriteBrief = (parts, draft, why) => {
+  const _p = parts || {};
+  const _figList = [...permittedFigures({
+    figures: _p.figures, money: _p.money, spine: _p.spine, earned: _p.earned,
+    count: _p.count, evidenceAssert: _p.evidenceAssert,
+  })];
+  const _tok = openingTokens(_p.spine, _p.figures);
   const prompt = [
     'You wrote this cold email:',
     '',
     draft,
     '',
-    'It was rejected by the fact-checker for ONE reason:',
+    'It came back with ONE objection:',
     '',
     '  ' + why,
     '',
     'Rewrite it, fixing ONLY that. Everything else was accepted — the finding, the',
     'numbers, the structure, the ask. Change as little as possible.',
     '',
-    'The rules that produced the rejection, restated so you do not trip a different one:',
-    '- Every number must be one we measured. Do not add, round or estimate any figure.',
-    '- Never say what happens AFTER someone contacts them — no callbacks, no waiting,',
-    '  no voicemail, no "by the time you see it". We have never watched that happen.',
+    // The facts, so the second attempt is not working from its memory of a prompt
+    // it can no longer see. Each line is omitted when the caller genuinely has no
+    // value for it rather than printed empty: an empty heading reads as "there is
+    // none", which on the figures line would be a lie.
+    _p.spine ? 'THE FACT THIS EMAIL IS BUILT ON, and it must survive in your own words: ' + _p.spine : '',
+    _p.cta ? 'THE JOB OF THE LAST SENTENCE: ' + _p.cta : '',
+    _figList.length
+      ? 'THE ONLY NUMBERS THIS EMAIL MAY CONTAIN: ' + _figList.join(', ') + '. Any other digit — a percentage, a rounded figure, a year, a count of anything — is refused as invented, however reasonable it looks. If a sentence needs a number you were not given, write the sentence without it.'
+      : 'THIS EMAIL MAY CONTAIN NO NUMBERS AT ALL. Nothing here can be stated as a figure, so any digit is refused as invented.',
+    _tok.all.length >= 3
+      ? 'YOUR FIRST TWELVE WORDS MUST CONTAIN AT LEAST ONE OF THESE, and it is checked mechanically: ' + _tok.all.slice(0, 12).join(', ')
+      : '',
+    '',
+    'The rules that produced the objection, restated so you do not trip a different one:',
     '- Never describe our own work. Not "I mapped", not "I analysed", not "we found".',
     '  State what is true about his business; that we found it is implied.',
     '- Never name the fix or the product. This email exists to earn a reply, and the',
     '  moment he knows what you sell he judges the offer instead of wanting the answer.',
-    '- The ask is the last sentence. Nothing follows it.',
-    '- 50-90 words, short paragraphs, the finding inside the first dozen words.',
+    '- The ask is the LAST sentence, it is a question, and nothing follows it.',
+    '- Never ask for a call, a meeting, a time, or any number of minutes.',
+    // The shape rules as the gate actually states them. The old line said
+    // "50-90 words, short paragraphs" and both halves were guesses at a gate
+    // that measures four separate things.
+    '- 110-130 words. Under ' + EMAIL_WORD_FLOOR + ' or over ' + EMAIL_WORD_CEILING + ' is refused outright.',
+    '- No paragraph longer than ' + EMAIL_PARA_MAX_SENTENCES + ' sentences, no sentence longer than '
+      + EMAIL_SENTENCE_MAX_WORDS + ' words, and the first paragraph under '
+      + EMAIL_OPEN_PARA_MAX_WORDS + ' words. He reads this on a phone, standing up.',
+    '- Do not mention his reviews, his ratings or his stars unless the FACT above',
+    '  already does. His reviews are how we read the business, not what we say to him.',
+    '- No marketing words. This list is generated from the check itself, so it is the',
+    '  whole rule and not a summary of it: ' + EMAIL_JARGON_TERMS.join(', ') + '.',
+    '',
+    'Every family of claim the fact-checker refuses. Each one is a thing we did not',
+    'measure and cannot know from outside the business:',
+    claimFamilyBrief(),
     '',
     'Return ONLY the corrected email body. No preamble, no explanation, no quotes.',
-  ].join('\n');
+  ].filter(x => x !== '').join('\n');
+  return prompt;
+};
+
+const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
+  if (!apiKey || !draft || !why) return null;
+  const prompt = buildRewriteBrief(parts, draft, why);
   try {
     const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -13249,8 +13404,13 @@ const EMAIL_JARGON_TERMS = ['pixel', 'retargeting', 'H1', 'meta description', 's
 // asserting every disclosed term is one the regex actually tests.
 const EMAIL_JARGON_RE = /\b(pixel|retargeting|H1|meta description|schema|SEO|above the fold|funnel|CRM|conversion rate|CTA|landing page|attribution|impressions|nurture|optimi[sz]ation|UX|leverage|unlock|synerg[a-z]*)\b/i;
 
-const writeEmailWithBrain = async (parts, apiKey, company) => {
-  if (!apiKey) return null;
+// ══ THE BRIEF IS BUILT WHERE A CHECK CAN EXECUTE IT ═══════════════
+// This prompt used to be assembled inside the API call, so nothing could read
+// it without an Anthropic key and every guard over it was a regex against the
+// source. SCREENSHOT SCALER CHECK records what that is worth: a source regex
+// asserting the CALL SITE exists passed on the run that lost every image on a
+// lead. WRITER RULE DISCLOSURE CHECK now builds the real brief and reads it.
+const buildWriterBrief = (parts, company) => {
   const { first, spine, earned, pattern, reframe, money, count, cta, blind,
     trade, tenure, situationRead, bindingLayer, bindingWhy, acquisitionIsReferral,
     purchaseUrgency: urgency, second } = parts;
@@ -13385,6 +13545,11 @@ ABSOLUTE RULES, and the email is discarded if any is broken:
   no auto-replies, no "they go elsewhere", no "you never hear from them". We have
   never observed any of it.
 - Never state their revenue, their losses, their conversion rate or their hours.
+- EVERY FAMILY OF CLAIM THE FACT-CHECKER REFUSES, and it is the whole list rather
+  than a summary of it \u2014 generated from the checker itself, so a draft can no
+  longer be discarded for a rule you were never given. Each one is a thing we did
+  not measure and cannot know from outside the business:
+${claimFamilyBrief()}
 - The FACT must still be recognisable and its numbers must appear exactly. The
   SENTENCE does not have to survive and should not: if your draft reads as a
   tidied version of the supplied line, you have not written an email, you have
@@ -13442,6 +13607,12 @@ rather than a metric? If any answer is no, it reads like a report and it will be
 deleted.
 
 Return ONLY the email body. No subject, no signature, no preamble.`;
+  return prompt;
+};
+
+const writeEmailWithBrain = async (parts, apiKey, company) => {
+  if (!apiKey) return null;
+  const prompt = buildWriterBrief(parts, company);
 
   try {
     const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
@@ -13518,6 +13689,33 @@ Return ONLY the email body. No subject, no signature, no preamble.`;
 // refused. Periods are left alone, so 4.8 stays 4.8 rather than becoming 48.
 const NUMBER_TOKENS = (t) => (String(t || '').match(/\d[\d,.]*/g) || [])
   .map(x => x.replace(/[.,]$/, '').replace(/,/g, ''));
+
+// ══ THE ONE LIST OF NUMBERS THIS EMAIL MAY CONTAIN ═════════════════════════
+// Live, 2026-08-19, Big Ben's Tree Service: the first draft was refused for a
+// five-sentence paragraph, and the REWRITE was refused for "1 figure(s) we never
+// measured — 40". The rewrite prompt said "Every number must be one we measured"
+// and then listed none of them. A model asked to fix a paragraph break, holding
+// no list of permitted numbers, wrote a plausible one. Both attempts spent, flat
+// template shipped.
+//
+// The permitted set was computed inside the verifier and nowhere else, so it
+// could not be shown to the writer. It is lifted out here so the SAME function
+// produces the allowlist the gate tests and the list the brief prints — the same
+// reason openingTokens and EMAIL_JARGON_TERMS were lifted out before it. Two
+// hand-kept copies of one rule is how they came to disagree.
+const permittedFigures = (opts = {}) => {
+  const permitted = new Set();
+  (opts.figures || []).forEach(f => NUMBER_TOKENS(f).forEach(n => permitted.add(n)));
+  // buildEmailEvidence hands the writer an ASSERT block — published prices,
+  // market counts, verified reviewer quotes. Everything in it is measured by
+  // construction; that is what the A list IS.
+  NUMBER_TOKENS(String(opts.evidenceAssert || '')).forEach(n => permitted.add(n));
+  NUMBER_TOKENS(opts.money || '').forEach(n => permitted.add(n));
+  NUMBER_TOKENS(opts.spine || '').forEach(n => permitted.add(n));
+  NUMBER_TOKENS(opts.earned || '').forEach(n => permitted.add(n));
+  NUMBER_TOKENS(String(opts.count == null ? '' : opts.count)).forEach(n => permitted.add(n));
+  return permitted;
+};
 const verifyBrainEmail = (body, opts = {}) => {
   const text = String(body || '').trim();
   if (!text) return { ok: false, why: 'empty' };
@@ -13536,8 +13734,8 @@ const verifyBrainEmail = (body, opts = {}) => {
   // 150 is still an email he reads on a phone in under a minute. It is not
   // permission to list findings: every other gate here still allows exactly one
   // point, one read and one ask. It is room to finish the thought.
-  if (words > 150) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
-  if (words < 25) return { ok: false, why: `${words} words — too short to carry the finding and the ask` };
+  if (words > EMAIL_WORD_CEILING) return { ok: false, why: `${words} words — past the point an owner reads on a phone` };
+  if (words < EMAIL_WORD_FLOOR) return { ok: false, why: `${words} words — too short to carry the finding and the ask` };
 
   // ══ THE ASK MUST BE THE LAST THING HE READS ═══════════════════════════════
   // The composer always put the CTA last, so nothing ever checked. Giving the
@@ -13691,16 +13889,16 @@ const verifyBrainEmail = (body, opts = {}) => {
     // opening block that asks for attention before it has earned any. None of
     // them constrains WHAT is said, which is why they can be absolute.
     const _long = text.split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean)
-      .find(x => x.split(/\s+/).filter(Boolean).length > 32);
+      .find(x => x.split(/\s+/).filter(Boolean).length > EMAIL_SENTENCE_MAX_WORDS);
     if (_long) {
       return { ok: false, why: `a ${_long.split(/\s+/).filter(Boolean).length}-word sentence — "${_long.slice(0, 50)}..." — is one a scanning reader gives up on halfway. Break it` };
     }
-    const _fat = _paras.find(p => p.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length > 3);
+    const _fat = _paras.find(p => p.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length > EMAIL_PARA_MAX_SENTENCES);
     if (_fat) {
       return { ok: false, why: `a paragraph of ${_fat.split(/(?<=[.!?])\s+/).filter(x => x.trim()).length} sentences — on a phone that is a block he has to commit to before he knows whether it is worth it. One or two per paragraph` };
     }
     const _open = (_paras[0] || '').split(/\s+/).filter(Boolean).length;
-    if (_open > 45) {
+    if (_open > EMAIL_OPEN_PARA_MAX_WORDS) {
       return { ok: false, why: `the first paragraph runs ${_open} words — that is the block he decides on, and it is asking for his attention before it has earned any` };
     }
   }
@@ -13880,8 +14078,6 @@ const verifyBrainEmail = (body, opts = {}) => {
   // false. The permitted list is built from measurements; anything outside it
   // fails. Money ranges are permitted as written since they come from the trade
   // table, not from his books.
-  const permitted = new Set();
-  (opts.figures || []).forEach(f => NUMBER_TOKENS(f).forEach(n => permitted.add(n)));
   // ══ WHAT THE BRIEF OFFERS, THE VERIFIER MUST ACCEPT ═══════════════════
   // buildEmailEvidence hands the writer an ASSERT block — published prices
   // ("safe to use in arithmetic"), market counts, verified reviewer quotes —
@@ -13889,13 +14085,12 @@ const verifyBrainEmail = (body, opts = {}) => {
   // what it was invited to use was refused as "figures we never measured" and
   // fell back to the flat template. Two lists, one meaning, maintained apart:
   // the recorded disease. The call sites pass the SAME assertable lines the
-  // writer saw, so the brief and the allowlist cannot drift again. Everything
-  // in that block is measured by construction — that is what the A list IS.
-  NUMBER_TOKENS(String(opts.evidenceAssert || '')).forEach(n => permitted.add(n));
-  NUMBER_TOKENS(opts.money || '').forEach(n => permitted.add(n));
-  NUMBER_TOKENS(opts.spine || '').forEach(n => permitted.add(n));
-  NUMBER_TOKENS(opts.earned || '').forEach(n => permitted.add(n));
-  NUMBER_TOKENS(String(opts.count == null ? '' : opts.count)).forEach(n => permitted.add(n));
+  // writer saw, so the brief and the allowlist cannot drift again.
+  //
+  // The set itself now lives in permittedFigures, above, so the rewrite brief
+  // can PRINT the numbers this gate will accept instead of telling the model to
+  // guess which ones they are.
+  const permitted = permittedFigures(opts);
   const unknown = NUMBER_TOKENS(text).filter(n => !permitted.has(n));
   if (unknown.length) {
     return { ok: false, why: `contains ${unknown.length} figure(s) we never measured — ${unknown.slice(0, 3).join(', ')}` };
@@ -14438,6 +14633,21 @@ const insightLine = (situationRead) => {
     if (re.test(h)) return '';
   }
 
+  // ══ AND THE SHARED TABLE, WHICH THIS ONE NEVER READ EITHER ════════
+  // The eight rules above are a private list, and a private list is how
+  // verifyBrainEmail came to sit eight families behind BACKEND_CLAIM_PATTERNS
+  // until it was wired to the shared one. Same disease, same fix: this sentence
+  // is the FIRST thing the owner reads on every lead where the model's draft was
+  // refused, so it should be held to the same table as the draft was.
+  //
+  // Verified against every headline the audit brain has actually produced — the
+  // eight in INSIGHT LINE CHECK — with zero false positives, which is the number
+  // that matters: over-blocking here deletes the best sentence in the email.
+  for (const [_re] of BACKEND_CLAIM_PATTERNS) {
+    if (_re.test(h)) return '';
+  }
+
+
   // ══ NOTHING THAT LOOKS LIKE CODE MAY OPEN AN EMAIL ══════════════════════
   // The fuzzer put "{{template}}", "${injection}" and "<script>alert(1)</script>"
   // through this and all three came out as the email's first sentence. The
@@ -14459,6 +14669,43 @@ const insightLine = (situationRead) => {
   const _words = h.split(/\s+/).filter(w => /^[A-Za-z'\u2019-]{2,}$/.test(w));
   const _letters = (h.match(/[A-Za-z ]/g) || []).length / Math.max(1, h.length);
   if (_words.length < 5 || _letters < 0.75) return '';
+
+  // ══ A SENTENCE HE CANNOT READ IS NOT A TRUE SENTENCE ══════════════
+  // Live, 2026-08-19, Aire-Flo Heating. Its draft was refused twice, so the
+  // COMPOSED email shipped and this opened it:
+  //
+  //   "Phone-only intake without an automated response or after-hours capture
+  //    layer means..."
+  //
+  // Every claim in it survived the fabrication rules above, and it reads at
+  // grade 14.3. Vin's note on that batch was "language and tone of voice is not
+  // great", and this is the sentence he was reading.
+  //
+  // Eleven gates ask whether the ladder's sentences are TRUE and READABLE
+  // FINDING CHECK asks whether an owner can read them. This sentence goes into
+  // the same email, ABOVE the ladder's, and it was exempt from the readability
+  // half — which is how audit prose written for a briefing ended up as the
+  // opening line of a cold email.
+  //
+  // Same function and same ceiling as the ladder's sentences, so the two cannot
+  // diverge. A headline that fails is dropped rather than repaired: the composed
+  // email is fine without it, and a repaired sentence is a sentence nobody wrote.
+  //
+  // Placed LAST on purpose. Every rule above it drops junk silently, and running
+  // this first meant "${'$'}{injection}" was reported to the operator as a reading-grade
+  // problem — a true measurement of a string that was never prose.
+  {
+    const _faults = plainEnglishFaults(h, { trade: '', mined: '' });
+    if (_faults.length) {
+      // \u26a0 and not \u26d4. Dropping this line is a per-lead event and the email is
+      // fine without it; a build failure it is not. INSIGHT LINE CHECK runs the
+      // real function over its fixtures at boot, so this fires once on every
+      // clean start, and an operator reading a red line there would be reading a
+      // false alarm \u2014 the exact cost the Firecrawl gate line was carrying.
+      console.log(`\u26a0 INSIGHT LINE DROPPED: "${h.slice(0, 70)}" \u2014 ${_faults[0]}. That sentence would have opened the email and he would have had to re-read it. The email sends without it.`);
+      return '';
+    }
+  }
   return h.replace(/\s+/g, ' ').replace(/[.\s]+$/, '');
 };
 
@@ -14647,10 +14894,9 @@ const EMAIL_SKELETONS = [
       `${first ? first + ', ' + lower1(fact) : upper1(fact)}.${second ? ' ' + upper1(second) + '.' : ''}\n\n${reframe ? upper1(reframe) : ''}${costs ? (reframe ? ' ' : '') + endSentence(upper1(costs)) : ''}${money ? ' ' + upper1(money) : ''}\n\n${count}\n\n${cta}`,
   },
   {
-    // Cost first. Opens on his money rather than his page.
     // == THIS SKELETON CANNOT RUN WITHOUT costs =============================
-    // It opens `${first}, right now ${lower1(costs)}.` — unconditional. And
-    // composeEmail BLANKS costs whenever an insight line or a second finding
+    // It used to open `${first}, right now ${lower1(costs)}.` — unconditional.
+    // And composeEmail BLANKS costs whenever an insight line or a second finding
     // is present, so the opening sentence became the two words "Chris, right
     // now." That is the first thing the owner reads and the whole of the
     // preview text.
@@ -14660,10 +14906,35 @@ const EMAIL_SKELETONS = [
     // and it was applied to the reframe dependency only. A skeleton has to
     // declare every element it cannot render without, not just the one that
     // broke first.
+    //
+    // ══ AND THEN IT OPENED ON A SENTENCE ABOUT NOTHING ═════════════
+    // Live, 2026-08-19, Aire-Flo Heating, variant B — this skeleton:
+    //
+    //   "Aaron, right now somebody looking for exactly this is picking from the
+    //    names above you."
+    //
+    // Exactly WHAT? Which names? Both point at the finding, and the finding is
+    // in the NEXT paragraph. Every cost line in the ladder is written as the
+    // so-what that FOLLOWS the fact — that is what a cost line is — so putting
+    // one first hands the reader a pronoun with nothing behind it. Eight of the
+    // thirty cost lines break this way, including both SPENDING rungs and the
+    // outranked finding, which is one of only two with a reply behind it.
+    //
+    // The other three skeletons all open on the fact, and each was changed to do
+    // so for the same reason, recorded above: the brief's first law, Chuck
+    // Jenkins verbatim ("if they'd led with the finding instead of the review
+    // count, I'd have opened this in 30 seconds instead of almost deleting it"),
+    // and the brain path's own twelve-word gate. This was the last one that did
+    // not, and its comment defending "opens on his money rather than his page"
+    // was written before that evidence existed.
+    //
+    // So the fact goes first here too, and the cost keeps its own paragraph with
+    // the "right now" lead-in that made this skeleton distinct. Nothing is lost
+    // except a pronoun pointing at a sentence the reader has not reached yet.
     needsCosts: true,
     needsReframe: false,
     render: ({ first, fact, costs, reframe, money, count, cta, earned, insight, pattern, second }) =>
-      `${first ? first + ', ' + leadIn('right now ', costs) + lower1(costs) : (leadIn('right now ', costs) ? 'Right now ' + lower1(costs) : upper1(costs))}.${money ? ' ' + upper1(money) : ''}\n\n${upper1(fact)}. ${upper1(reframe)}\n\n${count}\n\n${cta}`,
+      `${first ? first + ', ' + lower1(fact) : upper1(fact)}.\n\n${leadIn('right now ', costs) ? 'Right now ' + lower1(costs) : upper1(costs)}.${money ? ' ' + upper1(money) : ''}${reframe ? '\n\n' + endSentence(upper1(reframe)) : ''}\n\n${count}\n\n${cta}`,
   },
   {
     // Tight. Four short paragraphs, no connective at all.
@@ -33890,6 +34161,31 @@ app.listen(PORT, () => {
       ['markup', '<script>alert(1)</script>'],
       ['a bare url', 'https://example.com/page'],
       ['not a sentence', 'a b'],
+      // — FROM THE 2026-08-19 LIVE RUN —
+      // Aire-Flo Heating. Its draft was refused twice, so the COMPOSED email
+      // shipped and this opened it:
+      //
+      //   "Phone-only intake without an automated response or after-hours
+      //    capture layer means..."
+      //
+      // Every claim in it survived the eight fabrication rules above and it
+      // reads at grade 14.3. Vin's note on that batch was "language and tone of
+      // voice is not great", and this is the sentence he was reading. The
+      // ladder's own sentences have had a readability ceiling since 2026-08-18;
+      // the one line ABOVE them in the same email did not.
+      //
+      // The fixture is the live sentence with its tail cut, and the cut matters:
+      // the full line ended "...means every enquiry waits", which the EXISTING
+      // `every (form|call|enquiry)` rule above already refuses. With the tail on,
+      // this fixture passed with the readability gate reverted — it was proving
+      // that an older rule works, not that the new one does. Falsified again with
+      // the tail removed, and it goes red as it should.
+      ['audit prose he would have to re-read', 'Phone-only intake without an automated response or after-hours capture layer'],
+      // And the shared fabrication table, which this line's private list had
+      // never read. Exactly how verifyBrainEmail came to sit eight families
+      // behind before it was wired to the same table.
+      ['a claim about WHY somebody ranks', 'They rank above you because their listing is more active'],
+      ['a claim about what his customers did next', 'Customers go quiet after the quote goes out'],
     ];
     // Every headline the brain actually produced tonight, across six businesses.
     // Every headline the brain actually produced across two days. "The work is
@@ -33913,7 +34209,7 @@ app.listen(PORT, () => {
     } else if (_blocked.length) {
       console.log(`\u26d4 INSIGHT LINE CHECK: a real headline was rejected \u2014 "${String(_blocked[0]).slice(0, 60)}". Over-blocking here removes the best sentence the brain writes.`);
     } else {
-      console.log(`\u2713 INSIGHT LINE CHECK: ${_bad.length} fabrication families are blocked from the email's first sentence, and all ${_good.length} headlines the brain actually produced still pass.`);
+      console.log(`\u2713 INSIGHT LINE CHECK: ${_bad.length} fabrication families are blocked from the email's first sentence — including every family in the shared table, which this line's private list had never read — and a sentence past the reading-grade ceiling is dropped rather than opening the email — the one \u26a0 INSIGHT LINE DROPPED line above is this check's own fixture going through the real function. All ${_good.length} headlines the brain actually produced still pass, at grades 6.2 to 7.8.`);
     }
   } catch (e) {
     console.log(`\u26d4 INSIGHT LINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
@@ -36549,7 +36845,12 @@ app.listen(PORT, () => {
     // about a function it never looked at, which is worse than not checking.
     const _rs = _src.indexOf("app.post('" + '/api/compose-email' + "'");
     const _re2 = _src.indexOf('app.post' + '(', _rs + 20);
-    const _route = _rs > -1 ? _src.slice(_rs, _re2 > -1 ? _re2 : _src.length) : '';
+    // Comments stripped before the window is measured. This scans 500 characters
+    // after each verify call for `_rankOpt`, and adding a five-line comment
+    // INSIDE one of those option objects pushed the spread past the window and
+    // reported a wire that is plainly there as missing. A comment is never the
+    // wire, and a check a comment can break is a check that ends up muted.
+    const _route = _rs > -1 ? _src.slice(_rs, _re2 > -1 ? _re2 : _src.length).replace(/^\s*\/\/.*$/gm, '') : '';
     if (!_route) {
       _fails.push('the compose route could not be located in the source, so the wiring was not checked');
     } else {
@@ -36689,26 +36990,38 @@ app.listen(PORT, () => {
   // draft came back as the composed email with the punctuation tidied. That is
   // the flatness, and it was in the instructions rather than in the model.
   //
-  // Source-read, because the failure is a sentence in a prompt: no behaviour
-  // changes, no log moves, and the only evidence is the emails all sounding
-  // alike, which takes a batch to see.
+  // ══ IT USED TO READ THE SOURCE, AND THE SOURCE MOVED ════════════
+  // This sliced the file from `const writeEmailWithBrain` to `const
+  // NUMBER_TOKENS` and grepped the text. When the brief was lifted into its own
+  // function so a check could execute it, that slice became the six-line API
+  // wrapper and this reported three instructions as deleted that are all still
+  // there. A check reading source is a check measuring where the code lives.
+  //
+  // It builds the real brief now and reads what the MODEL receives, which also
+  // makes the assertions stronger: "_spineFigs exists as an identifier" became
+  // "the spine's figures are printed in the text", which is the thing that
+  // actually matters.
   try {
-    const _src = selfSource();
-    const _i = _src.indexOf('const writeEmailWithBrain');
-    const _j = _src.indexOf('const NUMBER_TOKENS', _i);
-    // Comments stripped. The comments in that function QUOTE the instructions
-    // that were removed — explaining what the brief used to say and why — so
-    // reading them as live text reports every removed instruction as still
-    // present. The question this check asks is what the MODEL receives, and the
-    // model never receives a comment.
-    const _fn = (_i > -1 && _j > -1) ? _src.slice(_i, _j).replace(/^\s*\/\/.*$/gm, '') : '';
     const _fails = [];
-    if (!_fn) _fails.push('writeEmailWithBrain could not be located in the source');
+    const _bp = {
+      first: 'Kurt',
+      spine: 'their Google reviews have slowed — 6 in the last 90 days, against 10 in the 90 days before that',
+      figures: ['6', '10', '90'], earned: '', pattern: '', reframe: '', money: '', count: '',
+      cta: 'Want me to send the rest of what we found?', second: '', blind: '',
+      trade: 'orthodontist', tenure: null, situationRead: '', evidence: {},
+      bindingLayer: '', bindingWhy: '', acquisitionIsReferral: false, purchaseUrgency: '',
+    };
+    const _fn = buildWriterBrief(_bp, 'Kavanaugh Orthodontics');
+    if (!_fn) _fails.push('the writer brief came back empty');
     else {
       if (/use close to verbatim/i.test(_fn)) _fails.push('the ask is still handed over as "use close to verbatim", which makes the last sentence of every email one of nine fixed questions');
       if (/you may not change what it claims/i.test(_fn)) _fails.push('the brief still says the supplied sentence may only be re-read, not rewritten');
       if (!/IN YOUR OWN WORDS/.test(_fn)) _fails.push('the brief no longer tells the writer the fact must survive in its OWN words, so nothing replaces the instruction that was removed');
-      if (!/_spineFigs/.test(_fn)) _fails.push('the figures that must survive are not named, so releasing the wording releases the numbers with it \u2014 that is the one thing that may never move');
+      for (const _f of ['6', '10', '90']) {
+        if (!new RegExp(`must appear exactly as written:[^\\n]*\\b${_f}\\b`).test(_fn)) {
+          _fails.push(`the figure ${_f} from the spine is not named as one that must survive, so releasing the wording releases the numbers with it — that is the one thing that may never move`);
+        }
+      }
       if (!/NEVER ask for a call/.test(_fn)) _fails.push('the ask is released without the boundary that replaces it');
     }
     if (_fails.length) {
@@ -37815,6 +38128,129 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ HIDDEN RULE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE WRITER WAS JUDGED ON THIRTEEN RULES AND TOLD ABOUT THREE ═══════
+  // Live, 2026-08-19. Aire-Flo Heating: BRAIN DRAFT REJECTED for RANKING
+  // CAUSATION, REWRITE ALSO REJECTED for OWNER SELF-LOOKUP CLAIM. Big Ben's Tree
+  // Service: first draft refused for a five-sentence paragraph, then the rewrite
+  // invented the figure "40". Three of the four refusals name a rule that
+  // appeared in neither prompt, and the fourth is a number the rewrite was told
+  // to avoid without being shown which numbers were allowed.
+  //
+  // Every one of those leads then shipped the flat composed template, which is
+  // the output that has been called garbage every time it has been seen. So this
+  // is not a fussy consistency check: the model getting two attempts at rules it
+  // was never given IS the email-quality problem on those leads.
+  //
+  // It is the same disease HIDDEN RULE CHECK above was built for, one table over,
+  // and the fix is the same shape: the briefs are GENERATED from the gate. This
+  // check executes both real brief builders — not a regex over the source, which
+  // is the guard that passed on the run that lost every image on a lead.
+  try {
+    const _fails = [];
+    const _p = {
+      first: 'Kurt',
+      spine: 'their Google reviews have slowed — 6 in the last 90 days, against 10 in the 90 days before that',
+      figures: ['6', '10', '90'],
+      earned: '', pattern: '', reframe: '', money: '', count: '', second: '', blind: '',
+      cta: 'Want me to send the rest of what we found?',
+      trade: 'orthodontist', tenure: null, situationRead: '', evidence: {},
+      bindingLayer: '', bindingWhy: '', acquisitionIsReferral: false, purchaseUrgency: '',
+    };
+    const _writer = buildWriterBrief(_p, 'Kavanaugh Orthodontics');
+    const _rewrite = buildRewriteBrief(_p, 'Kurt, six reviews came in over the last ninety days.\n\nThat is the gap.\n\nHad you seen it?', 'a paragraph of 5 sentences');
+
+    // ── 1. EVERY FAMILY THE GATE REFUSES IS NAMED IN BOTH BRIEFS ──────────
+    // Derived here by reading the leading run of capitals off each row, which is
+    // a DIFFERENT parser from the one claimFamilyBrief uses on purpose: if the
+    // generator's parser breaks, the two disagree and this goes red. A check that
+    // shares its subject's logic cannot fail when that logic is wrong.
+    const _fams = new Set();
+    for (const row of BACKEND_CLAIM_PATTERNS) {
+      const m = String(row[1] || '').match(/^[A-Z][A-Z]+(?: [A-Z]+)*/);
+      if (m) _fams.add(m[0].trim());
+    }
+    if (_fams.size < 10) _fails.push(`only ${_fams.size} families could be read out of ${BACKEND_CLAIM_PATTERNS.length} rows — the rejection messages have changed shape and the disclosure is reading the wrong thing`);
+    for (const f of _fams) {
+      if (!_writer.includes(f)) _fails.push(`the gate refuses "${f}" and the WRITER's brief never names it — a draft can be discarded for a rule it was never given, and both attempts then fail the same way`);
+      if (!_rewrite.includes(f)) _fails.push(`the gate refuses "${f}" and the REWRITE prompt never names it`);
+    }
+    // And the wire itself: the generated block appears verbatim in both, so a
+    // future edit cannot quietly replace it with a hand-written summary.
+    const _gen = claimFamilyBrief();
+    if (!_writer.includes(_gen)) _fails.push('the writer brief no longer interpolates the generated list — it has gone back to a hand-written summary, which is how the two came to disagree in the first place');
+    if (!_rewrite.includes(_gen)) _fails.push('the rewrite prompt no longer interpolates the generated list');
+
+    // ── 2. THE SAMPLES ARE DELIBERATELY NOT DISCLOSED ─────────────────────
+    // Each row carries the live sentence that produced it. Those are not shown to
+    // the writer: the brief's POSITIVE examples have come back as copy word for
+    // word in live sends, which is why exemplarLeak exists, and there is no
+    // reason to think a negative example primes any less.
+    for (const row of BACKEND_CLAIM_PATTERNS) {
+      const s = String(row[2] || '');
+      if (s.length > 20 && (_writer.includes(s) || _rewrite.includes(s))) {
+        _fails.push(`the banned sample "${s.slice(0, 40)}" is now printed in a brief — the writer has been handed a sentence to copy`);
+      }
+    }
+
+    // ── 3. THE REWRITE MUST BE SHOWN THE NUMBERS IT MAY USE ───────────────
+    // "REWRITE ALSO REJECTED: contains 1 figure(s) we never measured — 40",
+    // Big Ben's, live. The prompt said "every number must be one we measured" and
+    // listed none of them.
+    const _allowed = [...permittedFigures({ figures: _p.figures, spine: _p.spine })];
+    for (const n of _allowed) {
+      if (!new RegExp(`(?:^|[^0-9])${n}(?:[^0-9]|$)`).test(_rewrite)) {
+        _fails.push(`the rewrite prompt never shows the permitted figure ${n}, so the second attempt is still guessing which numbers are real`);
+      }
+    }
+    if (!/THE ONLY NUMBERS THIS EMAIL MAY CONTAIN/.test(_rewrite)) _fails.push('the rewrite prompt no longer names the permitted-figure list at all');
+    // A lead with nothing numeric must say so rather than print an empty heading,
+    // which reads as "there are none" only by accident.
+    const _noFigs = buildRewriteBrief({ spine: 'they publish no prices anywhere on the site', cta: 'Had you seen that?' }, 'draft', 'why');
+    if (!/NO NUMBERS AT ALL/.test(_noFigs)) _fails.push('a lead with no measured figure gets an empty permitted-numbers heading instead of being told there are none');
+
+    // ── 4. THE OPENING TOKENS, SAME SOURCE AS THE GATE ────────────────────
+    const _tok = openingTokens(_p.spine, _p.figures);
+    if (_tok.all.length >= 3 && !_tok.all.slice(0, 12).every(t => _rewrite.includes(t))) {
+      _fails.push('the rewrite prompt does not carry the twelve-word opening tokens, so the second attempt can fail the opening rule it was never shown — exactly what killed four leads before the writer brief was given the same list');
+    }
+
+    // ── 5. THE SHAPE LIMITS MUST BE THE GATE'S OWN NUMBERS ────────────────
+    // The old prompt said "50-90 words" against a gate that refuses under 25 and
+    // over 150, so every rewrite was told to cut a correctly-sized email in half
+    // on the one path whose job is to rescue it.
+    if (/50-90 words/.test(_rewrite)) _fails.push('the rewrite prompt still asks for 50-90 words, which is neither the gate’s range nor the writer’s target');
+    for (const [n, what] of [[EMAIL_WORD_CEILING, 'the word ceiling'], [EMAIL_WORD_FLOOR, 'the word floor'],
+      [EMAIL_SENTENCE_MAX_WORDS, 'the sentence limit'], [EMAIL_PARA_MAX_SENTENCES, 'the paragraph limit'],
+      [EMAIL_OPEN_PARA_MAX_WORDS, 'the opening-paragraph limit']]) {
+      if (!new RegExp(`(?:^|[^0-9])${n}(?:[^0-9]|$)`).test(_rewrite)) _fails.push(`the rewrite prompt never states ${what} (${n}) that the gate enforces`);
+    }
+    // And the constants really are what the gate tests, so the numbers printed
+    // above are not decoration.
+    const _mk = (n) => 'Kurt, ' + Array.from({ length: n - 1 }, () => 'word').join(' ') + '.';
+    const _over = verifyBrainEmail(_mk(EMAIL_WORD_CEILING + 1), { spine: _p.spine, figures: _p.figures });
+    if (_over.ok || !new RegExp(`^${EMAIL_WORD_CEILING + 1} words`).test(String(_over.why))) {
+      _fails.push(`a draft of ${EMAIL_WORD_CEILING + 1} words was not refused for its length — the constant in the prompt is not the number the gate uses`);
+    }
+    const _under = verifyBrainEmail(_mk(EMAIL_WORD_FLOOR - 1), { spine: _p.spine, figures: _p.figures });
+    if (_under.ok || !new RegExp(`^${EMAIL_WORD_FLOOR - 1} words`).test(String(_under.why))) {
+      _fails.push(`a draft of ${EMAIL_WORD_FLOOR - 1} words was not refused for its length`);
+    }
+
+    // ── 6. THE VOCABULARY RULE, IN THE REWRITE TOO ────────────────────────
+    // The rewrite prompt restated no vocabulary rule at all, so a draft refused
+    // for "impressions" could only fail the same way on its second attempt.
+    for (const t of EMAIL_JARGON_TERMS) {
+      if (!_rewrite.includes(t)) _fails.push(`the gate bans "${t}" and the rewrite prompt never tells the writer`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ WRITER RULE DISCLOSURE CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ WRITER RULE DISCLOSURE CHECK: all ${_fams.size} families the fact-checker refuses are named in the writer's brief AND in the rewrite prompt, both generated from the table rather than written beside it, and none of the ${BACKEND_CLAIM_PATTERNS.length} banned sample sentences is handed over as something to copy. The rewrite now carries the finding, the ask, the ${_allowed.length} permitted figures, the twelve-word opening tokens, all ${EMAIL_JARGON_TERMS.length} banned terms and the gate's own shape limits — it used to receive the draft and one sentence, which is how "40" reached Big Ben's second attempt and how RANKING CAUSATION took both of Aire-Flo's.`);
+    }
+  } catch (e) {
+    console.log(`⛔ WRITER RULE DISCLOSURE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
   // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
@@ -40507,7 +40943,16 @@ app.listen(PORT, () => {
     //
     // Built with the same settings so the assertions below still test the real
     // configuration, just not the real queue.
-    const _gate = makeFcGate({ concurrency: FC_CONCURRENCY, minGapMs: FC_MIN_GAP_MS });
+    // onStart records the moment the gate RELEASES each job. _starts, below,
+    // records the moment each job's body runs — one microtask later, and on a
+    // loaded boot that lag reached a quarter of a second. Spacing is asserted on
+    // the first; concurrency is asserted on the second, which is correct, because
+    // how many are in flight is a property of the bodies.
+    const _dispatch = [];
+    const _gate = makeFcGate({
+      concurrency: FC_CONCURRENCY, minGapMs: FC_MIN_GAP_MS,
+      onStart: (t) => _dispatch.push(t),
+    });
     const _job = (ms, boom) => async () => {
       _live++; _peak = Math.max(_peak, _live); _starts.push(Date.now());
       await new Promise(r => setTimeout(r, ms));
@@ -40541,19 +40986,20 @@ app.listen(PORT, () => {
     if (_peak > FC_CONCURRENCY) _fails.push(`${_peak} calls were in flight against a cap of ${FC_CONCURRENCY} — the burst that made Firecrawl refuse two leads is back`);
     if (FC_CONCURRENCY > 5) _fails.push(`FC_CONCURRENCY is ${FC_CONCURRENCY}; Firecrawl serves 2 concurrent browsers on Free and 5 on Hobby, so this fans out past what the plan can answer`);
     if (_peak > 5) _fails.push(`${_peak} calls were in flight — past every plan's concurrent-browser cap regardless of configuration`);
-    // ── WHAT IS MEASURED HERE IS NOT WHAT THE GATE CONTROLS ────────────────
-    // The gate spaces the moment it RELEASES a call; this array records the
-    // moment the call's body RUNS, one microtask later. Under a busy event loop
-    // — and boot is the busiest this process ever gets — that lag is real: the
-    // first observed gap came in at 310ms against a 350ms setting while every
-    // later one was exactly 350. The gate was correct and the ruler was wrong.
+    // ── SPACING, MEASURED WHERE THE GATE ACTUALLY CONTROLS IT ──────────────
+    // _dispatch is written by the gate at the moment it releases each job, so
+    // this is the interval the gate promises rather than the interval the event
+    // loop happened to deliver. That is what lets the floor be the exact setting
+    // with no tolerance — and the tolerance was the bug: 20% of slack still fired
+    // on a correct gate on the deployed instance, because the first body was
+    // starved 255ms while the second was not.
     //
-    // The lag can only ever make requests FURTHER apart in wall-clock terms, so
-    // 20% of tolerance costs nothing and keeps the assertion meaningful: a
-    // genuine spacing failure is a fan-out firing several calls in the same
-    // millisecond, which is two orders of magnitude past this.
-    const _gaps = _starts.slice(1).map((s, i) => s - _starts[i]);
-    const _floor = Math.round(FC_MIN_GAP_MS * 0.8);
+    // Falsified by building the probe gate with minGapMs: 0 — gaps collapse to
+    // single-digit milliseconds and this goes red, which is the burst it exists
+    // to catch.
+    const _gaps = _dispatch.slice(1).map((s, i) => s - _dispatch[i]);
+    const _floor = FC_MIN_GAP_MS;
+    if (_dispatch.length !== 10) _fails.push(`the gate reported ${_dispatch.length} dispatches for 10 jobs — the spacing measurement has nothing to read`);
     const _tooClose = _gaps.filter(g => g < _floor).length;
     if (_tooClose) _fails.push(`${_tooClose} start(s) came less than ${_floor}ms after the one before — gaps were [${_gaps.join(', ')}] — the spacing that keeps a fan-out from becoming a burst is not holding`);
     // The slot must survive the throws: if a rejection leaked a slot, this hangs
@@ -40566,7 +41012,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ FIRECRAWL GATE CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FIRECRAWL GATE CHECK: 10 calls through the real gate with 2 of them throwing — never more than ${FC_CONCURRENCY} in flight, every start at least ${_floor}ms after the last (the ${FC_MIN_GAP_MS}ms setting, less the microtask the body waits on), both throws returned to their caller, and the gate still accepts work afterwards. It ran in ${Date.now() - _t0}ms against ~${10 * 30 + 10 * FC_MIN_GAP_MS}ms strictly serial, which is the 350s-per-lead this replaced.`);
+      console.log(`✓ FIRECRAWL GATE CHECK: 10 calls through the real gate with 2 of them throwing — never more than ${FC_CONCURRENCY} in flight, every release at least the full ${_floor}ms after the last as the gate itself timed them, both throws returned to their caller, and the gate still accepts work afterwards. It ran in ${Date.now() - _t0}ms against ~${10 * 30 + 10 * FC_MIN_GAP_MS}ms strictly serial, which is the 350s-per-lead this replaced.`);
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -40685,11 +41131,20 @@ app.listen(PORT, () => {
       _fails.push('the strongest true blind line in the ladder is refused by its own gate');
     }
     // THE WIRE. Computed and not delivered is the way this fails silently.
+    // Built rather than grepped: this used to slice the source between two
+    // declarations, and when the brief moved into its own function the slice
+    // stopped containing the brief. It now asserts the blind LINE ITSELF reaches
+    // the text the model receives, which the old version could not tell.
     const _src = selfSource();
-    const _fnI = _src.indexOf('const writeEmailWithBrain');
-    const _fnJ = _src.indexOf('const NUMBER_TOKENS', _fnI);
-    const _fn = (_fnI > -1 && _fnJ > -1) ? _src.slice(_fnI, _fnJ).replace(/^\s*\/\/.*$/gm, '') : '';
+    const _fn = buildWriterBrief({
+      first: 'Kurt', spine: 'their reviews have slowed', figures: ['6'],
+      blind: 'reviews still arrive, so nothing looks broken', cta: 'Had you seen that?',
+      earned: '', pattern: '', reframe: '', money: '', count: '', second: '',
+      trade: 'orthodontist', tenure: null, situationRead: '', evidence: {},
+      bindingLayer: '', bindingWhy: '', acquisitionIsReferral: false, purchaseUrgency: '',
+    }, 'Kavanaugh Orthodontics');
     if (!/WHY HE HAS NOT ALREADY SEEN THIS/.test(_fn)) _fails.push('the writer prompt never mentions it, so the line is computed and thrown away');
+    if (!_fn.includes('reviews still arrive, so nothing looks broken')) _fails.push('the writer prompt carries the heading but not the line under it — the field is announced and its value dropped');
     const _rsN = "app.post('" + '/api/compose-email' + "'";
     const _rs = _src.indexOf(_rsN);
     const _reNext = _src.indexOf('app.post' + '(', _rs + 20);
@@ -42979,6 +43434,18 @@ app.post('/api/compose-email', async (req, res) => {
           rankScanned: Number.isFinite(Number(r.scanned)) ? Number(r.scanned) : null,
         };
       })();
+      // ══ DECLARED OUT HERE BECAUSE TWO SEPARATE BLOCKS READ THEM ══════
+      // The first version of this fix declared both inside the `if` below and
+      // scopecheck.js refused the build: the prospect-simulator rewrite, three
+      // hundred lines down, is a different block and the binding had already
+      // closed. That is the "line order is not scope" class this file has been
+      // caught by twice, and the tool exists because of it.
+      //
+      // Seeded with the spine and the figures rather than left empty, so the one
+      // path that skips the writer entirely — no API key, or no spine — still
+      // hands a rewrite the finding it must keep and the numbers it may use.
+      let _evAssert = '';
+      let _brief = { ..._parts, spine: _spineTxt, figures: _figs };
       try {
         if (req.body.apiKey && _spineTxt) {
           // ══ THE WRITER GETS WHAT THE AUDIT BRAIN KNEW ═══════════════════
@@ -43054,7 +43521,18 @@ app.post('/api/compose-email', async (req, res) => {
               // judgement about what their copy does, anchored on copy we read.
               marketClarity: audit.marketClarity || null,
           };
-          const _written = await writeEmailWithBrain({
+          // ══ ONE BRIEF OBJECT, READ BY BOTH STAGES ════════════════════════
+          // This used to be an inline literal handed to the writer, and the
+          // rewrite below was handed `_parts` instead — a different object
+          // that carries no spine and no figures. So the second attempt could
+          // not be told the finding it had to keep or the numbers it was
+          // allowed to use, which is how "40" reached a rewrite on Big Ben's
+          // and burned that lead's last attempt.
+          //
+          // The recorded disease in this file is a value computed in one place
+          // and not passed to another. Two stages reading ONE object is the
+          // only shape that cannot have that bug.
+          _brief = {
             first: _parts.first || '', spine: _spineTxt, earned: _parts.earned || '',
             pattern: _parts.pattern || '', reframe: _parts.reframe || '',
             money: _parts.money || '', count: _parts.count || '', cta: _parts.cta || '',
@@ -43080,11 +43558,12 @@ app.post('/api/compose-email', async (req, res) => {
             bindingLayer: (audit.growthConstraint && audit.growthConstraint.layer)
               || (audit._persisted && audit._persisted.growthConstraint && audit._persisted.growthConstraint.layer) || '',
             bindingWhy: (audit.growthConstraint && audit.growthConstraint.condition) || '',
-          }, req.body.apiKey, company);
+          };
+          const _written = await writeEmailWithBrain(_brief, req.body.apiKey, company);
           // The exact assertable lines the writer's brief contained — derived
           // from the same evidence object, so the brief and the allowlist are
           // one list read twice rather than two lists maintained apart.
-          const _evAssert = (() => {
+          _evAssert = (() => {
             try { return (buildEmailEvidence(_evidence).assertable || []).join(' '); }
             catch (e) { return ''; }
           })();
@@ -43152,7 +43631,13 @@ app.post('/api/compose-email', async (req, res) => {
             // passing one; it cannot lower the floor.
             let _fixed = null, _retryWhy = null;
             try {
-              const _r2 = await rewriteEmailWithBrain(_parts, req.body.apiKey, company, _written, _v.why);
+              // The SAME object the writer was handed, plus the assertable
+              // lines — so the second attempt is judged on the permitted
+              // figures it can now see, rather than on a list it was never
+              // shown. `_parts` used to be passed here and carries neither.
+              const _r2 = await rewriteEmailWithBrain(
+                { ..._brief, evidenceAssert: _evAssert },
+                req.body.apiKey, company, _written, _v.why);
               if (_r2) {
                 const _v2 = verifyBrainEmail(_r2, {
                   spine: _spineTxt, figures: _figs, money: _parts.money || '',
@@ -43258,7 +43743,7 @@ app.post('/api/compose-email', async (req, res) => {
                   console.log(`⚠ SIM INVENTED A FACT [${company}]: the simulator's "what would have got a reply" contained something concrete — "${String(_sim.wouldReply).slice(0, 90)}" — and it holds no measurements at all, so that could only have been invented. It has NOT been passed to the writer. On Glenn Layton this exact path put "you're on page two for that search" into a live email against a measured rank of #3.`);
                 }
                 const _r3 = await rewriteEmailWithBrain(
-                  _parts, req.body.apiKey, company, _send.body,
+                  { ..._brief, evidenceAssert: _evAssert }, req.body.apiKey, company, _send.body,
                   `The owner read this and deleted it. His first thought: "${_why}" That is his opinion of THE EMAIL. He was shown nothing else, so it tells you what he did not care about and nothing whatsoever about his business — do not treat any part of it as information about him. Fix that objection using ONLY the facts you were already given: do not add a new claim, a new number or a new finding to answer it.${_wantHarm ? ` Of the findings you were already given, this is the one closest to what he says he would have answered — lead on it, in your own words: "${_wantHarm}"` : ` If his objection is that the finding does not apply to how he gets customers, lead on a different measured finding you were given instead.`}`
                 );
                 if (_r3) {
@@ -43266,6 +43751,12 @@ app.post('/api/compose-email', async (req, res) => {
                     spine: _spineTxt, figures: _figs, money: _parts.money || '',
                     earned: _parts.earned || '', count: _parts.count || '',
                     trade: (audit.measuredNumbers && audit.measuredNumbers.tradeWord) || '',
+                    // Missing here and present at the two gates above it, so a
+                    // figure the writer's own ASSERT block invited it to use
+                    // passed twice and was refused on the third pass. Three
+                    // copies of one allowlist, and this was the copy that had
+                    // drifted.
+                    evidenceAssert: _evAssert,
                     ..._rankOpt,
                   });
                   if (_v3.ok) {
