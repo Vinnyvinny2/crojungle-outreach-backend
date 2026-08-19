@@ -235,8 +235,21 @@ const INVARIANTS = [
   console.log('');
   console.log(`  ${N} synthetic leads -> ${composed} emails composed, ${blocked} correctly blocked, ${threw} request errors`);
   console.log('');
-  if (!fails.size) {
-    console.log('  ✓ every invariant held across every email');
+  // ══ IT SAID EVERY INVARIANT HELD OVER ZERO EMAILS ═══════════════════════
+  // Live, 2026-08-18: a stale server on the port meant all 500 requests failed,
+  // 0 emails were composed, and this printed "✓ every invariant held across
+  // every email" — because no email had violated anything. Vacuously true and
+  // completely misleading, on the exact run being used to clear a change.
+  // CLAUDE.md already names this class ("a test harness that lies") and this is
+  // the harness doing it about itself. An empty pass is a failure.
+  if (threw > N / 10) {
+    console.log(`  ⛔ HARNESS FAILED: ${threw} of ${N} requests errored — the server under test was not answering, so nothing below was measured. Check for a stale process on port ${PORT}.`);
+    process.exitCode = 1;
+  } else if (!composed) {
+    console.log('  ⛔ HARNESS FAILED: 0 emails were composed, so "no invariant was violated" means nothing was tested.');
+    process.exitCode = 1;
+  } else if (!fails.size) {
+    console.log(`  ✓ every invariant held across all ${composed} emails`);
   } else {
     console.log(`  ${fails.size} INVARIANT(S) VIOLATED:`);
     for (const [name, f] of [...fails].sort((a, b) => b[1].count - a[1].count)) {

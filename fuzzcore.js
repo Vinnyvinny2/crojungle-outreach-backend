@@ -19,7 +19,8 @@ let src = fs.readFileSync(__dirname + '/server.js', 'utf8');
 src += `\nmodule.exports.__probe = { HARM_LADDER, HARM_LADDER_LAYER, URGENCY_ADJUST,
   purchaseUrgency, resolveBusinessModel, rankHarms, buildFactualSpine,
   verifyBrainEmail, insightLine, patternLineSafe, resolveMeasurements,
-  parseProspectVerdict, factCheckFlagReachesProspect, greetingName, toSecondPerson };\n`;
+  parseProspectVerdict, factCheckFlagReachesProspect, greetingName, toSecondPerson,
+  INTERNAL_ONLY_RUNGS };\n`;
 fs.writeFileSync(__dirname + '/.probe.js', src);
 const P = require(__dirname + '/.probe.js').__probe;
 
@@ -289,6 +290,17 @@ console.log(`\n  Fuzzing ${N.toLocaleString()} cases per gate.\n`);
   const rungs = P.HARM_LADDER;
   let checked = 0;
   for (const h of rungs) {
+    // ══ A RUNG THAT CANNOT REACH AN EMAIL CANNOT BE JUDGED BY THE EMAIL ══
+    // From 2026-08-18 the seven review-metric rungs are INTERNAL_ONLY_RUNGS:
+    // measured, ranked, written into the audit and the call sheet, and never
+    // sent. verifyBrainEmail now refuses a body that names his reviews unless
+    // the code put the word there, which is the point of that guard — and it
+    // means low_rating's "people filter by rating before they read a single
+    // word" is correctly refused by a gate it can never be put in front of.
+    // Judging it here would report a bug that cannot happen, and this harness
+    // has already produced two false failures by wrapping rung text in
+    // conditions production never creates.
+    if (P.INTERNAL_ONLY_RUNGS && P.INTERNAL_ONLY_RUNGS[h.id]) continue;
     for (const field of ['costs', 'reframe']) {
       const t = h[field];
       if (typeof t !== 'string' || !t) continue;

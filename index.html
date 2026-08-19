@@ -3332,6 +3332,19 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
     placeholder: 'e.g. SaaS'
   })), React.createElement('div', null, React.createElement('label', {
     className: 'lbl'
+  }, 'City / Location'), React.createElement('input', {
+    className: 'input',
+    value: form.location,
+    onChange: e => setForm(p => ({
+      ...p,
+      location: e.target.value
+    })),
+    placeholder: 'e.g. Tampa, FL'
+  }), React.createElement('div', {
+    className: 'hint',
+    style: { fontSize: '11px', opacity: .6, marginTop: '4px' }
+  }, 'Needed for the search-rank check. Without a city we cannot measure where they come up, and every search-visibility finding is skipped.')), React.createElement('div', null, React.createElement('label', {
+    className: 'lbl'
   }, 'Founder Name'), React.createElement('input', {
     className: 'input',
     value: form.founderName,
