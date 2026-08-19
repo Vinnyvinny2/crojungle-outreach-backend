@@ -8558,6 +8558,27 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
 // EVERY FIELD HERE IS MEASURED, not inferred. We are reading their actual public
 // profile. That is the distinction that has been missing: this is revenue-critical
 // AND verifiable, which is exactly the combination the audit needs more of.
+// ══ WHERE TO SEARCH, WHEN THE LEAD DOES NOT SAY ════════════════════════════
+// checkLocalRank builds "<trade> in <city>" and refuses outright without a
+// city. David Long Electrical Contractor, live 2026-08-19, carried no location
+// string — so it refused, and the entire search-visibility half of the ladder
+// went dark on him: absent_from_search, outranked_by_weaker,
+// service_invisibility, coverage_gap. That is the half every reply this system
+// has ever earned came from, and his email opened on a booking form instead.
+// The audit in the same run called him "a Charlotte, North Carolina
+// electrician", read off his own homepage. We knew. Nothing told the searcher.
+//
+// Their Google Place record is the authoritative answer and we fetch it on
+// every lead anyway. The lead's own location still wins when it has one: that
+// is what the operator typed, and an operator naming a service area we should
+// search is a decision, not a gap.
+//
+// A function rather than a variable because two call sites need it and they sit
+// in different blocks — scopecheck refused the first version for exactly that,
+// which is the "line order is not scope" class CLAUDE.md PART 6 records.
+const rankLocationFrom = (leadLocation, gbp) =>
+  String(leadLocation || '').trim() || String((gbp && gbp.formattedAddress) || '').trim();
+
 const fetchGBPHealth = async (placeId, placesKey) => {
   if (!placeId || !placesKey) return null;
   try {
@@ -8569,6 +8590,24 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       // from geocoding a town name. The local-rank check needs it to prove a
       // search landed in their market - see the WRONG TOWN guard.
       'location',
+      // ══ THE CITY, WHICH WE HAD THE COORDINATES FOR AND NOT THE NAME ═══
+      // David Long Electrical Contractor, live 2026-08-19:
+      //   "LOCAL RANK: skipped — no city could be parsed from the location"
+      // His lead carried no location string, so the rank search could not be
+      // built and the ENTIRE search-visibility half of the ladder went dark on
+      // him — absent_from_search, outranked_by_weaker, service_invisibility,
+      // coverage_gap, all of it. Every reply this system has ever earned came
+      // from that half. Meanwhile the audit two lines below described him
+      // correctly as "a Charlotte, North Carolina electrician", because the
+      // brain had read it off his own homepage.
+      //
+      // We were already asking this Place record for its coordinates. The
+      // ADDRESS was one word away in the same field mask, on a call we make on
+      // every lead anyway, and it is the authoritative answer — their own
+      // record rather than a geocode of a town name. formattedAddress is a
+      // basic-tier field and this mask already requests reviews, so it changes
+      // nothing about what the call costs.
+      'formattedAddress',
       'editorialSummary','googleMapsUri','reviewSummary','reviews'
     ].join(',');
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
@@ -8638,6 +8677,10 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       hasDescription: !!d.editorialSummary,
       status: d.businessStatus || null,
       mapsUri: d.googleMapsUri || null,
+      // Where Google says they are. Read by the rank check when the lead itself
+      // carries no location, which is what silenced David Long's whole
+      // visibility half.
+      formattedAddress: d.formattedAddress || '',
       // The phone has been requested in the field mask all along and thrown away
       // on every single lead. It is the number Google shows on their listing \u2014
       // the most authoritative one that exists, and free with a call we already
@@ -27004,6 +27047,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // The sitemap is already cached from the owner/email passes, so re-asking
         // for it costs nothing and hands us their own service list as keywords.
         try { _siteUrls = await firecrawlMap(firecrawlKey, website); } catch {}
+        // ══ A LEAD WITH NO LOCATION LOST ITS WHOLE VISIBILITY HALF ═══════
+        // checkLocalRank builds "<trade> in <city>" and refuses without a city.
+        // David Long Electrical Contractor carried no location string, live on
+        // 2026-08-19, so it refused — and with it went absent_from_search,
+        // outranked_by_weaker, service_invisibility and coverage_gap, the half
+        // of the ladder every reply this system has ever earned came from. His
+        // email opened on a booking form instead. Two lines below in the same
+        // run, the audit described him correctly as "a Charlotte, North
+        // Carolina electrician", because the brain had read it off his homepage.
+        //
+        // Their own Google Place record says where they are, we already fetch it
+        // on every lead, and it lands well before this line. This is not a
+        // guess: it is the most authoritative address available, more so than
+        // whatever is on the lead. The lead's own location still wins when it
+        // has one, because that is what the operator typed.
+        const _rankLocation = rankLocationFrom(req.body.location, gbpHealth);
+        if (!String(req.body.location || '').trim() && _rankLocation) {
+          console.log(`\u{1F4CD} LOCATION RECOVERED [${company}]: the lead carried no location, so the rank searches use the address on their own Google listing \u2014 "${_rankLocation}". Without this the whole search-visibility half of the ladder goes dark on this lead.`);
+        }
         const lv = await auditLocalVisibility({
           companyName: company, placeId: effectivePlaceId, website,
           // ── USE THE TRADE WE ALREADY READ ────────────────────────────
@@ -27053,7 +27115,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // job-board lanes, where the Ram Jack failure lives.
           industry: customerTrade || verifiedIndustry
             || (discoverySource === 'google_places' ? String(req.body.industry || '').trim() : ''),
-          location: req.body.location || '',
+          location: _rankLocation,
           placesKey, sitemapUrls: _siteUrls,
           // Their OWN coordinates, read off their Google Place record by
           // fetchGBPHealth on this same lead. Without these, both protections
@@ -27225,7 +27287,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const lv2 = await auditLocalVisibility({
           companyName: company, placeId: effectivePlaceId, website,
           industry: _trade,
-          location: req.body.location || '',
+          // Recomputed rather than carried: the first call site is inside a
+          // block that has closed by here, and scopecheck caught exactly that
+          // when this was one const. One function, two call sites, no wire to
+          // leave stale — which is the shape this file already uses for every
+          // value two paths need.
+          location: rankLocationFrom(req.body.location, gbpHealth),
           // ── STILL ZERO COST, BUT NO LONGER ZERO SITEMAP ──────────────────
           // The note above is right that MAPPING here would add a Firecrawl call
           // on leads that skipped the deep audit, and that decision stands. But
@@ -38612,6 +38679,53 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ READABLE FINDING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A LEAD WITH NO LOCATION MUST STILL GET ITS RANK SEARCHES ════════════
+  // The half of the ladder every reply came from was silenced on a live lead
+  // because one string was empty. The helper is CALLED here, and the wire is
+  // read from source, because computing a value and not delivering it is the
+  // bug class that has eaten more work in this file than any other.
+  try {
+    const _fails = [];
+    const _gbp = { formattedAddress: '2320 Distribution St, Charlotte, NC 28203, USA' };
+    if (rankLocationFrom('', _gbp) !== '2320 Distribution St, Charlotte, NC 28203, USA') {
+      _fails.push('a lead with no location does not fall back to the address on their own Google listing, so every search-visibility rung stays dark on it');
+    }
+    if (rankLocationFrom('Dallas, TX', _gbp) !== 'Dallas, TX') {
+      _fails.push('the Google listing address overrides a location the operator typed — an operator naming a service area is a decision, not a gap');
+    }
+    if (rankLocationFrom('   ', _gbp) !== '2320 Distribution St, Charlotte, NC 28203, USA') {
+      _fails.push('a whitespace-only location is treated as a real one');
+    }
+    if (rankLocationFrom('', null) !== '' || rankLocationFrom('', {}) !== '') {
+      _fails.push('a missing Google record invents a location rather than returning nothing');
+    }
+    // And the recovered address must actually produce a searchable city, or the
+    // fallback is decorative: checkLocalRank refuses anything it cannot parse.
+    {
+      const _parts = '2320 Distribution St, Charlotte, NC 28203, USA'.split(',').map(x => x.trim())
+        .filter(Boolean).filter(x => !/^(usa|united states|us)$/i.test(x));
+      const _stIdx = _parts.findIndex(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x) || /^[A-Z]{2}$/.test(x));
+      if (!(_stIdx > 0 && /Charlotte/.test(_parts[_stIdx - 1]))) {
+        _fails.push('the city parser cannot read a Google formatted address, so the fallback delivers a string the rank check will still refuse');
+      }
+    }
+    // Both call sites must use it. The first version of this fix was a const in
+    // a block that had already closed by the second one, and scopecheck caught it.
+    {
+      const _src = selfSource();
+      const _uses = (_src.match(/rankLocationFrom\(req\.body\.location, gbpHealth\)/g) || []).length;
+      if (_uses < 2) _fails.push(`only ${_uses} rank call site(s) use the location resolver — both visibility passes need it or the second one silently keeps the old behaviour`);
+      if (!/'formattedAddress',/.test(_src)) _fails.push('the Places field mask no longer asks for formattedAddress, so the fallback has nothing to read');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 RANK LOCATION CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 RANK LOCATION CHECK: a lead carrying no location falls back to the address on their own Google Place record, an operator-typed location still wins, a missing record invents nothing, the recovered address parses to a searchable city, and both visibility passes read the same resolver. David Long lost absent_from_search, outranked_by_weaker, service_invisibility and coverage_gap to one empty string.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 RANK LOCATION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ NOT ONE EM DASH REACHES AN INBOX ════════════════════════════════════
