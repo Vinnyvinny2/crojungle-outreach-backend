@@ -16668,9 +16668,32 @@ const rankHarms = (m = {}) => {
       'phone_mismatch', 'tap_to_call_broken', 'no_after_hours', 'long_form',
       'form_only_no_booking', 'no_website_on_profile']);
     let harmAdj = h.harm;
-    if (CONVERSION_SIDE.has(h.id) && Number.isFinite(Number(m.rank)) && m.rankFound) {
+    // rankForScoring is the position when it was measured but is not sayable —
+    // see checkLocalRankStable. Reading it here keeps the damper working on a
+    // lead whose rank drifted, which is the whole point: how much traffic hits
+    // a broken page does not depend on whether we are willing to quote the
+    // number. m.rank is preferred when present; both are the same value on a
+    // stable lead.
+    // ══ typeof FIRST, AND THIS ONE INFLATED HARM ABOVE ITS OWN BASE ═════
+    // Number(null) is 0 and 0 is finite, so `Number.isFinite(Number(m.rank))`
+    // is TRUE for a null rank — the trap CLAUDE.md PART 6 names as its own bug
+    // class ("Unmeasured treated as zero"), and the reason every measurement
+    // comparison in this file is typeof-first.
+    //
+    // Here it was not merely skipping the damper. A null rank read as position
+    // ZERO, which is better than #1, so traffic came out at 1.15 and broken_page
+    // scored 99 against a base of 95 — the suppression that exists to make us
+    // MORE careful was boosting the finding above its own harm and pushing it
+    // past both ladder floors. Caught by this session's own boot check on its
+    // first run, on a lead shape that occurs whenever two rank samples disagree.
+    const _rankNum = (typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank > 0)
+      ? m.rank : null;
+    const _rankScoreOnly = (typeof m.rankForScoring === 'number' && Number.isFinite(m.rankForScoring) && m.rankForScoring > 0)
+      ? m.rankForScoring : null;
+    const _rankForHarm = _rankNum !== null ? _rankNum : _rankScoreOnly;
+    if (CONVERSION_SIDE.has(h.id) && _rankForHarm !== null && m.rankFound) {
       // Top of the list = full weight. Bottom of twenty = about two thirds.
-      const traffic = Math.max(0.65, 1.15 - (Number(m.rank) / 20) * 0.5);
+      const traffic = Math.max(0.65, 1.15 - (_rankForHarm / 20) * 0.5);
       harmAdj = Math.min(99, Math.round(h.harm * traffic));
     }
     // ══ A COLLAPSE AND A DIP CANNOT SCORE THE SAME ═══════════════════════
@@ -19089,9 +19112,35 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     // that under-reports its own size cannot vouch for itself.
     const _total = Math.max(Number(meta.totalReviews || 0), Number(placeTotalHint || 0));
     const _got = items.length;
-    if (_total >= 25 && _got > 0 && _got <= 8 && _got < _total * 0.25) {
+    // ══ THE ABSOLUTE CAP LET EVERY MID-SIZE TRUNCATION THROUGH ═══════════
+    // This read `_got <= 8 && _got < _total * 0.25`, so it only ever caught a
+    // near-total failure. Twenty rows for a 116-review profile is seventeen
+    // percent of the business's public record — obviously a partial pull — and
+    // 20 > 8, so it passed as a COMPLETE measurement and everything downstream
+    // treated it as one:
+    //
+    //   the pain miner reads 20 newest reviews instead of 150, and a complaint
+    //     repeating six times across the full profile may appear once or not at
+    //     all in the newest twenty — silently turning "this business has a
+    //     recurring complaint" into "no repeating complaint", which is the
+    //     strongest finding this system produces, deleted with no error
+    //   reviewPainMentions is counted against 20
+    //   ownerReplies / reviewsRead is a ratio against 20, and a newest-first
+    //     slice systematically distorts it
+    //   the velocity windows are computed against a 20-review history
+    //
+    // So the cap is gone and the test is the ratio alone, against what we could
+    // possibly have received: we ask for maxReviews, so a 500-review profile
+    // returning 150 is COMPLETE, not 30%. Anything under 60% of what was
+    // available is a failed run rather than a short profile.
+    //
+    // The line this must not cross is unchanged and is held by _total >= 25: a
+    // business that genuinely has nine reviews and returns five is fine, and
+    // always was. The ratio only ever speaks about large profiles.
+    const _available = Math.min(_total, Number(maxReviews) || _total);
+    if (_total >= 25 && _got > 0 && _available > 0 && _got < _available * 0.6) {
       return { checked: false, truncated: true,
-        why: `Apify returned only ${_got} review(s) for a place with about ${_total}. That is a truncated dataset rather than a short profile — usually an exhausted or throttled account, and it arrives as HTTP 200 so there is no error to catch. Reading it would report "no repeating complaint" about reviews we never actually saw.` };
+        why: `Apify returned ${_got} review(s) for a place with about ${_total}, when up to ${_available} were available to this run — ${Math.round((_got / _available) * 100)}% of what we asked for. That is a truncated dataset rather than a short profile: usually an exhausted or throttled account, and it arrives as HTTP 200 so there is no error to catch. Reading it would compute every review number against a fraction of the record and report "no repeating complaint" about reviews we never actually saw.` };
     }
   }
   const reviews = items.map(normalizeApifyReview).filter(Boolean);
@@ -24986,7 +25035,53 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
 // it unstable, which stops the digit reaching the copy at all.
 const checkLocalRankStable = async (args) => {
   const a = await checkLocalRank(args);
-  if (!a || !a.checked || !a.found) return a;
+  // ══ THE STABILITY DISCIPLINE SKIPPED THE STRONGEST CLAIM IN THE SYSTEM ══
+  // This used to be `if (!a.checked || !a.found) return a;` — one line, and it
+  // meant the two-sample rule protected the rank DIGIT and never protected the
+  // ABSENCE claim. Which is backwards: absent_from_search is harm 96, the top
+  // of the whole ladder, it produces the single most alarming sentence we can
+  // write ("a customer looking for exactly what they sell, in their own city,
+  // does not see them"), and it is the one finding that cannot be softened into
+  // a band if it turns out to be wrong. It was the only measurement in the file
+  // decided on a single noisy draw.
+  //
+  // The noise is documented right here: this function exists because one
+  // business returned #9/#13/#9/#12 minutes apart, and another #3/#12. A
+  // business sitting near the edge of the twenty-result page is found on one
+  // draw and absent on the next — and the two runs produce completely different
+  // emails, because on the absent run the highest-harm rung in the system fires
+  // and on the found run it does not exist.
+  //
+  // So a not-found first sample now buys a second look, and absence is claimed
+  // only when BOTH miss. When they disagree the business WAS found, so the
+  // durable weaker-above claim survives while the position stays unsayable —
+  // the same shape the drift branch below already uses.
+  //
+  // Cost: one extra Places search, and only on leads that were about to make
+  // the strongest claim in the system. That is the cheapest insurance in the
+  // pipeline.
+  if (!a || !a.checked) return a;
+  if (!a.found) {
+    await new Promise(r => setTimeout(r, 1200));
+    let a2 = null;
+    try { a2 = await checkLocalRank(args); } catch (e) { void e; }
+    if (!a2 || !a2.checked) {
+      return { ...a, rankStable: null,
+        rankNote: 'the second look failed, so ABSENCE rests on one sample — treat it as unconfirmed' };
+    }
+    if (!a2.found) {
+      return { ...a, rankStable: true, absenceConfirmed: true,
+        rankNote: 'two independent searches both failed to find them, so the absence is real and sayable' };
+    }
+    // Found on the second look. They are in the pack; we simply cannot say where.
+    console.log(`\u21ba RANK DISAGREED ON ABSENCE: the first search did not find them and the second returned #${a2.rank}. The absence claim is DROPPED \u2014 it is the highest-harm sentence in the system and it is not true. What survives is that they are in the pack and the position is not stable enough to state.`);
+    const { rank: _r2, scanned: _sc2, ...durable2 } = a2;
+    void _r2; void _sc2;
+    return { ...durable2, rankFound: true, rankStable: false, rankSuppressed: true,
+      rankForScoring: a2.rank,
+      rankSamples: [null, a2.rank],
+      rankNote: `one search did not find them and a second returned #${a2.rank}. No absence claim is permitted \u2014 they ARE in the results \u2014 and no position may be stated either.` };
+  }
   await new Promise(r => setTimeout(r, 1200));
   let b = null;
   // ══ ANCHOR THE SECOND SAMPLE ON THE FIRST ════════════════════════════════
@@ -25024,6 +25119,28 @@ const checkLocalRankStable = async (args) => {
     void _r; void _sc;
     return {
       ...durable,
+      // ══ STRIPPING THE DIGIT ALSO STRIPPED THE SCORING DIAL ══════════════
+      // Removing rank is right for the COPY and was silently wrong for the
+      // RANKING. Eight conversion-side rungs multiply their harm by a traffic
+      // factor derived from m.rank — a broken page on a business at #3 is
+      // bleeding daily, the same break at #18 is barely touched. When rank
+      // vanishes, Number.isFinite(m.rank) is false, the multiplier is skipped,
+      // and those eight rungs get their FULL undamped harm.
+      //
+      // So the suppression that exists to make the email MORE careful made
+      // eight unrelated findings up to 21 points more likely to open it:
+      // broken_page scores 74 on a run where rank measured #15 and 95 on a run
+      // where the two samples happened to disagree. Both floors in the ladder
+      // sit at 45, so this changes ELIGIBILITY and not just order — long_form
+      // at 52 crosses in and out on nothing but Places noise. It is a large
+      // part of why the same business produces a different email on two runs.
+      //
+      // The position is still gone from everything the copy can read. This is a
+      // separate name the email layer has no path to: the ladder reads it for
+      // scaling only, and the boot check below asserts no rung sentence can
+      // reach it. The worse of the two samples is used, so an uncertain
+      // position never flatters the lead.
+      rankForScoring: worse.rank,
       rankStable: false,
       rankDrift: drift,
       rankSamples: [a.rank, b.rank],
@@ -25432,10 +25549,35 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   //
   // So: if the head term puts them outside the top five, we have the finding.
   // Stop buying. If they rank well, keep looking — that is where a gap can hide.
-  const _headWeak = head.checked && head.found && Number(head.rank) > 5;
+  // ══ #5 AND #6 BOUGHT COMPLETELY DIFFERENT EVIDENCE SETS ═══════════════
+  // The reasoning above is right and it was reading a number the rest of this
+  // file refuses to state. `Number(head.rank) > 5` is a hard cliff against a
+  // value we KNOW moves: this very function exists because one business
+  // returned #9/#13/#9/#12 minutes apart. Two samples of 5 and 6 make the worse
+  // one 6, we skip; two samples of 4 and 5 make it 5, we buy. Same business,
+  // same afternoon, and one run gets three extra searches that are the ONLY
+  // source of service_invisibility — "you publish a page for crawl space
+  // encapsulation and do not come up in the top twenty for it", the sharpest
+  // fact this system can hand an owner — while the other run has no such
+  // finding in existence.
+  //
+  // The shortcut is only safe when we are CONFIDENT the head term is weak, so
+  // it now reads both samples and requires even the BEST draw to be outside the
+  // top five. A borderline lead buys the extra searches, which is the correct
+  // way to be wrong: the whole purpose of those queries is to find a gap the
+  // head term hid, so uncertainty about the head is an argument FOR looking,
+  // never against it. On a genuinely weak lead (#11 and #13) nothing changes
+  // and the credits are still saved.
+  const _samples = Array.isArray(head.rankSamples)
+    ? head.rankSamples.map(Number).filter(n => Number.isFinite(n)) : [];
+  const _bestSeen = _samples.length ? Math.min(..._samples)
+    : (Number.isFinite(Number(head.rank)) ? Number(head.rank) : null);
+  const _headWeak = head.checked && head.found && _bestSeen !== null && _bestSeen > 5;
+  // head.found is now false only when TWO searches both missed — see
+  // checkLocalRankStable — so this is no longer a single-draw decision either.
   const _headAbsent = head.checked && !head.found;
   if (_headWeak || _headAbsent) {
-    console.log(`LOCAL RANK [${companyName}]: skipped the service-page searches \u2014 the head term already answers the question (${_headAbsent ? 'not in the top ' + head.scanned : '#' + head.rank + ' of ' + head.scanned}). More queries could only find them ranking BETTER somewhere else, which does not strengthen anything (saves up to ${maxServices} Places searches).`);
+    console.log(`LOCAL RANK [${companyName}]: skipped the service-page searches \u2014 the head term already answers the question (${_headAbsent ? 'not in the top ' + head.scanned : '#' + head.rank + ' of ' + head.scanned}). More queries could only find them ranking BETTER somewhere else, which does not strengthen anything (saves up to ${maxServices} Places searches)${_samples.length > 1 ? `. Both samples agreed it is outside the top five (${_samples.join(' and ')}), so this is not a borderline call` : ''}.`);
   } else {
     const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
     for (const svc of services) {
@@ -27701,6 +27843,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Without this the absence entry could fire on a lead where the rank
           // check was skipped, which would be a fabricated finding.
           rankChecked: !!(localRank && localRank.checked),
+          // The position when it was measured but is NOT sayable, so the eight
+          // conversion-side rungs keep their traffic damper on a lead whose two
+          // rank samples disagreed. Delivered explicitly, because "computed but
+          // not passed" is the bug class that has eaten more work in this file
+          // than every other cause combined — and it is invisible in every log.
+          // RANK SCALING CHECK at boot asserts this arrives and that no rung
+          // SENTENCE can read it.
+          rankForScoring: (localRank && Number.isFinite(Number(localRank.rankForScoring)))
+            ? Number(localRank.rankForScoring) : null,
           // Inputs for the four entries added after the signal-by-signal audit.
           rating: _measured.rating,
           // reviewCount is already supplied above from localRank.ours.reviews \u2014
@@ -38158,6 +38309,135 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ READABLE FINDING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SAME BUSINESS MUST NOT MEASURE AS TWO DIFFERENT BUSINESSES ══════
+  // Four defects, one disease: a noisy input silently changing what the email
+  // says. Vin's complaint is "email quality varies a lot", and the ladder is
+  // deterministic — identical measurements give an identical email every time.
+  // So every one of these is a place where two runs of ONE business produced
+  // different measurements and therefore a different email.
+  try {
+    const _fails = [];
+
+    // ── 1. SUPPRESSING THE RANK MUST NOT RE-INFLATE EIGHT OTHER RUNGS ──
+    // Eight conversion-side rungs scale their harm by traffic, derived from the
+    // position. When the two rank samples disagree the position is stripped so
+    // the copy cannot state it — and that used to remove the damper too, so the
+    // same broken page scored 74 on a run where rank measured #15 and 95 on a
+    // run where the samples happened to drift. Both ladder floors are 45, so
+    // this changed which findings were ELIGIBLE, not just their order.
+    {
+      // brokenPages entries are OBJECTS with confirmed:true — the rung's test
+      // reads .confirmed, so a bare string fires nothing. The first version of
+      // this check used strings and reported the damper as broken when it was
+      // the fixture that was wrong: "check the harness before changing the
+      // code", which CLAUDE.md PART 6 names as its own bug class.
+      const _base = { rankChecked: true, rankFound: true, tradeWord: 'plumber',
+        brokenPages: [{ confirmed: true, key: 'booking', why: 'a 404', url: 'https://x.test/book' }] };
+      const _at15 = rankHarms({ ..._base, rank: 15 });
+      const _supp = rankHarms({ ..._base, rank: null, rankSuppressed: true, rankForScoring: 15 });
+      const _bp = (r) => ((r.all || []).find(h => h.id === 'broken_page') || {}).harm;
+      if (!Number.isFinite(_bp(_at15))) _fails.push('the fixture did not fire broken_page, so it proves nothing about the traffic damper');
+      else if (_bp(_supp) !== _bp(_at15)) {
+        _fails.push(`a suppressed rank scores broken_page at ${_bp(_supp)} while the same measured position scores it ${_bp(_at15)} — whether we are willing to QUOTE the position is changing how much the finding is worth`);
+      }
+      // And the damper must still be a damper: #3 has to outscore #15.
+      if (!(_bp(rankHarms({ ..._base, rank: 3 })) > _bp(_at15))) {
+        _fails.push('the traffic damper no longer separates a business at #3 from one at #15 — the scaling has been neutralised rather than preserved');
+      }
+      // The digit must remain unsayable. rankForScoring is for SCORING only, and
+      // a rung sentence that reads it would put back the exact number the
+      // suppression exists to withhold.
+      const _saySrc = HARM_LADDER.map(h => String(h.say || '') + String(h.costs || '')).join(' ');
+      if (/rankForScoring/.test(_saySrc)) {
+        _fails.push('a rung SENTENCE reads rankForScoring — that is the position we just declared unsayable, arriving in the copy through the scoring dial');
+      }
+      // It has to actually reach the ladder. "Computed but not passed" is the
+      // class that has eaten more work in this file than any other.
+      {
+        const _src = selfSource();
+        const _m = /_harmInputs = \{\s*[\r\n]/.exec(_src);
+        let _txt = '';
+        if (_m) {
+          let _d = 0;
+          for (let i = _src.indexOf('{', _m.index); i < _src.length; i++) {
+            if (_src[i] === '{') _d++;
+            if (_src[i] === '}') { _d--; if (!_d) { _txt = _src.slice(_m.index, i + 1); break; } }
+          }
+        }
+        if (!/^\s+rankForScoring:/m.test(_txt)) _fails.push('_harmInputs does not forward "rankForScoring" — the damper is dead on every real lead and no log would say so');
+      }
+    }
+
+    // ── 2. ABSENCE IS THE STRONGEST CLAIM AND WAS THE LEAST CHECKED ────
+    // absent_from_search is harm 96, the top of the ladder, and it was decided
+    // on a single Places draw because the stability function returned early
+    // whenever the first sample did not find the business. Asserted from source
+    // because the real function makes live network calls.
+    {
+      const _src = selfSource();
+      const _i = _src.indexOf('const checkLocalRankStable');
+      const _fn = _i >= 0 ? _src.slice(_i, _i + 4000) : '';
+      if (!_fn) _fails.push('checkLocalRankStable could not be read from source');
+      else {
+        if (/if \(!a \|\| !a\.checked \|\| !a\.found\) return a;/.test(_fn)) {
+          _fails.push('checkLocalRankStable still returns early on a not-found first sample — the highest-harm sentence in the system is back to being decided by one noisy search');
+        }
+        if (!/absenceConfirmed/.test(_fn)) {
+          _fails.push('nothing in checkLocalRankStable marks an absence as confirmed by two samples');
+        }
+        if (!/RANK DISAGREED ON ABSENCE/.test(_fn)) {
+          _fails.push('the disagreement case is silent — a first search that missed and a second that found them must drop the absence claim loudly, not quietly');
+        }
+      }
+    }
+
+    // ── 3. THE SERVICE SEARCHES MUST NOT HANG ON ONE PLACE ─────────────
+    // Those three extra queries are the only source of service_invisibility.
+    // Gating them on `rank > 5` meant a business oscillating between #5 and #6
+    // — well inside the documented drift — got a completely different evidence
+    // set on two runs of the same afternoon.
+    {
+      const _src = selfSource();
+      const _i = _src.indexOf('const _headWeak');
+      const _seg = _i >= 0 ? _src.slice(_i - 200, _i + 400) : '';
+      if (!_seg) _fails.push('the service-search gate could not be read from source');
+      else if (/_headWeak = head\.checked && head\.found && Number\(head\.rank\) > 5/.test(_seg)) {
+        _fails.push('the service-page searches are gated on a single rank digit again — #5 buys three queries and #6 buys none, on a number this file elsewhere refuses to state');
+      } else if (!/rankSamples/.test(_seg)) {
+        _fails.push('the service-search gate does not read both rank samples, so it cannot tell a confident weak position from a borderline one');
+      }
+    }
+
+    // ── 4. A PARTIAL REVIEW PULL IS NOT A MEASUREMENT ──────────────────
+    // The truncation guard had an absolute cap of 8 rows, so 20 reviews from a
+    // 116-review profile passed as complete and every review number downstream
+    // was computed on a sixth of the record.
+    {
+      const _src = selfSource();
+      const _i = _src.indexOf('const _available = Math.min(_total');
+      if (_i < 0) _fails.push('the Apify truncation guard no longer measures what was AVAILABLE — a 500-review profile capped at 150 must read as complete, not as 30%');
+      const _seg = _i >= 0 ? _src.slice(_i, _i + 500) : '';
+      if (/_got <= 8/.test(_seg)) {
+        _fails.push('the truncation guard is back to an absolute row cap — a 20-of-116 pull passes as a complete read and every review number is then computed on a sixth of the evidence');
+      }
+      if (_seg && !/_got < _available \* 0\.6/.test(_seg)) {
+        _fails.push('the truncation guard is not testing the ratio against what was available');
+      }
+      // The line it must not cross, still held: a genuinely small profile.
+      if (_seg && !/_total >= 25/.test(_seg)) {
+        _fails.push('the guard no longer requires a large profile — it would start calling a nine-review business a failed run');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`\u26d4 MEASUREMENT STABILITY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 MEASUREMENT STABILITY CHECK: the four places where a noisy input used to rewrite the email are closed. A suppressed rank keeps its scoring damper without letting the digit back into a sentence; absence is claimed only when two searches both miss, and a disagreement drops the claim out loud; the service-page searches read both samples instead of one digit at the #5/#6 cliff; and a review pull is judged against what was AVAILABLE, so a 20-of-116 partial can no longer pass as a complete measurement. The ladder was never the variance — this was.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MEASUREMENT STABILITY CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ WHAT THE SITE IS BUILT ON, AND WHAT WE MAY SAY ABOUT IT ═════════════
