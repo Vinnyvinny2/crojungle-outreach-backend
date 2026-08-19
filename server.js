@@ -4633,6 +4633,189 @@ const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|ai
 // only buying leads that match — which is the whole point of a narrow pull: one
 // niche, one region, one rating band.
 //
+// ══ NOBODY KNEW FIND COST ANYTHING ═════════════════════════════════════════
+// Anthropic spend is metered per lead and printed. Firecrawl has a rough meter.
+// Google had none at all, which is why a $48.83 invoice arrived as a surprise
+// and why the first question about it — "what does 50 audits a day cost?" —
+// could only be answered with arithmetic from outside the system.
+//
+// This counts the two things that are billed, separately, because they are
+// separate SKUs with separate free allowances:
+//   search   places:searchText   — discovery AND the per-lead rank checks
+//   details  places/{id}         — the Google profile read, once per lead
+//
+// THE RATE IS A SETTING, NOT A FACT WE KNOW. Published third-party figures for
+// the Enterprise text-search SKU disagree with each other ($17 to $35 per
+// thousand depending on who is writing and at what volume), and the only
+// authoritative number is on the account's own invoice — Cloud Console, Billing,
+// Reports, grouped by SKU, where the SKU name is a link to Google's rate card.
+// So the COUNT is measured and the PRICE is declared, and the log says which is
+// which. A meter that presents a guessed rate as a measurement is the class of
+// error this file already records for the SMTP log line: a message that
+// overstates its own certainty costs exactly what one that understates it does.
+const GP_RATE_SEARCH_PER_1K = Number(process.env.GP_RATE_SEARCH_PER_1K || 35);
+const GP_RATE_DETAILS_PER_1K = Number(process.env.GP_RATE_DETAILS_PER_1K || 35);
+const GP_FREE_SEARCH = Math.max(0, parseInt(process.env.GP_FREE_SEARCH || '1000', 10));
+const GP_FREE_DETAILS = Math.max(0, parseInt(process.env.GP_FREE_DETAILS || '1000', 10));
+const _gpCalls = { search: 0, details: 0 };
+const notePlacesCall = (kind) => {
+  if (kind === 'details') _gpCalls.details++; else _gpCalls.search++;
+};
+// What this process has spent since it started. Render restarts on deploy, so
+// this is "since the last deploy", not a month — and it says so, because a
+// number labelled as something it is not is worse than no number.
+const placesSpendLine = (label) => {
+  const s = _gpCalls.search, d = _gpCalls.details;
+  if (!s && !d) return '';
+  const cost = (s * GP_RATE_SEARCH_PER_1K + d * GP_RATE_DETAILS_PER_1K) / 1000;
+  return `\u{1F4B3} GOOGLE PLACES [${label}]: ${s} text search(es) + ${d} profile read(s) since this instance started. `
+    + `At $${GP_RATE_SEARCH_PER_1K}/1k and $${GP_RATE_DETAILS_PER_1K}/1k that is ~$${cost.toFixed(2)}, `
+    + `against free allowances of ${GP_FREE_SEARCH} searches and ${GP_FREE_DETAILS} profile reads PER CALENDAR MONTH `
+    + `(this counter resets on every deploy, so it is a run total, not a month). `
+    + `The rates are the GP_RATE_* settings, not something we measured — confirm them on the invoice, Billing › Reports › group by SKU.`;
+};
+
+// ══ WE PAID GOOGLE TWICE FOR THE SAME SEARCH, TWELVE TIMES OVER ═════════════
+// Vin's July invoice: $48.83, SKU "Places API Text Search Enterprise". August
+// was on the same track. Nobody knew Find cost anything at all.
+//
+// WHY IT IS THE EXPENSIVE TIER, AND WHY THAT IS CORRECT. Asking Places for a
+// star rating, a review count or a website URL puts the whole call on the
+// Enterprise SKU, whose free allowance is 1,000 calls a month rather than
+// 5,000. We ask for all three, and all three earn their place: the 4.2-4.85
+// rating band is the ONLY filter in this system with evidence behind it, the
+// review count is the affordability proxy, and the website read is what routes
+// a lead to CALL or REBUILD before a penny is spent. The tier is not the defect.
+//
+// THE DEFECT IS THAT THE GRID HAD NO MEMORY. Every run shuffled 40 categories
+// against 20 cities and dealt out 100 queries at random. Places answers each
+// query with its twenty most prominent businesses IN THE SAME ORDER EVERY TIME,
+// so the twelfth run re-asked "plumber in Denver" — a search the third run had
+// already drained — paid full Enterprise price, got back the same twenty
+// businesses, and threw every one of them away as already owned. The code even
+// counted them: `skippedAlreadyOwned` has been in the log line for weeks.
+//
+// So this is not a throttle and it is not a cap. It is the system remembering
+// which ground it has already walked over.
+//
+// ══ WHAT "EXHAUSTED" HAS TO MEAN, AND THE FOUR WAYS IT COULD GO WRONG ══════
+// A pair is rested only after TWO consecutive runs that produced nothing new,
+// and only for a cooling period, because businesses appear, ratings drift and a
+// permanent ban would quietly kill coverage. Beyond that, four failure modes
+// had to be closed by construction rather than by hoping:
+//
+//  1. A QUERY THAT ERRORED IS NOT AN EXHAUSTED QUERY. Recording an outcome on a
+//     timeout would rest a productive pair for a month on the strength of one
+//     bad network moment. Outcomes are recorded ONLY when a response parsed.
+//  2. A CATEGORY THAT HIT ITS PER-RUN CAP IS NOT AN EXHAUSTED QUERY EITHER.
+//     PER_CAT_CAP stops one vertical flooding the queue, and a query blocked by
+//     it returns zero new leads while the ground underneath is untouched. Those
+//     are excluded, which is the difference between a memory and a lobotomy.
+//  3. IT MUST NEVER MAKE A RUN RETURN NOTHING. If every pair is resting the
+//     selector admits the stalest ones anyway and says so. A run that finds no
+//     leads reads as a broken system, and an operator who believes the finder is
+//     broken turns the memory off — which costs more than it ever saved.
+//  4. IT MUST NOT UNDO THE STRATIFICATION. The round-robin deal exists because a
+//     blind shuffle gave some categories four slots and others none. Freshness
+//     orders the CITIES INSIDE each category; the deal across categories is
+//     untouched, so coverage stays exactly as even as it was.
+//
+// And if Supabase is unreachable the state map is empty, every pair reads as
+// never-searched, and the run behaves precisely as it did before this existed.
+const PQ_DRY_RUNS_TO_REST = Math.max(1, parseInt(process.env.GP_MEMORY_DRY_RUNS || '2', 10) || 2);
+const PQ_COOLDOWN_DAYS = Math.max(1, parseInt(process.env.GP_MEMORY_COOLDOWN_DAYS || '30', 10) || 30);
+const PQ_COOLDOWN_MS = PQ_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+
+// One key shape, built in one place. A key assembled by hand at the read site
+// and by hand again at the write site is two keys, and the memory would then
+// record outcomes nothing ever reads — the exact "computed but not passed"
+// class this file has shipped five times.
+const pqKey = (cat, city) => `${String(cat || '').trim().toLowerCase()}|${String(city || '').trim().toLowerCase()}`;
+
+// Never-searched sorts first, then least-recently-searched. Returns a tier so
+// the caller can say WHY a pair was skipped rather than only that it was.
+//   0  never searched
+//   1  searched and still producing
+//   2  went dry, but has rested long enough to be worth another look
+//   3  went dry and is still cooling      ← the only tier that costs nothing
+const pqTier = (st, now) => {
+  if (!st || !st.lastRun) return 0;
+  if ((st.dryStreak || 0) < PQ_DRY_RUNS_TO_REST) return 1;
+  return (now - st.lastRun) >= PQ_COOLDOWN_MS ? 2 : 3;
+};
+
+// PURE, and separated from the Supabase call for the same reason the grid
+// ordering is: a boot check can run it. Turns one run's outcomes plus the state
+// we started with into the rows to upsert.
+//
+// A query counts as DRY only when it returned ZERO new businesses. Not "fewer
+// than four" — a pair still yielding one lead a run is still yielding, and the
+// pairs worth resting are the ones giving nothing at all. Conservative on
+// purpose: the cost of resting a live pair is lost coverage, and the cost of
+// re-running a dead one is about two cents.
+const pqOutcomeRows = (outcomes, state, nowIso) => {
+  const st = state instanceof Map ? state : new Map();
+  const rows = [];
+  for (const o of (Array.isArray(outcomes) ? outcomes : [])) {
+    if (!o || !o.cat || !o.city) continue;
+    // A category that hit its per-run cap returns nothing new from ground that
+    // may be untouched. Recording it would rest a pair for a reason that has
+    // nothing to do with the pair.
+    if (o.capBlocked) continue;
+    const k = pqKey(o.cat, o.city);
+    const prev = st.get(k) || {};
+    const dry = Number(o.newLeads) === 0;
+    rows.push({
+      q: k, cat: String(o.cat), city: String(o.city),
+      last_run: nowIso,
+      runs: (Number(prev.runs) || 0) + 1,
+      last_new: Number(o.newLeads) || 0,
+      dry_streak: dry ? (Number(prev.dryStreak) || 0) + 1 : 0,
+    });
+  }
+  return rows;
+};
+
+// PURE. Takes the per-category city buckets and the remembered state, returns
+// { grid, rested, tiers }. A boot check executes this against a synthetic state
+// map, which is the only way to prove the policy without a live Places bill —
+// and the lesson this file has already paid for twice is that a check reading
+// source instead of running the function passes on the run that breaks.
+const orderGridByFreshness = (byCat, state, opts = {}) => {
+  const now = Number(opts.now) || Date.now();
+  const runCap = Math.max(1, Number(opts.runCap) || 100);
+  const st = state instanceof Map ? state : new Map();
+  // Order the cities INSIDE each category. The deal across categories below is
+  // untouched, so stratification survives exactly as it was.
+  const ranked = byCat.map(bucket => bucket
+    .map(p => ({ ...p, _tier: pqTier(st.get(pqKey(p.cat && p.cat.label, p.city)), now),
+                 _last: (st.get(pqKey(p.cat && p.cat.label, p.city)) || {}).lastRun || 0 }))
+    .sort((a, b) => (a._tier - b._tier) || (a._last - b._last)));
+  const grid = [];
+  let rested = 0;
+  // Pass one: round-robin, skipping the pairs that are still cooling.
+  for (let round = 0; grid.length < runCap; round++) {
+    let placedThisRound = 0;
+    for (const bucket of ranked) {
+      if (round >= bucket.length) continue;
+      placedThisRound++;
+      const p = bucket[round];
+      if (p._tier === 3) { rested++; continue; }
+      grid.push(p);
+      if (grid.length >= runCap) break;
+    }
+    if (!placedThisRound) break;
+  }
+  // Pass two, and ONLY if pass one found nothing at all: admit the stalest
+  // resting pairs so a run is never empty. Deliberately not a top-up to runCap
+  // — a partially drained grid SHOULD run short, because running short is the
+  // saving. Empty is the only outcome that reads as a broken finder.
+  if (!grid.length && rested) {
+    const all = ranked.flat().sort((a, b) => a._last - b._last);
+    for (const p of all.slice(0, runCap)) grid.push(p);
+  }
+  return { grid, rested, exhaustedAdmitted: !grid.length ? 0 : (rested && grid.some(p => p._tier === 3) ? grid.filter(p => p._tier === 3).length : 0) };
+};
 // Every filter is optional and absent means no constraint, so a caller that
 // sends nothing gets exactly the behaviour that existed before.
 //   niches    ['Roofing','HVAC']   only these categories
@@ -4766,13 +4949,35 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
     return cities.map(city => ({ cat, city }));
   });
   // Rotate the starting category each run so the same vertical is not always first
-  // to be served when RUN_CAP does not divide evenly.
-  const _offset = Math.floor(Math.random() * _byCat.length);
-  for (let round = 0; round < GP_CITIES.length; round++) {
-    for (let k = 0; k < _byCat.length; k++) {
-      const bucket = _byCat[(k + _offset) % _byCat.length];
-      if (round < bucket.length) grid.push(bucket[round]);
-    }
+  // to be served when RUN_CAP does not divide evenly. Done by rotating the
+  // buckets rather than indexing with an offset, because the ordering below
+  // consumes them in array order.
+  const _offset = Math.floor(Math.random() * Math.max(1, _byCat.length));
+  const _rotated = _byCat.slice(_offset).concat(_byCat.slice(0, _offset));
+  // ══ AND NOW THE PART THAT STOPS US PAYING TWICE ═════════════════
+  // The Fisher-Yates shuffle above is still the tie-break between pairs the
+  // memory knows nothing about; orderGridByFreshness then puts never-searched
+  // cities first, least-recently-searched next, and leaves out the ones that
+  // came back empty twice and have not rested yet.
+  //
+  // filters.queryState absent — no Supabase, an older caller, the boot check —
+  // means an empty map, which reads every pair as never-searched and produces
+  // exactly the grid this function built before the memory existed.
+  const _pqState = _flt.queryState instanceof Map ? _flt.queryState : new Map();
+  const _pq = orderGridByFreshness(_rotated, _pqState, { runCap: RUN_CAP });
+  grid.push(..._pq.grid);
+  if (_pq.rested) {
+    const _short = Math.max(0, RUN_CAP - grid.length);
+    console.log(`\u267b QUERY MEMORY [Places]: ${grid.length} of ${RUN_CAP} query slots used. ${_pq.rested} category+city pair(s) came back with nothing new twice running and are resting for ${PQ_COOLDOWN_DAYS} days${_short ? `, so this run makes ${_short} fewer paid Google call(s) than it would have` : ''}. Google bills these on the Enterprise SKU, so a re-run of ground we have already walked costs real money and returns businesses already in the pipeline. Widen the grid with more cities, or shorten the rest with GP_MEMORY_COOLDOWN_DAYS.`);
+  }
+  // Stamped before the first request so a concurrent run cannot choose the same
+  // hundred pairs. Awaited on purpose: firing it off and starting the loop would
+  // leave exactly the window this closes.
+  if (typeof _flt.onClaim === 'function' && grid.length) {
+    try { await _flt.onClaim(grid); } catch (e) { void e; }
+  }
+  if (_pq.exhaustedAdmitted) {
+    console.log(`\u26a0 QUERY MEMORY [Places]: every pair in the grid is resting, so ${_pq.exhaustedAdmitted} of the stalest were run anyway rather than returning an empty Find. This means the current category and city list is worked out — the fix is more cities, not more runs.`);
   }
   // A Map rather than a Set: the value is the lead itself, so a repeat sighting
   // in another city can add a market to it instead of being discarded.
@@ -4829,9 +5034,18 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       // pageToken carries the query forward. Google requires the ORIGINAL request
       // body to be resent alongside it, so textQuery stays on every page.
       let _pageToken = '', _pagesHere = 0, _stop = false;
+      // Per QUERY, not per page. _newHere below resets on every page because it
+      // decides whether to buy the next one; the memory needs the whole query's
+      // yield. _answered gates the write: a query that timed out taught us
+      // nothing and must never be recorded as exhausted. _capBlocked gates it
+      // too, because PER_CAT_CAP can return zero new leads from ground that is
+      // completely untouched, and resting a pair for that reason would delete
+      // coverage rather than save money.
+      let _newForQuery = 0, _answered = false, _capBlocked = false;
       do {
       const _body = { textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true, pageSize: 20 };
       if (_pageToken) _body.pageToken = _pageToken;
+      notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken` },
@@ -4842,6 +5056,9 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       _pagesHere++;
       const d = await r.json();
       if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) { _stop = true; break; } break; }
+      // A response arrived and parsed. Only now is anything this query says
+      // about its own ground worth remembering.
+      _answered = true;
       // The answer arrived and parsed with no error: NOW this city counts as
       // searched for this category. (Idempotent across pages of one query.)
       if (!_searchedForCat.includes(city)) _searchedForCat.push(city);
@@ -4903,7 +5120,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
           if ((_h && _knownH.has(_h)) || (_k && _k.length > 4 && _knownN.has(_k))) { skippedAlreadyOwned++; continue; }
         }
         const catCount = perCat.get(cat.label) || 0;
-        if (catCount >= PER_CAT_CAP) { skippedCatCap++; continue; }    // one vertical must not flood the queue
+        if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; continue; }    // one vertical must not flood the queue
         // A lead with no website is keyed on its Place id instead, so two
         // different businesses without sites do not collapse into one another.
         const domainKey = website
@@ -4961,12 +5178,28 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         seen.set(domainKey, _lead);
         out.push(_lead);
         _newHere++;
+        _newForQuery++;
       }
       // Ask for the next page only when this one ran dry of NEW businesses, and
       // only while the page budget lasts. A productive query costs one request.
       _pageToken = (_newHere < NEW_PER_QUERY && pagesBought < PAGE_BUDGET && _pagesHere < 3)
         ? String(d.nextPageToken || '') : '';
       } while (_pageToken);
+      // ══ RECORDED AFTER THE ANSWER, CLAIMED BEFORE THE RUN ═══════════
+      // Two different questions that look like one, and this file has already
+      // been burned by conflating them. citiesSearchedByCat is recorded AFTER a
+      // clean response because it feeds ABSENCE claims, and claiming we searched
+      // a market we never got an answer from puts a false "absent from Denver"
+      // into a prospect's email. This is recorded after a clean response too,
+      // but for the opposite reason: an errored query taught us nothing about
+      // whether its ground is worked out, so resting it would be a guess.
+      //
+      // The CLAIM against concurrent runs is a separate mechanism and lives at
+      // the caller, which stamps every selected pair before the first request.
+      if (_answered && typeof _flt.onQuery === 'function') {
+        try { _flt.onQuery({ cat: cat.label, city, newLeads: _newForQuery, capBlocked: _capBlocked, pages: _pagesHere }); }
+        catch (e) { void e; }
+      }
       if (_stop) break;
     } catch(e) { /* fail-safe per query */ }
   }
@@ -4992,6 +5225,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // without extra pages a run can only ever see 39 categories x 20 cities x 20 =
   // about 15,600 businesses in total. Pages are bought only for queries that ran
   // out of NEW businesses, which is exactly where the repetition comes from.
+  { const _sp = placesSpendLine('after Find'); if (_sp) console.log(_sp); }
   console.log(`\u{1F50E} DEPTH [Places]: ${pagesBought} extra page(s) of results pulled on queries whose first page returned fewer than ${NEW_PER_QUERY} businesses we do not already own (budget ${PAGE_BUDGET}). ${skippedAlreadyOwned} business(es) were skipped BEFORE they could take a per-category slot \u2014 previously they filled the slot and were dropped at the very end, so the run reported leads it never returned.`);
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
@@ -8617,6 +8851,7 @@ ${corpus}` }]
 const fetchGoogleReviews = async (placeId, placesKey) => {
   if (!placeId || !placesKey) return [];
   try {
+    notePlacesCall('details');  // counted at DISPATCH, same reason
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
     }, 12000);
@@ -8691,6 +8926,7 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       'formattedAddress',
       'editorialSummary','googleMapsUri','reviewSummary','reviews'
     ].join(',');
+    notePlacesCall('details');  // counted at DISPATCH, same reason
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': mask },
     }, 12000);
@@ -23685,6 +23921,78 @@ const sbRest = async (path, options = {}) => {
   } catch (e) { console.log('Supabase REST failed:', e.message); return null; }
 };
 
+
+// ── THE QUERY MEMORY, PERSISTED ─────────────────────────────────────────────
+// Render restarts on every deploy and Find runs from two places (the button and
+// the cron), so this cannot live in process memory. Requires:
+//   create table places_query_state (
+//     q text primary key, cat text, city text,
+//     last_run timestamptz, runs int default 0,
+//     last_new int default 0, dry_streak int default 0);
+//
+// Everything here fails OPEN. No Supabase, no table, a bad response — the map
+// comes back empty, every pair reads as never-searched, and Find behaves exactly
+// as it did before the memory existed. A cost optimisation that can stop the
+// lead engine is not an optimisation.
+const loadPlacesQueryState = async () => {
+  const out = new Map();
+  const rows = await sbRest('/places_query_state?select=q,last_run,dry_streak,runs');
+  if (!Array.isArray(rows)) return out;
+  for (const r of rows) {
+    if (!r || !r.q) continue;
+    const t = r.last_run ? Date.parse(r.last_run) : 0;
+    out.set(String(r.q), {
+      lastRun: Number.isFinite(t) ? t : 0,
+      dryStreak: Number(r.dry_streak) || 0,
+      runs: Number(r.runs) || 0,
+    });
+  }
+  return out;
+};
+
+// One upsert for the whole run rather than one per query: 100 round trips inside
+// the search loop would cost more wall-clock than the Google calls they save.
+const savePlacesQueryState = async (rows) => {
+  if (!Array.isArray(rows) || !rows.length) return false;
+  const r = await sbRest('/places_query_state?on_conflict=q', {
+    method: 'POST',
+    prefer: 'return=minimal,resolution=merge-duplicates',
+    body: JSON.stringify(rows),
+  });
+  return r !== null;
+};
+
+// ══ THE CLAIM, WHICH IS A DIFFERENT JOB FROM THE RECORD ═══════════════════
+// Find runs from the button AND from the cron, and nothing stops them
+// overlapping. Two runs that both load the state a second apart choose the same
+// hundred pairs and pay Google twice for every one of them — the exact bill this
+// whole mechanism exists to stop, arriving by a route the per-query record
+// cannot see, because neither run has finished when the other starts.
+//
+// So the selected pairs are stamped BEFORE the first request. A concurrent run
+// then reads them as just-searched and sorts them last. It is deliberately not a
+// lock: a crashed run leaves pairs stamped and they simply come up again on the
+// next cooldown, which is the failure that costs nothing. A lock that can be
+// held by a dead process is the failure that stops Find forever.
+const claimPlacesQueries = async (pairs, state) => {
+  if (!Array.isArray(pairs) || !pairs.length) return false;
+  const now = new Date().toISOString();
+  return savePlacesQueryState(pairs.map(p => {
+    const k = pqKey(p.cat && p.cat.label, p.city);
+    const prev = (state instanceof Map && state.get(k)) || {};
+    return {
+      q: k, cat: (p.cat && p.cat.label) || '', city: p.city || '',
+      last_run: now,
+      runs: (Number(prev.runs) || 0) + 1,
+      // The streak is NOT touched here. A claim says "somebody is looking at
+      // this now", never "this came back empty" — deciding exhaustion before the
+      // answer arrives is how a productive pair gets rested on a timeout.
+      dry_streak: Number(prev.dryStreak) || 0,
+      last_new: 0,
+    };
+  }));
+};
+
 // ── COMPANY SIZE CACHE (Supabase) ───────────────────────────────────────────
 // The Companies API charges 1 credit per full enrich. Company headcount barely
 // moves week to week, so we pay ONCE per domain and reuse it forever. This turns
@@ -24066,7 +24374,28 @@ app.post('/api/discover', async (req, res) => {
       // contributed FOURTEEN kept leads to the log and ZERO to the queue, and the
       // slots were gone. That is the mechanism behind "repetitive leads": not
       // that duplicates got through, but that they consumed the run.
-      searchGooglePlaces(placesKey, { ..._f, knownHosts: _knownHosts, knownNames: _knownNames, normName: _normName }),
+      // ══ THE QUERY MEMORY IS LOADED AND SAVED AROUND THIS ONE CALL ════
+      // Wrapped rather than threaded through the endpoint so the whole mechanism
+      // — load, claim, run, record — is one block that can be read in one
+      // sitting. Every part of it fails open: a Supabase outage produces an empty
+      // map and the search behaves exactly as it did before this existed.
+      (async () => {
+        const _pqState = await loadPlacesQueryState();
+        const _pqOutcomes = [];
+        const _leads = await searchGooglePlaces(placesKey, {
+          ..._f, knownHosts: _knownHosts, knownNames: _knownNames, normName: _normName,
+          queryState: _pqState,
+          onClaim: (pairs) => claimPlacesQueries(pairs, _pqState),
+          onQuery: (o) => _pqOutcomes.push(o),
+        });
+        const _rows = pqOutcomeRows(_pqOutcomes, _pqState, new Date().toISOString());
+        if (_rows.length) {
+          const _saved = await savePlacesQueryState(_rows);
+          const _dry = _rows.filter(r => r.dry_streak > 0).length;
+          console.log(`\u267b QUERY MEMORY [Places]: recorded ${_rows.length} searched pair(s), ${_dry} of them returning nothing new${_saved ? '' : ' \u2014 BUT THE WRITE FAILED, so nothing was remembered and the next run will pay for these same searches again. Check that the places_query_state table exists'}.`);
+        }
+        return _leads;
+      })(),
     ]);
 
     // Owner venting returns both identifiable leads AND the raw pain language
@@ -25506,6 +25835,7 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
   const city = String(location || '').split(',')[0].trim();
   const query = city ? `${companyName} ${city}` : String(companyName);
   try {
+    notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
@@ -25736,6 +26066,7 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
 
   const query = `${phrase} in ${city}`;
   try {
+    notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
@@ -33259,6 +33590,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     } else {
       console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} credits (no per-request ledger — figure may include concurrent leads)`);
     }
+    { const _sp = placesSpendLine(company); if (_sp) console.log(_sp); }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
     const _throttled = FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled;
@@ -38251,6 +38583,159 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ WRITER RULE DISCLOSURE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE SEARCH MEMORY, RUN RATHER THAN READ ═══════════════════════════════
+  // A cost optimisation that can silently stop the lead engine is not an
+  // optimisation, and every failure mode here is invisible in production: a run
+  // that returns fewer leads looks like a thin day, not like a bug. So the
+  // policy is a pure function and this executes it against synthetic state.
+  //
+  // Falsified against a build with each guard removed — the cap-blocked
+  // exclusion, the errored-query exclusion, the cooldown, the never-empty floor
+  // and the stratification — and it goes red on every one.
+  try {
+    const _fails = [];
+    const DAY = 24 * 60 * 60 * 1000;
+    const NOW = 1_700_000_000_000;      // fixed, because Date.now() in a check makes it flaky
+    const _cats = ['Roofing', 'HVAC', 'Plumbing'].map(label => ({ label }));
+    const _cities = ['Denver CO', 'Austin TX', 'Tampa FL', 'Boise ID'];
+    const _byCat = _cats.map(cat => _cities.map(city => ({ cat, city })));
+    const _st = (pairs) => new Map(pairs.map(([c, city, dry, ageDays]) =>
+      [pqKey(c, city), { lastRun: NOW - ageDays * DAY, dryStreak: dry, runs: 1 }]));
+
+    // 1. NEVER-SEARCHED GROUND COMES FIRST. Without this the memory is only a
+    // blocklist; the point is that it also STEERS the budget at fresh markets.
+    {
+      const st = _st([['Roofing', 'Denver CO', 0, 0], ['Roofing', 'Austin TX', 0, 1]]);
+      const { grid } = orderGridByFreshness(_byCat, st, { runCap: 12, now: NOW });
+      const first = grid.filter(p => p.cat.label === 'Roofing')[0];
+      if (!first || (first.city !== 'Tampa FL' && first.city !== 'Boise ID')) {
+        _fails.push(`the first Roofing query is "${first && first.city}" — a city we already searched, when two we never have are sitting in the same bucket`);
+      }
+    }
+
+    // 2. TWO DRY RUNS RESTS A PAIR, ONE DOES NOT. The threshold is the whole
+    // policy: rest too eagerly and coverage dies, too slowly and nothing is saved.
+    {
+      const st = _st([['Roofing', 'Denver CO', PQ_DRY_RUNS_TO_REST, 1]]);
+      const { grid } = orderGridByFreshness(_byCat, st, { runCap: 12, now: NOW });
+      if (grid.some(p => p.cat.label === 'Roofing' && p.city === 'Denver CO')) {
+        _fails.push(`a pair that returned nothing new ${PQ_DRY_RUNS_TO_REST} runs in a row is still being paid for`);
+      }
+      const st1 = _st([['Roofing', 'Denver CO', PQ_DRY_RUNS_TO_REST - 1, 1]]);
+      const g1 = orderGridByFreshness(_byCat, st1, { runCap: 12, now: NOW }).grid;
+      if (!g1.some(p => p.cat.label === 'Roofing' && p.city === 'Denver CO')) {
+        _fails.push('a pair with a single dry run is already being skipped — one quiet run is not an exhausted market and this deletes coverage');
+      }
+    }
+
+    // 3. AND IT COMES BACK. A permanent ban is a slow way to kill the finder:
+    // businesses open, ratings drift into the band, the client pipeline changes.
+    {
+      const st = _st([['Roofing', 'Denver CO', 9, PQ_COOLDOWN_DAYS + 1]]);
+      const { grid } = orderGridByFreshness(_byCat, st, { runCap: 12, now: NOW });
+      if (!grid.some(p => p.cat.label === 'Roofing' && p.city === 'Denver CO')) {
+        _fails.push(`a pair that has rested past the ${PQ_COOLDOWN_DAYS}-day cooldown is still barred — that is a permanent ban, and the grid drains to nothing`);
+      }
+    }
+
+    // 4. IT NEVER RETURNS AN EMPTY RUN. The failure that matters most, because
+    // an operator who believes Find is broken switches the memory off.
+    {
+      const all = [];
+      for (const c of _cats) for (const city of _cities) all.push([c.label, city, 9, 1]);
+      const { grid, exhaustedAdmitted } = orderGridByFreshness(_byCat, _st(all), { runCap: 12, now: NOW });
+      if (!grid.length) _fails.push('with every pair resting the selector returns NO queries at all — Find would report zero leads and read as broken');
+      if (!exhaustedAdmitted) _fails.push('the run went ahead on resting pairs without saying so, so an exhausted grid looks like a normal run');
+    }
+
+    // 5. A PARTLY DRAINED GRID RUNS SHORT ON PURPOSE. Topping back up to the cap
+    // would spend exactly the money this exists to save.
+    {
+      const st = _st(_cities.map(city => ['Roofing', city, 9, 1]));
+      const { grid, rested } = orderGridByFreshness(_byCat, st, { runCap: 12, now: NOW });
+      if (grid.some(p => p.cat.label === 'Roofing')) _fails.push('a fully drained category was topped back up from its own resting pairs');
+      if (grid.length !== 8) _fails.push(`the run used ${grid.length} of 12 slots; with one of three categories drained it should use 8 and save the other four`);
+      if (!rested) _fails.push('resting pairs were skipped but not counted, so the log cannot say what was saved');
+    }
+
+    // 6. STRATIFICATION SURVIVES. Freshness orders cities INSIDE a category; if
+    // it reordered across categories, one vertical with fresh ground would eat
+    // the whole budget and the queue goes back to being all garage doors.
+    {
+      const st = _st([['HVAC', 'Denver CO', 0, 5], ['HVAC', 'Austin TX', 0, 5],
+        ['HVAC', 'Tampa FL', 0, 5], ['HVAC', 'Boise ID', 0, 5]]);
+      const { grid } = orderGridByFreshness(_byCat, st, { runCap: 6, now: NOW });
+      const perCat = {};
+      for (const p of grid) perCat[p.cat.label] = (perCat[p.cat.label] || 0) + 1;
+      const counts = _cats.map(c => perCat[c.label] || 0);
+      if (Math.max(...counts) - Math.min(...counts) > 1) {
+        _fails.push(`categories got ${counts.join('/')} of 6 slots — the round-robin deal is broken and one vertical can now take the run`);
+      }
+    }
+
+    // 7. NO STATE AT ALL IS TODAY'S BEHAVIOUR. Supabase down, table missing, an
+    // older caller — all produce an empty map, and the run must be unchanged.
+    {
+      const { grid, rested } = orderGridByFreshness(_byCat, new Map(), { runCap: 12, now: NOW });
+      if (grid.length !== 12 || rested !== 0) {
+        _fails.push(`with no memory at all the run used ${grid.length} of 12 slots and rested ${rested} — a Supabase outage must leave Find exactly as it was`);
+      }
+    }
+
+    // 8. THE TWO REASONS A QUERY YIELDS NOTHING THAT ARE NOT EXHAUSTION.
+    {
+      const st = new Map();
+      const rows = pqOutcomeRows([
+        { cat: 'Roofing', city: 'Denver CO', newLeads: 0, capBlocked: true },
+        { cat: 'HVAC', city: 'Austin TX', newLeads: 0, capBlocked: false },
+        { cat: 'Plumbing', city: 'Tampa FL', newLeads: 3, capBlocked: false },
+      ], st, '2026-08-19T00:00:00Z');
+      if (rows.some(r => r.cat === 'Roofing')) {
+        _fails.push('a query blocked by the per-category cap was recorded as exhausted — the ground under it is untouched and this rests a live market for a month');
+      }
+      const hvac = rows.find(r => r.cat === 'HVAC');
+      if (!hvac || hvac.dry_streak !== 1) _fails.push('a genuinely empty query did not increment the dry streak, so nothing is ever rested and the memory saves nothing');
+      const plumb = rows.find(r => r.cat === 'Plumbing');
+      if (!plumb || plumb.dry_streak !== 0) _fails.push('a productive query did not reset the dry streak, so a pair that recovers stays barred');
+    }
+    // And the streak has to carry forward, or a pair can never reach the threshold.
+    {
+      const st = _st([['HVAC', 'Austin TX', 1, 1]]);
+      const rows = pqOutcomeRows([{ cat: 'HVAC', city: 'Austin TX', newLeads: 0, capBlocked: false }], st, '2026-08-19T00:00:00Z');
+      if (!rows[0] || rows[0].dry_streak !== 2) _fails.push(`a second consecutive empty run recorded a streak of ${rows[0] && rows[0].dry_streak} instead of 2 — the streak is not accumulating and nothing ever rests`);
+      if (!rows[0] || rows[0].runs !== 2) _fails.push('the run counter is not accumulating');
+    }
+
+    // 9. ONE KEY SHAPE. Read and write must agree, or the memory records
+    // outcomes nothing ever looks up — this file's most repeated bug.
+    {
+      const written = pqOutcomeRows([{ cat: 'Roofing', city: 'Denver CO', newLeads: 0, capBlocked: false }], new Map(), 'x')[0].q;
+      if (written !== pqKey('Roofing', 'Denver CO')) _fails.push('the key written by the recorder is not the key the selector reads — every outcome would be stored and never found');
+      if (pqKey(' ROOFING ', 'denver co') !== pqKey('Roofing', 'Denver CO')) _fails.push('the key is case- or whitespace-sensitive, so the same market stores under two rows and neither ever reaches the threshold');
+    }
+
+    // 10. THE METER COUNTS BOTH BILLED SKUs SEPARATELY.
+    {
+      const _before = _gpCalls.search + _gpCalls.details;
+      notePlacesCall('search'); notePlacesCall('details');
+      if (_gpCalls.search + _gpCalls.details !== _before + 2) _fails.push('the Places meter did not count a call');
+      if (!/text search/.test(placesSpendLine('selftest')) || !/profile read/.test(placesSpendLine('selftest'))) {
+        _fails.push('the spend line does not separate the two SKUs, which have different rates and different free allowances');
+      }
+      if (!/GP_RATE_/.test(placesSpendLine('selftest'))) {
+        _fails.push('the spend line presents its rate as a measurement — it is a setting, and the only authoritative rate is on the invoice');
+      }
+      _gpCalls.search -= 1; _gpCalls.details -= 1;
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ PLACES QUERY MEMORY CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ PLACES QUERY MEMORY CHECK: never-searched markets are queried first; a pair goes quiet only after ${PQ_DRY_RUNS_TO_REST} consecutive runs returning nothing new, rests ${PQ_COOLDOWN_DAYS} days and then returns; a query blocked by the per-category cap or by an error is never mistaken for exhausted ground; a drained category runs SHORT rather than being topped back up, which is the saving; the round-robin deal still gives every category the same number of slots; an empty memory reproduces today's run exactly; and the grid can never come back empty. Google bills these on the Enterprise SKU at 1,000 free calls a month, and one Find run was making up to ${parseInt(process.env.GP_QUERY_CAP || '100', 10) + parseInt(process.env.GP_PAGE_BUDGET || '80', 10)} of them.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PLACES QUERY MEMORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
   // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
