@@ -10059,9 +10059,26 @@ const HARM_LADDER = [
         return `${top.name} shows up above them on Google for "${m.rankQuery}", with ${top.reviews} reviews against their ${ours}`
           + (more > 0 ? `, and ${more} other${more === 1 ? '' : 's'} above them have fewer too` : '');
       }
-      return Number(m.weakerAbove) === 1
-        ? `A business with fewer reviews than theirs comes up above them when somebody searches "${m.rankQuery}"`
-        : `Businesses with fewer reviews than theirs come up above them when somebody searches "${m.rankQuery}"`;
+      // ══ WITHOUT A NAME, THE REVIEW COMPARISON IS ALL COST ═════════════
+      // Stephen M. Davis, live: "businesses with fewer reviews than yours are
+      // ranking above you in the Google map results for plastic surgeon in
+      // Nashville, TN". Vin's reading of the same shape on another lead: "it
+      // makes it seem like reviews are what make you rank higher. Incorrect."
+      //
+      // The named form earns the comparison — it points at one business he can
+      // go and look at, and CLAUDE.md PART 5 has a real prospect saying that
+      // contrast is what would have made him open the email. Unnamed, it earns
+      // nothing and costs twice: there is no one to verify, and leading on
+      // review counts asserts a theory of local search that is false. That
+      // lead's own simulator said so: "if they had NAMED those two competitors
+      // specifically and shown me their review counts versus mine, I'd have
+      // spent 30 seconds verifying it myself."
+      //
+      // So the fallback states the position and stops. No count either: with
+      // rank sometimes suppressed we do not always hold the number above them,
+      // and weakerAbove counts only the ones with fewer reviews, which is not
+      // the same thing and would be a wrong number stated confidently.
+      return `They are not the first name Google shows when somebody searches "${m.rankQuery}"`;
     },
     // "the reputation is real and it is not reaching the people searching right
     // now" opens on an abstract noun, and the skeleton that wraps a cost line in
@@ -15526,6 +15543,12 @@ const CTA_TEXT = {
   list: { text: 'Had you seen them sitting there, or is that news?', kind: 'list',
     alts: ['Is that a name you already know?',
            'Do they come up much on your side, same jobs and same customers?'] },
+  // The same finding with nobody named. Every ask above points at a business
+  // the email did not identify, so these point at the SEARCH instead, which is
+  // the thing the email actually gave him.
+  listUnnamed: { text: 'Is that search where your customers actually find you?', kind: 'list',
+    alts: ['Had you ever checked that one, or is that news?',
+           'Is that the search you would want to be first for?'] },
   // ══ THE ASK THAT NAMES THE SET HE CANNOT BUILD ═══════════════════════════
   // Everything else in this table asks who owns a problem. This one names an
   // artifact, because the artifact is the point: he can check the one market we
@@ -15621,6 +15644,26 @@ const _ctaAlt = (entry, seed) => {
 const CTA_FOR = (finding, claimId, company) => {
   const _seed = String(company || '').split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
   const byId = claimId && CTA_BY_FINDING[claimId];
+  // ══ AN ASK POINTING AT A NAME THE EMAIL NEVER GAVE ══════════════════════
+  // Stephen M. Davis, live. The email said "businesses with fewer reviews than
+  // yours are ranking above you" — no name anywhere in it — and closed with:
+  //
+  //     "Is that a name you already know?"
+  //
+  // All three asks under the 'list' kind assume somebody was named: "them",
+  // "that name", "they". The rung's sentence has two forms and only one of them
+  // names anybody, so on every lead where the competitor list was missing the
+  // last line of the email pointed at nothing. That is the same defect as
+  // "Worth seeing the others?" and it lands in the same place: the final line,
+  // where he decides whether to reply.
+  //
+  // Read off the FINDING rather than the rung id, because the rung id is the
+  // same in both cases and the finding is the thing that either carries a name
+  // or does not.
+  if (byId === 'list' && !/\b(?:shows? up above|comes? up above)\b/.test(String(finding || ''))
+      && /\bnot the first name\b/.test(String(finding || ''))) {
+    return _ctaAlt(CTA_TEXT.listUnnamed, _seed);
+  }
   if (byId && CTA_TEXT[byId]) return _ctaAlt(CTA_TEXT[byId], _seed);
   // Fallback for a rung with no mapping: the original text test, so a new rung
   // added without touching this table still closes sensibly rather than oddly.
@@ -35868,10 +35911,23 @@ app.listen(PORT, () => {
       ourReviews: 260, rankQuery: 'garage door repair in Carmel', weakerAbove: 1,
     });
     const _fallback = _rung && _rung.say({ rankQuery: 'plumber in Tulsa', weakerAbove: 4 });
+    // ══ THE FALLBACK RULE INVERTED ON 2026-08-19 ═════════════════════════
+    // This asserted the fallback said "Businesses with fewer reviews". It now
+    // must NOT. The named form earns the review comparison: it points at one
+    // business the owner can go and look at, and a real prospect said that
+    // contrast is what would have made him open the email. The UNNAMED form
+    // earns nothing by it and pays twice — nobody to verify, and leading on
+    // review counts asserts that reviews decide the order, which is false and
+    // which Vin flagged on a live email in those words.
+    //
+    // So the assertion is now two-sided: the named form must carry the name and
+    // both counts, and the fallback must carry the position and no review word
+    // at all. A one-sided version could be satisfied by a fallback that says
+    // nothing.
     const _ok = _named && /Overhead Door Company/.test(_named) && /41/.test(_named) && /260/.test(_named)
-      && _fallback && /Businesses with fewer reviews/.test(_fallback);
+      && _fallback && !/\breviews?\b/i.test(_fallback) && /plumber in Tulsa/.test(_fallback);
     if (!_ok) {
-      console.log(`\u26d4 COMPETITOR NAME CHECK: the outranked finding is not naming the business ranked above them \u2014 got "${String(_named).slice(0, 80)}". Without the name the sentence is generic and reads as a template no matter how true it is.`);
+      console.log(`\u26d4 COMPETITOR NAME CHECK: the named form must carry the competitor and both counts and the unnamed form must carry the position with no review word \u2014 named: "${String(_named).slice(0, 70)}" | unnamed: "${String(_fallback).slice(0, 80)}". Without the name the sentence is generic and reads as a template no matter how true it is.`);
     } else {
       console.log(`\u2713 COMPETITOR NAME CHECK: the outranked finding names the business above them with both review counts, and still falls back to the counted form when no names were measured.`);
     }
@@ -38679,6 +38735,45 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ READABLE FINDING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE LAST LINE MUST NOT POINT AT A NAME THE EMAIL NEVER GAVE ════════
+  // Live on Stephen M. Davis: an email whose finding named nobody closed with
+  // "Is that a name you already know?" Both halves are real — the rung has a
+  // named form and an unnamed one — and the ask table only ever knew the named
+  // one. This asserts the pairing in both directions, because an ask that fits
+  // neither case would satisfy a one-sided check.
+  try {
+    const _fails = [];
+    const _rung = HARM_LADDER.find(h => h.id === 'outranked_by_weaker');
+    const _named = _rung.say({ rankQuery: 'plumber in dallas', ourReviews: 68,
+      weakerNames: [{ name: 'Acme Plumbing', reviews: 40 }], weakerAbove: 1 });
+    const _unnamed = _rung.say({ rankQuery: 'plumber in dallas', weakerAbove: 2 });
+    if (!/Acme Plumbing/.test(_named)) _fails.push('the named form no longer names the competitor, which is the whole reason it outperforms');
+    if (/\breviews?\b/i.test(_unnamed)) {
+      _fails.push(`the unnamed form still leads on review counts — "${_unnamed.slice(0, 70)}". With nobody to verify, that asserts reviews decide the order and gives him nothing to check`);
+    }
+    const _askNamed = CTA_FOR(_named, 'outranked_by_weaker', 'Acme Co');
+    const _askUnnamed = CTA_FOR(_unnamed, 'outranked_by_weaker', 'Acme Co');
+    // A pronoun or "that name" is only honest when a name is actually present.
+    const _POINTS_AT_NAME = /\bthem\b|\bthey\b|that name/i;
+    if (!_POINTS_AT_NAME.test(_askNamed.text)) {
+      _fails.push(`the NAMED finding closes with "${_askNamed.text}" — it named a competitor and then asked about nothing in particular`);
+    }
+    if (_POINTS_AT_NAME.test(_askUnnamed.text)) {
+      _fails.push(`the UNNAMED finding closes with "${_askUnnamed.text}" — the email never said who, so the last line he reads points at nobody`);
+    }
+    for (const _alt of [_askUnnamed.text, ...(_askUnnamed.alts || [])]) {
+      if (_POINTS_AT_NAME.test(_alt)) _fails.push(`an unnamed-case ask still points at a name: "${_alt}"`);
+      if (!/\?$/.test(String(_alt).trim())) _fails.push(`"${_alt}" is not a question`);
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 ASK MATCHES FINDING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 ASK MATCHES FINDING CHECK: the ranking finding has a named form and an unnamed one, and each closes on an ask that fits it. Named, it asks about the competitor. Unnamed, it asks about the search, because the email never said who. And the unnamed form no longer leads on review counts, which with nobody to verify asserted that reviews decide the order and gave him nothing to check.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 ASK MATCHES FINDING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ A LEAD WITH NO LOCATION MUST STILL GET ITS RANK SEARCHES ════════════
