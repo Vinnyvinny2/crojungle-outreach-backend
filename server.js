@@ -4896,7 +4896,11 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
 
   // GP_FREE_BUILDER is declared at module scope so the boot check can assert it.
   const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
-  const RUN_CAP = parseInt(process.env.GP_QUERY_CAP || '100', 10);
+  // The caller may size this down when the bench already holds leads we have
+  // paid for. Absent, the env setting stands and the run is what it always was.
+  const _capEnv = parseInt(process.env.GP_QUERY_CAP || '100', 10);
+  const RUN_CAP = (Number.isFinite(Number(_flt.runCap)) && Number(_flt.runCap) > 0)
+    ? Math.min(_capEnv, Math.floor(Number(_flt.runCap))) : _capEnv;
   // Cap how many leads any ONE category can contribute per run. Without this a
   // single vertical fills the queue and every lead on screen is a garage door
   // company, which is what was happening.
@@ -5014,9 +5018,17 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // businesses (because we already own them, or the band and the caps rejected
   // them), ask for the next page. A query that yielded plenty stops at one page,
   // so the extra requests land exactly on the exhausted verticals.
-  const PAGE_BUDGET = parseInt(process.env.GP_PAGE_BUDGET || '80', 10);
+  // Scaled with RUN_CAP. Left absolute, a run cut to 25 queries by the bench
+  // could still buy 80 extra pages — more depth than the search it belongs to,
+  // and the page is the same price as the query.
+  const _pageEnv = parseInt(process.env.GP_PAGE_BUDGET || '80', 10);
+  const PAGE_BUDGET = Math.max(0, Math.round(_pageEnv * (RUN_CAP / Math.max(1, _capEnv))));
   const NEW_PER_QUERY = parseInt(process.env.GP_NEW_PER_QUERY || '4', 10);
   let pagesBought = 0;
+  // Measured, not assumed: what a first page yields against what the pages we
+  // BUY on top of it yield. The next change to the depth rule should come from
+  // these two numbers rather than from an argument about prominence order.
+  let _firstYield = 0, _deepYield = 0, _bandMisses = 0, _ownedMisses = 0, _capMisses = 0;
   for (const { cat, city } of grid.slice(0, RUN_CAP)) {
     // ══ RECORDED ONLY AFTER A RESPONSE ACTUALLY ARRIVES ═════════════════
     // This used to record BEFORE the request, and its comment argued that was
@@ -5042,6 +5054,26 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       // completely untouched, and resting a pair for that reason would delete
       // coverage rather than save money.
       let _newForQuery = 0, _answered = false, _capBlocked = false;
+      // ══ WHY A PAGE RAN DRY DECIDES WHETHER DEPTH CAN HELP ══════════
+      // The next-page rule was "fewer than 4 new businesses, so go deeper", and
+      // it could not see WHY. From the live run of 2026-08-19: 1,810 businesses
+      // dropped for sitting outside the rating band, 335 dropped because their
+      // category was already full, and 25 dropped as already ours. Those three
+      // want opposite answers.
+      //
+      // Already ours     depth HELPS. We have drained the prominent end of this
+      //                  market; page two is ground we have not walked.
+      // Category full    depth is PROVABLY USELESS. Every further result on this
+      //                  query is discarded by definition, and the page costs
+      //                  exactly what the query cost.
+      // Outside the band depth is UNKNOWN, and nothing has ever measured it.
+      //
+      // The cap rule is enforced below because it can be proven. The band rule
+      // is only MEASURED for now — the log reports what deeper pages actually
+      // yielded, so the next change to this gate comes from data rather than
+      // from a plausible argument. This file's own record: judging a source by a
+      // symptom downstream of it instead of by what it returned.
+      let _missBand = 0, _missCap = 0, _missOwned = 0;
       do {
       const _body = { textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true, pageSize: 20 };
       if (_pageToken) _body.pageToken = _pageToken;
@@ -5097,7 +5129,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // A rating we cannot read tells us nothing either way, so it passes —
         // absence of a rating is not evidence of a clean record.
         if (rating !== null && (rating < PAIN_BAND_LOW || rating > PAIN_BAND_HIGH)) {
-          skippedNoPain++;
+          skippedNoPain++; _missBand++;
           // Counted separately: these are the near-perfect profiles the ceiling
           // exists to exclude. Reported so the cost is a number rather than an
           // assumption - fourteen audits said there is nothing to find up here,
@@ -5117,10 +5149,10 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         if (_knownH.size || _knownN.size) {
           const _h = website ? website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase() : '';
           const _k = _nrm(name);
-          if ((_h && _knownH.has(_h)) || (_k && _k.length > 4 && _knownN.has(_k))) { skippedAlreadyOwned++; continue; }
+          if ((_h && _knownH.has(_h)) || (_k && _k.length > 4 && _knownN.has(_k))) { skippedAlreadyOwned++; _missOwned++; continue; }
         }
         const catCount = perCat.get(cat.label) || 0;
-        if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; continue; }    // one vertical must not flood the queue
+        if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
         // A lead with no website is keyed on its Place id instead, so two
         // different businesses without sites do not collapse into one another.
         const domainKey = website
@@ -5182,8 +5214,23 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       }
       // Ask for the next page only when this one ran dry of NEW businesses, and
       // only while the page budget lasts. A productive query costs one request.
-      _pageToken = (_newHere < NEW_PER_QUERY && pagesBought < PAGE_BUDGET && _pagesHere < 3)
+      //
+      // ══ AND NEVER WHEN THE CATEGORY IS ALREADY FULL ═══════════════
+      // PER_CAT_CAP stops one vertical flooding the queue. Once it has bitten,
+      // every further business this query returns is discarded before it is
+      // looked at — so a second page is a Google Enterprise call bought to
+      // produce nothing, by construction rather than by bad luck. 335 businesses
+      // hit that cap on the live run of 2026-08-19 and 77 extra pages were
+      // bought in the same run.
+      //
+      // Written as its own condition rather than folded into the count above,
+      // because the two say different things: the count asks "did this page
+      // yield?", and this asks "can any page yield?".
+      const _catFull = (perCat.get(cat.label) || 0) >= PER_CAT_CAP;
+      _pageToken = (_newHere < NEW_PER_QUERY && !_catFull && pagesBought < PAGE_BUDGET && _pagesHere < 3)
         ? String(d.nextPageToken || '') : '';
+      if (_pagesHere > 1) _deepYield += _newHere;
+      if (_pagesHere === 1) _firstYield += _newHere;
       } while (_pageToken);
       // ══ RECORDED AFTER THE ANSWER, CLAIMED BEFORE THE RUN ═══════════
       // Two different questions that look like one, and this file has already
@@ -5196,6 +5243,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       //
       // The CLAIM against concurrent runs is a separate mechanism and lives at
       // the caller, which stamps every selected pair before the first request.
+      _bandMisses += _missBand; _ownedMisses += _missOwned; _capMisses += _missCap;
       if (_answered && typeof _flt.onQuery === 'function') {
         try { _flt.onQuery({ cat: cat.label, city, newLeads: _newForQuery, capBlocked: _capBlocked, pages: _pagesHere }); }
         catch (e) { void e; }
@@ -5225,6 +5273,13 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // without extra pages a run can only ever see 39 categories x 20 cities x 20 =
   // about 15,600 businesses in total. Pages are bought only for queries that ran
   // out of NEW businesses, which is exactly where the repetition comes from.
+  if (pagesBought) {
+    const _pp = _deepYield / Math.max(1, pagesBought);
+    const _fp = _firstYield / Math.max(1, calls - pagesBought);
+    console.log(`\u{1F4CF} DEPTH YIELD [Places]: a first page returned ${_fp.toFixed(1)} usable business(es) on average; the ${pagesBought} extra page(s) we BOUGHT returned ${_pp.toFixed(1)} each. `
+      + `Every page costs exactly what a query costs, so depth is worth buying only while that second number holds up. `
+      + `Of the businesses we paid for and did not keep, ${_bandMisses} were outside the rating band, ${_capMisses} hit their category cap and ${_ownedMisses} were already ours \u2014 only the last of those is a gap that a deeper page can fill.`);
+  }
   { const _sp = placesSpendLine('after Find'); if (_sp) console.log(_sp); }
   console.log(`\u{1F50E} DEPTH [Places]: ${pagesBought} extra page(s) of results pulled on queries whose first page returned fewer than ${NEW_PER_QUERY} businesses we do not already own (budget ${PAGE_BUDGET}). ${skippedAlreadyOwned} business(es) were skipped BEFORE they could take a per-category slot \u2014 previously they filled the slot and were dropped at the very end, so the run reported leads it never returned.`);
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
@@ -23962,6 +24017,135 @@ const savePlacesQueryState = async (rows) => {
   return r !== null;
 };
 
+
+// ══ WE PAID FOR 513 BUSINESSES AND KEPT 120 ═══════════════════════════════
+// From the live run of 2026-08-19, in the log's own words:
+//
+//   Google Places: 514 local owner-operated businesses from 177 queries
+//   After merge: 513 unique
+//   Unique: 513 | Returning: 120
+//
+// Every one of those 513 cleared the rating band, the size gate, the franchise
+// filter and the pipeline dedupe. They are qualified leads. 393 of them were
+// dropped on the floor because MAX_TOTAL is 120, and MAX_TOTAL is a decision
+// about how many rows fit usefully on a screen — not a decision about how many
+// businesses are worth having.
+//
+// Nothing remembered them, so the next run pays Google to find the same
+// businesses again and throws the same 393 away again. At 177 calls a run on the
+// Enterprise SKU that is most of the invoice, spent on work already done.
+//
+// The bench is the fix and it is not clever: the overflow is stored, and the
+// NEXT run serves from it before it spends anything. One run currently yields
+// 120 usable leads; with the bench it yields about 513, so four runs do the work
+// of seventeen.
+//
+//   create table lead_bench (
+//     id text primary key, name text, website text, source text,
+//     score real, payload jsonb, created_at timestamptz default now());
+//
+// Three things this must not do, each closed below rather than hoped for:
+//
+//  1. IT MUST NOT SERVE STALE BUSINESSES. A benched lead is a snapshot: ratings
+//     move, businesses close, websites change. Anything past the TTL is dropped
+//     on read rather than served, because a lead that has gone bad costs a full
+//     research cycle to discover — far more than the search that found it.
+//  2. IT MUST NOT STARVE FRESH DISCOVERY. Scaling the Places budget down to the
+//     shortfall is the whole saving, but a bench full of one trade would then
+//     stop us ever searching for anything else. The budget never falls below a
+//     floor, so every run still walks some new ground.
+//  3. IT MUST NOT GROW WITHOUT LIMIT. Kept to the highest-scoring rows, because
+//     an unbounded table eventually makes the read slower than the search it
+//     replaces.
+//
+// And it fails open in both directions: no Supabase means no bench, a full
+// Places budget, and exactly the behaviour that existed before this.
+const BENCH_TTL_DAYS = Math.max(1, parseInt(process.env.LEAD_BENCH_TTL_DAYS || '60', 10) || 60);
+const BENCH_MAX_ROWS = Math.max(100, parseInt(process.env.LEAD_BENCH_MAX || '3000', 10) || 3000);
+
+// One id shape for read and write. A lead keyed by host on the way in and by
+// name on the way out is two leads, and the bench would grow a duplicate of
+// every business it holds.
+const benchIdOf = (c) => {
+  const host = cleanDomainOf(c && (c.website || c.domain) || '');
+  if (host) return 'h:' + host;
+  const n = String((c && (c.name || c.company)) || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return n ? 'n:' + n : '';
+};
+
+const loadLeadBench = async () => {
+  const rows = await sbRest(`/lead_bench?select=id,payload,created_at&order=score.desc&limit=${BENCH_MAX_ROWS}`);
+  if (!Array.isArray(rows)) return [];
+  const cutoff = Date.now() - BENCH_TTL_DAYS * 24 * 60 * 60 * 1000;
+  const out = [];
+  let stale = 0;
+  for (const r of rows) {
+    if (!r || !r.payload) continue;
+    const t = r.created_at ? Date.parse(r.created_at) : 0;
+    if (Number.isFinite(t) && t && t < cutoff) { stale++; continue; }
+    // The row IS the lead, restored whole. Storing a subset here and rebuilding
+    // it on read is how a benched lead would come back missing the very field
+    // that made it worth keeping.
+    out.push({ ...r.payload, _benchId: r.id });
+  }
+  if (stale) console.log(`\u{1F5C3} LEAD BENCH: ${stale} benched lead(s) older than ${BENCH_TTL_DAYS} days were not served — a stale lead costs a whole research cycle to discover, which is far more than the search that found it.`);
+  return out;
+};
+
+const saveLeadBench = async (leads) => {
+  const rows = [];
+  const seen = new Set();
+  for (const c of (Array.isArray(leads) ? leads : [])) {
+    const id = benchIdOf(c);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({
+      id, name: String(c.name || c.company || '').slice(0, 200),
+      website: String(c.website || '').slice(0, 300),
+      source: String(c.source || '').slice(0, 60),
+      score: Number(c.icpScore) || 0,
+      payload: c,
+    });
+  }
+  if (!rows.length) return 0;
+  const r = await sbRest('/lead_bench?on_conflict=id', {
+    method: 'POST',
+    prefer: 'return=minimal,resolution=merge-duplicates',
+    body: JSON.stringify(rows),
+  });
+  return r === null ? -1 : rows.length;
+};
+
+// Served leads leave the bench. Not because serving them twice would be unsafe
+// — the pipeline dedupe would catch that — but because a bench that only grows
+// eventually holds every business we have ever seen and the read costs more than
+// the search it replaced.
+const clearLeadBench = async (ids) => {
+  const list = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))];
+  if (!list.length) return;
+  // Chunked: a URL carrying three thousand ids is refused by the gateway long
+  // before Postgres sees it.
+  for (let i = 0; i < list.length; i += 100) {
+    const chunk = list.slice(i, i + 100).map(x => `"${String(x).replace(/"/g, '')}"`).join(',');
+    await sbRest(`/lead_bench?id=in.(${encodeURIComponent(chunk)})`, { method: 'DELETE' });
+  }
+};
+
+// PURE, so a boot check can run it. How much Google budget this run actually
+// needs, given what the bench already holds.
+//
+// The floor is the important half. Scaling straight down to the shortfall is
+// the saving; scaling to ZERO would mean a bench full of roofers stops us ever
+// searching for anything else, and the grid would never widen again.
+const placesBudgetFor = ({ benchCount, target, runCap, floorPct = 0.25 }) => {
+  const cap = Math.max(1, Number(runCap) || 100);
+  const need = Math.max(0, (Number(target) || 0) - (Number(benchCount) || 0));
+  const floor = Math.max(1, Math.round(cap * floorPct));
+  if (!Number.isFinite(need) || need <= 0) return floor;
+  const scaled = Math.ceil(cap * (need / Math.max(1, Number(target) || 1)));
+  return Math.max(floor, Math.min(cap, scaled));
+};
+
 // ══ THE CLAIM, WHICH IS A DIFFERENT JOB FROM THE RECORD ═══════════════════
 // Find runs from the button AND from the cron, and nothing stops them
 // overlapping. Two runs that both load the state a second apart choose the same
@@ -24297,6 +24481,20 @@ app.post('/api/discover', async (req, res) => {
   // server-side and can't leak. Set GOOGLE_PLACES_KEY in Render's environment tab.
   const placesKey = process.env.GOOGLE_PLACES_KEY || '';
 
+  // ══ WHAT WE ALREADY PAID FOR, BEFORE WE PAY FOR ANYTHING ELSE ════
+  // Read first, deliberately. The whole saving is that the Google budget is
+  // sized against what the bench already holds, and that decision has to happen
+  // before the search runs rather than after.
+  const _bench = await loadLeadBench();
+  const _benchIds = _bench.map(b => b._benchId).filter(Boolean);
+  const _placesBudget = placesBudgetFor({
+    benchCount: _bench.length, target: 120,
+    runCap: parseInt(process.env.GP_QUERY_CAP || '100', 10),
+  });
+  if (_bench.length) {
+    console.log(`\u{1F5C3} LEAD BENCH: ${_bench.length} qualified lead(s) already paid for are being served before a penny is spent. The Google budget for this run drops to ${_placesBudget} queries${_placesBudget < parseInt(process.env.GP_QUERY_CAP || '100', 10) ? ` from ${parseInt(process.env.GP_QUERY_CAP || '100', 10)}` : ''}. It never drops below a quarter of the cap, because a bench full of one trade must not stop us searching for anything else.`);
+  }
+
   console.log('\n=== DISCOVERY START ===');
   // The headline of a discovery run now names what actually decides the leads:
   // the category grid and the filters. `keywords` used to print here and was
@@ -24384,6 +24582,10 @@ app.post('/api/discover', async (req, res) => {
         const _pqOutcomes = [];
         const _leads = await searchGooglePlaces(placesKey, {
           ..._f, knownHosts: _knownHosts, knownNames: _knownNames, normName: _normName,
+          // Sized against the bench above. This is where the saving actually
+          // lands: a run that has 400 paid-for leads waiting does not need to
+          // buy a hundred more searches to fill a queue of 120.
+          runCap: _placesBudget,
           queryState: _pqState,
           onClaim: (pairs) => claimPlacesQueries(pairs, _pqState),
           onQuery: (o) => _pqOutcomes.push(o),
@@ -24417,6 +24619,11 @@ app.post('/api/discover', async (req, res) => {
       ...(Array.isArray(venting.leads) ? venting.leads : []),
       ...arr(fbAdsRes),
       ...arr(placesRes),
+      // Benched leads re-enter here rather than being spliced in at the end, so
+      // they go through the same ICP filter, size gate, merge and scoring as
+      // anything fresh. A lead that skipped those checks would be a lead nobody
+      // had actually qualified, sitting at the top of the queue.
+      ..._bench,
     ];
 
     console.log('Raw total:', allCompanies.length);
@@ -25396,6 +25603,39 @@ const WEIGHTS = {
     const breakdown = {};
     scored.forEach(c => { breakdown[c.source] = (breakdown[c.source]||0)+1; });
 
+    // ══ THE OVERFLOW IS AN ASSET, NOT A REMAINDER ═════════════════
+    // 393 qualified businesses were dropped on the floor by this line on the
+    // 2026-08-19 run — every one of them past the rating band, the size gate and
+    // the franchise filter, and every one of them paid for. MAX_TOTAL is a
+    // decision about how many rows are useful on a screen; it was silently
+    // acting as a decision about how many businesses are worth having.
+    //
+    // Written AFTER the dedupe loop above, so anything already in the client's
+    // pipeline is excluded by construction rather than by a second filter that
+    // could drift from the first.
+    {
+      const _served = new Set(scored.map(c => benchIdOf(c)).filter(Boolean));
+      const _over = [];
+      for (const c of allScored) {
+        const id = benchIdOf(c);
+        if (!id || _served.has(id)) continue;
+        if (_knownHosts.size) { const h = _hostOf(c.website || ''); if (h && _knownHosts.has(h)) continue; }
+        if (_knownNames.size) { const k = _normName(c.name || c.company || ''); if (k && k.length > 4 && _knownNames.has(k)) continue; }
+        _over.push(c);
+      }
+      if (_over.length) {
+        const _n = await saveLeadBench(_over.slice(0, BENCH_MAX_ROWS));
+        console.log(_n < 0
+          ? `\u26d4 LEAD BENCH: ${_over.length} qualified lead(s) could not be saved — the write failed, so they are lost and the next run will pay Google to find them again. Check that the lead_bench table exists.`
+          : `\u{1F5C3} LEAD BENCH: ${_n} qualified lead(s) beyond this run's ${scored.length} are banked instead of discarded. They cost nothing to serve next time; finding them again costs a Google search each.`);
+      }
+      // Served rows leave the bench so it cannot grow into a table that takes
+      // longer to read than the search it replaces.
+      if (_benchIds.length) {
+        const _usedIds = scored.map(c => c._benchId).filter(Boolean);
+        if (_usedIds.length) await clearLeadBench(_usedIds);
+      }
+    }
     console.log('Unique:', unique.length, '| Returning:', scored.length);
     console.log('Breakdown:', breakdown);
     const reachSummary = {
@@ -38736,6 +38976,99 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ PLACES QUERY MEMORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE BENCH, AND THE BUDGET IT SIZES ════════════════════════════════════
+  // 393 qualified businesses were dropped on the floor by one line on the
+  // 2026-08-19 run. The failure modes here are all silent: a bench that serves
+  // stale leads looks like bad data, a bench that starves discovery looks like a
+  // thin market, and a bench that grows without limit just gets slower. None of
+  // them raises an error, so each is asserted.
+  try {
+    const _fails = [];
+    const CAP = 100;
+
+    // 1. AN EMPTY BENCH CHANGES NOTHING. First run, Supabase down, table
+    // missing — all reach here, and all must leave the Google budget alone.
+    if (placesBudgetFor({ benchCount: 0, target: 120, runCap: CAP }) !== CAP) {
+      _fails.push('an empty bench does not leave the search budget alone — the first run, and every run after a Supabase outage, would search less than it should');
+    }
+
+    // 2. A BENCH THAT COVERS THE QUEUE COLLAPSES THE BUDGET TO THE FLOOR.
+    // This is the entire saving: 400 leads already paid for means we do not buy
+    // a hundred searches to fill a queue of 120.
+    {
+      const b = placesBudgetFor({ benchCount: 400, target: 120, runCap: CAP });
+      if (b > CAP * 0.25) _fails.push(`with 400 banked leads the run still buys ${b} of ${CAP} searches — the bench is being loaded and then ignored`);
+    }
+
+    // 3. BUT NEVER TO ZERO. A bench full of one trade must not stop us ever
+    // searching for anything else; the grid would then never widen again.
+    for (const n of [120, 500, 5000]) {
+      if (placesBudgetFor({ benchCount: n, target: 120, runCap: CAP }) < 1) {
+        _fails.push(`a bench of ${n} stops discovery completely — no new ground is ever walked and the grid freezes wherever it is`);
+      }
+    }
+    if (placesBudgetFor({ benchCount: 9999, target: 120, runCap: CAP }) !== Math.round(CAP * 0.25)) {
+      _fails.push('the discovery floor is not holding at a quarter of the cap');
+    }
+
+    // 4. A PARTIAL BENCH BUYS THE SHORTFALL, NOT THE WHOLE RUN.
+    {
+      const b = placesBudgetFor({ benchCount: 60, target: 120, runCap: CAP });
+      if (b >= CAP || b <= CAP * 0.25) _fails.push(`a half-full bench bought ${b} of ${CAP} searches — it should scale to the shortfall, between the floor and the cap`);
+    }
+    // Monotonic: more banked leads can never mean more searching.
+    {
+      let prev = Infinity;
+      for (const n of [0, 30, 60, 90, 120, 300]) {
+        const b = placesBudgetFor({ benchCount: n, target: 120, runCap: CAP });
+        if (b > prev) { _fails.push(`the budget went UP from ${prev} to ${b} as the bench grew — the relationship is inverted somewhere`); break; }
+        prev = b;
+      }
+    }
+
+    // 5. ONE ID SHAPE, READ AND WRITE. A lead keyed by host on the way in and by
+    // name on the way out is two leads, and the bench grows a duplicate of every
+    // business it holds.
+    {
+      const a = benchIdOf({ name: 'Window Doctor Of Colorado', website: 'http://www.windowdoctorofcolorado.com/' });
+      const b = benchIdOf({ name: 'Window Doctor of Colorado', website: 'https://windowdoctorofcolorado.com/our-team' });
+      if (!a || a !== b) _fails.push(`the same business stores under two ids ("${a}" and "${b}") — the bench would hold a duplicate of every lead whose URL changed shape`);
+      const noSite = benchIdOf({ name: 'Bob & Sons Plumbing, LLC' });
+      if (!noSite) _fails.push('a business with no website gets no bench id at all — the CALL leads, which are the ones with nothing to audit and a phone number Mike can dial, would never be banked');
+      if (benchIdOf({}) !== '') _fails.push('a lead with neither a name nor a website still produces an id, so junk can enter the bench');
+    }
+
+    // 6. THE PAGE RULE. A category already at its cap discards every further
+    // result by construction, so a second page there is a paid call bought to
+    // produce nothing.
+    {
+      const _src = selfSource();
+      const _i = _src.indexOf('_pageToken = (_newHere < NEW_PER_QUERY');
+      if (_i < 0) _fails.push('the next-page rule could not be located, so nothing about depth was checked');
+      else if (!/_catFull/.test(_src.slice(_i, _i + 200))) {
+        _fails.push('the next-page rule does not consider whether the category is already full — 335 businesses hit that cap on the live run and 77 extra pages were bought in the same run');
+      }
+    }
+
+    // 7. THE PAGE BUDGET FOLLOWS THE RUN. A run cut to a quarter of its queries
+    // must not still be able to buy a full run's worth of extra pages — a page
+    // costs exactly what a query costs.
+    {
+      const _src = selfSource();
+      const _i = _src.indexOf('const PAGE_BUDGET =');
+      if (_i < 0 || !/RUN_CAP/.test(_src.slice(_i, _i + 160))) {
+        _fails.push('the page budget is an absolute number rather than a share of the run, so a bench-shortened run can still buy a full run of depth');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ LEAD BENCH CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ LEAD BENCH CHECK: qualified leads beyond the queue cap are banked instead of discarded — 393 of them on the 2026-08-19 run, every one past the rating band, the size gate and the franchise filter, and every one paid for. The next run serves them first and buys only the shortfall in Google searches, never dropping below a quarter of the cap so fresh ground is always walked. One id shape covers both the read and the write, a business with no website still banks, and junk cannot enter. Depth is no longer bought for a category that is already full, and the page budget scales with the run rather than sitting at an absolute 80.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LEAD BENCH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
   // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
