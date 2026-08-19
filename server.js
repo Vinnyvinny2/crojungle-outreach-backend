@@ -28691,6 +28691,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             const _buf = await _homeImage();
             if (_buf) {
               screenshotBase64 = _buf.toString('base64');
+              // ══ LABEL EVERY IMAGE ═══════════════════════════════════════
+              // Interior renders may now travel without a homepage render (see
+              // the block below), so nothing about ORDER tells the model what it
+              // is looking at any more. Each image says what it is, immediately
+              // before it, and the prompt is told separately whether a homepage
+              // render exists at all. Labelling is what makes sending the
+              // interiors safe; withholding them was the old answer.
+              msgContent.push({ type: 'text', text: 'IMAGE 1 \u2014 THE HOMEPAGE, rendered full page, top to bottom.' });
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } });
             }
           } catch(e) { console.log('Screenshot fetch failed:', e.message); }
@@ -28776,9 +28784,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // and asked what the homepage looks like.
           //
           // Interiors supplement the homepage; they never stand in for it.
-          if (!msgContent.some(m => m && m.type === 'image')) {
-            if (_shots.length) console.log(`\u26a0 PAGE RENDERS HELD [${company}]: ${_shots.length} interior render(s) were captured but the homepage produced no screenshot, so none are sent. The first image the model sees has to be the homepage - the prompt and the vision read both describe it - and an interior page in that slot is worse than no picture.`);
-            throw new Error('no homepage render');
+          // ══ ONE MISSING PICTURE WAS DELETING FOUR OTHERS ═══════════════
+          // Claude Reynolds, live 2026-08-19: the homepage render was a
+          // 1920x8336 PALETTE png, the downscaler only reads RGB and RGBA, so
+          // it was dropped — and this throw then binned four interior renders
+          // that were already captured and already paid for. BRAIN INPUT: 0
+          // image(s). The audit ran blind on a lead where we were holding five
+          // pictures of the site.
+          //
+          // The comment above rests on two premises. The first — that an
+          // interior page in the homepage SLOT gets described as the homepage —
+          // is real, and the answer to it is to LABEL the images, which is what
+          // now happens: each interior render is announced by name and the
+          // prompt is told explicitly whether a homepage render exists. The
+          // second premise, that the vision read would misread them, does not
+          // hold: that read is structurally homepage-only.
+          //
+          // And the homepage can be lost six independent ways — an HTTP error,
+          // an unreadable buffer, a scaler refusal, the 3MB cap, a fetch throw,
+          // or a palette source that re-encodes larger than the cap. Every one
+          // of them used to take the whole visual channel with it.
+          const _haveHome = msgContent.some(m => m && m.type === 'image');
+          if (!_haveHome && _shots.length) {
+            console.log(`\u26a0 NO HOMEPAGE RENDER [${company}]: the homepage produced no usable image, so ${_shots.length} interior render(s) are being sent WITHOUT it. Each is labelled as an interior page and the prompt is told there is no homepage render, so nothing can be mistaken for one. Four paid-for images used to be discarded here.`);
           }
           for (const pg of _ranked) {
             if (_sent >= MAX_IMAGES || _bytes >= MAX_TOTAL) break;
@@ -28819,6 +28847,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                 _send = _fit.buffer;
                 _rescaled.push(`${pg.key} ${_fit.from} → ${_fit.width}x${_fit.height}`);
               }
+              msgContent.push({ type: 'text', text: `IMAGE ${_sent + (_haveHome ? 2 : 1)} \u2014 an INTERIOR page: ${pg.key}${pg.url ? ` (${pg.url})` : ''}. This is NOT the homepage. Nothing visible here may be described as the homepage.` });
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _send.toString('base64') } });
               _sent++; _bytes += _send.length; _sentKeys.push(pg.key);
             } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
@@ -29230,6 +29259,30 @@ Anything outside that list sells them something that does not address what this 
 })()}
 Your recommendedProduct and every item in topThreeProducts MUST come from this list.Your recommendedProduct and every item in topThreeProducts MUST come from this list. If a product is not listed, its triggering signal was NOT found — do NOT recommend it.${_realOpsSignal ? '' : '\n⚠ There is NO confirmed manual-labor signal, so Custom AI Software Build is NOT eligible. Do not recommend it under any framing.'}`;
 
+        // ══ THE PROMPT CLAIMED A SCREENSHOT THAT WAS NOT ATTACHED ═══════
+        // The line further down was gated on `screenshotUrl` — the Firecrawl URL
+        // — rather than on an image actually being in this message. On Claude
+        // Reynolds the homepage render was dropped by the downscaler, so the
+        // brain was told "I have also provided a screenshot of their homepage
+        // above" with ZERO images attached, while another line of the same
+        // prompt correctly said no screenshot was available. Two contradictory
+        // instructions in one message, one of them false, and the false one
+        // invites the model to describe a page it cannot see.
+        //
+        // Computed from msgContent itself, which is the thing actually sent, so
+        // it cannot drift from reality the way a URL flag did. Read here rather
+        // than wired down from the image block, because the counters there are
+        // block-scoped and a wire is one more thing to leave stale.
+        const _imagesSent = msgContent.filter(m => m && m.type === 'image').length;
+        const _homeSent = msgContent.some(m => m && m.type === 'text' && /^IMAGE 1 \u2014 THE HOMEPAGE/.test(String(m.text || '')));
+        const _interiorLabels = msgContent
+          .filter(m => m && m.type === 'text' && /an INTERIOR page: /.test(String(m.text || '')))
+          .map(m => (String(m.text).match(/an INTERIOR page: ([^(]+)/) || [])[1] || '')
+          .map(s => s.trim()).filter(Boolean);
+        const _imagesDesc = !_imagesSent
+          ? 'NO images were attached to this request. Do not describe what any page looks like.'
+          : `${_homeSent ? 'Image 1 is the homepage, rendered full page.' : 'There is NO homepage render in this request — do not describe the homepage.'}`
+            + (_interiorLabels.length ? ` Interior page renders attached: ${_interiorLabels.join(', ')}. Each is labelled above its image.` : '');
         msgContent.push({
           type: 'text',
           text: `You are CROJungle's senior marketing auditor. Your job is to find the single most expensive problem in this business's digital presence and recommend the right CROJungle product to fix it.
@@ -29517,7 +29570,7 @@ ADS:
 - Facebook Ads: ${fbAds.hasAds && (fbAds.countReliable !== false) ? `${fbAds.adCount}+ active ads VERIFIED AS THEIRS in Ad Library (attribution-checked; true count may be higher — cite as "at least ${fbAds.adCount}"). Confirmed ad spend landing on a page that cannot hold anyone IS the pitch.` : fbAds.hasAds ? `Ad Library keyword search returned hits for this company name, but the count is NOT attribution-verified \u2014 it may include other advertisers or even a different company with a similar name. \u26a0 You MUST NOT state an ad count, imply a specific number of ads, or say they are \"running N ads\". Putting an unverified number in a real sales email is a fabrication. If ad spend matters to the pitch you may only reference it when the Meta pixel is ALSO present, and only as \"ads appear to be running\" with no number \u2014 otherwise leave Facebook ads out of the pitch entirely.` : builtWith.hasMetaPixel ? 'Meta pixel on their site — ad infrastructure exists but ZERO ads verified as theirs in Ad Library. Do NOT state an ad count or claim active campaigns.' : fbAds.confirmed ? 'No ads attributable to them in Ad Library — do NOT claim they run Facebook ads' : 'Could not check — do not claim anything about their Facebook ads'}
 ${fbAds.ads?.length > 0 ? '- Longest running ad: ' + Math.max(...(fbAds.ads||[]).map(a=>a.runningDays||0)) + ' days' : ''}
 
-${siteUnreachable ? 'WARNING: The homepage could NOT be reached during our scan — it returned a connection/error state (e.g. "Connection Reset" or a timeout). This is very likely transient or on OUR side, NOT proof their site is down. DO NOT claim their website is broken, blank, or showing an error — that would be a fabrication. Do NOT audit the homepage at all. Audit ONLY from the discovery signals and tech-stack data, and note in the pitch angle that the site needs a manual look.' : screenshotUrl ? 'I have also provided a screenshot of their homepage above.' : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
+${siteUnreachable ? 'WARNING: The homepage could NOT be reached during our scan — it returned a connection/error state (e.g. "Connection Reset" or a timeout). This is very likely transient or on OUR side, NOT proof their site is down. DO NOT claim their website is broken, blank, or showing an error — that would be a fabrication. Do NOT audit the homepage at all. Audit ONLY from the discovery signals and tech-stack data, and note in the pitch angle that the site needs a manual look.' : _imagesSent ? _imagesDesc : trustedContent.length > 100 ? 'No screenshot available — audit from scraped content only.' : 'WARNING: Homepage could not be reliably scraped (site blocked Firecrawl or returned a bot/cookie page). Do NOT make up ANY homepage findings, headlines, or CTAs. Audit ONLY from the discovery signals and tech stack data provided above. Focus on the operational/funding/exit angle.'}
 
 ${stackCombo ? `STACKED SIGNAL COMBO — HIGHEST-CONFIDENCE LEAD TYPE:
 ${stackCombo.label} (Tier ${stackCombo.tier})
@@ -30694,7 +30747,37 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // that quotes the owner's own advertisement now VERIFIES instead of
             // being dropped as unquotable, and one that invents a sentence he
             // never wrote is still dropped exactly as before.
-            const _corpusBase = (sitePages && sitePages.rawText) || trustedContent || '';
+            // ══ THE HOMEPAGE WAS FALLING OUT OF ITS OWN CORPUS ═══════════
+            // This read `sitePages.rawText || trustedContent`, an OR — so the
+            // moment any interior page was scraped, the HOMEPAGE text stopped
+            // being part of the corpus entirely. Claude Reynolds, live: the
+            // audit quoted "Your Trusted, Independent Insurance Age…", which is
+            // the tagline at the top of their homepage, and it was dropped as
+            // "does not appear on any page we read". We had read it. We were
+            // checking against the wrong pages.
+            //
+            // Five of the eight worked examples this prompt gives the model
+            // quote the homepage, so the single most-encouraged kind of finding
+            // was the kind most likely to be discarded.
+            //
+            // ══ AND A REVIEW QUOTE CAN NEVER APPEAR ON A WEB PAGE ═════════
+            // The second dropped finding was "Google review pattern: callback
+            // delays and agent unavailability" — checked against the SITE. No
+            // amount of loosening would ever have let that through, because it
+            // was being asked to appear somewhere it cannot exist. A category
+            // error, not a threshold.
+            //
+            // The mined review evidence is text we captured verbatim from their
+            // profile, so it belongs in the corpus on exactly the same footing
+            // as their page copy: the finding must quote something a real person
+            // actually wrote. Nothing is loosened — the rule is still "we hold
+            // the words you are quoting". This just stops the rule being applied
+            // to a corpus that could not contain them.
+            const _corpusBase = [
+              trustedContent,
+              sitePages && sitePages.rawText,
+              (Array.isArray(publicPainSignals) ? publicPainSignals.join('\n') : ''),
+            ].filter(Boolean).join('\n\n');
             const _corpus = jobSnippet ? `${_corpusBase}\n\n${jobSnippet}` : _corpusBase;
             const _origIn = Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [];
             const _origOk = [];
@@ -38165,10 +38248,25 @@ app.listen(PORT, () => {
           for (const _v of ['variantA', 'variantB']) {
             if (_full && _full[_v] && _full[_v].body) _bodies.push([_v, _full[_v].body]);
           }
-          for (const _t of (_full && _full.touches) || []) {
-            if (_t && _t.body) _bodies.push([`touch:${_t.rungId || '?'}`, _t.body]);
+          // ══ THIS LOOP READ A KEY THAT DOES NOT EXIST ══════════════════
+          // It was `_full.touches`, and composeFullEmail returns no such key —
+          // its shape is variantA / variantB / followUp1 / followUp2 / breakup.
+          // So it iterated nothing, silently, and the three LATER touches were
+          // never scanned. That is exactly the half of the sequence where the
+          // review findings used to ship: the quota deferred them to the end of
+          // the array, and the end of the array is follow-up 2 and the break-up.
+          //
+          // A guard I wrote today, blind to the half of the problem it was
+          // written for, and green the whole time. Named here rather than
+          // quietly corrected, because "a check that cannot fail is not a
+          // check" applies hardest to the checks that look like they passed.
+          for (const _t of ['followUp1', 'followUp2', 'breakup']) {
+            const _tb = _full && _full[_t] && _full[_t].body;
+            if (_tb) _bodies.push([_t, _tb]);
           }
-          if (!_bodies.length) _fails.push('the leak fixture composed no body at all, so this assertion proves nothing');
+          if (_bodies.length < 3) {
+            _fails.push(`only ${_bodies.length} composed body/bodies were found on the fixture — the two variants and the three follow-up touches must all be inspected, and a missing key here reads as a pass`);
+          }
           for (const [_where, _body] of _bodies) {
             const _hit = String(_body).match(_REV);
             if (_hit) {
@@ -38309,6 +38407,95 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ READABLE FINDING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ NOTHING IN THIS FILE HAD EVER RUN THE SCREENSHOT SCALER ═════════════
+  // The only thing guarding the audit's eyes was a source-text regex asserting
+  // that the string `_pngscale.fitWithin(` appears in the homepage block. That
+  // check PASSED on the run that lost every image: the call site was present,
+  // the callee simply said no. pngscale.js has a 21-assertion self-test and no
+  // gate ever ran it, and it is not in CLAUDE.md's gate list either.
+  //
+  // "A check that cannot fail is not a check" — applied to the component that
+  // decides whether the audit can see. This one BUILDS a palette PNG of the
+  // shape Firecrawl actually sent us and pushes it through the real function.
+  try {
+    const _fails = [];
+    if (!_pngscale) {
+      _fails.push('pngscale.js is not loaded at all, so every over-tall screenshot is dropped and the audit runs blind');
+    } else {
+      const _z = require('zlib');
+      const _SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const _tbl = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+      const _crc = (b) => { let r = 0xFFFFFFFF; for (const x of b) r = (_tbl[(r ^ x) & 255] ^ (r >>> 8)) >>> 0; return (r ^ 0xFFFFFFFF) >>> 0; };
+      const _chunk = (type, data) => {
+        const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+        const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+        const c = Buffer.alloc(4); c.writeUInt32BE(_crc(td));
+        return Buffer.concat([len, td, c]);
+      };
+      const _png = ({ w, h, ct, bd, plte }) => {
+        const srcCh = ct === 2 ? 3 : ct === 6 ? 4 : ct === 4 ? 2 : 1;
+        const rowBytes = Math.ceil((w * srcCh * bd) / 8);
+        const rows = Buffer.alloc((rowBytes + 1) * h);
+        for (let y = 0; y < h; y++) {
+          rows[y * (rowBytes + 1)] = 0;
+          for (let i = 0; i < rowBytes; i++) rows[y * (rowBytes + 1) + 1 + i] = (i * 31 + y * 17) & 255;
+        }
+        const ihdr = Buffer.alloc(13);
+        ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+        ihdr[8] = bd; ihdr[9] = ct; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+        const parts = [_SIG, _chunk('IHDR', ihdr)];
+        if (plte) parts.push(_chunk('PLTE', plte));
+        parts.push(_chunk('IDAT', _z.deflateSync(rows)), _chunk('IEND', Buffer.alloc(0)));
+        return Buffer.concat(parts);
+      };
+      const _pal = Buffer.alloc(256 * 3);
+      for (let i = 0; i < 256; i++) { _pal[i * 3] = i; _pal[i * 3 + 1] = 255 - i; _pal[i * 3 + 2] = (i * 7) & 255; }
+      // The exact shape that lost five images on Claude Reynolds, plus the three
+      // other formats that were refused for the same reason, plus the two that
+      // already worked so a regression cannot hide.
+      const _cases = [
+        ['palette 8-bit (the live failure)', { w: 9000, h: 300, ct: 3, bd: 8, plte: _pal }],
+        ['palette 4-bit', { w: 9000, h: 300, ct: 3, bd: 4, plte: _pal.subarray(0, 48) }],
+        ['palette 1-bit', { w: 9000, h: 300, ct: 3, bd: 1, plte: _pal.subarray(0, 6) }],
+        ['greyscale 8-bit', { w: 9000, h: 300, ct: 0, bd: 8 }],
+        ['greyscale 1-bit', { w: 9000, h: 300, ct: 0, bd: 1 }],
+        ['grey+alpha 8-bit', { w: 9000, h: 300, ct: 4, bd: 8 }],
+        ['RGB 8-bit', { w: 9000, h: 300, ct: 2, bd: 8 }],
+        ['RGBA 8-bit', { w: 9000, h: 300, ct: 6, bd: 8 }],
+      ];
+      for (const [_name, _spec] of _cases) {
+        const _r = _pngscale.fitWithin(_png(_spec), 7800);
+        if (_r.skip) { _fails.push(`${_name} was refused — ${_r.skip}`); continue; }
+        if (!_r.buffer || !_r.buffer.subarray(0, 8).equals(_SIG)) { _fails.push(`${_name} produced something that is not a PNG`); continue; }
+        // It must be re-readable, because the thing we send has to be a real
+        // image and not merely a buffer that starts with the right magic bytes.
+        const _again = _pngscale.fitWithin(_r.buffer, 100000);
+        if (!_again.buffer) _fails.push(`${_name} produced a PNG our own reader cannot parse — ${_again.skip}`);
+        if (_r.width > 7800 || _r.height > 7800) _fails.push(`${_name} came back ${_r.width}x${_r.height}, still past the vision ceiling`);
+      }
+      // Interlaced and 16-bit are refused ON PURPOSE and must stay refused —
+      // a silent wrong answer here is worse than no image.
+      const _il = _png({ w: 9000, h: 300, ct: 2, bd: 8 });
+      _il[28] = 1;                                   // IHDR interlace byte
+      if (!_pngscale.fitWithin(_il, 7800).skip) _fails.push('an interlaced PNG was accepted — Adam7 is seven sub-images and decoding it as one produces confident nonsense');
+      const _sixteen = _png({ w: 9000, h: 300, ct: 2, bd: 8 });
+      _sixteen[24] = 16;                             // IHDR bit-depth byte
+      if (!_pngscale.fitWithin(_sixteen, 7800).skip) _fails.push('a 16-bit PNG was accepted — it doubles every buffer against a memory ceiling this file has already had to fight');
+      // And the caller must not bin the interior renders when the homepage is
+      // the one that failed. That is what turned one bad image into five.
+      if (/throw new Error\('no homepage render'\)/.test(selfSource())) {
+        _fails.push('a missing homepage render still throws, so four already-paid-for interior renders are discarded with it');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 SCREENSHOT SCALER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SCREENSHOT SCALER CHECK: eight PNG shapes are built here and pushed through the REAL scaler — palette at 8/4/1 bits, greyscale at 8 and 1, greyscale+alpha, RGB and RGBA — and every one comes back inside the vision ceiling and re-readable by our own decoder. A palette homepage is what Firecrawl sent on Claude Reynolds and it took all five of that lead's images with it. Interlaced and 16-bit are still refused deliberately. Nothing in this file had ever executed fitWithin before.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SCREENSHOT SCALER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THE SAME BUSINESS MUST NOT MEASURE AS TWO DIFFERENT BUSINESSES ══════

@@ -75,8 +75,12 @@ function readHeader(buf) {
 // Undo the per-scanline filter. This is the part that must be exactly right:
 // every filter references the pixel to the left (a), above (b) and above-left
 // (c), in BYTES offset by the channel count, not in pixels.
-function unfilter(raw, width, height, channels) {
-  const stride = width * channels;
+// stride is the row length in BYTES and bpp is the filter unit in BYTES — not a
+// pixel width and a channel count. That distinction is what lets sub-8-bit rows
+// work unchanged: a row of 1-bit palette indices is one byte per eight pixels,
+// and the filter still operates byte by byte with a unit of 1.
+function unfilter(raw, stride, height, bpp) {
+  const channels = bpp;
   const out = Buffer.alloc(stride * height);
   let pos = 0;
   for (let y = 0; y < height; y++) {
@@ -181,37 +185,174 @@ function fitWithin(buf, maxEdge = 7800) {
   if (h.width <= maxEdge && h.height <= maxEdge) {
     return { buffer: buf, width: h.width, height: h.height, scaled: false };
   }
+  // ══ REFUSING FIVE OF PNG'S SIX SHAPES COST US EVERY IMAGE ON A LEAD ══════
+  // This used to accept 8-bit RGB and 8-bit RGBA and nothing else. Claude
+  // Reynolds, live 2026-08-19: Firecrawl returned the homepage as a 1920x8336
+  // colour-type-3 (palette) PNG, this refused it, and because the caller treated
+  // a missing homepage as fatal, four interior renders that were already
+  // captured and already paid for went in the bin with it. The audit ran with
+  // zero images on a lead where we were holding five pictures of the site.
+  //
+  // Refusing rather than guessing is still the right instinct and it is why this
+  // file exists — a mangled image produces confident readings of pixels that
+  // mean nothing. But palette, greyscale and sub-8-bit are not guesswork. They
+  // are exactly specified: a table lookup and some bit shifting. Expanding them
+  // is lossless, and the only honest reason they were refused is that nobody had
+  // written the thirty lines.
+  //
+  // Still refused, deliberately: INTERLACED (Adam7 is seven sub-images and a
+  // real rewrite, and no screenshot renderer emits it) and 16-BIT (doubles every
+  // buffer against a memory ceiling this file has already had to fight, and no
+  // screenshot renderer emits that either). Both say so by name.
   if (h.interlace !== 0) return { skip: `interlaced PNG (${h.width}x${h.height})` };
-  if (h.bitDepth !== 8) return { skip: `${h.bitDepth}-bit PNG, only 8-bit is handled` };
-  const channels = h.colorType === 2 ? 3 : h.colorType === 6 ? 4 : 0;
-  if (!channels) return { skip: `colour type ${h.colorType}, only RGB and RGBA are handled` };
+  if (h.bitDepth === 16) return { skip: '16-bit PNG — refused deliberately, it doubles every buffer against the memory ceiling' };
+  if (![1, 2, 4, 8].includes(h.bitDepth)) return { skip: `${h.bitDepth}-bit PNG is not a valid PNG bit depth` };
+  if (![0, 2, 3, 4, 6].includes(h.colorType)) return { skip: `colour type ${h.colorType} is not a valid PNG colour type` };
+  // Only truecolour carries its channels in the sample directly; everything else
+  // is expanded below. Sub-8-bit only exists for palette and greyscale.
+  if (h.bitDepth !== 8 && h.colorType !== 3 && h.colorType !== 0) {
+    return { skip: `${h.bitDepth}-bit colour type ${h.colorType} is not a valid combination` };
+  }
+  // Bytes per FILTER unit and bytes per ROW, which are what unfilter works in.
+  // For sub-8-bit these are not width * channels: the filter operates on bytes,
+  // and a row of 1-bit indices is one byte per eight pixels.
+  const srcChannels = h.colorType === 2 ? 3 : h.colorType === 6 ? 4 : h.colorType === 4 ? 2 : 1;
+  const rowBytes = Math.ceil((h.width * srcChannels * h.bitDepth) / 8);
+  const filterUnit = Math.max(1, Math.floor((srcChannels * h.bitDepth) / 8));
+  const channels = srcChannels;
 
   // Collect every IDAT. A large screenshot is always split across several.
   const idat = [];
+  // PLTE is the colour table an indexed image indexes INTO, and tRNS is its
+  // optional per-entry alpha. Both are required to expand colour type 3, and
+  // neither was ever read here — the encoder re-emits only IHDR/IDAT/IEND, so
+  // they are consumed and then correctly dropped.
+  let plte = null, trns = null;
   let p = 8;
   while (p + 8 <= buf.length) {
     const len = buf.readUInt32BE(p);
     const type = buf.toString('ascii', p + 4, p + 8);
     if (type === 'IDAT') idat.push(buf.subarray(p + 8, p + 8 + len));
+    else if (type === 'PLTE') plte = buf.subarray(p + 8, p + 8 + len);
+    else if (type === 'tRNS') trns = buf.subarray(p + 8, p + 8 + len);
     if (type === 'IEND') break;
     p += 12 + len;
   }
+  if (h.colorType === 3 && (!plte || plte.length < 3)) return { skip: 'indexed PNG with no colour table' };
   if (!idat.length) return { skip: 'no IDAT chunks' };
 
+  // ══ THIS FUNCTION PEAKED AT 382MB AGAINST RENDER'S 256MB CEILING ═══════
+  // Measured, on the exact image sizes it exists for:
+  //     1920x8336  RGBA -> peak RSS 330MB
+  //     1920x11189 RGBA -> peak RSS 382MB
+  // Both are real Firecrawl homepage renders. Note the heap stayed at 7-9MB
+  // throughout — Buffers live OUTSIDE the V8 heap, so --max-old-space-size does
+  // not bound them and BOOT HEAP CHECK cannot see them. The container limit is
+  // on RSS, so this was an OOM-kill waiting for a tall enough page.
+  //
+  // Four full-size buffers were alive at once: the inflated stream (~64MB), the
+  // unfiltered pixels (~64MB), the resampled output (~56MB) and the re-filtered
+  // encode buffer, plus inflate's own transient ~2x. Each is only needed by the
+  // step that follows it, so each reference is dropped as soon as its consumer
+  // has run and the collector is allowed to take it before the next allocation.
+  //
+  // maxOutputLength bounds the inflate itself: a corrupt or hostile length field
+  // could otherwise ask for gigabytes before any of our own checks run.
   let raw;
-  try { raw = zlib.inflateSync(Buffer.concat(idat)); }
+  const _expected = (rowBytes + 1) * h.height;
+  try { raw = zlib.inflateSync(Buffer.concat(idat), { maxOutputLength: _expected + 1024 }); }
   catch (e) { return { skip: `inflate failed (${e.message})` }; }
-  if (raw.length < (h.width * channels + 1) * h.height) return { skip: 'truncated image data' };
+  idat.length = 0;
+  if (raw.length < _expected) return { skip: 'truncated image data' };
 
-  const pixels = unfilter(raw, h.width, h.height, channels);
+  // unfilter works in BYTES: it is handed the row length and the filter unit,
+  // not a pixel count, which is what makes sub-8-bit rows work unchanged.
+  let pixels = unfilter(raw, rowBytes, h.height, filterUnit);
+  raw = null;                              // ~64MB, and unfilter is done with it
   if (!pixels) return { skip: 'unknown row filter' };
+
+  // ══ EXPAND EVERYTHING THAT IS NOT ALREADY 8-BIT TRUECOLOUR ═════════════
+  // After this point the rest of the function sees plain 8-bit RGB or RGBA and
+  // needs to know nothing about how the source stored it.
+  let expChannels = channels;
+  let expColorType = h.colorType;
+  if (h.colorType === 3 || h.colorType === 0 || h.colorType === 4 || h.bitDepth !== 8) {
+    const px = h.width * h.height;
+    // Indexed images get alpha only when tRNS actually says a colour is
+    // transparent; a palette without tRNS is fully opaque and RGB is a quarter
+    // smaller. Greyscale+alpha keeps its alpha.
+    const wantAlpha = (h.colorType === 3 && trns && trns.length > 0) || h.colorType === 4 || h.colorType === 6;
+    const oc = wantAlpha ? 4 : 3;
+    const out = Buffer.alloc(px * oc);
+    const maxVal = (1 << h.bitDepth) - 1;
+    // Sub-8-bit greyscale is stored as a fraction of full scale, so it is
+    // scaled up rather than shifted — 1-bit black/white must become 0 and 255,
+    // not 0 and 1.
+    const greyScale = h.bitDepth === 8 ? 1 : 255 / maxVal;
+    for (let y = 0; y < h.height; y++) {
+      const rowStart = y * rowBytes;
+      for (let x = 0; x < h.width; x++) {
+        let v;
+        if (h.bitDepth === 8) {
+          v = pixels[rowStart + x * srcChannels];
+        } else {
+          const bitPos = x * h.bitDepth;
+          const b = pixels[rowStart + (bitPos >> 3)];
+          const shift = 8 - h.bitDepth - (bitPos & 7);
+          v = (b >> shift) & maxVal;
+        }
+        const o = (y * h.width + x) * oc;
+        if (h.colorType === 3) {
+          const pi = v * 3;
+          out[o] = plte[pi] || 0; out[o + 1] = plte[pi + 1] || 0; out[o + 2] = plte[pi + 2] || 0;
+          if (wantAlpha) out[o + 3] = (trns && v < trns.length) ? trns[v] : 255;
+        } else {
+          const g = Math.round(v * greyScale);
+          out[o] = g; out[o + 1] = g; out[o + 2] = g;
+          if (wantAlpha) out[o + 3] = pixels[rowStart + x * srcChannels + 1];
+        }
+      }
+    }
+    pixels = out;
+    expChannels = oc;
+    expColorType = wantAlpha ? 6 : 2;
+  }
+
+  // ══ A SCREENSHOT'S ALPHA CHANNEL IS A QUARTER OF THE MEMORY FOR NOTHING ══
+  // Firecrawl renders arrive as RGBA, and a page screenshot is opaque: there is
+  // nothing behind it to show through. That fourth channel is then carried
+  // through the two largest allocations left — the resampled image and the
+  // encode buffer — and written into the PNG we send.
+  //
+  // Dropping it when it is provably uniform-opaque is lossless by definition,
+  // and it is checked rather than assumed: one pass over the alpha bytes, and
+  // any single non-255 byte leaves the image exactly as it was. That pass is
+  // cheap against what it saves.
+  let outChannels = expChannels;
+  let outColorType = expColorType;
+  if (expChannels === 4) {
+    let opaque = true;
+    for (let i = 3; i < pixels.length; i += 4) { if (pixels[i] !== 255) { opaque = false; break; } }
+    if (opaque) {
+      const px = h.width * h.height;
+      const rgb = Buffer.alloc(px * 3);
+      for (let i = 0, j = 0; i < px; i++, j += 3) {
+        const s = i * 4;
+        rgb[j] = pixels[s]; rgb[j + 1] = pixels[s + 1]; rgb[j + 2] = pixels[s + 2];
+      }
+      pixels = rgb;
+      outChannels = 3;
+      outColorType = 2;
+    }
+  }
 
   const ratio = Math.min(maxEdge / h.width, maxEdge / h.height);
   const dw = Math.max(1, Math.floor(h.width * ratio));
   const dh = Math.max(1, Math.floor(h.height * ratio));
-  const small = resample(pixels, h.width, h.height, dw, dh, channels);
+  const small = resample(pixels, h.width, h.height, dw, dh, outChannels);
+  pixels = null;                           // ~64MB, and encode reads only `small`
   let outBuf;
-  try { outBuf = encode(small, dw, dh, h.colorType, channels); }
+  try { outBuf = encode(small, dw, dh, outColorType, outChannels); }
   catch (e) { return { skip: `encode failed (${e.message})` }; }
   return { buffer: outBuf, width: dw, height: dh, scaled: true, from: `${h.width}x${h.height}` };
 }
