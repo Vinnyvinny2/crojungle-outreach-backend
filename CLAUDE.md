@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 178 boot checks at the bottom, each documenting the live failure that caused it
+- 180 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1239,7 +1239,7 @@ audit and of the log i need eveyrhting running perfect because we are going to
 running bulk soon."*
 
 Fourteen falsification runs, one per fix, every one red with its fix reverted.
-178 boot checks green.
+180 boot checks green.
 
 **The two nobody had reported, because nothing said anything.**
 
@@ -1909,6 +1909,128 @@ synthesis must run after the evidence exists, which is genuinely invariant.
 
 ---
 
+## 29. Ranking by what it would have cost him to know — 2026-08-20
+
+The opener was chosen by HARM, a hand-assigned guess at what a fault costs. That
+is the right sort for the AUDIT. Four real sends say it is the wrong sort for the
+EMAIL:
+
+- **REPLIED** — ads spend tracked on his homepage while he ranks 13th organically.
+  He owns both halves and had never seen them on one screen.
+- **DELETED** ×3 — no plan or agreement, no published prices, a nine-field form.
+  All three are things he looks at weekly and decided.
+
+And both findings behind every real reply this project has had —
+`review_pain_pattern` and `outranked_by_weaker` — share one property: they
+required **work he has not done**. He has read his reviews one at a time and
+never tabulated them; he has never run the search and compared the listings.
+
+So `OWNER_KNOWS` declares, for all 42 rungs with a recorded reason, what it would
+have cost the owner to know the finding:
+
+| | |
+|---|---|
+| **CANNOT_KNOW** | a JOIN of two sources he uses separately, an AGGREGATE of N things he has only seen one at a time, or a RECORD he has no view of |
+| **HAS_NOT_LOOKED** | his own surface, but a fault rather than a choice |
+| **DECIDED** | he looks at it and chose it |
+
+Sendable split: 10 / 13 / 12, so it is not a placebo.
+
+**It is not a second copy of `novel`.** novel is a hand-assigned 0-100 guess worth
+**at most 7 points against a harm range of 63** — it could never change an
+outcome. This is derived from what the finding's own `test()` has to read, and it
+is declared where a reviewer can audit each call.
+
+**Three things the first version got wrong, and only executing it found them.**
+
+- **It was a complete no-op in production.** The per-lead stand-down read
+  `!!URGENCY_ADJUST[profile]`, and that map's third key is `UNKNOWN: {}` — an
+  empty object, which is **truthy**. Every lead stood down, every rung scored
+  zero on the new dimension, and every fixture passed, because the fixtures
+  called the function directly and never the call site. Fourth instance this
+  session of the recorded "a check that does not assert its call site is half a
+  check", and the second of "the check only exercised the configuration where
+  nothing can go wrong". The check now recomputes the flag exactly as the scorer
+  does, for every value `purchaseUrgency` can return.
+- **Deleting the novelty term created seven ties**, and `byOpener` is a stable
+  sort over an array pushed in ladder-declaration order — so a 1,300-line
+  literal's layout was deciding which finding opened the email, against this
+  file's own rule that a tie must not be broken by emission order. The worst pair
+  put `duplicate_listing` and `review_pain_pattern` both on 86, and the second is
+  one of only two rungs with a real reply behind it. novel is **demoted, not
+  deleted**: coarse class first, fine tiebreak after.
+- **The magnitude was too big.** At a spread of 36 it out-bid every business-type
+  rule in the file — `REFERRAL_ADJUST` at −30 (David Leon deleted an email about
+  his search ranking) and `URGENCY_ADJUST` at ±26 (a flooded basement does not
+  compare quotes). A GENERAL rule must not outrank a SPECIFIC one. The spread is
+  22, level with a two-step `SELLABLE` gap and the self-fix penalty, and there is
+  now a ceiling assertion — inflating it to ±40 left every check green until that
+  assertion existed.
+
+**And the stand-down is per LEAD, not per rung.** The per-rung version failed
+`URGENCY CHECK` by a single point, and the obvious patch — adding a negative
+urgency entry for the review pattern — would have been wrong: a complaint that
+nobody calls back is *more* relevant to a 2am emergency, not less. A
+business-type rule is a statement about what matters for that business; when one
+is in force it owns the ordering for that lead.
+
+**One formula, not five.** The opener base lived in the real scorer and four boot
+checks, each hand-writing `harm + (novel / 100) * 7`. Adding a term to one and
+not the others would have left four checks asserting orderings that no longer
+happen — the recorded two-hand-kept-copies disease, with the copies inside the
+guards.
+
+**Two classifications corrected by the adversarial pass**: `no_after_hours` reads
+the booking route on his *site*, not his opening hours, so it is HAS_NOT_LOOKED;
+`dated_credibility`'s recorded reason described badges while its test reads table
+layout and missing viewport tags.
+
+**Honest limit.** At a spread of 22 this changes CLOSE CALLS, not blowouts. It
+will not lift a harm-48 finding over a harm-76 one. On the four real leads it
+would have changed nothing: Gregory already led on the right finding, Jose's
+problem was the search term, and Donna and John had nothing better available —
+which is a SUPPLY problem, not an ordering one.
+
+---
+
+## 30. The search we measured him on was not the one he sells on
+
+Jose Barrera, on why he deleted a true email: *"they clearly don't know that my
+patients find me because they're looking for a FACIAL plastic surgeon in San
+Antonio."*
+
+We searched "plastic surgery practice in San Antonio" — the `GP_CATEGORIES`
+bucket we happened to DISCOVER him under. That bucket is chosen so a Places query
+returns lots of plausible businesses, which is a different job from naming what a
+customer types. On a generalist the two coincide. On a specialist they do not,
+and the specialists are the top of this ICP.
+
+The correction costs nothing and is not a guess: **he named his own business.** A
+modifier in the registered name is his own statement of what he sells and the
+same word his customers type. Bounded four ways — the modifier must be DECLARED,
+it must be in the NAME rather than somewhere on the site, the category must not
+already carry it, and the head noun has to be nearby so "Mobile Home Park
+Management" does not narrow "plumber".
+
+**The stem trap, for the third time in this file.** A trade appears in a name
+under a different ending every time: dentist/Dentistry, plumber/Plumbing,
+roofer/Roofing. Matching the category word literally found none of them, and
+"Bright Pediatric Dentistry" failed to narrow "dentist" — caught by this check's
+own fixture before it shipped.
+
+**And a floor that was never there.** "You are not in the top three" is a finding
+when twenty businesses compete and arithmetic when five do. Below six results the
+rank read now refuses rather than claiming a position. That matters most on a
+narrowed phrase, which is exactly where a field goes thin.
+
+`TRADE PHRASE CHECK` fixtures both directions: four specialist names must narrow,
+seven generalist names must not, and "Coral Springs Plumbing" and "Moral Fiber
+Landscaping" must not trip the `oral` modifier.
+
+**`index.html` is unchanged this round, so no Netlify deploy is needed.**
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -1962,7 +2084,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 178 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 180 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -2036,7 +2158,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 178 boot checks and the comments above
+and caused none of this week's failures. The 180 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
