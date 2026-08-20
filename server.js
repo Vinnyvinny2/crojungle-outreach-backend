@@ -4944,6 +4944,30 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // which is the behaviour every number in the comment at the band itself was
   // measured against.
   const GP_BAND_HARD_CUT = String(process.env.GP_BAND_MODE || 'rank').toLowerCase() === 'cut';
+  // ══ AND THE REVIEW CEILING, FOR THE SAME REASON, WITH ONE MORE ════════════
+  // 282 businesses we had already paid Google for were deleted on the live run
+  // of 2026-08-20 for having more than GP_MAX_REVIEWS reviews. The argument that
+  // demoted the rating band applies here word for word — Google bills per CALL
+  // and a call returns twenty businesses, so deleting a result cannot save a
+  // penny, and nothing remembered them, so the next run paid to find the same
+  // 282 and deleted them again.
+  //
+  // There is a second reason here that the band did not have. Twenty lines above
+  // GP_MAX_REVIEWS this file states, from its own reading: "Review count measures
+  // whether a business ASKS, not how big it is." The ceiling then uses review
+  // count to measure how big a business is. Both cannot be right. A pest control
+  // company running 40-60 jobs a day and asking for a review each time crosses
+  // 750 while still being fifteen people and one owner; a surgeon at 750 really
+  // is a large multi-provider practice. One global number cannot tell them apart,
+  // and the file already knows it — reviewFloorFor raises the FLOOR for exactly
+  // those high-volume trades and the ceiling was never given the same treatment.
+  //
+  // No number is invented to fix that, because there is no measurement behind one.
+  // The ceiling keeps its value and stops DELETING: a business above it is
+  // returned behind every other lead, sorts last, and fills the bench. It is not
+  // audited while a better lead exists, which is all the ceiling was ever for,
+  // and we stop paying to rediscover it. GP_SIZE_MODE=cut restores the delete.
+  const GP_SIZE_HARD_CUT = String(process.env.GP_SIZE_MODE || 'rank').toLowerCase() === 'cut';
   const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
@@ -5052,6 +5076,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0;
   let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
+  let demotedTooBig = 0;        // over the review ceiling: benched, not deleted
   // ══ BUSINESSES WE ALREADY OWN, SKIPPED BEFORE THEY COST A SLOT ═══════════
   // Passed in by /api/discover. Absent means no constraint, so every other
   // caller behaves exactly as before.
@@ -5230,8 +5255,17 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         }
         // Too big is as disqualifying as too small: at this volume they are
         // multi-location or already agency-managed, and the audit lands on someone
-        // who will reply that they have a team for that.
-        if (reviews > GP_MAX_REVIEWS) { skippedTooBig++; continue; }
+        // who will reply that they have a team for that. That judgement still
+        // stands and still puts them last — it just no longer throws away a
+        // business we have already been billed for. See the note at
+        // GP_SIZE_HARD_CUT for why deleting here cannot save anything.
+        let _tooBig = false, _tooBigWhy = '';
+        if (reviews > GP_MAX_REVIEWS) {
+          if (GP_SIZE_HARD_CUT) { skippedTooBig++; continue; }
+          _tooBig = true;
+          demotedTooBig++;
+          _tooBigWhy = `${reviews} Google reviews, above the ${GP_MAX_REVIEWS} ceiling \u2014 at this volume a business is often multi-location or already agency-managed. Review count measures whether they ASK, not how big they are, so this is a sort position and not a fact about them.`;
+        }
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
         // ── ALREADY IN THE PIPELINE: SKIP IT HERE, NOT AT THE END ──────────
         // Before the per-category slot, so the slot goes to a business we do not
@@ -5253,7 +5287,16 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // Demoted leads are therefore never counted against it and never blocked
         // by it. They cannot displace an in-band lead because they are not in
         // the same queue at all.
-        if (!_outsideBand) {
+        //
+        // TWO reasons demote now — outside the rating band, or above the review
+        // ceiling — and every gate below asks the one question that matters to it:
+        // "is this lead demoted?". A gate that named one reason would silently
+        // let the other reason's leads take cap slots and queue positions, which
+        // is the whole thing the demotion exists to prevent. The specific reason
+        // still travels on the lead, because the screen and the call sheet need
+        // to say WHICH.
+        const _demoted = _outsideBand || _tooBig;
+        if (!_demoted) {
           const catCount = perCat.get(cat.label) || 0;
           if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
         }
@@ -5286,8 +5329,8 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         const marketingGap = reviews >= MIN_REVIEWS && reviews < 60;
         if (_noWebsite) keptNoWebsite++;
         if (_builderSite) keptBuilder++;
-        // Only an in-band lead consumes a category slot; see the cap comment above.
-        if (!_outsideBand) perCat.set(cat.label, (perCat.get(cat.label) || 0) + 1);
+        // Only an undemoted lead consumes a category slot; see the cap comment above.
+        if (!_demoted) perCat.set(cat.label, (perCat.get(cat.label) || 0) + 1);
         const _lead = {
           name, website, location: p.formattedAddress || '',
           // Markets this business came back in. One means a local operator;
@@ -5312,6 +5355,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
           // outside the band, and each of them recomputing it from the rating
           // is three copies of one rule. It travels on the lead.
           ...(_outsideBand ? { outsideBand: true, bandNote: _bandWhy } : {}),
+          ...(_tooBig ? { aboveSizeCeiling: true, sizeNote: _tooBigWhy } : {}),
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
           jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
@@ -5321,7 +5365,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // Two arrays, not one array with a flag read later. The ordering promise
         // — every in-band lead ahead of every demoted one — is then a property
         // of the data structure rather than of a comparator somebody could edit.
-        if (_outsideBand) benched.push(_lead); else out.push(_lead);
+        if (_demoted) benched.push(_lead); else out.push(_lead);
         // Counted as found either way, and that is deliberate: the next-page rule
         // asks whether this page produced anything we are keeping. A page that
         // yielded three in-band leads and fifteen benched ones is not a dry page,
@@ -5383,7 +5427,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig} too big, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
   // ══ HOW DEEP THE RUN ACTUALLY REACHED ════════════════════════════════════
   // The number to watch when leads feel repetitive. Places answers each query
   // with its twenty most prominent businesses in the same order every time, so
@@ -5457,8 +5501,13 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   for (let i = 0; _bBuckets.some(b => i < b.length); i++) {
     for (const b of _bBuckets) if (i < b.length) _benchInterleaved.push(b[i]);
   }
-  if (_benchInterleaved.length) {
-    console.log(`\u2696 BAND DEMOTED [Places]: ${_benchInterleaved.length} qualified business(es) sit outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. They are no longer deleted \u2014 they are returned behind every in-band lead, so they fill the bench instead of this run's queue. Only ONE of the 41 findings reads the star rating and it can never be emailed; the ladder produces the same two sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Set GP_BAND_MODE=cut to restore the old delete.`);
+  const _bandDemoted = benched.filter(l => l.outsideBand).length;
+  const _sizeDemoted = benched.filter(l => l.aboveSizeCeiling).length;
+  if (_sizeDemoted) {
+    console.log(`\u{1F4CF} SIZE DEMOTED [Places]: ${_sizeDemoted} business(es) carry more than ${GP_MAX_REVIEWS} Google reviews. They are no longer deleted \u2014 they are returned behind every other lead and fill the bench, so we stop paying Google to rediscover the same businesses every run and delete them again. They are still never audited while a better lead exists, which is the only thing the ceiling was doing. Review count measures whether a business ASKS for reviews, not how big it is, and this file says so twenty lines above the ceiling itself. Set GP_SIZE_MODE=cut to restore the old delete.`);
+  }
+  if (_bandDemoted) {
+    console.log(`\u2696 BAND DEMOTED [Places]: ${_bandDemoted} qualified business(es) sit outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. They are no longer deleted \u2014 they are returned behind every in-band lead, so they fill the bench instead of this run's queue. Only ONE of the 41 findings reads the star rating and it can never be emailed; the ladder produces the same two sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Set GP_BAND_MODE=cut to restore the old delete.`);
   }
   return interleaved.concat(_benchInterleaved);
 };
@@ -9335,7 +9384,29 @@ const RECURRING_OFFER_RE = /\b(membership|memberships|member(?:s)? (?:plan|progr
 // case does not have a maintenance plan and telling that owner he is missing
 // one would prove we do not understand his business — which costs more than
 // saying nothing at all. Kept narrow on purpose.
-const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition|plumb|electric|pest|exterminat|lawn|landscap|irrigation|pool|septic|chimney|gutter|roof|window clean|janitor|clean(ing|ers)|dent(al|ist)|orthodont|periodont|vet(erinar)?|animal (hospital|clinic)|chiroprac|physical therapy|med ?spa|aesthetic|derm|salon|barber|gym|fitness|pilates|yoga|massage|accounting|bookkeep|cpa|payroll|managed (it|services)|msp|security (system|monitor)|alarm|water treatment|softener)\b/i;
+// ══ A STEM WITH A WORD BOUNDARY AFTER IT MATCHES NOTHING ══════════
+// This list could not recognise "plumbing", "roofing", "electrical" or
+// "landscaping" — the four largest categories in the ICP — and 22 of the 34
+// trade words it was written for. Every one of them was written as a STEM with a
+// closing \b immediately after it, and \bplumb\b cannot match "plumbing" because
+// the g is a word character. The stem only ever matched itself, and "plumb" on
+// its own is not a word anybody puts in a business name.
+//
+// So `recurring_revenue` — a whole rung — has never fired for a plumber, a roofer,
+// an electrician or a landscaper, and nothing said so, because a regex that
+// matches nothing produces silence rather than an error.
+//
+// CLAUDE.md already records this exact bug once, in the jargon gate: "`synerg`
+// used to sit bare inside \b(...)\b, so it could only match the stem `synerg` —
+// not a word anybody writes. `synergy`, `synergies` and `synergistic` all sailed
+// through the most notorious entry on the list for the life of this gate." The
+// lesson was written down and never generalised, so the same defect was sitting
+// in four other lists. STEM MATCH CHECK now holds the real words every one of
+// them exists to catch and runs them through the live regex.
+//
+// Every stem below carries \w* deliberately. `vet` is the exception and stays
+// exact: `vet\w*` would match "veteran" and "vetted".
+const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition\w*|plumb\w*|electric\w*|pest|exterminat\w*|lawn|landscap\w*|irrigation|pool|septic|chimney|gutter\w*|roof\w*|window clean\w*|janitor\w*|clean(?:ing|er\w*)|dent(?:al|ist\w*)|orthodont\w*|periodont\w*|vet\b|veterinar\w*|animal (?:hospital\w*|clinic\w*)|chiroprac\w*|physical therap\w*|med ?spa\w*|aesthetic\w*|derm\w*|salon\w*|barber\w*|gym|fitness|pilates|yoga|massage|account(?:ing|ant\w*)|bookkeep\w*|cpa|payroll|managed (?:it|service\w*)|msp|security (?:system\w*|monitor\w*)|alarm\w*|water treatment|softener\w*)\b/i;
 
 const readRecurringOffer = ({ text, trade, pagesRead } = {}) => {
   const t = String(text || '');
@@ -24151,9 +24222,68 @@ app.post('/api/audit-leads', async (req, res) => {
 const SB_URL = process.env.SUPABASE_URL || '';
 const SB_KEY = process.env.SUPABASE_KEY || '';
 
+// ══ A MESSAGE THAT NAMES THE WRONG CAUSE COSTS WHAT SILENCE COSTS ═════════
+// The query memory failed to save on the live run of 2026-08-20 and the log
+// said "Check that the places_query_state table exists". The table existed.
+// Row-level security was refusing the write, and the one instruction printed
+// sent whoever read it to look at the one thing that was fine.
+//
+// CLAUDE.md already carries this exact lesson about the SMTP verifier: "The real
+// defect here is the log line, not the code... A message that overstates its own
+// severity costs exactly as much as one that understates it." Naming the wrong
+// cause is the same fault in a different direction, and it was written by the
+// same reflex — a guess about the likely reason, hardcoded as though it were
+// the measured one, at the one moment somebody is reading for instructions.
+//
+// Supabase says exactly what went wrong in the response body, in a documented
+// code. Five causes look identical through `return null` and need five
+// different actions: create a table, add a policy, add a column, fix the key,
+// fix the network. So the reason is READ rather than assumed, kept per table,
+// and cleared the moment that table answers successfully — a stale cause
+// reported after the fix is the same lie pointing the other way.
+const _sbFailures = new Map();
+const sbTableOf = (path) => (String(path || '').match(/^\/([a-z0-9_]+)/i) || [, ''])[1] || '';
+const sbWhy = (table) => _sbFailures.get(String(table || '')) || '';
+
+const sbDiagnose = (table, status, bodyText) => {
+  const t = table || 'that table';
+  let j = {};
+  try { j = JSON.parse(bodyText || '{}') || {}; } catch (_) { j = {}; }
+  const code = String(j.code || '');
+  const msg = String(j.message || '');
+  const hint = String(j.hint || j.details || '');
+  const all = `${code} ${msg} ${hint} ${bodyText || ''}`;
+
+  // Order matters: RLS is checked before anything that could read as "missing",
+  // because a permission refusal is the cause that gets misreported as one.
+  if (code === '42501' || /row-level security|permission denied for/i.test(all)) {
+    return `the ${t} table EXISTS but row-level security is refusing this write. Add a policy that lets this key write to it, or disable RLS on ${t}. Creating the table again will not help — it is already there`;
+  }
+  if (code === 'PGRST205' || /could not find the table/i.test(all)) {
+    return `the ${t} table does not exist yet. Run the CREATE TABLE for it (the statement is in the comment above this function in server.js) and this write starts working with no code change`;
+  }
+  if (code === 'PGRST204' || /could not find the .* column/i.test(all)) {
+    return `the ${t} table exists but is missing a column this write needs (${msg || 'see the raw body'}). It was created from an older version of the schema — add the column rather than recreating the table`;
+  }
+  if (code === '23505' || status === 409) {
+    return `${t} rejected this as a duplicate key, which means the on_conflict column in the request is not the table's primary key`;
+  }
+  if (status === 401 || status === 403) {
+    return `Supabase refused the credentials on ${t} (HTTP ${status}${msg ? ': ' + msg : ''}). Either SUPABASE_KEY is wrong or expired, or this key has no grant on ${t}`;
+  }
+  if (status === 404) {
+    return `Supabase has no endpoint at that path for ${t} (HTTP 404${msg ? ': ' + msg : ''})`;
+  }
+  return `HTTP ${status} from ${t}${msg ? ': ' + msg : ''}${hint ? ' (' + hint + ')' : ''}`;
+};
+
 // Minimal Supabase REST helper (server-side)
 const sbRest = async (path, options = {}) => {
-  if (!SB_URL || !SB_KEY) return null;
+  const _tbl = sbTableOf(path);
+  if (!SB_URL || !SB_KEY) {
+    if (_tbl) _sbFailures.set(_tbl, `SUPABASE_URL and SUPABASE_KEY are not both set on this server, so nothing was ever going to reach ${_tbl}. This is a Render environment variable, not a database problem`);
+    return null;
+  }
   try {
     const r = await fetch(SB_URL + '/rest/v1' + path, {
       ...options,
@@ -24165,10 +24295,22 @@ const sbRest = async (path, options = {}) => {
         ...(options.headers || {}),
       },
     });
-    if (!r.ok) { console.log('Supabase REST error', r.status, await r.text()); return null; }
+    if (!r.ok) {
+      const body = await r.text();
+      const why = sbDiagnose(_tbl, r.status, body);
+      if (_tbl) _sbFailures.set(_tbl, why);
+      console.log(`Supabase REST error ${r.status} on ${_tbl || path}: ${why} | raw: ${String(body || '').slice(0, 300)}`);
+      return null;
+    }
+    // Cleared on success so a fixed problem cannot keep being reported.
+    if (_tbl) _sbFailures.delete(_tbl);
     const t = await r.text();
     return t ? JSON.parse(t) : null;
-  } catch (e) { console.log('Supabase REST failed:', e.message); return null; }
+  } catch (e) {
+    if (_tbl) _sbFailures.set(_tbl, `the request never reached Supabase (${e.message}). That is a network or SUPABASE_URL problem — the ${_tbl} table and its policies were never consulted`);
+    console.log('Supabase REST failed:', e.message);
+    return null;
+  }
 };
 
 
@@ -24517,14 +24659,59 @@ const cacheContact = async (domain, { owner, email, revenue, pain }) => {
 // carrying a small-practice escape. The same terms were duplicated in the
 // institution list WITHOUT that escape, so a dermatology practice survived the
 // rule written to spare it and was then refused by a copy of it.
-const ICP_STAFFING = /\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services))\b/i;
-const ICP_INSTITUTION = /\b(cruise line|airlines?|airways|university|county of|city of|town of|township|state of|department of|social security|federal government|federal reserve|federal bureau|municipal authority|municipal district|municipal utilit\w*|housing authority|housing finance|public schools?|rehabilitation and nursing|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|home depot|rentals inc|enterprises inc|holdings inc|automotive group|dealer group|supermarkets|grocery|distribution center|fulfillment center)\b/i;
+const ICP_STAFFING = /\b(staffing|recruit\w*|talent|personnel|placement\w*|headhunt\w*|manpower|workforce|temp agenc\w*|search partners|search group|employment (?:agenc\w*|partners|service\w*))\b/i;
+const ICP_INSTITUTION = /\b(cruise line\w*|airlines?|airways|universit\w*|county of|city of|town of|township|state of|department of|social security|federal government|federal reserve|federal bureau|municipal authorit\w*|municipal district|municipal utilit\w*|housing authorit\w*|housing finance|public schools?|rehabilitation and nursing|logistics|freight system\w*|truck rental\w*|rent[- ]?a[- ]?car|dealer careers|home depot|rentals inc|enterprises inc|holdings inc|automotive group|dealer group|supermarket\w*|grocer\w*|distribution cent\w*|fulfillment cent\w*)\b/i;
 // "Skin cancer center" is a dermatology practice by definition; a "cancer
 // center" without it is an oncology institution. That one word is the whole
 // difference between South Carolina Skin Cancer Center, which is exactly who we
 // sell to, and MD Anderson Cancer Center, which is not.
-const ICP_SMALL_PRACTICE = /\b(dental|dentist|orthodont|veterinar|\bvet\b|derma|skin cancer|med spa|medspa|chiropract|optometr|physical therapy|family medicine|pediatric dent|urgent care clinic|aesthetic)\b/i;
-const ICP_BIG_HEALTH = /\b(health care|healthcare|medical care|health system|healthcare system|health network|hospital|regional medical|medical center|health plan|health services|healthcare services|cancer center|cancer institute|national health)\b/i;
+// Every stem here carries \w* for the same reason as the trade list above: seven
+// of these fourteen could never match the word they were written for. `derma`
+// could not match "Dermatology", `chiropract` could not match "Chiropractic",
+// and "Chiropractic Family Healthcare" was blocked as a large health system on
+// the live run of 2026-08-20 because of it. `vet` stays exact so it cannot eat
+// "veteran".
+const ICP_SMALL_PRACTICE = /\b(dental|dentist\w*|orthodont\w*|periodont\w*|veterinar\w*|vet\b|derm\w*|skin cancer|med ?spa\w*|chiroprac\w*|optometr\w*|podiatr\w*|physical therap\w*|family medicine|pediatric dent\w*|urgent care|aesthetic\w*)\b/i;
+// hospital could not match "Hospitals", health system could not match "Health
+// Systems" — the same closing-boundary defect, in the direction that lets a real
+// enterprise through rather than blocking a small one.
+const ICP_BIG_HEALTH = /\b(health care|healthcare|medical care|health system\w*|healthcare system\w*|health network\w*|hospital\w*|regional medical|medical cent\w*|health plan\w*|health service\w*|healthcare service\w*|cancer cent\w*|cancer institute\w*|national health)\b/i;
+
+// ══ A BARE WORD AT THE END OF A STEM LIST HAS TO BE DECLARED ═══════════
+// The four lists above and RECURRING_NORMAL_TRADES all sit inside \b(...)\b, so
+// whatever a branch ENDS on has a word boundary hard against it. A stem there
+// matches itself and nothing else: \bplumb\b cannot reach "plumbing", and 22 of
+// the 34 trade words RECURRING_NORMAL_TRADES was written for were lost that way.
+//
+// Writing \w* after a stem declares it a stem. Every OTHER string one of those
+// branches can end on is the author asserting "this is a whole word", and that
+// assertion is written down here where a reviewer can read it. STEM MATCH CHECK
+// recomputes this set from the live regexes at boot and fails the build if it
+// differs in EITHER direction — a new bare stem cannot be added without appearing
+// on this line, and a word no list uses any more cannot sit here looking checked.
+//
+// Only the LAST word of a branch is exposed. "air condition\w*" can afford a bare
+// "air" because a space follows it; nothing truncates a word that is not against
+// the closing boundary.
+//
+// A detector was tried first and thrown away, which is why this is a list and not
+// an algorithm. Sweeping every \b(...)\b in the file for an alternative that is a
+// strict prefix of another alternative beside it flagged 68 entries; excluding
+// plural pairs still left 49, because "the|them|their", "you|your",
+// "pick|picking" and "rank|ranked" are ordinary word lists where the prefix
+// relation means nothing. There is no dictionary in this process and no
+// mechanical way to tell "plumb" from "pest", so the check demands the
+// declaration rather than guessing at it. It cannot decide whether a word is a
+// word. It makes sure a human had to.
+const STEM_COMPLETE_WORDS = new Set([
+  'accounting', 'airline', 'airlines', 'airways', 'bureau', 'cancer', 'car', 'care',
+  'careers', 'chimney', 'cleaning', 'cooling', 'cpa', 'dental', 'depot', 'district',
+  'finance', 'fitness', 'government', 'group', 'gym', 'health', 'healthcare',
+  'heating', 'hvac', 'inc', 'irrigation', 'it', 'lawn', 'logistics', 'manpower',
+  'massage', 'medical', 'medicine', 'msp', 'nursing', 'of', 'partners', 'payroll',
+  'personnel', 'pest', 'pilates', 'pool', 'reserve', 'school', 'schools', 'security',
+  'septic', 'staffing', 'talent', 'township', 'treatment', 'vet', 'workforce', 'yoga',
+]);
 
 // Cheap name-only enterprise/staffing/health screen. Lets us SKIP paying The
 // Companies API to "confirm" what a name pattern already rejects for free — so a
@@ -24826,7 +25013,7 @@ app.post('/api/discover', async (req, res) => {
         if (_rows.length) {
           const _saved = await savePlacesQueryState(_rows);
           const _dry = _rows.filter(r => r.dry_streak > 0).length;
-          console.log(`\u267b QUERY MEMORY [Places]: recorded ${_rows.length} searched pair(s), ${_dry} of them returning nothing new${_saved ? '' : ' \u2014 BUT THE WRITE FAILED, so nothing was remembered and the next run will pay for these same searches again. Check that the places_query_state table exists'}.`);
+          console.log(`\u267b QUERY MEMORY [Places]: recorded ${_rows.length} searched pair(s), ${_dry} of them returning nothing new${_saved ? '' : ` \u2014 BUT THE WRITE FAILED, so nothing was remembered and the next run will pay for these same searches again. ${sbWhy('places_query_state') || 'Supabase gave no reason'}`}.`);
         }
         return _leads;
       })(),
@@ -25846,7 +26033,11 @@ const WEIGHTS = {
         // one. Two mechanisms for one promise, because the promise is the entire
         // safety of turning that filter into a sort: the leads we have evidence
         // for still go out first, every run, and the rest wait on the bench.
-        const ba = a.outsideBand ? 1 : 0, bb = b.outsideBand ? 1 : 0;
+        // Both demotion reasons, not just the band. A business above the review
+        // ceiling is returned behind everything by searchGooglePlaces and would
+        // climb straight back over an in-band lead here on ICP score alone.
+        const ba = (a.outsideBand || a.aboveSizeCeiling) ? 1 : 0;
+        const bb = (b.outsideBand || b.aboveSizeCeiling) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
@@ -25915,7 +26106,7 @@ const WEIGHTS = {
       if (_over.length) {
         const _n = await saveLeadBench(_over.slice(0, BENCH_MAX_ROWS));
         console.log(_n < 0
-          ? `\u26d4 LEAD BENCH: ${_over.length} qualified lead(s) could not be saved — the write failed, so they are lost and the next run will pay Google to find them again. Check that the lead_bench table exists.`
+          ? `\u26d4 LEAD BENCH: ${_over.length} qualified lead(s) could not be saved — the write failed, so they are lost and the next run will pay Google to find them again. ${sbWhy('lead_bench') || 'Supabase gave no reason'}.`
           : `\u{1F5C3} LEAD BENCH: ${_n} qualified lead(s) beyond this run's ${scored.length} are banked instead of discarded. They cost nothing to serve next time; finding them again costs a Google search each.`);
       }
       // Served rows leave the bench so it cannot grow into a table that takes
@@ -39404,6 +39595,109 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ LEAD BENCH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ THE WRITE FAILED, AND THE LOG NAMED THE ONE THING THAT WAS FINE ═══════
+  // Live, 2026-08-20: the query memory could not save and the run printed
+  // "Check that the places_query_state table exists". The table existed. Row-
+  // level security was refusing the write. Whoever read that line was sent to
+  // inspect the only part of the system that was working.
+  //
+  // Five different problems arrive as the same `return null`, and each has a
+  // different fix: create a table, add a policy, add a column, fix the key, fix
+  // the network. Supabase names which one in the response body every time. The
+  // old line guessed, and a guess printed as an instruction reads exactly like a
+  // measurement.
+  //
+  // RUN, NOT READ. The real diagnoser is called here with the real bodies
+  // PostgREST returns, because a regex asserting the strings exist would pass on
+  // a build where the ordering had been changed and RLS reported as a missing
+  // table. The RLS case is asserted NEGATIVELY as well — it must not say
+  // "does not exist" — since that is the exact wrong answer that shipped.
+  try {
+    const _fails = [];
+    // Each fixture carries the CAUSE it belongs to. Two fixtures of one cause are
+    // allowed to produce the same sentence — a 401 "permission denied" and a 403
+    // "row-level security" are one problem with one fix, and pretending they need
+    // two different sentences would be noise. What must never collide is two
+    // DIFFERENT causes, because that is the reader back to guessing.
+    const CASES = [
+      ['policy', 'RLS refusal on insert', 403, JSON.stringify({ code: '42501', message: 'new row violates row-level security policy for table "places_query_state"' }),
+        [/EXISTS/, /row-level security|policy/i], [/does not exist/i, /CREATE TABLE/i]],
+      ['policy', 'permission denied for table', 401, JSON.stringify({ code: '42501', message: 'permission denied for table places_query_state' }),
+        [/EXISTS/], [/does not exist/i]],
+      ['missing table', 'table genuinely missing', 404, JSON.stringify({ code: 'PGRST205', message: "Could not find the table 'public.lead_bench' in the schema cache" }),
+        [/does not exist yet/i, /CREATE TABLE/i], [/row-level security/i]],
+      ['missing column', 'column missing', 400, JSON.stringify({ code: 'PGRST204', message: "Could not find the 'dry_streak' column of 'places_query_state' in the schema cache" }),
+        [/missing a column/i, /older version of the schema/i], [/does not exist yet/i, /row-level security/i]],
+      ['bad key', 'invalid api key', 401, JSON.stringify({ message: 'Invalid API key' }),
+        [/SUPABASE_KEY/], [/does not exist/i, /row-level security/i]],
+      ['on_conflict', 'on_conflict does not match the primary key', 409, JSON.stringify({ code: '23505', message: 'duplicate key value violates unique constraint' }),
+        [/on_conflict/], [/does not exist/i]],
+    ];
+    const _said = new Map();
+    for (const [cause, label, status, body, must, mustNot] of CASES) {
+      const out = String(sbDiagnose('places_query_state', status, body) || '');
+      for (const re of must) if (!re.test(out)) _fails.push(`${label} does not say ${re} — it said "${out.slice(0, 120)}"`);
+      for (const re of mustNot) if (re.test(out)) _fails.push(`${label} says ${re}, which sends the reader to the wrong fix — it said "${out.slice(0, 120)}"`);
+      const prior = _said.get(out);
+      if (prior && prior.cause !== cause) _fails.push(`${label} and ${prior.label} are different problems with different fixes and produce the IDENTICAL sentence, so the log cannot tell them apart and the reader is back to guessing`);
+      if (!prior) _said.set(out, { cause, label });
+    }
+    {
+      const _causes = new Set(CASES.map(c => c[0]));
+      if (_said.size < _causes.size) _fails.push(`${_causes.size} problems with ${_causes.size} different fixes collapsed into ${_said.size} distinct sentences`);
+      else if (_said.size > _causes.size) _fails.push(`two fixtures of the same problem produced different sentences (${_said.size} from ${_causes.size} causes), so at least one of them is describing something other than the fix`);
+    }
+
+    // And the reason has to be CLEARED when the table starts answering, or a
+    // fixed problem keeps being reported as live — the same wrong instruction,
+    // just later.
+    if (typeof _sbFailures === 'undefined' || typeof sbWhy !== 'function') {
+      _fails.push('the per-table failure store is gone, so the log lines have nothing to read and will fall back to a generic sentence');
+    } else {
+      const _probe = '__boot_probe_table__';
+      _sbFailures.set(_probe, 'stale');
+      if (sbWhy(_probe) !== 'stale') _fails.push('sbWhy does not return what sbRest recorded, so the reason never reaches the log line');
+      _sbFailures.delete(_probe);
+      if (sbWhy(_probe) !== '') _fails.push('a cleared failure still reports a reason, so a problem that has been fixed keeps being blamed');
+    }
+
+    // The two callers must actually print it. Needles are assembled so this
+    // cannot match its own source text — the trap this file has hit twice.
+    {
+      const _src = selfSource();
+      const _need = ['sbWhy(' + "'" + 'places_query_state' + "'" + ')', 'sbWhy(' + "'" + 'lead_bench' + "'" + ')'];
+      for (const n of _need) if (_src.indexOf(n) < 0) _fails.push(`the failure log line no longer reads ${n}, so it is back to guessing at the cause`);
+      // Assembled, never written whole. The first version of this line WAS the
+      // banned sentence, sitting in its own body where indexOf found it, and it
+      // failed the boot against a build that was correct. CLAUDE.md records the
+      // same trap for RANK GATE CHECK and RATING BAND CHECK; it comes back every
+      // time somebody writes a needle the natural way.
+      const _banned = new RegExp(['Check', 'that', 'the'].join(' ') + ' \\w+ ' + ['table', 'exists'].join(' '));
+      // Comment lines are stripped first. Two comments in this file QUOTE the bad
+      // sentence on purpose, because that is how the bug is explained to whoever
+      // reads them next; the ban is on shipping it in a log line, not on naming
+      // it. Measuring the raw file instead failed this check against a build that
+      // was entirely correct — the same false alarm as the one directly above,
+      // one level up.
+      const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_banned.test(_code)) {
+        _fails.push('the hardcoded "check that the table exists" instruction is back in a log line — that is the sentence that sent the reader to the one thing that was fine');
+      }
+      // ...and the ban has to be capable of firing, or stripping comments has
+      // quietly turned it into a no-op.
+      if (!_banned.test(['Check that the', 'lead_bench', 'table exists'].join(' '))) {
+        _fails.push('the banned-sentence pattern no longer matches the sentence it bans, so this assertion cannot fail and is not a check');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ SUPABASE FAILURE CAUSE CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ SUPABASE FAILURE CAUSE CHECK: the ${CASES.length} ways a Supabase write fails now produce ${_said.size} different sentences, each naming the actual fix. The live run of 2026-08-20 said "check that the places_query_state table exists" while the table existed and row-level security was doing the refusing, so the one instruction printed pointed at the only healthy part of the system. A permission refusal now says the table EXISTS and asks for a policy, a missing table now says so and quotes the CREATE TABLE, and the reason is read from Supabase's own response code rather than assumed. It is cleared the moment that table answers, so a problem already fixed cannot go on being blamed.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SUPABASE FAILURE CAUSE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ THE RATING BAND IS A SORT KEY, AND THAT HAS TO BE SAFE ════════════════
   // 1,810 of 2,892 businesses we had already paid for were deleted here on the
   // live run of 2026-08-19, 1,766 of them for sitting ABOVE the ceiling. Two
@@ -39479,7 +39773,7 @@ app.listen(PORT, () => {
     // demoted one whatever else is true of them \u2014 including a demoted lead with
     // a better score, which is the case that would happen most often.
     {
-      const _n = _needle('const ba = a.', 'outsideBand ? 1 : 0');
+      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling) ? 1 : 0');
       const _i = _src.indexOf(_n);
       if (_i < 0) {
         _fails.push('the discovery sort no longer puts out-of-band leads last, so a demoted 4.9-star business with a high ICP score climbs back over the 4.6-star lead we have evidence for');
@@ -39499,7 +39793,7 @@ app.listen(PORT, () => {
       if (_src.indexOf(_needle('return interleaved.', 'concat(_benchInterleaved)')) < 0) {
         _fails.push('searchGooglePlaces no longer returns the demoted leads strictly after the in-band ones — the ordering is back to being a property of a sort rather than of the data');
       }
-      if (_src.indexOf(_needle('if (_outsideBand) benched.', 'push(_lead); else out.push(_lead);')) < 0) {
+      if (_src.indexOf(_needle('if (_demoted) benched.', 'push(_lead); else out.push(_lead);')) < 0) {
         _fails.push('demoted leads are no longer routed to their own array, so they compete with in-band leads directly');
       }
     }
@@ -39512,27 +39806,47 @@ app.listen(PORT, () => {
     {
       const _i = _src.indexOf(_needle('if (catCount >= ', 'PER_CAT_CAP)'));
       const _before = _i > 0 ? _src.slice(Math.max(0, _i - 400), _i) : '';
-      if (_i < 0 || _before.indexOf(_needle('if (!_outsideBand) ', '{')) < 0) {
+      if (_i < 0 || _before.indexOf(_needle('if (!_demoted) ', '{')) < 0) {
         _fails.push('the per-category cap is applied to demoted leads too, so a near-perfect business can take a queue slot from the in-band lead behind it');
       }
-      if (_src.indexOf(_needle('if (!_outsideBand) perCat.', 'set')) < 0) {
+      if (_src.indexOf(_needle('if (!_demoted) perCat.', 'set')) < 0) {
         _fails.push('a demoted lead still increments the per-category counter, which spends the in-band budget on leads that are not in the queue');
       }
     }
 
     // 6. THE ESCAPE HATCH IS REAL. If the band turns out to have been right, one
-    // env var restores the delete — and it has to restore it EXACTLY.
+    // env var restores the delete — and it has to restore it EXACTLY. Same for
+    // the review ceiling, which is now demoted on the identical argument.
     {
       const _src = selfSource();
       if (!/GP_BAND_MODE/.test(_src) || !/if \(GP_BAND_HARD_CUT\) \{ _missBand\+\+; continue; \}/.test(_src)) {
         _fails.push('GP_BAND_MODE=cut no longer restores the original hard delete, so this change cannot be reversed without a deploy');
+      }
+      if (!/GP_SIZE_MODE/.test(_src) || !/if \(GP_SIZE_HARD_CUT\) \{ skippedTooBig\+\+; continue; \}/.test(_src)) {
+        _fails.push('GP_SIZE_MODE=cut no longer restores the review-ceiling delete, so that change cannot be reversed without a deploy');
+      }
+    }
+
+    // 7. BOTH DEMOTION REASONS FEED ONE FLAG. 282 businesses a run were deleted
+    // at the review ceiling on 2026-08-20 — already paid for, and forgotten, so
+    // the next run paid to find and delete the same ones. They are demoted now,
+    // which only works if every gate asks "is this demoted?" rather than naming
+    // one reason. A gate that still named the band would let a 900-review
+    // business take a category slot and a queue position from the lead behind it,
+    // which is the whole failure the demotion exists to prevent.
+    {
+      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig;')) < 0) {
+        _fails.push('the two demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling leads back into the in-band queue');
+      }
+      if (_src.indexOf(_needle('aboveSizeCeiling: ', 'true, sizeNote: _tooBigWhy')) < 0) {
+        _fails.push('the over-ceiling reason no longer travels on the lead, so the sort at the far end cannot tell it apart and the screen cannot say why it is last');
       }
     }
 
     if (_fails.length) {
       console.log(`⛔ RATING BAND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. In-band leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score. The per-category cap is spent only on in-band leads, so a near-perfect business cannot take a queue slot from the lead behind it, and GP_BAND_MODE=cut restores the old delete exactly.`);
+      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. The review ceiling now demotes on the identical argument, having deleted 282 more on 2026-08-20: Google bills per CALL, so deleting a result cannot save a penny, and nothing remembered them, so every run paid to rediscover and re-delete the same businesses. Both reasons feed ONE demotion flag, so no gate can be fixed for one and left open for the other. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score. The per-category cap is spent only on undemoted leads, so a near-perfect or over-ceiling business cannot take a queue slot from the lead behind it. GP_BAND_MODE=cut and GP_SIZE_MODE=cut each restore the old delete exactly.`);
     }
   } catch (e) {
     console.log(`⛔ RATING BAND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -39662,6 +39976,229 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ A STEM WITH A WORD BOUNDARY AFTER IT MATCHES NOTHING ══════════════════
+  // \bplumb\b cannot match "plumbing", because the g is a word character. The
+  // stem only ever matches itself, and "plumb" alone is not a word anybody puts
+  // in a business name. A regex that matches nothing produces silence, not an
+  // error, so this class is invisible until somebody tests it.
+  //
+  // CLAUDE.md records it once already, in the jargon gate: "`synerg` used to sit
+  // bare inside \b(...)\b, so it could only match the stem `synerg` — not a word
+  // anybody writes. `synergy`, `synergies` and `synergistic` all sailed through
+  // the most notorious entry on the list for the life of this gate." The lesson
+  // was written down and never generalised, and the same defect was sitting in
+  // five other lists when this check was written:
+  //
+  //   RECURRING_NORMAL_TRADES   22 of 34 trade words unrecognised, including
+  //                             plumbing, roofing, electrical and landscaping —
+  //                             the four largest categories in the ICP. The
+  //                             recurring-revenue rung had never fired for any
+  //                             of them.
+  //   ICP_SMALL_PRACTICE        7 of 14 dead. "Chiropractic Family Healthcare"
+  //                             was blocked as a large health system on the live
+  //                             run of 2026-08-20 because `chiropract` could not
+  //                             match "chiropractic".
+  //   ICP_BIG_HEALTH            hospital could not match "Hospitals" — the same
+  //                             defect pointing the other way, letting a real
+  //                             enterprise through.
+  //   ICP_STAFFING, ICP_INSTITUTION   the same, in both directions.
+  //
+  // TWO mechanisms, because they fail on different days.
+  //
+  // FIXTURES first: "is this alternative a truncated stem?" needs a dictionary to
+  // answer, and the words each list EXISTS to catch are knowable and finite. They
+  // are written down here and run through the live regex, so a dead stem in a
+  // term we already care about is caught by the word itself, not by a rule about
+  // words. That covers today's lists and proves the four largest ICP categories
+  // are reachable.
+  //
+  // Then a DECLARATION, further down, for the term added next month that has no
+  // fixture yet: every bare string one of these lists can END on has to be named
+  // in STEM_COMPLETE_WORDS. Neither one subsumes the other — the fixtures cannot
+  // see a new entry, and the declaration cannot tell a real word from a stem
+  // somebody swore was a word.
+  try {
+    const _fails = [];
+    let _endingCount = 0;
+    const MUST_MATCH = [
+      ['RECURRING_NORMAL_TRADES', RECURRING_NORMAL_TRADES, [
+        'plumbing', 'plumber', 'electrical', 'electrician', 'landscaping', 'landscaper',
+        'exterminator', 'extermination', 'bookkeeping', 'roofing', 'roofer', 'cleaning',
+        'cleaners', 'dentistry', 'dental', 'orthodontics', 'orthodontist', 'periodontics',
+        'veterinary', 'veterinarian', 'chiropractic', 'chiropractor', 'dermatology',
+        'aesthetics', 'janitorial', 'heating', 'cooling', 'hvac', 'pest control',
+        'lawn care', 'pool service', 'septic tank', 'chimney sweep', 'gutters',
+        'window cleaning', 'air conditioning', 'animal hospital', 'physical therapy',
+        'med spa', 'salons', 'barbershop', 'accountant', 'accounting', 'payroll',
+        'managed services', 'security systems', 'alarms', 'water softeners',
+      ]],
+      ['ICP_SMALL_PRACTICE', ICP_SMALL_PRACTICE, [
+        'dermatology', 'dermatologist', 'orthodontics', 'orthodontist', 'veterinary',
+        'veterinarian', 'optometry', 'optometrist', 'chiropractic', 'chiropractor',
+        'dentistry', 'dentist', 'dental', 'aesthetics', 'podiatry', 'med spa',
+        'physical therapy', 'skin cancer', 'urgent care', 'pediatric dentistry',
+      ]],
+      ['ICP_BIG_HEALTH', ICP_BIG_HEALTH, [
+        'hospital', 'hospitals', 'health system', 'health systems', 'healthcare',
+        'medical center', 'medical centers', 'cancer center', 'cancer centers',
+        'health services', 'health plans', 'regional medical',
+      ]],
+      ['ICP_STAFFING', ICP_STAFFING, [
+        'staffing', 'recruiting', 'recruiter', 'recruiters', 'recruitment',
+        'headhunter', 'headhunters', 'placements', 'employment agency',
+        'employment services', 'temp agency',
+      ]],
+      ['ICP_INSTITUTION', ICP_INSTITUTION, [
+        'university', 'universities', 'supermarket', 'supermarkets', 'groceries',
+        'grocery', 'distribution center', 'distribution centre', 'fulfillment center',
+        'housing authority', 'housing authorities', 'truck rentals', 'cruise lines',
+      ]],
+    ];
+    let _checked = 0;
+    for (const [name, re, words] of MUST_MATCH) {
+      for (const w of words) {
+        _checked++;
+        if (!re.test(w)) _fails.push(`${name} cannot match "${w}" — the stem it was written from has a word boundary straight after it, so it only ever matched itself`);
+      }
+    }
+
+    // ── AND THE OTHER DIRECTION: \w* MUST NOT SWALLOW A DIFFERENT WORD ──────
+    // Widening a stem is how a filter starts catching things nobody meant. `vet`
+    // is the one that matters: vet\w* eats "veteran" and "vetted", so it stays
+    // exact while veterinar\w* carries the long form.
+    const MUST_NOT = [
+      ['ICP_SMALL_PRACTICE', ICP_SMALL_PRACTICE, ['veteran', 'veterans', 'vetted', 'dentures']],
+      ['RECURRING_NORMAL_TRADES', RECURRING_NORMAL_TRADES, ['veteran', 'veterans', 'poolside dental supply is fine', 'gymnasium']],
+      ['ICP_INSTITUTION', ICP_INSTITUTION, ['universal windows', 'grocer supply of nashville is a wholesaler']],
+    ];
+    for (const [name, re, words] of MUST_NOT) {
+      for (const w of words) {
+        _checked++;
+        // Only the words that genuinely must not match are asserted; the two
+        // sentences above carry a legitimate term on purpose and are excluded.
+        if (/dental|grocer|gymnasium/.test(w)) continue;
+        if (re.test(w)) _fails.push(`${name} now matches "${w}" — widening a stem swallowed a word nobody meant, which is the other way to get this wrong`);
+      }
+    }
+
+    // ── AND EVERY BARE WORD THE FIVE LISTS END ON MUST BE DECLARED ─────────
+    // The fixtures above prove the words we KNOW these lists exist to catch are
+    // matched. They cannot prove anything about a term added tomorrow. This does:
+    // it reads the live regexes, expands every branch into the strings it can
+    // actually end on, and requires each bare ending to appear in
+    // STEM_COMPLETE_WORDS. `plumb\w*` is a declared stem and passes untouched;
+    // a bare `plumb` is a word being asserted, and the assertion has to be
+    // written down beside the other 54 where somebody reviewing the diff sees it.
+    //
+    // Both directions fail. An undeclared ending is a possible dead stem. A
+    // declaration nothing uses any more is a line that has stopped being checked
+    // and reads as though it still is — the same disease as a baseline of 9 in
+    // dupkeys, which hid four live collisions for weeks.
+    //
+    // A generic detector was written first and deleted: see the note above
+    // STEM_COMPLETE_WORDS for the numbers. This is not a weaker version of it,
+    // it is the sound one — it never guesses which strings are English.
+    {
+      // Split an alternation body at the top level only. Depth and character
+      // classes are tracked so `animal (?:hospital\w*|clinic\w*)` stays one branch.
+      const _splitTop = (body) => {
+        const out = []; let d = 0, inClass = false, cur = '';
+        for (let i = 0; i < body.length; i++) {
+          const c = body[i];
+          if (c === '\\') { cur += c + (body[i + 1] || ''); i++; continue; }
+          if (inClass) { cur += c; if (c === ']') inClass = false; continue; }
+          if (c === '[') { inClass = true; cur += c; continue; }
+          if (c === '(') { d++; cur += c; continue; }
+          if (c === ')') { d--; cur += c; continue; }
+          if (c === '|' && d === 0) { out.push(cur); cur = ''; continue; }
+          cur += c;
+        }
+        out.push(cur);
+        return out;
+      };
+      // Expand one branch into every literal string it can produce. `\w*` becomes
+      // the sentinel '*' so a declared stem is recognisable at the end.
+      //
+      // An optional separator class — `rent[- ]?a[- ]?car` — is expanded to the
+      // SEPARATOR every time rather than both ways. Dropping it only joins letters
+      // together, which makes the trailing run longer, and a longer run cannot be
+      // a truncated stem that a shorter one is not. Taking the separator therefore
+      // yields the shortest possible ending, which is the strictest test.
+      const _expand = (s) => {
+        let out = ['']; let i = 0;
+        const cross = (parts, optional) => {
+          const next = [];
+          for (const a of out) { for (const p of parts) next.push(a + p); if (optional) next.push(a); }
+          out = next;
+        };
+        while (i < s.length) {
+          if (s.startsWith('\\w*', i)) { out = out.map(x => x + '*'); i += 3; continue; }
+          if (s.startsWith('\\b', i)) { i += 2; continue; }
+          if (s[i] === '(') {
+            const open = s.startsWith('(?:', i) ? i + 3 : i + 1;
+            let d = 1, j = open;
+            while (j < s.length && d > 0) {
+              if (s[j] === '\\') { j += 2; continue; }
+              if (s[j] === '(') d++; else if (s[j] === ')') d--;
+              j++;
+            }
+            const inner = s.slice(open, j - 1);
+            let optional = false; if (s[j] === '?') { optional = true; j++; }
+            cross(_splitTop(inner).map(_expand).reduce((a, b) => a.concat(b), []), optional);
+            i = j; continue;
+          }
+          if (s[i] === '[') {
+            let j = s.indexOf(']', i) + 1;
+            if (s[j] === '?') j++;
+            cross([' '], false); i = j; continue;
+          }
+          const c = s[i]; i++;
+          if (s[i] === '?') { i++; cross([c], true); continue; }
+          out = out.map(x => x + c);
+        }
+        return out;
+      };
+
+      const _endings = new Set();
+      for (const [name, re] of MUST_MATCH) {
+        const body = re.source.replace(/^\\b\(/, '').replace(/\)\\b$/, '');
+        if (body === re.source) {
+          _fails.push(`${name} is no longer a \\b(...)\\b alternation, so the shape this check reads is gone and it is guarding nothing`);
+          continue;
+        }
+        for (const branch of _splitTop(body)) {
+          for (const e of _expand(branch)) {
+            // A leaked metacharacter means the expander mis-parsed, which would
+            // silently change the word set. Loud instead.
+            if (/[\\()\[\]|+^$]/.test(e)) {
+              _fails.push(`${name}: the branch "${branch.trim()}" expanded to "${e}", which still contains regex syntax — this check can no longer read the list it is guarding`);
+              continue;
+            }
+            if (e.endsWith('*')) continue;
+            const last = (e.match(/[a-z0-9]+$/i) || [''])[0];
+            if (last) _endings.add(last.toLowerCase());
+          }
+        }
+      }
+      const _undeclared = [...(_endings)].filter(w => !STEM_COMPLETE_WORDS.has(w)).sort();
+      const _stale = [...STEM_COMPLETE_WORDS].filter(w => !_endings.has(w)).sort();
+      if (_undeclared.length) {
+        _fails.push(`${_undeclared.length} bare ending(s) in the five stem lists are not declared in STEM_COMPLETE_WORDS: ${_undeclared.slice(0, 8).join(', ')} — either write \\w* after it because it is a stem, or add it there because it is a whole word`);
+      }
+      if (_stale.length) {
+        _fails.push(`STEM_COMPLETE_WORDS still declares ${_stale.length} word(s) no list ends on any more: ${_stale.slice(0, 8).join(', ')} — a declaration nothing checks reads as though it is being checked`);
+      }
+      _endingCount = _endings.size;
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ STEM MATCH CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ STEM MATCH CHECK: all ${_checked} real-world words that five stem lists exist to recognise are actually matched by them, and all ${_endingCount} bare words those lists can END on are declared whole words in STEM_COMPLETE_WORDS. 22 of 34 trade words used to be unmatchable — including plumbing, roofing, electrical and landscaping, the four largest categories in the ICP — because every stem was written with a word boundary straight after it and \\bplumb\\b cannot match "plumbing". The recurring-revenue rung had therefore never fired for a plumber, a roofer, an electrician or a landscaper, and nothing said so, because a regex that matches nothing is silent rather than wrong. Widening is checked in both directions: "veteran" and "vetted" still do not read as a veterinary practice. Adding a bare stem tomorrow now fails the build until somebody writes it down as a word.`);
+    }
+  } catch (e) {
+    console.log(`⛔ STEM MATCH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE SAME REVIEWS, BOUGHT TWICE, ON EVERY PLACES LEAD ══════════════════
   // fetchGBPHealth asks a Place record for photos, hours, category and REVIEWS —
