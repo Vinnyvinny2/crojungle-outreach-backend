@@ -331,6 +331,23 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ 6c. THE SEND MUST CARRY BOTH SEQUENCES AND STAMP WHICH ONE FIRED ════════
+// Rotation is a settings entry; these are the three client wires that make it
+// real. Each is a needle for a line that, missing, silently reverts the send
+// path to one domain carrying every bounce.
+{
+  for (const [what, needle] of [
+    ['the send call no longer passes both sequences, so the server can only ever use the first domain',
+      'sequenceIds: [settings.hunterSequenceId, settings.hunterSequenceId2].filter(Boolean)'],
+    ['the sent snapshot no longer records which sequence carried the email, so a bounce cannot be charged to the domain that earned it',
+      'sentVia: s.sentVia'],
+    ['the outcome sync no longer reads the second sequence, so every lead sent through it sits at "no outcome" forever',
+      '[settings && settings.hunterSequenceId, settings && settings.hunterSequenceId2].filter(Boolean)'],
+  ]) {
+    if (src.indexOf(needle) < 0) fails.push(what);
+  }
+}
+
 // 7. AND EVERY MERGE GOES THROUGH IT. A second call site that assembles the
 // lead by hand is the same defect as a second research body, one stage later.
 {
