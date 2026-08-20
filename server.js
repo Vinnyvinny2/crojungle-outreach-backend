@@ -20899,6 +20899,35 @@ ${replyBlocks}` }]
 //      and those are the only dollar figures we are allowed to use in a pitch.
 // The site map is already paid for (cached above), so reading a few real pages is
 // cheap. We pick by intent, not by guessing paths.
+// ══ FOUR SCREENSHOTS OF THE SAME PAGE ═══════════════════════════════════════
+// Vin, on the 2026-08-20 audits: "the screenshots on the front end were 4
+// screenshots of the same page — the homepage." Nothing in this system could
+// answer that question either way, which is the actual defect. We ask Firecrawl
+// for six URLs, it returns six responses, and we have never once checked whether
+// those responses are six DIFFERENT pages.
+//
+// They are not always. Three ordinary things make a site return the homepage for
+// a URL that is not the homepage:
+//   · a redirect — /about 301s to / because the page was retired
+//   · a single-page app whose router had not run when the render was taken
+//   · a soft 404 that serves the homepage instead of a status code
+// In every one of those the markdown comes back byte-identical to the homepage's,
+// and so does the picture.
+//
+// The cost is not cosmetic. The corpus is what every quote and every positioning
+// finding is checked against, and four copies of the homepage in it means the
+// audit "read six pages" and actually read two — which is exactly the shape of a
+// dry audit that looks like it had plenty of evidence.
+//
+// Exact equality on normalised text, deliberately: a prefix or a similarity
+// score would collide on the shared nav and footer that every page carries, and
+// a false positive here DELETES a page we correctly read. A redirect returns
+// identical bytes, so exact is enough to catch the real case with no risk.
+const pageFingerprint = (md) => {
+  const t = String(md || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return t.length < 200 ? '' : crypto.createHash('sha1').update(t).digest('hex');
+};
+
 // ══ AN ARTICLE IS A BLOG POST WHEREVER IT LIVES ═════════════════════════════
 // The NOISE list catches content by its FOLDER — /blog, /posts, /news, /article.
 // Plenty of sites publish articles straight off the root, and the backfill then
@@ -20971,7 +21000,7 @@ const PAGE_INTENT = [
   { key: 'proof',    re: /(review|testimonial|gallery|portfolio|our-work|past-work|projects?|case-stud|before-?and-?after|results)/i },
 ];
 
-const auditSitePages = async (website, fcKey, apiKey, companyName) => {
+const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd) => {
   if (!website || !fcKey || !apiKey) return null;
   try {
     const urls = await firecrawlMap(fcKey, website, 'pricing services about our story book schedule quote'); // cached — usually free
@@ -21212,7 +21241,30 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
     // A crash page is not page content. Keeping it in the corpus is how a dead
     // booking path got audited as a working one.
     const brokenUrls = new Set(brokenPages.map(b => b.url));
-    const usable = scraped.filter(p => p.md && p.md.length > 200 && !brokenUrls.has(p.url));
+    const _readable = scraped.filter(p => p.md && p.md.length > 200 && !brokenUrls.has(p.url));
+    // ══ SIX RESPONSES IS NOT SIX PAGES ═══════════════════════════════════════
+    // See pageFingerprint. A page whose text is byte-identical to the homepage's
+    // IS the homepage — a redirect, a SPA shell that had not routed, or a soft
+    // 404 — and putting it in the corpus a second time makes the audit believe
+    // it read more of the site than it did. The render is the visible symptom;
+    // the corpus is the expensive one.
+    const _seenFp = new Map();
+    const _homeFp = pageFingerprint(homepageMd);
+    if (_homeFp) _seenFp.set(_homeFp, 'the homepage');
+    const _dupes = [];
+    const usable = [];
+    for (const p of _readable) {
+      const fp = pageFingerprint(p.md);
+      if (fp && _seenFp.has(fp)) { _dupes.push({ url: p.url, key: p.key, same: _seenFp.get(fp) }); continue; }
+      if (fp) _seenFp.set(fp, p.url);
+      usable.push(p);
+    }
+    if (_dupes.length) {
+      const _asHome = _dupes.filter(d => d.same === 'the homepage');
+      console.log(`\u26a0 SAME PAGE TWICE [${companyName}]: ${_dupes.length} of the ${_readable.length} page(s) we read came back with text identical to ${_asHome.length === _dupes.length ? 'the HOMEPAGE' : 'a page already read'} \u2014 ${_dupes.map(d => `${d.key} (${String(d.url).replace(/^https?:\/\/[^/]+/, '')} = ${d.same === 'the homepage' ? 'homepage' : String(d.same).replace(/^https?:\/\/[^/]+/, '')})`).join(', ')}. That is a redirect, a single-page app that had not routed when we looked, or a soft 404. They are dropped from the corpus and from the renders: four copies of the homepage in the evidence makes an audit that read two pages look like it read six, which is what a dry audit is made of.`);
+    } else if (_readable.length > 1) {
+      console.log(`SITE AUDIT [${companyName}]: ${_readable.length} page(s) read and all ${_readable.length} are genuinely different pages \u2014 compared by their full text, not assumed.`);
+    }
     if (!usable.length) return null;
 
     const corpus = usable.map(p => `--- ${p.key.toUpperCase()} PAGE (${p.url}) ---\n${p.md.slice(0, 4200)}`).join('\n\n');
@@ -21359,9 +21411,21 @@ ${corpus}` }]
     // other page we read is invisible to a human. That is how Jane R. Mays's
     // crashed booking page stayed unnoticed: nothing rendered it, so the crash
     // arrived as ordinary-looking text.
+    // Second net, on the picture rather than the text: two URLs resolving to
+    // ONE hosted render is the same page by a different route, and it is the
+    // thing a human actually sees on the audit screen.
+    const _seenShot = new Set();
     out.pageShots = usable
       .map(p => ({ key: p.key, url: p.url, shot: _PAGE_SHOTS.get(String(p.url)) || null }))
-      .filter(x => x.shot);
+      .filter(x => {
+        if (!x.shot) return false;
+        if (_seenShot.has(x.shot)) {
+          console.log(`\u26a0 SAME RENDER TWICE [${companyName}]: ${x.key} (${String(x.url).replace(/^https?:\/\/[^/]+/, '')}) points at a render already used for another page. Showing it twice is what "four screenshots of the same page" looks like on the audit screen.`);
+          return false;
+        }
+        _seenShot.add(x.shot);
+        return true;
+      });
     if (out.pageShots.length) {
       console.log(`\ud83d\uddbc PAGE RENDERS [${companyName}]: ${out.pageShots.length} full-page screenshot(s) kept \u2014 ${out.pageShots.map(x => x.key).join(', ')}. Same requests, no extra credit. A crashed or empty page is obvious in a picture and invisible in markdown.`);
     }
@@ -29030,7 +29094,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
         Promise.resolve(null),   // revenue moved BELOW the email gate — see findSizeViaSearch call
         (website && _careersUseful && _siteConfirmable) ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
-        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
+        // The homepage text goes in so the interior pages can be compared
+        // against it: a redirect or a SPA shell returns the homepage for a URL
+        // that is not the homepage, and until now nothing could tell.
+        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company, content) : Promise.resolve(null),
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
@@ -42195,6 +42262,64 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 SCREENSHOT SCALER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
+  // ══ SIX RESPONSES FROM FIRECRAWL IS NOT SIX PAGES ═════════════════════════
+  // Vin, on the audit screen: "the screenshots were 4 screenshots of the same
+  // page — the homepage." The honest answer was that NOTHING in this system
+  // could tell him either way: we asked for six URLs, got six responses, and
+  // never once checked whether they were six different pages. A redirect, a
+  // single-page app that had not routed when the render was taken, or a soft 404
+  // all return the homepage for a URL that is not the homepage — byte-identical
+  // markdown and an identical picture.
+  //
+  // The picture is the visible symptom. The corpus is the expensive one: four
+  // copies of the homepage in the evidence makes an audit that read two pages
+  // look like it read six, which is what a dry audit is made of.
+  try {
+    const _fails = [];
+    // Both pages open on the SAME nav block, because that is what Firecrawl
+    // markdown actually looks like — every page of a site begins with its
+    // header and menu. The first fixture for this had them differing in their
+    // first words, so hashing a 40-character PREFIX still told them apart and
+    // the falsification run passed on a build with the bug in it. A fixture
+    // that does not reproduce the shared preamble is measuring nothing.
+    const NAV = '[Home](/) [About](/about) [Services](/services) [Locations](/locations) [Contact](/contact) Acme Roofing Indianapolis 317 786 3315 Free Estimate '.repeat(6);
+    const HOME = NAV + 'Welcome to Acme Roofing. Serving Indianapolis since 1976. '.repeat(20);
+    const ABOUT = NAV + 'About Acme Roofing. Jared started the company after twenty years on a crew. '.repeat(20);
+    // Identical text is the same page however it was reached.
+    if (pageFingerprint(HOME) !== pageFingerprint(HOME)) _fails.push('the fingerprint is not stable, so nothing can be compared to anything');
+    if (pageFingerprint(HOME) === pageFingerprint(ABOUT)) _fails.push('two genuinely different pages fingerprint the same — this would DELETE a page we correctly read, which is worse than the bug it fixes');
+    // Whitespace and punctuation differences are the same page: a redirect can
+    // re-render with different spacing and it is still the homepage.
+    if (pageFingerprint(HOME) !== pageFingerprint(HOME.replace(/ /g, '\n').toUpperCase())) {
+      _fails.push('the same text with different spacing or casing reads as a different page, so the commonest redirect shape slips through');
+    }
+    // Too little text to judge must return empty rather than a hash: an empty
+    // page matching an empty page is not evidence of anything.
+    if (pageFingerprint('short') !== '' || pageFingerprint('') !== '') {
+      _fails.push('a page with almost no text still produces a fingerprint, so two thin pages would be called duplicates of each other on no evidence');
+    }
+    // And the two nets must be wired where they act — needles assembled.
+    {
+      const _src = selfSource();
+      if (_src.indexOf('const _homeFp = ' + 'pageFingerprint(homepageMd)') < 0) {
+        _fails.push('the interior pages are no longer compared against the HOMEPAGE, which is the exact case reported: four renders that were all the homepage');
+      }
+      if (_src.indexOf('auditSitePages(website, firecrawlKey, apiKey, company, ' + 'content)') < 0) {
+        _fails.push('the homepage text is not passed into the page audit, so the comparison has nothing to compare against and silently never fires');
+      }
+      if (_src.indexOf('if (_seenShot.has(' + 'x.shot))') < 0) {
+        _fails.push('two pages can point at one render again, which is literally what "four screenshots of the same page" looks like on screen');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ DUPLICATE PAGE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ DUPLICATE PAGE CHECK: a page whose text is identical to the homepage's is recognised as the homepage and dropped from both the corpus and the renders — a redirect, an unrouted single-page app or a soft 404 all return exactly that, and nothing in this system could previously tell. Two genuinely different pages never collide, spacing and casing do not fool it, and a page too thin to judge produces no fingerprint at all rather than matching every other thin page. A second net catches two URLs pointing at one hosted render, which is what four identical screenshots look like on the audit screen.`);
+    }
+  } catch (e) {
+    console.log(`⛔ DUPLICATE PAGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THE PAGES WE RENDER MUST BE PAGES A CUSTOMER NAVIGATES TO ═════════════
   // Vin, on the 2026-08-20 run: "the screenshots are 4-5 screenshots of the
   // homepage, it's clearly not taking pics of the other important pages — that
