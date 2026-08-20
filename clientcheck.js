@@ -260,7 +260,44 @@ const runMergeCheck = () => {
 };
 const mergeStat = runMergeCheck();
 
-// 6. AND EVERY MERGE GOES THROUGH IT. A second call site that assembles the
+// ══ 6. A NEW AUDIT MUST CLEAR THE WHOLE OF THE OLD EMAIL ════════════════════
+// applyResearchResult ends by dropping the previous draft, because approving
+// copy is approving THAT copy against THAT evidence — when the evidence is
+// re-measured the approval refers to nothing. It cleared three fields.
+// applyGeneratedEmail writes eleven, and the two it was leaving behind, subject
+// and pitch, are the two the send path reads.
+//
+// Two hand-kept lists of one thing is the disease this file is full of, so
+// neither list is trusted: both are read off the code and compared. A twelfth
+// field added to the writer fails the build until the clear knows about it.
+{
+  const writesOf = (name, objName) => {
+    const out = new Set();
+    walk(ast, (n) => {
+      if (n.type !== 'VariableDeclarator' || !n.id || n.id.name !== name) return;
+      walk(n, (m) => {
+        if (m.type !== 'AssignmentExpression' || m.left.type !== 'MemberExpression' || m.left.computed) return;
+        if (!m.left.object || m.left.object.type !== 'Identifier' || m.left.object.name !== objName) return;
+        if (m.left.property && m.left.property.name) out.add(m.left.property.name);
+      });
+    });
+    return out;
+  };
+  const written = writesOf('applyGeneratedEmail', 'L');
+  const merged = writesOf('applyResearchResult', 'L');
+  // status is set by both on purpose and is not part of the draft.
+  written.delete('status');
+  if (!written.size) {
+    fails.push('applyGeneratedEmail writes nothing to the lead, so this comparison is measuring an empty set and cannot fail');
+  } else {
+    const missed = [...written].filter(k => !merged.has(k)).sort();
+    if (missed.length) {
+      fails.push(`a re-research does not clear ${missed.length} field(s) the email writer sets: ${missed.join(', ')} — the lead keeps the previous audit's email in them while showing a fresh audit, and subject and pitch are what actually mail`);
+    }
+  }
+}
+
+// 7. AND EVERY MERGE GOES THROUGH IT. A second call site that assembles the
 // lead by hand is the same defect as a second research body, one stage later.
 {
   let merges = 0;

@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 146 boot checks at the bottom, each documenting the live failure that caused it
+- 147 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -856,6 +856,169 @@ one definition of each.
 
 ---
 
+## 15. A stem with a word boundary after it matches nothing — FIXED 2026-08-20
+
+`\bplumb\b` cannot match "plumbing", because the g is a word character. A stem
+written that way matches only itself, and "plumb" on its own is not a word
+anybody puts in a business name. **`RECURRING_NORMAL_TRADES` failed on 22 of the
+34 trade words it exists for — including plumbing, roofing, electrical and
+landscaping, our four largest categories** — so `recurring_revenue`, a whole
+rung, had never fired for a plumber, a roofer, an electrician or a landscaper.
+Nothing said so, because a regex that matches nothing is silent rather than wrong.
+
+Found from one live line: `BLOCKED [Chiropractic Family Healthcare]: large health
+system (name)`. `chiropract` could not match "chiropractic", so the small-practice
+exemption never fired and the enterprise filter took the lead. The same defect was
+in five lists, pointing both ways — `hospital` could not match "Hospitals" either,
+which lets a real enterprise through.
+
+**This file already recorded the bug once**, in the jargon gate: "`synerg` used to
+sit bare inside `\b(...)\b`... `synergy`, `synergies` and `synergistic` all sailed
+through the most notorious entry on the list for the life of that gate." The lesson
+was written down and never generalised.
+
+`STEM MATCH CHECK` now holds two mechanisms, because they fail on different days:
+
+- **Fixtures** — the real words each list exists to catch, run through the live
+  regex. Covers today's lists; blind to the term added next month.
+- **A declaration** — every bare string one of those lists can END on must appear
+  in `STEM_COMPLETE_WORDS`. A new stem cannot be added without writing it down as
+  a word, where a reviewer sees it. Both directions fail: a word no list uses any
+  more cannot sit there looking checked.
+
+**A generic detector was written first and deleted.** Sweeping every `\b(...)\b`
+in the file for an alternative that is a strict prefix of another beside it flagged
+68 entries; excluding plural pairs still left 49, because `the|them|their`,
+`you|your`, `pick|picking` and `rank|ranked` are ordinary word lists where the
+prefix relation means nothing. There is no dictionary in this process and no
+mechanical way to tell "plumb" from "pest". A check that cries wolf is a gate the
+next person switches off, so it demands the declaration instead of guessing.
+
+## 16. The log line named the one thing that was fine — FIXED 2026-08-20
+
+The query memory failed to save and the run printed **"Check that the
+places_query_state table exists."** The table existed. Row-level security was
+refusing the write. The one instruction printed sent whoever read it to inspect
+the only healthy part of the system.
+
+Five different problems arrive as the same `return null` and each needs a
+different action: create a table, add a policy, add a column, fix the key, fix
+the network. Supabase names which one in its response body every time, in a
+documented code. The line guessed, and a guess printed as an instruction reads
+exactly like a measurement.
+
+This is the SMTP lesson in the other direction. PART 4 §3 already says: "The real
+defect here is the log line, not the code... A message that overstates its own
+severity costs exactly as much as one that understates it." Naming the wrong cause
+costs the same again.
+
+The reason is now READ from the error code, kept per table, and **cleared the
+moment that table answers** — a stale cause reported after the fix is the same lie
+pointing the other way. `SUPABASE FAILURE CAUSE CHECK` runs the diagnoser against
+the real PostgREST bodies and asserts the permission case says the table EXISTS and
+never says "does not exist".
+
+**Two of its own assertions were wrong on the first run and only running them
+showed it.** A 401 "permission denied" and a 403 "row-level security" are ONE
+problem with ONE fix, and demanding they produce different sentences was noise —
+so fixtures now carry the cause they belong to, and only different causes may not
+collide. And the assertion banning the old sentence was written as a literal, so it
+matched **its own source text** and failed a correct build. That trap is recorded in
+this file twice already. It comes back every time somebody writes a needle the
+natural way.
+
+## 17. The review ceiling was deleting 282 paid-for businesses a run — FIXED 2026-08-20
+
+`GP_MAX_REVIEWS` is 750, and 282 businesses a run were deleted on it. The argument
+that demoted the rating band applies word for word: **Google bills per CALL and a
+call returns twenty businesses, so deleting a result cannot save a penny**, and
+nothing remembered them, so the next run paid to find the same 282 and delete them
+again.
+
+There is a second reason the band did not have. Twenty lines above the ceiling this
+file states, from its own reading: *"Review count measures whether a business ASKS,
+not how big it is."* The ceiling then uses review count to measure how big a
+business is. Both cannot be right — a pest control company running 40-60 jobs a day
+and asking each time crosses 750 while still being fifteen people and one owner; a
+surgeon at 750 really is a large multi-provider practice. `reviewFloorFor` already
+raises the FLOOR for exactly those high-volume trades. The ceiling was never given
+the same treatment.
+
+**No number was invented to fix that, because there is no measurement behind one.**
+The ceiling keeps its value and stops DELETING: a business above it is returned
+behind every other lead, sorts last, and fills the bench. It is still never audited
+while a better lead exists, which is all the ceiling was ever doing. `GP_SIZE_MODE=cut`
+restores the delete.
+
+Both demotion reasons now feed **one** flag, so no gate can be fixed for one and
+left open for the other — falsified by pointing the per-category cap and the final
+comparator back at the band alone, and both went red.
+
+## 18. Eleven measurements the server pays for never reached the lead — FIXED 2026-08-20
+
+The research merge — 200 lines of "which value wins" — lived inside a React
+function, so auditing fifty businesses at once meant writing it a second time. Its
+own comment says why that must not happen: *"Two implementations of one operation
+is the same mistake as the two fabrication lists and the two merge paths in this
+file's history. The second copy is always the one that rots, because it only runs
+in the case nobody tests."* A batch runner is precisely a case nobody tests one
+lead at a time.
+
+It is `applyResearchResult` at module scope now, pure, and **`clientcheck.js`
+EXECUTES it**: it lifts the function out of index.html with its helpers, builds a
+synthetic response where every field carries a unique marker, runs it, and asserts
+each marker comes out on the lead.
+
+**The requirement list is parsed from the SERVER's own `res.json`, not from the
+client.** The first version read it off the merge itself — so deleting the `lsa`
+assignment deleted the `data.lsa` read with it, the list got one shorter, and the
+check reported a clean pass on the broken build. A check whose requirement comes
+from the code under test cannot fail.
+
+Driven from the server it found **eleven fields measured, paid for, returned, and
+dropped one line before use.** `leadToRow` persists them FROM THE LEAD, so they
+were stored as null and reloaded as null — not dark until refresh, gone. Five are
+rendered by the UI today:
+
+| | |
+|---|---|
+| `fullPageUrl`, `pageShots` | the full-page renders. The audit view says "above the fold only" without them, on every lead |
+| `verifiedCEO`, `verifiedCEOTitle` | the confirmed decision-maker on the call sheet. `leadToRow`'s own comment calls verifiedCEO "the costly one" |
+| `rateLimited` | the banner saying Firecrawl was REFUSED rather than finding nothing, and to re-run the lead |
+| `phoneSource` | whether the number came off their Google listing |
+
+The other six — Google's real-world speed field data and the early-channel
+decision — were measured with nowhere to go. All eleven land now and the check
+requires all 68, with **zero declared exceptions**.
+
+Two more found on the way out:
+
+- **The merge overwrote the server's `richData` with a dead browser measurement.**
+  The browser PageSpeed call was removed weeks ago (it ran with no key and returned
+  429 on every lead, recorded as a measurement), so `pageSpeed` has been `{}` ever
+  since and those lines wrote "Not checked" over whatever the server sent. Fallback
+  now, not override.
+- **A re-research cleared three fields of the previous email and the writer sets
+  eleven** — and the two it left behind, `subject` and `pitch`, are the two the
+  send path reads. Nothing could ship it alone (approval goes false), but the
+  comment above it promises the draft is dropped and the batch relies on that.
+  Found by running fifty leads through the batch with a blocked composer.
+  `clientcheck.js` now reads BOTH lists off the code and fails if they drift.
+
+**And the bulk audit itself.** `runBatchAudit` reuses the shared request builder,
+the shared merge, the shared compose body and the shared email commit — it
+reimplements nothing. Audits only by default, because that is what Mike asked for;
+"also write the email" is a tick box. `batchcheck.js` runs 50 leads through the
+real runner with a fake network under it and proves seven things, each because the
+opposite has happened here: the shared builder and merge are used, audits-only
+costs zero compose calls, emails-on produces an actually sendable subject+body+arm,
+a fact-check refusal is reported AND leaves no stale draft, no more than eight
+leads are ever in flight, every job id is written to disk so a closed tab does not
+lose paid-for work, and Stop keeps what finished. All four of its central
+assertions were falsified by reverting the code they guard.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -894,6 +1057,13 @@ node tdz.js server.js                   # reads before declaration — MUST be 0
 node dupkeys.js server.js               # duplicate object keys — MUST be 0
 node dupkeys.js index.html              # MUST be 0
 node scopecheck.js server.js            # a name used outside the block it was declared in
+node clientcheck.js                     # the client's request/merge contract — EXECUTES the merge
+node batchcheck.js                      # runs 50 leads through the bulk audit with a fake network
+#   These two are the only gates that RUN index.html. It deploys to Netlify by
+#   hand and nothing in this repo could execute it, so every client change until
+#   2026-08-20 shipped on a read-through — which is how nine duplicate-key
+#   collisions, seventeen disagreeing request fields and eleven dropped server
+#   measurements all reached live at once.
 node fetchtest.js                       # the one helper all 60 outbound calls use
 node fuzzcore.js 20000                  # 11 gates, in-process
 node fuzz.js 500                        # composes emails over HTTP
@@ -902,7 +1072,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 146 boot checks
+PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 147 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -976,7 +1146,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 146 boot checks and the comments above
+and caused none of this week's failures. The 147 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 

@@ -1219,9 +1219,35 @@ const applyResearchResult = (prev, data, ctx) => {
         // is cleared in every case and the draft goes with it — the send itself is
         // already recorded in sentSnapshot, which is what Call reads, so nothing
         // about the history is lost.
+        //
+        // ══ AND IT HAS TO CLEAR THE WHOLE EMAIL, NOT THREE FIELDS OF IT ═══
+        // This cleared approved, generatedResult and copyFlags. applyGeneratedEmail
+        // writes ELEVEN fields, and the two it leaves behind — `subject` and
+        // `pitch` — are the two the send path actually reads. So a re-researched
+        // lead carried the previous audit's subject line and body, under a fresh
+        // audit, in the fields that mail.
+        //
+        // Nothing could ship it on its own: approved goes false and the lead has
+        // to pass through Generate again. But "the draft is dropped" is what the
+        // comment above promises and what the batch run relies on, and a lead
+        // whose compose was REFUSED by the fact-checker would otherwise sit there
+        // holding the exact copy that was refused. Found by running fifty leads
+        // through the batch with a blocked composer, not by reading this.
+        //
+        // The list mirrors applyGeneratedEmail's writes exactly, and
+        // clientcheck.js fails the build if the two ever drift apart — that is
+        // the only way this stays true when a twelfth field is added.
         L.approved = false;
         L.generatedResult = null;
+        L.composedEmail = null;
+        L.pitch = null;
+        L.subject = null;
+        L.abVariant = null;
+        L.followUp1 = null;
+        L.followUp2 = null;
+        L.breakup = null;
         L.copyFlags = null;
+        L.promptPath = null;
         L.status = 'researched';
         if (_wasApproved || _hadDraft) {
           console.log('[re-research] ' + (L.company || 'lead') +
@@ -1229,6 +1255,213 @@ const applyResearchResult = (prev, data, ctx) => {
             ' — the email it referred to was written from the old audit. Back in Generate for a fresh write.');
         }
         return { lead: L, outcome: 'researched', banner: '' };
+};
+
+
+// ══ ONE COMPOSE REQUEST, BUILT IN ONE PLACE ═════════════════════════════════
+// Same reason as buildResearchBody one function above: this payload was an
+// object literal inside a 1,500-line React handler, so the only way to write an
+// email for fifty leads at once was to write the payload a second time. Every
+// comment inside it records a live send that went wrong because one field was
+// missing or read from the wrong place — the greeting that used the operations
+// director's name, the problem list read from the one location that does not
+// survive a refresh, the trade word that decides the money sentence. A second
+// copy would start without any of them.
+//
+// Pure: lead in, request body out. clientcheck.js fails the build if a second
+// one appears or if a caller writes its own.
+const buildComposeBody = (lead, settings) => {
+  lead = lead || {};
+  settings = settings || {};
+  const _ba = lead.brainAudit || {};
+  return {
+            company: lead.name,
+            // ══ WITHOUT THIS THE MODEL NEVER WRITES ═══════════════════════
+            // The server hands the verified pieces to the model and lets it
+            // connect them into prose, then checks every figure and every
+            // claim before allowing it. No key means no writer, and the email
+            // silently stays in its assembled form — working, but the exact
+            // thing the writer exists to fix. Same key every other call uses.
+            apiKey: settings.apiKey,
+            // ══ GREET THE PERSON THE EMAIL IS ADDRESSED TO ═══════════════════
+            // Live on Hannah Custom Homes: the email went TO
+            // dusty@hannahcustomhomes.com and opened "Kacie — 39 reviews across
+            // 21 years". Kacie Carrico is the COO. Dusty Hannah is the owner.
+            //
+            // founderName is whatever discovery captured first and is never
+            // rewritten when the decision-maker resolves. Research had already
+            // corroborated Dusty three ways and built his mailbox, but the
+            // greeting still read the stale field — the computed-but-not-passed
+            // failure again, this time on the most visible line in the email.
+            //
+            // Addressing an owner by his operations director's name is worse
+            // than using no name: it is proof the message is automated, on the
+            // first four characters he reads. The confirmed decision-maker wins;
+            // founderName is only the fallback when nothing was confirmed.
+            // decisionMaker is an OBJECT — { name, title, corroborated } — and
+            // verifiedCEO may be either an object or a plain string depending on
+            // which path stored it. Passing the object straight through produced
+            // "[object Object] — 39 reviews across 21 years" in a live email,
+            // because the composer takes the first word of whatever it is given.
+            // Line 3289 in this same file already reads `.name`; this did not.
+            // Read the name off either shape, and never pass a non-string.
+            founderName: (() => {
+              const nameOf = (v) => {
+                if (!v) return '';
+                if (typeof v === 'string') return v.trim();
+                if (typeof v === 'object' && typeof v.name === 'string') return v.name.trim();
+                return '';
+              };
+              return nameOf(lead.verifiedCEO) || nameOf(lead.decisionMaker) || nameOf(lead.founderName) || '';
+            })(),
+            // ══ THE TRADE, FOR AUDITS STORED BEFORE IT SHIPPED ═══════════
+            // tradeJobValue() keys off this to write the money sentence. It is
+            // now included in measuredNumbers, but every lead researched before
+            // that reports "NO money (tradeWord=null)" and loses the third of
+            // the three elements the pitch must carry.
+            //
+            // The lead itself has carried the trade the whole time — it is what
+            // the Research header prints under the company name. Sending it
+            // means ~200 already-researched leads get the loss figure without
+            // re-running Research and re-spending the credits.
+            // Round-trip the brain's pattern line so a recompose keeps it.
+            // Without this the sentence exists on the server, survives
+            // persistence, and then vanishes the first time you hit
+            // Regenerate — the exact shape of every field this system has
+            // lost before.
+            patternLine: (_ba && _ba.patternLine) || lead.patternLine || '',
+            tradeWord: lead.industry || lead.verifiedIndustry || '',
+            // ══ THE LADDER IS ON THE LEAD, NOT ALWAYS ON THE AUDIT ═══════
+            // Fresh from research these ride inside brainAudit. After a
+            // reload, rowToLead restores them to the LEAD — problemList,
+            // harmsRanked, factualSpine, measuredNumbers, subjectOptions and
+            // allowedReframes are all top-level fields there.
+            //
+            // Sending lead.brainAudit alone therefore looked, to the server,
+            // exactly like a lead with nothing measured on it: it answered
+            // "neither a factual spine nor a stored harm ladder" on a lead
+            // whose audit screen was at that moment rendering its problem list
+            // from lead.problemList. The data was never missing; it was being
+            // read from the one place it does not survive a refresh.
+            //
+            // The spine read a few lines below already checks both locations.
+            // This payload did not, which is the same one-of-two-merge-paths
+            // gap that has produced "nothing on file" before.
+            brainAudit: Object.assign({}, _ba, {
+              harmsRanked: (Array.isArray(_ba.harmsRanked) && _ba.harmsRanked.length) ? _ba.harmsRanked : (lead.harmsRanked || []),
+              ladderInputs: _ba.ladderInputs || lead.ladderInputs || null,
+              problemList: (Array.isArray(_ba.problemList) && _ba.problemList.length) ? _ba.problemList : (lead.problemList || []),
+              factualSpine: _ba.factualSpine || lead.factualSpine || null,
+              measuredNumbers: _ba.measuredNumbers || lead.measuredNumbers || null,
+              subjectOptions: (Array.isArray(_ba.subjectOptions) && _ba.subjectOptions.length) ? _ba.subjectOptions : (lead.subjectOptions || []),
+              allowedReframes: (Array.isArray(_ba.allowedReframes) && _ba.allowedReframes.length) ? _ba.allowedReframes : (lead.allowedReframes || []),
+            }),
+  };
+};
+
+// ══ AND ONE READING OF WHAT COMES BACK ══════════════════════════════════════
+// The composer answers in four shapes and each means something different: an
+// email, "this audit predates the composer", "I refuse because the audit
+// contradicts the measurements", and "I could compose a body but not a subject,
+// so this could not be sent". Three of the four are NOT errors and the third is
+// the one that must never fall through to a stored draft — that is how a
+// refused email would have been shown as current. Read once, here, so the batch
+// runner and the Generate panel cannot disagree about which is which.
+const readComposeResponse = (j) => {
+  if (j && j.composed && j.composed.variantA) {
+    return { composed: j.composed, blocked: null, note: 'the server composed this email from the existing audit. No model call.' };
+  }
+  if (j && j.reason === 'no-spine') {
+    return { composed: null, blocked: null, note: 'this audit has no factual spine \u2014 it predates the composer. Re-run Research on this lead to get the composed email; falling back to the model for now.' };
+  }
+  if (j && j.reason === 'critical-fact-check') {
+    return { composed: null, blocked: j, note: 'blocked \u2014 ' + ((j.criticalFlags || []).length) + ' claim(s) contradict the measurements.' };
+  }
+  if (j && j.reason === 'no-subject') {
+    return { composed: null, blocked: null, note: 'the server composed a measured body for this lead but could not build a subject line for it, so it refused to hand back an email that could not be sent. Re-run Research on this lead. Falling back to the model for now.' };
+  }
+  return { composed: null, blocked: null, note: '' };
+};
+
+
+// ══ ONE PLACE AN EMAIL BECOMES A LEAD ═══════════════════════════════════════
+// Lifted out of commitGeneratedEmail for the same reason as the research merge:
+// the batch runner writes emails for fifty leads and has no React state, so
+// without this it would need a second copy of every rule below. The comment
+// this grew out of is the argument in full — two producers had grown separate
+// vocabularies, one writing fields nothing read, and five faults were queued
+// behind the visible one. That happened once. It does not need to happen again
+// because a batch button was added.
+//
+// Pure: previous lead in, merged lead out. No saving, no re-render, no error
+// state. The caller decides what to do with { ok, error }.
+const applyGeneratedEmail = (prev, raw, opts) => {
+  const L = prev || {};
+  opts = opts || {};
+  // ── NORMALISE ──────────────────────────────────────────────────────────────
+  // `pitch` is this application's word for the body. The server composer says
+  // `body`. Accept either, emit `pitch`, so a producer cannot be wrong about a
+  // field name again — it can only be missing content, which is visible.
+  const _v = (v) => {
+    if (!v || typeof v !== 'object') return null;
+    const pitch = String(v.pitch || v.body || '').trim();
+    const subject = String(v.subject || '').trim();
+    return (pitch || subject) ? { ...v, subject, pitch } : null;
+  };
+  const result = raw ? {
+    ...raw,
+    variantA: _v(raw.variantA),
+    variantB: _v(raw.variantB),
+    followUp1: raw.followUp1 || null,
+    followUp2: raw.followUp2 || null,
+    breakup: raw.breakup || null,
+  } : null;
+  if (!result || !result.variantA || !result.variantA.pitch) {
+    // Refuse rather than render an empty email. A blank panel with no
+    // explanation is what sent us looking in the wrong place for a week.
+    return { ok: false, lead: L, result: null, variant: 'A',
+      error: 'The email came back with no body. Nothing was written to this lead \u2014 re-run Research on it, then Generate.' };
+  }
+
+  L.generatedResult = result;
+  // ══ THE CAPTION READS composedEmail; THE COMMIT WROTE generatedResult ══
+  // The provenance caption (and its refusal read-out) looks at
+  // lead.composedEmail — which held the RESEARCH-time composed object, frozen
+  // before the brain ever saw the lead. So a brain-written email rendered under
+  // "no model wrote any part of this email", and a refusal's reason
+  // (composed.brainWriter, sent by the server since 2026-08-18) had nowhere to
+  // land. Same object, newer version, same slot: the caption now reads what
+  // actually shipped. writtenBy and brainWriter both survive _v's normalisation
+  // because it spreads the original variant through.
+  L.composedEmail = result;
+
+  // ── DETERMINISTIC A/B ASSIGNMENT ───────────────────────────────────────────
+  // Derived from the lead id rather than random, so it is stable: regenerating
+  // cannot flip it, which would otherwise scramble the attribution recorded at
+  // send time.
+  const _abHash = String(L.id || '')
+    .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
+  const _useB = Math.abs(_abHash) % 2 === 1 && result.variantB && result.variantB.subject;
+  const _chosen = _useB ? result.variantB : result.variantA;
+
+  L.pitch = _chosen && _chosen.pitch;
+  L.subject = _chosen && _chosen.subject;
+  L.abVariant = _useB ? 'B' : 'A';
+  L.followUp1 = result.followUp1 || null;
+  L.followUp2 = result.followUp2 || null;
+  L.breakup = result.breakup || null;
+  // ── FLAGS BELONG TO THIS EMAIL, NOT THE LAST ONE ───────────────────────────
+  // The model path read callClaude.lastCopyFlags. That global still holds the
+  // previous lead's flags when no model call was made, so a composed email would
+  // have inherited warnings written about somebody else's copy. Flags are passed
+  // in explicitly and default to none.
+  L.copyFlags = Array.isArray(opts.copyFlags) ? opts.copyFlags : [];
+  L.promptPath = opts.promptPath || 'unknown';
+  result._copyFlags = L.copyFlags;
+  // Do NOT touch icpScore — it is the discovery+research score, and the
+  // pitch-writer's opinion must never corrupt the real pipeline score.
+  L.status = 'generated';
+  return { ok: true, lead: L, result, variant: _useB ? 'B' : 'A', error: '' };
 };
 
 const researchViaQueue = async (body, opts) => {
@@ -1261,6 +1494,151 @@ const researchViaQueue = async (body, opts) => {
   if (!jobId) return { ok: false, status: 500, json: async () => ({ error: 'Server accepted the job but returned no job id.' }) };
   if (typeof o.onJobId === 'function') o.onJobId(jobId);
   return pollResearchJob(jobId, o);
+};
+
+// ══ FIFTY AT A TIME ═════════════════════════════════════════════════════════
+// Mike wants fifty audits a day for the sales guy, audits only, no emails. The
+// app could research exactly one lead at a time, from a detail view, with a
+// spinner — so fifty meant fifty clicks and fifty waits.
+//
+// This is the whole batch: it does NOT reimplement anything. It calls the same
+// request builder, the same queue, the same merge and the same email commit the
+// single-lead path uses, in that order, for each lead. Everything it needed had
+// to be lifted to module scope first, and that was the actual work — the merge
+// alone was two hundred lines inside a React function.
+//
+// WHY THE SERVER-SIDE QUEUE IS NOT ENOUGH ON ITS OWN. The server already limits
+// how many leads run at once (RESEARCH_CONCURRENCY, plus a gate that refuses to
+// start another while resident memory is near Render's ceiling). Submitting all
+// fifty at once would therefore be SAFE server-side — it would just queue them.
+// It would not be safe here: fifty browser poll loops, and fifty job ids whose
+// only record is a tab that might be closed. So the pool is small and the ids
+// are written to disk as they are issued, exactly as the single-lead path does.
+//
+// NO BROWSER LOOKUPS. The single-lead path runs Hunter from the browser with a
+// per-domain cache, because it was written before the server resolved addresses
+// itself. Doing that fifty times would spend a whole month of a 50-credit plan
+// in one press. The server resolves the decision-maker and builds the mailbox,
+// and its answer already outranks the cached one in the merge — so the batch
+// sends no browser data at all and takes the server's answer.
+//
+// EMAILS ARE OPTIONAL AND OFF BY DEFAULT, because Mike asked for audits. When
+// they are on, a lead whose audit contradicts its own measurements is reported
+// as BLOCKED rather than quietly left with its previous draft standing.
+const BATCH_DEFAULT_SIZE = 50;
+const BATCH_CONCURRENCY = 3;
+
+const runBatchAudit = async (opts) => {
+  const o = opts || {};
+  const queue = (o.leads || []).slice();
+  const settings = o.settings || {};
+  const withEmail = !!o.withEmail;
+  const conc = Math.max(1, Math.min(8, Number(o.concurrency) || BATCH_CONCURRENCY));
+  const stopped = () => !!(typeof o.shouldStop === 'function' && o.shouldStop());
+  // A throwing progress callback must not kill the run: the batch is the
+  // expensive half and a render error in the panel is the cheap half.
+  const report = (ev) => { try { if (typeof o.onProgress === 'function') o.onProgress(ev); } catch (e) { console.warn('[batch] progress handler threw', e); } };
+
+  // Re-read immediately before writing and patch only THIS lead. Fifty runs
+  // finishing at different times is precisely the case where writing back a
+  // snapshot taken minutes ago erases whatever finished in between — the bug
+  // recorded at the single-lead merge, which only ever had three in flight.
+  const persist = (row) => {
+    const fresh = getLeads();
+    const fi = fresh.findIndex(x => x.id === row.id);
+    if (fi >= 0) fresh[fi] = row; else fresh.push(row);
+    saveLeads(fresh, row);
+    return row;
+  };
+
+  const total = queue.length;
+  const results = new Array(total);
+  let started = 0, finished = 0;
+
+  const one = async (lead) => {
+    const base = { id: lead.id, name: lead.name || lead.company || lead.id };
+    let row = lead;
+    try {
+      const r = await researchViaQueue(
+        buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null }),
+        { onJobId: (jid) => setInflightJob(lead.id, jid) }
+      );
+      const data = await r.json();
+      // The row as it stands NOW, not as it stood when the batch was assembled.
+      const cur = getLeads().find(x => x.id === lead.id) || { ...lead };
+      const merged = applyResearchResult(cur, data, {
+        website: lead.website || '', emailData: {}, companyData: {}, pageSpeed: {}, httpStatus: r.status,
+      });
+      row = persist(merged.lead);
+      clearInflightJob(lead.id);
+      if (merged.outcome !== 'researched') return { ...base, outcome: merged.outcome, note: merged.banner };
+      if (!withEmail) return { ...base, outcome: 'researched', note: '' };
+    } catch (e) {
+      clearInflightJob(lead.id);
+      return { ...base, outcome: 'error', note: (e && e.message) || String(e) };
+    }
+
+    try {
+      const cr = readComposeResponse(await (await fetch(BACKEND + '/api/compose-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildComposeBody(row, settings)),
+      })).json());
+      if (cr.blocked) {
+        return { ...base, outcome: 'email_blocked', note:
+          ((cr.blocked.criticalFlags || []).length || 'one or more') + ' claim(s) in this audit contradict what we measured, so nothing was written. '
+          + String((cr.blocked.criticalFlags || [])[0] || '').slice(0, 200) };
+      }
+      if (!cr.composed) return { ...base, outcome: 'audited_no_email', note: cr.note };
+      const g = applyGeneratedEmail(row, cr.composed, { promptPath: 'composed', copyFlags: [] });
+      if (!g.ok) return { ...base, outcome: 'audited_no_email', note: g.error };
+      persist(g.lead);
+      return { ...base, outcome: 'generated', note: '' };
+    } catch (e) {
+      // The audit is saved either way. An email that could not be written is a
+      // lead to press Generate on, not a lead to research again.
+      return { ...base, outcome: 'audited_no_email', note: 'the composer could not be reached (' + ((e && e.message) || e) + '); the audit is saved, press Generate on this lead' };
+    }
+  };
+
+  const worker = async () => {
+    for (;;) {
+      if (stopped()) return;
+      const i = started++;
+      if (i >= total) return;
+      report({ phase: 'start', lead: queue[i], index: i, total, finished });
+      const res = await one(queue[i]);
+      results[i] = res;
+      finished++;
+      report({ phase: 'done', lead: queue[i], index: i, total, finished, result: res });
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(conc, total) }, worker));
+  return results.filter(Boolean);
+};
+
+// Which leads a batch would take, in the order it would take them. Separated
+// from the runner so the button can say "42 ready" before anything is spent,
+// and so the rule is in one place rather than inside a click handler.
+//
+// Already-researched leads are skipped by default: re-auditing a lead costs a
+// full research cycle and the app has no way to know it would come back
+// different. "Include re-runs" is a deliberate choice, not the default.
+const batchCandidates = (allLeads, o) => {
+  const opts = o || {};
+  const limit = Math.max(1, Number(opts.limit) || BATCH_DEFAULT_SIZE);
+  const includeDone = !!opts.includeResearched;
+  return (allLeads || [])
+    .filter((l) => l && l.id)
+    .filter((l) => !l.notAFit)
+    // A lead with no website has nothing to audit — leadChannel 'call' routes it
+    // to the phone, and spending a research cycle on it returns an empty read.
+    .filter((l) => (l.website || '').trim() || l.leadChannel === 'rebuild')
+    .filter((l) => includeDone || !(l.status === 'researched' || l.status === 'generated' || l.status === 'approved' || l.status === 'sent'))
+    .slice()
+    .sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0))
+    .slice(0, limit);
 };
 
 // The polling half, on its own so a resumed run uses the identical code path.
@@ -4500,6 +4878,54 @@ function ResearchView({
   const [websiteModal, setWebsiteModal] = useState(null); // null | { website, source, onConfirm }
   const [researchError, setResearchError] = useState('');
   const [rerunConfirm, setRerunConfirm] = useState(false);
+  // ══ BULK AUDIT ═══════════════════════════════════════════════════════════
+  // Mike asked for fifty audits a day for the sales guy, audits only. The whole
+  // run lives in runBatchAudit at module scope — this is only the panel: what to
+  // run, whether to write emails, and what happened. Nothing about how a lead is
+  // researched or merged is repeated here, because a second copy of that is the
+  // failure this file has recorded three times.
+  const [batchSize, setBatchSize] = useState(BATCH_DEFAULT_SIZE);
+  const [batchEmail, setBatchEmail] = useState(false);
+  const [batchIncludeDone, setBatchIncludeDone] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchAt, setBatchAt] = useState({ finished: 0, total: 0, now: '' });
+  const [batchResults, setBatchResults] = useState([]);
+  // A ref, not state: the worker loop reads it between leads and a state value
+  // captured in that closure would never see the change.
+  const batchStopRef = React.useRef(false);
+  const startBatch = async () => {
+    if (batchRunning) { batchStopRef.current = true; return; }
+    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone });
+    if (!pool.length) { setResearchError('Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.'); return; }
+    batchStopRef.current = false;
+    setBatchResults([]);
+    setBatchAt({ finished: 0, total: pool.length, now: pool[0].name || '' });
+    setBatchRunning(true);
+    setResearchError('');
+    try {
+      const out = await runBatchAudit({
+        leads: pool,
+        settings,
+        withEmail: batchEmail,
+        shouldStop: () => batchStopRef.current,
+        onProgress: (ev) => {
+          if (ev.phase === 'start') setBatchAt(s => ({ ...s, now: (ev.lead && ev.lead.name) || '', total: ev.total }));
+          else setBatchAt(s => ({ ...s, finished: ev.finished, total: ev.total }));
+          if (ev.phase === 'done' && ev.result) setBatchResults(rs => rs.concat([ev.result]));
+        },
+      });
+      setBatchResults(out);
+    } catch (e) {
+      setResearchError('The bulk run stopped: ' + ((e && e.message) || e) + '. Every lead that finished before it stopped is saved.');
+    }
+    setBatchRunning(false);
+    batchStopRef.current = false;
+    // Whatever finished is on disk; show it.
+    const _fresh = getLeads().sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0));
+    setAllLeads(_fresh);
+    const _cur = _fresh.find(x => x.id === (lead && lead.id));
+    if (_cur) setLead({ ..._cur });
+  };
   useEffect(() => {
     // Reload all leads from storage every time leadId changes — highest score first
     const leads = getLeads().sort((a,b) => (b.icpScore||0) - (a.icpScore||0));
@@ -4985,7 +5411,53 @@ function ResearchView({
           const all = getLeads().sort((a,b) => (b.icpScore||0)-(a.icpScore||0));
           setAllLeads(q ? all.filter(l => l.name.toLowerCase().includes(q)) : all);
         }
-      })
+      }),
+      // ══ AUDIT IN BULK ════════════════════════════════════════════════════
+      // Sits above the list because the list is what it changes. It says how
+      // many leads it would take BEFORE anything is spent, because a research
+      // cycle costs real credits and "50" is a limit, not a promise.
+      React.createElement('div', { style: { marginTop: 9, paddingTop: 9, borderTop: '1px solid var(--b)' } },
+        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 6 } }, 'Audit in bulk'),
+        React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 } },
+          React.createElement('input', {
+            type: 'number', min: 1, max: 200, value: batchSize, disabled: batchRunning,
+            onChange: e => setBatchSize(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1))),
+            style: { width: 58, fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--b)', background: 'var(--s2)', color: 'var(--t)' },
+          }),
+          React.createElement('div', { style: { fontSize: 11, color: 'var(--m)' } },
+            batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length + ' ready')),
+        React.createElement('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: 'var(--m)', marginBottom: 4, cursor: 'pointer' } },
+          React.createElement('input', { type: 'checkbox', checked: batchEmail, disabled: batchRunning, onChange: e => setBatchEmail(e.target.checked) }),
+          React.createElement('span', null, 'also write the email')),
+        React.createElement('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: 'var(--m)', marginBottom: 7, cursor: 'pointer' } },
+          React.createElement('input', { type: 'checkbox', checked: batchIncludeDone, disabled: batchRunning, onChange: e => setBatchIncludeDone(e.target.checked) }),
+          React.createElement('span', null, 'include re-runs')),
+        React.createElement('button', {
+          className: 'btn btn-sm ' + (batchRunning ? 'btn-g' : 'btn-p'),
+          style: { width: '100%' },
+          onClick: startBatch,
+        }, batchRunning ? ('Stop \u2014 ' + batchAt.finished + '/' + batchAt.total) : ('Audit ' + batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length + (batchEmail ? ' + write' : ''))),
+        batchRunning && React.createElement('div', { style: { fontSize: 10, color: 'var(--m)', marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+          'now: ' + (batchAt.now || '\u2026')),
+        // What actually happened, per outcome. A count of "done" would hide the
+        // two outcomes that need a human: an audit that refused to become an
+        // email, and one the fact-checker blocked.
+        (!batchRunning && batchResults.length > 0) && (() => {
+          const tally = {};
+          for (const x of batchResults) tally[x.outcome] = (tally[x.outcome] || 0) + 1;
+          const LABEL = {
+            researched: 'audited', generated: 'audited + written',
+            audited_no_email: 'audited, no email', email_blocked: 'blocked by the fact-check',
+            brain_failed: 'audit failed', not_a_fit: 'not a fit', error: 'error',
+          };
+          return React.createElement('div', { style: { marginTop: 7, fontSize: 10, color: 'var(--m)', lineHeight: 1.5 } },
+            Object.keys(tally).map(k => React.createElement('div', { key: k },
+              tally[k] + ' \u00b7 ' + (LABEL[k] || k))),
+            batchResults.filter(x => x.note).slice(0, 3).map((x, n) => React.createElement('div', {
+              key: 'n' + n, style: { marginTop: 4, color: 'var(--m2)' },
+            }, x.name + ': ' + String(x.note).slice(0, 90))));
+        })()
+      )
     ),
     React.createElement('div', { style: { overflowY: 'auto', flex: 1 } },
       allLeads.map(l => {
@@ -5931,77 +6403,19 @@ function GenerateView({
   // any more. Both hand their result here, and this is the only code that puts
   // an email into a lead.
   const commitGeneratedEmail = (raw, opts = {}) => {
-    // ── NORMALISE ────────────────────────────────────────────────────────────
-    // `pitch` is this application's word for the body. The server composer says
-    // `body`. Accept either, emit `pitch`, so a producer cannot be wrong about a
-    // field name again — it can only be missing content, which is visible.
-    const _v = (v) => {
-      if (!v || typeof v !== 'object') return null;
-      const pitch = String(v.pitch || v.body || '').trim();
-      const subject = String(v.subject || '').trim();
-      return (pitch || subject) ? { ...v, subject, pitch } : null;
-    };
-    const result = raw ? {
-      ...raw,
-      variantA: _v(raw.variantA),
-      variantB: _v(raw.variantB),
-      followUp1: raw.followUp1 || null,
-      followUp2: raw.followUp2 || null,
-      breakup: raw.breakup || null,
-    } : null;
-    if (!result || !result.variantA || !result.variantA.pitch) {
-      // Refuse rather than render an empty email. A blank panel with no
-      // explanation is what sent us looking in the wrong place for a week.
-      setError('The email came back with no body. Nothing was written to this lead — re-run Research on it, then Generate.');
-      return false;
-    }
-
     const leads = getLeads();
     const idx = leads.findIndex(x => x.id === (lead && lead.id ? lead.id : leadId));
     if (idx < 0) {
       setError('This lead is no longer in the pipeline, so the email was not saved.');
       return false;
     }
-
-    leads[idx].generatedResult = result;
-    // ══ THE CAPTION READS composedEmail; THE COMMIT WROTE generatedResult ══
-    // The provenance caption (and its new refusal read-out) looks at
-    // lead.composedEmail — which held the RESEARCH-time composed object, frozen
-    // before the brain ever saw the lead. So a brain-written email rendered
-    // under "no model wrote any part of this email", and a refusal's reason
-    // (composed.brainWriter, sent by the server since 2026-08-18) had nowhere
-    // to land. Same object, newer version, same slot: the caption now reads
-    // what actually shipped. writtenBy and brainWriter both survive _v's
-    // normalisation because it spreads the original variant through.
-    leads[idx].composedEmail = result;
-
-    // ── DETERMINISTIC A/B ASSIGNMENT ─────────────────────────────────────────
-    // Derived from the lead id rather than random, so it is stable: regenerating
-    // cannot flip it, which would otherwise scramble the attribution recorded at
-    // send time. Identical to what the model path did, now applied to both.
-    const _abHash = String(lead && lead.id ? lead.id : leadId)
-      .split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
-    const _useB = Math.abs(_abHash) % 2 === 1 && result.variantB && result.variantB.subject;
-    const _chosen = _useB ? result.variantB : result.variantA;
-
-    leads[idx].pitch = _chosen && _chosen.pitch;
-    leads[idx].subject = _chosen && _chosen.subject;
-    leads[idx].abVariant = _useB ? 'B' : 'A';
-    leads[idx].followUp1 = result.followUp1 || null;
-    leads[idx].followUp2 = result.followUp2 || null;
-    leads[idx].breakup = result.breakup || null;
-    // ── FLAGS BELONG TO THIS EMAIL, NOT THE LAST ONE ─────────────────────────
-    // The model path read callClaude.lastCopyFlags. That global still holds the
-    // previous lead's flags when no model call was made, so a composed email
-    // would have inherited warnings written about somebody else's copy. Flags
-    // are passed in explicitly and default to none.
-    leads[idx].copyFlags = Array.isArray(opts.copyFlags) ? opts.copyFlags : [];
-    leads[idx].promptPath = opts.promptPath || 'unknown';
-    result._copyFlags = leads[idx].copyFlags;
-    // Do NOT touch icpScore — it is the discovery+research score, and the
-    // pitch-writer's opinion must never corrupt the real pipeline score.
-    leads[idx].status = 'generated';
-
+    // ONE place an email becomes a lead — shared with the batch runner, which
+    // has no React state to write to. See applyGeneratedEmail at module scope.
+    const _out = applyGeneratedEmail(leads[idx], raw, opts);
+    if (!_out.ok) { setError(_out.error); return false; }
+    leads[idx] = _out.lead;
+    const result = _out.result;
+    const _useB = _out.variant === 'B';
     // Second argument matters: without it saveLeads pushes EVERY row in the
     // pipeline to Supabase rather than the one that changed.
     saveLeads(leads, leads[idx]);
@@ -7211,109 +7625,20 @@ Do not restate this brief, do not explain your reasoning, do not list what you a
           const r = await fetch(`${BACKEND}/api/compose-email`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              company: lead.name,
-              // ══ WITHOUT THIS THE MODEL NEVER WRITES ═══════════════════════
-              // The server hands the verified pieces to the model and lets it
-              // connect them into prose, then checks every figure and every
-              // claim before allowing it. No key means no writer, and the email
-              // silently stays in its assembled form — working, but the exact
-              // thing the writer exists to fix. Same key every other call uses.
-              apiKey: settings.apiKey,
-              // ══ GREET THE PERSON THE EMAIL IS ADDRESSED TO ═══════════════════
-              // Live on Hannah Custom Homes: the email went TO
-              // dusty@hannahcustomhomes.com and opened "Kacie — 39 reviews across
-              // 21 years". Kacie Carrico is the COO. Dusty Hannah is the owner.
-              //
-              // founderName is whatever discovery captured first and is never
-              // rewritten when the decision-maker resolves. Research had already
-              // corroborated Dusty three ways and built his mailbox, but the
-              // greeting still read the stale field — the computed-but-not-passed
-              // failure again, this time on the most visible line in the email.
-              //
-              // Addressing an owner by his operations director's name is worse
-              // than using no name: it is proof the message is automated, on the
-              // first four characters he reads. The confirmed decision-maker wins;
-              // founderName is only the fallback when nothing was confirmed.
-              // decisionMaker is an OBJECT — { name, title, corroborated } — and
-              // verifiedCEO may be either an object or a plain string depending on
-              // which path stored it. Passing the object straight through produced
-              // "[object Object] — 39 reviews across 21 years" in a live email,
-              // because the composer takes the first word of whatever it is given.
-              // Line 3289 in this same file already reads `.name`; this did not.
-              // Read the name off either shape, and never pass a non-string.
-              founderName: (() => {
-                const nameOf = (v) => {
-                  if (!v) return '';
-                  if (typeof v === 'string') return v.trim();
-                  if (typeof v === 'object' && typeof v.name === 'string') return v.name.trim();
-                  return '';
-                };
-                return nameOf(lead.verifiedCEO) || nameOf(lead.decisionMaker) || nameOf(lead.founderName) || '';
-              })(),
-              // ══ THE TRADE, FOR AUDITS STORED BEFORE IT SHIPPED ═══════════
-              // tradeJobValue() keys off this to write the money sentence. It is
-              // now included in measuredNumbers, but every lead researched before
-              // that reports "NO money (tradeWord=null)" and loses the third of
-              // the three elements the pitch must carry.
-              //
-              // The lead itself has carried the trade the whole time — it is what
-              // the Research header prints under the company name. Sending it
-              // means ~200 already-researched leads get the loss figure without
-              // re-running Research and re-spending the credits.
-              // Round-trip the brain's pattern line so a recompose keeps it.
-              // Without this the sentence exists on the server, survives
-              // persistence, and then vanishes the first time you hit
-              // Regenerate — the exact shape of every field this system has
-              // lost before.
-              patternLine: (_ba && _ba.patternLine) || lead.patternLine || '',
-              tradeWord: lead.industry || lead.verifiedIndustry || '',
-              // ══ THE LADDER IS ON THE LEAD, NOT ALWAYS ON THE AUDIT ═══════
-              // Fresh from research these ride inside brainAudit. After a
-              // reload, rowToLead restores them to the LEAD — problemList,
-              // harmsRanked, factualSpine, measuredNumbers, subjectOptions and
-              // allowedReframes are all top-level fields there.
-              //
-              // Sending lead.brainAudit alone therefore looked, to the server,
-              // exactly like a lead with nothing measured on it: it answered
-              // "neither a factual spine nor a stored harm ladder" on a lead
-              // whose audit screen was at that moment rendering its problem list
-              // from lead.problemList. The data was never missing; it was being
-              // read from the one place it does not survive a refresh.
-              //
-              // The spine read a few lines below already checks both locations.
-              // This payload did not, which is the same one-of-two-merge-paths
-              // gap that has produced "nothing on file" before.
-              brainAudit: Object.assign({}, _ba, {
-                harmsRanked: (Array.isArray(_ba.harmsRanked) && _ba.harmsRanked.length) ? _ba.harmsRanked : (lead.harmsRanked || []),
-                ladderInputs: _ba.ladderInputs || lead.ladderInputs || null,
-                problemList: (Array.isArray(_ba.problemList) && _ba.problemList.length) ? _ba.problemList : (lead.problemList || []),
-                factualSpine: _ba.factualSpine || lead.factualSpine || null,
-                measuredNumbers: _ba.measuredNumbers || lead.measuredNumbers || null,
-                subjectOptions: (Array.isArray(_ba.subjectOptions) && _ba.subjectOptions.length) ? _ba.subjectOptions : (lead.subjectOptions || []),
-                allowedReframes: (Array.isArray(_ba.allowedReframes) && _ba.allowedReframes.length) ? _ba.allowedReframes : (lead.allowedReframes || []),
-              }),
-            }),
+            // ONE builder, shared with the batch runner — see buildComposeBody.
+            body: JSON.stringify(buildComposeBody(lead, settings)),
           });
-          const j = await r.json();
-          if (j && j.composed && j.composed.variantA) {
-            _composedNow = j.composed;
-            console.log('GENERATE: the server composed this email from the existing audit. No model call.');
-          } else if (j && j.reason === 'no-spine') {
-            console.log('GENERATE: this audit has no factual spine \u2014 it predates the composer. Re-run Research on this lead to get the composed email; falling back to the model for now.');
-          } else if (j && j.reason === 'critical-fact-check') {
-            // ══ A BLOCKED COMPOSE MUST BE LOUD ═════════════════════════════
-            // The server now refuses to write an email whose audit contradicts
-            // the measurements. If that arrives silently the operator sees the
-            // OLD stored email and assumes it is current — which is exactly how
-            // Ram Jack's "your site is down" would have gone out. Surface the
-            // reason on screen and make sure no stale draft stands in for it.
-            _composedNow = null;
-            _blockedByFactCheck = j;
-            console.log('GENERATE: blocked — ' + (j.criticalFlags || []).length + ' claim(s) contradict the measurements.');
-          } else if (j && j.reason === 'no-subject') {
-            console.log('GENERATE: the server composed a measured body for this lead but could not build a subject line for it, so it refused to hand back an email that could not be sent. Re-run Research on this lead. Falling back to the model for now.');
-          }
+          // ══ A BLOCKED COMPOSE MUST BE LOUD ═══════════════════════════════
+          // The server refuses to write an email whose audit contradicts the
+          // measurements. If that arrives silently the operator sees the OLD
+          // stored email and assumes it is current — which is exactly how Ram
+          // Jack's "your site is down" would have gone out. ONE reading of the
+          // four answers, shared with the batch runner, so the two cannot
+          // disagree about which of them is an error.
+          const _cr = readComposeResponse(await r.json());
+          _composedNow = _cr.composed;
+          _blockedByFactCheck = _cr.blocked;
+          if (_cr.note) console.log('GENERATE: ' + _cr.note);
         } catch (e) {
           console.log('GENERATE: could not reach the composer (' + (e && e.message) + '); using the stored email if there is one.');
         }
