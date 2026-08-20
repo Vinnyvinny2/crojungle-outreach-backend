@@ -297,6 +297,40 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ 6b. A CRITICAL FABRICATION MUST BLOCK APPROVE ═══════════════════════════
+// Donna Krummen's checklist said confidence 3/10 and listed CRITICAL fact-check
+// findings — wrong city, wrong count, wrong rank — and the green Approve button
+// sat under it, enabled. A warning beside an enabled button is a decoration.
+{
+  let fnSrc = null;
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'criticalClaimsOf' && n.init) {
+      fnSrc = src.slice(n.init.start, n.init.end);
+    }
+  });
+  if (!fnSrc) {
+    fails.push('criticalClaimsOf is gone, so nothing separates a CRITICAL fabrication from an advisory note and Approve is enabled over both');
+  } else {
+    let fn;
+    try { fn = new Function('return ' + fnSrc)(); } catch (e) { fn = null; }
+    if (!fn) fails.push('criticalClaimsOf no longer compiles standalone, so it cannot be verified');
+    else {
+      if (fn({ _claimRisks: ['fact-check: CRITICAL: wrong city, wrong rank'] }).length !== 1) {
+        fails.push('a CRITICAL fact-check claim is not recognised, so the fabricated audit that reached Donna Krummen approves cleanly again');
+      }
+      if (fn({ _claimRisks: ['marketing jargon banned in the email voice'] }).length !== 0) {
+        fails.push('an advisory note is being treated as CRITICAL, which blocks approval on every routine flag and teaches the operator to want the gate gone');
+      }
+    }
+    // The GATE condition, not any mention — the banner body also names the
+    // function, so counting mentions passed with a gate deleted (falsified).
+    const gates = (src.match(/!lead\.approved && criticalClaimsOf\(lead\)\.length/g) || []).length;
+    if (gates < 2) {
+      fails.push(`only ${gates} of the 2 approve buttons gate on criticalClaimsOf — the other one still approves a copy the fact-checker measured to be false`);
+    }
+  }
+}
+
 // 7. AND EVERY MERGE GOES THROUGH IT. A second call site that assembles the
 // lead by hand is the same defect as a second research body, one stage later.
 {
