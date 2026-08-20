@@ -11273,6 +11273,39 @@ const HARM_LADDER = [
     say: () => 'Their site has Facebook and Instagram ad tracking on it, and nothing for Google',
     costs: 'somebody who is already searching for this is the easiest customer there is to win' },
 
+  // ── TWO LISTINGS, ONE BUSINESS ────────────────────────────────────────
+  // On the CLAUDE.md roadmap since 2026-08-18: "splits reviews and ranking,
+  // invisible to the owner, risky to fix alone, and explains the outranked
+  // finding." Now measured: one extra Places search per research lead, looking
+  // for a second listing that PROVABLY belongs to the same business.
+  //
+  // The proof standard is strict on purpose, because the failure mode is
+  // telling an owner his competitor's listing is his own duplicate:
+  //   · a second place ID carrying the SAME website domain or the SAME phone
+  //     number — a similar name proves nothing (two "Joe's Pizza"s are two
+  //     businesses; a franchise is many)
+  //   · AND the same street address — same domain at a DIFFERENT address is a
+  //     legitimate second location, which the coverage findings already handle
+  //     and which is the opposite of a problem
+  //
+  // Why it earns a high rung: it is invisible to him (searching his own name
+  // shows him whichever listing Google prefers for HIM), it is checkable in
+  // ten seconds once pointed out, merging listings wrong can lose the reviews
+  // — which is why nobody should do it casually, and why it sells — and it is
+  // the one mechanical explanation for outranked_by_weaker that involves no
+  // theory about Google's ranking at all.
+  //
+  // The counts are permitted review figures in the Chuck Jenkins sense: a
+  // non-review finding citing review counts is the sentence that made him open
+  // the email, and the split IS the finding here.
+  { harm: 86, specific: 95, novel: 95, delegable: 25, weFix: 90, band: 'INVISIBLE', id: 'duplicate_listing',
+    blind: 'when he searches his own name Google shows him one of the two, so nobody inside the business has ever had both listings on one screen',
+    reframe: 'two half records read weaker than one whole record, and they are competing with each other for the same spot',
+    test: (m) => m.duplicateChecked === true && m.duplicateFound === true
+      && Number.isFinite(m.reviewCount) && Number.isFinite(m.duplicateOtherReviews),
+    say: (m) => `Google is holding two listings for their business at the same address. One shows ${m.reviewCount} reviews and the other shows ${m.duplicateOtherReviews}`,
+    costs: 'every review a customer leaves lands on one of the two, so no stranger ever sees the full record' },
+
 
   // ══ WHAT THEIR OWN CUSTOMERS WROTE DOWN, MORE THAN ONCE ═══════════════════
   // The Brain prompt calls this the MANDATORY opening — "a pain repeating across
@@ -12062,6 +12095,7 @@ const AREA_OF = {
   coverage_gap: 'Being found',
   wrong_gbp_category: 'Being found', no_google_listing: 'Being found',
   no_website_on_profile: 'Being found',
+  duplicate_listing: 'Being found',
   listing_closed: 'Google listing', thin_profile: 'Google listing',
   no_hours_on_profile: 'Google listing', stale_reviews: 'Google listing',
   low_rating: 'Reputation', no_owner_replies: 'Reputation',
@@ -12155,6 +12189,8 @@ const SUBJECTS_FOR = {
   site_empty:           ['your site is down', 'your site loads nothing'],
   listing_closed:       ['google says you are closed', 'your listing says closed'],
   no_website_on_profile:['your listing has no site link', 'google has no site for you'],
+  duplicate_listing: ['google has you listed twice', 'two google listings, one business',
+                      'you are on google twice', 'your second google listing'],
   expired_certificate:  ['your site shows a warning', 'browsers are blocking you'],
   no_https:             ['your site says not secure', 'browsers are flagging you'],
   phone_mismatch:       ['google has your old number', 'your numbers do not match'],
@@ -12741,6 +12777,9 @@ const HARM_LADDER_LAYER = {
   thin_profile:          'LEADS',
   no_hours_on_profile:   'LEADS',
   no_website_on_profile: 'LEADS',
+  // Two listings split the standing that decides who gets seen — a LEADS
+  // problem in the same sense as the rank findings it explains.
+  duplicate_listing: 'LEADS',
   stale_reviews:         'LEADS',
   review_deficit:        'LEADS',
   review_velocity_drop:  'LEADS',
@@ -12824,6 +12863,9 @@ const SELLABLE = {
   // getting into the top of that map, or building the search side of an ad
   // account, is an engagement. Neither is an afternoon of the owner's own time.
   paying_for_a_search_they_lose: 5, social_spend_no_search: 5,
+  // 5: merging listings wrong is how the reviews get lost, which is exactly
+  // why an owner should not do it alone on a Saturday.
+  duplicate_listing: 5,
   // 5: invisible across a service line is a build, not an afternoon.
   service_invisibility: 5,
   // 5: pricing, an offer, a signup path, billing and a retention sequence.
@@ -16425,6 +16467,12 @@ const CTA_BY_FINDING = {
   // Their Google listing. Same logic, different owner in most businesses.
   listing_closed: 'listing', no_google_listing: 'listing', wrong_gbp_category: 'listing',
   no_hours_on_profile: 'listing', no_website_on_profile: 'listing', thin_profile: 'listing',
+  // Two listings. Deliberately NOT the shared 'listing' ask — "is anyone
+  // watching that" invites him to forward it to whoever watches. Only the owner
+  // knows whether a second listing was ever set up on purpose, and the answer
+  // decides the whole conversation: an old rebrand, a move, or Google acting
+  // alone are three different jobs.
+  duplicate_listing: 'duplicate',
   // Reputation. The ask is about their PROCESS after a job — a question no
   // employee can answer for him and the exact conversation the call needs to
   // start on.
@@ -16491,6 +16539,12 @@ const CTA_TEXT = {
     alts: ['Who looks after the site for you these days?',
            'Is anyone on the site at the moment, or has it been left alone?'] },
   listing: { text: 'Is anyone actually watching that, or has it been on its own for a while?', kind: 'listing' },
+  // Only the owner can answer this one from memory, and the answer is the
+  // diagnosis: set up on purpose years ago, left over from a move or a rebrand,
+  // or created by Google without anyone asking.
+  duplicate: { text: 'Was the second one ever set up on purpose, or is this the first you\u2019re hearing of it?', kind: 'duplicate',
+    alts: ['Did anyone set that second one up, or has Google done it on its own?',
+           'Is that second listing something you knew about?'] },
   process: { text: 'Has that ever been anyone\u2019s job, or has it just never come up?', kind: 'process',
     alts: ['Is that anybody\u2019s job at the moment?',
            'Has anyone ever owned that, or has it just never come up?'] },
@@ -23602,6 +23656,44 @@ const readSocialPresence = (html, { trade } = {}) => {
 // itself worth knowing and must NOT be reported as "slow" \u2014 absence of data is
 // not evidence of a problem, and inventing one here would be the same failure as
 // any other unmeasured claim.
+// ══ THE LAB SCORE WAS MEASURED, RETURNED, AND DROPPED — ON EVERY LEAD ═══════
+// measureRealWorldSpeed has extracted lighthouseResult's mobile performance
+// score (labScore) since the day it was written, and nothing ever read it.
+// Meanwhile five consumers — the audit prompt's "PageSpeed mobile" line, the
+// slow_mobile flaw, richData's mobile row, the isBroken product test and the
+// research bonus — all read pageSpeed.mobileScore, which comes from the
+// browser's PageSpeed call, which was REMOVED (it ran keyless and returned 429
+// on every lead). So the row has said "Mobile score unavailable" on every lead
+// while the number sat in the same response we were already parsing. The exact
+// computed-but-not-passed class; instance nineteen.
+//
+// One honesty rule, and it is absolute: THE LAB SCORE IS A SIMULATION. Google's
+// field data is the record of the prospect's real visitors, and when the two
+// disagree the field data wins. A lab 45 against field-data-fine must not fire
+// the slow_mobile flaw, must not count as a "confirmed mobile issue" bonus, and
+// must reach the audit brain only WITH the contradiction spelled out — because
+// the fact-checker (correctly) flags any speed claim the field data refutes,
+// and feeding the brain a naked 45 manufactures exactly that claim.
+//
+// Pure, so the boot can run every branch.
+const applyLabMobileScore = (pageSpeed, realSpeed) => {
+  const p = pageSpeed || {};
+  const r = realSpeed || {};
+  if (Number.isFinite(Number(p.mobileScore))) {
+    return { ...p, mobileScoreSource: p.mobileScoreSource || 'browser', fieldSaysFine: false };
+  }
+  if (!r.checked || !Number.isFinite(Number(r.labScore))) return { ...p, fieldSaysFine: false };
+  return {
+    ...p,
+    mobileScore: Number(r.labScore),
+    mobileScoreSource: 'lab',
+    // Real visitors measured fine: the simulation loses every argument it
+    // starts. The score still displays — hiding a number we hold is a lie of
+    // omission — but nothing may score, flag or claim off it.
+    fieldSaysFine: !!(r.hasFieldData && !r.isProblem),
+  };
+};
+
 const measureRealWorldSpeed = async (website, key) => {
   if (!website || !key) return { checked: false, why: 'no PageSpeed key configured' };
   try {
@@ -26924,6 +27016,85 @@ const checkLocalRankStable = async (args) => {
   };
 };
 
+// ══ TWO LISTINGS, ONE BUSINESS — THE MATCHER, PURE ══════════════════════════
+// Decides whether a second Places result is a DUPLICATE of the lead's own
+// listing. Pure so the boot can run every branch; the network wrapper below
+// only fetches and hands over.
+//
+// The standard is deliberately strict, because the failure mode is telling an
+// owner that a competitor's listing — or his own second premises — is a
+// duplicate:
+//   SAME BUSINESS  proven by the same website domain or the same phone number
+//                  on a different place ID. A similar name proves nothing.
+//   SAME PREMISES  proven by the same street number and street name. The same
+//                  domain at a different address is a second location — the
+//                  coverage findings' territory, and the opposite of a problem.
+// Anything unprovable returns found:false and the rung stays silent. "I'd
+// rather send nothing than tell them something's wrong when it isn't."
+const matchDuplicateListing = (own, results) => {
+  const o = own || {};
+  if (!o.placeId) return { checked: false, why: 'no place id for their own listing' };
+  const normPhone = (s) => { let d = String(s || '').replace(/[^0-9]/g, ''); if (d.length === 11 && d[0] === '1') d = d.slice(1); return d.length === 10 ? d : ''; };
+  const normDomain = (s) => { try { const u = String(s || '').trim(); if (!u) return ''; return new URL(/^https?:/i.test(u) ? u : 'https://' + u).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return ''; } };
+  const streetOf = (s) => { const m = String(s || '').toLowerCase().match(/(\d+)\s+([a-z0-9]+)/); return m ? m[1] + ' ' + m[2] : ''; };
+  const oDom = normDomain(o.website), oPh = normPhone(o.phone), oSt = streetOf(o.address);
+  if (!oDom && !oPh) return { checked: false, why: 'no website or phone on file, so a second listing could never be PROVEN to be the same business' };
+  if (!oSt) return { checked: false, why: 'no street address on file, so a duplicate could not be told apart from a legitimate second location' };
+  for (const r of (Array.isArray(results) ? results : [])) {
+    if (!r || !r.id || r.id === o.placeId) continue;
+    const proof = (oDom && normDomain(r.website) === oDom) ? 'the same website'
+      : (oPh && normPhone(r.phone) === oPh) ? 'the same phone number' : '';
+    if (!proof) continue;
+    if (streetOf(r.address) !== oSt) continue;   // second location, not a duplicate
+    return {
+      checked: true, found: true, matchedBy: proof,
+      otherName: String(r.name || ''),
+      otherReviews: Number.isFinite(Number(r.reviews)) ? Number(r.reviews) : null,
+      otherRating: Number.isFinite(Number(r.rating)) ? Number(r.rating) : null,
+    };
+  }
+  return { checked: true, found: false };
+};
+
+// The network half: ONE Places name search (Enterprise SKU, metered at
+// dispatch like every other call). An audit is 2-3 searches and a profile
+// read; this is the fourth, bought only when the lead has a place ID and a
+// provable identity to match against.
+const findDuplicateListing = async ({ companyName, placeId, website, phone, location, placesKey }) => {
+  const pre = matchDuplicateListing({ placeId, website, phone, address: location }, []);
+  if (pre.checked === false) return pre;   // missing identity — do not spend the search
+  if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
+  if (!companyName || !location) return { checked: false, why: 'no name or address to search' };
+  try {
+    notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received
+    const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
+                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.nationalPhoneNumber,places.formattedAddress,places.rating,places.userRatingCount' },
+      // The NAME, not the trade: this search asks "how many listings does Google
+      // hold for this exact business", so the business name plus its address is
+      // the whole question.
+      body: JSON.stringify({ textQuery: `${companyName} ${location}`, pageSize: 10 }),
+    }, 12000);
+    const d = await safeJson(r);
+    if (!d || d.error || !Array.isArray(d.places)) {
+      return { checked: false, why: (d && d.error && d.error.message) || 'Places returned no readable answer' };
+    }
+    return matchDuplicateListing({ placeId, website, phone, address: location },
+      d.places.map(p => ({
+        id: p.id,
+        name: (p.displayName && p.displayName.text) || '',
+        website: p.websiteUri || '',
+        phone: p.nationalPhoneNumber || '',
+        address: p.formattedAddress || '',
+        reviews: p.userRatingCount,
+        rating: p.rating,
+      })));
+  } catch (e) {
+    return { checked: false, why: 'duplicate-listing search failed: ' + e.message };
+  }
+};
+
 const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
@@ -27546,7 +27717,7 @@ const _runResearchInner = async (req, res) => {
   // Hunter key can arrive either inside keys{} or at the top level of the body.
   const hunterKey = (keys && keys.hunterKey) || req.body.hunterKey || '';
   const browserData = req.body.browserData || {};
-  const pageSpeed = browserData.pageSpeed || {};
+  let pageSpeed = browserData.pageSpeed || {};   // let: applyLabMobileScore backfills it after realSpeed lands
   const emailData = browserData.emailData || {};
   const companyData = browserData.companyData || {};
   const discoverySignals = req.body.discoverySignals || {};
@@ -27658,6 +27829,7 @@ const _runResearchInner = async (req, res) => {
   let _openerForResponse = null;
   let phoneResult = { phone: '', display: '', source: 'none' };
   let realSpeed = { checked: false };
+  let duplicateListing = { checked: false, why: 'not attempted' };
   let socialPresence = { checked: false };
   // Can they actually fund the engagement? Internal only — never reaches copy.
   let affordability = { checked: false, band: 'unknown' };
@@ -29264,10 +29436,43 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // Google's record of their own visitors, on mobile. Free, and the only
     // measurement in the audit that comes from the prospect's actual traffic.
     realSpeed = await measureRealWorldSpeed(website, req.body.keys && req.body.keys.pageSpeedKey);
+    // The lab score from the SAME response backfills the five consumers that
+    // have read an empty object since the browser call was removed. Zero extra
+    // calls — see applyLabMobileScore for the field-data-wins rule.
+    pageSpeed = applyLabMobileScore(pageSpeed, realSpeed);
+    if (Number.isFinite(Number(pageSpeed.mobileScore)) && pageSpeed.mobileScoreSource === 'lab') {
+      console.log(`\u{1F4F1} LAB MOBILE SCORE [${company}]: ${pageSpeed.mobileScore}/100 from the Lighthouse run in the SAME PageSpeed response — measured and discarded on every previous lead.${pageSpeed.fieldSaysFine ? ' Real-visitor field data says the site performs FINE, so this number displays but cannot flag, score or be claimed — the simulation loses to the record.' : ''}`);
+    }
     if (realSpeed.checked) {
       console.log(`REAL SPEED [${company}]: ${realSpeed.hasFieldData
         ? (realSpeed.isProblem ? realSpeed.findings.join(' | ') : 'fine for real mobile visitors (' + (realSpeed.overall || 'good') + ') \u2014 no speed claim permitted')
         : realSpeed.why}`);
+    }
+
+    // ── TWO LISTINGS, ONE BUSINESS ────────────────────────────────────────
+    // One Places name search, bought only when the lead has a place ID and a
+    // provable identity (website or phone) to match a second listing against.
+    // Runs HERE — after the wrong-company check has settled `website` and after
+    // the phone is resolved — because matching against a franchisor's domain is
+    // how this finding would fabricate. See matchDuplicateListing for the
+    // proof standard.
+    duplicateListing = { checked: false, why: 'not attempted' };
+    if (effectivePlaceId) {
+      duplicateListing = await findDuplicateListing({
+        companyName: company,
+        placeId: effectivePlaceId,
+        website,
+        phone: (phoneResult && phoneResult.phone) || '',
+        location: req.body.location || '',
+        placesKey: process.env.GOOGLE_PLACES_KEY || '',
+      });
+      if (duplicateListing.found) {
+        console.log(`\u{1F465} DUPLICATE LISTING [${company}]: Google holds a SECOND listing for this business at the same address — "${duplicateListing.otherName}" with ${duplicateListing.otherReviews === null ? 'an unreported number of' : duplicateListing.otherReviews} review(s), proven by ${duplicateListing.matchedBy}. Invisible to the owner, splits the review record, and explains an outranked finding with no theory about ranking at all.`);
+      } else if (duplicateListing.checked) {
+        console.log(`DUPLICATE LISTING [${company}]: one listing only — the name search found no second place ID sharing their website or phone at their address. No finding.`);
+      } else {
+        console.log(`DUPLICATE LISTING [${company}]: not checked — ${duplicateListing.why}. No claim about their listings is permitted either way.`);
+      }
     }
 
     // ── SOCIAL PRESENCE ──────────────────────────────────────────────────
@@ -29650,6 +29855,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           purchaseUrgency: _measured.purchaseUrgency,
           acquisitionIsReferral: _measured.acquisitionIsReferral,
           bindingLayer: _measured.bindingLayer,
+          // ══ TWO LISTINGS, ONE BUSINESS — DELIVERED, NOT JUST MEASURED ════
+          // duplicateChecked is the "did we look?" gate every absence-adjacent
+          // claim needs; found and the other listing's count are what the rung
+          // reads. Wired the same day the measurement was written, because
+          // "computed but not passed" is the recorded disease of this exact
+          // assembly — three ordering fixes died here once already.
+          duplicateChecked: duplicateListing.checked === true,
+          duplicateFound: duplicateListing.checked === true ? duplicateListing.found === true : null,
+          duplicateOtherReviews: (duplicateListing.checked === true && Number.isFinite(Number(duplicateListing.otherReviews)))
+            ? Number(duplicateListing.otherReviews) : null,
           // ══ THE UNREAD GUARD FIRED AND THE EMAIL SAID IT ANYWAY ═══════════
           // "EXISTS BUT UNREAD: their sitemap has PRICING page(s) we did not
           // open. NO ABSENCE CLAIM MAY BE MADE ABOUT PRICING" — logged on both
@@ -33570,7 +33785,7 @@ RAW EVIDENCE (what we actually confirmed):
 - Title tag: "${builtWith.titleTag || 'not found'}"
 - Email capture on site: ${builtWith.hasEmailCapture ? 'YES' : 'not found'}
 - Booking tool: ${builtWith.hasBooking ? 'YES' : 'not found'}
-- PageSpeed mobile: ${pageSpeed.mobileScore || 'not checked'}
+- PageSpeed mobile: ${pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100${pageSpeed.mobileScoreSource === 'lab' ? ' (Google lab test)' : ''}${pageSpeed.fieldSaysFine ? ' — BUT Google\'s real-visitor field data says the site performs FINE. The record beats the simulation: make NO claim that this site is slow.' : ''}` : 'not checked'}
 
 AUDIT PRODUCED BY FIRST CALL:
 Real pain: ${parsed.realPain || 'none'}
@@ -34015,7 +34230,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           ? `Social proof present${visualAnalysis?.socialProofType ? ` (${visualAnalysis.socialProofType})` : ''}`
           : 'No social proof detected',
         pricing: hasPricing ? 'Pricing visible' : 'No pricing shown',
-        mobileScore: pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100 mobile score` : 'Mobile score unavailable',
+        mobileScore: pageSpeed.mobileScore
+          ? `${pageSpeed.mobileScore}/100 mobile score${pageSpeed.mobileScoreSource === 'lab' ? ' (Google lab test)' : ''}${pageSpeed.fieldSaysFine ? ' — real-visitor data says the site performs fine, so this is not a finding' : ''}`
+          : 'Mobile score unavailable',
         lcp: pageSpeed.lcp ? `Load time: ${pageSpeed.lcp}` : '',
         positioningScore: `Dunford positioning: ${positioningScore}/10`,
         designQuality: visualAnalysis ? `Design: ${designQuality}` : '',
@@ -34116,8 +34333,10 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // HIGH CONFIDENCE — confirmed running via API
     if (fbAds.hasAds && fbAds.ads?.some(a=>a.runningDays>180)) flaws.push('stale_fb_ads');
 
-    // Mobile — only flag if actually checked and confirmed bad
-    if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50) flaws.push('slow_mobile');
+    // Mobile — only flag if actually checked and confirmed bad, and NEVER when
+    // Google's real-visitor data says the site performs fine: the lab score is
+    // a simulation, and the record beats the simulation every time they argue.
+    if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50 && !pageSpeed.fieldSaysFine) flaws.push('slow_mobile');
     if (positioningScore < 4) flaws.push('weak_positioning');
 
     // OPERATIONS — AI-replacement signals (from discovery, high confidence)
@@ -34181,7 +34400,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       const hasAdSpend = !!builtWith.hasGoogleAdsTag || !!fbAds.hasAds;
       const hasInfra = builtWith.hasCRM || builtWith.hasPixel;
       const isAIOpportunity = !builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat;
-      const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40);
+      const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40 && !pageSpeed.fieldSaysFine);
       const isMediaOrAgency = /media|agency|creative|PR|communications|marketing firm|studio/i.test(content.slice(0,500));
       if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$40k–$100k+', reason:'Merged or growing operation with no unified tech stack', flag:'' };
       if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$10k–$35k/mo', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
@@ -34215,7 +34434,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       if (flaws.length >= 3) bonus += 3;                // multiple confirmed issues
       if (email.email) bonus += 3;                      // found founder email
       if (visualAnalysis) bonus += 2;                   // visual analysis completed
-      if (pageSpeed.mobileScore && pageSpeed.mobileScore < 60) bonus += 2; // confirmed mobile issue
+      if (pageSpeed.mobileScore && pageSpeed.mobileScore < 60 && !pageSpeed.fieldSaysFine) bonus += 2; // confirmed mobile issue (a lab score contradicted by field data confirms nothing)
       return Math.min(bonus, 15);
     })();
 
@@ -34625,6 +34844,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       leadMagnet: leadMagnet || null,
       valueEquation: valueEquation || null,
       realSpeed: realSpeed || null,
+      // Two-listings measurement — on the call sheet it is the mechanical
+      // explanation for an outranked finding, so it must survive the round trip.
+      duplicateListing: duplicateListing || null,
       reviewCount: (gbpHealth && gbpHealth.reviewCount) || null,
       rating: (gbpHealth && gbpHealth.rating) || null,
       phone: phoneResult.phone || req.body.phone || '',
@@ -41607,6 +41829,7 @@ app.listen(PORT, () => {
       servicePagesChecked: 3, servicePagesInvisible: 2, serviceInvisibleNames: ['probate', 'trust administration'],
       recurringChecked: true, hasRecurringOffer: false, datedSite: true,
       adsTagConfirmed: true, paidLeakGap: 'the only way to act on it is a form and a wait for someone to reply',
+      duplicateChecked: true, duplicateFound: true, duplicateOtherReviews: 41,
     };
     const _r = rankHarms(_m);
     let _scored = 0, _worst = { g: -1, id: '', t: '' };
@@ -41916,6 +42139,141 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 SCREENSHOT SCALER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
+  // ══ TWO SENDING DOMAINS, ONE LEAD IN EXACTLY ONE OF THEM ══════════════════
+  // Deliverability has one mailbox, 2 hard bounces in ~12 sends, and a hard
+  // bounce is charged to the sending DOMAIN. Rotation ships as a settings entry:
+  // a second Hunter sequence splits the sends the moment it is pasted in. The
+  // property this check exists for is not the split — it is that the pick is
+  // STABLE: a lead re-sent must land in the SAME sequence, because one person
+  // sitting in two campaigns receives two parallel four-touch runs and reads it
+  // as spam from two strangers.
+  try {
+    const _fails = [];
+    const SEQS = ['859908', '901234'];
+    const _ids = [];
+    for (let i = 0; i < 400; i++) _ids.push('lead_' + (i * 2654435761 % 4294967296).toString(36));
+    // Stable: the same lead picks the same sequence every time it is asked.
+    for (const id of _ids.slice(0, 50)) {
+      if (pickSequenceForLead(id, SEQS) !== pickSequenceForLead(id, SEQS)) {
+        _fails.push('the pick is not stable — a re-sent lead can land in the OTHER sequence and one person ends up inside two campaigns at once');
+        break;
+      }
+    }
+    // Balanced enough that neither domain carries the whole bounce risk.
+    const _a = _ids.filter(id => pickSequenceForLead(id, SEQS) === SEQS[0]).length;
+    if (_a < 120 || _a > 280) {
+      _fails.push(`the split over 400 leads is ${_a}/${400 - _a} — one domain is carrying nearly everything, which is the exact single-point-of-failure rotation exists to remove`);
+    }
+    // One sequence configured: everything goes through it, exactly as today.
+    if (pickSequenceForLead('anything', ['859908']) !== '859908') _fails.push('a single configured sequence is not simply used, so the pre-rotation behaviour is broken for everyone who never adds a second');
+    // The same id pasted twice is one sequence, not a coin flip between copies.
+    if (pickSequenceForLead('lead_x', ['859908', '859908']) !== '859908') _fails.push('a duplicated sequence id is treated as two lanes');
+    if (pickSequenceForLead('lead_x', []) !== null) _fails.push('an empty sequence list picks something from nothing');
+    // The route must actually route by the pick — needles assembled.
+    {
+      const _src = selfSource();
+      if (_src.indexOf('campaigns/${' + '_seqForLead}/recipients') < 0) _fails.push('the send loop no longer adds each lead to ITS picked sequence — everything lands in one campaign and the rotation is decorative');
+      if (_src.indexOf('sentVia: ' + '_seqForLead') < 0) _fails.push('the send result no longer says which sequence carried each lead, so a bounce can never be charged to the domain that earned it and the rotation can never be judged');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SEND ROTATION CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ SEND ROTATION CHECK: a second Hunter sequence is a settings entry, not a code change — the moment it exists, sends split across the two domains (400 synthetic leads landed ${_a}/${400 - _a}) and every send records which sequence carried it, so a bounce is chargeable to the domain that earned it. The pick is a stable hash of the lead id: a re-sent lead always lands in its own sequence, because one person inside two campaigns gets two parallel four-touch runs and reads it as spam from two strangers. One configured sequence behaves exactly as before this existed.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SEND ROTATION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A DUPLICATE LISTING MUST BE PROVEN, NEVER GUESSED ═════════════════════
+  // On the roadmap since 2026-08-18: two Google listings split the reviews and
+  // the ranking, the owner cannot see it, and it explains outranked_by_weaker
+  // with no theory about ranking at all. The failure mode is worse than the
+  // finding is good: telling an owner a COMPETITOR's listing is his duplicate,
+  // or calling his second premises a defect. So the matcher demands the same
+  // website or phone on a different place ID AND the same street address, and
+  // every branch of that standard runs here.
+  try {
+    const _fails = [];
+    const OWN = { placeId: 'pid_A', website: 'https://www.acmeplumbing.com', phone: '(210) 555-0134', address: '4122 Bennett Memorial Rd, Durham, NC 27705' };
+    const other = (over) => ({ id: 'pid_B', name: 'Acme Plumbing', website: '', phone: '', address: '4122 Bennett Memorial Rd, Durham, NC 27705', reviews: 88, rating: 4.6, ...over });
+    // Same domain, same address, different id: FOUND.
+    const _r1 = matchDuplicateListing(OWN, [other({ website: 'http://acmeplumbing.com/' })]);
+    if (!_r1.found || _r1.otherReviews !== 88) _fails.push('a second place ID with the same domain at the same address is not recognised as a duplicate — the one case this whole measurement exists for');
+    // Same phone, same address: FOUND.
+    if (!matchDuplicateListing(OWN, [other({ phone: '+1 210-555-0134' })]).found) _fails.push('a phone-proven duplicate is missed, so a listing with no site link — the commonest duplicate shape — never matches');
+    // Same domain, DIFFERENT address: a second location, NOT a duplicate.
+    if (matchDuplicateListing(OWN, [other({ website: 'https://acmeplumbing.com', address: '900 Oak St, Raleigh, NC' })]).found) _fails.push('a legitimate second location is being called a duplicate — that tells an owner his own branch office is a defect, and he knows in one second we never looked');
+    // Similar name only: NOT a duplicate.
+    if (matchDuplicateListing(OWN, [other({})]).found) _fails.push('a name-and-address match with NO shared domain or phone is treated as proof — two businesses in one building would be called duplicates');
+    // The lead's own listing must never match itself.
+    if (matchDuplicateListing(OWN, [other({ id: 'pid_A', website: 'https://acmeplumbing.com' })]).found) _fails.push('the lead\u2019s own place ID matches itself as its own duplicate');
+    // No identity to prove with: refuse to spend, refuse to claim.
+    const _noid = matchDuplicateListing({ placeId: 'pid_A', address: '4122 Bennett Memorial Rd' }, []);
+    if (_noid.checked !== false) _fails.push('with no website and no phone the matcher still claims to have checked — an unprovable answer presented as a measurement');
+
+    // The rung fires through the REAL ladder, and only with both counts.
+    const _base = { duplicateChecked: true, duplicateFound: true, duplicateOtherReviews: 88, reviewCount: 145 };
+    const _fired = (rankHarms(_base).all || []).find(h => h.id === 'duplicate_listing');
+    if (!_fired) _fails.push('the duplicate_listing rung does not fire on a confirmed duplicate with both counts — measured, delivered, and silent');
+    else {
+      if (!/145/.test(_fired.finding) || !/88/.test(_fired.finding)) _fails.push(`the rung's sentence does not carry both counts — "${String(_fired.finding).slice(0, 80)}" — and the split IS the finding`);
+    }
+    if ((rankHarms({ ..._base, duplicateFound: false }).all || []).some(h => h.id === 'duplicate_listing')) _fails.push('the rung fires when no duplicate was found');
+    if ((rankHarms({ ..._base, duplicateChecked: false }).all || []).some(h => h.id === 'duplicate_listing')) _fails.push('the rung fires on a lead we never checked — unmeasured treated as measured, the PART 6 class');
+    if ((rankHarms({ ..._base, duplicateOtherReviews: null }).all || []).some(h => h.id === 'duplicate_listing')) _fails.push('the rung fires without the other listing\u2019s count, so the sentence would carry a hole where its evidence goes');
+
+    if (_fails.length) {
+      console.log(`⛔ DUPLICATE LISTING CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ DUPLICATE LISTING CHECK: a second Google listing is claimed only when a different place ID carries the same website or phone AND the same street address — a similar name proves nothing, a second premises is a location and not a defect, the lead cannot match itself, and with no provable identity the search is not even bought. The rung fires through the real ladder carrying both review counts, and stays silent without the gate, without a find, or without the counts. This is the roadmap finding that explains outranked_by_weaker with no theory about ranking at all.`);
+    }
+  } catch (e) {
+    console.log(`⛔ DUPLICATE LISTING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE LAB MOBILE SCORE MUST LAND, AND MUST LOSE TO THE FIELD DATA ═══════
+  // measureRealWorldSpeed extracted the Lighthouse mobile score on every lead
+  // and nothing read it — while five consumers read pageSpeed.mobileScore,
+  // fed by a browser call that was removed. "Mobile score unavailable" on every
+  // lead, with the number in a response we were already parsing. And the one
+  // rule that makes using it honest: the lab score is a SIMULATION, so when
+  // Google's real-visitor record says the site is fine, the simulation may
+  // display but must not flag, score, or feed a claim.
+  try {
+    const _fails = [];
+    // Lab score, no field data: it lands and may score.
+    const _a = applyLabMobileScore({}, { checked: true, labScore: 45, hasFieldData: false });
+    if (_a.mobileScore !== 45 || _a.mobileScoreSource !== 'lab') _fails.push('a measured lab score with no field data does not land on pageSpeed — the slow_mobile flaw, the product test and the bonus all go back to reading an empty object');
+    if (_a.fieldSaysFine) _fails.push('with NO field data the lab score is being suppressed anyway, so the one case where it is the only measurement we hold is the one case it never fires');
+    // Lab score contradicted by fine field data: displays, cannot flag.
+    const _b = applyLabMobileScore({}, { checked: true, labScore: 45, hasFieldData: true, isProblem: false });
+    if (_b.mobileScore !== 45) _fails.push('a lab score contradicted by field data is hidden entirely — a number we hold vanishing is a lie of omission; it should display with the contradiction stated');
+    if (!_b.fieldSaysFine) _fails.push('a lab 45 against field-data-fine is allowed to flag slow_mobile — the audit would carry a speed problem the fact-checker (correctly) refutes from the same response, and the brain is fed the contradiction it is then punished for repeating');
+    // Field data agrees it is slow: the lab score may support it.
+    const _c = applyLabMobileScore({}, { checked: true, labScore: 38, hasFieldData: true, isProblem: true });
+    if (_c.fieldSaysFine) _fails.push('a lab score AGREEING with bad field data is suppressed, which silences the one configuration where both measurements point the same way');
+    // A browser-sent score is never overwritten.
+    const _d = applyLabMobileScore({ mobileScore: 62 }, { checked: true, labScore: 45, hasFieldData: false });
+    if (_d.mobileScore !== 62) _fails.push('a score the browser actually measured is overwritten by the lab backfill');
+    // Nothing measured: nothing invented.
+    const _e = applyLabMobileScore({}, { checked: false });
+    if (Number.isFinite(Number(_e.mobileScore))) _fails.push('an unchecked PageSpeed run produced a mobile score from nothing — unmeasured treated as a number, the exact class PART 6 names');
+    // And the consumers must carry the guard — needles assembled.
+    {
+      const _src = selfSource();
+      if (_src.indexOf("< 50 && !pageSpeed." + 'fieldSaysFine') < 0) _fails.push('the slow_mobile flaw no longer defers to field data, so a simulation can contradict the record in the same audit');
+      if (_src.indexOf("< 60 && !pageSpeed." + 'fieldSaysFine') < 0) _fails.push('the research bonus counts a "confirmed mobile issue" the field data refutes');
+      if (_src.indexOf('pageSpeed = applyLabMobileScore(' + 'pageSpeed, realSpeed)') < 0) _fails.push('the backfill is not wired at the realSpeed call site, so labScore is measured and dropped again — instance nineteen of computed-but-not-passed, back for a second run');
+    }
+    if (_fails.length) {
+      console.log(`⛔ LAB MOBILE SCORE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ LAB MOBILE SCORE CHECK: the Lighthouse mobile score measured on every lead now reaches the five consumers that have read an empty object since the browser call was removed — and it loses to Google's real-visitor record whenever they disagree: a lab 45 against field-data-fine displays with the contradiction stated but cannot flag slow_mobile, cannot count as a confirmed issue, and cannot feed the brain a claim the fact-checker refutes from the same response. A browser-sent score is never overwritten and nothing is invented when nothing was measured.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LAB MOBILE SCORE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A TIE IN THE LADDER GOES TO THE MEASURED BINDING LAYER ════════════════
   // Jose Barrera, live 2026-08-20: search_absence and conversion_leak tied at 23,
   // the measured binding constraint was LEADS, and the audit led on the
@@ -44990,11 +45348,45 @@ app.post('/api/test-contact-engine', async (req, res) => {
   }
 });
 
+// ══ ONE MAILBOX CARRIES EVERY BOUNCE ═════════════════════════════════════════
+// Deliverability has one mailbox on one domain, 2 hard bounces in ~12 sends, and
+// a hard bounce is charged to the sending DOMAIN. Vin has a second domain and
+// nothing to rotate with — so rotation is built here as a SETTINGS ENTRY, not a
+// code change: the moment a second Hunter sequence (a campaign whose sender is a
+// mailbox on the second domain, in the SAME Hunter account) is pasted into
+// Settings, sends split across the two and no single domain carries the whole
+// bounce risk. Until then one sequence behaves exactly as today.
+//
+// The pick is a STABLE HASH of the lead id, not a counter, for two reasons that
+// both bit the A/B assignment before this:
+//   · a counter resets on every deploy, so the split drifts with restart timing
+//     and can never be audited afterwards
+//   · the same lead re-sent MUST land in the same sequence — one person sitting
+//     in two campaigns gets two parallel four-touch runs, which reads as spam
+//     from two strangers at once
+// Same hash construction as the deterministic A/B arm, for the same reason:
+// arbitrary-and-stable is categorically different from arbitrary-and-random.
+const pickSequenceForLead = (leadId, sequenceIds) => {
+  const list = [...new Set((Array.isArray(sequenceIds) ? sequenceIds : []).filter(Boolean).map(String))];
+  if (!list.length) return null;
+  if (list.length === 1) return list[0];
+  const h = String(leadId || '').split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+  return list[Math.abs(h) % list.length];
+};
+
 app.post('/api/send-to-hunter', async (req, res) => {
-  const { leads, sequenceId, hunterKey } = req.body;
+  const { leads, sequenceId, sequenceIds, hunterKey } = req.body;
   if (!Array.isArray(leads) || leads.length === 0) return res.status(400).json({ error: 'leads array required' });
-  if (!sequenceId) return res.status(400).json({ error: 'sequenceId required — the Hunter sequence (campaign) to add leads to' });
+  // Both spellings accepted: the old single field keeps every existing caller
+  // working, the new array is what the rotation client sends. Dedup because the
+  // client passes both during the transition.
+  const _seqList = [...new Set([
+    ...(Array.isArray(sequenceIds) ? sequenceIds : []),
+    sequenceId,
+  ].filter(Boolean).map(String))];
+  if (!_seqList.length) return res.status(400).json({ error: 'sequenceId required — the Hunter sequence (campaign) to add leads to' });
   if (!hunterKey) return res.status(400).json({ error: 'hunterKey required' });
+  if (_seqList.length > 1) console.log(`\u2696 SENDER ROTATION: ${_seqList.length} sequences configured — each lead lands in one, picked by a stable hash of its id, so a re-send can never put the same person in two campaigns.`);
 
   const results = { sent: [], failed: [] };
 
@@ -45353,14 +45745,19 @@ app.post('/api/send-to-hunter', async (req, res) => {
       }
       const leadId = leadData?.data?.id;
 
-      // Add the saved lead to the sequence so it enters the send queue
-      const addRes = await fetchT(`https://api.hunter.io/v2/campaigns/${sequenceId}/recipients`, {
+      // Add the saved lead to ITS sequence so it enters that send queue. The
+      // pick is stable per lead id — see pickSequenceForLead above.
+      const _seqForLead = pickSequenceForLead(lead.id, _seqList);
+      const addRes = await fetchT(`https://api.hunter.io/v2/campaigns/${_seqForLead}/recipients`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${hunterKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(leadId ? { lead_ids: [leadId] } : { emails: [lead.email] }),
       }, 10000);
       if (addRes.ok) {
-        results.sent.push({ id: lead.id, name: lead.name, email: lead.email });
+        // sentVia goes back to the client for the attribution snapshot: a bounce
+        // or a reply has to be chargeable to the DOMAIN that sent it, or the
+        // rotation can never be judged.
+        results.sent.push({ id: lead.id, name: lead.name, email: lead.email, sentVia: _seqForLead });
         // == RECORD IT, OR THE GUARD ABOVE IS DECORATION =====================
         // The duplicate guard at the top of this loop READ these two maps and
         // nothing ever WROTE to them, so it could never fire across sends. That
@@ -45389,6 +45786,11 @@ app.post('/api/send-to-hunter', async (req, res) => {
     await new Promise(r => setTimeout(r, 250));
   }
 
+  if (_seqList.length > 1) {
+    const _tally = {};
+    for (const s of results.sent) _tally[s.sentVia] = (_tally[s.sentVia] || 0) + 1;
+    console.log(`\u2696 SENDER ROTATION: ${Object.entries(_tally).map(([k, v]) => `${v} \u2192 sequence ${k}`).join(' | ') || 'nothing sent'}.`);
+  }
   console.log(`Hunter send: ${results.sent.length} sent, ${results.failed.length} failed`);
   res.json({ ...results, attributeSlugs: { pitchSlug, subjectSlug, angleSlug } });
 });

@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 151 boot checks at the bottom, each documenting the live failure that caused it
+- 154 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1133,6 +1133,42 @@ admission gate carry that risk now. Five leads took ~15 minutes at 2 slots;
 fifty at that rate is over four hours, and at 3 it is under two. The cap is
 `RESEARCH_CONCURRENCY`, and it matches the batch client's own pool of 3.
 
+## 22. The three roadmap builds — 2026-08-20, shipped but unproven live
+
+Built at the end of the night, each falsified at boot, none yet run against a
+real lead. Distinguish accordingly.
+
+- **Sender rotation is a settings entry.** One mailbox has carried every
+  bounce, and a hard bounce is charged to the DOMAIN. A second Hunter sequence
+  (same Hunter account, sender on the second domain) pasted into Settings
+  splits sends across the two. The pick is a **stable hash of the lead id** —
+  never a counter — because a re-sent lead landing in the other sequence puts
+  one person inside two campaigns, which reads as spam from two strangers.
+  Every send stamps `sentVia` into the attribution snapshot so a bounce is
+  chargeable to the domain that earned it, and the outcome sync reads BOTH
+  sequences. One configured sequence behaves exactly as before.
+  `SEND ROTATION CHECK`.
+- **Duplicate Google listings are measured.** One extra Places name search per
+  research lead (the audit's fourth call). A duplicate is claimed only when a
+  different place ID carries the **same website domain or phone** AND the
+  **same street address** — a similar name proves nothing, and the same domain
+  at a different address is a second location, not a defect. New rung
+  `duplicate_listing` (harm 86, LEADS): the split is invisible to the owner,
+  checkable in ten seconds, risky to fix alone, and explains
+  `outranked_by_weaker` with no theory about ranking at all.
+  `DUPLICATE LISTING CHECK`; clientcheck flagged the missing client merge line
+  the moment the server returned the field — the executable merge check doing
+  its job.
+- **The lab mobile score finally lands.** `measureRealWorldSpeed` extracted
+  the Lighthouse mobile score on every lead and nothing read it, while five
+  consumers read `pageSpeed.mobileScore` — fed by a browser call that was
+  REMOVED. Instance nineteen of computed-but-not-passed. The one rule that
+  makes it honest: **the lab score is a simulation and loses to the field
+  data** — a lab 45 against real-visitors-fine displays with the contradiction
+  stated but cannot flag `slow_mobile`, cannot count as a confirmed issue, and
+  cannot feed the brain a claim the fact-checker refutes from the same
+  response. `LAB MOBILE SCORE CHECK`.
+
 ---
 
 # PART 5 — WHAT IS PROVEN
@@ -1188,7 +1224,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 151 boot checks
+PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 154 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -1262,7 +1298,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 151 boot checks and the comments above
+and caused none of this week's failures. The 154 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 

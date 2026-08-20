@@ -360,6 +360,7 @@ const leadToRow = (l) => ({
         // otherwise. Same disease as reachPredict and the other five fields
         // above: computed, rendered once, and gone on the round trip.
         rateLimited: l.rateLimited ?? null,
+        duplicateListing: l.duplicateListing ?? null,
         // A refusal is terminal — the server refused to research a non-owner
         // and the lead must not render as an ordinary un-researched lead after
         // a refresh, inviting the exact re-run that can only refuse again.
@@ -512,6 +513,7 @@ const rowToLead = (r) => ({
   // alongside the other _persisted fields; without BOTH halves the value is
   // saved and never seen, which is the shape of every dead field in this file.
   rateLimited: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rateLimited) ?? null,
+  duplicateListing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.duplicateListing) ?? null,
   notAFit: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.notAFit) ?? null,
   rejectedReason: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rejectedReason) ?? null,
   rejectedAt: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rejectedAt) ?? null,
@@ -1144,6 +1146,11 @@ const applyResearchResult = (prev, data, ctx) => {
         L.rateLimited = data.rateLimited ?? L.rateLimited ?? null;
         L.phoneSource = data.phoneSource || L.phoneSource || '';
         L.realSpeed = data.realSpeed ?? L.realSpeed ?? null;
+        // Two-listings measurement: the call sheet's mechanical explanation for
+        // an outranked finding. clientcheck.js flagged this line's absence the
+        // moment the server started returning the field — the executable merge
+        // check doing the job it was built for.
+        L.duplicateListing = data.duplicateListing ?? L.duplicateListing ?? null;
         L.earlyChannel = data.earlyChannel || L.earlyChannel || '';
         L.earlyChannelReason = data.earlyChannelReason || L.earlyChannelReason || '';
         L.auditSkippedForChannel = data.auditSkippedForChannel ?? L.auditSkippedForChannel ?? null;
@@ -6161,14 +6168,24 @@ function GenerateView({
   //     anything in the sequence that did not come from this pipeline is ignored.
   const syncOutcomes = async () => {
     const key = (settings && settings.hunterKey) || '';
-    const seq = (settings && settings.hunterSequenceId) || '';
-    if (!key || !seq) { setSyncMsg('Add your Hunter key and sequence in Settings first.'); return; }
+    // BOTH sequences when rotation is on: an outcome that landed in the second
+    // sequence would otherwise never be read, and every lead sent through it
+    // would sit at "no outcome" forever — which reads as the rotation failing
+    // when it is the sync that never looked.
+    const seqs = [settings && settings.hunterSequenceId, settings && settings.hunterSequenceId2].filter(Boolean);
+    if (!key || !seqs.length) { setSyncMsg('Add your Hunter key and sequence in Settings first.'); return; }
     setSyncing(true); setSyncMsg('');
     try {
-      const r = await fetch(BACKEND + '/api/hunter-outcomes?key=' + encodeURIComponent(key)
-        + '&sequenceId=' + encodeURIComponent(seq));
-      const d = await r.json();
-      if (d.error) { setSyncMsg('Hunter: ' + d.error); setSyncing(false); return; }
+      const d = { outcomes: {}, total: 0, counts: {} };
+      for (const seq of seqs) {
+        const r = await fetch(BACKEND + '/api/hunter-outcomes?key=' + encodeURIComponent(key)
+          + '&sequenceId=' + encodeURIComponent(seq));
+        const dd = await r.json();
+        if (dd.error) { setSyncMsg('Hunter: ' + dd.error); setSyncing(false); return; }
+        Object.assign(d.outcomes, dd.outcomes || {});
+        d.total += Number(dd.total) || 0;
+        for (const [k, v] of Object.entries(dd.counts || {})) d.counts[k] = (d.counts[k] || 0) + (Number(v) || 0);
+      }
       const all = getLeads();
       // Sentiment is a human call. Anything in this set stays untouched.
       const HUMAN = ['replied_positive', 'replied_neutral', 'call_booked', 'replied_negative'];
@@ -6224,7 +6241,7 @@ function GenerateView({
   useEffect(() => {
     try {
       const key = (settings && settings.hunterKey) || '';
-      const seq = (settings && settings.hunterSequenceId) || '';
+      const seq = (settings && settings.hunterSequenceId) || (settings && settings.hunterSequenceId2) || '';
       if (!key || !seq) return;
       const pending = getLeads().filter(l => l.sentSnapshot && !l.sentSnapshot.outcome);
       if (!pending.length) return;
@@ -9975,6 +9992,11 @@ function SendView({ settings }) {
         body: JSON.stringify({
           leads: chosen,
           sequenceId: settings.hunterSequenceId,
+          // Rotation: when a second sequence is configured the server splits
+          // sends across them by a stable hash of the lead id, so a re-send can
+          // never put the same person in two campaigns. One sequence behaves
+          // exactly as before.
+          sequenceIds: [settings.hunterSequenceId, settings.hunterSequenceId2].filter(Boolean),
           hunterKey: settings.hunterKey,
         })
       });
@@ -10024,6 +10046,10 @@ function SendView({ settings }) {
             openerHarm: (_ba.openerStrength && _ba.openerStrength.harm) ?? null,
             openerFinding: (_ba.openerStrength && _ba.openerStrength.finding) || null,
             problemCount: _ba.problemCount ?? null,
+            // Which Hunter sequence — and therefore which sending DOMAIN —
+            // carried this email. A bounce is charged to the domain, so the
+            // rotation can only ever be judged if each send remembers its lane.
+            sentVia: s.sentVia || null,
 
             // `lead` is not in scope here. This callback sits inside
             // sendToHunter inside SendView; the only `const lead` declarations in
@@ -10575,6 +10601,12 @@ function SettingsView({
     type: 'text',
     ph: 'Sequence/campaign ID',
     hint: 'The Hunter Sequence that leads get added to. Click "Find My Sequences" below to see your real IDs.'
+  }), React.createElement(Fld, {
+    label: 'Second Hunter Sequence ID (rotation)',
+    k: 'hunterSequenceId2',
+    type: 'text',
+    ph: 'Second sequence/campaign ID — optional',
+    hint: 'Deliverability rotation. Make a second Hunter sequence in the SAME Hunter account whose sender is a mailbox on your SECOND domain, paste its ID here, and sends split between the two so no single domain carries every bounce. Each lead always lands in the same sequence (stable by lead), so nobody ever sits in two campaigns. Leave blank and everything sends through the first sequence exactly as before.'
   }), React.createElement(Fld, {
     label: 'SDR Booking Link',
     k: 'bookingLink',
