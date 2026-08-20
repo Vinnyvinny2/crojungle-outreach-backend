@@ -251,6 +251,10 @@ const leadToRow = (l) => ({
         publicPainSignals: l.publicPainSignals ?? null,
         visualAnalysis: l.visualAnalysis ?? null,
         valueEquation: l.valueEquation ?? null,
+        // The published one-change diagnosis. Code-assembled server-side from the
+        // binding layer, the first broken link and the buying-path friction, all
+        // three of which were measured on every lead and rendered nowhere.
+        theOneThing: l.theOneThing ?? null,
         topPain: l.topPain ?? null,
         buckets: l.buckets ?? null,
         signals: l.signals ?? null,
@@ -553,6 +557,7 @@ const rowToLead = (r) => ({
   auditedWebsite: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditedWebsite) ?? null,
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
+  theOneThing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.theOneThing) || null,
   topPain: r.top_pain || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.topPain) || null,
   buckets: r.buckets || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.buckets) || null,
   signals: r.signals || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.signals) || {},
@@ -599,7 +604,7 @@ const rowToLead = (r) => ({
   originalFindings: (r.brain_audit && r.brain_audit.originalFindings) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.originalFindings) ?? [],
   businessModel: (r.brain_audit && r.brain_audit.businessModel) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.businessModel) ?? null,
   growthConstraint: (r.brain_audit && r.brain_audit.growthConstraint) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.growthConstraint) ?? null,
-  situationRead: (r.brain_audit && r.brain_audit.situationRead) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.situationRead) ?? null,
+  situationRead: pickSituationRead(r.brain_audit && r.brain_audit.situationRead, r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.situationRead),
   visionAudit: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.visionAudit) ?? null,
   reachabilityVerified: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.reachabilityVerified) ?? null,
   researchBonus: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.researchBonus) ?? null,
@@ -1083,6 +1088,7 @@ const applyResearchResult = (prev, data, ctx) => {
         L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
+        L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         // Only overwrite when the incoming one actually has results. A merge that
         // takes an empty object over good persisted data is how a working lead
         // turns into "nothing on file".
@@ -1156,6 +1162,7 @@ const applyResearchResult = (prev, data, ctx) => {
         L.auditSkippedForChannel = data.auditSkippedForChannel ?? L.auditSkippedForChannel ?? null;
         L.outreachChannel = data.outreachChannel ?? L.outreachChannel ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
+        L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.offerStrength = data.offerStrength ?? L.offerStrength ?? null;
@@ -1354,6 +1361,20 @@ const buildComposeBody = (lead, settings) => {
             // lost before.
             patternLine: (_ba && _ba.patternLine) || lead.patternLine || '',
             tradeWord: lead.industry || lead.verifiedIndustry || '',
+            // ══ THE ARM WAS ASSIGNED AND NEVER SENT ═══════════════════════
+            // The compose route picks which variant the prospect simulator
+            // judges with `req.body.abVariant === 'B' ? variantB : variantA`,
+            // and this builder never sent the field — so the simulator has
+            // always read arm A, including on every lead the app had assigned
+            // to arm B. Both arms carry the same body and different subjects,
+            // so the subject actually judged could differ from the one that
+            // shipped, and nothing recorded which arm went out against what
+            // came back.
+            //
+            // That is the prerequisite for any reply-rate test: without it the
+            // two-arm machinery cannot produce a readable result no matter how
+            // many are sent.
+            abVariant: lead.abVariant || 'A',
             // ══ THE LADDER IS ON THE LEAD, NOT ALWAYS ON THE AUDIT ═══════
             // Fresh from research these ride inside brainAudit. After a
             // reload, rowToLead restores them to the LEAD — problemList,
@@ -1641,6 +1662,170 @@ const runBatchAudit = async (opts) => {
   return results.filter(Boolean);
 };
 
+// ══ EXPORTING FIFTY AUDITS WITHOUT MAKING A SECOND COPY OF THE AUDIT ════════
+// After a bulk run there are fifty audits on screen and no way to get them out.
+// The obvious build is a formatter that walks a lead and writes out the sections
+// — and that is a SECOND implementation of the audit, which this file's own
+// history says is the one that rots, because it only runs in the case nobody
+// tests. leadToRow produced nine duplicate-key collisions that way, and the
+// research merge was written twice before it was made one function.
+//
+// So there are two pieces and only the first knows anything about an audit:
+//   auditRecordFor   lead -> plain data. ONE place that says what an audit is.
+//   auditExportHtml  that data -> a page. Knows nothing about leads.
+// A boot-time check in clientcheck.js runs auditRecordFor against a lead built
+// from the server's own response shape and asserts every section arrives.
+//
+// HTML rather than CSV or PDF, deliberately: an audit is prose with structure,
+// a spreadsheet destroys it, and a PDF needs a library. One file, no assets, no
+// network — it opens on any machine, prints to PDF from the browser, and cannot
+// half-load. That is what "nothing gets ruined" has to mean for a file that
+// leaves this app and gets emailed around.
+const auditRecordFor = (lead) => {
+  const l = lead || {};
+  const ba = l.brainAudit || {};
+  const sr = (l.situationRead && typeof l.situationRead === 'object') ? l.situationRead : null;
+  const srFlat = typeof l.situationRead === 'string' ? l.situationRead : (typeof ba.situationRead === 'string' ? ba.situationRead : '');
+  const gc = l.growthConstraint || ba.growthConstraint || null;
+  const t = (l.theOneThing && typeof l.theOneThing === 'object') ? l.theOneThing : null;
+  const arr = (x) => (Array.isArray(x) ? x : []);
+  return {
+    // WHO
+    company: l.name || l.company || 'Unknown business',
+    website: l.website || '',
+    owner: l.verifiedCEO || l.founderName || '',
+    ownerTitle: l.verifiedCEOTitle || l.title || '',
+    email: l.email || '',
+    phone: l.phoneDisplay || l.phone || '',
+    location: l.location || '',
+    trade: l.tradeWord || l.industry || '',
+    icpScore: Number.isFinite(Number(l.icpScore)) ? Number(l.icpScore) : null,
+    status: l.approved ? 'approved' : (l.pitch ? 'email written' : (ba.situationRead || l.problemList ? 'audited' : 'not audited')),
+    // WHAT IT IS
+    background: (sr && sr.background) || '',
+    // THE ONE THING
+    oneThing: t ? {
+      layer: t.layer || '', diagnosis: t.diagnosis || '', why: t.why || '',
+      firstBrokenLink: t.firstBrokenLink || '', firstBrokenLinkWhy: t.firstBrokenLinkWhy || '',
+      earnedButBlocked: !!t.earnedButBlocked, frictionCount: Number(t.frictionCount) || 0,
+      friction: arr(t.friction), costliest: t.costliest || null, product: t.product || '',
+    } : null,
+    // THE READ
+    headline: (sr && sr.headline) || '',
+    read: (sr && sr.read) || srFlat || '',
+    rows: arr(sr && sr.rows).filter(r => r && (r.label || r.says)),
+    bindingLayer: (gc && gc.layer) || '',
+    // EVIDENCE
+    originalFindings: arr(ba.originalFindings || l.originalFindings),
+    problems: arr(l.problemList).map(p => ({ area: p.area || '', problem: p.problem || '', costs: p.costs || '', harm: p.harm })),
+    // Called directly, not behind a `typeof` guard. buildAuditRows is a hoisted
+    // module-scope declaration in this same script block, so a guard here could
+    // only ever do one thing: silently empty this section if somebody moved the
+    // function, which is precisely the vacuous pass this file keeps recording.
+    signals: arr(buildAuditRows(l)).map(r => ({ label: r.label, val: r.val, ok: r.ok, proof: r.proof })),
+    // THE CONVERSATION
+    whatHeNeeds: (sr && sr.whatHeNeeds) || '',
+    askOnTheCall: (sr && sr.askOnTheCall) || '',
+    // WHAT NOT TO SAY. Carried deliberately: an exported audit that drops the
+    // fact-check is an audit somebody repeats on a call believing all of it.
+    criticalFactCheck: arr(l._criticalFactCheck),
+    claimRisks: arr(l._claimRisks),
+    // THE EMAIL, if one exists, so the caller can open on what was actually asked.
+    subject: l.subject || '',
+    pitch: l.pitch || '',
+    renders: arr(l.pageShots).map(s => ({ label: s.label || s.key || 'page', url: s.shot || s.url || '' })).filter(s => s.url),
+  };
+};
+
+// Renders records to one self-contained page. Knows nothing about leads, which
+// is the point — everything it can say about an audit came from auditRecordFor.
+const auditExportHtml = (records, meta) => {
+  const m = meta || {};
+  // Escaping is not a detail here. A business called "Smith & Sons <Roofing>"
+  // silently destroys an unescaped page, and half the file after it.
+  const e = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const p = (s) => e(s).replace(/\n/g, '<br>');
+  const sec = (title, body) => body ? '<section><h3>' + e(title) + '</h3>' + body + '</section>' : '';
+  const ul = (items, fn) => items.length ? '<ul>' + items.map(fn).join('') + '</ul>' : '';
+  const one = (r, i) => {
+    const t = r.oneThing;
+    return '<article id="a' + i + '">'
+      + '<header><h2>' + e(r.company) + '</h2><div class="meta">'
+      + [r.trade, r.location, r.owner ? e(r.owner) + (r.ownerTitle ? ', ' + e(r.ownerTitle) : '') : '',
+         r.phone, r.email, r.website].filter(Boolean).map(e).join(' &middot; ')
+      + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></header>'
+      + sec('What this business is', r.background ? '<p>' + p(r.background) + '</p>' : '')
+      + (t ? '<section class="one"><h3>The one thing' + (t.layer ? ' &mdash; ' + e(t.layer) : '') + '</h3>'
+          + (t.diagnosis ? '<p class="big">' + p(t.diagnosis) + '</p>' : '')
+          + (t.why ? '<p class="dim">' + p(t.why) + '</p>' : '')
+          + (t.firstBrokenLinkWhy ? '<h4>Fix this first' + (t.firstBrokenLink ? ' &mdash; ' + e(t.firstBrokenLink) : '') + '</h4><p>' + p(t.firstBrokenLinkWhy) + '</p>' : '')
+          + (t.friction.length ? '<h4>' + (t.earnedButBlocked ? 'Earned, and blocked &mdash; ' : '') + t.frictionCount + ' thing(s) between interested and booked</h4>' + ul(t.friction, x => '<li>' + p(x) + '</li>') : '')
+          + (t.costliest && t.costliest.problem ? '<h4>Costing them most</h4><p>' + p(t.costliest.problem) + (t.costliest.costs ? '. ' + p(t.costliest.costs) : '') + '</p>' : '')
+          + '</section>' : '')
+      + sec('What is actually going on here',
+          (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
+          + (r.read ? '<p>' + p(r.read) + '</p>' : '')
+          + (r.bindingLayer ? '<p class="dim">Binding layer: ' + e(r.bindingLayer) + '</p>' : '')
+          + ul(r.rows, x => '<li><b>' + e(x.label) + '</b> &mdash; ' + p(x.says) + '</li>'))
+      + sec('What we found by reading their pages',
+          ul(r.originalFindings, f => '<li>' + p(f.finding || f.what || f) + (f.quote ? '<br><q>' + p(f.quote) + '</q>' : '') + '</li>'))
+      + sec('What is broken, worst first',
+          r.problems.length ? '<table><tr><th>Area</th><th>Problem</th><th>What it costs</th></tr>'
+            + r.problems.map(x => '<tr><td>' + e(x.area) + '</td><td>' + p(x.problem) + '</td><td>' + p(x.costs) + '</td></tr>').join('') + '</table>' : '')
+      + sec('What is actually worth selling them',
+          (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
+          + (r.askOnTheCall ? '<p class="ask"><b>Ask before pitching:</b> ' + p(r.askOnTheCall) + '</p>' : ''))
+      + sec('Measured signals',
+          r.signals.length ? '<table class="sig">' + r.signals.map(x =>
+            '<tr><td>' + e(x.label) + '</td><td class="' + (x.ok === false ? 'bad' : x.ok === true ? 'good' : '') + '">' + p(x.val) + '</td><td class="dim">' + p(x.proof || '') + '</td></tr>').join('') + '</table>' : '')
+      + sec('Do not say', ul(r.claimRisks.concat(r.criticalFactCheck), x => '<li>' + p(typeof x === 'string' ? x : (x.what || JSON.stringify(x))) + '</li>'))
+      + sec('The email as written', r.pitch ? '<p class="dim">Subject: ' + p(r.subject) + '</p><pre>' + p(r.pitch) + '</pre>' : '')
+      + sec('Full-page renders', ul(r.renders, s => '<li>' + e(s.label) + ': <a href="' + e(s.url) + '">' + e(s.url) + '</a></li>'))
+      + '</article>';
+  };
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
+    + ':root{color-scheme:light}body{margin:0;padding:28px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#16181d;background:#fff;max-width:920px;margin:0 auto}'
+    + 'h1{font-size:22px;margin:0 0 4px}h2{font-size:20px;margin:0 0 4px}h3{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#6b7280;margin:20px 0 6px;padding-bottom:5px;border-bottom:1px solid #e5e7eb}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#374151}p{margin:0 0 8px}.big{font-size:17px;font-weight:600}.dim{color:#6b7280;font-size:13px}'
+    + 'article{padding:26px 0;border-top:3px solid #16181d}article:first-of-type{border-top:none}header .meta{color:#6b7280;font-size:13px;margin-bottom:6px}'
+    + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#eef2ff;color:#4338ca}'
+    + '.one{background:#f5f6ff;border-left:3px solid #6366f1;padding:2px 16px 12px;border-radius:6px}.one h3{border-bottom:none;color:#4338ca}'
+    + 'table{border-collapse:collapse;width:100%;font-size:13px}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;border-bottom:1px solid #e5e7eb;padding:6px 8px 6px 0}'
+    + 'td{border-bottom:1px solid #f0f1f3;padding:7px 8px 7px 0;vertical-align:top}.sig td:first-child{width:170px;color:#374151}.good{color:#15803d}.bad{color:#b91c1c}'
+    + 'ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}q{color:#374151;font-style:italic}pre{white-space:pre-wrap;font:13px/1.6 inherit;background:#f7f8fa;padding:12px;border-radius:6px}'
+    + '.ask{background:#fffbeb;padding:8px 10px;border-radius:5px}nav{font-size:13px;margin-bottom:20px;columns:2}nav a{color:#4338ca;text-decoration:none}'
+    + '@media print{body{padding:0;max-width:none}article{break-after:page;border-top:none}nav{display:none}}'
+    + '</style></head><body>'
+    + '<h1>' + e(m.title || 'CROJungle audits') + '</h1>'
+    + '<p class="dim">' + records.length + ' audit(s) &middot; exported ' + e(m.at || '') + '</p>'
+    + (records.length > 1 ? '<nav>' + records.map((r, i) => '<div><a href="#a' + i + '">' + e(r.company) + '</a></div>').join('') + '</nav>' : '')
+    + records.map(one).join('')
+    + '</body></html>';
+};
+
+// The download itself. A blob rather than a data: URI because fifty audits run
+// to megabytes and a data: URI of that size is refused by some browsers.
+const downloadAudits = (leads, title) => {
+  const records = (leads || []).map(auditRecordFor);
+  if (!records.length) return 0;
+  const at = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+  const html = auditExportHtml(records, { title: title || 'CROJungle audits', at });
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'crojungle-audits-' + new Date().toISOString().slice(0, 10) + '-' + records.length + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoking immediately cancels the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return records.length;
+};
+
 // Which leads a batch would take, in the order it would take them. Separated
 // from the runner so the button can say "42 ready" before anything is spent,
 // and so the rule is in one place rather than inside a click handler.
@@ -1847,6 +2032,40 @@ const auditPersistence = (lead) => {
         + '. They will read as absent on every lead loaded from the cloud, which is all of them after a refresh. Add each to leadToRow._persisted and rowToLead.');
     }
   } catch (e) { void e; }
+};
+
+// ══ THE RICH STRATEGIC READ LOSES TO ITS OWN SUMMARY ON EVERY RELOAD ════════
+// Two different things are called situationRead and they are not the same shape.
+//
+//   brain_audit.situationRead  — ONE SENTENCE. The audit brain writes it as a
+//     thinking step, deliberately, so that it reasons about the whole business
+//     before choosing findings. The server's own comment on that field says
+//     "Nothing reads parsed.situationRead."
+//   _persisted.situationRead   — THE OBJECT. Written by a separate, larger model
+//     AFTER the audit: {shape, background, headline, read, rows, whatHeNeeds,
+//     askOnTheCall}. This is the strategic read — the 3-5 sentence diagnosis,
+//     the character rows, the closing recommendation, and the one diagnostic
+//     question the whole system generates for a salesperson.
+//
+// rowToLead read the one-sentence string FIRST, and `??` only falls through on
+// null, so the summary won every time. The rich object survived exactly until
+// the first page reload and was then silently replaced by its own summary.
+//
+// What that costs, all of it invisible: the briefing's read collapses to one
+// line, the headline vanishes, the character rows vanish, "what is actually
+// worth selling them" vanishes, and the call sheet's only question — "ask before
+// pitching" — vanishes. The screen still renders, which is why this survived.
+//
+// Prefer the object. The discriminator is structural, not a flag: only the rich
+// shape carries a read, a headline or rows.
+const pickSituationRead = (flat, persisted) => {
+  const isRich = (v) => !!(v && typeof v === 'object' && !Array.isArray(v)
+    && (v.read || v.headline || (Array.isArray(v.rows) && v.rows.length)));
+  if (isRich(persisted)) return persisted;
+  if (isRich(flat)) return flat;
+  // Neither is the strategic object. Keep whichever exists so a lead audited
+  // before the synthesis call existed still shows its one sentence.
+  return persisted ?? flat ?? null;
 };
 
 const getLeads = () => {
@@ -4670,6 +4889,71 @@ function LeadBriefing({ lead }) {
       React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
     ) : null,
 
+    // ── THE ONE THING ───────────────────────────────────────────────────────
+    // The system computed three independent diagnoses on every lead and rendered
+    // none of them. The binding layer appeared as four words in 11px grey at the
+    // bottom of the verdict box with its reason stripped by the server; the
+    // buying-path friction — the interested-to-book-to-close measurement, which
+    // is the thing Vin describes as wrong with ninety per cent of these sites —
+    // was returned, persisted and drawn nowhere; the first broken link in the
+    // revenue chain never left the server at all.
+    //
+    // This is the answer to "the audits give a bunch of issues but don't nail
+    // what is actually worth selling them". It goes ABOVE the findings, because
+    // the findings are its evidence, not a menu.
+    //
+    // Every sentence here was assembled by code from a measurement. No model
+    // wrote any of it, so nothing in this block can be a fabrication.
+    (() => {
+      const t = lead.theOneThing;
+      // Defensive on shape, not on presence. A lead persisted by an older build,
+      // or a row that came back partial, must not throw here — this block sits at
+      // the top of the briefing and an exception takes the whole audit screen
+      // down, which is a far worse failure than a missing section.
+      if (!t || typeof t !== 'object') return null;
+      const fr = Array.isArray(t.friction) ? t.friction : [];
+      if (!t.diagnosis && !t.firstBrokenLinkWhy && !fr.length && !(t.costliest && t.costliest.problem)) return null;
+      const H = (txt) => React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 5 } }, txt);
+      return React.createElement('div', {
+        style: { padding: '14px 16px', background: 'rgba(99,102,241,.07)', borderLeft: '3px solid #6366f1', borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 12 }
+      },
+        React.createElement('div', null,
+          H(t.layer ? 'The one thing \u2014 ' + t.layer : 'The one thing'),
+          t.diagnosis ? React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: 'var(--t)', lineHeight: 1.45 } }, t.diagnosis) : null,
+          // WHY this layer and not the cheaper one below it. Stripped by the
+          // server for the whole life of the field, so it has never been read.
+          t.why ? React.createElement('div', { style: { fontSize: 13, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } }, t.why) : null
+        ),
+        // What has to be fixed FIRST. The only dependency model in the system:
+        // every other finding is an independent rung with no notion that fixing
+        // one is pointless until another is fixed.
+        t.firstBrokenLinkWhy ? React.createElement('div', null,
+          H('Fix this first \u2014 ' + (t.firstBrokenLink || '')),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } }, t.firstBrokenLinkWhy)
+        ) : null,
+        // The path from interested to booked, in sentences the owner can check
+        // on his own site in under a minute. This is the website sale, stated as
+        // measurements rather than as an opinion about his website.
+        fr.length ? React.createElement('div', null,
+          H(t.earnedButBlocked
+            ? 'Earned, and blocked \u2014 ' + (t.frictionCount || fr.length) + ' thing(s) between interested and booked'
+            : (t.frictionCount || fr.length) + ' thing(s) between interested and booked'),
+          React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 } },
+            fr.map((f, i) => React.createElement('li', {
+              key: 'fr' + i, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55 }
+            }, f)))
+        ) : null,
+        // And what it is COSTING most. The findings list below is ordered by
+        // this now; it used to be ordered by how well each would open a cold
+        // email, which is a different question with a different answer.
+        t.costliest && t.costliest.problem ? React.createElement('div', null,
+          H('Costing them most'),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
+            t.costliest.problem + (t.costliest.costs ? '. ' + String(t.costliest.costs).charAt(0).toUpperCase() + String(t.costliest.costs).slice(1) + '.' : '.'))
+        ) : null
+      );
+    })(),
+
     // ── THE VERDICT ─────────────────────────────────────────────────────────
     counted.length >= 4 && React.createElement('div', {
       style: { padding: '12px 15px', background: 'rgba(34,197,94,.07)', borderLeft: '3px solid var(--g)', borderRadius: 6 }
@@ -4692,7 +4976,7 @@ function LeadBriefing({ lead }) {
         (sr && sr.read) || ba.situationRead
           || (gc && gc.checked !== false && gc.condition ? String(gc.condition).replace(/\s*\u26a0[^]*$/, '') : null)
           || ba.realPain || lead.discoveryReason || 'Not enough measured yet to say what is holding this business back.'),
-      (!sr && !ba.situationRead && gc && gc.why) ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } },
+      (!(sr && sr.read) && !ba.situationRead && gc && gc.why) ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } },
         String(gc.why).replace(/\s*\u26a0[^]*$/, '')) : null,
       React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 7 } },
         problems.length === 0
@@ -5487,6 +5771,25 @@ function ResearchView({
           style: { width: '100%' },
           onClick: startBatch,
         }, batchRunning ? ('Stop \u2014 ' + batchAt.finished + '/' + batchAt.total) : ('Audit ' + batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length + (batchEmail ? ' + write' : ''))),
+        // ── GETTING FIFTY AUDITS OUT ──────────────────────────────────────
+        // Fifty audits on screen and no way to hand them to anybody. Exports
+        // every lead that HAS an audit, in the order shown, as one self-contained
+        // page: no assets, no network, opens anywhere, prints to PDF from the
+        // browser. Deliberately not a spreadsheet — an audit is prose with
+        // structure and a CSV destroys it.
+        (() => {
+          const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
+          if (batchRunning || !done.length) return null;
+          return React.createElement('button', {
+            className: 'btn btn-sm btn-g',
+            style: { marginTop: 6, width: '100%' },
+            title: 'One self-contained HTML file. Opens in any browser and prints to PDF.',
+            onClick: () => {
+              const n = downloadAudits(done, 'CROJungle audits');
+              if (!n) alert('No audited leads to export yet.');
+            },
+          }, 'Export ' + done.length + ' audit' + (done.length === 1 ? '' : 's'));
+        })(),
         batchRunning && React.createElement('div', { style: { fontSize: 10, color: 'var(--m)', marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
           'now: ' + (batchAt.now || '\u2026')),
         // What actually happened, per outcome. A count of "done" would hide the

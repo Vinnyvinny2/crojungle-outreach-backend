@@ -331,6 +331,138 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ 6b-2. THE STRATEGIC READ MUST SURVIVE A RELOAD ══════════════════════════
+// Two different values are called situationRead: the audit brain's ONE SENTENCE
+// (on brain_audit) and the separate synthesis OBJECT with the headline, the 3-5
+// sentence read, the character rows, "what is actually worth selling them" and
+// the single diagnostic question the system generates for a salesperson (on
+// _persisted). rowToLead read the sentence first and `??` only falls through on
+// null, so the summary replaced the real thing on the first reload of every lead
+// ever audited. The screen still rendered, which is why it survived.
+//
+// Executed, not read: the picker is lifted out and run against both shapes.
+{
+  let fnSrc = null;
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'pickSituationRead' && n.init) {
+      fnSrc = src.slice(n.init.start, n.init.end);
+    }
+  });
+  if (!fnSrc) {
+    fails.push('pickSituationRead is gone, so the rich strategic read is back to losing to its own one-sentence summary on every page reload');
+  } else {
+    let fn;
+    try { fn = new Function('return ' + fnSrc)(); } catch (e) { fn = null; }
+    if (!fn) fails.push('pickSituationRead no longer compiles standalone, so it cannot be verified');
+    else {
+      const FLAT = 'Fifty years of proof that almost no one sees.';
+      const RICH = { shape: 'EARNED_BUT_BLOCKED', headline: 'Earned and blocked',
+        read: 'Three to five sentences of actual diagnosis.',
+        rows: [{ label: 'Reputation machine', says: 'He runs it personally.' }],
+        whatHeNeeds: 'One recommendation.', askOnTheCall: 'Is he trying to grow, or is he full?' };
+      const got = fn(FLAT, RICH);
+      if (!got || got.read !== RICH.read) {
+        fails.push('the one-sentence summary still wins over the strategic object, so the headline, the read, the character rows, what-to-sell and the call sheet question are all discarded on reload');
+      }
+      if (fn(FLAT, null) !== FLAT) fails.push('a lead audited before the synthesis call existed loses its one sentence too');
+      if (fn(null, null) !== null) fails.push('an unaudited lead no longer resolves to null');
+      // A persisted value that is NOT the rich shape must not beat a rich flat one.
+      if (fn(RICH, 'a stale string') !== RICH) fails.push('a stale persisted string outranks a rich read');
+    }
+    // And the wiring: the picker has to be what rowToLead actually uses.
+    if (!/situationRead:\s*pickSituationRead\(/.test(src)) {
+      fails.push('rowToLead is not using pickSituationRead, so the fix is present and unwired');
+    }
+  }
+}
+
+// ══ 6b-3. THE AUDIT EXPORT MUST CARRY THE WHOLE AUDIT ═══════════════════════
+// After a bulk run there are fifty audits on screen. The export is the only way
+// they leave, and the failure that matters is silent: a section that quietly
+// arrives empty, so the file looks complete and is missing the diagnosis.
+//
+// Executed, not read. auditRecordFor and auditExportHtml are lifted out with the
+// one helper they call and run against a lead whose every field is a unique
+// marker; then every marker is looked for in the rendered page.
+{
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows'];
+  const found = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
+      found[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+    if (n.type === 'FunctionDeclaration' && n.id && NEED.includes(n.id.name)) {
+      found[n.id.name] = src.slice(n.start, n.end);
+    }
+  });
+  const missing = NEED.filter(k => !found[k]);
+  if (missing.length) {
+    fails.push(`the audit export cannot be verified: ${missing.join(', ')} not found at module scope — auditRecordFor calls buildAuditRows directly, so if that stops being a hoisted module-scope declaration the measured-signals section silently exports empty`);
+  } else {
+    let mod = null;
+    try {
+      mod = new Function(found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml };')();
+    } catch (e) {
+      fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
+    }
+    if (mod) {
+      const LEAD = {
+        id: 'x1', name: 'Smith & Sons <Roofing>', website: 'https://smith.example',
+        verifiedCEO: 'MARKER_OWNER', verifiedCEOTitle: 'MARKER_TITLE', email: 'a@b.example',
+        phoneDisplay: 'MARKER_PHONE', location: 'Indianapolis, IN', tradeWord: 'roofer', icpScore: 71,
+        situationRead: { background: 'MARKER_BACKGROUND', headline: 'MARKER_HEADLINE',
+          read: 'MARKER_READ', rows: [{ label: 'MARKER_ROWLABEL', says: 'MARKER_ROWSAYS' }],
+          whatHeNeeds: 'MARKER_NEEDS', askOnTheCall: 'MARKER_ASK' },
+        growthConstraint: { layer: 'MARKER_LAYER', condition: 'c', product: 'p' },
+        theOneThing: { layer: 'MARKER_LAYER', diagnosis: 'MARKER_DIAGNOSIS', why: 'MARKER_WHY',
+          firstBrokenLink: 'CONVERSION', firstBrokenLinkWhy: 'MARKER_FIRSTBROKEN',
+          earnedButBlocked: true, frictionCount: 2, friction: ['MARKER_FRICTION1', 'MARKER_FRICTION2'],
+          costliest: { id: 'r', problem: 'MARKER_COSTLIEST', costs: 'MARKER_COSTS', harm: 74 } },
+        brainAudit: { originalFindings: [{ finding: 'MARKER_ORIGINAL', quote: 'MARKER_QUOTE' }] },
+        problemList: [{ area: 'MARKER_AREA', problem: 'MARKER_PROBLEM', costs: 'MARKER_PCOSTS', harm: 80 }],
+        _claimRisks: ['MARKER_RISK'], _criticalFactCheck: ['MARKER_CRITICAL'],
+        subject: 'MARKER_SUBJECT', pitch: 'MARKER_PITCH',
+        pageShots: [{ label: 'MARKER_SHOTLABEL', shot: 'https://shot.example/1.png' }],
+      };
+      let page = '';
+      try { page = mod.html([mod.rec(LEAD)], { title: 'T', at: 'now' }); }
+      catch (e) { fails.push('the audit export threw on a normal lead: ' + e.message); }
+      if (page) {
+        const MARKERS = ['MARKER_OWNER', 'MARKER_TITLE', 'MARKER_PHONE', 'MARKER_BACKGROUND',
+          'MARKER_HEADLINE', 'MARKER_READ', 'MARKER_ROWLABEL', 'MARKER_ROWSAYS', 'MARKER_LAYER',
+          'MARKER_DIAGNOSIS', 'MARKER_WHY', 'MARKER_FIRSTBROKEN', 'MARKER_FRICTION1',
+          'MARKER_FRICTION2', 'MARKER_COSTLIEST', 'MARKER_COSTS', 'MARKER_ORIGINAL', 'MARKER_QUOTE',
+          'MARKER_AREA', 'MARKER_PROBLEM', 'MARKER_PCOSTS', 'MARKER_NEEDS', 'MARKER_ASK',
+          'MARKER_RISK', 'MARKER_CRITICAL', 'MARKER_SUBJECT', 'MARKER_PITCH', 'MARKER_SHOTLABEL'];
+        const lost = MARKERS.filter(m => page.indexOf(m) < 0);
+        if (lost.length) {
+          fails.push(`the audit export drops ${lost.length} field(s) that are on the lead and on the screen: ${lost.join(', ')} — an export that looks complete and is missing the diagnosis is worse than no export`);
+        }
+        // A business name with an ampersand and angle brackets must not destroy
+        // the page. Unescaped, everything after it renders as broken markup.
+        if (page.indexOf('Smith &amp; Sons &lt;Roofing&gt;') < 0) {
+          fails.push('the export does not escape the company name, so a business called "Smith & Sons <Roofing>" silently corrupts the file from that point on');
+        }
+        if (!/^<!doctype html>/i.test(page)) fails.push('the export is not a complete HTML document');
+        // Self-contained means it LOADS nothing. A link the reader can click is
+        // fine and a screenshot URL in the text is fine; a stylesheet, a script,
+        // an <img>, a webfont or a CSS url() is not, because the file gets
+        // emailed around and opened on machines that cannot reach any of them.
+        const LOADS = /<script\b|<link\b|<img\b|<iframe\b|@import|url\(\s*['"]?https?:/i;
+        if (LOADS.test(page)) {
+          fails.push('the export is no longer self-contained — it loads a script, stylesheet, image or font over the network, so it cannot be relied on to open on a machine that has none of them');
+        }
+      }
+      // An empty run must produce nothing rather than an empty-looking file.
+      try {
+        const blank = mod.rec({});
+        if (blank.company !== 'Unknown business') fails.push('a lead with no name breaks the export record');
+      } catch (e) { fails.push('the export record throws on an empty lead: ' + e.message); }
+    }
+  }
+}
+
 // ══ 6c. THE SEND MUST CARRY BOTH SEQUENCES AND STAMP WHICH ONE FIRED ════════
 // Rotation is a settings entry; these are the three client wires that make it
 // real. Each is a needle for a line that, missing, silently reverts the send
