@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 155 boot checks at the bottom, each documenting the live failure that caused it
+- 156 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1200,6 +1200,28 @@ Articles are used **last and capped at two**, and a page the site links in its
 own navigation is never filed as one whatever its slug looks like — the owner
 put it in his header, which outranks any guess from a URL.
 
+**And nothing could tell whether two renders were the same page.** Pushed back
+on the display explanation, Vin was specific: *"the screenshots on the front end
+were 4 screenshots of the same page — the homepage."* The honest answer was that
+this system could not answer him either way. We ask Firecrawl for six URLs, it
+returns six responses, and we had never once checked whether those were six
+DIFFERENT pages. Three ordinary things return the homepage for a URL that is not
+the homepage — a redirect from a retired page, a single-page app whose router had
+not run when the render was taken, and a soft 404 — and in all three the markdown
+comes back byte-identical, as does the picture.
+
+The corpus is the expensive half. Four copies of the homepage in the evidence
+makes an audit that read two pages look like it read six, which is the shape of a
+dry audit that appears to have had plenty to work with. Interior pages are now
+fingerprinted against each other AND against the homepage, duplicates are dropped
+from both the corpus and the renders, and the run says so by name. `DUPLICATE
+PAGE CHECK` uses exact equality on normalised text on purpose: a similarity score
+would collide on the nav and footer every page shares, and a false positive here
+DELETES a page we read correctly. Its first fixture had the two pages differing
+in their opening words, so hashing a 40-character prefix still told them apart
+and the falsification run passed on a broken build — real Firecrawl markdown
+begins with the same header on every page, and the fixture now does too.
+
 `PAGE SELECTION CHECK` runs Jose Barrera's real sitemap plus twenty-two real
 navigational URLs from our own trades. The second list is the more important
 one: a filter tuned until it catches everything stops reading the pricing and
@@ -1261,7 +1283,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 155 boot checks
+PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 156 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -1335,7 +1357,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 155 boot checks and the comments above
+and caused none of this week's failures. The 156 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
