@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 147 boot checks at the bottom, each documenting the live failure that caused it
+- 151 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1028,6 +1028,111 @@ leads are ever in flight, every job id is written to disk so a closed tab does n
 lose paid-for work, and Stop keeps what finished. All four of its central
 assertions were falsified by reverting the code they guard.
 
+## 19. One lead was served another lead's audit — FIXED 2026-08-20, the worst bug this system has had
+
+Donna Krummen, a Cincinnati plastic surgeon, received an audit asserting **"176
+reviews at 4.8 and #3 of 20 in Indianapolis"**, a homepage that **"promises
+upfront pricing and no hidden fees"**, a Google Ads conversion tag **"confirmed
+on your site"**, and John Peters Roofing's pattern sentence spliced verbatim
+into her outgoing email. Every one of those is John Peters Roofing — the lead
+that ran three minutes earlier. Her own fact-checker caught it ("it was written
+about a different prospect or a different market"), but the Approve button sat
+under that verdict, enabled.
+
+**The cause was the audit cache's key.** It hashed "the evidence text", and the
+variable feeding it took the FIRST text block of the request — which is the
+constant image caption, *"IMAGE 1 — THE HOMEPAGE, rendered full page, top to
+bottom."* The real evidence rides in a later block. So **every lead with a
+homepage render hashed to the same key**, and the cache became a machine for
+handing each lead the audit of whoever wrote first. The BRAIN INPUT meter read
+the same variable, which is why it priced a 28,000-token call as "evidence text
+15 tok" — the same wrong variable, caught by nobody because the meter and the
+key agreed with each other.
+
+Three walls now, each falsified by reverting it:
+
+- **The key covers everything the model sees** — every text block plus a
+  fingerprint of every image.
+- **The cache entry remembers which company it was written for**, and a read by
+  any other company is refused by name. Even a future key bug cannot cross two
+  businesses again.
+- **Under 2,000 characters of keyed text disqualifies the cache entirely** —
+  the real evidence block alone is tens of thousands, so a small key means the
+  assembly upstream is broken.
+
+`AUDIT CACHE ISOLATION CHECK` runs two synthetic leads through the real key and
+the real cache at boot. Two smaller cross-lead leaks found in the same sweep:
+the leadership-page text length was a single module-level number (now keyed by
+company), and a CRITICAL fact-check verdict now **blocks the Approve button**
+in the client instead of decorating it — the fabricated audit above was one
+click from Send.
+
+## 20. The byte ceiling deleted the render the pixel ceiling had just saved — FIXED 2026-08-20
+
+Jose Barrera's homepage rendered at 1920x9544, the scaler brought it under the
+7,800px vision ceiling — the log celebrated "the model is reading the whole
+homepage top to bottom" — and one line later the byte check found 9MB and threw
+the image away: *"Screenshot too large (9MB) — skipping image, auditing from
+text."* Two ceilings, and only one knew how to shrink. A photo-heavy page
+compresses badly, so clearing the pixel limit says nothing about the byte
+limit, and the audit ran blind on a picture we were holding.
+
+`fitPngToBudget` is now the one fit against BOTH ceilings, for the homepage and
+every interior render: bytes over budget scale the image smaller (edge ×
+√(budget/bytes), up to three passes from the original buffer), and only below a
+1,200px floor is refusing honest. Every decode still goes through the single
+gated door. `RENDER BYTE BUDGET CHECK` forces the second pass at boot with a
+real PNG. And the interior renders are now **labelled by their own path**
+instead of the word "page" — five leads logged "booking, page, page, page,
+page", and Vin read a run that HAD rendered every page as "it's clearly not
+taking pics of the other important pages." A label that hides what was bought
+reads exactly like the thing not having been bought.
+
+## 21. Four more from the same five-lead run — FIXED 2026-08-20
+
+- **A successful write reported as a failure.** Every Supabase write sends
+  `return=minimal`, so success is a 201 with an EMPTY body — which parsed to
+  the same null as a failure. The query memory wrote 91 rows successfully and
+  the log printed "BUT THE WRITE FAILED... Supabase gave no reason". No reason
+  because there was no failure: the night's one fixed problem reported as the
+  night's one remaining problem. An empty 2xx body now returns a distinct
+  success value.
+- **The quote in the email was three spliced fragments of her FAQ.** The
+  extractor's sentence boundaries required a space directly after the
+  punctuation — «?”&nbsp;» is not that — and its tail trim used `search()`,
+  which returns the FIRST punctuation in the span, before the phrase, so the
+  after-the-phrase guard refused it and nothing trimmed. Donna's email opened
+  mid-question and closed on a comma. `phraseAround` is module-scope now,
+  boundary-aware of closing quotes, and `QUOTE INTEGRITY CHECK` runs her exact
+  FAQ shape. My first fix broke two other shapes (the window-edge word trim ate
+  the last word of a correctly trimmed sentence; the orphan-quote stripper ate
+  apostrophes) — only running the fixtures found either.
+- **The ladder tiebreak was a narrator.** Jose Barrera: two findings tied at
+  23, the measured constraint LEADS, the winner in CONVERSION — and the ⛔ that
+  said search_absence "should have taken the tie" changed nothing. The
+  binding-layer preference is now a term in `rankCandidateFindings` (ties
+  within the 2-point noise band go to the measured binding layer; a 4-point
+  deficit is still never promoted) and the override block completes the
+  rewrite. The first fixture for this passed with the fix reverted — the
+  winner it chose was already preferred by the leverage tiebreaker — which is
+  the fixture-that-measures-nothing trap, caught by falsification.
+- **A wrong-company site's measurements survived the discard.** Ram Jack
+  Durham resolved to the national franchisor, the discard branch fired, and
+  the audit still opened on "their contact form asks for 10 pieces of
+  information" — measured on ramjackusa.com, a page the same audit said it had
+  discarded. `htmlSignals` is extracted BEFORE the domain check runs, and
+  blanking the page alone left it alive. It is blanked with everything else
+  now, and Places website URLs are stripped of `?utm_campaign=gmb`-style
+  params, which is what dragged that lead to the franchisor domain looking
+  authoritative.
+
+**And research concurrency is 3, up from 2.** "Three at once is what made two
+runs stop mid-way" was true, and the cause was never the queue — it was two
+page-render decodes landing in the same instant. The decode door and the RSS
+admission gate carry that risk now. Five leads took ~15 minutes at 2 slots;
+fifty at that rate is over four hours, and at 3 it is under two. The cap is
+`RESEARCH_CONCURRENCY`, and it matches the batch client's own pool of 3.
+
 ---
 
 # PART 5 — WHAT IS PROVEN
@@ -1083,7 +1188,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 147 boot checks
+PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 151 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -1157,7 +1262,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 147 boot checks and the comments above
+and caused none of this week's failures. The 151 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 

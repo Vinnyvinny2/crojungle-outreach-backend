@@ -436,6 +436,22 @@ const leadToRow = (l) => ({
 // Adding the writes to the merge would have fixed today and drifted again the
 // next time a field was added, because the mapping would still exist twice. So
 // the mapping exists once, here, and both writers call it.
+// ══ A CRITICAL FABRICATION BLOCKS APPROVE, IT DOES NOT DECORATE IT ══════════
+// Donna Krummen, live 2026-08-20: her checklist said confidence 3/10 and listed
+// fact-check CRITICAL findings — wrong city, wrong review count, wrong rank, a
+// homepage promise her page never made — and the green "Approve for send"
+// button sat under it, enabled. A warning next to an enabled button is a
+// decoration; the operator taps through it on lead forty of fifty. CRITICAL
+// claims are the fact-checker saying the copy asserts something we measured to
+// be FALSE, and "I'd rather send nothing than tell them something's wrong when
+// it isn't" is the one rule of this system. Approval now requires re-running
+// Research (which rebuilds the copy from fresh measurements) — the same remedy
+// the wrong-company banner already uses.
+const criticalClaimsOf = (lead) => {
+  const risks = ((lead && lead.brainAudit && lead.brainAudit._claimRisks) || (lead && lead._claimRisks) || []);
+  return risks.filter(x => /\bCRITICAL\b/.test(String(x)));
+};
+
 const measuredFieldsFrom = (audit) => {
   const a = audit || {};
   const p = a._persisted || {};
@@ -8772,6 +8788,10 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
       ? React.createElement('div', {
           style: { flex: 1, padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid var(--r)', borderRadius: 8, fontSize: 12, color: 'var(--r)', textAlign: 'center' }
         }, 'Not confirmed reachable \u2014 ' + (lead.reachability || 0) + '/100')
+      : (!lead.approved && criticalClaimsOf(lead).length)
+      ? React.createElement('div', {
+          style: { flex: 1, padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid var(--r)', borderRadius: 8, fontSize: 12, color: 'var(--r)', textAlign: 'center' }
+        }, 'Cannot approve \u2014 ' + criticalClaimsOf(lead).length + ' CRITICAL claim(s): the copy asserts something we measured to be false. Re-run Research to rebuild it from fresh measurements.')
       : React.createElement('button', {
           className: lead.approved ? 'btn' : 'btn btn-a',
           style: { flex: 1, justifyContent: 'center', fontSize: 13 },
@@ -9317,6 +9337,11 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
       ? React.createElement('div', {
           style: { padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid var(--r)', borderRadius: 8, fontSize: 12, color: '#fca5a5', lineHeight: 1.5 }
         }, 'Not confirmed reachable — reachability ' + (lead.reachability || 0) + '/100 (' + (lead.reachabilityVerdict || 'poor') + '). ' + ((lead.reachabilityReasons || [])[0] || 'Find the owner/founder or verify the email before sending.'))
+      : (!lead.approved && criticalClaimsOf(lead).length)
+      ? React.createElement('div', {
+          style: { padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid var(--r)', borderRadius: 8, fontSize: 12, color: '#fca5a5', lineHeight: 1.5 }
+        }, 'Cannot approve \u2014 the fact-checker found ' + criticalClaimsOf(lead).length + ' CRITICAL claim(s): the copy asserts something we measured to be false. '
+           + String(criticalClaimsOf(lead)[0] || '').slice(0, 180) + ' Re-run Research to rebuild this email from fresh measurements.')
       : !lead.approved
         ? React.createElement('button', {
             className: 'btn btn-a',

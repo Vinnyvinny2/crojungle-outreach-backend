@@ -58,6 +58,38 @@ const imgSerial = (fn) => new Promise((resolve, reject) => { _imgWaiting.push({ 
 // one at a time before any lead exists, and they are testing the scaler itself.
 const scalePng = (buf, edge) => imgSerial(() => (_pngscale ? _pngscale.fitWithin(buf, edge) : { skip: 'pngscale.js not deployed' }));
 
+// ══ THE BYTE CEILING THREW AWAY THE RENDER THE PIXEL CEILING HAD JUST SAVED ══
+// Live, Jose Barrera, 2026-08-20: his homepage rendered at 1920x9544, the scaler
+// brought it under the 7,800px vision ceiling — the log celebrated "the model is
+// reading the whole homepage top to bottom" — and one line later the byte check
+// found 9MB and threw the image away entirely: "Screenshot too large (9MB) —
+// skipping image, auditing from text". Two ceilings, and only one of them knew
+// how to shrink. A photo-heavy page compresses badly, so clearing the pixel
+// limit says nothing about the byte limit.
+//
+// Bytes scale with area, so the edge that hits a byte budget is edge *
+// sqrt(budget/bytes). Aim 10% under, iterate up to three times from the
+// ORIGINAL buffer (re-scaling an already-scaled PNG compounds artifacts), and
+// refuse only below a floor where the image stops being readable at all. Every
+// decode goes through the same serialised door as everything else — this is
+// exactly the allocation the door exists for.
+const PNG_BYTE_BUDGET = 3 * 1024 * 1024;
+const PNG_MIN_EDGE = 1200;
+const fitPngToBudget = async (buf, longEdge, maxEdge, budget = PNG_BYTE_BUDGET, minEdge = PNG_MIN_EDGE) => {
+  let edge = Math.min(Number(longEdge) || maxEdge, maxEdge);
+  let out = null;
+  for (let i = 0; i < 3; i++) {
+    const fit = await scalePng(buf, edge);
+    if (fit.skip) return fit;
+    out = fit;
+    if (fit.buffer.length <= budget) return fit;
+    const next = Math.floor(edge * Math.sqrt((budget * 0.9) / fit.buffer.length));
+    if (next < minEdge) break;
+    edge = next;
+  }
+  return { skip: `still ${Math.round(((out && out.buffer.length) || 0) / 104857.6) / 10}MB above the ${Math.round(budget / 104857.6) / 10}MB budget at the ${minEdge}px floor`, ...(out ? { width: out.width, height: out.height } : {}) };
+};
+
 const app = express();
 
 // ══ ONE PLACE TO READ EVERYTHING THAT HAPPENED ═══════════════════════════════
@@ -5180,7 +5212,14 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       let _newHere = 0;
       for (const p of (d.places || [])) {
         const name = (p.displayName?.text || '').trim();
-        const website = p.websiteUri || '';
+        // Google Business Profiles frequently link the site with tracking
+        // params bolted on — Ram Jack Durham's profile linked
+        // "ramjackusa.com/?utm_campaign=gmb", live. The params identify the
+        // CLICK, not the business, and carrying them forward means the lead
+        // card, the audit URL and the dedupe key all wear a campaign tag.
+        // Query and fragment are dropped; the path is kept, because a
+        // location page like /durham-nc is real routing.
+        const website = String(p.websiteUri || '').replace(/[?#].*$/, '');
         const reviews = p.userRatingCount || 0;
         const rating = p.rating || null;
         if (!name) continue;
@@ -5928,31 +5967,79 @@ const selfSource = () => {
 };
 const releaseSelfSource = () => { _selfSourceCache = null; };
 const AUDIT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const _auditCache = new Map();   // hash -> { at, payload }
+const _auditCache = new Map();   // hash -> { at, company, payload }
 
-const auditCacheKey = (evidenceText, hasScreenshot) =>
-  crypto.createHash('sha256')
-    .update(String(BRAIN_STATIC || ''))
-    .update('\u0000')
-    .update(String(evidenceText || ''))
-    .update(hasScreenshot ? '|shot' : '|noshot')
-    .digest('hex');
+// ══ ONE LEAD WAS SERVED ANOTHER LEAD'S AUDIT, LIVE, ON 2026-08-20 ═══════════
+// Donna Krummen, a Cincinnati plastic surgeon, received an audit asserting "176
+// reviews at 4.8 and #3 of 20 in Indianapolis", a homepage that "promises
+// upfront pricing and no hidden fees", and a Google Ads conversion tag "confirmed
+// on your site". Every one of those is John Peters Roofing, the lead that ran
+// three minutes earlier. Her own fact-checker caught it — "it was written about
+// a different prospect or a different market" — but only after the writer had
+// already spliced his pattern sentence into her outgoing email.
+//
+// The cause was this cache's KEY. It hashed "the evidence text", and the
+// variable feeding it was `msgContent.find(c => c.type === 'text')` — the FIRST
+// text block of the request. The first text block is the image caption, pushed
+// before the images: "IMAGE 1 — THE HOMEPAGE, rendered full page, top to
+// bottom." The real evidence rides in a later block. So every lead that had a
+// homepage render hashed to the SAME KEY, and this cache became a machine for
+// handing each lead the audit of whichever lead wrote first. The BRAIN INPUT
+// meter read the same variable, which is why it reported the evidence as 15
+// tokens on a call the bill priced at 28,000.
+//
+// Three defences now, because a cache that can cross leads is worse than no
+// cache at all:
+//
+//   1. THE KEY COVERS EVERYTHING THE MODEL SEES. Every text block, joined, plus
+//      a fingerprint of every image (its byte length and both ends of its
+//      base64). Two leads cannot collide unless the model would genuinely give
+//      the same answer.
+//   2. THE ENTRY REMEMBERS WHO IT WAS WRITTEN FOR, and a read by any other
+//      company is REFUSED and logged loudly. Even a future key bug cannot cross
+//      two businesses again — this line held in falsification when the key was
+//      deliberately reverted to the broken one.
+//   3. TOO LITTLE TEXT DISQUALIFIES THE CACHE. If the key's text is under 2,000
+//      characters the evidence assembly is broken upstream, and a cache keyed on
+//      almost nothing must not serve — the caller skips it entirely.
+const auditKeyFromContent = (msgContent) => {
+  const parts = Array.isArray(msgContent) ? msgContent : [];
+  const txt = parts.filter(c => c && c.type === 'text').map(c => String(c.text || '')).join('\u0000');
+  const imgs = parts.filter(c => c && c.type === 'image').map(c => {
+    const d = String((c.source && c.source.data) || '');
+    return d.length + ':' + d.slice(0, 64) + ':' + d.slice(-64);
+  }).join('|');
+  return {
+    key: crypto.createHash('sha256')
+      .update(String(BRAIN_STATIC || ''))
+      .update('\u0000')
+      .update(txt)
+      .update('\u0000IMG:')
+      .update(imgs)
+      .digest('hex'),
+    textLen: txt.length,
+  };
+};
 
-const readAuditCache = (key) => {
+const readAuditCache = (key, company) => {
   const hit = _auditCache.get(key);
   if (!hit) return null;
   if (Date.now() - hit.at > AUDIT_CACHE_TTL_MS) { _auditCache.delete(key); return null; }
+  if (hit.company && company && hit.company !== company) {
+    console.log(`\u26d4 AUDIT CACHE REFUSED [${company}]: the entry under this key was written for "${hit.company}". Serving it would hand this lead another business's audit \u2014 which happened live on 2026-08-20 and put John Peters Roofing's numbers into Donna Krummen's email. The key matching across two companies means the key derivation is broken again; a fresh audit is being bought instead.`);
+    return null;
+  }
   return hit.payload;
 };
 
-const writeAuditCache = (key, payload) => {
+const writeAuditCache = (key, payload, company) => {
   if (!key || !payload) return;
   // Bounded so a long-running instance cannot grow without limit.
   if (_auditCache.size > 400) {
     const oldest = [..._auditCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     if (oldest) _auditCache.delete(oldest[0]);
   }
-  _auditCache.set(key, { at: Date.now(), payload });
+  _auditCache.set(key, { at: Date.now(), company: String(company || ''), payload });
 };
 
 // ══ ONE RULE, EVERY PROMPT THAT DESCRIBES THIS BUSINESS ══════════════════════
@@ -8148,7 +8235,18 @@ const looksLikeRealName = (n) => {
 // The gate downstream asks "did their website return nothing" and only ever
 // looked at the homepage. This records what this function actually read so the
 // gate can ask the real question.
-let _lastLeadershipTextLen = 0;
+// Keyed BY COMPANY, not a single slot. Two leads research concurrently, and a
+// single module-level number meant lead A's gate could read lead B's page
+// length — the same disease, one instance smaller, as the audit cache that
+// served Donna Krummen John Peters Roofing's audit. The duplicate-run guard
+// already prevents the same company running twice at once, so the company name
+// is a safe key here.
+const _leadershipTextLen = new Map();
+const _setLeadershipLen = (companyName, n) => {
+  if (_leadershipTextLen.size > 200) _leadershipTextLen.clear();
+  _leadershipTextLen.set(String(companyName || ''), Number(n) || 0);
+};
+const _getLeadershipLen = (companyName) => _leadershipTextLen.get(String(companyName || '')) || 0;
 // Pure so the boot check can execute it. True when both name tokens appear in
 // the corroboration text — which INCLUDES the business name, because a business
 // named after its owner corroborates that owner all by itself and Places gave
@@ -8163,7 +8261,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
   if (!website || !apiKey || !fcKey) return null;
   try {
     const pages = [];
-    _lastLeadershipTextLen = 0;
+    _setLeadershipLen(companyName, 0);
     if (homepageContent && homepageContent.length > 200) {
       pages.push('--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000));
     }
@@ -8267,7 +8365,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     // nothing" and only ever looked at the homepage \u2014 so Hawk Crawlspace, whose
     // about page carries the whole team and whose footer carries info@hawkva.com,
     // was declared dead six seconds after we successfully scraped both pages.
-    _lastLeadershipTextLen = corpus.trim().length;
+    _setLeadershipLen(companyName, corpus.trim().length);
     if (corpus.trim().length < 300) {
       console.log(`DM/brain [${companyName}]: no readable content (homepage empty AND no leadership pages mapped)`);
       return null;
@@ -9377,6 +9475,89 @@ const checkHttpsSupport = async (website) => {
 // The vocabulary is the OWNER'S, not ours: plan, membership, club, agreement,
 // subscription, retainer. Nobody in this ICP writes "recurring revenue model"
 // on their website and nobody would recognise it in an email either.
+// ══ A QUOTE FROM THEIR OWN PAGE MUST READ LIKE A SENTENCE THEY WROTE ════════
+// Extracts a readable span around a phrase found in their copy, trimmed to the
+// sentence the phrase actually lives in. Lifted to module scope so the boot can
+// run it against the live shape that broke it.
+//
+// Live, Donna Krummen, 2026-08-20: her FAQ reads «…do I need to come back?\u201d The
+// answer isn\u2019t the same for everyone. While many patients follow a general
+// schedule…» and the email quoted: "I need to come back?\u201d The answer isn\u2019t the
+// same for everyone. While many patients follow a general schedule," — three
+// sentence fragments, opening mid-question, closing on a comma, with a stray
+// curly quote in the middle. First words of the email, and they read as a
+// mail-merge accident. Two mechanical causes:
+//
+//   1. The boundary regex required whitespace DIRECTLY after the punctuation, so
+//      «?\u201d » (question mark, closing curly quote, space) was not a boundary and
+//      the lead trim never fired.
+//   2. The tail used search(), which returns the FIRST match — the «?» before
+//      the hit — so the guard "boundary must be after the hit" refused it and no
+//      tail trim happened at all, letting the span run across two sentences.
+//
+// Boundaries now allow closing quotes and brackets between the punctuation and
+// the space, the lead cut takes the LAST boundary before the phrase (its own
+// sentence, not the previous one and a half), the tail takes the FIRST boundary
+// after it and keeps the punctuation, and any unpaired quote characters left in
+// the span are removed so a fragment of their quotation marks cannot survive
+// inside ours.
+const phraseAround = (t, hit) => {
+  t = String(t || '');
+  const at = t.toLowerCase().indexOf(String(hit).toLowerCase());
+  if (at < 0) return '';
+  let from = Math.max(0, at - 55), to = Math.min(t.length, at + String(hit).length + 55);
+  let span = t.slice(from, to);
+  const BOUND = /[.!?\u2014\n]["'\u201d\u2019\u00bb)\]]*\s/g;
+  let hitIn = span.toLowerCase().indexOf(String(hit).toLowerCase());
+  // LAST boundary before the phrase, so the span is the phrase's own sentence.
+  let m, lastLead = -1, leadLen = 0;
+  while ((m = BOUND.exec(span)) !== null) {
+    if (m.index >= hitIn) break;
+    lastLead = m.index; leadLen = m[0].length;
+  }
+  const leadCut = lastLead > -1;
+  if (leadCut) span = span.slice(lastLead + leadLen);
+  // FIRST boundary after the phrase, punctuation kept.
+  hitIn = span.toLowerCase().indexOf(String(hit).toLowerCase());
+  const TAILBOUND = /[.!?\n]/g;
+  TAILBOUND.lastIndex = hitIn + String(hit).length;
+  const tm = TAILBOUND.exec(span);
+  const tailCut = !!tm;
+  if (tailCut) span = span.slice(0, tm.index + 1);
+  // Strip a partial word at each end ONLY where the window actually cut one —
+  // and only when that end still IS the window's raw edge. An end already cut
+  // at a sentence boundary starts or ends on a whole word by construction, and
+  // trimming it again ate the last word of a correctly trimmed sentence
+  // ("The answer isn't the same for everyone." lost "everyone.", the one word
+  // the quote existed to show).
+  if (!leadCut && from > 0 && !/\s/.test(t[from - 1] || '')) span = span.replace(/^\S*\s+/, '');
+  if (!tailCut && to < t.length && !/\s/.test(t[to] || '')) span = span.replace(/\s+\S*$/, '');
+  span = span.replace(/\s+/g, ' ').replace(/^[\s,;:.\u2014-]+|[\s,;:\u2014-]+$/g, '').trim();
+  // Their own quotation marks, if the trim orphaned one half of a pair, must
+  // not survive inside OUR quotation marks. Curly SINGLE quotes are left alone:
+  // \u2019 is also the apostrophe, and "isn\u2019t" losing it reads worse than any
+  // orphan quote. Edge-sitting singles are handled by the edge strip above.
+  for (const [open, close] of [['\u201c', '\u201d'], ['"', '"']]) {
+    const o = span.split(open).length - 1, c = span.split(close).length - 1;
+    if (open === close ? (o % 2 === 1) : (o !== c)) {
+      span = span.split(open).join('').split(close).join('').replace(/\s+/g, ' ').trim();
+    }
+  }
+  span = span.replace(/^[\u201d\u2019]+/, '').trim();
+  // ── AND IT MUST NOT END ON A DANGLING WORD ──────────────────────
+  // Trimming to whole words still produced: "No job too big or small for
+  // our" and "quality service to everyone in the Kansas City". Both are
+  // verbatim and both read as though the sentence was cut off mid-thought,
+  // which tells the reader a machine did the cutting. Drop trailing words
+  // that cannot end an English phrase until one that can is reached.
+  const DANGLING = /\s+(a|an|the|our|your|their|his|her|its|my|and|or|but|for|with|to|of|in|on|at|by|from|as|that|this|these|those|is|are|was|were|be|been|we|you|they|it|all|any|every|no|not|so|if|when|who|which)$/i;
+  for (let i = 0; i < 6 && DANGLING.test(span); i++) span = span.replace(DANGLING, '');
+  span = span.trim();
+  // Must still CONTAIN the phrase after trimming, or we would be quoting
+  // text that no longer demonstrates the finding.
+  return span.toLowerCase().includes(String(hit).toLowerCase()) ? span : '';
+};
+
 const RECURRING_OFFER_RE = /\b(membership|memberships|member(?:s)? (?:plan|program|club)|maintenance (?:plan|agreement|program|contract)|service (?:plan|agreement|contract)|care (?:plan|club)|wellness plan|protection plan|annual (?:plan|agreement|contract)|monthly (?:plan|membership|program)|subscription|subscribe and save|retainer|loyalty (?:program|club)|VIP (?:club|program|membership)|priority (?:service|customer) (?:plan|program)|dental savings plan|concierge (?:plan|membership|program))\b/i;
 
 // Trades where a recurring offer is standard practice, so its ABSENCE is a real
@@ -18569,40 +18750,7 @@ const readMarketClarity = (text, { trade, city } = {}) => {
     // actually contains: a literal substring of their own text, never
     // reassembled, so the words in the email are the words on their site and he
     // finds them by searching his own page for them.
-    const _phraseAround = (hit) => {
-      const at = t.toLowerCase().indexOf(String(hit).toLowerCase());
-      if (at < 0) return '';
-      // Widen to a readable span, then trim to whole words at both ends so the
-      // quote never opens or closes mid-word. Sentence punctuation inside the
-      // window ends it early — a quote that runs across two sentences reads as
-      // stitched together, which is exactly the impression to avoid.
-      let from = Math.max(0, at - 55), to = Math.min(t.length, at + String(hit).length + 55);
-      let span = t.slice(from, to);
-      const lead = span.search(/[.!?\u2014\n]\s/);
-      const hitIn = span.toLowerCase().indexOf(String(hit).toLowerCase());
-      if (lead > -1 && lead < hitIn) span = span.slice(lead + 1);
-      const tail = span.search(/[.!?\n]/);
-      if (tail > -1 && tail > span.toLowerCase().indexOf(String(hit).toLowerCase())) span = span.slice(0, tail);
-      // Strip a partial word at each end ONLY where the window actually cut one.
-      // Cutting unconditionally turned "Our practice is your one-stop shop" into
-      // "practice is your one-stop shop", which starts mid-sentence for no reason.
-      if (from > 0 && !/\s/.test(t[from - 1] || '')) span = span.replace(/^\S*\s+/, '');
-      if (to < t.length && !/\s/.test(t[to] || '')) span = span.replace(/\s+\S*$/, '');
-      span = span.replace(/\s+/g, ' ').replace(/^[\s,;:.\u2014-]+|[\s,;:\u2014-]+$/g, '').trim();
-      // ── AND IT MUST NOT END ON A DANGLING WORD ──────────────────────
-      // Trimming to whole words still produced: "No job too big or small for
-      // our" and "quality service to everyone in the Kansas City". Both are
-      // verbatim and both read as though the sentence was cut off mid-thought,
-      // which tells the reader a machine did the cutting. Drop trailing words
-      // that cannot end an English phrase until one that can is reached.
-      const DANGLING = /\s+(a|an|the|our|your|their|his|her|its|my|and|or|but|for|with|to|of|in|on|at|by|from|as|that|this|these|those|is|are|was|were|be|been|we|you|they|it|all|any|every|no|not|so|if|when|who|which)$/i;
-      for (let i = 0; i < 6 && DANGLING.test(span); i++) span = span.replace(DANGLING, '');
-      span = span.trim();
-      // Must still CONTAIN the phrase after trimming, or we would be quoting
-      // text that no longer demonstrates the finding.
-      return span.toLowerCase().includes(String(hit).toLowerCase()) ? span : '';
-    };
-    const _quoted = _uniqGeneric.map(g => _phraseAround(g)).filter(x => x.length >= 20).slice(0, 2);
+    const _quoted = _uniqGeneric.map(g => phraseAround(t, g)).filter(x => x.length >= 20).slice(0, 2);
     if (_quoted.length) {
       gaps.push(`their copy is written for anybody \u2014 ${_quoted.map(q => '"' + q + '"').join(' and ')}`);
     } else {
@@ -18959,6 +19107,36 @@ const SIGNAL_LEVERAGE = ['review_pattern', 'positioning_offer', 'search_absence'
 //
 // So the layer cannot come from the category alone. It has to read the finding.
 const HISTORY_FINDING = /\b\d+\s+(?:public\s+)?reviews?\s+(?:across|over|in)\s+\d+\s*years?\b|\broughly\s+(?:one|two|[\d.]+)\s*(?:a|per)\s*year\b|\babout\s+[\d.]+\s+a\s+year\b/i;
+
+// ══ THE LADDER'S ORDER, AS ONE PURE FUNCTION THE BOOT CAN RUN ═══════════════
+// Total first; within 2 points of the top — the noise band of five subjective
+// 1-5 scores — a candidate in the MEASURED binding layer outranks one that is
+// not, which is the tiebreak the old ⛔ demanded on Jose Barrera ("search_absence
+// should have taken the tie") and never performed. Then Hormozi leverage, then
+// verifiability, then text — arbitrary-and-stable beats arbitrary-and-random.
+// With no measured constraint the binding term is inert.
+const rankCandidateFindings = (cands, growthConstraint) => {
+  const list = Array.isArray(cands) ? cands.slice() : [];
+  const _levOf = (x) => {
+    const i = SIGNAL_LEVERAGE.indexOf(String((x && x.signal) || ''));
+    return i === -1 ? SIGNAL_LEVERAGE.length : i;
+  };
+  const maxTotal = Math.max(0, ...list.map(c => Number(c && c.total) || 0));
+  const inBindingTie = (x) => {
+    try {
+      return !!(growthConstraint && growthConstraint.checked
+        && (Number(x && x.total) || 0) >= maxTotal - 2
+        && layerForFinding(x && x.signal, x && x.finding) === growthConstraint.layer);
+    } catch (e) { return false; }
+  };
+  list.sort((a, b) =>
+       ((inBindingTie(b) ? 1 : 0) - (inBindingTie(a) ? 1 : 0))
+    || ((Number(b && b.total) || 0) - (Number(a && a.total) || 0))
+    || (_levOf(a) - _levOf(b))
+    || ((Number(b && b.verifiable) || 0) - (Number(a && a.verifiable) || 0))
+    || String((a && a.finding) || '').localeCompare(String((b && b.finding) || '')));
+  return { list, inBindingTie };
+};
 
 const layerForFinding = (signal, findingText) => {
   if (signal === 'review_pattern' && HISTORY_FINDING.test(String(findingText || ''))) return 'LEADS';
@@ -20816,7 +20994,19 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
         .slice(0, 7 - picked.length);
       const _fromNav = spare.filter(u => _navRank(u) !== Number.MAX_SAFE_INTEGER).length;
       if (_fromNav) console.log(`SITE AUDIT [${companyName}]: ${_fromNav} of the ${spare.length} backfilled page(s) were chosen because the site links them in its own navigation, not because their URL happened to be short. Nav order is the owner's own statement of what a visitor needs.`);
-      spare.forEach(u => picked.push({ key: 'page', url: u }));
+      // NAMED BY THEIR OWN PATH, not the label "page". Five leads on 2026-08-20
+      // logged "reading 7 page(s) — booking, page, page, page, page, page, page",
+      // the audit view captioned every render the same way, and Vin read the
+      // result as "it's clearly not taking pics of the other important pages" —
+      // on a run where the pages WERE read and rendered. A label that hides what
+      // was bought reads exactly like the thing not having been bought.
+      const _pathKey = (u) => {
+        try {
+          const seg = new URL(u).pathname.replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'page';
+          return seg.slice(0, 40);
+        } catch (e) { return 'page'; }
+      };
+      spare.forEach(u => picked.push({ key: _pathKey(u), url: u }));
       if (spare.length) console.log(`SITE AUDIT [${companyName}]: only ${picked.length - spare.length} page(s) matched our intent words, so ${spare.length} more were taken from the sitemap by shallowest path. Their URLs do not use our vocabulary \u2014 that is our gap, not a thin site.`);
     }
     if (!picked.length) return null;
@@ -21827,12 +22017,13 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   //
   // The question the gate is trying to ask is "can we produce an audit" \u2014 and we
   // can, from any readable page. Ask that instead.
-  const _readableSiteText = Math.max(String(homepageContent || '').trim().length, _lastLeadershipTextLen || 0);
+  const _ownLeadershipLen = _getLeadershipLen(companyName);
+  const _readableSiteText = Math.max(String(homepageContent || '').trim().length, _ownLeadershipLen);
   const _siteIsDead = _readableSiteText < 300;
-  if (_siteIsDead && _lastLeadershipTextLen > 0) {
-    console.log(`DM [${companyName}]: the homepage was empty AND their leadership pages came back with only ${_lastLeadershipTextLen} characters, so there is genuinely nothing to audit.`);
-  } else if (!String(homepageContent || '').trim().length && _lastLeadershipTextLen >= 300) {
-    console.log(`\u267b DM [${companyName}]: the homepage returned nothing, but their own pages gave us ${_lastLeadershipTextLen} characters. Continuing the owner lookup \u2014 the old gate read the homepage alone and stopped here, which is how a business with its whole team on an about page came back with no owner and no mailbox.`);
+  if (_siteIsDead && _ownLeadershipLen > 0) {
+    console.log(`DM [${companyName}]: the homepage was empty AND their leadership pages came back with only ${_ownLeadershipLen} characters, so there is genuinely nothing to audit.`);
+  } else if (!String(homepageContent || '').trim().length && _ownLeadershipLen >= 300) {
+    console.log(`\u267b DM [${companyName}]: the homepage returned nothing, but their own pages gave us ${_ownLeadershipLen} characters. Continuing the owner lookup \u2014 the old gate read the homepage alone and stopped here, which is how a business with its whole team on an about page came back with no owner and no mailbox.`);
   }
   if (_siteIsDead && !settled()) {
     console.log(`DM [${companyName}]: their website returned nothing, so no audit can be produced for this lead. Stopping before the paid owner lookups \u2014 that ladder costs ~15 Firecrawl credits and an owner name is worth nothing without an audit to put in front of him. Everything free was still measured. Fix or replace the website URL and re-run.`);
@@ -24277,6 +24468,16 @@ const sbDiagnose = (table, status, bodyText) => {
   return `HTTP ${status} from ${t}${msg ? ': ' + msg : ''}${hint ? ' (' + hint + ')' : ''}`;
 };
 
+// ══ AN EMPTY BODY IS WHAT SUCCESS LOOKS LIKE ═══════════════════════════════
+// Every write here sends Prefer: return=minimal, so a SUCCESSFUL insert answers
+// 201 with an empty body. This helper returned `t ? JSON.parse(t) : null` — so
+// the empty body of a successful write and the null of a failed one were the
+// same value, and both save functions read null as failure. Live on 2026-08-20:
+// the query memory wrote 91 rows successfully and the run printed "BUT THE
+// WRITE FAILED... Supabase gave no reason" — no reason because there was no
+// failure. The night's one fixed problem was reported as the night's one
+// remaining problem. A 2xx with no body now returns a distinct success value.
+const sbParseBody = (t) => (t ? JSON.parse(t) : { ok: true, emptyBody: true });
 // Minimal Supabase REST helper (server-side)
 const sbRest = async (path, options = {}) => {
   const _tbl = sbTableOf(path);
@@ -24305,7 +24506,7 @@ const sbRest = async (path, options = {}) => {
     // Cleared on success so a fixed problem cannot keep being reported.
     if (_tbl) _sbFailures.delete(_tbl);
     const t = await r.text();
-    return t ? JSON.parse(t) : null;
+    return sbParseBody(t);
   } catch (e) {
     if (_tbl) _sbFailures.set(_tbl, `the request never reached Supabase (${e.message}). That is a network or SUPABASE_URL problem — the ${_tbl} table and its policies were never consulted`);
     console.log('Supabase REST failed:', e.message);
@@ -28090,6 +28291,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         domain = '';
         content = '';
         screenshotUrl = null;
+        // ══ AND THE MEASUREMENTS ALREADY TAKEN FROM THAT PAGE ═══════════════
+        // htmlSignals is extracted from the raw markup BEFORE this check runs —
+        // the log order proves it on every lead — so blanking the page alone
+        // left its form-field count, its tel link and its tag-manager read alive.
+        // Live on Ram Jack Durham: the site resolved to the national franchisor,
+        // this branch fired, and the audit still opened on "their contact form
+        // asks a stranger for 10 pieces of information" — a finding measured on
+        // ramjackusa.com, a page the same audit said it had discarded. The
+        // franchisor's form reaching the Durham owner as HIS problem is exactly
+        // the confident-wrong audit this branch exists to prevent.
+        htmlSignals = { checked: false, discardedWrongCompany: true };
       }
     }
 
@@ -30285,24 +30497,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               console.log(`Homepage render [${company}]: ${buf.length} bytes came back and they are not a readable PNG. Refused rather than sent unmeasured.`);
               return null;
             }
-            if (d.w > _MAX_EDGE || d.h > _MAX_EDGE) {
-              // Through scalePng: this is the one allocation in the process big
-              // enough to put Render over its ceiling, and two leads decoding at
-              // the same instant is what makes a dyno restart-loop.
-              const fit = await scalePng(buf, _MAX_EDGE);
+            // ONE fit against BOTH ceilings. This used to be two independent
+            // checks: the pixel one downscaled, the byte one SKIPPED — so a
+            // photo-heavy homepage cleared 7,800px at 9MB and was thrown away
+            // one line after the log celebrated reading it top to bottom (Jose
+            // Barrera, live). Bytes are a reason to scale smaller, never a
+            // reason to run the audit blind on a render we already paid for.
+            if (d.w > _MAX_EDGE || d.h > _MAX_EDGE || buf.length >= PNG_BYTE_BUDGET) {
+              const fit = await fitPngToBudget(buf, Math.max(d.w, d.h), _MAX_EDGE);
               if (!fit.buffer) {
-                console.log(`Homepage render [${company}]: ${d.w}x${d.h} is past the ${_MAX_EDGE}px vision ceiling and could not be downscaled (${fit.skip}). Sending it would fail the ENTIRE audit request, so it is dropped and the audit runs from text.`);
+                console.log(`Homepage render [${company}]: ${d.w}x${d.h} could not be brought under the vision and byte ceilings (${fit.skip}). Sending it would fail the ENTIRE audit request, so it is dropped and the audit runs from text.`);
                 return null;
               }
-              console.log(`\u{1F5BC} HOMEPAGE FULL PAGE [${company}]: ${fit.from} downscaled to ${fit.width}x${fit.height} to clear the vision ceiling. The model is reading the whole homepage top to bottom — every lead before this one showed it the top thousand pixels and nothing else.`);
+              console.log(`\u{1F5BC} HOMEPAGE FULL PAGE [${company}]: ${d.w}x${d.h} downscaled to ${fit.width}x${fit.height} (${Math.round(fit.buffer.length / 104857.6) / 10}MB) to clear the vision and byte ceilings. The model is reading the whole homepage top to bottom — every lead before this one showed it the top thousand pixels and nothing else.`);
               buf = fit.buffer;
             } else {
               console.log(`\u{1F5BC} HOMEPAGE RENDER [${company}]: ${d.w}x${d.h}, sent whole.`);
-            }
-            // Render's free tier uploads slowly — a 4MB image alone can eat 20s.
-            if (buf.length >= 3 * 1024 * 1024) {
-              console.log(`Screenshot too large (${Math.round(buf.length/1024/1024*10)/10}MB) — skipping image, auditing from text`);
-              return null;
             }
             return buf;
           };
@@ -30438,7 +30648,6 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // base64'd into the audit request labelled image/png.
               if (!_r || !_r.ok) { _skipped.push(`${pg.key} (HTTP ${_r ? _r.status : 'no response'})`); continue; }
               const _b = await _r.buffer();
-              if (_b.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (${Math.round(_b.length / 104857.6) / 10}MB)`); continue; }
               const _d = _png(_b);
               // FAIL CLOSED. `if (_d && oversize)` skipped the ceiling entirely
               // whenever the buffer was not a readable PNG - so the one payload
@@ -30459,12 +30668,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // 8-bit, not RGB/RGBA - rather than guessing, because a mangled
               // image produces confident readings of pixels that mean nothing.
               let _send = _b;
-              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE) {
-                const _fit = await scalePng(_b, MAX_EDGE);
+              if (_d.h > MAX_EDGE || _d.w > MAX_EDGE || _b.length >= PNG_BYTE_BUDGET) {
+                // Same single fit as the homepage: bytes are a reason to scale
+                // smaller, never a reason to drop a render we already paid for.
+                const _fit = await fitPngToBudget(_b, Math.max(_d.w, _d.h), MAX_EDGE);
                 if (_fit.skip) { _skipped.push(`${pg.key} (${_d.w}x${_d.h}px — ${_fit.skip})`); continue; }
-                if (_fit.buffer.length > 3 * 1024 * 1024) { _skipped.push(`${pg.key} (downscaled to ${_fit.width}x${_fit.height} but still ${Math.round(_fit.buffer.length / 104857.6) / 10}MB)`); continue; }
                 _send = _fit.buffer;
-                _rescaled.push(`${pg.key} ${_fit.from} → ${_fit.width}x${_fit.height}`);
+                _rescaled.push(`${pg.key} ${_d.w}x${_d.h} → ${_fit.width}x${_fit.height}`);
               }
               msgContent.push({ type: 'text', text: `IMAGE ${_sent + (_haveHome ? 2 : 1)} \u2014 an INTERIOR page: ${pg.key}${pg.url ? ` (${pg.url})` : ''}. This is NOT the homepage. Nothing visible here may be described as the homepage.` });
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _send.toString('base64') } });
@@ -31287,7 +31497,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         // was attached). Same instructions and same evidence cannot produce a
         // different audit worth $0.08, and re-running an unchanged lead is the
         // single largest avoidable line on the Anthropic bill.
-        const _evidenceText = (msgContent.find(c => c && c.type === 'text') || {}).text || '';
+        // ALL text blocks, not the first one. The first text block is the image
+        // caption; reading it here is what keyed every homepage-rendered lead to
+        // one cache slot and served Donna Krummen John Peters Roofing's audit.
+        // See the note above auditKeyFromContent.
+        const _evidenceText = msgContent.filter(c => c && c.type === 'text').map(c => String(c.text || '')).join('\n');
         const _hasShot = msgContent.some(c => c && c.type === 'image');
         // ══ WHAT THE BILL IS ACTUALLY MADE OF ══════════════════════════════
         // BRAIN COST reports `fresh`, `cacheRead` and `cacheWrite` and nothing
@@ -31333,8 +31547,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // reads exactly like a run that did not reach the brain at all.
           console.log(`\u26d4 BRAIN INPUT BREAKDOWN COULD NOT RUN [${company}] — ${(e && e.message) || e}. The cost split is unmeasured for this lead.`);
         }
-        const _auditKey = auditCacheKey(_evidenceText, _hasShot);
-        const _cachedAudit = readAuditCache(_auditKey);
+        const _auditKeyInfo = auditKeyFromContent(msgContent);
+        const _auditKey = _auditKeyInfo.key;
+        // Under 2,000 characters of text means the evidence assembly upstream is
+        // broken \u2014 the real evidence block alone is tens of thousands \u2014 and a
+        // cache keyed on almost nothing serves the wrong lead's audit. Skip it.
+        const _cachedAudit = _auditKeyInfo.textLen >= 2000 ? readAuditCache(_auditKey, company) : null;
         if (_cachedAudit) {
           console.log(`\u267b BRAIN CACHE HIT [${company}]: identical evidence AND identical prompt as a run within the last 24h \u2014 reusing that audit and skipping the Sonnet call. Saved ~$0.08. Any change to the evidence or to the instructions produces a fresh audit automatically, so this can never serve a stale answer after a prompt edit.`);
         }
@@ -31362,7 +31580,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
 
         const vd = _cachedAudit ? _cachedAudit : await safeJson(visionRes);
-        if (!_cachedAudit && vd && !vd.error) writeAuditCache(_auditKey, vd);
+        if (!_cachedAudit && vd && !vd.error) writeAuditCache(_auditKey, vd, company);
         if (vd.usage && !_cachedAudit) {
           const u = vd.usage;
           const fresh = u.input_tokens || 0;
@@ -32745,43 +32963,21 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
           // already written on the losing finding; relabelling it would only make the
           // label lie about the copy. The honest action is to raise it as a claim risk
           // so it reaches the review checklist, and to stop LADDER CHECK certifying it.
+          // ══ THE TIEBREAK IS ENFORCED IN THE SORT NOW, NOT NARRATED HERE ═══
+          // This used to be a detector: it re-sorted the candidates by raw total,
+          // found the binding-layer finding that "should have taken the tie",
+          // printed a ⛔ and pushed a claim risk — and changed nothing. Jose
+          // Barrera, live 2026-08-20: top two candidates 0 points apart, the
+          // winner in CONVERSION while the measured constraint was LEADS, its own
+          // log saying search_absence "should have taken the tie" — and the audit
+          // led on the conversion finding anyway. Four fixes in this file carry
+          // the same lesson under the name "a guard that reports and does not
+          // act". The binding-layer preference is now a term in the ladder sort
+          // itself (see the comparator below), so a tied binding-layer candidate
+          // WINS rather than being mourned, and the override block completes the
+          // rewrite. This flag survives for the one legitimate remaining case:
+          // the model traded away the binding layer and gave a real reason.
           let _tiebreakOverruled = false;
-          try {
-            const _cf = Array.isArray(parsed.candidateFindings) ? parsed.candidateFindings.slice() : [];
-            if (_cf.length >= 2 && growthConstraint.checked) {
-              _cf.sort((a, b) => (Number(b && b.total) || 0) - (Number(a && a.total) || 0));
-              const _gap = (Number(_cf[0].total) || 0) - (Number(_cf[1].total) || 0);
-              if (_gap <= 2) {
-                // ══ ONLY A CANDIDATE INSIDE THE TIE CAN WIN THE TIE ══════════
-                // This filtered the WHOLE sorted list, then took the first
-                // binding-layer finding anywhere in it. On Hannah Custom Homes
-                // the top two were 19 and 18 — a genuine tie — and this nominated
-                // conversion_leak at 15, in FOURTH place, four points below the
-                // pair it was resolving.
-                //
-                // That is not a tiebreak, it is an override, and it fired a ⛔ and
-                // pushed a claim risk onto the review checklist for a finding the
-                // scoring never put in contention. The whole justification is
-                // "this difference is inside scoring noise" — a four-point deficit
-                // is outside it, which is exactly what the scores are saying.
-                //
-                // The tie is the top score and anything within the same noise
-                // threshold of it. Nothing below that is eligible.
-                const _tieFloor = (Number(_cf[0].total) || 0) - 2;
-                const _tied = _cf.filter(c => (Number(c && c.total) || 0) >= _tieFloor);
-                const _inLayer = _tied.filter(c => c && layerForFinding(c.signal, c.finding) === growthConstraint.layer);
-                const _winnerLayer = _cf[0] ? layerForFinding(_cf[0].signal, _cf[0].finding) : undefined;
-                if (_inLayer.length && _winnerLayer !== growthConstraint.layer) {
-                  const _should = _inLayer[0];
-                  _tiebreakOverruled = true;
-                  _claimRisks.push(`LADDER: the email leads on the ${_winnerLayer} layer, which won by ${_gap} point(s) - inside scoring noise - while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) sits in the binding layer and should have taken the tie.`);
-                  console.log(`\u26d4 LADDER TIEBREAK [${company}]: top two are ${_gap} point(s) apart \u2014 inside scoring noise \u2014 and the winner sits in the ${_winnerLayer} layer while the MEASURED binding constraint is ${growthConstraint.layer}. "${String(_should.finding).slice(0, 60)}" (${_should.signal}, ${_should.total}) is in the binding layer and should have taken the tie. A difference this small in five subjective scores is not a reason to lead on a layer that is not the constraint.`);
-                } else if (_winnerLayer === growthConstraint.layer) {
-                  console.log(`\u2713 LADDER TIEBREAK [${company}]: top two within ${_gap} point(s), and the winner is in the measured binding layer (${growthConstraint.layer}). Correct tie resolution.`);
-                }
-              }
-            }
-          } catch (e) { void e; }
 
           if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
             // ── DO NOT SLICE THIS LIST ────────────────────────────────────────
@@ -32806,17 +33002,17 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // categorically different from arbitrary-and-random. It means the same
             // lead always produces the same email, which is the precondition for
             // ever learning whether the choice was right.
-            const _lev = (x) => {
-              const i = SIGNAL_LEVERAGE.indexOf(String((x && x.signal) || ''));
-              return i === -1 ? SIGNAL_LEVERAGE.length : i;
-            };
-            const _sortedC = parsed.candidateFindings
-              .slice()
-              .sort((a, b) =>
-                   ((Number(b && b.total) || 0) - (Number(a && a.total) || 0))
-                || (_lev(a) - _lev(b))
-                || ((Number(b && b.verifiable) || 0) - (Number(a && a.verifiable) || 0))
-                || String((a && a.finding) || '').localeCompare(String((b && b.finding) || '')));
+            // (The leverage tiebreaker now lives inside rankCandidateFindings,
+            // where the boot can execute it.)
+            // ══ A TIE GOES TO THE MEASURED BINDING LAYER, BY CONSTRUCTION ══
+            // rankCandidateFindings is the one ordering, at module scope so the
+            // boot can run Jose Barrera's exact shape through it. Within 2 points
+            // of the top a binding-layer candidate wins; outside that band the
+            // scores stand — a 4-point promotion is the Hannah Custom Homes
+            // failure this apparatus already recorded.
+            const _ranking = rankCandidateFindings(parsed.candidateFindings, growthConstraint);
+            const _sortedC = _ranking.list;
+            const _inBindingTie = _ranking.inBindingTie;
             const _ranked = _sortedC
               .map(c => `${c && c.signal ? c.signal : '?'}=${Number(c && c.total) || 0}${c && c._injected ? '*' : ''} (${String((c && c.finding) || '').slice(0, 50)})`)
               .join(' | ');
@@ -32987,7 +33183,23 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The AUDIT and the CALL SHEET are rebuilt on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". This line used to end "the email will be built on" that finding, and it was false on every lead: composeFullEmail ran hundreds of lines earlier, off the harm ladder, and never reads leadSignal. A log that overstates its own reach costs exactly what one that understates it does \u2014 it was read as evidence the two rankings had been reconciled, and they never were.`);
                 parsed.leadSignal = _wSig;
                 parsed.ladderWinner.overrode = _declaredNow;
+              } else if (_wSig && _declaredNow && _wSig !== _declaredNow && !_gaveReason && _inBindingTie(_ladderWinner)) {
+                // The winner is here BECAUSE of the binding-layer tie term — a
+                // measured reason, not noise — so the margin-3 respect for the
+                // model's judgement does not apply. This is the rewrite the old
+                // ⛔ demanded on Jose Barrera and never performed.
+                console.log(`\u2696 LADDER TIEBREAK ENFORCED [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but the scores tie inside noise and ${_wSig} (${_ladderWinner.total}) sits in the MEASURED binding layer (${growthConstraint.layer}). The AUDIT and the CALL SHEET are rebuilt on it: "${String(_ladderWinner.finding).slice(0, 70)}". This used to be a ⛔ that said "should have taken the tie" and changed nothing — a guard that reports and does not act, which is the failure this file records four times.`);
+                parsed.leadSignal = _wSig;
+                parsed.ladderWinner.overrode = _declaredNow;
+                parsed.ladderWinner.byBindingTie = true;
               } else if (_wSig && _declaredNow && _wSig !== _declaredNow && _gaveReason) {
+                if (_inBindingTie(_ladderWinner)) {
+                  // The one case the old flag was for: the binding layer lost the
+                  // tie to a stated (and score-checked) reason. Surface it where
+                  // the operator reviews, but the reason earned the trade.
+                  _tiebreakOverruled = true;
+                  _claimRisks.push(`LADDER: the audit leads on ${_declaredNow} while "${String(_ladderWinner.finding).slice(0, 60)}" (${_wSig}, ${_ladderWinner.total}) is tied within noise AND sits in the measured binding layer (${growthConstraint.layer}). The stated reason was accepted: "${String(parsed.leadSignalReason).slice(0, 90)}".`);
+                }
                 console.log(`\u00b7 LADDER [${company}]: led on ${_declaredNow} over the top-scored ${_wSig}, and gave a reason \u2014 "${String(parsed.leadSignalReason).slice(0, 90)}". Allowed.`);
               }
             }
@@ -34561,7 +34773,22 @@ const _jobs = new Map();          // id -> { status, startedAt, finishedAt, comp
 // and report nothing. When the plan is upgraded for 40-lead batches, raise this
 // with the env var rather than editing code: the queue design already holds at
 // any value, because a queued lead's clock only starts when its work does.
-const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '2', 10) || 2);
+// ══ 2 → 3, AND WHY THAT IS SAFE NOW WHEN IT WAS NOT BEFORE ═════════════════
+// "Three at once is what made two runs stop mid-way and report nothing" — that
+// was true, and the cause was never the queue: a page-render DECODE is the one
+// allocation big enough to cross Render's ceiling, and two landing in the same
+// instant restarted the dyno. Both hazards are gated now — decodes are
+// serialised through one door (IMG_CONCURRENCY) and a lead is only admitted
+// while resident memory is measured under RESEARCH_RSS_CEILING_MB — so the
+// third slot no longer buys a restart. Everything else a lead does is waiting
+// on other people's servers.
+//
+// Three, not more, because the memory gate holding leads at the door is not
+// throughput, it is queueing with extra steps — and because it matches the
+// batch client's own pool of 3, so batch submissions map one-to-one onto slots.
+// Measured on the 2026-08-20 run: five leads took ~15 minutes at 2 slots; fifty
+// at that rate is over four hours, and at 3 it is under two.
+const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '3', 10) || 3);
 // The measured half of the same question. Render's container limit is near
 // 256MB; boot settles around 145MB and one page render can add tens of MB on top
 // of that. 205 leaves room for a decode to finish without the next lead being
@@ -34718,7 +34945,7 @@ app.post('/api/research-async', (req, res) => {
   // .finally, the one place that fires however the work ends.
   const _runningNow = [..._jobs.values()].filter(j => j.phase === 'running' && j.workDone !== true && j.id !== id).length;
   if (_runningNow >= RESEARCH_CONCURRENCY) {
-    console.log(`JOB ${id} [${job.company}]: QUEUED \u2014 ${_runningNow} already running. Three at once is what made two runs stop mid-way and report nothing. This starts when a slot frees.`);
+    console.log(`JOB ${id} [${job.company}]: QUEUED \u2014 ${_runningNow} already running against a limit of ${RESEARCH_CONCURRENCY}. The limit exists because a page-render decode is the one allocation that can cross Render's memory ceiling; the decode door and the RSS gate carry that risk now, and the slot count is throughput. This starts when a slot frees.`);
   }
   console.log(`JOB ${id} [${job.company}]: accepted — running in background, client will poll`);
 
@@ -38673,12 +38900,13 @@ app.listen(PORT, () => {
     if (!_img) _fails.push('the homepage image block could not be located');
     else {
       if (!/_pngDims\(/.test(_img)) _fails.push('the homepage image is sent without reading its dimensions — it is the full page now, and one tall PNG fails the entire vision request, not just the picture');
-      // Was `_pngscale ? _pngscale.fitWithin(`. Page-render decoding now goes
-      // through one gated door so two leads cannot decode at the same instant
-      // and take the dyno over Render's memory limit, and the old spelling
-      // stopped existing. The rule this asserts is unchanged: an over-tall
-      // homepage must be downscaled rather than dropped.
-      if (_img.indexOf('scalePng(buf, ' + '_MAX_EDGE)') < 0) _fails.push('an over-tall homepage is not downscaled, so the whole audit dies on the pages that matter most');
+      // Was `scalePng(buf, _MAX_EDGE)`. The pixel and byte ceilings are one
+      // fit now — fitPngToBudget scales the render smaller instead of the byte
+      // check deleting it, which is what blinded Jose Barrera's audit at 9MB —
+      // and fitPngToBudget itself decodes only through the gated scalePng door.
+      // The rule this asserts is unchanged: an over-tall or over-heavy homepage
+      // must be downscaled rather than dropped.
+      if (_img.indexOf('fitPngToBudget(buf, ' + 'Math.max(d.w, d.h), _MAX_EDGE)') < 0) _fails.push('an over-tall homepage is not downscaled, so the whole audit dies on the pages that matter most');
       if (!/_MAX_EDGE/.test(_img)) _fails.push('the homepage image does not use the shared vision ceiling');
     }
     // 3. ONE CEILING, ONE READER. Two copies is how one of them stops matching.
@@ -39661,6 +39889,19 @@ app.listen(PORT, () => {
       if (sbWhy(_probe) !== '') _fails.push('a cleared failure still reports a reason, so a problem that has been fixed keeps being blamed');
     }
 
+    // ── A SUCCESSFUL WRITE MUST NOT REPORT AS A FAILED ONE ─────────────────
+    // Every write sends Prefer: return=minimal, so success is a 201 with an
+    // EMPTY body. The old body reader returned null for that — the same value
+    // as a failure — and on 2026-08-20 the query memory wrote 91 rows
+    // successfully while the log printed "BUT THE WRITE FAILED... Supabase gave
+    // no reason". The night's one fixed problem was reported as still broken.
+    {
+      const _empty = sbParseBody('');
+      if (!_empty || _empty.ok !== true) _fails.push('a 2xx with an empty body parses to a falsy value again, so every successful return=minimal write reports as "THE WRITE FAILED" with no reason — which is exactly the lie printed on 2026-08-20 about a write that had succeeded');
+      const _rows = sbParseBody('[{"q":"x"}]');
+      if (!Array.isArray(_rows) || _rows[0].q !== 'x') _fails.push('a JSON body no longer parses through sbParseBody, so every read comes back empty and the memory and the bench silently stop existing');
+    }
+
     // The two callers must actually print it. Needles are assembled so this
     // cannot match its own source text — the trap this file has hit twice.
     {
@@ -39693,10 +39934,78 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SUPABASE FAILURE CAUSE CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ SUPABASE FAILURE CAUSE CHECK: the ${CASES.length} ways a Supabase write fails now produce ${_said.size} different sentences, each naming the actual fix. The live run of 2026-08-20 said "check that the places_query_state table exists" while the table existed and row-level security was doing the refusing, so the one instruction printed pointed at the only healthy part of the system. A permission refusal now says the table EXISTS and asks for a policy, a missing table now says so and quotes the CREATE TABLE, and the reason is read from Supabase's own response code rather than assumed. It is cleared the moment that table answers, so a problem already fixed cannot go on being blamed.`);
+      console.log(`✓ SUPABASE FAILURE CAUSE CHECK: the ${CASES.length} ways a Supabase write fails now produce ${_said.size} different sentences, each naming the actual fix. The live run of 2026-08-20 said "check that the places_query_state table exists" while the table existed and row-level security was doing the refusing, so the one instruction printed pointed at the only healthy part of the system. A permission refusal now says the table EXISTS and asks for a policy, a missing table now says so and quotes the CREATE TABLE, and the reason is read from Supabase's own response code rather than assumed. It is cleared the moment that table answers, so a problem already fixed cannot go on being blamed. And a successful write with an empty body — which is what return=minimal success looks like — no longer reports as "THE WRITE FAILED": the query memory wrote 91 rows successfully on 2026-08-20 and the log called it a failure with no reason.`);
     }
   } catch (e) {
     console.log(`⛔ SUPABASE FAILURE CAUSE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ ONE LEAD MUST NEVER BE SERVED ANOTHER LEAD'S AUDIT ════════════════════
+  // Live, 2026-08-20: Donna Krummen's audit asserted John Peters Roofing's
+  // review count, his rank, his city, his homepage promise and his ads tag, and
+  // his pattern sentence was spliced verbatim into her outgoing email. The audit
+  // cache's key hashed "the evidence text" and the variable feeding it held the
+  // first text block of the request — the constant image caption — so every
+  // homepage-rendered lead shared ONE cache slot and whoever wrote first became
+  // everyone else's audit. The BRAIN INPUT meter read the same variable, which
+  // is why it priced a 28,000-token call as "15 tokens of evidence".
+  //
+  // This check RUNS the key and the cache, because a source regex would have
+  // passed on the broken build — the code looked exactly like code that hashes
+  // the evidence.
+  try {
+    const _fails = [];
+    const _img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo'.repeat(40) } };
+    const _label = { type: 'text', text: 'IMAGE 1 \u2014 THE HOMEPAGE, rendered full page, top to bottom.' };
+    const _evA = { type: 'text', text: 'You are the auditor. COMPANY: Alpha Plumbing. ' + 'Their booking page asks nine questions. '.repeat(80) };
+    const _evB = { type: 'text', text: 'You are the auditor. COMPANY: Bravo Roofing. ' + 'Their homepage promises upfront pricing. '.repeat(80) };
+    const _a1 = auditKeyFromContent([_label, _img, _evA]);
+    const _a2 = auditKeyFromContent([_label, _img, _evA]);
+    const _b = auditKeyFromContent([_label, _img, _evB]);
+    if (_a1.key !== _a2.key) _fails.push('the same request no longer produces the same key, so the cache can never hit and every audit is paid for twice');
+    if (_a1.key === _b.key) _fails.push('two different leads with the same image caption produce the SAME cache key — this is the exact defect that served Donna Krummen John Peters Roofing\u2019s audit, back again');
+    if (_a1.textLen < _evA.text.length) _fails.push(`the key measured ${_a1.textLen} characters of text against an evidence block of ${_evA.text.length} — it is reading the caption instead of the evidence again, which is the meter that priced a 28,000-token call as 15 tokens`);
+    // Different images, same text, must also differ — a re-run whose renders
+    // changed is a different question to the model.
+    const _img2 = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo'.repeat(41) } };
+    if (auditKeyFromContent([_label, _img2, _evA]).key === _a1.key) _fails.push('two requests with different images produce the same key, so a re-run with fresh renders replays the stale audit');
+
+    // The second wall: even with a colliding key, a hit written for another
+    // company must be refused. Exercised with a deliberate collision.
+    const _probeKey = '__boot_audit_probe__';
+    writeAuditCache(_probeKey, { marker: 'alpha-audit' }, 'Alpha Plumbing');
+    // The wall logs its refusal loudly, which is right in production and noise
+    // here — this probe EXPECTS the refusal. Muted for exactly one call.
+    const _origLog = console.log;
+    let _cross;
+    try { console.log = () => {}; _cross = readAuditCache(_probeKey, 'Bravo Roofing'); }
+    finally { console.log = _origLog; }
+    const _self = readAuditCache(_probeKey, 'Alpha Plumbing');
+    _auditCache.delete(_probeKey);
+    if (_cross !== null) _fails.push('an audit written for Alpha Plumbing was served to Bravo Roofing — the company wall on the cache is gone, and a future key bug crosses two businesses again');
+    if (!_self || _self.marker !== 'alpha-audit') _fails.push('the company wall now refuses the OWN company too, so the cache never hits and every audit is paid for twice');
+
+    // And the call site must actually enforce the text floor and pass the
+    // company — needles assembled so they cannot match their own source.
+    {
+      const _src = selfSource();
+      if (_src.indexOf('_auditKeyInfo.textLen >= ' + '2000') < 0) _fails.push('the call site no longer skips the cache when the keyed text is suspiciously small, so a broken evidence assembly upstream turns the cache back into a cross-lead machine');
+      if (_src.indexOf('readAuditCache(_auditKey, ' + 'company)') < 0) _fails.push('the call site no longer tells the cache which company is asking, so the company wall cannot fire');
+      // The other route to the same disease: a WRONG-COMPANY site's measurements
+      // surviving the discard. Blanking the page alone left htmlSignals alive,
+      // and Ram Jack Durham's audit opened on the national franchisor's 10-field
+      // form — measured on a page the same audit said it had discarded.
+      if (_src.indexOf('htmlSignals = { checked: false, ' + 'discardedWrongCompany: true }') < 0) {
+        _fails.push('the wrong-company branch no longer blanks htmlSignals, so a discarded site\u2019s form-field count still reaches the ladder as the prospect\u2019s own problem — Ram Jack Durham got the franchisor\u2019s form as his lead finding this way');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ AUDIT CACHE ISOLATION CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ AUDIT CACHE ISOLATION CHECK: two different leads can no longer share an audit-cache key — the key covers every text block and an image fingerprint, not the first block, which was the constant image caption. Live on 2026-08-20 that constant key served Donna Krummen the audit written for John Peters Roofing, complete with his review count, his city and his pattern sentence in her outgoing email. A hit written for another company is refused by name even if a future key bug collides again, and a keyed text under 2,000 characters disqualifies the cache entirely because it means the evidence assembly upstream is broken.`);
+    }
+  } catch (e) {
+    console.log(`⛔ AUDIT CACHE ISOLATION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE RATING BAND IS A SORT KEY, AND THAT HAS TO BE SAFE ════════════════
   // 1,810 of 2,892 businesses we had already paid for were deleted here on the
@@ -40365,7 +40674,7 @@ app.listen(PORT, () => {
         _fails.push('the single decode door no longer goes through the concurrency gate, so nothing bounds page renders at all');
       }
       for (const [_what, _from, _to] of [
-        ['the homepage render', _n('const scrapeHome', 'page = async () => {'), _n('const _fit = await ', 'scalePng(_b, MAX_EDGE)')],
+        ['the homepage render', _n('const scrapeHome', 'page = async () => {'), _n('const _fit = await ', 'fitPngToBudget(_b, Math.max(_d.w, _d.h), MAX_EDGE)')],
       ]) {
         const _a = _src.indexOf(_from), _b2 = _src.indexOf(_to);
         if (_a < 0 || _b2 < 0 || _b2 <= _a) { _fails.push(`${_what} region could not be read, so the decode bound was not checked there`); continue; }
@@ -40374,11 +40683,16 @@ app.listen(PORT, () => {
           _fails.push(`${_what} path decodes an image without going through the single gated door — under a batch two of those can land in the same instant and take the dyno over its limit`);
         }
       }
-      if (_src.indexOf(_n('const fit = await ', 'scalePng(buf, _MAX_EDGE)')) < 0) {
+      // Both render paths fit through fitPngToBudget, whose only decoder is the
+      // gated scalePng — asserted here so the door cannot be bypassed by either.
+      if (_src.indexOf(_n('const fit = await ', 'fitPngToBudget(buf, Math.max(d.w, d.h), _MAX_EDGE)')) < 0) {
         _fails.push('the homepage render no longer goes through the gated door');
       }
-      if (_src.indexOf(_n('const _fit = await ', 'scalePng(_b, MAX_EDGE)')) < 0) {
+      if (_src.indexOf(_n('const _fit = await ', 'fitPngToBudget(_b, Math.max(_d.w, _d.h), MAX_EDGE)')) < 0) {
         _fails.push('the interior page renders no longer go through the gated door');
+      }
+      if (_src.indexOf(_n('const fit = await ', 'scalePng(buf, edge);')) < 0) {
+        _fails.push('fitPngToBudget no longer decodes through the gated scalePng door, so the byte budget itself became the unbounded decode');
       }
       if (_src.indexOf(_n('const IMG_CONCURRENCY = Math.max(1, ', "parseInt(process.env.IMG_CONCURRENCY")) < 0) {
         _fails.push('the image gate is no longer configurable, so a bigger plan cannot raise it without a code change');
@@ -41602,6 +41916,157 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 SCREENSHOT SCALER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
+  // ══ A TIE IN THE LADDER GOES TO THE MEASURED BINDING LAYER ════════════════
+  // Jose Barrera, live 2026-08-20: search_absence and conversion_leak tied at 23,
+  // the measured binding constraint was LEADS, and the audit led on the
+  // conversion finding while its own ⛔ said search_absence "should have taken
+  // the tie". The tiebreak was a narrator. It is a term in the sort now, and this
+  // runs his exact shape through the real function.
+  try {
+    const _fails = [];
+    // The binding candidate is deliberately the one that LOSES every other
+    // tiebreaker — lower leverage, lower verifiability, later alphabetically —
+    // so only the binding term itself can put it first. The first version of
+    // this fixture used a winner that leverage already preferred, and deleting
+    // the term left the check green: a fixture that passes without the code it
+    // guards is measuring nothing.
+    const _jose = [
+      { signal: 'search_absence', finding: 'ranked #3 locally but one of the two ahead has fewer reviews', total: 23, verifiable: 5 },
+      { signal: 'conversion_leak', finding: 'their 9-field form has no phone option', total: 23, verifiable: 3 },
+      { signal: 'positioning_offer', finding: 'no named offer — the site sells trust', total: 18, verifiable: 3 },
+    ];
+    const _bindLayer = layerForFinding('conversion_leak', _jose[1].finding);
+    const _searchLayer = layerForFinding('search_absence', _jose[0].finding);
+    if (_bindLayer === _searchLayer) _fails.push('the two fixture signals map to the same layer, so this fixture cannot tell the binding term from its absence');
+    const _r1 = rankCandidateFindings(_jose, { checked: true, layer: _bindLayer });
+    if (!_r1.list.length || _r1.list[0].signal !== 'conversion_leak') {
+      _fails.push(`a candidate tied at the top and sitting in the measured binding layer resolves to ${_r1.list[0] && _r1.list[0].signal} instead — the binding-layer term is out of the sort and the tiebreak is back to being a ⛔ that changes nothing (Jose Barrera's audit led on the wrong layer exactly this way)`);
+    }
+    // Outside the noise band the scores must stand — promoting a 4-point
+    // deficit is the Hannah Custom Homes failure, already recorded here once.
+    const _hannah = [
+      { signal: 'positioning_offer', finding: 'no named offer anywhere', total: 19, verifiable: 3 },
+      { signal: 'search_absence', finding: 'ranked below two weaker businesses', total: 15, verifiable: 4 },
+    ];
+    const _r2 = rankCandidateFindings(_hannah, { checked: true, layer: _searchLayer });
+    if (_r2.list[0].signal !== 'positioning_offer') {
+      _fails.push('a candidate 4 points below the top was promoted into first — that is an override wearing a tiebreak\u2019s name, the Hannah Custom Homes failure back again');
+    }
+    // No measured constraint: the term must be inert.
+    const _r3 = rankCandidateFindings(_jose, { checked: false });
+    if (_r3.list[0].total !== 23 || _r3.inBindingTie(_jose[0])) {
+      _fails.push('with no measured constraint the binding term still fires, so an unmeasured lead gets its ladder reordered on nothing');
+    }
+    // And the override block must be able to act on it — needle assembled.
+    {
+      const _src = selfSource();
+      if (_src.indexOf('LADDER TIEBREAK ' + 'ENFORCED') < 0) {
+        _fails.push('the enforcement branch is gone from the override block, so a tie won on the binding layer never rewrites the audit\u2019s lead finding and the call sheet keeps the coin flip');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ LADDER TIEBREAK CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ LADDER TIEBREAK CHECK: a tie inside the 2-point noise band now goes to the finding in the MEASURED binding layer, by construction in the sort — run here on Jose Barrera's live shape, where search_absence and conversion_leak tied at 23, the constraint was LEADS, and the audit led on the conversion finding while its own ⛔ said the other "should have taken the tie". A guard that reports and does not act is the failure this file records four times. A 4-point deficit is still never promoted, and with no measured constraint the term is inert.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LADDER TIEBREAK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A QUOTE FROM THEIR PAGE MUST BE THE SENTENCE THEY WROTE ═══════════════
+  // Donna Krummen's outgoing email opened on a quote spliced from three sentence
+  // fragments of her FAQ — starting mid-question, ending on a comma, carrying an
+  // orphaned curly quote — because the extractor's sentence boundaries required
+  // a space DIRECTLY after the punctuation («?\u201d » is not that) and its tail trim
+  // used search(), which returns the FIRST punctuation in the span, sitting
+  // before the phrase, so the after-the-phrase guard refused it and nothing was
+  // trimmed at all. The first words of the email read as a mail-merge accident.
+  //
+  // The live text shape, run through the live function.
+  try {
+    const _fails = [];
+    const _donna = 'Patients often ask: do I need to come back?\u201d The answer isn\u2019t the same for everyone. While many patients follow a general schedule, some heal faster and others need more time to recover fully.';
+    const _q = phraseAround(_donna, 'everyone');
+    if (_q !== 'The answer isn\u2019t the same for everyone.') {
+      _fails.push(`the FAQ shape that broke Donna Krummen's email extracts to ${JSON.stringify(_q)} instead of her own single sentence — a boundary hidden behind a closing curly quote is being missed again, or the trims are eating the sentence`);
+    }
+    const _kc = 'We proudly deliver quality service to everyone in the Kansas City metro. No job too big or small for our team.';
+    if (phraseAround(_kc, 'everyone') !== 'We proudly deliver quality service to everyone in the Kansas City metro.') {
+      _fails.push('a phrase mid-first-sentence no longer extracts to that whole sentence');
+    }
+    if (phraseAround(_kc, 'no job too big') !== 'No job too big or small for our team.') {
+      _fails.push('a phrase in the second sentence drags the first sentence in with it, or loses its own opening word');
+    }
+    if (phraseAround('Our practice is your one-stop shop for family dentistry.', 'your one-stop') !== 'Our practice is your one-stop shop for family dentistry.') {
+      _fails.push('a clean single sentence comes back altered — the trims are firing where nothing was cut');
+    }
+    for (const q of [_q, phraseAround(_kc, 'everyone')]) {
+      if (/[\u201c\u201d]/.test(q)) _fails.push(`an orphaned curly double-quote survived inside the extracted span ${JSON.stringify(q)} — their quotation mark ends up nested inside ours in the email`);
+      if (/,$/.test(q)) _fails.push(`an extracted span ends on a comma (${JSON.stringify(q)}) — the cut-off-mid-thought shape that tells the reader a machine did the cutting`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ QUOTE INTEGRITY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ QUOTE INTEGRITY CHECK: a quote lifted from their own copy is now the sentence the phrase lives in — whole, apostrophes intact, no orphaned quotation marks, never ending on a comma. Donna Krummen's email opened on three spliced fragments of her FAQ because «?\u201d » was not recognised as a sentence end and the tail trim keyed on the FIRST punctuation in the span rather than the first after the phrase. The exact text that broke it is the fixture.`);
+    }
+  } catch (e) {
+    console.log(`⛔ QUOTE INTEGRITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BYTE CEILING MUST SHRINK THE IMAGE, NEVER DELETE IT ═══════════════
+  // Jose Barrera, live 2026-08-20: his homepage cleared the 7,800px vision
+  // ceiling and was then thrown away by the byte check one line later —
+  // "Screenshot too large (9MB) — skipping image, auditing from text". The model
+  // audited a photo-heavy site blind because the render compressed badly. Two
+  // ceilings existed and only the pixel one knew how to shrink.
+  //
+  // Run, not read: a real PNG goes through fitPngToBudget against a budget set
+  // just below what its first fit produces, so the loop must take a second,
+  // smaller pass to succeed — the exact move the live failure never made.
+  (async () => {
+  try {
+    const _fails = [];
+    if (_pngscale && typeof _pngscale.__testPng === 'function') {
+      const _png = _pngscale.__testPng(900, 3000, 4);
+      const _first = await imgSerial(() => _pngscale.fitWithin(_png, 1400));
+      if (!_first || !_first.buffer) {
+        _fails.push('the reference fit failed, so the budget path cannot be exercised');
+      } else {
+        // 60% of the first fit's bytes: far enough under that only a genuinely
+        // smaller SECOND pass can satisfy it, wide enough that a small synthetic
+        // image (whose bytes are mostly fixed PNG overhead) can still get there.
+        // The floor is lowered for the fixture because the test image is small;
+        // production keeps the real floor.
+        const _budget = Math.floor(_first.buffer.length * 0.6);
+        const _fit = await fitPngToBudget(_png, 3000, 1400, _budget, 100);
+        if (_fit.skip) _fails.push(`a render over budget was DROPPED (${_fit.skip}) instead of scaled smaller — that is Jose Barrera's homepage again, audited from text while we held the picture`);
+        else if (_fit.buffer.length > _budget) _fails.push(`the budget loop returned ${_fit.buffer.length} bytes against a budget of ${_budget} — it scaled but never re-checked, so an oversize render still reaches the request and fails the whole audit`);
+        else if (!(_fit.width < _first.width)) _fails.push('the budget loop claims success without actually scaling smaller, so the byte ceiling is decorative');
+        // Under budget on the first pass must come back untouched — paying a
+        // second decode and losing resolution for nothing is its own defect.
+        const _easy = await fitPngToBudget(_png, 3000, 1400, _first.buffer.length + 1024, 100);
+        if (_easy.skip || _easy.width !== _first.width) _fails.push('a render already under budget was rescaled anyway, losing resolution and paying a decode for nothing');
+      }
+    } else {
+      _fails.push('pngscale is not deployed, so the byte-budget path cannot be verified at all');
+    }
+    // The old skip sentence must be gone from CODE (comments may quote it — they
+    // are how the bug is explained). Needle assembled; comments stripped first.
+    {
+      const _code = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_code.indexOf('skipping image, ' + 'auditing from text') >= 0) {
+        _fails.push('the "skip the homepage render on bytes" branch is back — the byte ceiling deletes the picture again instead of shrinking it');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ RENDER BYTE BUDGET CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ RENDER BYTE BUDGET CHECK: a render over the byte budget is now scaled smaller until it fits — exercised here with a real PNG against a budget at 60% of its first fit, forcing the smaller second pass the live failure never took. Jose Barrera's homepage cleared the pixel ceiling at 9MB and was deleted by the byte check one line later, so his audit ran blind on a picture we were holding. A render already under budget passes through untouched, and the floor is ${PNG_MIN_EDGE}px — below that the image stops being readable and refusing is honest.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RENDER BYTE BUDGET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
 
   // ══ THE SAME BUSINESS MUST NOT MEASURE AS TWO DIFFERENT BUSINESSES ══════
   // Four defects, one disease: a noisy input silently changing what the email
@@ -45617,7 +46082,15 @@ app.post('/api/compose-email', async (req, res) => {
       // declaration DOES appear earlier in the file, inside a block that had
       // already closed. Found by scopecheck.js, which was written this session
       // for index.html and now runs on this file too.
-      const _spineTxt = String(useSpine.claim || '');
+      // SECOND PERSON BEFORE IT REACHES THE WRITER. The ladder writes every
+      // sentence in third person because the audit and the call sheet talk ABOUT
+      // the business. The composed skeleton already converts (toSecondPerson at
+      // the fact line) — but the WRITER received the raw claim, copied it
+      // faithfully, and a live email opened "Donna, their copy is written for
+      // anybody" — an email to Donna, about Donna, in the third person, which
+      // reads as a mail-merge accident in the first six words. Same converter,
+      // same protected spans, applied where the writer actually reads.
+      const _spineTxt = toSecondPerson(String(useSpine.claim || ''));
       const _figs = Array.isArray(useSpine.figures) ? useSpine.figures : [];
       const _parts = composed._parts || {};
       // ══ THE RANK HAS TO TRAVEL WITH THE EMAIL ═══════════════════════════
