@@ -9993,6 +9993,13 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       open24: Array.isArray(d.regularOpeningHours && d.regularOpeningHours.weekdayDescriptions)
         ? d.regularOpeningHours.weekdayDescriptions.some(x => /open 24 hours/i.test(String(x || '')))
         : false,
+      // The hours THEMSELVES, not just whether any exist. Kept for the call
+      // sheet: fifty cold calls a day means knowing when a roofer is on a roof
+      // and when a surgeon is in theatre, and this is the only published record
+      // of it. Truncated because seven lines of text is all it ever is.
+      hoursText: Array.isArray(d.regularOpeningHours && d.regularOpeningHours.weekdayDescriptions)
+        ? d.regularOpeningHours.weekdayDescriptions.map(x => String(x || '').slice(0, 60)).slice(0, 7)
+        : [],
       hasWebsiteLink: !!d.websiteUri,
       hasDescription: !!d.editorialSummary,
       status: d.businessStatus || null,
@@ -18721,6 +18728,73 @@ const LADDER_HARM_FLOOR = 45;
 // their row in the audit and their line on the call sheet, and they may still
 // be the SECOND finding. They simply cannot be the sentence a stranger reads
 // first. And if nothing else on the lead qualifies, the block is ignored.
+// ══ WHEN TO PHONE HIM ═══════════════════════════════════════════════════════
+// Fifty cold calls a day makes this a real question and we already hold the
+// answer: their published opening hours, and the trade.
+//
+// Nothing here is a claim to the prospect — it never leaves the call sheet — so
+// it is allowed to be a judgement in a way an email sentence is not. What it must
+// not do is invent hours. When the listing publishes none, it says so.
+const callWindowFor = (hoursText, tradeWord) => {
+  const rows = Array.isArray(hoursText) ? hoursText.filter(Boolean) : [];
+  if (!rows.length) return { checked: false, why: 'their Google listing publishes no opening hours, so there is nothing to read here' };
+  if (rows.some(r => /open 24 hours/i.test(r))) {
+    return { checked: true, open24: true, say: 'They publish 24-hour availability, so there is no closed window to work around. That also means an after-hours finding is false for them.' };
+  }
+  // The earliest opening across the week, read from their own text.
+  let earliest = null;
+  for (const r of rows) {
+    const m = String(r).match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+    if (!m) continue;
+    let h = Number(m[1]) % 12;
+    if (/pm/i.test(m[3])) h += 12;
+    if (earliest === null || h < earliest) earliest = h;
+  }
+  const t = String(tradeWord || '').toLowerCase();
+  // Two shapes, and the difference is where the owner physically is at 10am.
+  const onSite = /roof|plumb|electric|hvac|heating|cooling|landscap|paving|concrete|excavat|fenc|tree|pest|clean|restor|remodel|construct|contractor|builder|garage|window|sider|gutter|foundation|septic|well|pool/.test(t);
+  const inRooms = /dent|surg|derm|ortho|chiro|vet|clinic|medical|physician|attorney|lawyer|account|cpa|therap|optom|podiat/.test(t);
+  const open = Number.isFinite(earliest) ? earliest : 8;
+  if (onSite) {
+    return { checked: true, open24: false,
+      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is on a roof or under a house.` };
+  }
+  if (inRooms) {
+    return { checked: true, open24: false,
+      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. A practice owner is with patients or clients through the day, so the realistic windows are before the first appointment and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
+  }
+  return { checked: true, open24: false,
+    say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. Early is usually better than late for an owner-operated business.` };
+};
+
+// ══ WHAT WILL HE SAY BACK ═══════════════════════════════════════════════════
+// The prospect simulator already writes this and it is used as a pass/fail
+// signal and then thrown away. On John Peters it produced, in the owner's voice:
+// "my jobs come from Google reviews and word of mouth — I've booked out most
+// weeks without a website doing anything."
+//
+// That is not a verdict. That is the objection, written in advance, in his
+// register — and on a cold call it is the single most useful sentence we have,
+// because it is what Mike will hear ninety seconds in. It costs nothing: the
+// call has already been made and paid for.
+const objectionFromSim = (sim) => {
+  if (!sim || typeof sim !== 'object') return null;
+  const verdict = String(sim.verdict || sim.action || '').toUpperCase();
+  const said = String(sim.reason || sim.why || sim.reaction || '').trim();
+  if (!said || said.length < 25) return null;
+  return {
+    likely: verdict === 'DELETE' || verdict === 'IGNORE',
+    said: said.slice(0, 400),
+    // Deliberately NOT a scripted rebuttal. Writing Mike's answer for him is
+    // copywriting against a simulator that has contradicted itself one build
+    // apart, and this file's rule is not to tune copy without real replies. What
+    // it IS safe to do is hand him the sentence and let him prepare.
+    note: verdict === 'REPLY'
+      ? 'Our own prospect model expected this one to land. Treat that as encouragement, not evidence.'
+      : 'Our own prospect model, reading this as the owner, pushed back in these words. Expect to hear something close to it, and have an answer ready before you dial.',
+  };
+};
+
 // ══ WHAT IT WOULD HAVE COST HIM TO KNOW THIS ════════════════════════════════
 // The ladder ranks by HARM — a hand-assigned guess at what a fault costs the
 // business. That is the right sort for the AUDIT, which is about money. It is
@@ -37057,6 +37131,16 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // Positive-only advertising evidence. See checkAdsTransparency: "not found"
       // is never returned as a negative, because only verified advertisers appear.
       adsTransparency: (adsTransparency && adsTransparency.checked) ? adsTransparency : null,
+      // ══ WHEN THIS WAS MEASURED ═══════════════════════════════════════════
+      // Nothing anywhere recorded it. On an email that is survivable — it goes
+      // out the same day. On a COLD CALL it is not: a rank, a review count and a
+      // set of opening hours all move, and asserting a three-week-old number to
+      // an owner who has since fixed it ends the call and the relationship. Mike
+      // needs to know how old the sheet in front of him is.
+      researchedAt: new Date().toISOString(),
+      // Their published hours read as a calling window, plus the trade. Internal
+      // only — it is a judgement about our own day, not a claim about theirs.
+      callWindow: callWindowFor((gbpHealth && gbpHealth.hoursText) || [], customerTrade || verifiedIndustry || ''),
       reviewCount: (gbpHealth && gbpHealth.reviewCount) || null,
       rating: (gbpHealth && gbpHealth.rating) || null,
       phone: phoneResult.phone || req.body.phone || '',
@@ -44481,6 +44565,125 @@ app.listen(PORT, () => {
     console.log(`⛔ SEND CAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ THE PART OF DELIVERABILITY THAT NEEDS NO REPLIES ═══════════════════
+  // "Deliverability is unproven" has been at the top of this file for weeks and
+  // was treated as something only sending can answer. Whether the domain is
+  // CONFIGURED to be trusted is a DNS lookup, free and definitive, and nothing
+  // ever checked it. A missing SPF record or one ending +all is the ordinary
+  // reason cold mail lands in spam, and it is invisible from inside Hunter,
+  // which reports the send as successful either way.
+  //
+  // The PARSING is what is exercised here. The lookup itself is stock Node DNS
+  // and could not be run from the build environment, so it is shipped unproven
+  // against a live domain and this comment says so rather than implying it was
+  // tested.
+  try {
+    const _fails = [];
+    const T = [
+      [[['v=spf1 include:_spf.google.com ~all']], 'ok', 'a normal Google Workspace SPF'],
+      [[['v=spf1 include:mailgun.org -all']], 'good', 'a strict SPF'],
+      [[['v=spf1 +all']], 'bad', 'an SPF that authorises the entire internet to send as this domain — worse than having none'],
+      [[['some-verification-token=abc123']], 'bad', 'a domain with TXT records but no SPF among them'],
+      [[], 'bad', 'a domain with no TXT records at all'],
+    ];
+    for (const [recs, want, what] of T) {
+      const got = _parseSpf(recs).verdict;
+      if (got !== want) _fails.push(`${what} reads as "${got}" and should be "${want}"`);
+    }
+    // A record split across strings is how DNS returns anything over 255 chars,
+    // and a long SPF is the normal case. Reading only the first chunk would
+    // report a strict record as having no all mechanism.
+    const _split = _parseSpf([['v=spf1 include:a.example include:b.example ', 'include:c.example -all']]);
+    if (_split.all !== '-all') _fails.push('a TXT record split across strings is not being rejoined, so any SPF over 255 characters is misread — and a long SPF is the normal case for a domain using more than one sender');
+    const _d = _parseDmarc([['v=DMARC1; p=reject; rua=mailto:x@y.com']]);
+    if (!_d.present || _d.policy !== 'reject') _fails.push('a DMARC policy is not being read');
+    if (_parseDmarc([]).verdict !== 'warn') _fails.push('a missing DMARC record is being treated as fine or as fatal; it is neither');
+    // DKIM must say it did not look, not that it found nothing.
+    if (typeof checkSendingDomain !== 'function') _fails.push('the sending-domain check is gone');
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf("dkim: { checked: " + "false") < 0) {
+        _fails.push('DKIM is being reported as a finding rather than as not-checked — the selector is chosen by whoever set the mailbox up, and guessing one would report a false absence on the most important of the three settings');
+      }
+      // Assembled at runtime. Written as a literal this needle sits in the
+      // check's own body, indexOf finds itself, and the assertion passes on a
+      // build where the guard is gone — falsified exactly that way, and it is
+      // the fifth time in this session.
+      if (_src.indexOf('txt.code !== ' + "'ENOT" + "FOUND'") < 0) {
+        _fails.push('a failed DNS lookup is no longer distinguished from a missing record, so a resolver timeout would be reported as "no SPF" — a false absence aimed at the one setting that decides whether anything arrives');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ SENDING DOMAIN CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ SENDING DOMAIN CHECK: SPF and DMARC parsing is exercised against real record shapes including the split-string form DNS uses for anything over 255 characters, a resolver failure is never reported as a missing record, and DKIM says it did not look rather than inventing an absence. NOTE: the DNS lookup itself could not be run from the build environment, so it is unproven against a live domain until the first real call.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SENDING DOMAIN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ FIFTY COLD CALLS A DAY IS SIXTY SECONDS OF PREP EACH ═══════════════
+  // The audit stopped being only an email input the day it became a call sheet.
+  // Three things only matter on a phone, and all three were being computed and
+  // thrown away: how old the measurements are, when the owner is reachable, and
+  // what he is going to say back.
+  try {
+    const _fails = [];
+    // 1. WHEN TO CALL. Read from their own published hours. Never invented.
+    const _noHours = callWindowFor([], 'plumber');
+    if (_noHours.checked) _fails.push('a listing that publishes no hours still produces a calling window — that is an invented fact on the one sheet somebody reads while dialling');
+    const _open24 = callWindowFor(['Monday: Open 24 hours', 'Tuesday: Open 24 hours'], 'plumber');
+    if (!_open24.checked || !_open24.open24) _fails.push('a 24-hour business is not being recognised, so the sheet would send Mike hunting for a closed window that does not exist');
+    if (!/after-hours finding is false/i.test(String(_open24.say || ''))) {
+      _fails.push('a 24-hour listing does not warn that the after-hours finding is false for them — that finding is SELLABLE 5 and saying it to a business that never closes ends the call');
+    }
+    const _trade = callWindowFor(['Monday: 7:00 AM - 5:00 PM'], 'roofing contractor');
+    const _rooms = callWindowFor(['Monday: 9:00 AM - 5:00 PM'], 'dentist');
+    if (!_trade.checked || !/roof|crew|site|under a house/i.test(String(_trade.say || ''))) {
+      _fails.push('an on-site trade gets no advice about when the owner is physically reachable');
+    }
+    if (!_rooms.checked || !/front desk|patients|clients/i.test(String(_rooms.say || ''))) {
+      _fails.push('a practice gets no advice about the gatekeeper, who is the whole problem on that call');
+    }
+    if (String(_trade.say) === String(_rooms.say)) _fails.push('every trade gets the same calling advice, so the trade is not being read');
+
+    // 2. WHAT HE WILL SAY BACK. Already written by the prospect model and
+    //    previously used as a pass/fail signal and discarded.
+    const _obj = objectionFromSim({ verdict: 'DELETE', reason: 'my jobs come from Google reviews and word of mouth, I have booked out most weeks without a website doing anything' });
+    if (!_obj || !_obj.likely) _fails.push('a DELETE verdict does not surface the objection, which is the most useful sentence we hold for a cold call');
+    if (_obj && /^(say|tell him|respond)/i.test(String(_obj.note || ''))) {
+      _fails.push('the objection now ships a scripted rebuttal — that is copywriting against a simulator that has contradicted itself one build apart, and this file\'s rule is not to tune copy without real replies');
+    }
+    if (objectionFromSim({ verdict: 'DELETE', reason: 'nope' })) _fails.push('a one-word simulator answer is being presented as a considered objection');
+    if (objectionFromSim(null)) _fails.push('a missing simulator result still produces an objection');
+    const _rep = objectionFromSim({ verdict: 'REPLY', reason: 'that is money leaking somewhere I cannot see, and I would want to know more about it' });
+    if (!_rep || _rep.likely) _fails.push('a REPLY verdict is being reported as an objection');
+    if (_rep && !/not evidence/i.test(String(_rep.note || ''))) {
+      _fails.push('a positive simulator verdict is presented without saying it is not evidence — it is the system grading its own homework, and twelve sends have produced zero human replies');
+    }
+
+    // 3. THE WIRING, because a fixture cannot see a caller.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('researchedAt: new Date().' + 'toISOString()') < 0) {
+        _fails.push('the audit no longer records WHEN it was measured — a rank or a review count asserted three weeks late is how a cold call ends');
+      }
+      if (_src.indexOf('callWindow: callWindowFor(' + '(gbpHealth && gbpHealth.hoursText)') < 0) {
+        _fails.push('the calling window is not wired to their published hours');
+      }
+      if (_src.indexOf('hoursText: Array.' + 'isArray') < 0) {
+        _fails.push('the opening hours text is being discarded again — only whether ANY hours exist was ever kept, which is what let the after-hours finding fire on a 24-hour business');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ CALL SHEET CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ CALL SHEET CHECK: the sheet now carries when it was measured, when the owner is actually reachable read from their own published hours, and what he is likely to say back — the last written by the prospect model in his own register and previously used as a pass/fail signal and thrown away. No calling window is invented for a listing that publishes no hours, and a 24-hour business is warned about rather than sent an after-hours finding.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CALL SHEET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ WHAT IT WOULD HAVE COST HIM TO KNOW IT ══════════════════════════════
   // The opener used to be sorted by HARM, with novelty worth at most 7 points
   // against a harm range of 63. Both findings behind every real reply this
@@ -49048,6 +49251,104 @@ app.get('/p/:token', async (req, res) => {
     console.log('lead page render failed:', e && e.message);
     return res.status(500).type('html').send('<!doctype html><meta charset=utf-8><p>Something went wrong.');
   }
+});
+
+// ══ THE ONE PART OF DELIVERABILITY THAT NEEDS NO REPLIES TO MEASURE ═════════
+// PART 4 §3 has carried "deliverability is unproven" for weeks — one mailbox, two
+// hard bounces in twelve sends — and treated it as something only sending can
+// answer. Most of it is. But whether the sending domain is CONFIGURED to be
+// trusted is a DNS lookup, it is free, it is definitive, and nothing has ever
+// checked it.
+//
+// A domain with no SPF record, or an SPF that ends `+all`, is not a marginal
+// deliverability risk. It is the single most common reason cold email lands in
+// spam, and it is invisible from inside the sending tool: Hunter reports the send
+// as successful either way.
+//
+// WHAT THIS CAN AND CANNOT SEE:
+//   SPF    definitive. Published at the domain root, one TXT record.
+//   DMARC  definitive. Published at _dmarc.<domain>.
+//   MX     definitive, and it matters: a sending domain with no MX cannot
+//          RECEIVE the reply this whole system exists to earn.
+//   DKIM   NOT CHECKABLE without knowing the selector, which is chosen by
+//          whoever set the mailbox up. Guessing selectors and reporting "no
+//          DKIM" on a miss would be a false absence about the most important
+//          setting of the three, so it reports "not checked" and says why.
+const _parseSpf = (records) => {
+  const rows = (Array.isArray(records) ? records : []).map(r => (Array.isArray(r) ? r.join('') : String(r || '')));
+  const spf = rows.find(r => /^v=spf1\b/i.test(r.trim()));
+  if (!spf) return { present: false, verdict: 'bad', why: 'no SPF record at all. Receiving servers have nothing saying this domain is allowed to send, and cold mail from an unlisted domain is the ordinary case for landing in spam' };
+  if (/\+all\b/i.test(spf)) return { present: true, all: '+all', verdict: 'bad', record: spf.slice(0, 200), why: 'the SPF record ends +all, which tells every receiver that ANY server may send as this domain. That is worse than having none, and spam filters treat it that way' };
+  if (/-all\b/i.test(spf)) return { present: true, all: '-all', verdict: 'good', record: spf.slice(0, 200), why: 'SPF present and strict' };
+  if (/~all\b/i.test(spf)) return { present: true, all: '~all', verdict: 'ok', record: spf.slice(0, 200), why: 'SPF present, soft fail. Normal and fine' };
+  return { present: true, all: null, verdict: 'ok', record: spf.slice(0, 200), why: 'SPF present with no explicit all mechanism' };
+};
+const _parseDmarc = (records) => {
+  const rows = (Array.isArray(records) ? records : []).map(r => (Array.isArray(r) ? r.join('') : String(r || '')));
+  const d = rows.find(r => /^v=DMARC1\b/i.test(r.trim()));
+  if (!d) return { present: false, verdict: 'warn', why: 'no DMARC record. Not fatal on its own, and Google and Microsoft have both been tightening on bulk senders without one' };
+  const p = (d.match(/\bp\s*=\s*(none|quarantine|reject)/i) || [])[1];
+  return { present: true, policy: (p || '').toLowerCase(), verdict: 'good', record: d.slice(0, 200),
+    why: `DMARC present with p=${p || 'unset'}` };
+};
+const checkSendingDomain = async (domain) => {
+  const host = String(domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  if (!host || !host.includes('.')) return { checked: false, why: 'no sending domain configured' };
+  const dns = require('dns').promises;
+  const grab = async (fn, name) => {
+    try { return { ok: true, value: await fn() }; }
+    catch (e) { return { ok: false, code: (e && e.code) || 'ERROR', name }; }
+  };
+  const [txt, dmarcTxt, mx] = await Promise.all([
+    grab(() => dns.resolveTxt(host), 'SPF'),
+    grab(() => dns.resolveTxt('_dmarc.' + host), 'DMARC'),
+    grab(() => dns.resolveMx(host), 'MX'),
+  ]);
+  // A lookup that could not run is NOT a missing record. Reporting "no SPF"
+  // because a resolver timed out would be the false-absence failure this file
+  // exists to prevent, aimed at the one setting that decides whether anything
+  // we send arrives at all.
+  if (!txt.ok && txt.code !== 'ENOTFOUND' && txt.code !== 'ENODATA') {
+    return { checked: false, host, why: `the DNS lookup for ${host} did not complete (${txt.code}), so nothing can be concluded about how this domain is configured` };
+  }
+  const spf = _parseSpf(txt.ok ? txt.value : []);
+  const dmarc = (dmarcTxt.ok || dmarcTxt.code === 'ENOTFOUND' || dmarcTxt.code === 'ENODATA')
+    ? _parseDmarc(dmarcTxt.ok ? dmarcTxt.value : [])
+    : { present: null, verdict: 'unknown', why: `the DMARC lookup did not complete (${dmarcTxt.code})` };
+  const canReceive = mx.ok && Array.isArray(mx.value) && mx.value.length > 0;
+  const blockers = [];
+  if (spf.verdict === 'bad') blockers.push(spf.why);
+  if (!canReceive && mx.ok) blockers.push('the sending domain has no MX records, so it cannot RECEIVE mail. Every reply this system is built to earn would bounce back to the sender');
+  const warnings = [];
+  if (dmarc.verdict === 'warn') warnings.push(dmarc.why);
+  if (dmarc.present && dmarc.policy === 'none') warnings.push('DMARC is set to p=none, which monitors and enforces nothing. Fine while warming, worth tightening once volume is steady');
+  return {
+    checked: true, host, spf, dmarc,
+    mx: { present: canReceive, count: canReceive ? mx.value.length : 0 },
+    // Stated rather than guessed. See the header comment.
+    dkim: { checked: false, why: 'DKIM lives at a selector chosen by whoever configured the mailbox, and guessing selectors would report a false absence on the most important of the three settings. Check it in the sending tool.' },
+    blockers, warnings,
+    verdict: blockers.length ? 'blocked' : warnings.length ? 'warn' : 'ok',
+  };
+};
+
+// ══ THE MARKETS AND TRADES WE ACTUALLY SEARCH ═══════════════════════════════
+// The client had its own hardcoded copy of the city list — twenty strings typed
+// out a second time. Adding a market to GP_CITIES would have left the picker
+// showing the old set, and picking a city the server does not search silently
+// returns nothing, which reads as "Find is broken" rather than "that list drifted".
+//
+// One source. The client asks once and renders whatever comes back.
+app.get('/api/sending-domain', async (req, res) => {
+  try { res.json(await checkSendingDomain(req.query.domain || '')); }
+  catch (e) { res.json({ checked: false, why: `the check itself failed: ${(e && e.message) || e}` }); }
+});
+
+app.get('/api/find-options', (req, res) => {
+  res.json({
+    cities: GP_CITIES,
+    categories: [...new Set(GP_CATEGORIES.map(c => c.label).filter(Boolean))].sort(),
+  });
 });
 
 app.get('/api/firecrawl-credits', async (req, res) => {

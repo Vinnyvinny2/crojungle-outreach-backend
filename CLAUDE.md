@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 180 boot checks at the bottom, each documenting the live failure that caused it
+- 182 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1239,7 +1239,7 @@ audit and of the log i need eveyrhting running perfect because we are going to
 running bulk soon."*
 
 Fourteen falsification runs, one per fix, every one red with its fix reverted.
-180 boot checks green.
+182 boot checks green.
 
 **The two nobody had reported, because nothing said anything.**
 
@@ -2031,6 +2031,99 @@ Landscaping" must not trip the `oral` modifier.
 
 ---
 
+## 31. The audit became a call sheet — 2026-08-20
+
+Vin: *"we need to make sure the audits are 10/10 because we will be making cold
+calls to the batches of 50 a day."*
+
+That is a different artefact from an email input. Fifty calls a day is about sixty
+seconds of preparation each, and three things that only matter on a phone were all
+being computed and thrown away.
+
+**Nothing recorded WHEN the audit was measured.** Not a field anywhere. On an
+email that is survivable, because it goes out the same day. On a call it is not: a
+rank, a review count and a set of opening hours all move, and asserting a
+three-week-old number to an owner who has since fixed it ends the call and the
+relationship. Every audit is now stamped, and the sheet says plainly when the
+figures are old enough to re-check before saying out loud.
+
+**Their published opening hours were reduced to a boolean.** `hasHours` was kept
+and the weekday text discarded — the same discard that let the after-hours finding
+fire on a business that never closes. The text is kept now and read as a calling
+window against the trade: an owner on a roof is reachable in the first half hour
+and late afternoon, a practice owner between patients and over lunch, and the
+person who answers a practice line is front desk. A listing that publishes no
+hours produces no window rather than an invented one.
+
+**And the objection was already written.** The prospect simulator reads the email
+as the owner and produces, in his register, exactly what he will say ninety
+seconds into the call — on John Peters, *"my jobs come from Google reviews and
+word of mouth."* That sentence was used as a pass/fail signal and discarded. It is
+the most useful thing we hold for a cold call and it costs nothing, because the
+call has already been made and paid for.
+
+Deliberately NOT built: a scripted rebuttal. Writing Mike's answer for him is
+copywriting against a simulator that has contradicted itself one build apart, and
+this file's rule is not to tune copy without real replies. He gets the sentence
+and prepares his own answer. A REPLY verdict is labelled as encouragement rather
+than evidence, because twelve sends have produced zero human replies.
+
+**The export drops the how-we-checked column.** Provenance is useful while
+debugging the machine and noise on a sheet somebody is holding while dialling. The
+values stay, because "176 reviews at 4.8, third of twenty" is what gets said.
+
+---
+
+## 32. Markets, and the second list that would have drifted
+
+The Find picker held its own hardcoded array of the twenty cities the server
+searches — a copy of `GP_CITIES` typed out again. A market added on the server
+would never have appeared in the picker, and a market picked in the picker that
+the server does not search returns nothing at all, which reads as "Find is broken"
+rather than "two lists drifted apart".
+
+`/api/find-options` serves both lists from the constants themselves, and the
+picker is now multi-select: the server has always accepted an array and filtered
+`GP_CITIES` against it, and only the single dropdown was the bottleneck.
+`clientcheck` refuses a hardcoded "City ST" list coming back.
+
+---
+
+## 33. The half of deliverability that needs no replies
+
+PART 4 §3 has carried "deliverability is unproven" for weeks and treated it as
+something only sending can answer. Most of it is. Whether the sending domain is
+CONFIGURED to be trusted is a DNS lookup — free, definitive, and never once
+checked.
+
+A domain with no SPF record, or one ending `+all`, is the ordinary reason cold
+mail lands in spam, and it is invisible from inside Hunter, which reports the send
+as successful either way.
+
+- **SPF and DMARC** are definitive and parsed here, including the split-string
+  form DNS returns for anything over 255 characters. A long SPF is the normal case
+  for a domain using more than one sender, and reading only the first chunk would
+  misreport a strict record.
+- **MX matters too**: a sending domain with no MX cannot RECEIVE the reply this
+  whole system exists to earn.
+- **DKIM is not checkable** without the selector, which is chosen by whoever set
+  the mailbox up. Guessing selectors and reporting "no DKIM" on a miss would be a
+  false absence about the most important of the three, so it says it did not look.
+- **A resolver failure is never a missing record.** Reporting "no SPF" because a
+  lookup timed out would be the false-absence failure aimed at the one setting
+  that decides whether anything arrives at all.
+
+**Unproven against a live domain.** DNS is blocked from the build environment, so
+the parsing is exercised and the lookup is stock Node that has never run here. The
+boot check says so rather than implying it was tested.
+
+**And a fifth self-matching needle.** The assertion guarding the resolver-failure
+branch was written as a literal, sat in the check's own body, and passed on a
+build with the guard removed. Assembled at runtime now. This trap has now been
+recorded five times in one session.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -2084,7 +2177,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 180 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 182 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -2158,7 +2251,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 180 boot checks and the comments above
+and caused none of this week's failures. The 182 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 

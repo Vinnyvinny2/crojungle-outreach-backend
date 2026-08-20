@@ -297,6 +297,22 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ 6a. THE MARKET LIST MUST NOT BE A SECOND COPY ═══════════════════════════
+// The Find picker held its own hardcoded array of the twenty cities the server
+// searches. A market added to GP_CITIES would not have appeared in the picker,
+// and a city picked here that the server does not search returns nothing at all
+// — which reads as "Find is broken" rather than "two lists drifted apart". The
+// list is served from /api/find-options now; this refuses a copy coming back.
+{
+  const _cityish = (src.match(/'[A-Z][a-zA-Z .]+ (?:AZ|TX|NC|FL|CO|TN|OH|MO|IN|UT|OK|KY|VA|ID|SC|CA|NY|PA|GA|MI|WA|OR|NV|AZ)'/g) || []);
+  if (_cityish.length >= 5) {
+    fails.push(`index.html holds ${_cityish.length} hardcoded "City ST" strings (${_cityish.slice(0, 3).join(', ')}) — the market list belongs to the server and a second copy silently drifts, so a picked market can return nothing while looking fine`);
+  }
+  if (src.indexOf('/api/find-options') < 0) {
+    fails.push('the client no longer asks the server which markets it searches, so the picker is back to guessing');
+  }
+}
+
 // ══ 6b. A CRITICAL FABRICATION MUST BLOCK APPROVE ═══════════════════════════
 // Donna Krummen's checklist said confidence 3/10 and listed CRITICAL fact-check
 // findings — wrong city, wrong count, wrong rank — and the green Approve button

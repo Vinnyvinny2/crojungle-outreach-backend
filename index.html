@@ -259,6 +259,11 @@ const leadToRow = (l) => ({
         // Centre. Never a negative: only verified advertisers appear there.
         adsTransparency: l.adsTransparency ?? null,
         ctaMode: l.ctaMode ?? null,
+        // When the measurements were taken, and when to phone. Both matter only
+        // for the call sheet, and the first one matters a lot: a rank or a review
+        // count asserted three weeks late is how a call ends badly.
+        researchedAt: l.researchedAt ?? null,
+        callWindow: l.callWindow ?? null,
         pageUrl: l.pageUrl ?? null,
         topPain: l.topPain ?? null,
         buckets: l.buckets ?? null,
@@ -601,6 +606,8 @@ const rowToLead = (r) => ({
   // reply arrives days later and the arm is the only thing that makes it mean
   // anything.
   ctaMode: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ctaMode) || null,
+  researchedAt: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.researchedAt) || null,
+  callWindow: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.callWindow) || null,
   pageUrl: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.pageUrl) || null,
   adsTransparency: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.adsTransparency) || null,
   topPain: r.top_pain || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.topPain) || null,
@@ -1135,6 +1142,8 @@ const applyResearchResult = (prev, data, ctx) => {
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
+        L.researchedAt = data.researchedAt ?? L.researchedAt ?? null;
+        L.callWindow = data.callWindow ?? L.callWindow ?? null;
         // Only overwrite when the incoming one actually has results. A merge that
         // takes an empty object over good persisted data is how a working lead
         // turns into "nothing on file".
@@ -1210,6 +1219,8 @@ const applyResearchResult = (prev, data, ctx) => {
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
+        L.researchedAt = data.researchedAt ?? L.researchedAt ?? null;
+        L.callWindow = data.callWindow ?? L.callWindow ?? null;
         L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.offerStrength = data.offerStrength ?? L.offerStrength ?? null;
@@ -1858,9 +1869,14 @@ const auditExportHtml = (records, meta) => {
       + sec('What is actually worth selling them',
           (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
           + (r.askOnTheCall ? '<p class="ask"><b>Ask before pitching:</b> ' + p(r.askOnTheCall) + '</p>' : ''))
+      // ══ THE VALUES, NOT HOW WE GOT THEM ═══════════════════════════════════
+      // The third column was the proof of method — how each signal was checked.
+      // Useful while debugging the machine, noise on a sheet somebody is holding
+      // during a cold call. The numbers stay because "176 reviews at 4.8, third
+      // of twenty" is exactly what gets said out loud; the provenance goes.
       + sec('Measured signals',
           r.signals.length ? '<table class="sig">' + r.signals.map(x =>
-            '<tr><td>' + e(x.label) + '</td><td class="' + (x.ok === false ? 'bad' : x.ok === true ? 'good' : '') + '">' + p(x.val) + '</td><td class="dim">' + p(x.proof || '') + '</td></tr>').join('') + '</table>' : '')
+            '<tr><td>' + e(x.label) + '</td><td class="' + (x.ok === false ? 'bad' : x.ok === true ? 'good' : '') + '">' + p(x.val) + '</td></tr>').join('') + '</table>' : '')
       + sec('Do not say', ul(r.claimRisks.concat(r.criticalFactCheck), x => '<li>' + p(typeof x === 'string' ? x : (x.what || JSON.stringify(x))) + '</li>'))
       + sec('The email as written', r.pitch ? '<p class="dim">Subject: ' + p(r.subject) + '</p><pre>' + p(r.pitch) + '</pre>' : '')
       + sec('Full-page renders', ul(r.renders, s => '<li>' + e(s.label) + ': <a href="' + e(s.url) + '">' + e(s.url) + '</a></li>'))
@@ -2925,6 +2941,20 @@ function FindView({
     minReviews: '', websiteShape: 'any',   // any | none | builder | real
   });
   const [showFilters, setShowFilters] = React.useState(false);
+  // ══ ONE LIST OF MARKETS, AND IT LIVES ON THE SERVER ══════════════════════
+  // The picker used to hold its own hardcoded copy of the twenty cities. A market
+  // added on the server would not appear here, and a city picked here that the
+  // server does not search returns nothing at all — which reads as "Find is
+  // broken" rather than "two lists drifted apart".
+  const [findOptions, setFindOptions] = React.useState({ cities: [], categories: [] });
+  React.useEffect(() => {
+    let alive = true;
+    fetch(BACKEND + '/api/find-options')
+      .then(r => r.json())
+      .then(d => { if (alive && d && Array.isArray(d.cities)) setFindOptions(d); })
+      .catch(e => console.log('find options unavailable:', e.message));
+    return () => { alive = false; };
+  }, []);
   const [error, setError] = useState('');
   const [loadingCount, setLoadingCount] = useState(0);
   const [lastRun, _setLastRun] = useState(localStorage.getItem('cj_last_discover') || null);
@@ -4348,15 +4378,38 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               ...[...new Set(sorted.map(c => c.industry).filter(Boolean))].sort()
                 .map(n => React.createElement('option', { key:n, value:n }, n)))),
 
-          React.createElement('div', { style:{ ..._fWrap, minWidth:170 } },
-            React.createElement('div', { style:_fLabel }, 'Market'),
-            React.createElement('select', { value: pullFilters.cities[0] || '', style:{ ..._fInput, minWidth:170 },
-              onChange: e => _set('cities', e.target.value ? [e.target.value] : []) },
-              React.createElement('option', { value:'' }, 'All markets'),
-              ...['Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH',
-                  'Austin TX','Kansas City MO','Indianapolis IN','Jacksonville FL','San Antonio TX','Raleigh NC',
-                  'Salt Lake City UT','Oklahoma City OK','Louisville KY','Cincinnati OH','Richmond VA','Boise ID','Greenville SC']
-                .map(c => React.createElement('option', { key:c, value:c }, c)))),
+          // ══ SEVERAL MARKETS, NOT ONE ═══════════════════════════════════════
+          // A single dropdown could only ever express "all twenty" or "exactly
+          // one". The server has always accepted an array and filtered GP_CITIES
+          // against it; only the picker was the bottleneck. Tick as many as you
+          // want and the run searches those and nothing else.
+          React.createElement('div', { style:{ ..._fWrap, minWidth: 250, flexBasis: '100%' } },
+            React.createElement('div', { style: { display:'flex', alignItems:'baseline', gap:8, marginBottom:4 } },
+              React.createElement('div', { style:_fLabel },
+                pullFilters.cities.length ? 'Markets \u2014 ' + pullFilters.cities.length + ' selected' : 'Markets \u2014 all'),
+              pullFilters.cities.length ? React.createElement('button', {
+                style: { background:'none', border:'none', color:'var(--m2)', fontSize:11, cursor:'pointer', padding:0 },
+                onClick: () => _set('cities', []),
+              }, 'clear') : null),
+            React.createElement('div', {
+              style: { display:'flex', flexWrap:'wrap', gap:6, maxHeight: 132, overflowY:'auto' },
+            }, (findOptions.cities.length ? findOptions.cities : []).map(c => {
+              const on = pullFilters.cities.includes(c);
+              return React.createElement('button', {
+                key: c,
+                onClick: () => _set('cities', on ? pullFilters.cities.filter(x => x !== c) : pullFilters.cities.concat([c])),
+                style: {
+                  fontSize: 11, padding: '4px 9px', borderRadius: 99, cursor: 'pointer',
+                  border: '1px solid ' + (on ? 'var(--a)' : 'var(--b)'),
+                  background: on ? 'var(--a)' : 'transparent',
+                  color: on ? '#0b0d10' : 'var(--m2)',
+                  fontWeight: on ? 700 : 500,
+                },
+              }, c);
+            })),
+            findOptions.cities.length ? null : React.createElement('div',
+              { style: { fontSize: 11, color: 'var(--m)' } },
+              'Market list unavailable \u2014 the run will search every market.')),
 
           _activeCount ? React.createElement('button', {
             onClick: () => setPullFilters({ niches:[], cities:[], minRating:'', maxRating:'', minReviews:'', websiteShape:'any' }),
@@ -9997,6 +10050,32 @@ function callDataFor(lead, result) {
       // man cares about changes how you open, and the recommendation is what you
       // arrive at afterwards.
       _sr.whatHeCaresAbout ? `What he clearly cares about \u2014 ${String(_sr.whatHeCaresAbout).trim()}` : '',
+      // ══ FIFTY COLD CALLS A DAY IS SIXTY SECONDS OF PREP EACH ═════════════
+      // Three things that only matter on a phone call, and all three were being
+      // computed and thrown away.
+      //
+      // HOW OLD IS THIS. A rank, a review count and a set of opening hours all
+      // move. Asserting a three-week-old number to an owner who has since fixed
+      // it ends the call. Nothing anywhere recorded when the audit was measured.
+      (() => {
+        if (!lead.researchedAt) return '';
+        const days = Math.floor((Date.now() - new Date(lead.researchedAt).getTime()) / 86400000);
+        if (!Number.isFinite(days)) return '';
+        return days <= 1
+          ? 'Measured today. Everything below is current.'
+          : `Measured ${days} days ago. Re-check the search position and the review count before you say either out loud \u2014 both move, and being wrong about one is how this call ends.`;
+      })(),
+      // WHEN TO DIAL, read from their own published hours and their trade.
+      (lead.callWindow && lead.callWindow.checked && lead.callWindow.say)
+        ? `When to call \u2014 ${lead.callWindow.say}` : '',
+      // WHAT HE WILL SAY BACK. Our own prospect model already writes this in the
+      // owner's register and it was only ever used as a pass/fail signal.
+      (() => {
+        const sim = (lead.generatedResult && lead.generatedResult.prospectSim) || lead.prospectSim || null;
+        const said = String((sim && (sim.reason || sim.why || sim.reaction)) || '').trim();
+        if (said.length < 25) return '';
+        return `Expect to hear \u2014 "${said.slice(0, 300)}" That is our own prospect model reading this as the owner. Have an answer ready before you dial.`;
+      })(),
       _sr.whatHeNeeds ? `What would actually help \u2014 ${String(_sr.whatHeNeeds).trim()}` : '',
       _sr.askOnTheCall ? `Ask before pitching \u2014 ${String(_sr.askOnTheCall).trim()}` : '',
     ].filter(Boolean).join('\n\n') : '';
