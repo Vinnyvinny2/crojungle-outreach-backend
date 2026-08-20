@@ -18721,6 +18721,206 @@ const LADDER_HARM_FLOOR = 45;
 // their row in the audit and their line on the call sheet, and they may still
 // be the SECOND finding. They simply cannot be the sentence a stranger reads
 // first. And if nothing else on the lead qualifies, the block is ignored.
+// ══ WHAT IT WOULD HAVE COST HIM TO KNOW THIS ════════════════════════════════
+// The ladder ranks by HARM — a hand-assigned guess at what a fault costs the
+// business. That is the right sort for the AUDIT, which is about money. It is
+// the wrong sort for the EMAIL, and four real sends say so:
+//
+//   REPLIED  paying_for_a_search_they_lose — "your homepage is tracking ad spend
+//            and you rank 13th; those two numbers have never been on the same
+//            screen." He owns both halves and had never joined them.
+//   DELETED  no_recurring_offer  — "my jobs come from reviews and word of mouth"
+//   DELETED  no_published_pricing — "price transparency doesn't move the needle"
+//   DELETED  no_offer / long_form — "that's not how I get customers"
+//
+// And the two findings behind every real reply this project has ever had —
+// review_pain_pattern and outranked_by_weaker — share the same property: both
+// required WORK HE HAS NOT DONE. He has read his reviews one at a time and never
+// tabulated them; he has never run the search and compared the listings.
+//
+// So the dimension is not how bad it is. It is what it would have cost him to
+// know it, which is a property of the DATA rather than a guess about him:
+//
+//   CANNOT_KNOW  needs a JOIN of two sources he uses separately (his ads
+//                dashboard and an organic rank check), an AGGREGATE of N things
+//                he has only ever seen one at a time (forty reviews into one
+//                repeating complaint), or a RECORD he has no view of at all (a
+//                second Google listing, a competitor's review count)
+//   HAS_NOT_LOOKED  on his own surface and a FAULT rather than a choice — a page
+//                that 404s, a certificate that expired, a number that will not
+//                dial. One click would show him and nothing put it in front of him
+//   DECIDED      he looks at it and chose it: his prices, his hours, his form,
+//                his offer, his homepage copy. Telling him is not news
+//
+// THIS IS NOT A SECOND COPY OF `novel`. novel is a hand-assigned 0-100 guess and
+// it contributes AT MOST 7 POINTS against a harm range of 63 — decorative. This
+// is derived from what the finding's own test() has to read, it is declared per
+// rung where a reviewer can audit it, and the boot check refuses any rung whose
+// declared class and hand-assigned novel disagree. That is how no_recurring_offer
+// was caught sitting at novel 82 while being the single most deletable finding
+// in the ladder.
+//
+// SPENDING IS EXEMPT FROM THE PENALTY. hiring_marketing_now is DECIDED — of
+// course he knows he is hiring — and it is the only signal in this system with a
+// DATE on it. Money already moving beats knowability, and PART 4 §1 calls the
+// absence of a clock the largest gap in the pipeline. Penalising the one clock we
+// have to satisfy a rule about novelty would be the tail wagging the dog.
+const OWNER_KNOWS = {
+  // ── CANNOT KNOW: needs a join, an aggregate, or a record he cannot see ──
+  absent_from_search:           ['cannot_know', 'requires running the search himself and reading a whole result list he has never pulled up'],
+  outranked_by_weaker:          ['cannot_know', 'requires running the search AND comparing another listing’s review count against his own'],
+  coverage_gap:                 ['cannot_know', 'requires searching a market he does not trade in to discover he is absent from it'],
+  service_invisibility:         ['cannot_know', 'requires a separate search per service page to find the one he does not come up for'],
+  duplicate_listing:            ['cannot_know', 'a second Google record he has no view of and Google never told him about'],
+  phone_mismatch:               ['cannot_know', 'the number on his site against the number on his listing — two places he never opens side by side'],
+  review_pain_pattern:          ['cannot_know', 'forty reviews tabulated for a repeating theme; he has read them one at a time and never counted'],
+  paying_for_a_search_they_lose:['cannot_know', 'his ads account says one thing and an organic rank check says another; the two live in different places'],
+  paid_traffic_leaks:           ['cannot_know', 'joins an advertising tag in his own markup to where the click can actually land'],
+  social_spend_no_search:       ['cannot_know', 'joins one advertising platform present against another absent, neither visible from the other'],
+  review_velocity_drop:         ['cannot_know', 'an arrival RATE across years, which no screen anywhere shows him'],
+  review_deficit:               ['cannot_know', 'his count against the counts of the businesses ranked above him'],
+  not_compounding:              ['cannot_know', 'his review count divided by his years trading — an arithmetic nobody performs on themselves'],
+  partial_owner_replies:        ['cannot_know', 'a ratio across every review, not a fact visible on any one of them'],
+
+  // ── HAS NOT LOOKED: his own surface, a fault rather than a choice ──
+  broken_page:                  ['has_not_looked', 'a page on his own domain returns an error; he arrives by bookmark and never clicks it'],
+  site_empty:                   ['has_not_looked', 'his site does not load for a stranger, and he is served something different'],
+  listing_closed:               ['has_not_looked', 'Google flagged his listing and sent him no notice'],
+  no_website_on_profile:        ['has_not_looked', 'a field on his own listing that nothing ever prompts him to fill'],
+  expired_certificate:          ['has_not_looked', 'a certificate expiry date nothing surfaces until a browser warns a visitor'],
+  no_https:                     ['has_not_looked', 'a protocol his own bookmark hides from him'],
+  wrong_gbp_category:           ['has_not_looked', 'a category set once at signup and never revisited'],
+  no_hours_on_profile:          ['has_not_looked', 'an unfilled field on his listing'],
+  no_mobile_viewport:           ['has_not_looked', 'a tag in his own markup that only a phone reveals'],
+  tap_to_call_broken:           ['has_not_looked', 'his own number does not dial from a phone, and he has never tapped it'],
+  stale_copyright:              ['has_not_looked', 'a footer year nobody reads on their own site'],
+  placeholder_text:             ['has_not_looked', 'template text left behind, which he scrolls past every time'],
+  thin_profile:                 ['has_not_looked', 'a photo count on a listing he rarely opens'],
+  stale_reviews:                ['has_not_looked', 'the date of the newest review, which no screen puts in front of him'],
+
+  // ── DECIDED: he looks at it and chose it. Telling him is not news ──
+  no_published_pricing:         ['decided', 'he decided not to publish prices, and owners say so in their own words when they delete'],
+  no_offer:                     ['decided', 'his own homepage copy, which he approved'],
+  no_lead_magnet:               ['decided', 'the absence of a thing he never chose to build'],
+  undifferentiated:             ['decided', 'his own positioning copy, written or approved by him'],
+  no_recurring_offer:           ['decided', 'he knows he does not sell maintenance plans; he has simply never wanted to'],
+  // Reclassified. The recorded reason said "he set his own opening hours" — but
+  // the test does not read his hours, it reads `booking === 'phone_only'` off his
+  // WEBSITE. What he decided is when he answers the phone; what the rung asserts
+  // is that a stranger arriving at 11pm finds no route on the site at all. Those
+  // are not the same fact, and the second one is on a surface he does not visit.
+  no_after_hours:               ['has_not_looked', 'the test reads the booking route on his site, not his opening hours — he has never arrived at his own site at 11pm as a stranger would'],
+  long_form:                    ['decided', 'he built the form and chose every field on it'],
+  form_only_no_booking:         ['decided', 'he chose a form over a scheduler'],
+  // The recorded reason described a different rung. The test reads `datedSite`,
+  // a composite over copyright age, a missing viewport, missing https, table
+  // layout and <font>/<center> tags — none of which is a badge, and table-layout
+  // markup is exactly what an owner cannot see.
+  dated_credibility:            ['has_not_looked', 'a composite of markup age — table layout, missing viewport, old tags — none of which is visible to anyone who is not reading the source'],
+  dead_blog:                    ['decided', 'he knows he stopped posting'],
+  no_google_listing:            ['decided', 'he knows whether he ever created one'],
+  low_rating:                   ['decided', 'his own star rating, on the first screen of his own listing'],
+  no_owner_replies:             ['decided', 'he knows whether he answers his reviews'],
+  hiring_marketing_now:         ['decided', 'he posted the job himself — but see the SPENDING exemption: this is the only signal here with a date on it'],
+};
+
+// The bands where money is already moving. A DECIDED finding in one of these is
+// not stale news: he knows he is hiring and he knows he buys ads, and that is
+// exactly why a fact about it has a clock on it.
+const KNOWABILITY_EXEMPT_BANDS = { SPENDING: true };
+
+// ══ SIZED TO SIT INSIDE THE FAMILY, NOT ON TOP OF IT ════════════════════════
+// The first attempt was +20 / +4 / -16, a spread of 36, and four boot checks went
+// red for the right reason: it was bigger than every business-type rule in the
+// file and swamped them. Those rules are more specific than this one and they are
+// each backed by a named live deletion —
+//
+//   REFERRAL_ADJUST     up to -30   David Leon deleted an email about his search
+//                                   ranking; a referral practice does not care
+//   URGENCY_ADJUST      up to +/-26 a flooded basement at 11pm does not compare
+//                                   quotes, it calls whoever answers
+//   SELLABLE_STEP       11 a step   what we can actually sell against
+//   selfFix penalty     up to -21   he fixes it himself and never writes back
+//   BINDING_LAYER_BONUS 10          the constraint we measured
+//
+// A GENERAL dimension must not outrank a SPECIFIC one. "This finding is wrong for
+// this kind of business" is a stronger statement than "this finding is generally
+// more surprising", and a term that overrides it would reinstate the exact email
+// a real prospect deleted.
+//
+// So the spread is 22 — level with a two-step SELLABLE gap and the self-fix
+// penalty, below referral and urgency. The honest consequence, stated plainly:
+// this changes CLOSE CALLS, not blowouts. It will not lift a harm-48 finding over
+// a harm-76 one. Where it does flip an order, both findings were already within
+// about twenty points, which on a real lead is most of them.
+const KNOWABILITY_BONUS = { cannot_know: 12, has_not_looked: 2, decided: -10 };
+
+const knowabilityOf = (id) => (OWNER_KNOWS[id] || [null])[0];
+// ══ A GENERAL RULE STANDS DOWN WHEN A SPECIFIC ONE HAS SPOKEN ═══════════════
+// REFERRAL_ADJUST and URGENCY_ADJUST say "this finding is wrong for THIS KIND OF
+// BUSINESS", and each is backed by a named live failure: David Leon deleted an
+// email about his search ranking because a referral practice does not care about
+// it, and a flooded basement at 11pm does not compare quotes.
+//
+// Knowability says something weaker — "this finding is generally more
+// surprising". Letting the weaker statement out-bid the stronger one reinstates
+// the exact emails those rules exist to stop, and the first version of this did
+// precisely that: REFERRAL CHECK and URGENCY CHECK both went red.
+//
+// The answer is not to inflate the specific rules until they out-bid this one.
+// That is an arms race between two hand-assigned numbers, and this file has a
+// name for it.
+//
+// AND THE STAND-DOWN IS PER LEAD, NOT PER RUNG. The first attempt suppressed
+// knowability only on the rung a business-type rule was touching, and URGENCY
+// CHECK still failed BY ONE POINT: an emergency plumber's "you are shut when the
+// pipe bursts" (+26, suppressed, 107) lost to "six people say you never call
+// back" (+12, unsuppressed, 108). The obvious patch was to add a negative
+// urgency entry for the review pattern, and it would have been wrong — a
+// complaint that nobody calls back is MORE relevant to a 2am emergency, not
+// less. The real error was mixing the two rules on one lead at all.
+//
+// A business-type rule is a statement about what matters for THIS BUSINESS. When
+// one is in force it owns the ordering for that lead, and the general dimension
+// contributes nothing anywhere on it. That removes the one-point arm-wrestle by
+// construction instead of settling it with another hand-tuned number.
+const knowabilityBonus = (id, band, specificRuleActive) => {
+  const k = knowabilityOf(id);
+  if (!k) return 0;                                    // undeclared scores nothing; the boot check refuses it
+  if (specificRuleActive) return 0;
+  if (k === 'decided' && KNOWABILITY_EXEMPT_BANDS[band]) return 0;
+  return KNOWABILITY_BONUS[k] || 0;
+};
+
+// ══ ONE FORMULA, NOT FIVE ═══════════════════════════════════════════════════
+// The opener base lived in five places: the real scorer and four boot checks
+// that each model one adjustment to prove it lands. Every one of them wrote
+// `harm + (novel / 100) * 7` by hand. Adding a term to the real scorer and not
+// to the replicas would leave four checks asserting orderings that no longer
+// happen, which is this file's recorded "two hand-kept copies of one rule"
+// disease with the copies inside the guards.
+// ══ AND NOVELTY IS NOT DELETED, IT IS DEMOTED ═══════════════════════════════
+// The first version replaced `(novel / 100) * 7` outright. Executed across all
+// 42 rungs that produced SEVEN NEW TIES, and `byOpener` is a stable sort over an
+// array pushed in ladder-declaration order — so those ties were being settled by
+// where a rung happens to sit in a 1,300-line literal. This file already says
+// "A TIE MUST NOT BE BROKEN BY EMISSION ORDER."
+//
+// The worst of them put duplicate_listing and review_pain_pattern both on 86,
+// and review_pain_pattern is one of only two rungs with a real reply behind it.
+//
+// The two are not redundant. Knowability is COARSE — three classes, worth 12,
+// 2 or -10 — and answers "what would it have cost him to know this". novel is a
+// fine 0-100 hand-assigned guess at the same question, and at 7 points it was
+// never able to change an outcome on its own. So it keeps exactly the job it was
+// actually doing: separating findings the coarse class cannot.
+// One argument per input, all explicit: the replicas build partial rungs and a
+// destructured object would let one of them silently omit a field.
+const openerBase = (harm, id, band, novel, specificRuleActive) =>
+  Number(harm)
+  + knowabilityBonus(id, band, specificRuleActive)
+  + (Number(novel) || 0) / 100 * 7;
+
 const NOT_SELLABLE_OPENER = {
   review_deficit: 'being behind on reviews is fixed by asking his own customers — he tells his crew and it is done, and there is nothing in it for us to be engaged on',
   not_compounding: 'the fix is asking finished customers for a review, which needs nobody',
@@ -19113,7 +19313,20 @@ const rankHarms = (m = {}) => {
     // Derived from the trade we read off their own homepage, so it is a
     // measurement rather than a judgement. Adjusts ORDER only — every finding
     // still appears in the audit and on the call sheet.
-    const _urgAdj = (URGENCY_ADJUST[m.purchaseUrgency || 'UNKNOWN'] || {})[h.id] || 0;
+    // ══ AN EMPTY OBJECT IS TRUTHY, AND THAT MADE THIS A NO-OP ═════════════
+    // This read `!!URGENCY_ADJUST[m.purchaseUrgency || 'UNKNOWN']`. URGENCY_ADJUST
+    // has three keys and the third is `UNKNOWN: {}` — an empty object, which is
+    // truthy. purchaseUrgency can only ever return EMERGENCY, CONSIDERED or
+    // UNKNOWN, so the lookup ALWAYS hit a key, the flag was ALWAYS true, and
+    // knowabilityBonus returned 0 for every rung on every lead this system can
+    // produce. The dimension was dead at the call site while every fixture that
+    // called it directly passed.
+    //
+    // What decides is whether the profile actually MOVES anything, which is the
+    // question the comment always claimed to be asking.
+    const _urgProfile = URGENCY_ADJUST[m.purchaseUrgency || 'UNKNOWN'] || {};
+    const _specificRuleLead = Object.keys(_urgProfile).length > 0 || !!m.acquisitionIsReferral;
+    const _urgAdj = _urgProfile[h.id] || 0;
     // ══ A REFERRAL PRACTICE IS NOT COMPETING FOR A MAP-PACK CLICK ═════════
     // Six of eight simulator deletes were "you do not know how I get
     // customers." David Leon, estate planning, 20 years, 225 reviews: "my
@@ -19158,7 +19371,19 @@ const rankHarms = (m = {}) => {
     const _sellable = _soleRoute ? 3 : (SELLABLE[h.id] || 3);
     const _sellPenalty = (5 - _sellable) * SELLABLE_STEP;
     const openerScore = _disqualified ? 0
-      : Math.max(0, Math.round(harmAdj + (h.novel / 100) * 7 + _minedBonus + _spendBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
+      // openerBase carries harm PLUS what it would have cost him to know this.
+      // It replaces `harm + (novel / 100) * 7`, in which novel could move a
+      // finding by at most 7 points against a harm range of 63 — see OWNER_KNOWS
+      // for the four real sends that say harm is the wrong primary sort for an
+      // EMAIL. byHarm, which is what the AUDIT and the call sheet read, is
+      // untouched: what costs him most and what earns a reply are different
+      // questions with different answers, and this file has said so for weeks.
+      // Floored at 1, not 0. A zero score is how a DISQUALIFIED finding is
+      // marked above, and with a knowability penalty a genuinely small finding
+      // could now reach zero on its own and vanish — so a lead whose only finding
+      // is a small one would produce no email at all rather than a weak one.
+      // SELLABLE CHECK caught exactly that. The two states must stay distinct.
+      : Math.max(1, Math.round(openerBase(harmAdj, h.id, h.band, h.novel, _specificRuleLead) + _minedBonus + _spendBonus + _urgAdj + _refAdj + _bindingBonus - _sellPenalty - _selfFixPenalty));
 
     // ══ THE FINDING IS THE DOOR. THE FRAMING IS THE LOCK. ═══════════════
     // Mike's Part 12 rule 1: could he forward this and consider it handled? An
@@ -28619,6 +28844,87 @@ const findDuplicateListing = async ({ companyName, placeId, website, phone, loca
   }
 };
 
+// ══ WE MEASURED HIM ON A SEARCH HIS CUSTOMERS DO NOT RUN ════════════════════
+// Jose Barrera, live, on why he deleted the email:
+//
+//   "They're talking about review counts and Google rankings like those move the
+//    needle, but they clearly don't know that my patients find me because they're
+//    looking for a FACIAL plastic surgeon in San Antonio."
+//
+// He is right and the finding was true. We searched "plastic surgery practice in
+// San Antonio" — the Find CATEGORY we happened to discover him under — and
+// reported, accurately, that three businesses outrank him on it. It is simply not
+// the search that brings him patients, and his business is NAMED after the one
+// that does.
+//
+// The head term comes from GP_CATEGORIES, which is a discovery bucket: it is
+// chosen so a Places query returns lots of plausible businesses, and that is a
+// different job from naming what a customer types. On a general practitioner the
+// two coincide. On a specialist they do not, and the specialists are the top of
+// this ICP — the highest ticket sizes in the trade list are all specialisms.
+//
+// The strongest available correction costs nothing and is not a guess: THE OWNER
+// NAMED HIS OWN BUSINESS. A modifier sitting in the registered business name is
+// his own statement of what he sells, and it is the same word his customers type.
+//
+// Bounded four ways, because a narrower search is not automatically a better one:
+//   • the modifier must be DECLARED below, not inferred — a made-up narrowing is
+//     the same class of error as the sector label this function already refuses
+//   • it must appear in the NAME, not merely somewhere on the site. A services
+//     page mentioning "commercial roofing" once does not make them a commercial
+//     roofer; putting it on the door does
+//   • the category phrase must not already carry it, or we would say it twice
+//   • the narrowed search must still return a real field of competitors. A phrase
+//     only four businesses in the county compete on makes "you are not in the top
+//     three" arithmetic rather than a finding, so below a floor we keep the
+//     generic term and say so in the log
+const TRADE_MODIFIERS = [
+  // Medical and dental specialisms. A facial plastic surgeon and a plastic
+  // surgeon are different searches with different patients.
+  'facial', 'cosmetic', 'oral', 'maxillofacial', 'pediatric', 'paediatric',
+  'orthodontic', 'endodontic', 'periodontal', 'reconstructive', 'vascular',
+  'bariatric', 'sports', 'holistic', 'functional',
+  // Trades. A commercial roofer does not want the residential search and the
+  // residential roofer does not want the commercial one.
+  'commercial', 'residential', 'industrial', 'structural', 'emergency',
+  'custom', 'luxury', 'historic', 'mobile', 'marine',
+];
+// A modifier is only meaningful in front of the thing it modifies. "Custom Homes"
+// narrows "home builder"; "Custom Signs Inc" in front of a plumbing category does
+// not describe a plumbing specialism, so the head noun has to be nearby.
+const narrowTradePhrase = (phrase, companyName) => {
+  const p = String(phrase || '').toLowerCase().trim();
+  const n = String(companyName || '').toLowerCase();
+  if (!p || !n) return null;
+  // The head noun of the category, e.g. "surgery" from "plastic surgery practice".
+  const words = p.split(/\s+/).filter(Boolean);
+  for (const mod of TRADE_MODIFIERS) {
+    if (!new RegExp('\\b' + mod + '\\b').test(n)) continue;
+    if (new RegExp('\\b' + mod + '\\b').test(p)) continue;   // already there
+    // The modifier must sit within three words of a word the category also uses,
+    // so "Facial Plastic Surgery" narrows "plastic surgery" and "Mobile Home
+    // Park Management" does not narrow "plumber".
+    // ══ THE SAME STEM TRAP, FOR THE THIRD TIME IN THIS FILE ════════════════
+    // A trade appears in a business name under a different ending than in the
+    // category phrase, every time: dentist/Dentistry, plumber/Plumbing,
+    // roofer/Roofing, electrician/Electric. Matching the category word literally
+    // found none of them — "Bright Pediatric Dentistry" failed to narrow
+    // "dentist", caught by this check's own fixture before it shipped.
+    //
+    // So the category word is reduced to a stem and the name is matched on the
+    // stem plus any ending. The stem floor of four characters is what stops
+    // "co" or "air" matching half the alphabet.
+    const near = words.some((w) => {
+      const stem = w.replace(/[^a-z]/g, '').replace(/(?:ers|er|ing|ry|s|y)$/, '');
+      if (stem.length < 4) return false;
+      return new RegExp('\\b' + mod + '\\b[\\w\\s&,.-]{0,24}\\b' + stem + '[a-z]{0,5}\\b').test(n);
+    });
+    if (!near) continue;
+    return { phrase: `${mod} ${p}`, modifier: mod };
+  }
+  return null;
+};
+
 const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
@@ -28640,7 +28946,14 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
   // The customer-facing phrase for this trade, reused from the Find category map so
   // the two always agree. Falls back to the raw industry label.
   const cat = GP_CATEGORIES.find(c => c.label.toLowerCase() === String(industry).toLowerCase());
-  const phrase = cat ? cat.q : (naturalTrade(industry) || String(industry).toLowerCase());
+  const _generic = cat ? cat.q : (naturalTrade(industry) || String(industry).toLowerCase());
+  // If his own registered name narrows the trade, that is the search his
+  // customers run. See narrowTradePhrase for why the name and not the site.
+  const _narrowed = narrowTradePhrase(_generic, companyName);
+  const phrase = _narrowed ? _narrowed.phrase : _generic;
+  if (_narrowed) {
+    console.log(`\u{1F50E} TRADE PHRASE [${companyName}]: searching "${phrase}" rather than "${_generic}" \u2014 the word "${_narrowed.modifier}" is in their own registered business name, so it is what they sell and what their customers type. The generic term is the bucket we DISCOVERED them under, which is a different job. Jose Barrera deleted an email measured on the generic term with the words "they clearly don't know my patients are looking for a FACIAL plastic surgeon".`);
+  }
 
   // City only. A state or ZIP makes the query national or absurdly narrow, and
   // "foundation repair company in NC 28025" is not a search any human performs.
@@ -28703,6 +29016,18 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     if (d.error) return { checked: false, why: `Places error: ${d.error.message || d.error.status}` };
     const places = d.places || [];
     if (!places.length) return { checked: false, why: `no results at all for "${query}"` };
+    // ══ A FIELD TOO SMALL TO BE A POSITION ═══════════════════════════════════
+    // "You are not in the top three" is a finding when twenty businesses compete
+    // and arithmetic when five do. This matters most on a narrowed phrase, which
+    // is exactly where the field can be thin — but it was worth having on the
+    // generic term too, and there was no floor at all.
+    //
+    // Refusing is the correct outcome: everything downstream already treats
+    // checked:false as "no claim about search is permitted", and a weak true
+    // sentence spends the one first impression this domain gets on him.
+    if (places.length < 6) {
+      return { checked: false, why: `only ${places.length} business(es) came back for "${query}" — too small a field to call a position. Below six, "not in the top three" is arithmetic rather than a finding${_narrowed ? `, and this was the narrowed phrase; the generic term is "${_generic}"` : ''}` };
+    }
 
     // == PROVE THE SEARCH LANDED IN THEIR TOWN BEFORE BELIEVING IT ===========
     // Naming the state in the query fixes the case we found. It cannot fix the
@@ -37779,10 +38104,17 @@ app.listen(PORT, () => {
     const _rungIds = HARM_LADDER.map(h => h.id);
     const _unmapped = _rungIds.filter(id => !HARM_LADDER_LAYER[id]);
     const _phantom = Object.keys(HARM_LADDER_LAYER).filter(id => !_rungIds.includes(id));
-    const _score = (h, binding) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+    const _score = (h, binding) => Math.round(openerBase(h.harm, h.id, h.band, h.novel, false)
       + (HARM_LADDER_LAYER[h.id] === binding ? BINDING_LAYER_BONUS : 0));
     // A genuine near-tie: 2 points apart, one of them in the binding layer.
-    const _tieA = { id: 'not_compounding', harm: 56, novel: 50 };        // LEADS
+    // ══ A NEAR-TIE HAS TO STILL BE ONE ═══════════════════════════════════
+    // These were not_compounding (56) against no_published_pricing (54) — two
+    // points apart under the old formula. They are in DIFFERENT knowability
+    // classes, so once the opener started scoring that, they were 24 apart and
+    // the binding bonus could not settle a tie that no longer existed.
+    // Two findings he equally chose, still two points apart, still in different
+    // layers: the fixture measures the binding bonus and nothing else.
+    const _tieA = { id: 'long_form', harm: 56, novel: 50 };              // CONVERSION
     const _tieB = { id: 'no_published_pricing', harm: 54, novel: 50 };   // OFFER
     const _tieWinner = _score(_tieB, 'OFFER') > _score(_tieA, 'OFFER') ? 'no_published_pricing' : 'not_compounding';
     // A dominant finding the bonus must NOT overturn: 23 points clear.
@@ -37823,8 +38155,12 @@ app.listen(PORT, () => {
     const _rungIds = HARM_LADDER.map(h => h.id);
     const _unscored = _rungIds.filter(id => !SELLABLE[id]);
     const _phantom = Object.keys(SELLABLE).filter(id => !_rungIds.includes(id));
-    const _sc = (h) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
-      - ((5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP));
+    // Floored at 1 exactly as the real scorer is: zero is reserved for a
+    // DISQUALIFIED finding, and a small finding must rank last rather than
+    // disappear. The replica had no floor and the real scorer's was added when a
+    // knowability penalty made the difference reachable.
+    const _sc = (h) => Math.max(1, Math.round(openerBase(h.harm, h.id, h.band, h.novel, false)
+      - ((5 - (SELLABLE[h.id] || 3)) * SELLABLE_STEP)));
     // Mostafa's real ladder: the retainer pitch against the page edit.
     const _pitch = { id: 'absent_from_search', harm: 95, novel: 85 };
     const _pageEdit = { id: 'no_published_pricing', harm: 54, novel: 30 };
@@ -38955,7 +39291,7 @@ app.listen(PORT, () => {
   // criminal defence are legal work that genuinely competes in search — getting
   // those wrong would bury a real finding on the leads it matters most for.
   try {
-    const _sc = (h, ref) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+    const _sc = (h, ref) => Math.round(openerBase(h.harm, h.id, h.band, h.novel, !!ref)
       + (ref ? (REFERRAL_ADJUST[h.id] || 0) : 0));
     const _rank = { id: 'outranked_by_weaker', harm: 92, novel: 92 };
     const _offer = { id: 'no_offer', harm: 56, novel: 45 };
@@ -39001,7 +39337,7 @@ app.listen(PORT, () => {
   // Derived from the trade we read off their homepage, so it is a measurement.
   // Order only — nothing is suppressed from the audit or the call sheet.
   try {
-    const _score = (h, urg) => Math.round(Number(h.harm) + (Number(h.novel) / 100) * 7
+    const _score = (h, urg) => Math.round(openerBase(h.harm, h.id, h.band, h.novel, Object.keys(URGENCY_ADJUST[urg] || {}).length > 0)
       + (h.id === 'review_pain_pattern' ? 10 : 0)
       + ((URGENCY_ADJUST[urg] || {})[h.id] || 0));
     const _midwest = [
@@ -44143,6 +44479,237 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ SEND CAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ WHAT IT WOULD HAVE COST HIM TO KNOW IT ══════════════════════════════
+  // The opener used to be sorted by HARM, with novelty worth at most 7 points
+  // against a harm range of 63. Both findings behind every real reply this
+  // project has had needed work the owner has not done; all three deletes were
+  // things he looks at weekly and chose. See OWNER_KNOWS.
+  try {
+    const _fails = [];
+    const _rungs = (typeof HARM_LADDER !== 'undefined' && Array.isArray(HARM_LADDER)) ? HARM_LADDER : [];
+    if (_rungs.length < 30) _fails.push('the ladder could not be read');
+
+    // 1. COMPLETENESS. A rung added without a class scores zero on this
+    //    dimension and silently ranks as though the question were never asked.
+    const _undeclared = _rungs.map(h => h && h.id).filter(id => id && !OWNER_KNOWS[id]);
+    if (_undeclared.length) {
+      _fails.push(`${_undeclared.length} rung(s) have no knowability class and therefore score zero on it: ${_undeclared.slice(0, 6).join(', ')}. A rung cannot be added without deciding what it would have cost him to know it`);
+    }
+    const _phantom = Object.keys(OWNER_KNOWS).filter(id => !_rungs.some(h => h && h.id === id));
+    if (_phantom.length) _fails.push(`OWNER_KNOWS declares ${_phantom.length} id(s) that are not in the ladder: ${_phantom.join(', ')}`);
+    for (const [id, row] of Object.entries(OWNER_KNOWS)) {
+      if (!Array.isArray(row) || !KNOWABILITY_BONUS.hasOwnProperty(row[0])) _fails.push(`${id} has an illegal knowability class`);
+      else if (!row[1] || String(row[1]).length < 20) _fails.push(`${id} has no reason recorded, so nobody can audit the call`);
+    }
+
+    // 2. THE MAGNITUDES ARE ORDERED, and the penalty is real rather than token.
+    if (!(KNOWABILITY_BONUS.cannot_know > KNOWABILITY_BONUS.has_not_looked
+          && KNOWABILITY_BONUS.has_not_looked > KNOWABILITY_BONUS.decided)) {
+      _fails.push('the knowability bonuses are not ordered, so the dimension says nothing');
+    }
+    // ══ AND A CEILING, WHICH THE FIRST VERSION HAD NO ASSERTION FOR ═══════
+    // Inflating this to +/-40 left every check green, because REFERRAL and
+    // URGENCY stand down and cannot object. The rules that DO still compete with
+    // it are the ones that never stand down: a two-step SELLABLE gap (22), the
+    // self-fix penalty (21) and the binding-layer bonus (10). A general
+    // dimension that out-bids all three would decide every opener on its own,
+    // which is the failure this replaced rather than a new one.
+    const _spread = KNOWABILITY_BONUS.cannot_know - KNOWABILITY_BONUS.decided;
+    const _competes = Math.max(2 * SELLABLE_STEP, 21, BINDING_LAYER_BONUS);
+    if (_spread > _competes) {
+      _fails.push(`the knowability spread is ${_spread}, above the ${_competes}-point rules it still competes with — what we can sell against, whether he can fix it alone, and the constraint we measured. A general dimension that outranks all three decides every opener by itself`);
+    }
+    if (KNOWABILITY_BONUS.cannot_know - KNOWABILITY_BONUS.decided < 20) {
+      _fails.push(`the spread between a finding he cannot know and one he chose is only ${KNOWABILITY_BONUS.cannot_know - KNOWABILITY_BONUS.decided} points — smaller than the gap between adjacent findings on a real lead, which is what novelty already was at 7 points and why it never changed an outcome`);
+    }
+
+    // 3. THE ORDERINGS THIS EXISTS TO PRODUCE. Each is a real pairing from the
+    //    ladder, and each FLIPS only because of this dimension.
+    const _by = {};
+    for (const h of _rungs) if (h && h.id) _by[h.id] = h;
+    const _b = (id) => { const h = _by[id]; return h ? openerBase(h.harm, h.id, h.band, h.novel, false) : null; };
+    // Each pair FLIPS: the loser outranks the winner on raw harm, and only this
+    // dimension reverses it. A pair that was already ordered correctly would
+    // prove nothing, which is the fixture-that-measures-nothing trap.
+    const ORDER = [
+      ['social_spend_no_search', 'no_after_hours',
+        'one advertising platform present and another absent is a join he cannot make; his opening hours are his own decision. Harm ranks the hours 4 points higher'],
+      ['social_spend_no_search', 'no_recurring_offer',
+        'harm ranks not selling a maintenance plan 6 points above it, and he knows perfectly well he does not sell one'],
+      ['phone_mismatch', 'long_form',
+        'harm ranks the form 4 points higher, and he chose every field on it; he has never seen his two phone numbers side by side'],
+      ['phone_mismatch', 'form_only_no_booking',
+        'harm ranks the booking choice 10 points higher, and it is a choice'],
+    ];
+    for (const [win, lose] of ORDER) {
+      const a = _by[win], c = _by[lose];
+      if (a && c && !(Number(c.harm) > Number(a.harm))) {
+        _fails.push(`${win} already outranks ${lose} on raw harm, so this pair proves nothing about the new dimension`);
+      }
+    }
+    for (const [win, lose, why] of ORDER) {
+      const a = _b(win), c = _b(lose);
+      if (a === null || c === null) { _fails.push(`${win} or ${lose} is missing from the ladder`); continue; }
+      if (!(a > c)) _fails.push(`${win} (${a}) does not outrank ${lose} (${c}) for the opener — ${why}`);
+    }
+    // And a fault on his own site still beats a finding he cannot see but which
+    // costs far less. This dimension ADJUSTS the order; it does not replace it.
+    if (!(_b('broken_page') > _b('phone_mismatch'))) {
+      _fails.push('a booking page returning an error no longer outranks a phone-number mismatch — knowability has stopped adjusting harm and started replacing it');
+    }
+
+    // 4. THE EXEMPTION. The one signal here with a date on it is something he
+    //    obviously knows — he posted the job — and penalising it would demote
+    //    the only clock in the pipeline.
+    const _hire = _by['hiring_marketing_now'];
+    if (_hire) {
+      if (knowabilityBonus(_hire.id, _hire.band, false) !== 0) {
+        _fails.push('a live hire is being penalised for being known to him — it is the only measured signal in this system with a date attached, and PART 4 section 1 calls the absence of a clock the largest gap in the pipeline');
+      }
+      if (knowabilityBonus('no_published_pricing', 'OPINION') >= 0) {
+        _fails.push('the exemption is leaking — a finding he chose is not being penalised outside the SPENDING band');
+      }
+    }
+
+    // ══ 5. AND THE STATE PRODUCTION ACTUALLY REACHES ════════════════════════
+    // Everything above calls the function directly. The first version of this
+    // check did ONLY that, and the change was a complete no-op in production for
+    // a reason no fixture could see: the per-lead stand-down flag read
+    // `!!URGENCY_ADJUST[profile]`, and URGENCY_ADJUST's third key is `UNKNOWN: {}`
+    // — an empty object, which is truthy. Every lead stood down. Every rung
+    // scored zero on this dimension. Every fixture passed.
+    //
+    // That is the fourth time in this session a check exercised the callee and
+    // not the call site, and the second time it exercised only the configuration
+    // where nothing can go wrong. So the flag is recomputed here exactly as the
+    // scorer computes it, for every value purchaseUrgency can return.
+    {
+      const _flagFor = (urg, ref) => Object.keys(URGENCY_ADJUST[urg || 'UNKNOWN'] || {}).length > 0 || !!ref;
+      const _profiles = Object.keys(URGENCY_ADJUST);
+      if (!_profiles.includes('UNKNOWN')) _fails.push('URGENCY_ADJUST no longer has an UNKNOWN profile, so the stand-down flag is reading something else');
+      if (_flagFor('UNKNOWN', false) !== false) {
+        _fails.push('the stand-down fires on an ordinary lead with no urgency profile and no referral signal — which means this dimension contributes NOTHING on the leads that make up most of the pipeline, and every fixture above still passes because they call the function directly');
+      }
+      if (_flagFor('EMERGENCY', false) !== true) _fails.push('the stand-down does NOT fire on an emergency trade, so the urgency rule and this dimension are fighting again');
+      if (_flagFor('UNKNOWN', true) !== true) _fails.push('the stand-down does not fire on a referral business');
+      // And it has to actually change a score in the ordinary case.
+      const _pm = _by['phone_mismatch'];
+      if (_pm && openerBase(_pm.harm, _pm.id, _pm.band, _pm.novel, false) === openerBase(_pm.harm, _pm.id, _pm.band, _pm.novel, true)) {
+        _fails.push('standing down and not standing down produce the same score, so the flag decides nothing');
+      }
+      // The source must not go back to a truthy-object test.
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('!!URGENCY_ADJUST[m.purchase' + 'Urgency') >= 0) {
+        _fails.push('the stand-down flag is testing whether a KEY EXISTS rather than whether the profile moves anything — UNKNOWN is an empty object and an empty object is truthy, which made this whole dimension dead on every lead');
+      }
+    }
+
+    // 6. NO NEW TIES. Removing the fine tiebreak put seven pairs on identical
+    //    scores, and byOpener is a stable sort over an array pushed in ladder
+    //    declaration order — so a 1,300-line literal's layout was deciding which
+    //    finding opened the email. The worst pair was duplicate_listing against
+    //    review_pain_pattern, and the second of those is one of only two rungs
+    //    with a real reply behind it.
+    {
+      const _scores = new Map();
+      const _dupes = [];
+      for (const h of _rungs) {
+        if (!h || !h.id) continue;
+        const s = openerBase(h.harm, h.id, h.band, h.novel, false);
+        if (_scores.has(s)) _dupes.push(`${h.id} ties ${_scores.get(s)} at ${s}`);
+        else _scores.set(s, h.id);
+      }
+      if (_dupes.length > 2) {
+        _fails.push(`${_dupes.length} pair(s) of rungs now score identically for the opener, so which one leads is decided by where it sits in the ladder literal: ${_dupes.slice(0, 3).join('; ')}. This file's own rule is that a tie must not be broken by emission order`);
+      }
+    }
+
+    // 7. A REPORT, NOT AN ASSERTION. `novel` is a hand-assigned guess at the same
+    //    question and it still drives the audit's ambient classification, so it
+    //    is not safe to change from here. Where the two disagree, print it: a
+    //    reviewer should look, and a check that quietly rewrote a number the
+    //    audit reads would be worse than one that says what it found.
+    const _odd = [];
+    for (const h of _rungs) {
+      const k = knowabilityOf(h && h.id);
+      const n = Number(h && h.novel);
+      if (!k || !Number.isFinite(n)) continue;
+      if (k === 'cannot_know' && n <= 40) _odd.push(`${h.id} (cannot know, novel ${n})`);
+      if (k === 'decided' && n >= 75) _odd.push(`${h.id} (he chose it, novel ${n})`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ KNOWABILITY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ KNOWABILITY CHECK: all ${_rungs.length} rungs declare what it would have cost the owner to know them, and the opener is ranked on it rather than on harm alone — novelty was worth 7 points against a harm range of 63, which is why it never once changed an outcome. Both findings behind every real reply needed work he has not done; all three deletes were things he looks at weekly and chose. Money already moving is exempt, so the one signal with a date on it is not demoted for being known.${_odd.length ? ` REPORT, not a failure: ${_odd.length} rung(s) where the declared class and the hand-assigned novel score disagree and a reviewer should look — ${_odd.slice(0, 4).join('; ')}.` : ''}`);
+    }
+  } catch (e) {
+    console.log(`⛔ KNOWABILITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SEARCH WE MEASURE HIM ON HAS TO BE THE ONE HE SELLS ON ═════════
+  // Jose Barrera, on why he deleted a true email: "they clearly don't know that
+  // my patients find me because they're looking for a FACIAL plastic surgeon in
+  // San Antonio." We searched "plastic surgery practice" — the bucket we
+  // DISCOVERED him under — and his own registered business name says facial.
+  //
+  // Both directions are fixtured. A filter that narrows everything is worse than
+  // one that narrows nothing: it would move every generalist onto a thinner
+  // search and manufacture visibility findings out of small fields.
+  try {
+    const _fails = [];
+    const NARROW = [
+      ['plastic surgery practice', 'Jose Barrera MD Facial Plastic Surgery', 'facial plastic surgery practice'],
+      ['roofing contractor', 'Peters Commercial Roofing LLC', 'commercial roofing contractor'],
+      ['home builder', 'Hannah Custom Homes', 'custom home builder'],
+      ['dentist', 'Bright Pediatric Dentistry', 'pediatric dentist'],
+    ];
+    const LEAVE = [
+      ['plumber', 'George Plumbing Co'],
+      ['dentist', 'Smith Family Dentistry'],
+      ['roofing contractor', 'All American Roofing'],
+      ['hvac contractor', 'Aire-Flo Heating and Cooling'],
+      ['cosmetic dentist', 'Jane Mays Cosmetic Dentistry'],
+      ['plumber', 'Mobile Home Park Management'],
+      ['electrician', 'Arlington Emergency Electric'],
+    ];
+    for (const [p, n, want] of NARROW) {
+      const r = narrowTradePhrase(p, n);
+      if (!r || r.phrase !== want) {
+        _fails.push(`"${n}" should be measured on "${want}" and this returns "${r ? r.phrase : 'the generic term'}" — their own name says what they sell`);
+      }
+    }
+    for (const [p, n] of LEAVE) {
+      const r = narrowTradePhrase(p, n);
+      if (r) {
+        _fails.push(`"${n}" is being narrowed to "${r.phrase}" and should not be — narrowing a generalist moves him onto a thinner search and manufactures a visibility finding out of a small field`);
+      }
+    }
+    // Every declared modifier must be a word, not a stem. A stem with a word
+    // boundary after it matches only itself, which this file has been caught by
+    // three times.
+    for (const m of TRADE_MODIFIERS) {
+      if (!/^[a-z]{4,}$/.test(m)) _fails.push(`trade modifier "${m}" is not a plain whole word`);
+    }
+    // And the wiring: the rank search must actually USE it.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('const _narrowed = narrowTradePhrase(_generic, ' + 'companyName)') < 0) {
+        _fails.push('the rank search no longer narrows the phrase, so a specialist is measured on the bucket we discovered him under');
+      }
+      if (_src.indexOf('if (places.length < ' + '6)') < 0) {
+        _fails.push('the thin-field floor is gone — "not in the top three" out of five businesses is arithmetic, not a finding, and a narrowed phrase is exactly where a field goes thin');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ TRADE PHRASE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ TRADE PHRASE CHECK: ${NARROW.length} specialist name(s) are measured on the search their own name says they sell, and ${LEAVE.length} generalist name(s) are left on the generic term. A rank finding is only as good as its query, and a true finding on a query his customers never run reads to him as not knowing his business — which is the sentence Jose Barrera deleted.`);
+    }
+  } catch (e) {
+    console.log(`⛔ TRADE PHRASE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A SCOPE PHRASE THAT CAN WALK TO ANOTHER SENTENCE ════════════════════
