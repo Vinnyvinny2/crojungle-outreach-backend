@@ -24485,19 +24485,56 @@ const cacheContact = async (domain, { owner, email, revenue, pain }) => {
   });
 };
 
+// ══ ONE ICP NAME FILTER, NOT TWO ══════════════════════════════
+// There were two, and they had drifted. This one decided whether to spend a
+// Companies API credit sizing a business; the size gate three hundred lines down
+// decided whether to keep it. Both refused a name containing "construction
+// company", so a two-person builder was never sized AND then blocked for having
+// no size — two copies of one wrong rule reinforcing each other.
+//
+// What the live run of 2026-08-20 showed, in the log's own numbers: the size
+// gate blocked 15 leads, 9 on a VERIFIED headcount and 6 on the name pattern.
+// All nine headcount blocks were right. FIVE OF THE SIX NAME BLOCKS WERE WRONG:
+//
+//   Twin Sisters Construction Company LLC          "construction company"
+//   Vineyard Construction Company LLC              "construction company"
+//   Louisville Paving & Construction Company       "construction company"
+//   Audrey Echt Dermatology & Skin Cancer Center   "cancer center"
+//   South Carolina Skin Cancer Center              "cancer center"
+//
+// Tested against twenty-five realistic owner-operated names from our own trade
+// list, the old pattern refused thirteen. It refused "National Roofing & Sheet
+// Metal" on national, "Federal Way Plumbing" on federal — Federal Way is a city
+// in Washington — and "Municipal Plumbing Supply" on municipal.
+//
+// The list mixed three kinds of signal and applied one rule to all of them:
+// INSTITUTION words (university, county of, housing authority), which are
+// reliable; SCALE words (enterprises inc, holdings inc, fulfillment center),
+// which are reliable; and words that are merely COMMON IN SMALL-BUSINESS NAMES,
+// which are not, and which were doing the damage. Only the third kind was cut.
+//
+// Health is owned by ICP_BIG_HEALTH alone, because it is the only one of these
+// carrying a small-practice escape. The same terms were duplicated in the
+// institution list WITHOUT that escape, so a dermatology practice survived the
+// rule written to spare it and was then refused by a copy of it.
+const ICP_STAFFING = /\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services))\b/i;
+const ICP_INSTITUTION = /\b(cruise line|airlines?|airways|university|county of|city of|town of|township|state of|department of|social security|federal government|federal reserve|federal bureau|municipal authority|municipal district|municipal utilit\w*|housing authority|housing finance|public schools?|rehabilitation and nursing|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|home depot|rentals inc|enterprises inc|holdings inc|automotive group|dealer group|supermarkets|grocery|distribution center|fulfillment center)\b/i;
+// "Skin cancer center" is a dermatology practice by definition; a "cancer
+// center" without it is an oncology institution. That one word is the whole
+// difference between South Carolina Skin Cancer Center, which is exactly who we
+// sell to, and MD Anderson Cancer Center, which is not.
+const ICP_SMALL_PRACTICE = /\b(dental|dentist|orthodont|veterinar|\bvet\b|derma|skin cancer|med spa|medspa|chiropract|optometr|physical therapy|family medicine|pediatric dent|urgent care clinic|aesthetic)\b/i;
+const ICP_BIG_HEALTH = /\b(health care|healthcare|medical care|health system|healthcare system|health network|hospital|regional medical|medical center|health plan|health services|healthcare services|cancer center|cancer institute|national health)\b/i;
+
 // Cheap name-only enterprise/staffing/health screen. Lets us SKIP paying The
 // Companies API to "confirm" what a name pattern already rejects for free — so a
 // credit is only ever spent on a lead that could plausibly be our ICP.
 const looksLikeEnterpriseByName = (rawName) => {
   const n = (rawName || '').toLowerCase();
   if (!n) return false;
-  const STAFFING = /\b(staffing|recruit(er|ing|ment)?|talent|personnel|placement|headhunt|manpower|workforce|temp agency|search partners|search group|employment (agency|partners|services))\b/;
-  const ENTERPRISE = /\b(health systems?|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|town of|township|state of|department of|housing authority|public schools?|municipal|cancer center|cancer institute|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|worldwide|enterprises inc|holdings inc|construction company|automotive group|dealer group|distribution center|fulfillment center)\b/;
-  const BIG_HEALTH = /\b(health care|healthcare|medical care|health system|hospital|regional medical|health plan)\b/;
-  const SMALL_PRACTICE = /\b(dental|dentist|orthodont|veterinar|\bvet\b|derma|med spa|medspa|chiropract|optometr|physical therapy|family medicine|pediatric|urgent care|aesthetic)\b/;
-  if (STAFFING.test(n)) return true;
-  if (ENTERPRISE.test(n)) return true;
-  if (BIG_HEALTH.test(n) && !SMALL_PRACTICE.test(n)) return true;
+  if (ICP_STAFFING.test(n)) return true;
+  if (ICP_INSTITUTION.test(n)) return true;
+  if (ICP_BIG_HEALTH.test(n) && !ICP_SMALL_PRACTICE.test(n)) return true;
   return false;
 };
 
@@ -25240,7 +25277,40 @@ const WEIGHTS = {
     // block anything showing clear enterprise markers (that wastes research).
     // Decision uses independent signals; verified headcount wins when present,
     // otherwise we combine name-pattern + public-company + no-data-is-SMB logic.
-    const ENTERPRISE_NAME = /\b(health systems?|healthcare system|medical center|health network|cruise line|airlines?|airways|university|federal|county of|city of|town of|township|state of|department of|social security|national health|regional medical|memorial hospital|health plan|housing authority|housing finance|public schools?|municipal|cancer center|cancer institute|rehabilitation and nursing|logistics|freight systems|truck rental|rent[- ]?a[- ]?car|dealer careers|medical centers|healthcare allied|home depot|rentals inc|national|worldwide|enterprises inc|holdings inc|construction company|automotive group|dealer group|supermarkets|grocery|distribution center|fulfillment center)\b/i;
+    // ══ THIS LIST WAS BLOCKING OUR EXACT ICP ═══════════════════════
+    // Live run, 2026-08-20: the size gate blocked 15 leads — 9 on a VERIFIED
+    // headcount and 6 on this name pattern. Every one of the headcount blocks was
+    // right. Five of the six name blocks were wrong, and wrong in the trades we
+    // sell to hardest:
+    //
+    //   Twin Sisters Construction Company LLC      "construction company"
+    //   Vineyard Construction Company LLC          "construction company"
+    //   Louisville Paving & Construction Company   "construction company"
+    //   Audrey Echt Dermatology & Skin Cancer Center   "cancer center"
+    //   South Carolina Skin Cancer Center              "cancer center"
+    //
+    // A dermatology practice named after the dermatologist is the most
+    // owner-operated business there is. "Construction Company" is a legal suffix
+    // on a two-person builder, not a size signal.
+    //
+    // Tested against twenty-five realistic owner-operated names across our own
+    // trade list, the old pattern blocked THIRTEEN of them. It blocked
+    // "National Roofing & Sheet Metal" on the word national, "Federal Way
+    // Plumbing" on federal — Federal Way is a city in Washington — and
+    // "Municipal Plumbing Supply" on municipal.
+    //
+    // ══ WHY: THREE DIFFERENT SIGNALS UNDER ONE RULE ═════════════════
+    // The list mixed institution words (university, county of, housing
+    // authority) which are reliable, scale words (enterprises inc, holdings inc,
+    // distribution center) which are reliable, and words that are merely COMMON
+    // in small-business names, which are not. Only the third kind was removed.
+    //
+    // The health terms were the other half of it. BIG_HEALTH, twenty lines below,
+    // already blocks large health systems AND carries a SMALL_PRACTICE escape so
+    // a dental or dermatology practice survives it. Those same terms were
+    // duplicated here WITHOUT the escape, so the escape was defeated by a copy of
+    // the rule it was written for. This file's recorded name for that is a guard
+    // in the wrong function. They are gone from here; BIG_HEALTH owns health.
     // KNOWN NATIONAL BRANDS that keep slipping through with no size data. These are
     // household-name enterprises Adzuna surfaces constantly. A hard name-block is the
     // only reliable stop when their headcount isn't in the free API tier.
@@ -25337,16 +25407,31 @@ const WEIGHTS = {
       // practices (dental/vet/med-spa/chiro are perfect ICP). Big systems carry
       // 'health care/healthcare/medical care/health system/hospital'; small
       // practices carry the practice type instead.
-      const SMALL_PRACTICE = /\b(dental|dentist|orthodont|veterinar|\bvet\b|derma|med spa|medspa|chiropract|optometr|physical therapy|family medicine|pediatric dent|urgent care clinic|aesthetic)\b/i;
-      const BIG_HEALTH = /\b(health care|healthcare|medical care|health system|healthcare system|health network|hospital|regional medical|medical center|health plan|health services|healthcare services)\b/i;
-      if (BIG_HEALTH.test(nameLower) && !SMALL_PRACTICE.test(nameLower)) {
+      // "Skin cancer center" is a dermatology practice by definition; a "cancer
+      // center" without it is an oncology institution. That one word is the whole
+      // difference between South Carolina Skin Cancer Center, which is exactly
+      // who we sell to, and MD Anderson Cancer Center, which is not.
+      // cancer center and cancer institute moved here from ENTERPRISE_NAME, which
+      // had no small-practice escape and was therefore overriding this rule with
+      // a copy of it.
+      if (ICP_BIG_HEALTH.test(nameLower) && !ICP_SMALL_PRACTICE.test(nameLower)) {
         console.log(`BLOCKED [${c.name}]: large health system (name)`);
         blockedCount++; blockReasons.bigHealth = (blockReasons.bigHealth||0)+1;
         return false;
       }
 
-      // 2b. Enterprise name patterns (health systems, logistics, gov, dealers, etc.)
-      if (ENTERPRISE_NAME.test(nameLower)) {
+      // 2b. Enterprise name patterns (institutions, logistics, gov, dealers).
+      // ══ A MEASUREMENT BEATS A GUESS ABOUT A NAME ═══════════════════
+      // On the 2026-08-20 run the verified-headcount gate blocked nine leads and
+      // was right nine times; this name pattern blocked six and was wrong five
+      // times. When we actually KNOW how many people work there and the answer is
+      // small, a word in the name is not evidence of anything. The name heuristic
+      // exists for the leads with no headcount at all, which is most Places
+      // leads, and it should not be allowed to overrule the one signal that is
+      // measured rather than inferred.
+      const _smallVerified = Number.isFinite(Number(c.verifiedEmployees))
+        && Number(c.verifiedEmployees) > 0 && Number(c.verifiedEmployees) <= 200;
+      if (!_smallVerified && ICP_INSTITUTION.test(nameLower)) {
         console.log(`BLOCKED [${c.name}]: enterprise name pattern`);
         blockedCount++; blockReasons.namePattern = (blockReasons.namePattern||0)+1;
         return false;
@@ -39451,6 +39536,132 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ RATING BAND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE SIZE GATE WAS BLOCKING THE BUSINESSES WE SELL TO ══════════════════
+  // Live run, 2026-08-20. The size gate blocked 15 leads: 9 on a VERIFIED
+  // headcount and 6 on a name pattern. All nine headcount blocks were right.
+  // FIVE OF THE SIX NAME BLOCKS WERE WRONG, and wrong in our hardest trades:
+  //
+  //   Twin Sisters Construction Company LLC          "construction company"
+  //   Vineyard Construction Company LLC              "construction company"
+  //   Louisville Paving & Construction Company       "construction company"
+  //   Audrey Echt Dermatology & Skin Cancer Center   "cancer center"
+  //   South Carolina Skin Cancer Center              "cancer center"
+  //
+  // A dermatology practice named after the dermatologist is the most
+  // owner-operated business there is, and "Construction Company" is a legal
+  // suffix on a two-person builder.
+  //
+  // This is the check Vin asked for in one sentence: "who knows if our cutting
+  // is accurate". Both halves are asserted — the names we must keep, and the
+  // institutions we must still refuse — because a filter loosened until it
+  // catches nothing is the other way to get this wrong.
+  //
+  // The regexes are read out of the live source rather than restated, so a change
+  // to either one is measured here rather than merely hoped about.
+  try {
+    const _fails = [];
+    // ══ THE REAL CONSTANTS, NOT A COPY SCRAPED OUT OF THE SOURCE ════
+    // The first version of this check pulled the regexes back out of the file
+    // text. It found the WRONG COPY — there were two ICP filters, and the older
+    // one sat earlier in the file — then failed to compile what it had grabbed
+    // and reported that it could not check anything. Which was true, and which is
+    // how a duplicate rule stays invisible: the check reading source cannot tell
+    // you there are two of the thing it is reading.
+    //
+    // There is one of each now, at module scope, and this executes them.
+    const _nd = (...p) => p.join('');
+    const _src = selfSource();
+    const ENT = ICP_INSTITUTION, BIG = ICP_BIG_HEALTH, SMALL = ICP_SMALL_PRACTICE;
+    {
+      // And exactly one definition of each, so the pair cannot drift apart again.
+      for (const _n of ['ICP_INSTITUTION', 'ICP_BIG_HEALTH', 'ICP_SMALL_PRACTICE', 'ICP_STAFFING']) {
+        const _c = _src.split(_nd('const ', _n, ' = /')).length - 1;
+        if (_c !== 1) _fails.push(`${_n} is defined ${_c} times — two copies of this filter is what let a two-person builder be refused a size check AND then blocked for having no size`);
+      }
+      // Both consumers must read the shared pair rather than a local copy.
+      if (_src.indexOf(_nd('if (ICP_STAFFING.test(n)) ', 'return true;')) < 0) {
+        _fails.push('the cheap pre-spend screen no longer uses the shared filter, so it can start refusing to size businesses the size gate would have kept');
+      }
+      if (_src.indexOf(_nd('ICP_INSTITUTION.test(', 'nameLower)')) < 0) {
+        _fails.push('the size gate no longer uses the shared filter');
+      }
+    }
+    {
+      // A name is refused when the enterprise pattern hits, or when a big-health
+      // term hits and no small-practice term rescues it. Same two conditions the
+      // gate applies, in the same order.
+      const refused = (n) => ENT.test(n) || (BIG.test(n) && !SMALL.test(n));
+
+      // ── THE FIVE FROM THE LIVE RUN, PLUS THE CLASS THEY BELONG TO ────────
+      const KEEP = [
+        ['Twin Sisters Construction Company LLC', 'the live run'],
+        ['Vineyard Construction Company LLC', 'the live run'],
+        ['Louisville Paving & Construction Company', 'the live run'],
+        ['Audrey Echt Dermatology & Skin Cancer Center', 'the live run'],
+        ['South Carolina Skin Cancer Center', 'the live run'],
+        ['Smith Brothers Construction Company', 'the same suffix, any builder'],
+        ['National Roofing & Sheet Metal', 'a common small-business name'],
+        ['Worldwide Plumbing Co', 'a common small-business name'],
+        ['Federal Way Plumbing', 'Federal Way is a city in Washington'],
+        ['Municipal Plumbing Supply', 'a supply house, not a municipality'],
+        ['Anderson Family Dentistry', 'core ICP'],
+        ['Riverside Veterinary Center', 'core ICP'],
+        ['Premier Dental Center', 'core ICP'],
+        ['Lakeside Physical Therapy', 'core ICP'],
+        ['Denver Window Doctor', 'core ICP'],
+        ['Apex Tree Service', 'core ICP'],
+        ['Coastal Roofing LLC', 'core ICP'],
+      ];
+      for (const [n, why] of KEEP) {
+        if (refused(n)) _fails.push(`"${n}" is refused by the size gate — ${why}, and this is the business this system exists to find`);
+      }
+
+      // ── AND THE ONES IT STILL HAS TO REFUSE ─────────────────────────────
+      // A filter narrowed until it catches nothing is the other failure, and it
+      // is the more expensive one: every name here costs a full research cycle
+      // and lands an audit on somebody who has a team for that.
+      const BLOCK = [
+        'HCA Healthcare System', 'Baptist Memorial Hospital', 'University of Michigan',
+        'County of Los Angeles', 'XPO Logistics', 'Enterprise Rent-A-Car',
+        'Kroger Supermarkets', 'Amazon Fulfillment Center', 'MD Anderson Cancer Center',
+        'Penske Truck Rental', 'ABC Holdings Inc', 'Global Enterprises Inc',
+        'Cleveland Clinic Regional Medical', 'Dallas Housing Authority',
+        'Chicago Public Schools', 'Royal Caribbean Cruise Line', 'Delta Airlines',
+      ];
+      for (const n of BLOCK) {
+        if (!refused(n)) _fails.push(`"${n}" now passes the size gate — narrowing the pattern removed a real block, and this lead costs a whole research cycle to discover it was never a fit`);
+      }
+
+      // ── HEALTH IS OWNED BY ONE RULE, NOT TWO ────────────────────────────
+      // The duplicated terms are what defeated the small-practice escape: a
+      // dermatology practice survived BIG_HEALTH and was then refused by a copy
+      // of the same term in ENTERPRISE_NAME, which has no escape.
+      for (const t of ['medical center', 'cancer center', 'health system', 'regional medical', 'health plan']) {
+        if (ENT.test(t)) _fails.push(`"${t}" is back in the institution pattern, which has no small-practice escape — it will overrule ICP_BIG_HEALTH with a copy of ICP_BIG_HEALTH's own term`);
+      }
+      // The cheap pre-spend screen must agree with the gate on every one of
+      // these. It refusing a name the gate would keep means the lead is never
+      // sized, and then the gate blocks it for having no size.
+      for (const [n] of KEEP) {
+        if (looksLikeEnterpriseByName(n)) {
+          _fails.push(`"${n}" is refused by the cheap pre-spend screen, so it is never sized — and a lead with no verified size is exactly what the gate then blocks`);
+        }
+      }
+    }
+
+    // ── A MEASURED HEADCOUNT MUST BEAT A GUESS ABOUT A NAME ───────────────
+    if (_src.indexOf(_nd('if (!_smallVerified && ', 'ICP_INSTITUTION.test(nameLower))')) < 0) {
+      _fails.push('a verified small headcount no longer overrides the name pattern — on the live run the headcount gate was right nine times out of nine and the name pattern wrong five times out of six');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ ICP FILTER CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under 200 beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE SAME REVIEWS, BOUGHT TWICE, ON EVERY PLACES LEAD ══════════════════
   // fetchGBPHealth asks a Place record for photos, hours, category and REVIEWS —
