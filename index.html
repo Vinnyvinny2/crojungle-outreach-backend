@@ -5868,21 +5868,50 @@ function ResearchView({
         // the same requests that fetched their text and discarded until now.
         // These are the pages where the problems live: a crashed booking page
         // reads as ordinary text in markdown and is unmistakable in a picture.
+        // ══ FIVE RENDERS THAT ALL LOOKED LIKE THE HOMEPAGE ═════════════════
+        // Vin, on the 2026-08-20 run: "the screenshots are 4-5 screenshots of
+        // the homepage, it's clearly not taking pics of the other important
+        // pages." The renders WERE the other pages — about, booking, services —
+        // and this block is why they were indistinguishable.
+        //
+        // Each render is a full-page capture: 1920 x 6,000-9,500px. Displayed at
+        // width:100% of the ~1100px panel inside a 380px box, the visible strip
+        // is the top 7-12% of the page. On every website ever built, the top
+        // 10% is the header and the nav — identical on every page of the site.
+        // So five correct, different, paid-for renders rendered as five copies
+        // of the same masthead.
+        //
+        // Two columns, and each render at half the width, is the whole fix: the
+        // image scales to ~500px so the same box height shows a little over
+        // twice as much page, and two sit side by side where the difference is
+        // visible at a glance rather than by scrolling. The page name is a chip
+        // rather than grey micro-text, because "which page am I looking at" was
+        // the question this panel failed to answer. Full size is still one
+        // click, and each box still scrolls the whole page.
         (Array.isArray(lead.pageShots) && lead.pageShots.length) ? React.createElement('div', { style: { marginTop: 14 } },
           React.createElement('div', {
             style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8 }
-          }, 'The other ' + lead.pageShots.length + ' page' + (lead.pageShots.length === 1 ? '' : 's') + ' we read, top to bottom'),
-          lead.pageShots.map((ps, n) => React.createElement('div', { key: 'ps' + n, style: { marginBottom: 12 } },
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--m2)', marginBottom: 5 } },
-              React.createElement('span', { style: { textTransform: 'capitalize', fontWeight: 600 } }, String(ps.key || 'page')),
-              React.createElement('span', { style: { color: 'var(--m)' } }, ' \u00b7 ' + String(ps.url || '').replace(/^https?:\/\//, '').slice(0, 60))
-            ),
-            React.createElement('div', { style: { maxHeight: 380, overflowY: 'auto', borderRadius: 9, border: '1px solid var(--b)' } },
-              React.createElement('a', { href: ps.shot, target: '_blank', rel: 'noopener' },
-                React.createElement('img', { src: ps.shot, style: { width: '100%', display: 'block', cursor: 'zoom-in' }, alt: String(ps.key || 'page') + ' screenshot' })
+          }, 'The other ' + lead.pageShots.length + ' page' + (lead.pageShots.length === 1 ? '' : 's') + ' we read \u2014 scroll any of them, or click to open full size'),
+          React.createElement('div', {
+            style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }
+          },
+            lead.pageShots.map((ps, n) => React.createElement('div', { key: 'ps' + n },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 5, minWidth: 0 } },
+                React.createElement('span', {
+                  style: { textTransform: 'capitalize', fontWeight: 700, fontSize: 11, color: 'var(--t)',
+                           background: 'var(--s2)', border: '1px solid var(--b)', borderRadius: 5, padding: '2px 7px', flexShrink: 0 }
+                }, String(ps.key || 'page')),
+                React.createElement('span', {
+                  style: { fontSize: 10, color: 'var(--m)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+                }, String(ps.url || '').replace(/^https?:\/\//, '').replace(/^www\./, ''))
+              ),
+              React.createElement('div', { style: { maxHeight: 420, overflowY: 'auto', borderRadius: 9, border: '1px solid var(--b)' } },
+                React.createElement('a', { href: ps.shot, target: '_blank', rel: 'noopener' },
+                  React.createElement('img', { src: ps.shot, style: { width: '100%', display: 'block', cursor: 'zoom-in' }, alt: String(ps.key || 'page') + ' screenshot' })
+                )
               )
-            )
-          ))
+            ))
+          )
         ) : null,
         lead.visualAnalysis && React.createElement('div', { style: { fontSize: 11, color: 'var(--m2)', lineHeight: 1.6, marginTop: 8 } },
           typeof lead.visualAnalysis === 'string' ? lead.visualAnalysis : (lead.visualAnalysis.summary || '')

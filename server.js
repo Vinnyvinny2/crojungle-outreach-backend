@@ -20899,6 +20899,45 @@ ${replyBlocks}` }]
 //      and those are the only dollar figures we are allowed to use in a pitch.
 // The site map is already paid for (cached above), so reading a few real pages is
 // cheap. We pick by intent, not by guessing paths.
+// ══ AN ARTICLE IS A BLOG POST WHEREVER IT LIVES ═════════════════════════════
+// The NOISE list catches content by its FOLDER — /blog, /posts, /news, /article.
+// Plenty of sites publish articles straight off the root, and the backfill then
+// reads them because a root-level URL is the shallowest path there is.
+//
+// Live, Jose Barrera 2026-08-20: eight URLs mapped, one matched an intent word
+// (/contact), and the backfill spent the other SIX reads on
+// /how-is-rhinoplasty-for-wide-noses-different,
+// /best-treatments-for-forehead-wrinkles-dr-jose-barrera,
+// /submentoplasty-san-antonio-neck-band-surgery, /rejuvemd-recovery-post-op-care
+// and /latera-nasal-valve-implant. Six procedure explainers, labelled "page,
+// page, page, page, page, page" in the log and rendered as six near-identical
+// screenshots on the audit screen. Vin, reading it: "it's clearly not taking
+// pics of the other important pages, that may be why most audits are dry."
+//
+// He is right about the consequence. An article tells us what the business
+// KNOWS; the audit is about how it SELLS — what it charges, how you book it,
+// who runs it, what it can prove. Six articles is six credits and no evidence.
+//
+// The shape is mechanical and it is about the SLUG, not the folder. A page a
+// customer navigates to is named in one to three words — /about, /contact,
+// /practice-areas, /window-replacement. An article is named in a sentence: four
+// or more words, or opening on a question word, or carrying a joining word
+// (-in-, -for-, -vs-, -to-) that only appears when a title was slugified.
+//
+// Tested against Jose Barrera's real sitemap (5 of 7 caught, and the two it
+// leaves are /contact and a genuine service page) and against twenty-two real
+// navigational URLs from our own trades, of which it wrongly flags none.
+const ARTICLE_SLUG = new RegExp(
+  // four or more hyphenated words in the final segment: a slugified sentence
+  '\\/(?:[a-z0-9]+-){3,}[a-z0-9]+\\/?$'
+  // opens on a question or listicle word
+  + '|\\/(?:how|why|what|when|where|which|is|are|does|do|can|should|will|top|best|guide|tips|ways|reasons|signs|benefits)-[a-z0-9-]{8,}\\/?$'
+  // a date folder
+  + '|\\/(?:19|20)\\d\\d\\/'
+  // a joining word only a slugified title contains
+  + '|\\/[a-z0-9-]*(?:-in-|-for-|-vs-|-to-)[a-z0-9-]*\\/?$',
+  'i');
+
 const PAGE_INTENT = [
   { key: 'pricing',  re: /(pricing|prices|rates|plans|packages|cost|fees|tuition|membership)/i },
   // THE OWNER'S OWN STORY. On an owner-operated business the About page is where the
@@ -21038,14 +21077,31 @@ const auditSitePages = async (website, fcKey, apiKey, companyName) => {
         const k = String(u).replace(/\/+$/, '').toLowerCase();
         return _navOrder.has(k) ? _navOrder.get(k) : Number.MAX_SAFE_INTEGER;
       };
-      const spare = clean
+      const _order = (a, b) => (_navRank(a) - _navRank(b))
+                     || (a.split('/').length - b.split('/').length)
+                     || (a.length - b.length);
+      const _eligible = clean
         .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u) && !LOW_VALUE.test(u))
         // Never the homepage \u2014 it is already scraped and would be bought twice.
-        .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } })
-        .sort((a, b) => (_navRank(a) - _navRank(b))
-                     || (a.split('/').length - b.split('/').length)
-                     || (a.length - b.length))
-        .slice(0, 7 - picked.length);
+        .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } });
+      // ══ ARTICLES ARE THE LAST RESORT, NOT THE FILLER ══════════════════════
+      // A page the site links in its own navigation is never an article by our
+      // reckoning, whatever its URL looks like: the owner put it in the header,
+      // which is a stronger statement than any slug shape. Everything else that
+      // reads as a slugified sentence goes to the back of the queue and is
+      // capped, because six procedure explainers is six credits and no evidence
+      // about how the business sells. See ARTICLE_SLUG for the live case.
+      const _isArticle = (u) => _navRank(u) === Number.MAX_SAFE_INTEGER && ARTICLE_SLUG.test(u);
+      const _room = 7 - picked.length;
+      const _solid = _eligible.filter(u => !_isArticle(u)).sort(_order);
+      const _articles = _eligible.filter(_isArticle).sort(_order);
+      // At most two, and only once the real pages are exhausted. Two keeps some
+      // coverage on a site that genuinely has nothing else; six was the bug.
+      const _fill = _articles.slice(0, Math.max(0, Math.min(2, _room - _solid.length)));
+      const spare = _solid.slice(0, _room).concat(_fill);
+      if (_articles.length) {
+        console.log(`SITE AUDIT [${companyName}]: ${_articles.length} page(s) in the sitemap read as articles rather than pages a customer navigates to \u2014 a slugified sentence like "${String(_articles[0]).replace(/^https?:\/\/[^/]+/, '').slice(0, 54)}". ${_fill.length ? `${_fill.length} used only because the real pages ran out` : 'None were read'}: an article tells us what they KNOW, and the audit is about how they SELL. Six of these took six of seven reads on a live lead.`);
+      }
       const _fromNav = spare.filter(u => _navRank(u) !== Number.MAX_SAFE_INTEGER).length;
       if (_fromNav) console.log(`SITE AUDIT [${companyName}]: ${_fromNav} of the ${spare.length} backfilled page(s) were chosen because the site links them in its own navigation, not because their URL happened to be short. Nav order is the owner's own statement of what a visitor needs.`);
       // NAMED BY THEIR OWN PATH, not the label "page". Five leads on 2026-08-20
@@ -42139,6 +42195,68 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 SCREENSHOT SCALER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
+  // ══ THE PAGES WE RENDER MUST BE PAGES A CUSTOMER NAVIGATES TO ═════════════
+  // Vin, on the 2026-08-20 run: "the screenshots are 4-5 screenshots of the
+  // homepage, it's clearly not taking pics of the other important pages — that
+  // may be why most audits are dry." Half right, and the half he was right about
+  // is this one: Jose Barrera's backfill spent SIX of its seven reads on
+  // procedure explainers published straight off the root, because a root-level
+  // URL is the shallowest path there is and the noise list only catches content
+  // by its folder (/blog, /posts, /news).
+  //
+  // An article tells us what a business KNOWS. The audit is about how it SELLS.
+  // Six articles is six credits and no evidence, and it is why that lead's
+  // findings came back thin.
+  //
+  // His real sitemap is the fixture. The must-keep list is the other half of the
+  // check and the more important one: a filter tuned until it catches everything
+  // would quietly stop reading the pricing and services pages this depends on.
+  try {
+    const _fails = [];
+    const _p = (u) => String(u).replace(/^https?:\/\/[^/]+/, '');
+    const JOSE = [
+      ['/how-is-rhinoplasty-for-wide-noses-different', true],
+      ['/best-treatments-for-forehead-wrinkles-dr-jose-barrera', true],
+      ['/submentoplasty-san-antonio-neck-band-surgery', true],
+      ['/rejuvemd-recovery-post-op-care', true],
+      ['/latera-nasal-valve-implant', true],
+      ['/contact', false],
+      ['/cosmetic/african-american-rhinoplasty', false],
+    ];
+    for (const [path, isArticle] of JOSE) {
+      if (ARTICLE_SLUG.test(path) !== isArticle) {
+        _fails.push(isArticle
+          ? `"${path}" is a procedure explainer and is no longer recognised as one — this is the live sitemap that spent six of seven reads on articles`
+          : `"${path}" is a page a customer navigates to and is being filed as an article, so the audit would stop reading it`);
+      }
+    }
+    // Real navigational URLs from our own trades. None may be flagged.
+    const KEEP = ['/about', '/contact', '/services', '/pricing', '/our-team', '/practice-areas',
+      '/meet-dr-burns', '/gallery', '/reviews', '/request-estimate', '/residential', '/commercial',
+      '/window-replacement', '/roof-repair', '/schedule-appointment', '/financing', '/what-we-do',
+      '/services/kitchen-remodeling', '/emergency-plumbing', '/free-estimate', '/our-work', '/book-online'];
+    const _wrong = KEEP.filter(u => ARTICLE_SLUG.test(u));
+    if (_wrong.length) _fails.push(`${_wrong.length} page(s) a customer actually navigates to are being filed as articles: ${_wrong.slice(0, 5).join(', ')} — a filter loosened until it catches everything stops reading the pricing and services pages the whole audit rests on`);
+
+    // And the two rules that make it safe, at the call site. Needles assembled.
+    {
+      const _src = selfSource();
+      if (_src.indexOf('_navRank(u) === Number.MAX_SAFE_INTEGER && ' + 'ARTICLE_SLUG.test(u)') < 0) {
+        _fails.push('a page the site links in its OWN navigation can now be filed as an article — the owner put it in his header, which outranks any guess we make from a slug');
+      }
+      if (_src.indexOf('_articles.slice(0, Math.max(0, Math.min(2, ' + '_room - _solid.length)))') < 0) {
+        _fails.push('articles are no longer capped and used last, so a thin sitemap fills the whole read list with them again');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ PAGE SELECTION CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ PAGE SELECTION CHECK: articles published off the root — a slugified sentence like "/how-is-rhinoplasty-for-wide-noses-different" — are recognised wherever they live and used only after the real pages run out, capped at two. Jose Barrera's live sitemap spent six of seven reads on those, which is six credits of what the business KNOWS and nothing about how it SELLS. Twenty-two real navigational URLs from our own trades are untouched, and a page the site links in its own navigation is never filed as an article whatever its slug looks like.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PAGE SELECTION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ TWO SENDING DOMAINS, ONE LEAD IN EXACTLY ONE OF THEM ══════════════════
   // Deliverability has one mailbox, 2 hard bounces in ~12 sends, and a hard
   // bounce is charged to the sending DOMAIN. Rotation ships as a settings entry:

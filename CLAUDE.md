@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 154 boot checks at the bottom, each documenting the live failure that caused it
+- 155 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1169,6 +1169,43 @@ real lead. Distinguish accordingly.
   cannot feed the brain a claim the fact-checker refutes from the same
   response. `LAB MOBILE SCORE CHECK`.
 
+## 23. Five renders that all looked like the homepage — FIXED 2026-08-20
+
+Vin, reading the audit screen: *"the screenshots are 4-5 screenshots of the
+homepage, it's clearly not taking pics of the other important pages — that may
+be why most audits are dry."* Two separate defects behind one symptom, and only
+one of them was the capture.
+
+**The display was showing the header band of every page.** The renders WERE the
+other pages — about, booking, services — captured correctly and keyed correctly
+per URL. Each is a full-page image at 1920 x 6,000-9,500px, and the audit view
+put it at `width:100%` inside a 380px box: **the visible strip is the top 7-12%
+of the page**, which on every website ever built is the masthead. Five correct,
+different, paid-for renders rendered as five copies of one nav bar. Two columns
+at half width now show 15-23% each, side by side where the difference is visible
+without scrolling, with the page name as a chip instead of grey micro-text.
+
+**And the backfill really was reading the wrong pages.** `NOISE` catches content
+by its FOLDER — /blog, /posts, /news — and plenty of sites publish articles
+straight off the root, where the shallowest-path sort finds them first. Jose
+Barrera: eight URLs mapped, one intent match (/contact), and the other **six
+reads went to procedure explainers** — `/how-is-rhinoplasty-for-wide-noses-different`,
+`/latera-nasal-valve-implant`, and three more. Six credits of what the business
+KNOWS, and nothing about how it SELLS, on the lead whose findings came back thin.
+
+`ARTICLE_SLUG` reads the shape of the slug rather than the folder: four or more
+hyphenated words, a question or listicle opener, a date folder, or a joining
+word (`-in-`, `-for-`, `-vs-`, `-to-`) that only survives slugifying a title.
+Articles are used **last and capped at two**, and a page the site links in its
+own navigation is never filed as one whatever its slug looks like — the owner
+put it in his header, which outranks any guess from a URL.
+
+`PAGE SELECTION CHECK` runs Jose Barrera's real sitemap plus twenty-two real
+navigational URLs from our own trades. The second list is the more important
+one: a filter tuned until it catches everything stops reading the pricing and
+services pages the whole audit rests on, and falsifying it by widening the
+regex one step went red on `/cosmetic/african-american-rhinoplasty`.
+
 ---
 
 # PART 5 — WHAT IS PROVEN
@@ -1224,7 +1261,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 154 boot checks
+PORT=4000 timeout 200 node --max-old-space-size=256 server.js   # 155 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -1298,7 +1335,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 154 boot checks and the comments above
+and caused none of this week's failures. The 155 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
