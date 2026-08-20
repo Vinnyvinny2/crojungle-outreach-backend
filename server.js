@@ -1565,6 +1565,26 @@ const BACKEND_CLAIM_PATTERNS = [
   [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'COMPETITOR CLAIM: claims a competitor responded first - no such data exists', "whoever called them back first"],
   [/\bby (the time|morning|monday|friday|tomorrow)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'INVENTED TIMELINE of a deal being lost', "by Friday the job is already gone"],
   [/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'INVENTED COMPETITOR COUNT', "two other companies"],
+  // ══ OUR OWN COUNT, GIVEN A SCOPE WE NEVER MEASURED ══════════════════════
+  // Live on Jose Barrera: "We found 4 more like these in your market."
+  //
+  // The count is code-assembled and correct — it is the number of findings on
+  // HIS OWN SITE AND LISTING. "In your market" turns it into a statement about
+  // other businesses in San Antonio, which we never counted anything about. The
+  // one sentence in the email whose number is guaranteed true was handed a scope
+  // that makes it false.
+  //
+  // It came out of the audit prompt's own worked examples, which use "every
+  // builder in your market" and "you are #1 in your market" to demonstrate
+  // something else entirely. That is the recorded exemplarLeak failure: the
+  // brief's positive examples come back as copy word for word. A phrase cannot
+  // be un-taught by an instruction, so it is refused mechanically instead.
+  [/\b(?:found|spotted|counted|there (?:are|is)|that is)\b[^.?!]{0,44}\b(?:more|others?|these|those)\b[^.?!]{0,30}\bin (?:your|the|their|this) (?:market|area|city|region|town|patch)\b/i,
+    'COUNT SCOPE: attaches a market or area scope to our count of findings. Every one of those findings is on THEIR OWN site and listing — we never counted anything about other businesses, so the scope is a claim we cannot support and it is attached to the one number in the email that is guaranteed true',
+    // No digit in the sample on purpose: the figure gate refuses an unmeasured
+    // number first, and a sample refused for the wrong reason proves the family
+    // is unreachable. SHARED CLAIM BATTERY CHECK caught exactly that.
+    "we found more like these in your market"],
   [/\b(is|are|'?s|'?re) (gone|lost)\b/i, 'OUTCOME CLAIM: states the visitor is gone or lost - never observed', "the visitor is gone"],
   [/\bnever (hear from|hears from|see|sees) them again\b/i, 'OUTCOME CLAIM: states they never return - unknowable', "you never hear from them again"],
   // ── NEW, FROM THE 2026-07-30 EMAILS THAT SHIPPED GREEN ──────────────────
@@ -2596,15 +2616,58 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
 // that start at thirty-five thousand. There is no version of this arithmetic
 // where the cheap model is the right call.
 //
-// If the findings stop being specific, BRAIN_MODEL=claude-haiku-4-5-20251001
-// puts it back. Watch the FINDING SCORES line, not a spreadsheet.
-const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-sonnet-5';
+// ══ AND THEN THE PRICE WAS THE INSTRUCTION ══════════════════════════════════
+// Vin, after the switch: "i dont want anything to get more expensive if anything
+// it needs to get cheaper." That is the decision, and this is where it lands.
+//
+// But the split is not "cheap or good", because the two calls do different jobs
+// and the file already says which is which. The five ranking dimensions, the harm
+// ladder, product fit, layer mapping and the ladder winner are ALL computed in
+// code. So this call contributes EXTRACTION AND PHRASING — pull the quotes, fill
+// the schema, write the sentences — and the actual synthesis is the separate
+// SITUATION_MODEL call below.
+//
+// Extraction is what Haiku is for. Judgement is what the other call is for, and
+// that one was ALREADY on a Sonnet, so keeping it there costs nothing new.
+//
+// Measured: this call on Sonnet was ~$0.14 against ~$0.047 on Haiku — $4.65 per
+// fifty leads, for the half of the work that is least judgement-shaped.
+//
+// BRAIN_MODEL=claude-sonnet-5 turns it back on for a run if the findings ever
+// look thin. Watch the FINDING SCORES line, not a spreadsheet.
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
 // The synthesis call. Separate switch, separate default \u2014 the audit's quality is
 // held up by deterministic scoring underneath it; this call's is not.
 // The synthesis call — the one that produced the only line Vin has ever singled
-// out as good. Same family as the audit now, and the newest one: it is handed
-// the fewest tokens of any call in the system and asked the hardest question.
+// out as good. It is handed the fewest tokens of any call in the system and asked
+// the hardest question, and it is where the judgement in this pipeline lives.
+//
+// It was already on a Sonnet before this change, so moving it to the current one
+// is cost-neutral on the input rate. It is the call worth spending on.
 const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-5';
+
+// ══ THINKING IS NOT A DEFAULT ANYONE SHOULD INHERIT ═════════════════════════
+// Sonnet 5 runs ADAPTIVE THINKING when the `thinking` parameter is omitted.
+// Haiku 4.5 does not. Sonnet 4.6 does not. So the same request body means three
+// different things depending on which model constant it happens to be pointed
+// at — and this file has two model constants that an env var can change.
+//
+// That matters beyond cost, because max_tokens caps THINKING PLUS THE ANSWER.
+// This file already carries the warning, at the truncation log line: "on an
+// adaptive-thinking model max_tokens caps THINKING PLUS the answer, so a budget
+// tuned for Haiku can spend itself on reasoning and return a part-written reply
+// that still parses." Nothing acted on it. A truncated audit JSON loses the
+// WHOLE audit, not its tail.
+//
+// So every call states its thinking mode explicitly and sizes max_tokens for
+// both halves. Two comments in this file disagreeing about a default is the
+// recorded failure that put the audit on the wrong model for months; an
+// UNSTATED default is the same disease with nobody to disagree.
+//
+// budget_tokens is deliberately absent: it returns a 400 on this model family.
+const THINKING_FOR = (model) => (/sonnet-5|opus-5|opus-4-8|opus-4-7/.test(String(model))
+  ? { type: 'adaptive' }
+  : undefined);
 
 // ══ A PRICE TABLE THAT KNOWS TWO MODELS, AND A SWITCH THAT OFFERS MORE ══════
 // BRAIN_MODEL and SITUATION_MODEL are environment variables. The table below
@@ -11553,7 +11616,22 @@ const HARM_LADDER = [
       // "every case they DO" reads wrong for a dentist and "every visit they
       // do" reads wrong for a vet. Dropping the verb makes one sentence that
       // is right in all seven registers.
-      return `Nothing on their site sells a plan, membership or agreement. Every ${a.job} starts from zero and ends at the invoice`;
+      // ══ TWO SENTENCES THE COMPOSER IS ALLOWED TO SWAP ═══════════════
+      // This read "Nothing on their site sells a plan, membership or agreement.
+      // Every job starts from zero and ends at the invoice" — and the fact-first
+      // skeleton puts the concrete observation first, which produced this, live:
+      //
+      //   "Every job starts from zero and ends at the invoice on your site,
+      //    nothing sells a plan or agreement upfront."
+      //
+      // "on your site" travelled with the wrong clause and now modifies the
+      // invoice. The scope belonged to sentence one and the reordering moved
+      // sentence two in front of it.
+      //
+      // One sentence, with the scope attached to the thing it actually scopes,
+      // cannot be reordered into nonsense. Every rung whose say() is two
+      // sentences carries this risk; this is the one that was caught doing it.
+      return `Every ${a.job} starts from zero and ends at the invoice: nothing on their site sells a plan, a membership or an agreement`;
     },
     costs: (m) => `a ${audienceOf(m.tradeWord).buyer} they have already won has no reason to come back on a schedule, so the same work has to be sold again next time` },
 
@@ -11873,7 +11951,18 @@ const HARM_LADDER = [
     reframe: 'two half records read weaker than one whole record, and they are competing with each other for the same spot',
     test: (m) => m.duplicateChecked === true && m.duplicateFound === true
       && Number.isFinite(m.reviewCount) && Number.isFinite(m.duplicateOtherReviews),
-    say: (m) => `Google is holding two listings for their business at the same address. One shows ${m.reviewCount} reviews and the other shows ${m.duplicateOtherReviews}`,
+    // ══ ONE SENTENCE, BECAUSE THE SCOPE CAN MIGRATE ═══════════════════════
+    // This was two sentences with "at the same address" in the first. The writer
+    // is allowed to merge a two-sentence fact, and when it does, a trailing
+    // prepositional phrase attaches to whatever noun ends up in front of it.
+    // no_recurring_offer was caught doing exactly that live: "Nothing on their
+    // site sells a plan. Every job starts from zero and ends at the invoice"
+    // came back as "ends at the invoice ON YOUR SITE, nothing sells a plan".
+    //
+    // Here the phrase at risk is "at the same address", and the merge would read
+    // "one shows 456 reviews at the same address" — which is not a claim we made
+    // and not one that means anything. One sentence removes the opportunity.
+    say: (m) => `Google is holding two separate listings for their business, one showing ${m.reviewCount} reviews and a second showing ${m.duplicateOtherReviews}, both at the same address`,
     costs: 'every review a customer leaves lands on one of the two, so no stranger ever sees the full record' },
 
 
@@ -20534,14 +20623,24 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         //   SITUATION_MODEL=claude-haiku-4-5-20251001
         // and compare two situation reads side by side before keeping it.
         model: SITUATION_MODEL,
-        // 900 -> 1400 -> 1800. `background` is new and rows are now full
-        // sentences; the old ceiling truncates the JSON, and a truncated response
-        // loses the entire briefing rather than its tail. 1800 because this call
-        // now also returns whatHeCaresAbout AND is handed their homepage copy and
-        // the audit's findings, so it has more to say and further to reason. The
-        // marginal cost of headroom is a few tenths of a cent; the cost of
-        // truncation is the whole briefing.
-        max_tokens: 1800,
+        // Explicit, never inherited. On this model family an omitted `thinking`
+        // means ADAPTIVE, and adaptive thinking spends max_tokens before the
+        // answer starts. Stated here so the request means one thing whatever
+        // SITUATION_MODEL is set to.
+        ...(THINKING_FOR(SITUATION_MODEL) ? { thinking: THINKING_FOR(SITUATION_MODEL) } : {}),
+        // medium, not the default high: this is a 5-field JSON synthesis from
+        // facts already assembled, not an open problem. Effort is what replaced
+        // the old fixed thinking budget, which returns a 400 on this family.
+        ...(THINKING_FOR(SITUATION_MODEL) ? { output_config: { effort: 'medium' } } : {}),
+        // 900 -> 1400 -> 1800 -> 4200. The first three were sized against the
+        // ANSWER, which is ~840 tokens. On an adaptive-thinking model max_tokens
+        // caps thinking PLUS the answer, so a ceiling tuned for the answer alone
+        // lets the reasoning eat the budget and returns a part-written JSON that
+        // still parses. That loses the entire briefing, not its tail.
+        //
+        // Headroom is cheap and truncation is not: the whole point of this call
+        // is the one line anybody has ever praised.
+        max_tokens: 4200,
         // `sys` is the shape list, both worked examples and the rules \u2014 identical
         // on every lead, ~2,950 Sonnet tokens, billed fresh every time until now.
         // Cached input is $0.30/M against $3.00/M. This call also retries on a
@@ -21185,10 +21284,72 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const formFieldCount = biggestForm > 0 ? biggestForm : pageWide;
   const formFieldCountIsSingleForm = biggestForm > 0;
   const hasForm = formBlocks.length > 0 || formFieldCount > 0;
+  // ══ THE CHECKS OUR OWN PUBLISHED CHECKLISTS ASK FOR ═════════════════════
+  // From CROJungle's Landing Page Autopsy and Funnel Leak Ledger. Every one of
+  // these is read from markup we have already bought, and every one is a box on
+  // a checklist this agency publishes under its own name — so a finding here is
+  // not an opinion about their website, it is our own stated method applied to
+  // it, and the owner can check each one himself in seconds.
+  //
+  // Nothing here is an absence claim about the SITE. They are facts about the
+  // page we actually opened, which is the only thing this file ever permits.
+
+  // AUTOPSY 06 — "The button says what happens next. Never just 'Submit'."
+  // The checklist's own worked example of a failure, and it is one regex.
+  const _btns = (html.match(/<(?:button|input)\b[^>]*>(?:[^<]{0,40})/gi) || []).join(' ');
+  const submitOnlyButton = /(?:value\s*=\s*["']\s*submit\s*["'])|(?:>\s*submit\s*$)|(?:>\s*submit\s*<)/i.test(_btns)
+    || /<button[^>]*>\s*submit\s*</i.test(html);
+
+  // AUTOPSY 09 — "Form inputs trigger the right keyboards (email keyboard for
+  // email, number pad for phone)." A phone field typed as plain text gives a
+  // mobile visitor a QWERTY keyboard to type a phone number into. Only counted
+  // where the field is unambiguously an email or a phone by name or id.
+  const _inputs = html.match(/<input\b[^>]*>/gi) || [];
+  const _wrongKeyboard = _inputs.filter((t) => {
+    const type = ((t.match(/type\s*=\s*["']([^"']+)["']/i) || [])[1] || 'text').toLowerCase();
+    const ident = ((t.match(/(?:name|id|autocomplete)\s*=\s*["']([^"']+)["']/i) || [])[1] || '').toLowerCase();
+    if (/e-?mail/.test(ident) && type !== 'email') return true;
+    if (/phone|tel|mobile/.test(ident) && type !== 'tel') return true;
+    return false;
+  }).length;
+
+  // AUTOPSY 07 — "Five fields max, or the form is split into steps with the easy
+  // ask first." A multi-step form is a PASS on the same box a long form fails,
+  // so counting fields without checking for steps condemns the sites that did
+  // the right thing.
+  const multiStepForm = /\b(?:step|multi-?step|wizard|page)\s*(?:1|one)\s*(?:of|\/)\s*(?:2|3|4|5|two|three)\b/i.test(html)
+    || /data-(?:step|multistep)|class=["'][^"']*(?:multi-?step|form-?step|step-?\d)/i.test(html);
+
+  // AUTOPSY 05 — "The strongest proof appears in the first two folds, not the
+  // footer." Measured as POSITION in the document rather than presence: where
+  // the proof sits is the whole point of that box.
+  const _proofRe = /\b(?:testimonial|what our (?:client|customer|patient)s? say|review|5-star|five star|google rating|trustpilot|verified customer)\b/i;
+  const _proofAt = html.search(_proofRe);
+  const proofPosition = _proofAt < 0 ? null : Math.round((_proofAt / Math.max(1, html.length)) * 100);
+  // The footer is the last fifth of the document on essentially every template.
+  const proofOnlyInFooter = proofPosition !== null && proofPosition >= 80;
+
+  // LEDGER stage 4 — "New leads route to a named owner, never a shared inbox
+  // where everyone means no one." Read from the addresses printed on their own
+  // page, so this is about what a CUSTOMER is given, not about their routing.
+  const _mails = [...new Set((html.match(/mailto:([^"'?>\s]+)/gi) || []).map(x => x.replace(/^mailto:/i, '').toLowerCase()))];
+  const sharedInboxOnly = _mails.length > 0
+    && _mails.every(a => /^(?:info|office|admin|contact|hello|sales|enquir|inquir|team|mail|support|service)/.test(a));
+
+  // AUTOPSY 06 — "One primary action per fold. Competing buttons are visually
+  // demoted or gone." Counted as DISTINCT calls to action in the first fifth of
+  // the document, which is the part a visitor sees before scrolling.
+  const _firstFold = html.slice(0, Math.min(html.length, Math.max(4000, Math.round(html.length * 0.2))));
+  const _ctaWords = (_firstFold.match(/>\s*(?:get (?:a |your )?(?:quote|estimate|audit|started)|book (?:now|online|a |your )|schedule|call (?:now|us|today)|contact us|request|free (?:quote|estimate|consultation)|apply|sign up|learn more)\b/gi) || []);
+  const firstFoldCtaKinds = new Set(_ctaWords.map(x => x.replace(/[^a-z ]/gi, '').trim().toLowerCase().split(' ')[0])).size;
+
   return { checked: true, isHttps: null, hasViewport, hasTitle, title: title.slice(0,120), titleIsErrorPage,
     hasMetaDescription, metaDescription: metaDescription.slice(0,160),
     hasTelLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount,
-    formFieldCountIsSingleForm, formCount: formBlocks.length };
+    formFieldCountIsSingleForm, formCount: formBlocks.length,
+    submitOnlyButton, wrongKeyboardFields: _wrongKeyboard, multiStepForm,
+    proofPosition, proofOnlyInFooter, sharedInboxOnly, firstFoldCtaKinds,
+    h1: (html.match(/<h1\b[^>]*>([\s\S]{0,200}?)<\/h1>/i) || [, ''])[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() };
 }
 
 // ══ APIFY GOOGLE REVIEWS ══════════════════════════════════════════════════════
@@ -33347,6 +33508,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
             model: BRAIN_MODEL,
+            // Explicit. If BRAIN_MODEL is pointed at a Sonnet-5-class model for a
+            // run, thinking would otherwise switch on silently and share the
+            // max_tokens below with the answer — and a truncated audit JSON loses
+            // the whole audit. See THINKING_FOR.
+            ...(THINKING_FOR(BRAIN_MODEL) ? { thinking: THINKING_FOR(BRAIN_MODEL) } : {}),
+            ...(THINKING_FOR(BRAIN_MODEL) ? { output_config: { effort: 'medium' } } : {}),
             // Static prefix, cached. Watch usage.cache_read_input_tokens in the
             // response to confirm hits — a persistent zero means the prefix is
             // being invalidated (whitespace drift is the usual culprit).
@@ -33360,7 +33527,10 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // 3000 when the output was findings-only; that ceiling now truncates
             // the two fields the briefing is built from, and a truncated JSON
             // loses the whole audit rather than the tail.
-            max_tokens: 4200,
+            // 4200 sizes the ANSWER (~2,600 tokens). On a thinking model the
+            // reasoning shares this ceiling, so the budget rises with the model
+            // rather than being tuned for one and inherited by another.
+            max_tokens: THINKING_FOR(BRAIN_MODEL) ? 9000 : 4200,
             messages: [{ role: 'user', content: msgContent }]
           }),
         }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
@@ -43802,6 +43972,70 @@ app.listen(PORT, () => {
     console.log(`\u26d4 EM DASH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ OUR OWN PUBLISHED CHECKLISTS, APPLIED TO THEIR PAGE ════════════════
+  // CROJungle publishes a 50-point Landing Page Autopsy and a 28-point Funnel
+  // Leak Ledger. Several of their boxes are answerable from markup this system
+  // already buys and was throwing away — including the Autopsy's own worked
+  // example of a failure, a button that says nothing but "Submit".
+  //
+  // These are executed against real page markup, not asserted from source. Both
+  // directions are fixtured: a page that got it wrong must be caught, and a page
+  // that got it right must be left alone. A checklist tuned until it flags every
+  // site is worth nothing to a salesperson.
+  try {
+    const _fails = [];
+    const PAD = '<div class="s"><p>' + 'lorem ipsum dolor sit amet consectetur '.repeat(40) + '</p></div>';
+    const TAGS = '<div><span>a</span><span>b</span><em>c</em><strong>d</strong><ul><li>1</li><li>2</li><li>3</li></ul></div>'.repeat(3);
+    const WRONG = '<html><head><title>Acme Roofing Company</title></head><body>'
+      + '<h1>Quality You Can Trust</h1>' + TAGS
+      + '<form><input type="text" name="email"><input type="text" name="phone">'
+      + '<textarea name="message"></textarea><button>Submit</button></form>'
+      + PAD + PAD + PAD
+      + '<a href="mailto:info@acme.com">email us</a>'
+      + '<div class="footer">What our customers say: great service</div></body></html>';
+    const RIGHT = '<html><head><title>Dallas Emergency Roof Repair</title></head><body>'
+      + '<h1>Emergency Roof Repair in Dallas</h1>' + TAGS
+      + '<div>What our customers say: five star reviews from 200 homeowners</div>'
+      + '<form data-step="1"><input type="email" name="email"><input type="tel" name="phone">'
+      + '<button>Get my free estimate</button></form>'
+      + PAD + PAD + PAD
+      + '<a href="mailto:dave@acme.com">Dave</a></body></html>';
+    const w = extractHtmlSignals(WRONG, 'https://acme.com');
+    const r = extractHtmlSignals(RIGHT, 'https://acme.com');
+    if (!w.checked || !r.checked) {
+      _fails.push('the html read refused an ordinary page, so none of these boxes can be scored on a real lead either');
+    } else {
+      const T = [
+        ['submitOnlyButton', w.submitOnlyButton, true, r.submitOnlyButton, false,
+          'a button that says only "Submit" — the Autopsy names this one by name, and it is one regex'],
+        ['wrongKeyboardFields', w.wrongKeyboardFields, 2, r.wrongKeyboardFields, 0,
+          'an email or phone field typed as plain text, which hands a mobile visitor a QWERTY keyboard to type a phone number into'],
+        ['multiStepForm', w.multiStepForm, false, r.multiStepForm, true,
+          'whether a long ask was split into steps — without this, counting fields condemns the sites that did the right thing'],
+        ['proofOnlyInFooter', w.proofOnlyInFooter, true, r.proofOnlyInFooter, false,
+          'proof sitting in the footer rather than the first two folds — the Autopsy scores WHERE it is, not whether it exists'],
+        ['sharedInboxOnly', w.sharedInboxOnly, true, r.sharedInboxOnly, false,
+          'every published address being a shared inbox — the Ledger\'s "never a shared inbox where everyone means no one"'],
+      ];
+      for (const [name, got, want, gotR, wantR, why] of T) {
+        if (got !== want) _fails.push(`${name} did not catch ${why} (read ${got}, expected ${want})`);
+        if (gotR !== wantR) _fails.push(`${name} fires on a page that did it correctly (read ${gotR}, expected ${wantR}) — a check that flags everyone is worth nothing on a call`);
+      }
+      if (w.h1 !== 'Quality You Can Trust') _fails.push(`the H1 is not being read (got "${w.h1}") — it is what the message-match box is scored against, and message match is FIRST in our own published triage order`);
+      if (!(w.proofPosition > 80)) _fails.push('proof position is not being measured as a position');
+    }
+    // The read must still refuse a challenge page rather than scoring it.
+    const _blocked = extractHtmlSignals('<html><head><title>Just a moment...</title></head><body>' + 'x'.repeat(900) + '</body></html>', 'https://acme.com');
+    if (_blocked.checked) _fails.push('a bot-challenge page is being scored as though it were their real site, which would put invented findings on every protected domain');
+    if (_fails.length) {
+      console.log(`⛔ CHECKLIST SIGNAL CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ CHECKLIST SIGNAL CHECK: five boxes from CROJungle's own published Autopsy and Ledger are now read from markup we already buy — a Submit-only button, an email or phone field that gives a mobile visitor the wrong keyboard, whether a long form was split into steps, whether the proof sits in the footer instead of the first two folds, and whether every published address is a shared inbox. Executed against a page that got them wrong AND a page that got them right, because a checklist that flags every site tells a salesperson nothing.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CHECKLIST SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A QUESTION, OR A PAGE — AND WHETHER THE ANSWER IS READABLE ══════════
   // Every CTA ever sent has been a question, on one prospect comment and no
   // measurement. The arm that tests the alternative is only worth having if it
@@ -43877,24 +44111,174 @@ app.listen(PORT, () => {
     console.log(`⛔ ASK ARM CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
-  // ══ THE HIGHEST-JUDGEMENT CALL RAN ON THE CHEAPEST MODEL ════════════════
+  // ══ FIFTY LEADS INTO ONE SYNCHRONOUS REQUEST, AND NO DAILY LIMIT ═══════
+  // The send route loops over every lead the browser posts, and the client posts
+  // ALL selected leads in one call while "select all" selects all of them. Per
+  // lead it can spend 30 seconds on an SMTP verify plus two 10-second Hunter
+  // calls, so fifty leads is a 17-to-40-minute HTTP request. Research was moved
+  // onto a job queue for exactly this reason; sending never was.
+  //
+  // The cap is also the only place the 25-a-day mailbox limit exists as code
+  // rather than as a number in a document.
+  try {
+    const _fails = [];
+    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (_src.indexOf('SEND_MAX_PER_' + 'REQUEST') < 0) {
+      _fails.push('the send cap is gone — fifty leads would go into one synchronous request against a mailbox rated for twenty-five a day, on a domain that already has two hard bounces in twelve sends');
+    }
+    if (_src.indexOf('if (leads.length > SEND_MAX_PER_' + 'REQUEST)') < 0) {
+      _fails.push('the cap is declared but nothing compares against it');
+    }
+    // Refused, never truncated. Sending the first 25 of 50 and reporting success
+    // is how you find out next week that half a batch never went.
+    if (/slice\(0, SEND_MAX_PER_REQUEST\)/.test(_src)) {
+      _fails.push('the send TRUNCATES to the cap instead of refusing, so half a batch would silently never go out');
+    }
+    const _cap = Math.max(1, Number(process.env.SEND_MAX_PER_REQUEST || 25));
+    if (_cap > 50) _fails.push(`the send cap is ${_cap} — above what one mailbox is rated for, and above what this request shape survives`);
+    if (_fails.length) {
+      console.log(`⛔ SEND CAP CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`✓ SEND CAP CHECK: a send of more than ${_cap} leads is REFUSED rather than truncated. That is the daily rate for one mailbox, and it is also what keeps this route inside a timeout — it is still a synchronous loop that can spend fifty seconds on a single lead, which is the one long operation in this system never moved onto the job queue.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SEND CAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SCOPE PHRASE THAT CAN WALK TO ANOTHER SENTENCE ════════════════════
+  // Live on John Peters: the rung said "Nothing on their site sells a plan,
+  // membership or agreement. Every job starts from zero and ends at the
+  // invoice", and the email said "Every job starts from zero and ends at the
+  // invoice ON YOUR SITE, nothing sells a plan or agreement upfront."
+  //
+  // The writer is entitled to merge a two-sentence fact — that is what writing
+  // is. What it must not be handed is a fact where merging MOVES a prepositional
+  // phrase onto a different noun. "on their site" scoped the absence; after the
+  // merge it scoped the invoice, which is nonsense he can see.
+  //
+  // Narrow on purpose. It does NOT demand one sentence per rung — two of the
+  // multi-sentence rungs are fine and one of them is harm 96 with reply evidence
+  // behind its wording, and rewording that to satisfy a rule would be trading a
+  // proven sentence for a tidy one. It demands only that a rung which CAN lead
+  // an email does not carry a migratable scope phrase in a non-final sentence.
+  try {
+    const _fails = [];
+    // A prepositional phrase that names WHERE the fact is true. These are the
+    // ones that change meaning when they land on a different noun.
+    const SCOPE = /\b(?:on|across|throughout|anywhere on|at) (?:their|the|his) (?:site|website|pages?|homepage|listing|profile|address)\b|\bat the same address\b/i;
+    const _rungs = (typeof HARM_LADDER !== 'undefined' && Array.isArray(HARM_LADDER)) ? HARM_LADDER : [];
+    if (!_rungs.length) _fails.push('the ladder could not be read, so nothing was checked');
+    const _m = {
+      tradeWord: 'plumber', reviewCount: 120, duplicateOtherReviews: 40, rank: 7, scanned: 20,
+      weakerAbove: 3, photoCount: 9, formFieldCount: 9, pricesPublished: 0, servicesListed: 4,
+      absentServices: ['drain cleaning'], tenureYears: 20, reviewsRead: 60, ownerReplies: 30,
+    };
+    let _checked = 0;
+    for (const h of _rungs) {
+      if (!h || typeof h.say !== 'function') continue;
+      if (typeof NOT_SELLABLE_OPENER !== 'undefined' && NOT_SELLABLE_OPENER[h.id]) continue;
+      if (typeof INTERNAL_ONLY_RUNGS !== 'undefined' && INTERNAL_ONLY_RUNGS[h.id]) continue;
+      let s = '';
+      try { s = String(h.say(_m) || ''); } catch (e) { void e; continue; }
+      if (!s) continue;
+      _checked++;
+      const parts = s.split(/(?<=[.!?])\s+/).filter(Boolean);
+      if (parts.length < 2) continue;
+      // Only a scope phrase in a NON-FINAL sentence can migrate forward.
+      for (let i = 0; i < parts.length - 1; i++) {
+        const hit = parts[i].match(SCOPE);
+        if (hit) {
+          _fails.push(`${h.id} carries "${hit[0]}" in a non-final sentence of a multi-sentence finding — merging the sentences moves that phrase onto the next noun, which is how "ends at the invoice on your site" reached a real prospect`);
+          break;
+        }
+      }
+    }
+    if (_checked < 15) _fails.push(`only ${_checked} rung sentence(s) could be produced, so this check is measuring almost nothing`);
+    if (_fails.length) {
+      console.log(`⛔ SCOPE PHRASE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ SCOPE PHRASE CHECK: ${_checked} sendable rung sentence(s) executed, and none carries a where-it-is-true phrase in a sentence the writer could merge forward. That is the defect that put \"every job starts from zero and ends at the invoice on your site\" in front of a roofer: the scope belonged to the absence and ended up on the invoice.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SCOPE PHRASE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A THINKING DEFAULT NOBODY STATED, SHARING A BUDGET NOBODY RESIZED ═══
+  // Sonnet 5 runs ADAPTIVE THINKING when `thinking` is omitted. Haiku 4.5 does
+  // not. Sonnet 4.6 does not. So the same request body means different things
+  // depending on which model constant it is pointed at — and both constants here
+  // are environment variables anybody can change.
+  //
+  // That is not only a price question. max_tokens caps THINKING PLUS THE ANSWER,
+  // and this file already carries the warning at its own truncation log line and
+  // acted on it nowhere. A truncated audit JSON loses the WHOLE audit.
+  try {
+    const _fails = [];
+    // 1. The thinking mode is decided by the model, and stated, never inherited.
+    if (typeof THINKING_FOR !== 'function') {
+      _fails.push('the thinking mode is no longer stated per model, so a model swap silently changes whether the request reasons at all');
+    } else {
+      const ON = ['claude-sonnet-5', 'claude-opus-5', 'claude-opus-4-8'];
+      const OFF = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6'];
+      for (const m of ON) {
+        const t = THINKING_FOR(m);
+        if (!t || t.type !== 'adaptive') _fails.push(`${m} thinks by default and we are not saying so explicitly`);
+        if (t && 'budget_tokens' in t) _fails.push(`${m} is being sent budget_tokens, which this model family rejects with a 400`);
+      }
+      for (const m of OFF) {
+        if (THINKING_FOR(m)) _fails.push(`${m} is being sent a thinking parameter it does not take`);
+      }
+    }
+    // 2. Every model we can be pointed at must be priced, or the meter invents.
+    for (const [what, m] of [['the audit', BRAIN_MODEL], ['the strategic read', SITUATION_MODEL]]) {
+      if (!ANTHROPIC_PRICES[m]) _fails.push(`${what} runs on ${m}, which has no price row — the cost line would report a figure it made up`);
+    }
+    // 3. The budget must cover BOTH halves whenever thinking is on. The audit's
+    //    answer is ~2,600 tokens and the strategic read's is ~840; a ceiling
+    //    sized for the answer alone lets reasoning spend it.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('max_tokens: THINKING_FOR(BRAIN_MODEL) ? ' + '9000 : 4200') < 0) {
+        _fails.push('the audit budget no longer rises with the model, so pointing BRAIN_MODEL at a thinking model returns a part-written JSON that still parses and loses the whole audit');
+      }
+      if (_src.indexOf('thinking: THINKING_FOR(SITUATION_' + 'MODEL)') < 0) {
+        _fails.push('the strategic read no longer states its thinking mode, so it inherits whatever the model does by default');
+      }
+      if (_src.indexOf('thinking: THINKING_FOR(BRAIN_' + 'MODEL)') < 0) {
+        _fails.push('the audit call no longer states its thinking mode');
+      }
+    }
+    // 4. The cheap model does the extraction; the judgement call is not cheap.
+    //    Stated as a floor rather than an exact id so an upgrade does not fail.
+    if (!process.env.SITUATION_MODEL && /haiku/i.test(String(SITUATION_MODEL))) {
+      _fails.push('the strategic read defaults to the cheap model — it is handed the fewest tokens of any call here and asked the hardest question, and it is the one that produced the only line anybody has praised');
+    }
+    if (_fails.length) {
+      console.log(`⛔ THINKING BUDGET CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ THINKING BUDGET CHECK: the audit runs on ${BRAIN_MODEL} and the strategic read on ${SITUATION_MODEL}, both priced, and BOTH state their thinking mode explicitly instead of inheriting it. That matters because an omitted thinking parameter means adaptive on one model family and nothing on another, and max_tokens caps thinking PLUS the answer — so a ceiling tuned for one model returns a part-written JSON on the next, which loses the whole audit rather than its tail.`);
+    }
+  } catch (e) {
+    console.log(`⛔ THINKING BUDGET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SYNTHESIS RAN BEFORE THE EVIDENCE EXISTED ═══════════════════════
   // Two comments in this file disagreed about what BRAIN_MODEL defaults to. The
   // prose said Sonnet and called it a quality decision; the code said Haiku. And
   // the one strategic call ran BEFORE the audit on ~35 summary bullets, so the
   // most capable model in the system was also the least informed thing in it.
   try {
     const _fails = [];
-    // Every configured model must be priced, or the cost meter invents a number.
-    for (const [what, m] of [['the audit', BRAIN_MODEL], ['the strategic read', SITUATION_MODEL]]) {
-      if (!ANTHROPIC_PRICES[m]) _fails.push(`${what} runs on ${m}, which has no price row — the cost line would report a figure it made up`);
-    }
-    // The audit must not silently fall back to the cheap model.
-    if (!process.env.BRAIN_MODEL && /haiku/i.test(String(BRAIN_MODEL))) {
-      _fails.push('the audit defaults to Haiku again — this is the call that reads 33,000 tokens of their pages and writes the narrative every other artefact is built from, and the difference is about five dollars per fifty leads');
-    }
-    if (!process.env.SITUATION_MODEL && /haiku/i.test(String(SITUATION_MODEL))) {
-      _fails.push('the strategic read defaults to Haiku — it is handed the fewest tokens of any call here and asked the hardest question');
-    }
+    // ══ WHAT THIS CHECK IS NOT ═════════════════════════════════════════════
+    // It used to assert that the audit ran on Sonnet, and it went red the moment
+    // the owner decided the opposite on price. That was a PREFERENCE written as
+    // an invariant, and a check that fails on a decision somebody is entitled to
+    // make is one they will delete — taking the real assertions below with it.
+    //
+    // Which model each call uses, and whether it is priced, belongs to THINKING
+    // BUDGET CHECK. What is genuinely invariant is the ORDER: the synthesis has
+    // to happen after the evidence exists, or it is reasoning from a summary of
+    // a business it has never read.
     // The synthesis must run AFTER the audit, or it cannot see the evidence.
     {
       const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
@@ -43915,12 +44299,12 @@ app.listen(PORT, () => {
       _fails.push('the strategic read is no longer asked what this owner demonstrably cares about, so the character line that made one audit land goes back to being an accident');
     }
     if (_fails.length) {
-      console.log(`⛔ AUDIT MODEL CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+      console.log(`⛔ AUDIT ORDER CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
     } else {
-      console.log(`✓ AUDIT MODEL CHECK: the audit and the strategic read both run on ${BRAIN_MODEL === SITUATION_MODEL ? BRAIN_MODEL : BRAIN_MODEL + ' and ' + SITUATION_MODEL}, both priced, and the strategic read now runs AFTER the audit with their own homepage copy and the audit's findings appended. It used to run before the audit on about 35 summary bullets — the most capable model in the system, and the least informed thing in it.`);
+      console.log(`✓ AUDIT ORDER CHECK: the strategic read runs AFTER the audit, with their own homepage copy and the audit's findings appended, and it is still asked what this owner demonstrably cares about. It used to run BEFORE the audit on about 35 summary bullets — the most capable call in the system, and the least informed thing in it.`);
     }
   } catch (e) {
-    console.log(`⛔ AUDIT MODEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+    console.log(`⛔ AUDIT ORDER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ WHERE DO THEIR AD CLICKS LAND, AND COULD THE COMPARISON EVER MATCH ═══
@@ -48393,6 +48777,29 @@ const pickSequenceForLead = (leadId, sequenceIds) => {
 app.post('/api/send-to-hunter', async (req, res) => {
   const { leads, sequenceId, sequenceIds, hunterKey } = req.body;
   if (!Array.isArray(leads) || leads.length === 0) return res.status(400).json({ error: 'leads array required' });
+  // ══ THE ONE LONG OPERATION STILL RUNNING AS A SINGLE HTTP REQUEST ═══════
+  // This loops over every lead the browser posts, and the client's Send button
+  // posts ALL selected leads in one call while "select all" selects all of them.
+  // Per lead this loop can spend 30s on an SMTP verify plus two 10s Hunter
+  // calls, so fifty leads is a 17-to-40-minute synchronous request. Research was
+  // rewritten onto a job queue for exactly this reason; sending never was.
+  //
+  // Until it is, the cap does two jobs at once. It keeps the request inside any
+  // sane timeout, AND it enforces the sending limit that has so far only existed
+  // as a number in a document: the mailbox is rated for 25 a day, and nothing
+  // anywhere stopped somebody selecting fifty and pressing Send. A domain with
+  // two hard bounces in twelve sends does not get to find out what fifty does.
+  //
+  // Refused rather than truncated: silently sending the first 25 of 50 and
+  // reporting success is how you discover next week that half a batch never went.
+  const SEND_MAX_PER_REQUEST = Math.max(1, Number(process.env.SEND_MAX_PER_REQUEST || 25));
+  if (leads.length > SEND_MAX_PER_REQUEST) {
+    console.log(`\u26d4 SEND REFUSED: ${leads.length} leads in one request against a cap of ${SEND_MAX_PER_REQUEST}. Nothing was sent. This is the daily sending limit for one mailbox, and it is also what keeps this request inside a timeout \u2014 it is a synchronous loop that can spend 50 seconds on a single lead.`);
+    return res.status(400).json({
+      error: `${leads.length} leads in one send. The cap is ${SEND_MAX_PER_REQUEST} \u2014 that is what one mailbox is rated for in a day, and this send runs as a single request that would not survive fifty. Nothing was sent. Select ${SEND_MAX_PER_REQUEST} or fewer, or raise SEND_MAX_PER_REQUEST if you have added mailboxes.`,
+      cap: SEND_MAX_PER_REQUEST, offered: leads.length, sent: 0,
+    });
+  }
   // Both spellings accepted: the old single field keeps every existing caller
   // working, the new array is what the rotation client sends. Dedup because the
   // client passes both during the transition.
