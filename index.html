@@ -879,6 +879,358 @@ const buildResearchBody = (lead, settings, extra) => {
   };
 };
 
+
+// ══ ONE MERGE FOR A RESEARCH RESULT, WHEREVER IT WAS RUN FROM ═══════════════
+// This is the code that turns the server's answer into the lead row: ~200 lines
+// of "which value wins", most of them written the day a specific field went
+// missing on screen. It lived inside runResearch, so the only way to audit fifty
+// businesses at once was to write it a second time.
+//
+// The comment this function grew out of says exactly why that must not happen:
+// "Two implementations of one operation is the same mistake as the two
+// fabrication lists and the two merge paths in this file's history. The second
+// copy is always the one that rots, because it only runs in the case nobody
+// tests." A batch runner is precisely a case nobody tests one lead at a time.
+//
+// It is PURE: it takes the previous row and the server's data, and returns the
+// merged row plus what the screen should say. Saving, sorting and re-rendering
+// stay with the caller, because a batch of fifty must not write to disk fifty
+// times or re-render on every one.
+//
+//   prev    the lead row as it stands (mutated and returned)
+//   data    the parsed body of the research response
+//   ctx     { website, emailData, companyData, pageSpeed, httpStatus }
+//   returns { lead, outcome: 'not_a_fit'|'brain_failed'|'researched', banner }
+//
+// AND IT CLOSES A REAL BUG ON THE WAY. The two early-return branches used to
+// save with `saveLeads(leads, ...)` — the whole array as it looked BEFORE the
+// audit started. The success path stopped doing that months ago, and the comment
+// explaining why is quoted at its call site: a stale array write erases whatever
+// another run finished in the meantime. The refusal and brain-failure branches
+// were still doing it. With one lead at a time that is a narrow window; with
+// fifty in flight it is the common case.
+const applyResearchResult = (prev, data, ctx) => {
+  const L = prev || {};
+  data = data || {};
+  ctx = ctx || {};
+  const website = ctx.website || '';
+  const emailData = ctx.emailData || {};
+  const companyData = ctx.companyData || {};
+  const pageSpeed = ctx.pageSpeed || {};
+        if (website) L.website = website;
+
+        // Brain failed — update status, show reason, don't wipe existing good data
+        // ══ A REFUSAL IS A VERDICT, NOT A FAILURE ═══════════════════════════
+        // Dan Thompson Agency was run three times in three minutes and each run
+        // ended "error in 0.0s (HTTP 422)". Nothing failed: the owner guard
+        // deliberately refused the lead, because dtainsure.com is not named after
+        // Dan Thompson, so he is one practitioner on a group's domain and cannot
+        // buy what we sell. The guard saved ~13 Firecrawl credits and was right.
+        //
+        // But a refusal returned 422, and 422 was handled as a crash — same
+        // banner, same reset, same invitation to press Run Research again. So it
+        // read as "the system keeps failing on this lead", and looked like a
+        // concurrency problem when nothing was running concurrently at all.
+        //
+        // A refusal is terminal. It says the answer, marks the lead so it stops
+        // occupying the queue, and does not ask to be retried — retrying a
+        // deliberate refusal cannot ever produce a different result.
+        if (data.notAnOwner) {
+          // Deliberately NOT a new status value. Several lists filter on an
+          // allowlist of statuses, and inventing one would make this lead vanish
+          // from views it currently appears in — silent loss, which is the exact
+          // bug class this session has been chasing. A flag alongside the
+          // existing status changes nothing about where the lead is shown.
+          L.notAFit = true;
+          L.rejectedReason = data.reason || data.error || 'Not an owner-operated business.';
+          L.rejectedAt = new Date().toISOString();
+          L.brainFailed = false;
+          return { lead: L, outcome: 'not_a_fit', banner:
+            '\u26d4 NOT A FIT \u2014 this lead was refused before any credits were spent, and re-running will refuse it again. '
+            + (data.reason || data.error || '')
+            + ' Nothing went wrong; there is nobody here who can buy what we sell.' };
+        }
+        if (data.brainFailed || ctx.httpStatus === 422) {
+          L.brainFailed = true;
+          L.brainFailReason = data.reason || 'Brain audit failed';
+          L.status = 'brain_failed';
+          // Still save email if we got it from Hunter
+          if (emailData.email) L.email = emailData.email;
+          if (emailData.founderName) L.founderName = emailData.founderName;
+          // Save screenshot if available so user can verify website
+          if (data.screenshotUrl) L.screenshotUrl = data.screenshotUrl;
+          // THE SPINNER BUG: this early return jumped past the cleanup at the bottom
+          // of the function, so a failed audit left the card spinning forever with no
+          // error on screen — which is exactly how an out-of-credits night looks like
+          // a working system. Surface the reason and clear the loading state here.
+          // ══ SAY THAT WHAT IS ON SCREEN IS OLD ══════════════════════════
+          // A failed run leaves the lead's PREVIOUS brainAudit in place, so the
+          // view re-renders the last successful audit and it looks like the app
+          // "went back to the prior run". Nothing said the run just watched had
+          // failed, or that the audit on screen predates it.
+          //
+          // Stamp the failure with a time so the banner can say which run failed
+          // and how old the visible audit is.
+          L.brainFailedAt = new Date().toISOString();
+          L.staleAuditShown = !!(L.brainAudit);
+          return { lead: L, outcome: 'brain_failed', banner:
+            (L.brainAudit ? '\u26a0 THE AUDIT BELOW IS FROM AN EARLIER RUN \u2014 this one failed and nothing on screen has been updated. ' : '')
+            + (data.outOfCredits
+              ? (data.reason || 'Firecrawl is out of credits.')
+              : `Research could not complete \u2014 ${data.reason || 'the audit failed'}`) };
+        }
+
+        // Brain succeeded — update everything
+        L.brainFailed = false;
+        L.brainFailReason = '';
+        // ══ THE SERVER'S ANSWER OUTRANKS THE CACHED ONE ═══════════════════
+        // This read the CACHED Hunter address first. On a re-run "alreadyHaveEmail"
+        // fills emailData.email from cache, so it always won — and the server's
+        // decision-maker resolution was discarded silently.
+        //
+        // Live on Comfort-Air: the server logged "EMAIL SWAPPED — the address on
+        // file (pfreund@) belongs to Patrick Freund, not to the decision-maker.
+        // Using tfreund@". This line put Patrick back, Hunter received pfreund@,
+        // and an email written for Tom at owner altitude went to someone else.
+        // That is the worst delivery error available: right research, wrong human,
+        // and no way to take it back.
+        //
+        // data.email is the server's final answer after the owner is resolved and
+        // the address engine has run. It wins. The cached Hunter value is the
+        // fallback for when research returned nothing.
+        L.email = data.email || emailData.email || L.email || '';
+        if (data.email && emailData.email && data.email !== emailData.email) {
+          console.log('EMAIL: research resolved ' + data.email + ' for the decision-maker; the cached address (' + emailData.email + ') belonged to someone else and has been replaced.');
+        }
+        // Same inversion, same consequence: the cached Hunter NAME outranked the
+        // resolved decision-maker, so an email addressed to the owner could open
+        // with a staff member's first name. The two must move together — an
+        // address for Tom under a greeting to Patrick is worse than either alone.
+        L.founderName = data.founderName || emailData.founderName || L.founderName || '';
+        if (companyData.industry) L.industry = companyData.industry;
+        if (companyData.employees) L.employees = String(companyData.employees);
+        L.flaws = data.flaws || [];
+        L.researchBonus = data.researchBonus || 0;
+        const discoveryScore = L.preResearchScore || L.icpScore || 0;
+        // `data.reachability`, NOT L.reachability — the lead's own copy is
+        // not assigned until ~40 lines below this, so reading it here would blend
+        // against the PREVIOUS run's number on every re-research.
+        L.icpScore = finalLeadScore(discoveryScore, data.reachability, data.researchBonus);
+        L.preResearchScore = discoveryScore;
+        // ══ THIS USED TO OVERWRITE THE SERVER'S ANSWER WITH A DEAD ONE ═════
+        // The browser's own PageSpeed call was removed further up this file (it
+        // ran with no API key and returned 429 on every lead, which was being
+        // recorded as a measurement). ctx.pageSpeed has been {} ever since, so
+        // these two lines wrote "Not checked" and "" over whatever the server
+        // had actually put in richData, on every lead, forever. An empty local
+        // value must never beat a measured remote one — that is the same
+        // inversion as the cached Hunter address winning over the resolved
+        // decision-maker, forty lines below.
+        //
+        // Kept as a fallback, not an override: the browser value only fills the
+        // row when the server did not send one.
+        L.richData = { ...(data.richData || {}) };
+        if (pageSpeed.mobileScore) L.richData.mobileScore = `${pageSpeed.mobileScore}/100 mobile score`;
+        if (pageSpeed.lcp) L.richData.loadTime = pageSpeed.lcp;
+        L.signals = {
+          ...(L.signals || {}),
+          ...(data.signals || {})
+        };
+        L.buckets = data.buckets || null;
+        L.topPain = data.topPain || null;
+        L.recommendedProduct = data.recommendedProduct || null;
+        L.brainAudit = data.brainAudit || null;
+        // ══ AND THE FLAT COPY THE UI ACTUALLY READS ══════════════════════
+        // brainAudit alone was written here. The audit screen renders
+        // lead.problemList, the compose payload reads lead.harmsRanked, and the
+        // save path serialises lead.factualSpine — all flat, none of them
+        // touched by this merge. Only a page reload put them there, via
+        // rowToLead, which is why a finished run left the previous run's
+        // findings on screen underneath the new run's narrative.
+        //
+        // Same function rowToLead uses, so the two paths cannot disagree about
+        // which fields are measured or where they come from.
+        Object.assign(L, measuredFieldsFrom(data.brainAudit));
+        // ── THE AUDIT'S MEASUREMENTS ─────────────────────────────────────
+        // THIS is the merge path that actually runs after research. The other
+        // one further down is a different branch, and fixing only that one meant
+        // these fields still never landed on the lead \u2014 so the call sheet showed
+        // "nothing on file" while the email in the same view correctly quoted
+        // "32 reviews at 4.7 stars". Written here, they survive.
+        L.offerStrength = data.offerStrength ?? L.offerStrength ?? null;
+        L.sitePages = data.sitePages ?? L.sitePages ?? null;
+        L.htmlSignals = data.htmlSignals ?? L.htmlSignals ?? null;
+        L.gbpHealth = data.gbpHealth ?? L.gbpHealth ?? null;
+        L.socialPresence = data.socialPresence ?? L.socialPresence ?? null;
+        L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
+        L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
+        L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
+        // Only overwrite when the incoming one actually has results. A merge that
+        // takes an empty object over good persisted data is how a working lead
+        // turns into "nothing on file".
+        L.localVisibility = (data.localVisibility && data.localVisibility.checked)
+          ? data.localVisibility : (L.localVisibility || null);
+        L.candidateFindings = data.candidateFindings ?? L.candidateFindings ?? null;
+        L.ownerReplyCount = data.ownerReplyCount ?? L.ownerReplyCount ?? null;
+        L.reviewsRead = data.reviewsRead ?? L.reviewsRead ?? null;
+        L.leadSignal = data.leadSignal ?? L.leadSignal ?? null;
+        // ── INSTANCE EIGHTEEN OF COMPUTED-BUT-NOT-PASSED ─────────────────
+        // detectLSA() runs on EVERY researched lead and costs ZERO credits — it
+        // reads the homepage we already scraped. It is returned by the server,
+        // persisted and restored. It was never written here, on the merge path
+        // that actually runs, so the Research tab has shown "Google LSA — Not
+        // checked. Re-run Research to check." on every lead tonight, including
+        // attorneys, which ARE an LSA category. Re-running could never fix it.
+        //
+        // A row that says "not checked" forever on an audit whose entire claim is
+        // "we only say what we measured" is worse than a missing row: it advertises
+        // a check we perform and silently never report.
+        L.lsa = data.lsa ?? L.lsa ?? null;
+        // ══ ELEVEN MORE, FOUND BY CHECKING THE SERVER'S OWN CONTRACT ═══════
+        // The comment above this line calls the lsa field "instance eighteen of
+        // computed-but-not-passed". It was found the way all seventeen before it
+        // were found: somebody looked at a screen and noticed a row that said
+        // "Not checked" forever. That is not a method, and it had missed these.
+        //
+        // clientcheck.js now reads the field list off the SERVER's own res.json
+        // and executes this merge against it, so the requirement comes from the
+        // thing that produces the data rather than from this file. It reported
+        // eleven fields the server computes, pays for and returns on every lead,
+        // that nothing here ever wrote down. Five of them are rendered by the UI
+        // right now:
+        //
+        //   fullPageUrl, pageShots   the full-page renders. The audit view reads
+        //                            both and says "above the fold only" without
+        //                            them — on every lead, because leadToRow
+        //                            persists them FROM THE LEAD, so a value that
+        //                            never lands here is stored as null and comes
+        //                            back null. Not dark until reload. Gone.
+        //   verifiedCEO, verifiedCEOTitle
+        //                            the confirmed decision-maker and their
+        //                            title, on the call sheet. leadToRow's own
+        //                            comment calls verifiedCEO "the costly one"
+        //                            because scoreReachability reads it.
+        //   rateLimited              the banner that says Firecrawl was REFUSED
+        //                            rather than finding nothing, and to re-run
+        //                            the lead. Exactly the case where a missing
+        //                            warning reads as a clean result.
+        //   phoneSource              whether the number came off their Google
+        //                            listing.
+        //
+        // The other five are measured and had nowhere to go: Google's real-world
+        // speed field data, and the early-channel decision that records whether
+        // the paid audit was skipped and why.
+        L.fullPageUrl = data.fullPageUrl ?? L.fullPageUrl ?? null;
+        L.pageShots = Array.isArray(data.pageShots) ? data.pageShots : (L.pageShots || []);
+        L.verifiedCEO = data.verifiedCEO || L.verifiedCEO || null;
+        L.verifiedCEOTitle = data.verifiedCEOTitle || L.verifiedCEOTitle || null;
+        L.founderTitle = data.founderTitle || L.founderTitle || '';
+        L.rateLimited = data.rateLimited ?? L.rateLimited ?? null;
+        L.phoneSource = data.phoneSource || L.phoneSource || '';
+        L.realSpeed = data.realSpeed ?? L.realSpeed ?? null;
+        L.earlyChannel = data.earlyChannel || L.earlyChannel || '';
+        L.earlyChannelReason = data.earlyChannelReason || L.earlyChannelReason || '';
+        L.auditSkippedForChannel = data.auditSkippedForChannel ?? L.auditSkippedForChannel ?? null;
+        L.outreachChannel = data.outreachChannel ?? L.outreachChannel ?? null;
+        L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
+        L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
+        L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
+        L.offerStrength = data.offerStrength ?? L.offerStrength ?? null;
+        L.growthConstraint = data.growthConstraint || L.growthConstraint || null;
+        L.situationRead = data.situationRead ?? L.situationRead ?? null;
+        L.affordability = data.affordability || L.affordability || null;
+        L.reviewCount = data.reviewCount ?? (data.gbpHealth && data.gbpHealth.reviewCount) ?? L.reviewCount ?? null;
+        L.rating = data.rating ?? (data.gbpHealth && data.gbpHealth.rating) ?? L.rating ?? null;
+        L.industry = data.verifiedIndustry || L.industry || '';
+        L.phone = data.phone || L.phone || '';
+        L.phoneDisplay = data.phoneDisplay || L.phoneDisplay || '';
+        L.topThreeProducts = (data.brainAudit && data.brainAudit.topThreeProducts) || [];
+        L.positioningScore = data.positioningScore || null;
+        L.homepageContent = data.homepageContent || '';
+        L.screenshotUrl = data.screenshotUrl || null;
+        L.visualAnalysis = data.visualAnalysis || null;
+        L.companyTriggers = data.companyTriggers || [];
+        L.auditedWebsite = data.auditedWebsite || '';
+        L.auditedWebsiteResolved = data.auditedWebsiteResolved || false;
+        L.domainMatch = data.domainMatch || 'unknown';
+        L.domainMatchConfidence = data.domainMatchConfidence || 'low';
+        L.domainMatchReason = data.domainMatchReason || '';
+        L.visionAudit = data.visionAudit || null;
+        L.signalConfidence = data.signalConfidence || null;
+        L.publicPainSignals = data.publicPainSignals || [];
+        L.painSummary = data.painSummary || '';
+        L.reachabilityVerdict = data.reachabilityVerdict || '';
+        L.decisionMaker = data.decisionMaker || null;
+        L.emailResult = data.emailResult || null;
+        if (data.verifiedRevenue) L.verifiedRevenue = data.verifiedRevenue;
+        if (data.verifiedEmployees) L.verifiedEmployees = data.verifiedEmployees;
+        L.firecrawlOutOfCredits = data.firecrawlOutOfCredits || false;
+        // Reachability is now computed properly by the backend (owner-identification +
+        // email as the spine, size as a modifier, hard cap when no owner is found).
+        // Use it verbatim — do NOT override with a crude local heuristic.
+        if (data.localVisibility) L.localVisibility = data.localVisibility;
+        if (data._claimRisks) L._claimRisks = data._claimRisks;
+        // These three were computed and returned by the server but never copied
+        // onto the lead, so their audit rows always read "Not checked"/"Not
+        // assessed" no matter what was actually measured. Same wiring shape as
+        // the _claimRisks bug: an explicit copy list that a new field was never
+        // added to. Positioning in particular is available on EVERY lead, so
+        // this silently hid the one finding that always exists.
+        if (data.positioningRead) L.positioningRead = data.positioningRead;
+        if (data.gbpHealth) L.gbpHealth = data.gbpHealth;
+        if (data.htmlSignals) L.htmlSignals = data.htmlSignals;
+        if (typeof data.reachability === 'number') L.reachability = data.reachability;
+        if (data.reachabilityReasons && data.reachabilityReasons.length) L.reachabilityReasons = data.reachabilityReasons;
+        L.reachabilityVerified = !!(data.decisionMaker && data.decisionMaker.corroborated);
+        L.ownerEmailMatch = data.ownerEmailMatch || 'unknown';
+        L.ownerEmailMatchReason = data.ownerEmailMatchReason || '';
+        // ══ A NEW AUDIT INVALIDATES THE OLD EMAIL AND ITS APPROVAL ═════════
+        // Live: Broderick was researched again, the run completed cleanly, and
+        // clicking Generate showed "Generate — Overhead Door Company of Denver".
+        // He was APPROVED from an earlier session, so the Generate queue — which
+        // holds only unapproved leads by design — excluded him, and the view fell
+        // through to the first lead in the list.
+        //
+        // The display was a symptom. The real problem is that he was still sitting
+        // in Send, approved, carrying an email written from the PREVIOUS audit,
+        // while the audit that had just replaced it was invisible. Approving copy
+        // is approving THAT copy against THAT evidence; when the evidence is
+        // re-measured, the approval no longer refers to anything. On this very
+        // lead the new audit changed the lead finding, the wording and the
+        // supporting numbers — so the approved email described a different
+        // diagnosis from the one now on file.
+        //
+        // Re-research therefore returns a lead to the Generate queue and drops the
+        // stale draft. Nothing is silently lost: the email is regenerated from the
+        // new audit, which is the only version that matches what we now know.
+        const _wasApproved = !!L.approved;
+        const _hadDraft = !!L.generatedResult;
+        // ══ A RE-RESEARCHED SENT LEAD FELL INTO A DEAD STATE ═════════════════
+        // The guard below protects a SENT lead's approval so it does not reappear
+        // as unsent. But the line after it sets status='researched' regardless —
+        // so the lead ends up researched AND approved, and Generate filters on
+        // (researched|generated) AND NOT approved. It matched nothing.
+        //
+        // Live on Property Masters: sent earlier, re-researched, then "Write the
+        // email" moved to Generate and the lead was not in the queue.
+        //
+        // Re-running Research is an explicit decision to work this lead again, and
+        // the new audit invalidates whatever the old email said. So the approval
+        // is cleared in every case and the draft goes with it — the send itself is
+        // already recorded in sentSnapshot, which is what Call reads, so nothing
+        // about the history is lost.
+        L.approved = false;
+        L.generatedResult = null;
+        L.copyFlags = null;
+        L.status = 'researched';
+        if (_wasApproved || _hadDraft) {
+          console.log('[re-research] ' + (L.company || 'lead') +
+            ': cleared a previous ' + (_wasApproved ? 'approval' : 'draft') +
+            ' — the email it referred to was written from the old audit. Back in Generate for a fresh write.');
+        }
+        return { lead: L, outcome: 'researched', banner: '' };
+};
+
 const researchViaQueue = async (body, opts) => {
   const o = opts || {};
   // RESUME: poll a job that was already accepted, instead of starting a new one.
@@ -4471,301 +4823,40 @@ function ResearchView({
         idx = leads.length - 1;
         console.warn('[research] "' + ((lead && lead.name) || rid) + '" was not in the local list when its audit returned — the row has been restored and the full result is being applied to it.');
       }
-      if (idx >= 0) {
-        if (website) leads[idx].website = website;
-
-        // Brain failed — update status, show reason, don't wipe existing good data
-        // ══ A REFUSAL IS A VERDICT, NOT A FAILURE ═══════════════════════════
-        // Dan Thompson Agency was run three times in three minutes and each run
-        // ended "error in 0.0s (HTTP 422)". Nothing failed: the owner guard
-        // deliberately refused the lead, because dtainsure.com is not named after
-        // Dan Thompson, so he is one practitioner on a group's domain and cannot
-        // buy what we sell. The guard saved ~13 Firecrawl credits and was right.
-        //
-        // But a refusal returned 422, and 422 was handled as a crash — same
-        // banner, same reset, same invitation to press Run Research again. So it
-        // read as "the system keeps failing on this lead", and looked like a
-        // concurrency problem when nothing was running concurrently at all.
-        //
-        // A refusal is terminal. It says the answer, marks the lead so it stops
-        // occupying the queue, and does not ask to be retried — retrying a
-        // deliberate refusal cannot ever produce a different result.
-        if (data.notAnOwner) {
-          // Deliberately NOT a new status value. Several lists filter on an
-          // allowlist of statuses, and inventing one would make this lead vanish
-          // from views it currently appears in — silent loss, which is the exact
-          // bug class this session has been chasing. A flag alongside the
-          // existing status changes nothing about where the lead is shown.
-          leads[idx].notAFit = true;
-          leads[idx].rejectedReason = data.reason || data.error || 'Not an owner-operated business.';
-          leads[idx].rejectedAt = new Date().toISOString();
-          leads[idx].brainFailed = false;
-          saveLeads(leads, leads[idx]);
-          setAllLeads(getLeads().sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0)));
-          if (leadIdRef.current === rid) setLead({ ...leads[idx] });
-          setResearchError('\u26d4 NOT A FIT \u2014 this lead was refused before any credits were spent, and re-running will refuse it again. '
-            + (data.reason || data.error || '')
-            + ' Nothing went wrong; there is nobody here who can buy what we sell.');
-          clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
-          clearTimeout(t4); clearTimeout(t5); clearTimeout(t6);
-          setResearchStep('done');
-          setLoading(false);
-          setResearchingId(cur => (cur === rid ? null : cur));
-          return;
-        }
-        if (data.brainFailed || r.status === 422) {
-          leads[idx].brainFailed = true;
-          leads[idx].brainFailReason = data.reason || 'Brain audit failed';
-          leads[idx].status = 'brain_failed';
-          // Still save email if we got it from Hunter
-          if (emailData.email) leads[idx].email = emailData.email;
-          if (emailData.founderName) leads[idx].founderName = emailData.founderName;
-          // Save screenshot if available so user can verify website
-          if (data.screenshotUrl) leads[idx].screenshotUrl = data.screenshotUrl;
-          saveLeads(leads, leads[idx]);
-          setAllLeads(getLeads().sort((a,b) => (b.icpScore||0) - (a.icpScore||0)));
-          if (leadIdRef.current === rid) setLead({ ...leads[idx] });
-          // THE SPINNER BUG: this early return jumped past the cleanup at the bottom
-          // of the function, so a failed audit left the card spinning forever with no
-          // error on screen — which is exactly how an out-of-credits night looks like
-          // a working system. Surface the reason and clear the loading state here.
-          // ══ SAY THAT WHAT IS ON SCREEN IS OLD ══════════════════════════
-          // A failed run leaves the lead's PREVIOUS brainAudit in place, so the
-          // view re-renders the last successful audit and it looks like the app
-          // "went back to the prior run". Nothing said the run just watched had
-          // failed, or that the audit on screen predates it.
-          //
-          // Stamp the failure with a time so the banner can say which run failed
-          // and how old the visible audit is.
-          leads[idx].brainFailedAt = new Date().toISOString();
-          leads[idx].staleAuditShown = !!(leads[idx].brainAudit);
-          setResearchError((leads[idx].brainAudit ? '\u26a0 THE AUDIT BELOW IS FROM AN EARLIER RUN \u2014 this one failed and nothing on screen has been updated. ' : '')
-            + (data.outOfCredits
-              ? (data.reason || 'Firecrawl is out of credits.')
-              : `Research could not complete \u2014 ${data.reason || 'the audit failed'}`));
-          clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
-          clearTimeout(t4); clearTimeout(t5); clearTimeout(t6);
-          setResearchStep('done');
-          setLoading(false);
-          setResearchingId(cur => (cur === rid ? null : cur));
-          return;
-        }
-
-        // Brain succeeded — update everything
-        leads[idx].brainFailed = false;
-        leads[idx].brainFailReason = '';
-        // ══ THE SERVER'S ANSWER OUTRANKS THE CACHED ONE ═══════════════════
-        // This read the CACHED Hunter address first. On a re-run "alreadyHaveEmail"
-        // fills emailData.email from cache, so it always won — and the server's
-        // decision-maker resolution was discarded silently.
-        //
-        // Live on Comfort-Air: the server logged "EMAIL SWAPPED — the address on
-        // file (pfreund@) belongs to Patrick Freund, not to the decision-maker.
-        // Using tfreund@". This line put Patrick back, Hunter received pfreund@,
-        // and an email written for Tom at owner altitude went to someone else.
-        // That is the worst delivery error available: right research, wrong human,
-        // and no way to take it back.
-        //
-        // data.email is the server's final answer after the owner is resolved and
-        // the address engine has run. It wins. The cached Hunter value is the
-        // fallback for when research returned nothing.
-        leads[idx].email = data.email || emailData.email || leads[idx].email || '';
-        if (data.email && emailData.email && data.email !== emailData.email) {
-          console.log('EMAIL: research resolved ' + data.email + ' for the decision-maker; the cached address (' + emailData.email + ') belonged to someone else and has been replaced.');
-        }
-        // Same inversion, same consequence: the cached Hunter NAME outranked the
-        // resolved decision-maker, so an email addressed to the owner could open
-        // with a staff member's first name. The two must move together — an
-        // address for Tom under a greeting to Patrick is worse than either alone.
-        leads[idx].founderName = data.founderName || emailData.founderName || leads[idx].founderName || '';
-        if (companyData.industry) leads[idx].industry = companyData.industry;
-        if (companyData.employees) leads[idx].employees = String(companyData.employees);
-        leads[idx].flaws = data.flaws || [];
-        leads[idx].researchBonus = data.researchBonus || 0;
-        const discoveryScore = leads[idx].preResearchScore || leads[idx].icpScore || 0;
-        // `data.reachability`, NOT leads[idx].reachability — the lead's own copy is
-        // not assigned until ~40 lines below this, so reading it here would blend
-        // against the PREVIOUS run's number on every re-research.
-        leads[idx].icpScore = finalLeadScore(discoveryScore, data.reachability, data.researchBonus);
-        leads[idx].preResearchScore = discoveryScore;
-        leads[idx].richData = {
-          ...(data.richData || {}),
-          mobileScore: pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100 mobile score` : 'Not checked',
-          loadTime: pageSpeed.lcp || ''
-        };
-        leads[idx].signals = {
-          ...(leads[idx].signals || {}),
-          ...(data.signals || {})
-        };
-        leads[idx].buckets = data.buckets || null;
-        leads[idx].topPain = data.topPain || null;
-        leads[idx].recommendedProduct = data.recommendedProduct || null;
-        leads[idx].brainAudit = data.brainAudit || null;
-        // ══ AND THE FLAT COPY THE UI ACTUALLY READS ══════════════════════
-        // brainAudit alone was written here. The audit screen renders
-        // lead.problemList, the compose payload reads lead.harmsRanked, and the
-        // save path serialises lead.factualSpine — all flat, none of them
-        // touched by this merge. Only a page reload put them there, via
-        // rowToLead, which is why a finished run left the previous run's
-        // findings on screen underneath the new run's narrative.
-        //
-        // Same function rowToLead uses, so the two paths cannot disagree about
-        // which fields are measured or where they come from.
-        Object.assign(leads[idx], measuredFieldsFrom(data.brainAudit));
-        // ── THE AUDIT'S MEASUREMENTS ─────────────────────────────────────
-        // THIS is the merge path that actually runs after research. The other
-        // one further down is a different branch, and fixing only that one meant
-        // these fields still never landed on the lead \u2014 so the call sheet showed
-        // "nothing on file" while the email in the same view correctly quoted
-        // "32 reviews at 4.7 stars". Written here, they survive.
-        leads[idx].offerStrength = data.offerStrength ?? leads[idx].offerStrength ?? null;
-        leads[idx].sitePages = data.sitePages ?? leads[idx].sitePages ?? null;
-        leads[idx].htmlSignals = data.htmlSignals ?? leads[idx].htmlSignals ?? null;
-        leads[idx].gbpHealth = data.gbpHealth ?? leads[idx].gbpHealth ?? null;
-        leads[idx].socialPresence = data.socialPresence ?? leads[idx].socialPresence ?? null;
-        leads[idx].marketClarity = data.marketClarity ?? leads[idx].marketClarity ?? null;
-        leads[idx].leadMagnet = data.leadMagnet ?? leads[idx].leadMagnet ?? null;
-        leads[idx].valueEquation = data.valueEquation ?? leads[idx].valueEquation ?? null;
-        // Only overwrite when the incoming one actually has results. A merge that
-        // takes an empty object over good persisted data is how a working lead
-        // turns into "nothing on file".
-        leads[idx].localVisibility = (data.localVisibility && data.localVisibility.checked)
-          ? data.localVisibility : (leads[idx].localVisibility || null);
-        leads[idx].candidateFindings = data.candidateFindings ?? leads[idx].candidateFindings ?? null;
-        leads[idx].ownerReplyCount = data.ownerReplyCount ?? leads[idx].ownerReplyCount ?? null;
-        leads[idx].reviewsRead = data.reviewsRead ?? leads[idx].reviewsRead ?? null;
-        leads[idx].leadSignal = data.leadSignal ?? leads[idx].leadSignal ?? null;
-        // ── INSTANCE EIGHTEEN OF COMPUTED-BUT-NOT-PASSED ─────────────────
-        // detectLSA() runs on EVERY researched lead and costs ZERO credits — it
-        // reads the homepage we already scraped. It is returned by the server,
-        // persisted and restored. It was never written here, on the merge path
-        // that actually runs, so the Research tab has shown "Google LSA — Not
-        // checked. Re-run Research to check." on every lead tonight, including
-        // attorneys, which ARE an LSA category. Re-running could never fix it.
-        //
-        // A row that says "not checked" forever on an audit whose entire claim is
-        // "we only say what we measured" is worse than a missing row: it advertises
-        // a check we perform and silently never report.
-        leads[idx].lsa = data.lsa ?? leads[idx].lsa ?? null;
-        leads[idx].outreachChannel = data.outreachChannel ?? leads[idx].outreachChannel ?? null;
-        leads[idx].valueEquation = data.valueEquation ?? leads[idx].valueEquation ?? null;
-        leads[idx].marketClarity = data.marketClarity ?? leads[idx].marketClarity ?? null;
-        leads[idx].leadMagnet = data.leadMagnet ?? leads[idx].leadMagnet ?? null;
-        leads[idx].offerStrength = data.offerStrength ?? leads[idx].offerStrength ?? null;
-        leads[idx].growthConstraint = data.growthConstraint || leads[idx].growthConstraint || null;
-        leads[idx].situationRead = data.situationRead ?? leads[idx].situationRead ?? null;
-        leads[idx].affordability = data.affordability || leads[idx].affordability || null;
-        leads[idx].reviewCount = data.reviewCount ?? (data.gbpHealth && data.gbpHealth.reviewCount) ?? leads[idx].reviewCount ?? null;
-        leads[idx].rating = data.rating ?? (data.gbpHealth && data.gbpHealth.rating) ?? leads[idx].rating ?? null;
-        leads[idx].industry = data.verifiedIndustry || leads[idx].industry || '';
-        leads[idx].phone = data.phone || leads[idx].phone || '';
-        leads[idx].phoneDisplay = data.phoneDisplay || leads[idx].phoneDisplay || '';
-        leads[idx].topThreeProducts = (data.brainAudit && data.brainAudit.topThreeProducts) || [];
-        leads[idx].positioningScore = data.positioningScore || null;
-        leads[idx].homepageContent = data.homepageContent || '';
-        leads[idx].screenshotUrl = data.screenshotUrl || null;
-        leads[idx].visualAnalysis = data.visualAnalysis || null;
-        leads[idx].companyTriggers = data.companyTriggers || [];
-        leads[idx].auditedWebsite = data.auditedWebsite || '';
-        leads[idx].auditedWebsiteResolved = data.auditedWebsiteResolved || false;
-        leads[idx].domainMatch = data.domainMatch || 'unknown';
-        leads[idx].domainMatchConfidence = data.domainMatchConfidence || 'low';
-        leads[idx].domainMatchReason = data.domainMatchReason || '';
-        leads[idx].visionAudit = data.visionAudit || null;
-        leads[idx].signalConfidence = data.signalConfidence || null;
-        leads[idx].publicPainSignals = data.publicPainSignals || [];
-        leads[idx].painSummary = data.painSummary || '';
-        leads[idx].reachabilityVerdict = data.reachabilityVerdict || '';
-        leads[idx].decisionMaker = data.decisionMaker || null;
-        leads[idx].emailResult = data.emailResult || null;
-        if (data.verifiedRevenue) leads[idx].verifiedRevenue = data.verifiedRevenue;
-        if (data.verifiedEmployees) leads[idx].verifiedEmployees = data.verifiedEmployees;
-        leads[idx].firecrawlOutOfCredits = data.firecrawlOutOfCredits || false;
-        // Reachability is now computed properly by the backend (owner-identification +
-        // email as the spine, size as a modifier, hard cap when no owner is found).
-        // Use it verbatim — do NOT override with a crude local heuristic.
-        if (data.localVisibility) leads[idx].localVisibility = data.localVisibility;
-        if (data._claimRisks) leads[idx]._claimRisks = data._claimRisks;
-        // These three were computed and returned by the server but never copied
-        // onto the lead, so their audit rows always read "Not checked"/"Not
-        // assessed" no matter what was actually measured. Same wiring shape as
-        // the _claimRisks bug: an explicit copy list that a new field was never
-        // added to. Positioning in particular is available on EVERY lead, so
-        // this silently hid the one finding that always exists.
-        if (data.positioningRead) leads[idx].positioningRead = data.positioningRead;
-        if (data.gbpHealth) leads[idx].gbpHealth = data.gbpHealth;
-        if (data.htmlSignals) leads[idx].htmlSignals = data.htmlSignals;
-        if (typeof data.reachability === 'number') leads[idx].reachability = data.reachability;
-        if (data.reachabilityReasons && data.reachabilityReasons.length) leads[idx].reachabilityReasons = data.reachabilityReasons;
-        leads[idx].reachabilityVerified = !!(data.decisionMaker && data.decisionMaker.corroborated);
-        leads[idx].ownerEmailMatch = data.ownerEmailMatch || 'unknown';
-        leads[idx].ownerEmailMatchReason = data.ownerEmailMatchReason || '';
-        // ══ A NEW AUDIT INVALIDATES THE OLD EMAIL AND ITS APPROVAL ═════════
-        // Live: Broderick was researched again, the run completed cleanly, and
-        // clicking Generate showed "Generate — Overhead Door Company of Denver".
-        // He was APPROVED from an earlier session, so the Generate queue — which
-        // holds only unapproved leads by design — excluded him, and the view fell
-        // through to the first lead in the list.
-        //
-        // The display was a symptom. The real problem is that he was still sitting
-        // in Send, approved, carrying an email written from the PREVIOUS audit,
-        // while the audit that had just replaced it was invisible. Approving copy
-        // is approving THAT copy against THAT evidence; when the evidence is
-        // re-measured, the approval no longer refers to anything. On this very
-        // lead the new audit changed the lead finding, the wording and the
-        // supporting numbers — so the approved email described a different
-        // diagnosis from the one now on file.
-        //
-        // Re-research therefore returns a lead to the Generate queue and drops the
-        // stale draft. Nothing is silently lost: the email is regenerated from the
-        // new audit, which is the only version that matches what we now know.
-        const _wasApproved = !!leads[idx].approved;
-        const _hadDraft = !!leads[idx].generatedResult;
-        // ══ A RE-RESEARCHED SENT LEAD FELL INTO A DEAD STATE ═════════════════
-        // The guard below protects a SENT lead's approval so it does not reappear
-        // as unsent. But the line after it sets status='researched' regardless —
-        // so the lead ends up researched AND approved, and Generate filters on
-        // (researched|generated) AND NOT approved. It matched nothing.
-        //
-        // Live on Property Masters: sent earlier, re-researched, then "Write the
-        // email" moved to Generate and the lead was not in the queue.
-        //
-        // Re-running Research is an explicit decision to work this lead again, and
-        // the new audit invalidates whatever the old email said. So the approval
-        // is cleared in every case and the draft goes with it — the send itself is
-        // already recorded in sentSnapshot, which is what Call reads, so nothing
-        // about the history is lost.
-        leads[idx].approved = false;
-        leads[idx].generatedResult = null;
-        leads[idx].copyFlags = null;
-        leads[idx].status = 'researched';
-        if (_wasApproved || _hadDraft) {
-          console.log('[re-research] ' + (leads[idx].company || 'lead') +
-            ': cleared a previous ' + (_wasApproved ? 'approval' : 'draft') +
-            ' — the email it referred to was written from the old audit. Back in Generate for a fresh write.');
-        }
-        // ══ CONCURRENT RUNS WERE OVERWRITING EACH OTHER ════════════════════
-        // `leads` is a snapshot taken BEFORE the audit started — three minutes
-        // ago. Writing that whole array back erases anything another run
-        // finished in the meantime, because every concurrent job holds its own
-        // stale copy and the last one to return wins.
-        //
-        // Live: three leads researched together. Dr. Binh Nguyen and Linda Vista
-        // Concrete both completed server-side with full audits; both were still
-        // showing "Run Research to unlock" afterwards. Only DRCH survived — the
-        // one that happened to save last. Two full audits, ~$0.25 of Anthropic
-        // and a pile of Firecrawl credits, erased by a colleague finishing.
-        //
-        // Re-read immediately before writing and patch only THIS lead into the
-        // current array. The window between read and write is now microseconds
-        // instead of the length of an audit, and nobody else's work is inside it.
-        const fresh = getLeads();
-        const fi = fresh.findIndex(x => x.id === rid);
-        if (fi >= 0) fresh[fi] = leads[idx]; else fresh.push(leads[idx]);
-        saveLeads(fresh, leads[idx]);
-        setAllLeads(fresh.slice().sort((a,b) => (b.icpScore||0) - (a.icpScore||0)));
-        if (leadIdRef.current === rid) setLead({ ...leads[idx] });
-      }
+      // ══ ONE MERGE PATH, AND IT IS NOT IN THIS FUNCTION ══════════════════
+      // Everything that decides which value wins now lives in
+      // applyResearchResult at module scope, so the batch runner applies the
+      // identical merge rather than a second copy of it. What stays here is the
+      // part that is about THIS screen: persist, sort, re-render, say what
+      // happened.
+      const merged = applyResearchResult(leads[idx], data, {
+        website, emailData, companyData, pageSpeed, httpStatus: r.status,
+      });
+      leads[idx] = merged.lead;
+      // ══ CONCURRENT RUNS WERE OVERWRITING EACH OTHER ════════════════════
+      // `leads` is a snapshot taken BEFORE the audit started — three minutes
+      // ago. Writing that whole array back erases anything another run
+      // finished in the meantime, because every concurrent job holds its own
+      // stale copy and the last one to return wins.
+      //
+      // Live: three leads researched together. Dr. Binh Nguyen and Linda Vista
+      // Concrete both completed server-side with full audits; both were still
+      // showing "Run Research to unlock" afterwards. Only DRCH survived — the
+      // one that happened to save last. Two full audits, ~$0.25 of Anthropic
+      // and a pile of Firecrawl credits, erased by a colleague finishing.
+      //
+      // Re-read immediately before writing and patch only THIS lead into the
+      // current array. The window between read and write is now microseconds
+      // instead of the length of an audit, and nobody else's work is inside it.
+      // Every outcome comes through here now, including the two that used to
+      // write the stale array back on their way out.
+      const fresh = getLeads();
+      const fi = fresh.findIndex(x => x.id === rid);
+      if (fi >= 0) fresh[fi] = leads[idx]; else fresh.push(leads[idx]);
+      saveLeads(fresh, leads[idx]);
+      setAllLeads(fresh.slice().sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0)));
+      if (leadIdRef.current === rid) setLead({ ...leads[idx] });
+      if (merged.banner) setResearchError(merged.banner);
     } catch (e) {
       console.error('Research error:', e);
       // SURFACE the error — silent failures made debugging impossible.
