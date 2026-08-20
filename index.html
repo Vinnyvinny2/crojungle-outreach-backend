@@ -1647,8 +1647,29 @@ const pollResearchJob = async (jobId, o) => {
   // Poll gently. The server abandons a run past 8 minutes and reports it as an
   // error, so this loop cannot spin forever even if the job never settles.
   const started = Date.now();
-  const HARD_STOP = 10 * 60 * 1000;
-  while (Date.now() - started < HARD_STOP) {
+  // ══ THE CLIENT'S CLOCK CONTRADICTED THE SERVER'S ═════════════════════════
+  // This gave up ten minutes after SUBMITTING. The server's clock starts when
+  // the WORK starts — its own comment says so: "The work begins HERE, so the
+  // timeout begins here too", because a job that waited six minutes for a slot
+  // used to have two minutes left to do five minutes of work and was killed
+  // with the credits already spent.
+  //
+  // So a lead that queued for five minutes and then worked for five was
+  // abandoned HERE, by the browser, at the exact moment the server was about to
+  // answer. It comes back as "Research did not finish within 10 minutes",
+  // which reads as a slow lead rather than as a queue, and the audit that was
+  // paid for is thrown away. With one lead at a time nothing ever queued and
+  // this was invisible. Running fifty at a time it is the normal case.
+  //
+  // Two clocks now, both from the server's own report: give up after ten
+  // minutes of WORK (the server abandons its own job at eight, so this can only
+  // fire if the server has stopped answering), and a wall-clock backstop for a
+  // server that never replies at all. An older server that does not report
+  // workedMs falls back to the previous behaviour exactly.
+  const WORK_STOP = 10 * 60 * 1000;
+  const TOTAL_STOP = 90 * 60 * 1000;
+  let workedMs = 0;
+  while (Date.now() - started < TOTAL_STOP && workedMs < WORK_STOP) {
     if (o.signal && o.signal.aborted) throw new DOMException('Aborted', 'AbortError');
     await new Promise(r => setTimeout(r, 3000));
     let poll;
@@ -1663,6 +1684,10 @@ const pollResearchJob = async (jobId, o) => {
       return { ok: false, status: 503, json: async () => ({ brainFailed: true, reason: st.error || 'The server restarted while this lead was being researched. Re-run Research.' }) };
     }
     if (st.status === 'running') {
+      // A queued job has done no work yet, so it burns none of the work clock.
+      workedMs = Number.isFinite(Number(st.workedMs))
+        ? Number(st.workedMs)
+        : (st.phase === 'queued' ? 0 : (Date.now() - started));
       if (typeof o.onProgress === 'function') o.onProgress(st.elapsedMs || (Date.now() - started));
       continue;
     }
@@ -1674,7 +1699,9 @@ const pollResearchJob = async (jobId, o) => {
     const status = st.httpStatus || 200;
     return { ok: status >= 200 && status < 300, status, json: async () => st.result || {} };
   }
-  return { ok: false, status: 504, json: async () => ({ brainFailed: true, reason: 'Research did not finish within 10 minutes. Re-run this lead.' }) };
+  return { ok: false, status: 504, json: async () => ({ brainFailed: true, reason: workedMs >= WORK_STOP
+    ? 'The server worked on this lead for over ten minutes without finishing, which is past its own abandon point. Re-run this lead.'
+    : 'This lead was waiting in the queue for an hour and a half and never started. Something is holding the server\u2019s research slots. Re-run this lead.' }) };
 };
 
 const proxyFetch = async url => {

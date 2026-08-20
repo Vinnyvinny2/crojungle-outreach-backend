@@ -78,6 +78,13 @@ if (fails.length) { fails.forEach(f => console.log('  ' + f)); console.log('\n�
 const makeWorld = () => `
 const BATCH_DEFAULT_SIZE = ${consts.BATCH_DEFAULT_SIZE};
 const BATCH_CONCURRENCY = ${consts.BATCH_CONCURRENCY};
+// ── A FAKE CLOCK ───────────────────────────────────────────────────────────
+// The poller sleeps three seconds between polls, so a real-timer harness spends
+// a minute on fifty leads and could never reach the ten-minute give-up at all.
+// setTimeout fires immediately and ADVANCES the clock by what it was asked to
+// wait, so elapsed time is exact and the whole gate runs in milliseconds.
+const setTimeout = (fn, ms) => { __W.clock += (Number(ms) || 0); return __W.tick(fn); };
+const Date = __W.Date;
 let __store = [];
 const getLeads = () => { __W.reReads++; return __store.map(x => ({ ...x })); };
 const saveLeads = (l, changed) => { __W.writes++; __store = l.map(x => ({ ...x })); if (!changed) __W.saveWithoutChanged = true; };
@@ -93,8 +100,9 @@ const fetch = async (url, init) => {
     return { ok: true, status: 200, json: async () => ({ jobId: 'job' + __n }) };
   }
   if (String(url).indexOf('/api/research-job/') >= 0) {
-    __W.calls.poll++;
+    const n = ++__W.calls.poll;
     const id = String(url).split('/').pop();
+    if (__W.pollAnswer) return { ok: true, status: 200, json: async () => __W.pollAnswer(n) };
     __W.live--;
     return { ok: true, status: 200, json: async () => ({ status: 'done', httpStatus: 200, result: __W.researchResult(id) }) };
   }
@@ -106,8 +114,30 @@ const fetch = async (url, init) => {
   throw new Error('the batch called an endpoint this harness does not know about: ' + url);
 };
 ${[...NEED].map(n => found.get(n)).join('\n')}
-return { runBatchAudit, batchCandidates, __store: () => __store };
+return { runBatchAudit, batchCandidates, pollResearchJob, clock: () => __W.clock, __store: () => __store };
 `;
+
+// The clock and the immediate-timer, shared by every scenario.
+const EXPORTS = "return { runBatchAudit, batchCandidates, pollResearchJob, clock: () => __W.clock, __store: () => __store };";
+const RealDate = Date;
+const makeW = (opts) => {
+  const W = {
+    calls: { research: 0, poll: 0, compose: 0 }, live: 0, peak: 0, jobIds: new Set(),
+    writes: 0, reReads: 0, bodies: [], composeBodies: [], saveWithoutChanged: false,
+    console: { log: () => {}, warn: () => {}, error: () => {} },
+    clock: 1755600000000,
+    researchResult: () => ((opts && opts.researchResult) || RESEARCH_OK),
+    composeAnswer: () => ((opts && opts.composeAnswer) || COMPOSED),
+    pollAnswer: (opts && opts.pollAnswer) || null,
+  };
+  W.tick = (fn) => { process.nextTick(fn); return 0; };
+  const FakeDate = function (...a) { return a.length ? new RealDate(...a) : new RealDate(W.clock); };
+  FakeDate.now = () => W.clock;
+  FakeDate.parse = RealDate.parse;
+  FakeDate.UTC = RealDate.UTC;
+  W.Date = FakeDate;
+  return W;
+};
 
 const seed = (n) => Array.from({ length: n }, (_, i) => ({
   id: 'L' + i, name: 'Lead ' + i, website: 'https://lead' + i + '.com',
@@ -124,16 +154,10 @@ const BLOCKED = { reason: 'critical-fact-check', criticalFlags: ['your site is d
 // The runner reads storage for the CURRENT row, so storage has to be primed
 // through saveLeads. Build a tiny primer inside the sandbox.
 const runBatch = async (opts) => {
-  const W = {
-    calls: { research: 0, poll: 0, compose: 0 }, live: 0, peak: 0, jobIds: new Set(),
-    writes: 0, reReads: 0, bodies: [], composeBodies: [], saveWithoutChanged: false,
-    console: { log: () => {}, warn: () => {}, error: () => {} },
-    researchResult: () => (opts.researchResult || RESEARCH_OK),
-    composeAnswer: () => (opts.composeAnswer || COMPOSED),
-  };
+  const W = makeW(opts);
   const body = makeWorld().replace(
-    'return { runBatchAudit, batchCandidates, __store: () => __store };',
-    'return { runBatchAudit, batchCandidates, prime: (rows) => { __store = rows.map(x => ({ ...x })); }, store: () => __store };'
+    EXPORTS,
+    EXPORTS.replace('__store: () => __store', 'prime: (rows) => { __store = rows.map(x => ({ ...x })); }, store: () => __store')
   );
   const api = new Function('__W', body)(W);
   api.prime(opts.leads);
@@ -209,7 +233,7 @@ const runBatch = async (opts) => {
       { id: 'd', name: 'd', website: 'https://d.com', status: 'new', notAFit: true, icpScore: 95 },
       { id: 'e', name: 'e', website: 'https://e.com', status: 'new', icpScore: 50 },
     ];
-    const body = makeWorld().replace('return { runBatchAudit, batchCandidates, __store: () => __store };', 'return { batchCandidates };');
+    const body = makeWorld();
     const api = new Function('__W', body)({ console: { log() {}, warn() {}, error() {} } });
     const got = api.batchCandidates(mixed, { limit: 50 }).map(x => x.id).join(',');
     if (got !== 'e,a') fails.push(`the batch would take [${got}] — it must skip the lead with no website (nothing to audit), the one already researched (a re-audit costs a full cycle) and the one already refused, and take the rest highest score first`);
@@ -217,6 +241,49 @@ const runBatch = async (opts) => {
     if (withDone !== 'c,e,a') fails.push(`"include re-runs" produced [${withDone}] instead of putting the researched lead back in`);
     const capped = api.batchCandidates(mixed, { limit: 1 }).map(x => x.id).join(',');
     if (capped !== 'e') fails.push(`the size limit produced [${capped}] instead of the single highest-scoring candidate`);
+  }
+
+  // ══ THE POLLER'S CLOCK MUST MEASURE WORK, NOT QUEUE TIME ═════════════════
+  // It gave up ten minutes after SUBMITTING. The server's clock starts when the
+  // WORK starts — deliberately, because a job that waited six minutes for a slot
+  // used to have two minutes left to do five minutes of work and was killed with
+  // the credits already spent. So a lead that queued five minutes and then worked
+  // five was abandoned by the BROWSER at the moment the server was about to
+  // answer, reported as "did not finish within 10 minutes", and the audit that
+  // was paid for was thrown away. One lead at a time nothing ever queued and this
+  // was invisible. Fifty at a time it is the normal case.
+  //
+  // The fake clock advances by whatever each sleep asked for, so half an hour of
+  // queueing takes no real time at all and the boundary is exact.
+  {
+    const mk = (opts) => {
+      const W = makeW(opts);
+      return { api: new Function('__W', makeWorld())(W), W };
+    };
+    // Queued for half an hour, then answers. The result must come back.
+    {
+      const { api } = mk({ pollAnswer: (n) => (n < 600
+        ? { status: 'running', phase: 'queued', elapsedMs: n * 3000, workedMs: 0 }
+        : { status: 'done', httpStatus: 200, result: { brainAudit: { factualSpine: 's' } } }) });
+      const res = await api.pollResearchJob('job1', {});
+      const body = await res.json();
+      if (!res.ok || body.brainFailed) {
+        fails.push('a lead that waited half an hour in the queue and then finished was abandoned by the browser — the audit was paid for and thrown away, and it reports as a slow lead rather than as a queue');
+      }
+    }
+    // Working, and never finishing. This one MUST give up, or a wedged job holds
+    // a pool slot forever and the batch stops after three leads.
+    {
+      const { api } = mk({ pollAnswer: (n) => ({ status: 'running', phase: 'running', elapsedMs: n * 3000, workedMs: n * 3000 }) });
+      const res = await api.pollResearchJob('job1', {});
+      const body = await res.json();
+      if (res.ok || !body.brainFailed) {
+        fails.push('a job that works forever is never given up on, so it holds a slot in the pool and a fifty-lead batch stops after three leads');
+      }
+      if (!/ten minutes/.test(body.reason || '')) {
+        fails.push(`the give-up message does not say which clock ran out: "${body.reason}"`);
+      }
+    }
   }
 
   if (fails.length) {

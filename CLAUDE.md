@@ -1005,6 +1005,17 @@ Two more found on the way out:
   Found by running fifty leads through the batch with a blocked composer.
   `clientcheck.js` now reads BOTH lists off the code and fails if they drift.
 
+**And one more the batch made urgent.** The browser's poller gave up ten minutes
+after SUBMITTING a lead. The server's clock starts when the WORK starts —
+deliberately, because a job that waited six minutes for a slot used to have two
+minutes left to do five minutes of work and was killed with the credits already
+spent. So a lead that queued for five minutes and then worked for five was
+abandoned **by the browser** at the moment the server was about to answer,
+reported as "did not finish within 10 minutes", and the paid-for audit thrown
+away. One lead at a time nothing ever queued and this was invisible. Fifty at a
+time it is the normal case. Two clocks now, both from the server's own report:
+ten minutes of WORK, and a wall-clock backstop for a server that never replies.
+
 **And the bulk audit itself.** `runBatchAudit` reuses the shared request builder,
 the shared merge, the shared compose body and the shared email commit — it
 reimplements nothing. Audits only by default, because that is what Mike asked for;
