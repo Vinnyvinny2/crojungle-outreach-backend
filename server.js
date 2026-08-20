@@ -2575,16 +2575,36 @@ const verifyGeneratedCopy = (copy = {}, opts = {}) => {
 //
 // The risk is real but small and it is in the right place: phrasing may be
 // slightly flatter, and the synthesis that carries the audit is untouched. If
-// the rows read worse, one env var puts it back:
+// the rows read worse, one env var puts it back. See the block immediately
+// below, which is where that decision now actually lives.
+// ══ THE FILE SAID SONNET AND THE CODE SAID HAIKU ════════════════════════════
+// Six lines above this one, the comment block reads "Default stays Sonnet.
+// Changing it is a quality decision" and tells you which env var puts it back.
+// The code said Haiku. Two comments in one file disagreeing about what the
+// default is means nobody could tell which decision had actually been taken, and
+// the answer for months was the cheap one.
 //
-//   BRAIN_MODEL=claude-sonnet-4-6
+// This is the highest-judgement call in the system: it reads 33,000 tokens of
+// their own pages, their measurements and their screenshots, and writes the
+// narrative every other artefact is built from. Vin, comparing it to a chat with
+// a large model: "it seems like the brain in our system is way dumber — clearly
+// we are limiting the brain." He was right, and this is most of the reason.
 //
-// Watch the FINDING SCORES line across a few leads. If the candidate findings
-// stop being specific, that is the signal to revert \u2014 not a spreadsheet.
-const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
+// THE PRICE, from the live meter rather than an estimate. Haiku audit $0.0467,
+// whole lead $0.1019, fifty leads $5.10. On Sonnet the audit is ~$0.14, the lead
+// ~$0.195, fifty leads $9.75. Four dollars sixty-six a day, against engagements
+// that start at thirty-five thousand. There is no version of this arithmetic
+// where the cheap model is the right call.
+//
+// If the findings stop being specific, BRAIN_MODEL=claude-haiku-4-5-20251001
+// puts it back. Watch the FINDING SCORES line, not a spreadsheet.
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-sonnet-5';
 // The synthesis call. Separate switch, separate default \u2014 the audit's quality is
 // held up by deterministic scoring underneath it; this call's is not.
-const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-4-6';
+// The synthesis call — the one that produced the only line Vin has ever singled
+// out as good. Same family as the audit now, and the newest one: it is handed
+// the fewest tokens of any call in the system and asked the hardest question.
+const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-5';
 
 // ══ A PRICE TABLE THAT KNOWS TWO MODELS, AND A SWITCH THAT OFFERS MORE ══════
 // BRAIN_MODEL and SITUATION_MODEL are environment variables. The table below
@@ -6867,6 +6887,173 @@ const fcNote = (paid, kind, what) => {
 //
 // So: harvest the links before discarding the markup, and let the map consult
 // them when it has nothing of its own. Zero credits, zero extra requests.
+// ══ ONE PAGE-FILTER, NOT TWO ════════════════════════════════════════════════
+// These were block-scoped inside the page audit. The unlinked-page detector needs
+// exactly the same two questions answered — is this URL noise, is it one of forty
+// near-identical city pages — and copying them would have made a second filter
+// that drifts, which is the failure this file records over and over (two
+// fabrication lists, two merge paths, two size gates that reinforced one wrong
+// rule). One definition, two callers.
+  const NOISE = /\/(blog|posts?|news|article|category|categories|tag|tags|author|privacy|terms|disclaimer|accessibility|sitemap[\w-]*|[\w-]*-sitemap|feed|rss|amp|wp-|cart|checkout|account|login|register|search|thank-?you|test(?:ing)?|staging|preview|404|coming-?soon)\b|\.(xml|json|pdf|jpe?g|png|gif|webp|txt|css|js)(?:$|\?)/i;
+  // ══ CITY PAGES ARE THE SAME PAGE, N TIMES ══════════════════════════════
+  // The backfill sorts by shallowest path, and a location landing page is as
+  // shallow as it gets: /olathe-ks, /leawood-ks, /lees-summit-mo,
+  // /overland-park-ks. All-Weather spent four of its seven reads on those
+  // plus /covid-19-policy, while its reviews and pricing pages went unread.
+  //
+  // They are near-identical service copy with the city swapped, so the
+  // second one teaches us nothing the first did not, and none of them tells
+  // us anything about how the business sells or what it can prove. One is
+  // occasionally worth reading for local positioning; four never are.
+  //
+  // Matching a US state suffix (-ks, -mo, -tx) or a "city-state" shape is
+  // the reliable tell, along with the standing policy notices that every
+  // site added in 2020 and nobody has looked at since.
+  const LOW_VALUE = new RegExp(
+    '\\/[a-z][a-z-]{2,}-(?:al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\\/?$'
+    + '|\\/(covid|coronavirus|pandemic)[\\w-]*'
+    + '|\\/(locations?|service-area|areas?-we-serve)\\/[\\w-]+',
+    'i');
+
+// ══ WHERE DO THEIR AD CLICKS LAND? ══════════════════════════════════════════
+// The single most valuable unanswered question in this system, and most of the
+// answer was already bought and thrown away.
+//
+// A LANDING PAGE is a page built for one campaign. Its defining property is not
+// its words, it is that the site does not link to it: it exists to be arrived at
+// from an ad, so it is absent from the header, the footer and the menu. We buy a
+// full sitemap on every lead (1 credit) and we harvest the site's own navigation
+// from markup we already hold. The set difference is the answer.
+//
+// What this is allowed to conclude, and what it is not:
+//
+//   POSITIVE, and safe        "these pages exist and nothing on the site links
+//                             them" — checkable by the owner in one click, and
+//                             true whatever the pages turn out to be for.
+//   NEGATIVE, and forbidden   "you are running ads with no landing pages". A
+//                             purpose-built PPC page is frequently noindex, off
+//                             the sitemap entirely, on a subdomain, or on a
+//                             different domain — and firecrawlMap does not
+//                             request subdomains. A false zero here tells an
+//                             owner he is not doing something he plainly is,
+//                             which is the EXISTS BUT UNREAD failure in a new
+//                             costume and the fastest way to lose him.
+//
+// So this is INTERNAL intelligence: it goes to the audit and the call sheet, and
+// the honest outward form is a question, never an assertion.
+const CAMPAIGN_SHAPE = /\/(lp|landing|go|get|offer|promo|special|campaign|ppc|ads?|start|free|claim|apply|book-now|quote-now|thank-?you|ty)(\/|-|$)/i;
+const findUnlinkedPages = ({ sitemap, navKeys, homepage } = {}) => {
+  const urls = Array.isArray(sitemap) ? sitemap : [];
+  const nav = navKeys instanceof Set ? navKeys : new Set(Array.isArray(navKeys) ? navKeys : []);
+  // Below this the comparison is not evidence of anything: a site whose header we
+  // failed to read makes EVERY page look unlinked, which is the false-zero
+  // failure pointed the other way. Three links is the floor for "we read a menu".
+  if (!urls.length || nav.size < 3) {
+    return { checked: false, why: nav.size < 3 ? `only ${nav.size} navigation link(s) were read, so "not linked from the site" cannot be established` : 'no sitemap' };
+  }
+  const homeKey = homepage ? pageKey(homepage) : '';
+  const seen = new Set();
+  const unlinked = [];
+  for (const u of urls) {
+    const k = pageKey(u);
+    if (!k || k === homeKey || nav.has(k) || seen.has(k)) continue;
+    // A path with nothing in it is the homepage under another spelling.
+    if (!/\/[^/]/.test(k.slice(k.indexOf('/')) || '/')) continue;
+    seen.add(k);
+    if (NOISE.test(u) || LOW_VALUE.test(u)) continue;
+    if (ARTICLE_SLUG.test(u)) continue;          // a blog post nobody links is a blog post
+    unlinked.push({ url: u, campaignShaped: CAMPAIGN_SHAPE.test(u) });
+  }
+  const campaign = unlinked.filter(x => x.campaignShaped);
+  return {
+    checked: true,
+    navLinks: nav.size,
+    sitemapPages: seen.size,
+    unlinkedCount: unlinked.length,
+    campaignCount: campaign.length,
+    // Campaign-shaped first: those are the ones worth naming out loud.
+    pages: campaign.concat(unlinked.filter(x => !x.campaignShaped)).slice(0, 8).map(x => x.url),
+  };
+};
+
+// ══ SEVEN PAGES BOUGHT, ONE PAGE'S MARKUP READ ══════════════════════════════
+// The interior scrapes asked for markdown and a screenshot and never for rawHtml,
+// so every signal that needs SOURCE rather than text was computed from the
+// homepage alone: the three advertising markers, the navigation harvest, and the
+// booking read. Firecrawl bills per PAGE, not per format — this file says so
+// itself two lines above the format list — so six more pages of markup cost
+// nothing and were simply not taken.
+//
+// The markup is consumed HERE and thrown away. Retaining six pages of raw HTML
+// would be several megabytes against a 256MB dyno ceiling, and this file's own
+// rule is to measure RSS rather than assume; the derived facts are a few
+// booleans and a link list, so nothing large survives this function.
+const _INTERIOR_ADS = new Map();   // host -> { googleAds, metaPixel, tagManager, pages }
+const harvestInteriorMarkup = (url, html, companyName) => {
+  const h = String(html || '');
+  if (h.length < 500) return false;
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { void e; return false; }
+  // Navigation. A header is repeated on every page, so six pages give a far more
+  // complete picture of what the owner links than the homepage alone — and that
+  // list is what decides which sitemap URLs are pages nobody can navigate to.
+  try { rememberHtmlLinks(h, url, null); } catch (e) { void e; }
+  // Advertising markers. Positives only: a tag on ANY page proves the account
+  // exists. An absence here proves nothing and is never recorded as one.
+  const prev = _INTERIOR_ADS.get(host) || { googleAds: false, metaPixel: false, tagManager: false, pages: 0 };
+  const next = {
+    googleAds: prev.googleAds || AD_TAG_SIGNATURES.hasGoogleAdsTag.test(h),
+    metaPixel: prev.metaPixel || AD_TAG_SIGNATURES.hasMetaPixel.test(h),
+    tagManager: prev.tagManager || AD_TAG_SIGNATURES.hasTagManager.test(h),
+    pages: prev.pages + 1,
+  };
+  _INTERIOR_ADS.set(host, next);
+  if (companyName && next.pages === 1) {
+    console.log(`⛓ INTERIOR MARKUP [${companyName}]: reading page SOURCE on the interior pages too, not just the homepage. Same credits — Firecrawl bills per page, not per format — and it is what lets a tracking tag or a booking widget on a services page be seen at all.`);
+  }
+  return true;
+};
+const interiorAdsFor = (website) => {
+  try { return _INTERIOR_ADS.get(new URL(String(website).startsWith('http') ? website : 'https://' + website).hostname.replace(/^www\./, '').toLowerCase()) || null; }
+  catch (e) { void e; return null; }
+};
+
+// ══ TWO LISTS OF THE SAME PAGES THAT COULD NEVER MATCH ══════════════════════
+// The nav-order backfill compares sitemap URLs against the links the site puts in
+// its own header, and it keyed both on the FULL URL string. The two sides come
+// from different places and disagree about the parts that do not matter:
+//
+//   the sitemap  comes from firecrawlMap and publishes whatever the site
+//                publishes, normally https://www. ...
+//   the nav      comes from linksFromHtml resolved against the STORED website,
+//                which extractHtmlSignals' own comment says is recorded as
+//                http:// regardless of what the site supports.
+//
+// One scheme mismatch, or one www, and EVERY sitemap URL reads as "not in the
+// navigation". Two things then break silently and in the same direction: the
+// backfill stops preferring the pages the owner put in his own header, and the
+// article filter — whose whole first clause is "a page the site links is never an
+// article" — loses its exemption and can file the services page as a blog post.
+//
+// Neither failure raises anything. The run still picks seven pages, they are just
+// the wrong seven, which is indistinguishable from a site that has nothing good.
+//
+// A page is its host and its path. Scheme, www, trailing slash and case are not
+// part of which page it is. The query string is dropped deliberately: two URLs
+// differing only by ?utm_source are the same page to a reader, and keeping it
+// would put the same page in the list twice.
+const pageKey = (u) => {
+  try {
+    const x = new URL(String(u).trim());
+    return x.hostname.replace(/^www\./i, '').toLowerCase()
+      + x.pathname.replace(/\/+$/, '').toLowerCase();
+  } catch (e) {
+    void e;
+    return String(u || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+  }
+};
+
 const linksFromHtml = (html, pageUrl) => {
   const out = [];
   if (!html || !pageUrl) return out;
@@ -7294,7 +7481,10 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
         // A format on a scrape we already pay 0.5 credits for, not a second
         // request \u2014 Firecrawl bills per page, not per format. This is how a
         // crashed booking page becomes visible instead of being read as text.
-        formats: ['markdown', 'screenshot@fullPage'],
+        // rawHtml costs nothing extra (per page, not per format) and is the only
+        // way the ad markers, the navigation harvest and the booking read can see
+        // anything but the homepage. Consumed and dropped in harvestInteriorMarkup.
+        formats: ['markdown', 'screenshot@fullPage', 'rawHtml'],
         // MUST MATCH firecrawlScrape EXACTLY. Both write into the same URL-keyed
         // cache, so if batch stripped nav/header/footer and the single scrape did
         // not, a cached page would mean something different depending on which
@@ -7371,6 +7561,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
       // reads as ordinary text in markdown. The picture is what makes it obvious.
       const shot = item?.['screenshot@fullPage'] || item?.screenshot || null;
       if (shot) _PAGE_SHOTS.set(String(u), shot);
+      try { harvestInteriorMarkup(u, item?.rawHtml || item?.html || '', null); } catch (e) { void e; }
       if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
       _SCRAPE_CACHE.set(String(u), { md, at: Date.now() });
       fcNote(true, 'batch-scrape (0.5cr)', u);
@@ -7425,7 +7616,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         // populate 2-4s after load, and a shot taken at 1.5s shows an empty slot
         // where the proof is. That mistake already told an electrician he had no
         // social proof on a page carrying 221 Google reviews.
-        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true }),
+        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true }),
       }, timeout));
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
@@ -7444,6 +7635,8 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       return '';
     }
     let _md = d.data?.markdown || d.markdown || '';
+    // Same page, same credit. Consumed and dropped — see harvestInteriorMarkup.
+    try { harvestInteriorMarkup(url, d.data?.rawHtml || d.rawHtml || d.data?.html || '', null); } catch (e) { void e; }
 
     // ══ NEVER LOSE THE CORPUS TO A SCREENSHOT ═══════════════════════════════
     // This request asks for markdown AND a full-page screenshot together, and on
@@ -17407,7 +17600,19 @@ const composeFullEmail = (spine, opts = {}) => {
     ? opts.subjects
     : (() => { try { return buildSubjects({ id: spine && spine.claimId }, opts.measured || {}); } catch (e) { void e; return []; } })();
   const reframes = Array.isArray(opts.reframes) ? opts.reframes : [];
-  const cta = CTA_FOR(spine.claim, spine.claimId, opts.company || opts.founderName);
+  // ══ THE ASK: A QUESTION, OR A PAGE ═════════════════════════════════════
+  // Default and every previous send: a question. `opts.pageUrl` swaps in the
+  // page form, and it is only ever set when the arm assigned this lead to the
+  // page test AND a page was successfully stored AND the link sits on a domain
+  // CROJungle owns. Any one of those failing falls back to the question, which
+  // is the behaviour that has always shipped.
+  //
+  // The page ask is still a question. Sending a bare link with no reason to open
+  // it tests nothing except whether people click strange links; the arm is meant
+  // to test whether ANSWERING the question in advance beats asking it.
+  const cta = opts.pageUrl
+    ? { text: 'I put what we found on one page for you: ' + opts.pageUrl, kind: 'page' }
+    : CTA_FOR(spine.claim, spine.claimId, opts.company || opts.founderName);
   const first = greetingName(opts.founderName);
 
   const variant = (i) => {
@@ -20237,7 +20442,8 @@ CORRECT OUTPUT:
     {"label":"Market size","says":"Anderson SC. A small city. Being first here has a ceiling, and he is near it."},
     {"label":"The one crack","says":"2 of 317 patients wrote about rude phone staff. Tiny \u2014 and it is the only negative pattern in three hundred reviews. He is personally excellent and the front desk is the gap between him and perfect."},
     {"label":"How you reach him","says":"A form is the only route. No scheduler. For a surgeon at capacity that may be deliberate."},
-    {"label":"Positioning","says":"Homepage speaks to everyone. When you are the only real choice locally that costs nothing \u2014 outside Anderson it costs everything."}
+    {"label":"Positioning","says":"Homepage speaks to everyone. When you are the only real choice locally that costs nothing \u2014 outside Anderson it costs everything."},
+    {"label":"What he cares about","says":"His reputation, close to obsessively. He answers reviews himself, in his own voice, including the two that criticised the front desk. That is where he will take a conversation seriously and where he will bristle."}
   ],
   "whatHeNeeds": "The front desk. 317 reviews of excellent surgery are being let down by two about the phone, and that is the one place the work he already does stops turning into money.",
   "askOnTheCall": "Is he trying to grow, or is he full? A surgeon at capacity does not want more demand, and that answer changes everything."
@@ -20289,7 +20495,7 @@ ${shapeList}
 
 \u2550\u2550\u2550 OUTPUT \u2550\u2550\u2550
 JSON only, no prose around it, exactly these keys:
-{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeNeeds":"ONE recommendation, in one or two sentences. Name the single change that would remove the most friction between what this business has already earned and a sale, and say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
+{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeCaresAbout":"ONE sentence, INTERNAL, read from BEHAVIOUR ONLY \u2014 things he did that were measured: whether he answers reviews himself and how he writes when he does, what he wrote about himself on his own site, what he is hiring for, which service he leads with. Never a guess at his personality and never a claim about his motives. This is what tells the salesperson where he will lean in and where he will bristle. Null if nothing behavioural was measured.","whatHeNeeds":"ONE recommendation, in one or two sentences. Name the single change that would remove the most friction between what this business has already earned and a sale, and say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
 
 \u2550\u2550\u2550 ABOUT \"rows\" \u2014 READ THIS TWICE \u2550\u2550\u2550
 Five to seven rows. YOU choose the labels for THIS business; they are not a fixed list and they are not the names of our measurements.
@@ -20323,14 +20529,19 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         // what a human reads first in the audit view. So this is the one place a
         // model change would actually show.
         //
-        // Default stays Sonnet for that reason. If you want the last cent:
+        // Default stays Sonnet for that reason — and as of the model change it
+        // is the same Sonnet the audit runs on. If you want the last cent:
         //   SITUATION_MODEL=claude-haiku-4-5-20251001
         // and compare two situation reads side by side before keeping it.
         model: SITUATION_MODEL,
-        // 900 -> 1400. `background` is new and rows are now full sentences; the
-        // old ceiling truncates the JSON, and a truncated response loses the
-        // entire briefing rather than its tail.
-        max_tokens: 1400,
+        // 900 -> 1400 -> 1800. `background` is new and rows are now full
+        // sentences; the old ceiling truncates the JSON, and a truncated response
+        // loses the entire briefing rather than its tail. 1800 because this call
+        // now also returns whatHeCaresAbout AND is handed their homepage copy and
+        // the audit's findings, so it has more to say and further to reason. The
+        // marginal cost of headroom is a few tenths of a cent; the cost of
+        // truncation is the whole briefing.
+        max_tokens: 1800,
         // `sys` is the shape list, both worked examples and the rules \u2014 identical
         // on every lead, ~2,950 Sonnet tokens, billed fresh every time until now.
         // Cached input is $0.30/M against $3.00/M. This call also retries on a
@@ -20361,7 +20572,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
       .replace(/([a-z]{2})([A-Z][a-z])/g, '$1 $2')
       .replace(/\s{2,}/g, ' ')
       .trim();
-    for (const k of ['headline', 'read', 'background', 'whatHeNeeds', 'askOnTheCall']) {
+    for (const k of ['headline', 'read', 'background', 'whatHeCaresAbout', 'whatHeNeeds', 'askOnTheCall']) {
       if (typeof parsed[k] === 'string') parsed[k] = _despace(parsed[k]);
     }
     if (Array.isArray(parsed.rows)) {
@@ -21751,6 +21962,26 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       ranked.slice(0, 2).forEach(u => picked.push({ key: intent.key, url: u }));
     }
     // Backfill: a site can be full of substance and match none of our words.
+    // ══ THE NAVIGATION MAP IS NOT A BACKFILL DETAIL ═════════════════════════
+    // This was built inside the "fewer than seven pages matched intent" branch,
+    // so on any site whose own pricing/about/services/booking pages already fill
+    // the quota it was never built at all. It answers a question that has nothing
+    // to do with backfilling — which pages does this site link to — and the
+    // unlinked-page read depends on it on EVERY lead, not just thin ones.
+    const _navOrder = new Map();
+    try {
+      let _host = '';
+      try { _host = new URL(clean[0] || website).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { void e; }
+      const _nav = _HTML_LINKS.get(_host) || [];
+      _nav.forEach((u, i) => {
+        const key = pageKey(u);
+        if (key && !_navOrder.has(key)) _navOrder.set(key, i);
+      });
+    } catch (e) { void e; }
+    const _navRank = (u) => {
+      const k = pageKey(u);
+      return _navOrder.has(k) ? _navOrder.get(k) : Number.MAX_SAFE_INTEGER;
+    };
     if (picked.length < 7) {
       // Excluded deliberately: the homepage (already scraped, would be paid for
       // twice), thank-you and test pages (no customer ever sees them), and the
@@ -21763,26 +21994,6 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       //
       // Sitemap and feed files are machine plumbing: a customer never sees them
       // and they contain no evidence about the business.
-      const NOISE = /\/(blog|posts?|news|article|category|categories|tag|tags|author|privacy|terms|disclaimer|accessibility|sitemap[\w-]*|[\w-]*-sitemap|feed|rss|amp|wp-|cart|checkout|account|login|register|search|thank-?you|test(?:ing)?|staging|preview|404|coming-?soon)\b|\.(xml|json|pdf|jpe?g|png|gif|webp|txt|css|js)(?:$|\?)/i;
-      // ══ CITY PAGES ARE THE SAME PAGE, N TIMES ══════════════════════════════
-      // The backfill sorts by shallowest path, and a location landing page is as
-      // shallow as it gets: /olathe-ks, /leawood-ks, /lees-summit-mo,
-      // /overland-park-ks. All-Weather spent four of its seven reads on those
-      // plus /covid-19-policy, while its reviews and pricing pages went unread.
-      //
-      // They are near-identical service copy with the city swapped, so the
-      // second one teaches us nothing the first did not, and none of them tells
-      // us anything about how the business sells or what it can prove. One is
-      // occasionally worth reading for local positioning; four never are.
-      //
-      // Matching a US state suffix (-ks, -mo, -tx) or a "city-state" shape is
-      // the reliable tell, along with the standing policy notices that every
-      // site added in 2020 and nobody has looked at since.
-      const LOW_VALUE = new RegExp(
-        '\\/[a-z][a-z-]{2,}-(?:al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\\/?$'
-        + '|\\/(covid|coronavirus|pandemic)[\\w-]*'
-        + '|\\/(locations?|service-area|areas?-we-serve)\\/[\\w-]+',
-        'i');
       // ══ THE SITE ALREADY TOLD US WHICH PAGES MATTER ═══════════════════════
       // Backfill sorted by shallowest path, and on a contractor site the
       // shallowest URLs are the city landing pages: /olathe-ks, /leawood-ks,
@@ -21799,20 +22010,6 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       //
       // So nav order ranks first, and path depth only breaks ties among pages
       // the nav does not mention.
-      let _navOrder = new Map();
-      try {
-        let _host = '';
-        try { _host = new URL(clean[0] || website).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { void e; }
-        const _nav = _HTML_LINKS.get(_host) || [];
-        _nav.forEach((u, i) => {
-          const key = String(u).replace(/\/+$/, '').toLowerCase();
-          if (!_navOrder.has(key)) _navOrder.set(key, i);
-        });
-      } catch (e) { void e; }
-      const _navRank = (u) => {
-        const k = String(u).replace(/\/+$/, '').toLowerCase();
-        return _navOrder.has(k) ? _navOrder.get(k) : Number.MAX_SAFE_INTEGER;
-      };
       const _order = (a, b) => (_navRank(a) - _navRank(b))
                      || (a.split('/').length - b.split('/').length)
                      || (a.length - b.length);
@@ -21840,6 +22037,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       }
       const _fromNav = spare.filter(u => _navRank(u) !== Number.MAX_SAFE_INTEGER).length;
       if (_fromNav) console.log(`SITE AUDIT [${companyName}]: ${_fromNav} of the ${spare.length} backfilled page(s) were chosen because the site links them in its own navigation, not because their URL happened to be short. Nav order is the owner's own statement of what a visitor needs.`);
+      else if (spare.length && _navOrder.size) console.log(`SITE AUDIT [${companyName}]: none of the ${spare.length} backfilled page(s) matched the ${_navOrder.size} link(s) in the site's own navigation \u2014 so they were chosen by path depth alone. That is normal on a site whose header points at pages the sitemap does not list, and it is ALSO what a broken URL comparison looks like, which is why the count is printed either way.`);
       // NAMED BY THEIR OWN PATH, not the label "page". Five leads on 2026-08-20
       // logged "reading 7 page(s) — booking, page, page, page, page, page, page",
       // the audit view captioned every render the same way, and Vin read the
@@ -22129,6 +22327,22 @@ ${corpus}` }]
     // Record what the sitemap contains that we did NOT open. Absence can only be
     // claimed about things we actually looked for.
     const _unread = (urls || []).filter(u => !usable.some(p => p.url === u));
+    // ══ PAGES THE SITE ITSELF DOES NOT LINK TO ══════════════════════════════
+    // Both inputs are in hand at this exact point and cost nothing more: `clean`
+    // is the sitemap we already bought, `_navOrder` is the site's own navigation
+    // harvested from markup we already hold. See findUnlinkedPages for what this
+    // may and may not conclude — it is INTERNAL, and the negative form is barred.
+    try {
+      out.unlinkedPages = findUnlinkedPages({ sitemap: clean, navKeys: new Set(_navOrder.keys()), homepage: website });
+      const up = out.unlinkedPages;
+      if (up.checked && up.unlinkedCount) {
+        console.log(`\u25c9 PAGES NOBODY CAN NAVIGATE TO [${companyName}]: ${up.unlinkedCount} page(s) in their sitemap are not linked from anywhere in the site's own ${up.navLinks} navigation links${up.campaignCount ? `, ${up.campaignCount} of them campaign-shaped` : ''} \u2014 ${up.pages.slice(0, 4).map(u => String(u).replace(/^https?:\/\/[^/]+/, '')).join(', ')}. A page built for an ad is not in the menu by design, so this is the closest free read there is on where their ad clicks land. INTERNAL: the positive is checkable and safe, the negative is not \u2014 a purpose-built campaign page is often noindex, on a subdomain or on another domain entirely, so "no landing pages" can never be claimed from this.`);
+      } else if (up.checked) {
+        console.log(`\u25cb PAGES NOBODY CAN NAVIGATE TO [${companyName}]: none \u2014 every one of the ${up.sitemapPages} page(s) in the sitemap is reachable from the site's own navigation. That is NOT evidence they run no ads and no landing pages: a campaign page is routinely kept out of the sitemap on purpose.`);
+      } else {
+        console.log(`\u25cb PAGES NOBODY CAN NAVIGATE TO [${companyName}]: not checked \u2014 ${up.why}.`);
+      }
+    } catch (e) { console.log(`unlinked-page read failed: ${e && e.message}`); }
     out.existsButUnread = {
       reviews: _unread.some(u => /review|testimonial|praise|feedback|what.?(?:our|my).?(?:client|patient|customer)/i.test(u)),
       pricing: _unread.some(u => /pricing|price|rates?|fees?|cost/i.test(u)),
@@ -25558,6 +25772,114 @@ const benchIdOf = (c) => {
   return n ? 'n:' + n : '';
 };
 
+// ══ THE ASK, AS A QUESTION OR AS A PAGE ═════════════════════════════════════
+// Every CTA this system has ever sent is a question. That is a deliberate
+// choice with one prospect comment behind it and no measurement, and Vin's
+// question is the right one: does a question actually beat sending him to a
+// page? Nobody knows, because nothing has ever recorded which was sent.
+//
+// TWO THINGS MUST BE SAID PLAINLY BEFORE THIS IS TURNED ON.
+//
+// 1. DELIVERABILITY. A link in a first cold email is a spam signal, and this
+//    domain has two hard bounces in twelve sends and no established reputation.
+//    Mitigated as far as a link can be: exactly ONE link, no shortener, no
+//    tracking pixel, no redirect chain, and it must be on a domain CROJungle
+//    owns. If PAGE_BASE_URL is not set, this arm cannot run at all and every
+//    lead gets the question — because the alternative is putting a raw
+//    onrender.com subdomain in a cold email, which is worse than not testing.
+//
+// 2. THIS IS NOT ONE OF CROJUNGLE'S LANDING PAGES. It is a page generated from
+//    this lead's own audit. That is a fair test of link-versus-question and it
+//    is NOT a test of what a hand-built CROJungle page would do. Reporting it
+//    as the latter would be exactly the 'shipped but unproven reported as
+//    proven' failure this project's own rules forbid.
+//
+// The arm is a stable hash of the lead id, never a counter: a lead that gets
+// re-composed must land in the same arm, or the result is unreadable.
+const PAGE_BASE_URL = String(process.env.PAGE_BASE_URL || '').replace(/\/+$/, '');
+const CTA_PAGE_SPLIT = Math.max(0, Math.min(100, Number(process.env.CTA_PAGE_SPLIT || 0)));
+// The two settings are parameters with live defaults, not reads of a global.
+// A boot check cannot change an environment variable, so with them baked in the
+// safety assertions could only ever be exercised in the one configuration the
+// server happens to be running — which is the configuration where they are both
+// off and nothing can go wrong. Falsified: removing the PAGE_BASE_URL guard
+// entirely left the check green.
+const pageArmFor = (leadId, baseUrl = PAGE_BASE_URL, split = CTA_PAGE_SPLIT) => {
+  if (!baseUrl || !split) return 'question';
+  const s = String(leadId || '');
+  if (!s) return 'question';
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return (Math.abs(h) % 100) < split ? 'page' : 'question';
+};
+// A token that cannot be walked. Derived from the lead id so re-composing the
+// same lead reuses the same page rather than orphaning the last one.
+// LETTERS ONLY, deliberately. verifyBrainEmail refuses any numeric token in the
+// body that does not trace to a measurement, and a hex token puts digits inside
+// the one sentence we need to survive that gate. Twenty-two letters from a
+// 26-symbol alphabet is far more entropy than a link nobody can guess needs.
+const pageTokenFor = (leadId) => {
+  const h = crypto.createHash('sha256').update('crojungle-page:' + String(leadId || '')).digest();
+  let out = '';
+  for (let i = 0; i < 22; i++) out += String.fromCharCode(97 + (h[i] % 26));
+  return out;
+};
+
+// What the prospect sees. Built from the SAME measured findings the email is
+// built from, so the page cannot say anything the email could not: one door,
+// and no second copy of what we claim about this business.
+//
+// Deliberately plain. This page's job is to be read in forty seconds by a man on
+// a phone who has never heard of us, and every element that is not a finding or
+// a way to reply is a reason to close it.
+const leadPageHtml = (p) => {
+  const d = p && typeof p === 'object' ? p : {};
+  const e = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+  const findings = Array.isArray(d.findings) ? d.findings.slice(0, 5) : [];
+  const reply = d.replyTo ? 'mailto:' + e(d.replyTo) + '?subject=' + encodeURIComponent('Re: ' + (d.subject || 'what you found')) : '';
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<meta name="robots" content="noindex,nofollow">'
+    + '<title>' + e(d.company || 'What we found') + '</title><style>'
+    + ':root{color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:32px 20px 64px;font:17px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#16181d;background:#fff}'
+    + '.w{max-width:640px;margin:0 auto}h1{font-size:26px;line-height:1.25;margin:0 0 6px}.sub{color:#6b7280;font-size:15px;margin:0 0 28px}'
+    + 'ol{margin:0;padding:0;list-style:none;counter-reset:f}li{counter-increment:f;padding:18px 0;border-top:1px solid #e9eaee}'
+    + 'li:before{content:counter(f);display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:99px;background:#16181d;color:#fff;font-size:13px;font-weight:700;margin-right:10px}'
+    + '.what{font-weight:600}.cost{color:#4b5563;font-size:15px;margin:6px 0 0 34px}'
+    + '.cta{margin-top:34px;padding:20px;background:#f5f6ff;border-left:3px solid #6366f1;border-radius:8px}'
+    + '.cta a{display:inline-block;margin-top:10px;background:#16181d;color:#fff;text-decoration:none;padding:12px 20px;border-radius:7px;font-weight:600}'
+    + '.foot{margin-top:40px;color:#9ca3af;font-size:13px}'
+    + '</style></head><body><div class="w">'
+    + '<h1>' + e(d.headline || ('What we found on ' + (d.company || 'your site'))) + '</h1>'
+    + '<p class="sub">' + e(d.sub || 'Everything below is something you can check yourself in a couple of minutes. No sign-up, nothing to download.') + '</p>'
+    + (findings.length ? '<ol>' + findings.map(f =>
+        '<li><span class="what">' + e(f.what || '') + '</span>'
+        + (f.cost ? '<div class="cost">' + e(f.cost) + '</div>' : '') + '</li>').join('') + '</ol>' : '')
+    + '<div class="cta"><div>' + e(d.ask || 'If any of this is worth twenty minutes, reply and I will walk you through it.') + '</div>'
+    + (reply ? '<a href="' + reply + '">Reply to ' + e(d.fromName || 'us') + '</a>' : '') + '</div>'
+    + '<p class="foot">' + e(d.foot || 'Written for ' + (d.company || 'this business') + ' only. Nothing here is stored about you and this page is not indexed.') + '</p>'
+    + '</div></body></html>';
+};
+
+const saveLeadPage = async (token, payload) => {
+  const r = await sbRest('/lead_pages?on_conflict=token', {
+    method: 'POST',
+    prefer: 'return=minimal,resolution=merge-duplicates',
+    body: JSON.stringify([{ token, company: String(payload && payload.company || '').slice(0, 200), payload }]),
+  });
+  if (r === null) {
+    console.log(`⛔ LEAD PAGE [${payload && payload.company}]: the page could not be stored — ${sbWhy('lead_pages') || 'no reason reported'}. The email must NOT go out carrying a link to a page that does not exist, so this lead falls back to the question ask.`);
+    return false;
+  }
+  return true;
+};
+const loadLeadPage = async (token) => {
+  const rows = await sbRest('/lead_pages?token=eq.' + encodeURIComponent(String(token || '')) + '&select=payload,visits&limit=1', { method: 'GET', prefer: 'return=representation' });
+  return (Array.isArray(rows) && rows[0]) ? rows[0] : null;
+};
+
 const loadLeadBench = async () => {
   const rows = await sbRest(`/lead_bench?select=id,payload,created_at&order=score.desc&limit=${BENCH_MAX_ROWS}`);
   if (!Array.isArray(rows)) return [];
@@ -27461,20 +27783,29 @@ const AD_TAG_SIGNATURES = {
   hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i,
   hasTagManager: /googletagmanager\.com\/(?:gtm|ns)|GTM-[A-Z0-9]{4,}/i,
 };
-const mergeAdSignals = (builtWith, renderedHtml) => {
+const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   const bw = builtWith && typeof builtWith === 'object' ? builtWith : {};
   const html = String(renderedHtml || '');
   const plainRead = bw.confirmed === true && !bw.blocked;
+  // Interior pages, harvested from markup we already bought. Positives only —
+  // a tracking tag on the services page proves the account exists exactly as
+  // well as one on the homepage, and there are sites that carry it on neither.
+  const inter = (interior && typeof interior === 'object' && interior.pages > 0) ? interior : null;
   // 500 is checkBuiltWith's own floor for "enough markup to read". Same number
   // on purpose: two different floors for one question is how they drift apart.
   const renderedRead = html.length >= 500;
-  if (!renderedRead) {
+  const FROM_INTERIOR = { hasGoogleAdsTag: 'googleAds', hasMetaPixel: 'metaPixel', hasTagManager: 'tagManager' };
+  if (!renderedRead && !inter) {
     return { hasGoogleAdsTag: bw.hasGoogleAdsTag ?? null, hasMetaPixel: bw.hasMetaPixel ?? null,
       hasTagManager: bw.hasTagManager ?? null, adsRead: plainRead, adSource: plainRead ? 'plain fetch' : 'neither copy' };
   }
-  const out = { adsRead: true, adSource: plainRead ? 'rendered page and plain fetch' : 'rendered page' };
+  const where = [plainRead ? 'plain fetch' : '', renderedRead ? 'rendered homepage' : '',
+    inter ? `${inter.pages} interior page(s)` : ''].filter(Boolean);
+  const out = { adsRead: true, adSource: where.join(' + ') };
   for (const k of Object.keys(AD_TAG_SIGNATURES)) {
-    out[k] = (bw[k] === true || AD_TAG_SIGNATURES[k].test(html)) ? true : false;
+    out[k] = (bw[k] === true
+      || (renderedRead && AD_TAG_SIGNATURES[k].test(html))
+      || (inter && inter[FROM_INTERIOR[k]] === true)) ? true : false;
   }
   return out;
 };
@@ -27611,6 +27942,52 @@ const checkBuiltWith = async (domain) => {
 // relabelled its output as "Confirmed ad spend" despite its own comment saying
 // never to build a pitch on it.
 //
+// ══ WHAT THAT REFUSAL ACTUALLY REFUTED, AND WHAT IT DID NOT ════════════════
+// Read the paragraph above again: every sentence of it is about a RAW FETCH of a
+// JavaScript application. It is right, and it does not refute the source. The
+// identical problem is solved for Meta thirty pages below, in a function whose
+// own comment reads "The Ad Library is a JS app so plain fetch fails; Firecrawl
+// renders it." Firecrawl runs a real browser and is already in this pipeline.
+//
+// So the check below renders the page instead of fetching it, and it is bounded
+// by the discipline the old one had none of:
+//
+//   POSITIVE ONLY. Only VERIFIED advertisers appear in the Transparency Center,
+//   so "not found" can never become "they do not run ads" — the same rule the
+//   LSA read already carries. A miss returns checked:false, not zero.
+//   NO PARSING OF NUMBERS WE CANNOT SEE. It reports that the domain appears and
+//   what the page says about recency. It does not invent a spend, a keyword
+//   count or an impression figure, none of which are on that page.
+//   OFF BY DEFAULT. It costs a Firecrawl credit per lead and it has never been
+//   run against a live advertiser from this codebase. Shipping it ON would be
+//   reporting an unproven read as a measurement, which is the one thing this
+//   project's own rules forbid. ADS_TRANSPARENCY=on turns it on.
+const ADS_TRANSPARENCY_ON = String(process.env.ADS_TRANSPARENCY || 'off').toLowerCase() === 'on';
+const checkAdsTransparency = async (domain, fcKey, companyName) => {
+  const host = String(domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim().toLowerCase();
+  if (!ADS_TRANSPARENCY_ON || !host || !fcKey) return { checked: false, why: ADS_TRANSPARENCY_ON ? 'no domain or no Firecrawl key' : 'ADS_TRANSPARENCY is off' };
+  const url = `https://adstransparency.google.com/?region=US&domain=${encodeURIComponent(host)}`;
+  try {
+    const md = await firecrawlScrape(fcKey, url, 30000);
+    const text = String(md || '');
+    // An app shell is what the old raw fetch got, every time, for every domain.
+    // If that is what came back, say so rather than reading tea leaves in it.
+    if (text.length < 300) return { checked: false, why: 'the Transparency Center returned nothing readable — this is a JavaScript page and a thin answer means it had not rendered' };
+    if (/no ads (?:to show|found)|couldn'?t find any ads|no results/i.test(text)) {
+      return { checked: true, found: false, why: 'the Transparency Center rendered and shows no verified advertiser for this domain. NOT evidence they run no ads: only VERIFIED advertisers appear.' };
+    }
+    // A verified advertiser page names the advertiser and lists ad cards. Require
+    // the domain itself to appear, so a generic page cannot be read as a hit.
+    const named = text.toLowerCase().includes(host);
+    if (!named) return { checked: false, why: 'the rendered page never mentions this domain, so it is the generic Transparency Center page rather than an advertiser result' };
+    const shown = (text.match(/\b(?:last shown|first shown|running since|shown between)\b[^\n]{0,60}/gi) || []).slice(0, 3);
+    return { checked: true, found: true, advertiserSeen: true, recency: shown,
+      why: 'this domain appears in Google\'s own Ads Transparency Center as a verified advertiser' };
+  } catch (e) {
+    return { checked: false, why: `the Transparency Center read failed (${(e && e.message) || e})` };
+  }
+};
+
 // The real signal was already here and is genuinely reliable: an AW- conversion
 // tag in their OWN page source, read by checkBuiltWith from markup we fetch
 // anyway. A business with a Google Ads conversion tag has a Google Ads account.
@@ -27625,7 +28002,18 @@ const checkFacebookAds = async (name, fbToken) => {
     const d = await safeJson(r);
     if (d.error) return { hasAds: false, ads: [], confirmed: false };
     const ads = (d.data||[]).map(ad => ({ copy: (ad.ad_creative_body||'').slice(0,150), runningDays: ad.ad_delivery_start_time ? Math.floor((Date.now()-new Date(ad.ad_delivery_start_time))/86400000) : 0 }));
-    return { hasAds: ads.length > 0, ads, confirmed: true };
+    // ══ AN EMPTY ANSWER IS NOT AN ANSWER ═══════════════════════════════════
+    // confirmed:true on an empty result put "No Facebook ads attributable to
+    // them in Ad Library" onto the call sheet Mike reads. The endpoint cannot
+    // support that: /ads_archive is scoped to political, social-issue and US
+    // special-category ads, so commercial ads for a local roofer are not in it
+    // at ANY token level. A zero here means "not in the political ads archive",
+    // which is true of every business we will ever audit.
+    //
+    // A find is still a find. A miss is "not checked", because that is what it
+    // is — and a claim on a call is exactly as expensive as a claim in an email.
+    return { hasAds: ads.length > 0, ads, confirmed: ads.length > 0,
+      why: ads.length ? 'found in the Ad Library' : 'the Ad Library API only covers political and issue ads, so a zero here says nothing about a local business' };
   } catch { return { hasAds: false, ads: [], confirmed: false }; }
 };
 
@@ -28832,6 +29220,7 @@ const _runResearchInner = async (req, res) => {
   let phoneResult = { phone: '', display: '', source: 'none' };
   let realSpeed = { checked: false };
   let duplicateListing = { checked: false, why: 'not attempted' };
+  let adsTransparency = { checked: false, why: 'not attempted' };
   let socialPresence = { checked: false };
   // Can they actually fund the engagement? Internal only — never reaches copy.
   let affordability = { checked: false, band: 'unknown' };
@@ -28845,6 +29234,19 @@ const _runResearchInner = async (req, res) => {
   // Observed owner engagement, hoisted because deepReviewMine is block-scoped
   // far above where reachability is finally scored.
   let ownerReplyCount = null;
+  // ══ HIS VOICE, REDUCED TO A NUMBER ══════════════════════════════════════
+  // The full text of every owner reply is scraped, travels out of the review
+  // mine, and is then collapsed to `.length` — so the one place in this system
+  // where the owner speaks in his own words about his own business was thrown
+  // away on every lead. Two prompts hold that text and both ask a narrow
+  // question of it: one extracts a signature name, the other looks for
+  // operational complaints. Neither is allowed to notice what the man cares
+  // about, which is the read Vin singled out as the good one.
+  //
+  // A short sample, INTERNAL, for the strategic read and the call sheet. Never
+  // quoted into an email: it is his writing, not ours, and repeating it back to
+  // him is the poker tell this file already records about review data.
+  let ownerReplySample = [];
   let reviewsRead = null;
   let channelRoute = 'email';
   let channelReason = '';
@@ -29423,7 +29825,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const builtWith = builtWithRes.value || {};
     // The rendered homepage is already in hand and is the better copy. Merge the
     // three advertising markers off it before anything reads them.
-    const _ads = mergeAdSignals(builtWith, homepageHtml);
+    const _ads = mergeAdSignals(builtWith, homepageHtml, interiorAdsFor(website));
     builtWith.hasGoogleAdsTag = _ads.hasGoogleAdsTag;
     builtWith.hasMetaPixel = _ads.hasMetaPixel;
     builtWith.hasTagManager = _ads.hasTagManager;
@@ -29742,6 +30144,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           if (deep && typeof deep.read === 'number' && deep.read > 0) {
             reviewsRead = deep.read;
             ownerReplyCount = Array.isArray(deep.ownerReplies) ? deep.ownerReplies.length : 0;
+            ownerReplySample = (Array.isArray(deep.ownerReplies) ? deep.ownerReplies : [])
+              .map(x => String(x || '').replace(/\s+/g, ' ').trim())
+              .filter(x => x.length >= 40)
+              .slice(0, 3)
+              .map(x => x.slice(0, 220));
             if (typeof deep.recentCount === 'number') recentReviewCount = deep.recentCount;
             if (deep.velocity && deep.velocity.checked) reviewVelocity = deep.velocity;
           }
@@ -30489,6 +30896,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         console.log(`DUPLICATE LISTING [${company}]: one listing only — the name search found no second place ID sharing their website or phone at their address. No finding.`);
       } else {
         console.log(`DUPLICATE LISTING [${company}]: not checked — ${duplicateListing.why}. No claim about their listings is permitted either way.`);
+      }
+    }
+
+    // ── ARE THEY RUNNING GOOGLE ADS TODAY? ───────────────────────────────
+    // Off unless ADS_TRANSPARENCY=on. Positive-only by construction: only
+    // verified advertisers appear, so a miss is "not checked", never "no ads".
+    if (website) {
+      adsTransparency = await checkAdsTransparency(website, firecrawlKey, company);
+      if (adsTransparency.checked && adsTransparency.found) {
+        console.log(`\u{1F4B0} ADS TRANSPARENCY [${company}]: their domain appears in Google's own Ads Transparency Center as a VERIFIED ADVERTISER${adsTransparency.recency && adsTransparency.recency.length ? ` \u2014 ${adsTransparency.recency.join('; ')}` : ''}. That is a dated fact about live campaigns, not an inference from a tag: an AW- conversion tag proves an ACCOUNT, this proves ADS. It is the difference between "if those ads are live" and knowing.`);
+      } else if (adsTransparency.checked) {
+        console.log(`ADS TRANSPARENCY [${company}]: ${adsTransparency.why}`);
+      } else if (ADS_TRANSPARENCY_ON) {
+        console.log(`ADS TRANSPARENCY [${company}]: not checked \u2014 ${adsTransparency.why}. No claim about their advertising is permitted from this source.`);
       }
     }
 
@@ -31413,6 +31834,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (sitePages && sitePages.booking) push(`Booking path: ${sitePages.booking}${htmlSignals && htmlSignals.checked && htmlSignals.formFieldCount ? ` (${htmlSignals.formFieldCount}-field form)` : ''}`);
       if (sitePages && sitePages.services && sitePages.services.length) push(`What they sell: ${sitePages.services.slice(0,6).join(', ')}`);
       if (sitePages && sitePages.ownerStory) push(`The owner's own story: ${String(sitePages.ownerStory).slice(0,260)}`);
+      // ══ WHAT THIS OWNER DEMONSTRABLY CARES ABOUT ═════════════════════════
+      // One behavioural fact — the review reply ratio — plus one worked example
+      // of interpreting it produced the best line this system has written:
+      // "almost obsessively engaged with his reputation". That was reproducible
+      // in mechanism and nothing anywhere asked for it, so it happened once.
+      //
+      // These are all BEHAVIOUR, not opinion: things he did, that we measured.
+      // A read of a man from what he does is not a claim about his motives, and
+      // this is the internal briefing, not the email.
+      if (sitePages && sitePages.storyQuote) push(`In his own words, from his own site: "${String(sitePages.storyQuote).slice(0, 200)}"`);
+      if (ownerReplySample.length) push(`How he writes back to customers, verbatim from his own review replies: ${ownerReplySample.map(x => `"${x}"`).join(' | ')}`);
+      if (careers && careers.totalOpenings) push(`He is hiring right now: ${(careers.roles || []).slice(0, 4).map(r => r.title).filter(Boolean).join(', ') || careers.totalOpenings + ' opening(s)'}. What a business hires for is what it is trying to become.`);
+      if (sitePages && sitePages.unlinkedPages && sitePages.unlinkedPages.checked && sitePages.unlinkedPages.unlinkedCount) {
+        push(`${sitePages.unlinkedPages.unlinkedCount} page(s) exist on their site that their own navigation does not link to${sitePages.unlinkedPages.campaignCount ? `, ${sitePages.unlinkedPages.campaignCount} of them shaped like campaign pages` : ''}. A page built for an ad is deliberately not in the menu. INTERNAL and POSITIVE ONLY: their absence proves nothing, because a campaign page is routinely kept out of the sitemap.`);
+      }
       // readOfferStrength returns { guarantee, urgency, genericOnly } — the
       // hasGuarantee/hasUrgency/genericAskOnly names read here existed nowhere,
       // so every situation read was told "guarantee=false, urgency=false" —
@@ -31510,11 +31946,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (valueEquation && valueEquation.checked) push(`How hard they are to buy from: ${valueEquation.shape}${Number.isFinite(valueEquation.delay) ? ` (delay ${valueEquation.delay}/5, effort ${valueEquation.effort}/5, confidence ${valueEquation.likelihood}/5)` : ''}${valueEquation.friction && valueEquation.friction.length ? ' \u2014 friction: ' + valueEquation.friction.join('; ') : ''}`);
       if (affordability && affordability.verdict) push(`Can they pay: ${affordability.verdict}${affordability.concerns && affordability.concerns.length ? ' | concern: ' + affordability.concerns.join('; ') : ''}`);
 
+      // ══ THE SMARTEST CALL IN THE SYSTEM WAS THE LEAST INFORMED ═══
+      // This used to RUN here, hundreds of lines before the audit. So the one
+      // strategic call — the only one on a large model, the one that produced the
+      // only line anybody has ever praised — was handed about 35 summary bullets
+      // and nothing else: no page copy, no screenshots, no findings, and no
+      // knowledge of what the audit concluded. Meanwhile the audit received
+      // 33,000 tokens of evidence and was asked to fill a 26-field schema.
+      //
+      // Read-everything and think-about-it were split across two calls and
+      // neither half got both. That is the structural reason a chat with a large
+      // model outperforms this: in the chat, one model has all the evidence and
+      // one question.
+      //
+      // The facts are still assembled HERE, because they are built from values
+      // that exist only in this scope. Only the CALL moves — to after the audit,
+      // where their own page copy and the audit's own findings go with it.
       if (F.length >= 6) {
         measuredFacts = F.slice();
-        situationRead = await buildSituationRead(F.join('\n'), apiKey, company);
       } else {
-        console.log(`SITUATION READ [${company}]: only ${F.length} measured facts available \u2014 too thin to synthesise. Skipping rather than guessing.`);
+        console.log(`SITUATION READ [${company}]: only ${F.length} measured facts available — too thin to synthesise. Skipping rather than guessing.`);
       }
     } catch (e) { console.log('SITUATION READ: failed —', e && e.message); }
 
@@ -33856,6 +34307,31 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               const _n = narrowAuditAbsence(parsed, _pr);
               if (_n) console.log(`\u2702 ABSENCE NARROWED [${company}]: ${_n} claim(s) about the whole site rewritten to the page we actually opened (${_pr.length ? _pr.join(', ') : 'homepage only'}). The prompt already forbade this in words and seven got through on one lead \u2014 narrowing is mechanical and can only make a claim more true.`);
             }
+            // ══ NOW SYNTHESISE, WITH EVERYTHING IN HAND ══════════════
+            // Runs here rather than before the audit so it can read their actual
+            // page copy and what the audit concluded. A few hundred extra tokens
+            // on one call, and the difference between a model reasoning from a
+            // summary and a model reasoning from the evidence.
+            try {
+              if (Array.isArray(measuredFacts) && measuredFacts.length >= 6 && !situationRead) {
+                const _extra = [];
+                if (trustedContent && trustedContent.length > 200) {
+                  _extra.push(`THEIR OWN HOMEPAGE COPY, so you are reading the business and not a summary of it:\n<<<${String(trustedContent).slice(0, 6000)}>>>`);
+                }
+                if (Array.isArray(parsed.originalFindings) && parsed.originalFindings.length) {
+                  _extra.push(`What was found by READING their pages: ${parsed.originalFindings.map(f => (f && (f.finding || f.what)) || '').filter(Boolean).join(' | ')}`);
+                }
+                if (Array.isArray(parsed.candidateFindings) && parsed.candidateFindings.length) {
+                  _extra.push(`The findings the audit ranked, strongest first: ${parsed.candidateFindings.slice(0, 6).map(c => (c && c.finding) || '').filter(Boolean).join(' | ')}`);
+                }
+                if (parsed.patternLine) _extra.push(`The pattern the audit named: ${parsed.patternLine}`);
+                situationRead = await buildSituationRead(measuredFacts.concat(_extra).join('\n'), apiKey, company);
+                if (situationRead) {
+                  console.log(`SITUATION READ [${company}]: written AFTER the audit, from ${measuredFacts.length} measured fact(s) plus ${_extra.length} block(s) of the audit's own evidence, their homepage copy included. It used to run BEFORE the audit on the bullets alone, which is why the smartest call in the system was the least informed one.`);
+                }
+              }
+            } catch (e) { console.log(`SITUATION READ [${company}]: failed after the audit — ${e && e.message}`); }
+
             parsed.measuredNumbers = {
               reviewCount: _mm.reviewCount,
               rating: _mm.rating,
@@ -36055,6 +36531,11 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         hasCapture: !!sitePages.hasCapture,
         prices: (sitePages.prices || []).slice(0, 8),
         pagesRead: sitePages.pagesRead || [],
+        // Pages the site's own navigation does not link to. INTERNAL — the call
+        // sheet and the audit only. The positive is checkable in one click; the
+        // negative can never be claimed, because a campaign page is routinely
+        // noindex, on a subdomain, or on a domain we never see.
+        unlinkedPages: sitePages.unlinkedPages || null,
       } : null,
       // `.checked` matters: an htmlSignals object that was never actually read
       // must come back as null, not as an object full of falsy fields that the UI
@@ -36078,6 +36559,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // Two-listings measurement — on the call sheet it is the mechanical
       // explanation for an outranked finding, so it must survive the round trip.
       duplicateListing: duplicateListing || null,
+      // Positive-only advertising evidence. See checkAdsTransparency: "not found"
+      // is never returned as a negative, because only verified advertisers appear.
+      adsTransparency: (adsTransparency && adsTransparency.checked) ? adsTransparency : null,
       reviewCount: (gbpHealth && gbpHealth.reviewCount) || null,
       rating: (gbpHealth && gbpHealth.rating) || null,
       phone: phoneResult.phone || req.body.phone || '',
@@ -43318,6 +43802,220 @@ app.listen(PORT, () => {
     console.log(`\u26d4 EM DASH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ A QUESTION, OR A PAGE — AND WHETHER THE ANSWER IS READABLE ══════════
+  // Every CTA ever sent has been a question, on one prospect comment and no
+  // measurement. The arm that tests the alternative is only worth having if it
+  // is SAFE (never a raw onrender.com link in a cold email), STABLE (a lead
+  // cannot change arms between composes) and RECORDED (a reply days later has
+  // to be attributable). The existing subject A/B fails the third and has
+  // therefore never produced a readable result.
+  try {
+    const _fails = [];
+    // 1. Safe by construction, in every configuration — not just the one this
+    //    server happens to be running. Both switches are exercised directly.
+    if (pageArmFor('lead-1', '', 100) !== 'question') {
+      _fails.push('the page arm runs with no PAGE_BASE_URL configured, which puts a raw backend subdomain in a cold email from a domain that already has two hard bounces');
+    }
+    if (pageArmFor('lead-1', 'https://ex.com', 0) !== 'question') {
+      _fails.push('the page arm runs at a 0% split, so the test is on when nobody asked for it');
+    }
+    if (pageArmFor('lead-1', 'https://ex.com', 100) !== 'page') {
+      _fails.push('a fully configured page arm still never fires, so the test can never run');
+    }
+    if (!process.env.CTA_PAGE_SPLIT && CTA_PAGE_SPLIT !== 0) {
+      _fails.push('the ask test is on by default — it changes what every prospect receives and must be a deliberate switch');
+    }
+    // 2. Stable. A lead re-composed must land in the same arm, or the result is
+    //    noise. Hash, never a counter.
+    const _ids = Array.from({ length: 400 }, (_, i) => 'lead-' + i);
+    const _once = _ids.map(pageArmFor);
+    const _twice = _ids.map(pageArmFor);
+    if (_once.join() !== _twice.join()) _fails.push('the arm is not stable across calls, so a re-composed lead can change arms and the test becomes unreadable');
+    // 3. The token is a letters-only, stable, per-lead value. Digits in it would
+    //    put an unmeasured number inside the one sentence that must survive the
+    //    figure gate.
+    const _t = pageTokenFor('lead-1');
+    if (!/^[a-z]{22}$/.test(_t)) _fails.push(`the page token is "${_t}" — it must be letters only, or the email's own figure gate sees an unmeasured number in the link`);
+    if (_t !== pageTokenFor('lead-1')) _fails.push('the page token is not stable, so re-composing a lead orphans the page the last email linked to');
+    if (_t === pageTokenFor('lead-2')) _fails.push('two different leads share a page token, which would show one prospect another business\'s audit');
+    // 4. The split has to actually split when it is turned on.
+    {
+      // The same hash pageArmFor uses. Asserted on its distribution rather than
+      // on the live setting, so this holds whether the split is on or off.
+      const _mod = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return Math.abs(h) % 100; };
+      const _in50 = _ids.filter(id => _mod(id) < 50).length;
+      if (_in50 < 120 || _in50 > 280) _fails.push(`a 50% split would put ${_in50} of 400 leads in the page arm — the hash is not distributing and one arm would be starved`);
+    }
+    // 5. The ask must swap, and only when a URL exists.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('const cta = opts.' + 'pageUrl') < 0) _fails.push('the ask no longer swaps to the page form, so the arm is assigned and never applied');
+      if (_src.indexOf('pageUrl: _pageUrl,') < 0) _fails.push('the composed email is not handed the page URL');
+      if (_src.indexOf('ctaMode: _ctaMode, pageUrl: _pageUrl ' + '|| null') < 0) {
+        _fails.push('the arm is not returned to the client, so a reply cannot be attributed to the ask that produced it — which is the exact reason the subject A/B has never been readable');
+      }
+    }
+    // 6. A page that could not be stored must NOT produce a link.
+    if (typeof saveLeadPage !== 'function' || typeof loadLeadPage !== 'function') _fails.push('the page store is gone');
+    // 7. The page itself must render, escape, and load nothing over the network.
+    {
+      const _html = leadPageHtml({ company: 'Smith & Sons <Roofing>', headline: 'H', replyTo: 'a@b.example',
+        findings: [{ what: 'MARKER_ONE', cost: 'MARKER_COST' }], ask: 'MARKER_ASK' });
+      for (const m of ['MARKER_ONE', 'MARKER_COST', 'MARKER_ASK']) {
+        if (_html.indexOf(m) < 0) _fails.push(`the prospect page drops ${m}`);
+      }
+      if (_html.indexOf('Smith &amp; Sons &lt;Roofing&gt;') < 0) _fails.push('the prospect page does not escape the company name, so an ampersand in a business name corrupts the page a stranger is looking at');
+      if (/<script\b|<link\b|<img\b|@import/i.test(_html)) _fails.push('the prospect page loads something over the network — it must be one self-contained document, because a half-rendered page is worse than no page');
+      if (_html.indexOf('noindex') < 0) _fails.push('the prospect page is indexable, so one business\'s audit could turn up in a search for another');
+    }
+    if (_fails.length) {
+      console.log(`⛔ ASK ARM CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ ASK ARM CHECK: the ask can now be a question or a page, the arm is a stable hash of the lead id so a re-composed lead cannot change arms, and it is returned and frozen onto the send so a reply days later is attributable. Both safeties hold: with no PAGE_BASE_URL configured every lead gets the question rather than a raw backend subdomain in a cold email, and the split is off unless deliberately set. The page escapes its input, loads nothing over the network and is not indexable.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ASK ARM CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE HIGHEST-JUDGEMENT CALL RAN ON THE CHEAPEST MODEL ════════════════
+  // Two comments in this file disagreed about what BRAIN_MODEL defaults to. The
+  // prose said Sonnet and called it a quality decision; the code said Haiku. And
+  // the one strategic call ran BEFORE the audit on ~35 summary bullets, so the
+  // most capable model in the system was also the least informed thing in it.
+  try {
+    const _fails = [];
+    // Every configured model must be priced, or the cost meter invents a number.
+    for (const [what, m] of [['the audit', BRAIN_MODEL], ['the strategic read', SITUATION_MODEL]]) {
+      if (!ANTHROPIC_PRICES[m]) _fails.push(`${what} runs on ${m}, which has no price row — the cost line would report a figure it made up`);
+    }
+    // The audit must not silently fall back to the cheap model.
+    if (!process.env.BRAIN_MODEL && /haiku/i.test(String(BRAIN_MODEL))) {
+      _fails.push('the audit defaults to Haiku again — this is the call that reads 33,000 tokens of their pages and writes the narrative every other artefact is built from, and the difference is about five dollars per fifty leads');
+    }
+    if (!process.env.SITUATION_MODEL && /haiku/i.test(String(SITUATION_MODEL))) {
+      _fails.push('the strategic read defaults to Haiku — it is handed the fewest tokens of any call here and asked the hardest question');
+    }
+    // The synthesis must run AFTER the audit, or it cannot see the evidence.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _deferred = _src.indexOf('measuredFacts = F.' + 'slice();');
+      const _called = _src.indexOf('situationRead = await buildSituationRead(measuredFacts.' + 'concat(_extra)');
+      if (_called < 0) _fails.push('the strategic read no longer runs with the audit evidence appended, so it is back to reasoning from a summary of a business it has never read');
+      if (_deferred < 0 || (_called >= 0 && _called < _deferred)) _fails.push('the strategic read runs before its facts are assembled');
+      if (_src.indexOf('situationRead = await buildSituationRead(F.' + 'join') >= 0) {
+        _fails.push('the old pre-audit call is still there, so the synthesis runs twice or runs early');
+      }
+      if (_src.indexOf('THEIR OWN HOMEPAGE COPY, so you are reading the ' + 'business') < 0) {
+        _fails.push('the strategic call is no longer handed their own homepage copy — it had never read one word of it');
+      }
+    }
+    // The owner read has to be asked for, or it happens once by luck and never
+    // again. It is the field behind the only line anybody has praised.
+    if (String(selfSource()).indexOf('what' + 'HeCaresAbout') < 0) {
+      _fails.push('the strategic read is no longer asked what this owner demonstrably cares about, so the character line that made one audit land goes back to being an accident');
+    }
+    if (_fails.length) {
+      console.log(`⛔ AUDIT MODEL CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ AUDIT MODEL CHECK: the audit and the strategic read both run on ${BRAIN_MODEL === SITUATION_MODEL ? BRAIN_MODEL : BRAIN_MODEL + ' and ' + SITUATION_MODEL}, both priced, and the strategic read now runs AFTER the audit with their own homepage copy and the audit's findings appended. It used to run before the audit on about 35 summary bullets — the most capable model in the system, and the least informed thing in it.`);
+    }
+  } catch (e) {
+    console.log(`⛔ AUDIT MODEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ WHERE DO THEIR AD CLICKS LAND, AND COULD THE COMPARISON EVER MATCH ═══
+  // The nav comparison keyed on full URL strings from two sources that disagree
+  // about scheme and www — the sitemap publishes https://www., the nav is
+  // resolved against a stored website this file records as http://. One mismatch
+  // and EVERY sitemap page reads as unlinked, which breaks the backfill and the
+  // article filter silently and in the same direction. That is also the exact
+  // failure that would give a landing-page detector a 100% false-positive rate,
+  // so it is verified before anything is built on it.
+  try {
+    const _fails = [];
+    // 1. A page is its host and its path. Nothing else decides which page it is.
+    const SAME = ['http://ex.com/services', 'https://ex.com/services', 'https://www.ex.com/services/',
+      'HTTPS://WWW.EX.COM/Services', 'https://ex.com/services?utm_source=x', 'https://ex.com/services#top'];
+    const keys = new Set(SAME.map(pageKey));
+    if (keys.size !== 1) _fails.push(`six spellings of one page produce ${keys.size} different keys: ${[...keys].join(' | ')}`);
+    if (pageKey('https://ex.com/services') === pageKey('https://ex.com/about')) _fails.push('two different pages collide on one key');
+    if (pageKey('https://other.com/services') === pageKey('https://ex.com/services')) _fails.push('the same path on two different sites collides');
+
+    // 2. The detector. A campaign page nobody links is the whole point.
+    const NAV = new Set(['ex.com/services', 'ex.com/about', 'ex.com/contact', 'ex.com/reviews'].map(x => pageKey('https://' + x)));
+    const SITEMAP = ['https://www.ex.com/', 'https://www.ex.com/services', 'https://www.ex.com/about',
+      'https://www.ex.com/contact', 'https://www.ex.com/reviews',
+      'https://www.ex.com/lp/emergency-roof-repair',      // campaign-shaped, unlinked
+      'https://www.ex.com/go/free-inspection',            // campaign-shaped, unlinked
+      'https://www.ex.com/old-crew-photos',               // unlinked, not campaign
+      'https://www.ex.com/blog/how-to-clean-your-gutters-in-fall'];  // an article, not a landing page
+    const u = findUnlinkedPages({ sitemap: SITEMAP, navKeys: NAV, homepage: 'https://ex.com' });
+    if (!u.checked) _fails.push(`the unlinked read refused a normal site: ${u.why}`);
+    else {
+      if (u.campaignCount !== 2) _fails.push(`${u.campaignCount} campaign-shaped page(s) found and there are 2`);
+      if (u.unlinkedCount !== 3) _fails.push(`${u.unlinkedCount} unlinked page(s) found and there are 3`);
+      if (u.pages.some(p => /blog\//.test(p))) _fails.push('a blog post is being reported as a page built for an ad');
+      if (u.pages.some(p => /\/services|\/about|\/contact|\/reviews/.test(p))) _fails.push('a page the site links in its own navigation is being reported as unlinked, which is the false-positive that makes this whole read worthless');
+      if (u.pages[0] !== 'https://www.ex.com/lp/emergency-roof-repair') _fails.push('campaign-shaped pages are not listed first, so the useful ones are buried');
+    }
+    // 3. The scheme/www mismatch that shipped. Nav keys built from http:// and no
+    //    www; sitemap published as https://www. If pageKey is not doing its job
+    //    this returns "everything is unlinked", which is the bug.
+    const MISMATCH = new Set(['http://ex.com/services', 'http://ex.com/about', 'http://ex.com/contact', 'http://ex.com/reviews'].map(pageKey));
+    const m = findUnlinkedPages({ sitemap: SITEMAP, navKeys: MISMATCH, homepage: 'http://ex.com' });
+    if (!m.checked || m.unlinkedCount !== 3) {
+      _fails.push(`an http:// navigation against an https://www. sitemap reports ${m.checked ? m.unlinkedCount : 'nothing'} unlinked page(s) instead of 3 — the two lists cannot see each other, which silently breaks the page backfill and the article filter too`);
+    }
+    // 4. Too little navigation is NOT evidence that everything is unlinked.
+    const thin = findUnlinkedPages({ sitemap: SITEMAP, navKeys: new Set([pageKey('https://ex.com/services')]), homepage: 'https://ex.com' });
+    if (thin.checked) _fails.push('a site whose menu we barely read still produces a list of "pages nobody links", which is a false positive on every page they have');
+    if (findUnlinkedPages({ sitemap: [], navKeys: NAV }).checked) _fails.push('an empty sitemap still produces a result');
+
+    // 5. Interior markup: positives merge up, and only positives.
+    const PAD = '<p>' + 'x'.repeat(600) + '</p>';
+    const interior = { googleAds: true, metaPixel: false, tagManager: false, pages: 4 };
+    const merged = mergeAdSignals({ confirmed: true, blocked: false, hasGoogleAdsTag: false, hasMetaPixel: false, hasTagManager: false }, PAD, interior);
+    if (merged.hasGoogleAdsTag !== true) _fails.push('an ads tag found on an interior page is discarded, so six pages of markup we now buy are read for nothing');
+    if (merged.hasMetaPixel !== false) _fails.push('an interior read is inventing a pixel that no page carried');
+    if (!/interior/.test(String(merged.adSource))) _fails.push('the log cannot say where the ad evidence came from');
+    // With no interior pages and no rendered page, nothing may be asserted.
+    const none = mergeAdSignals({ confirmed: false, blocked: true }, '', { googleAds: false, metaPixel: false, tagManager: false, pages: 0 });
+    if (none.hasGoogleAdsTag !== null) _fails.push('with nothing read, the ad markers report false rather than null');
+
+    // 6. The Transparency read is positive-only and off unless asked for.
+    if (typeof checkAdsTransparency !== 'function') _fails.push('the Ads Transparency read is gone');
+    if (ADS_TRANSPARENCY_ON && !process.env.ADS_TRANSPARENCY) _fails.push('the Ads Transparency read defaults ON — it costs a credit per lead and has never been run against a live advertiser from here');
+
+    // 7. AND THE WIRING. Falsified: passing an empty navigation set at the real
+    //    call site left every fixture above green, because a fixture supplies its
+    //    own arguments and cannot see a caller. That is the fourth time in one
+    //    session — booking, city, offer, and this — so it is now a rule rather
+    //    than a lesson: a check that does not assert its call site is half a
+    //    check. Needles assembled at runtime, comment lines stripped.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('findUnlinkedPages({ sitemap: clean, navKeys: new Set(_navOrder.' + 'keys()), homepage: website })') < 0) {
+        _fails.push('the unlinked read is no longer given the site\'s own navigation, so it either reports every page as unlinked or reports nothing at all');
+      }
+      // The navigation map must be built BEFORE the "fewer than seven pages
+      // matched" branch. Inside it, it does not exist on any site whose real
+      // pages already fill the quota — which is most good sites.
+      const _navAt = _src.indexOf('const _navOrder = new ' + 'Map()');
+      const _branchAt = _src.indexOf('if (picked.' + 'length < 7) {');
+      if (_navAt < 0 || _branchAt < 0 || _navAt > _branchAt) {
+        _fails.push('the navigation map is back inside the backfill branch, so on any site whose own pages fill the quota it is never built and the unlinked read goes dark');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ UNLINKED PAGE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ UNLINKED PAGE CHECK: one page key now serves the sitemap and the site's own navigation, so an http:// menu and an https://www. sitemap can finally see each other — they could not, which broke the page backfill and the article filter silently and in the same direction. Pages the site links to nowhere are read out of two lists we already buy, campaign-shaped ones first, and a site whose menu we barely read produces nothing rather than declaring every page unlinked. Advertising markers now merge up from the interior pages whose markup costs nothing extra, and never down.`);
+    }
+  } catch (e) {
+    console.log(`⛔ UNLINKED PAGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THREE DIAGNOSES COMPUTED, NONE OF THEM PUBLISHED ═════════════════════
   // "It gives a bunch of issues but doesn't nail what is actually worth selling
   // them." The one-change diagnosis was never missing — it was unpublished.
@@ -43488,8 +44186,8 @@ app.listen(PORT, () => {
     //    runtime, comment lines stripped — both recorded traps in this file.
     {
       const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
-      if (_src.indexOf('mergeAdSignals(builtWith, ' + 'homepageHtml)') < 0) {
-        _fails.push('the ad markers are no longer merged from the rendered homepage, so they are back to the plain fetch alone');
+      if (_src.indexOf('mergeAdSignals(builtWith, ' + 'homepageHtml, interiorAdsFor(website))') < 0) {
+        _fails.push('the ad markers are no longer merged from the rendered homepage and the interior pages, so they are back to the plain fetch alone');
       }
       if (_src.indexOf('adsReadable: !!(builtWith && builtWith.' + 'adsRead === true)') < 0) {
         _fails.push('the did-we-look gate no longer follows the merged read, so a bot-challenged plain fetch silences both spending findings again');
@@ -47374,6 +48072,33 @@ const ensureHunterAttribute = async (hunterKey, label) => {
 // now powers ~8 of our data sources. If it silently runs dry, the system produces
 // thin audits and empty decision-maker lookups WITHOUT any error — which looks
 // exactly like a broken engine. This makes an empty tank visible.
+// ══ THE PAGE THE PROSPECT LANDS ON ══════════════════════════════════════════
+// One route, no parameters beyond the token, no query string, nothing that
+// records who the reader is beyond a counter. A tracking pixel or a redirect
+// chain would improve the measurement and cost the deliverability this whole
+// arm depends on, so neither exists.
+app.get('/p/:token', async (req, res) => {
+  const token = String(req.params.token || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 40);
+  if (!token) return res.status(404).type('html').send('<!doctype html><meta charset=utf-8><p>Not found.');
+  try {
+    const row = await loadLeadPage(token);
+    if (!row || !row.payload) {
+      return res.status(404).type('html').send('<!doctype html><meta charset=utf-8><p>This link has expired.');
+    }
+    // Count the visit, and never let a failed count stop the page rendering.
+    // The page is the point; the number is bookkeeping.
+    sbRest('/lead_pages?token=eq.' + encodeURIComponent(token), {
+      method: 'PATCH', body: JSON.stringify({ visits: (Number(row.visits) || 0) + 1, last_visit: new Date().toISOString() }),
+    }).catch(() => {});
+    console.log(`👁 PAGE VISIT [${row.payload.company || token}]: visit ${(Number(row.visits) || 0) + 1}. This is the landing-page arm's own measurement, and it is the reason that arm is readable at 25 sends a day where a reply-rate arm is not.`);
+    res.set('Cache-Control', 'no-store').set('X-Robots-Tag', 'noindex, nofollow');
+    return res.type('html').send(leadPageHtml(row.payload));
+  } catch (e) {
+    console.log('lead page render failed:', e && e.message);
+    return res.status(500).type('html').send('<!doctype html><meta charset=utf-8><p>Something went wrong.');
+  }
+});
+
 app.get('/api/firecrawl-credits', async (req, res) => {
   const key = req.query.key;
   if (!key) return res.status(400).json({ error: 'key required' });
@@ -48711,7 +49436,46 @@ app.post('/api/compose-email', async (req, res) => {
         message: 'This audit contains claims that contradict the measurements, so no email was written. Re-run Research on this lead, or skip it.',
       });
     }
+    // ══ WHICH ASK THIS LEAD IS TESTING ═══════════════════════════════════
+    // Assigned from a stable hash of the lead id, so re-composing puts the lead
+    // back in the same arm. Everything has to succeed for the page arm to fire:
+    // the split has to be on, a domain CROJungle owns has to be configured, and
+    // the page has to actually store. Any failure falls back to the question,
+    // which is what every send has used until now.
+    let _ctaMode = 'question';
+    let _pageUrl = '';
+    try {
+      if (pageArmFor(req.body.leadId) === 'page' && useSpine && useSpine.claim) {
+        const _tok = pageTokenFor(req.body.leadId);
+        // Built from the SAME ranked findings the email is built from — the
+        // stored ladder, plus the spine's own claim first. The page can therefore
+        // never say anything the email could not, which is the whole reason it is
+        // assembled here rather than by a second formatter somewhere else.
+        const _stored = Array.isArray(audit.harmsRanked) ? audit.harmsRanked
+          : (audit._persisted && Array.isArray(audit._persisted.harmsRanked)) ? audit._persisted.harmsRanked
+          : [];
+        const _rows = [{ what: useSpine.claim, cost: useSpine.costs || '' }]
+          .concat(_stored.map(h => ({ what: h && h.finding, cost: (h && typeof h.costs === 'string') ? h.costs : '' })))
+          .filter(x => x.what && String(x.what).trim())
+          .filter((x, i, a) => a.findIndex(y => y.what === x.what) === i)
+          .slice(0, 5);
+        const _ok = _rows.length ? await saveLeadPage(_tok, {
+          company,
+          headline: 'What we found on ' + company,
+          findings: _rows,
+          fromName: _founder ? '' : '',
+          replyTo: String(req.body.replyTo || '').trim(),
+          ask: 'If any of this is worth twenty minutes, reply and I will walk you through what is behind it.',
+        }) : false;
+        if (_ok) {
+          _ctaMode = 'page';
+          _pageUrl = PAGE_BASE_URL + '/p/' + _tok;
+        }
+      }
+    } catch (e) { console.log('page arm skipped:', e && e.message); }
+    console.log(`⚖ ASK ARM [${company}]: ${_ctaMode}${_ctaMode === 'page' ? ' — ' + _pageUrl : ''}. ${PAGE_BASE_URL ? (CTA_PAGE_SPLIT ? CTA_PAGE_SPLIT + '% of leads are in the page arm' : 'the page arm is configured but the split is 0, so nothing is being tested') : 'PAGE_BASE_URL is not set, so every lead gets the question — a raw onrender.com link in a cold email costs more than the test is worth'}.`);
     const composed = composeFullEmail(useSpine, {
+      pageUrl: _pageUrl,
       founderName: _founder,
       company,   // seeds subject rotation so two leads on one rung differ
       subjects,
@@ -49154,7 +49918,10 @@ app.post('/api/compose-email', async (req, res) => {
       sessionAttachEmail(company, composed.variantA.subject, composed.variantA.body, '');
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words. ${_byBrain ? 'The brain connected the verified pieces into prose; every figure was traced back to a measurement before it was accepted.' : 'Assembled from measurements \u2014 no model call, no tokens.'}`);
     }
-    return res.json({ composed });
+    // The arm travels with the email. Without this the test is unreadable: a
+    // reply arrives and nothing anywhere says which ask produced it, which is
+    // exactly the state the existing subject A/B has been in since it was built.
+    return res.json({ composed, ctaMode: _ctaMode, pageUrl: _pageUrl || null });
   } catch (e) {
     console.log(`\u26d4 COMPOSE ON DEMAND FAILED: ${e && e.message}`);
     return res.status(500).json({ error: String(e && e.message) });

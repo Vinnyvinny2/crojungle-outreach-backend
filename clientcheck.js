@@ -413,7 +413,9 @@ const mergeStat = runMergeCheck();
         phoneDisplay: 'MARKER_PHONE', location: 'Indianapolis, IN', tradeWord: 'roofer', icpScore: 71,
         situationRead: { background: 'MARKER_BACKGROUND', headline: 'MARKER_HEADLINE',
           read: 'MARKER_READ', rows: [{ label: 'MARKER_ROWLABEL', says: 'MARKER_ROWSAYS' }],
-          whatHeNeeds: 'MARKER_NEEDS', askOnTheCall: 'MARKER_ASK' },
+          whatHeCaresAbout: 'MARKER_CARES', whatHeNeeds: 'MARKER_NEEDS', askOnTheCall: 'MARKER_ASK' },
+        adsTransparency: { checked: true, found: true },
+        sitePages: { unlinkedPages: { checked: true, unlinkedCount: 2, campaignCount: 1, pages: ['https://x.example/lp/MARKER_LANDING'] } },
         growthConstraint: { layer: 'MARKER_LAYER', condition: 'c', product: 'p' },
         theOneThing: { layer: 'MARKER_LAYER', diagnosis: 'MARKER_DIAGNOSIS', why: 'MARKER_WHY',
           firstBrokenLink: 'CONVERSION', firstBrokenLinkWhy: 'MARKER_FIRSTBROKEN',
@@ -434,7 +436,9 @@ const mergeStat = runMergeCheck();
           'MARKER_DIAGNOSIS', 'MARKER_WHY', 'MARKER_FIRSTBROKEN', 'MARKER_FRICTION1',
           'MARKER_FRICTION2', 'MARKER_COSTLIEST', 'MARKER_COSTS', 'MARKER_ORIGINAL', 'MARKER_QUOTE',
           'MARKER_AREA', 'MARKER_PROBLEM', 'MARKER_PCOSTS', 'MARKER_NEEDS', 'MARKER_ASK',
-          'MARKER_RISK', 'MARKER_CRITICAL', 'MARKER_SUBJECT', 'MARKER_PITCH', 'MARKER_SHOTLABEL'];
+          'MARKER_RISK', 'MARKER_CRITICAL', 'MARKER_SUBJECT', 'MARKER_PITCH', 'MARKER_SHOTLABEL',
+          // Tier 2: the owner read, and the pages the site links nowhere.
+          'MARKER_CARES', 'MARKER_LANDING'];
         const lost = MARKERS.filter(m => page.indexOf(m) < 0);
         if (lost.length) {
           fails.push(`the audit export drops ${lost.length} field(s) that are on the lead and on the screen: ${lost.join(', ')} — an export that looks complete and is missing the diagnosis is worse than no export`);

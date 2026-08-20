@@ -255,6 +255,11 @@ const leadToRow = (l) => ({
         // binding layer, the first broken link and the buying-path friction, all
         // three of which were measured on every lead and rendered nowhere.
         theOneThing: l.theOneThing ?? null,
+        // Positive-only advertising evidence from Google's own Transparency
+        // Centre. Never a negative: only verified advertisers appear there.
+        adsTransparency: l.adsTransparency ?? null,
+        ctaMode: l.ctaMode ?? null,
+        pageUrl: l.pageUrl ?? null,
         topPain: l.topPain ?? null,
         buckets: l.buckets ?? null,
         signals: l.signals ?? null,
@@ -558,6 +563,12 @@ const rowToLead = (r) => ({
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
   theOneThing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.theOneThing) || null,
+  // Which ask this lead was sent, and the page it points at. Persisted because a
+  // reply arrives days later and the arm is the only thing that makes it mean
+  // anything.
+  ctaMode: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ctaMode) || null,
+  pageUrl: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.pageUrl) || null,
+  adsTransparency: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.adsTransparency) || null,
   topPain: r.top_pain || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.topPain) || null,
   buckets: r.buckets || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.buckets) || null,
   signals: r.signals || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.signals) || {},
@@ -1089,6 +1100,7 @@ const applyResearchResult = (prev, data, ctx) => {
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
+        L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // Only overwrite when the incoming one actually has results. A merge that
         // takes an empty object over good persisted data is how a working lead
         // turns into "nothing on file".
@@ -1163,6 +1175,7 @@ const applyResearchResult = (prev, data, ctx) => {
         L.outreachChannel = data.outreachChannel ?? L.outreachChannel ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
+        L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.offerStrength = data.offerStrength ?? L.offerStrength ?? null;
@@ -1273,6 +1286,12 @@ const applyResearchResult = (prev, data, ctx) => {
         L.pitch = null;
         L.subject = null;
         L.abVariant = null;
+        // The ask arm and its page. A re-research re-measures the findings, so
+        // the stored page describes a business we no longer believe in — and
+        // leaving the URL behind means the next send links a stranger to the
+        // PREVIOUS audit. Cleared with the rest of the draft.
+        L.ctaMode = null;
+        L.pageUrl = null;
         L.followUp1 = null;
         L.followUp2 = null;
         L.breakup = null;
@@ -1375,6 +1394,13 @@ const buildComposeBody = (lead, settings) => {
             // two-arm machinery cannot produce a readable result no matter how
             // many are sent.
             abVariant: lead.abVariant || 'A',
+            // The ask arm is a stable hash of the lead id, so the id has to
+            // travel. Without it every lead hashes the same empty string and the
+            // whole test collapses into one arm.
+            leadId: lead.id || '',
+            // Where a reply goes if the reader uses the page's reply button
+            // rather than the email. Same mailbox the send goes out from.
+            replyTo: settings.fromEmail || settings.hunterFromEmail || '',
             // ══ THE LADDER IS ON THE LEAD, NOT ALWAYS ON THE AUDIT ═══════
             // Fresh from research these ride inside brainAudit. After a
             // reload, rowToLead restores them to the LEAD — problemList,
@@ -1413,7 +1439,13 @@ const buildComposeBody = (lead, settings) => {
 // runner and the Generate panel cannot disagree about which is which.
 const readComposeResponse = (j) => {
   if (j && j.composed && j.composed.variantA) {
-    return { composed: j.composed, blocked: null, note: 'the server composed this email from the existing audit. No model call.' };
+    // Which ask this lead was given, and the page it points at. Carried out of
+    // the response so it can be stored on the lead: a reply arrives days later
+    // and the arm is the only thing that makes it mean anything. The existing
+    // subject A/B has been running without this since it was built, which is why
+    // it has never produced a readable result.
+    return { composed: j.composed, blocked: null, ctaMode: j.ctaMode || null, pageUrl: j.pageUrl || null,
+      note: 'the server composed this email from the existing audit. No model call.' };
   }
   if (j && j.reason === 'no-spine') {
     return { composed: null, blocked: null, note: 'this audit has no factual spine \u2014 it predates the composer. Re-run Research on this lead to get the composed email; falling back to the model for now.' };
@@ -1442,6 +1474,10 @@ const readComposeResponse = (j) => {
 const applyGeneratedEmail = (prev, raw, opts) => {
   const L = prev || {};
   opts = opts || {};
+  // Stamped before anything else so a later refusal cannot leave the lead
+  // claiming an arm it was never actually sent under.
+  if (opts.ctaMode) L.ctaMode = opts.ctaMode;
+  if (opts.pageUrl !== undefined) L.pageUrl = opts.pageUrl || null;
   // ── NORMALISE ──────────────────────────────────────────────────────────────
   // `pitch` is this application's word for the body. The server composer says
   // `body`. Accept either, emit `pitch`, so a producer cannot be wrong about a
@@ -1634,7 +1670,7 @@ const runBatchAudit = async (opts) => {
           + String((cr.blocked.criticalFlags || [])[0] || '').slice(0, 200) };
       }
       if (!cr.composed) return { ...base, outcome: 'audited_no_email', note: cr.note };
-      const g = applyGeneratedEmail(row, cr.composed, { promptPath: 'composed', copyFlags: [] });
+      const g = applyGeneratedEmail(row, cr.composed, { promptPath: 'composed', copyFlags: [], ctaMode: cr.ctaMode, pageUrl: cr.pageUrl });
       if (!g.ok) return { ...base, outcome: 'audited_no_email', note: g.error };
       persist(g.lead);
       return { ...base, outcome: 'generated', note: '' };
@@ -1724,7 +1760,14 @@ const auditRecordFor = (lead) => {
     // function, which is precisely the vacuous pass this file keeps recording.
     signals: arr(buildAuditRows(l)).map(r => ({ label: r.label, val: r.val, ok: r.ok, proof: r.proof })),
     // THE CONVERSATION
+    whatHeCaresAbout: (sr && sr.whatHeCaresAbout) || '',
     whatHeNeeds: (sr && sr.whatHeNeeds) || '',
+    // Positive-only advertising evidence, and the pages the site links nowhere.
+    // Both INTERNAL: the negative form of either is barred, so neither is ever
+    // phrased as an absence in anything that leaves the building.
+    adsVerified: !!(l.adsTransparency && l.adsTransparency.found),
+    unlinkedPages: ((l.sitePages && l.sitePages.unlinkedPages) || {}).pages || [],
+    unlinkedCount: ((l.sitePages && l.sitePages.unlinkedPages) || {}).unlinkedCount || 0,
     askOnTheCall: (sr && sr.askOnTheCall) || '',
     // WHAT NOT TO SAY. Carried deliberately: an exported audit that drops the
     // fact-check is an audit somebody repeats on a call believing all of it.
@@ -1774,6 +1817,10 @@ const auditExportHtml = (records, meta) => {
       + sec('What is broken, worst first',
           r.problems.length ? '<table><tr><th>Area</th><th>Problem</th><th>What it costs</th></tr>'
             + r.problems.map(x => '<tr><td>' + e(x.area) + '</td><td>' + p(x.problem) + '</td><td>' + p(x.costs) + '</td></tr>').join('') + '</table>' : '')
+      + sec('Where their ad clicks might land',
+          (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to. A page built for an ad is not in the menu by design. Their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li>' + e(x) + '</li>') : '')
+          + (r.adsVerified ? '<p>Listed as a verified advertiser in Google\'s Ads Transparency Center.</p>' : ''))
+      + sec('What he clearly cares about', r.whatHeCaresAbout ? '<p>' + p(r.whatHeCaresAbout) + '</p>' : '')
       + sec('What is actually worth selling them',
           (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
           + (r.askOnTheCall ? '<p class="ask"><b>Ask before pitching:</b> ' + p(r.askOnTheCall) + '</p>' : ''))
@@ -9909,6 +9956,13 @@ function callDataFor(lead, result) {
     const _srBrief = (_sr && _sr.read) ? [
       _sr.headline ? String(_sr.headline).trim() : '',
       String(_sr.read).trim(),
+      // ══ WHERE HE WILL LEAN IN, AND WHERE HE WILL BRISTLE ═══════════════
+      // Read from behaviour we measured — whether he answers his own reviews
+      // and how he writes when he does, what he wrote about himself, what he is
+      // hiring for. It goes ABOVE the recommendation on purpose: knowing what a
+      // man cares about changes how you open, and the recommendation is what you
+      // arrive at afterwards.
+      _sr.whatHeCaresAbout ? `What he clearly cares about \u2014 ${String(_sr.whatHeCaresAbout).trim()}` : '',
       _sr.whatHeNeeds ? `What would actually help \u2014 ${String(_sr.whatHeNeeds).trim()}` : '',
       _sr.askOnTheCall ? `Ask before pitching \u2014 ${String(_sr.askOnTheCall).trim()}` : '',
     ].filter(Boolean).join('\n\n') : '';
@@ -10156,6 +10210,9 @@ function CallView({ settings }) {
               sr && sr.headline ? React.createElement('div', {
                 style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.5, marginTop: 9 }
               }, sr.headline) : null,
+              sr && sr.whatHeCaresAbout ? React.createElement('div', {
+                style: { fontSize: 12, color: 'var(--t)', lineHeight: 1.5, marginTop: 5 }
+              }, 'He cares about \u2014 ' + sr.whatHeCaresAbout) : null,
               sr && sr.askOnTheCall ? React.createElement('div', {
                 style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.5, marginTop: 5 }
               }, 'Ask before pitching \u2014 ' + sr.askOnTheCall) : null,
@@ -10382,6 +10439,12 @@ function SendView({ settings }) {
             // carried this email. A bounce is charged to the domain, so the
             // rotation can only ever be judged if each send remembers its lane.
             sentVia: s.sentVia || null,
+            // WHICH ASK WAS SENT. Frozen here with everything else, because a
+            // reply arrives days later and by then the lead may have been
+            // re-composed. Without this the arm is unattributable and the test
+            // reads as noise, which is the state the subject A/B is in.
+            ctaMode: all[idx].ctaMode || 'question',
+            pageUrl: all[idx].pageUrl || null,
 
             // `lead` is not in scope here. This callback sits inside
             // sendToHunter inside SendView; the only `const lead` declarations in
