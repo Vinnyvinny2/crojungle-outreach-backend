@@ -292,8 +292,15 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
   let inFlight = 0;
   let lastStart = 0;
   const waiting = [];
+  // A FUNCTION is allowed here so the live gate can be resized once Firecrawl
+  // tells us which plan we are on. Read on every pump rather than captured at
+  // construction, or the number learned at minute two would apply to nothing.
+  const capNow = () => {
+    const c = typeof concurrency === 'function' ? Number(concurrency()) : Number(concurrency);
+    return Number.isFinite(c) && c >= 1 ? c : 1;
+  };
   const pump = () => {
-    while (inFlight < concurrency && waiting.length) {
+    while (inFlight < capNow() && waiting.length) {
       const gap = minGapMs - (Date.now() - lastStart);
       if (gap > 0) { setTimeout(pump, gap); return; }
       const job = waiting.shift();
@@ -316,7 +323,68 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
     pump();
   });
 };
-const fcSerial = makeFcGate();
+// ══ THE GATE WAS PINNED TO THE SMALLEST PLAN FIRECRAWL SELLS ═══════════════
+// FC_CONCURRENCY defaults to 2 — the Free tier's concurrent-browser cap — and
+// the comment above says why: it is the only number that is safe without
+// knowing the plan. The cost of that safety is the whole system's throughput.
+// One lead makes ~14 paid Firecrawl calls, seven of them fanned out at once for
+// the interior pages, and RESEARCH_CONCURRENCY is 3 — so three leads contend
+// for two browsers and the queue in front of this gate IS the wall clock. On
+// 2026-08-20 a five-lead run reported one lead at 589 seconds.
+//
+// Raising the constant would be a guess. Firecrawl states the plan's per-minute
+// limit in a header on every response, so the plan is MEASURED rather than
+// assumed — the same discipline as the RSS gate, whose comment records why: "a
+// number tuned for one plan is wrong on the next one; a measurement is right on
+// both."
+//
+// The two halves are NOT the same kind of fact and the log says so:
+//   MEASURED  the requests-per-minute limit, read from x-ratelimit-limit.
+//   INFERRED  the concurrent-BROWSER cap, from Firecrawl's published tiers
+//             (10/min Free = 2 browsers, 100/min Hobby = 5, 500/min Standard
+//             = 50). We never take the full published cap; ten browsers is
+//             more than three concurrent leads can use and leaves the rest as
+//             headroom for whatever else the account is running.
+// An explicit FC_CONCURRENCY setting wins outright, in both directions.
+let FC_LIMIT_PER_MIN = null;
+let FC_CONCURRENCY_LIVE = FC_CONCURRENCY;
+const FC_CONCURRENCY_EXPLICIT = !!(process.env.FC_CONCURRENCY || '').trim();
+const fcBrowsersForLimit = (perMin) => {
+  const n = Number(perMin);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 500) return 10;
+  if (n >= 100) return 5;
+  if (n >= 50) return 3;
+  return 2;
+};
+const noteFirecrawlLimits = (r) => {
+  try {
+    if (!r || !r.headers || typeof r.headers.get !== 'function') return;
+    const raw = r.headers.get('x-ratelimit-limit');
+    const perMin = parseInt(String(raw || '').trim(), 10);
+    if (!Number.isFinite(perMin) || perMin <= 0) return;
+    if (FC_LIMIT_PER_MIN === perMin) return;
+    FC_LIMIT_PER_MIN = perMin;
+    const want = fcBrowsersForLimit(perMin);
+    if (FC_CONCURRENCY_EXPLICIT) {
+      console.log(`FIRECRAWL PLAN: their header says ${perMin} requests/minute. FC_CONCURRENCY is set explicitly to ${FC_CONCURRENCY}, so the gate is left exactly there \u2014 a setting somebody chose is never overridden by an inference.`);
+      return;
+    }
+    if (!want || want === FC_CONCURRENCY_LIVE) return;
+    const before = FC_CONCURRENCY_LIVE;
+    FC_CONCURRENCY_LIVE = want;
+    console.log(`FIRECRAWL PLAN: ${perMin} requests/minute is MEASURED from their own x-ratelimit-limit header. The concurrent-browser cap is INFERRED from Firecrawl's published tiers, not measured \u2014 so the gate moves ${before} \u2192 ${want}, which is below the cap that tier publishes. Set FC_CONCURRENCY to pin it. The queue in front of this gate is the research wall clock: three leads sharing two browsers is what a 589-second lead looks like.`);
+  } catch (e) { void e; }
+};
+const _fcGate = makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE });
+// One door, so the plan is read from every Firecrawl response in the process
+// rather than from the handful of call sites somebody remembered to wire.
+const fcSerial = (fn) => {
+  const _q0 = Date.now();
+  let _noted = false;
+  const _wrapped = () => { if (!_noted) { _noted = true; netNoteGateWait(Date.now() - _q0); } return fn(); };
+  return _fcGate(_wrapped).then((r) => { noteFirecrawlLimits(r); return r; });
+};
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
@@ -353,7 +421,72 @@ const fetchViaProxy = async (url, ms=10000) => {
 // The rejection is deliberately still `new Error('timeout')`, byte for byte,
 // because call sites across this file branch on that exact message. The fix
 // changes what happens to the socket, not what the caller sees.
+// ══ WHERE THE SECONDS ACTUALLY GO ═══════════════════════════════════════════
+// "JOB ... done in 589.1s" was the only timing this system produced, and it is
+// two numbers added together: how long the lead waited for a slot, and how long
+// the work took. Nobody could tell which. On 2026-08-20 that line read 589
+// seconds for John Peters Roofing on a run of five leads through a three-wide
+// queue — so it was almost certainly ~340s of queue and ~250s of work, and the
+// system could not say so. That is the same defect this file records twice
+// already: the SMTP line that overstated its own severity, and the Supabase line
+// that named the one thing that was fine. A number that conflates two things
+// reads as a measurement of one of them.
+//
+// Every outbound call in this process goes through fetchT. So the honest answer
+// is measured at that one door: seconds inside each service, and separately the
+// seconds spent WAITING for the Firecrawl gate before a request was even sent.
+// The gate figure is the one that decides whether the wall clock is our
+// throttle or their latency — and it is the number that decides whether a
+// fifty-lead batch finishes inside the client's clock.
+//
+// The times OVERLAP: calls run concurrently, so they do not add up to the wall
+// clock and the report says so rather than implying an arithmetic that is false.
+const { AsyncLocalStorage: _ALS_NET } = require('node:async_hooks');
+const NET_LEDGER = new _ALS_NET();
+const NET_SERVICE = [
+  [/firecrawl\.dev/i, 'firecrawl'],
+  [/anthropic\.com/i, 'anthropic'],
+  [/googleapis\.com/i, 'google places'],
+  [/apify\.com/i, 'apify'],
+  [/hunter\.io/i, 'hunter'],
+  [/myemailverifier\.com/i, 'email verify'],
+  [/theirstack\.com/i, 'theirstack'],
+  [/sec\.gov/i, 'sec edgar'],
+];
+const netServiceOf = (url) => {
+  const u = String(url || '');
+  for (const [re, name] of NET_SERVICE) if (re.test(u)) return name;
+  return 'other';
+};
+const netNote = (url, ms, ok) => {
+  try {
+    const led = NET_LEDGER.getStore();
+    if (!led || !led.by) return;
+    const k = netServiceOf(url);
+    const e = led.by.get(k) || { ms: 0, n: 0, failed: 0 };
+    e.ms += Math.max(0, ms); e.n += 1; if (!ok) e.failed += 1;
+    led.by.set(k, e);
+  } catch (e) { void e; }
+};
+const netNoteGateWait = (ms) => {
+  try {
+    const led = NET_LEDGER.getStore();
+    if (led) led.gateWaitMs = (led.gateWaitMs || 0) + Math.max(0, ms);
+  } catch (e) { void e; }
+};
+// Reported next to FIRECRAWL SPEND, per lead, from the per-lead store.
+const netReport = () => {
+  const led = NET_LEDGER.getStore();
+  if (!led || !led.by || !led.by.size) return '';
+  const rows = [...led.by.entries()].sort((a, b) => b[1].ms - a[1].ms);
+  const total = rows.reduce((s, [, e]) => s + e.ms, 0);
+  return `${(total / 1000).toFixed(0)}s inside outbound calls (these OVERLAP \u2014 they do not add up to the wall clock): `
+    + rows.map(([k, e]) => `${k} ${(e.ms / 1000).toFixed(0)}s/${e.n} call(s)${e.failed ? ` (${e.failed} failed or timed out)` : ''}`).join(', ')
+    + (led.gateWaitMs ? ` | ${(led.gateWaitMs / 1000).toFixed(0)}s of that was spent WAITING for a free Firecrawl browser before the request was sent \u2014 if this is large, the throttle is ours and FC_CONCURRENCY is the dial` : ' | no time was spent waiting for a Firecrawl slot');
+};
+
 const fetchT = (url, opts={}, ms=10000) => {
+  const _t0 = Date.now();
   const ac = new AbortController();
   let timer;
   const expiry = new Promise((_, rej) => {
@@ -375,7 +508,13 @@ const fetchT = (url, opts={}, ms=10000) => {
   });
   // Both promises get a handler from race(), so the aborted request rejecting
   // after we have already settled cannot surface as an unhandled rejection.
-  return Promise.race([req, expiry]).finally(() => clearTimeout(timer));
+  // The timing note is attached with then/catch rather than finally so a
+  // timeout is recorded as a FAILED call rather than as a fast one — the
+  // difference between "their API is slow" and "we gave up on it".
+  return Promise.race([req, expiry])
+    .then((r) => { netNote(url, Date.now() - _t0, true); return r; },
+          (e) => { netNote(url, Date.now() - _t0, false); throw e; })
+    .finally(() => clearTimeout(timer));
 };
 
 app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v9 — full-stack: stacking + combos + accuracy guards + reachability playbook', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
@@ -4709,6 +4848,118 @@ const GP_CITIES = [
 // National franchises / DSOs / chains — the local operator does NOT own the marketing,
 // so they are not our ICP no matter how reachable the branch is.
 const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|joshua tree experts)\b/i;
+// ══ THE FRANCHISE LIST IS A LIST OF BRANDS SOMEBODY REMEMBERED ══════════════
+// Vin: "ive ran an audit on ram jack like 6 times it always pops up in the find
+// section". Ram Jack is a national foundation-repair franchise with dozens of
+// outlets, and it is not in GP_FRANCHISE above — so every run found it again,
+// and the pipeline dedupe could not stop it either: each outlet is a DIFFERENT
+// business name in a different metro, so "we already own Ram Jack Durham" says
+// nothing about Ram Jack Raleigh.
+//
+// Adding "ram jack" to that regex is the band-aid, and the next franchise
+// repeats the whole thing. The list is a hand-kept memory of brands, and a
+// hand-kept memory of anything in this file has failed the same way every time.
+//
+// The evidence is already in hand and free. A Find run searches 39 categories
+// across twenty metros that are hundreds of miles apart — Phoenix, Dallas,
+// Charlotte, Denver, Nashville. A single owner-operated business does not trade
+// in three of them. A brand that comes back in three or more of them is a
+// franchise or a corporate chain, which is the exact judgement GP_FRANCHISE
+// encodes by hand, measured instead of remembered.
+//
+// It needs no storage and never goes stale: the detection is recomputed from
+// each run's own results, so a chain is caught on every run rather than on the
+// runs after somebody added it to a list.
+//
+// TWO SIGNALS, because they fail on different days:
+//   HOST   one website serving businesses in three metros. Unambiguous — that
+//          is one web presence with many outlets. Ram Jack's franchisees all
+//          point at the franchisor's site, which is also why researching one
+//          resolves to the national company (PART 4 §21).
+//   BRAND  the same first two words of the name in three metros, for outlets
+//          that carry their own domains.
+//
+// The brand rule is the one that can be wrong, so it is bounded: a key made
+// only of generic marketing words cannot anchor it. "All American Plumbing" in
+// three cities is three unrelated businesses; "Ram Jack" in three cities is one
+// franchise. Both halves are asserted at boot — the brands that must be caught
+// AND the ordinary businesses that must survive — because a filter loosened
+// until it catches nothing is the more expensive failure.
+const CHAIN_GENERIC_WORDS = new Set([
+  'all', 'the', 'a', 'an', 'and', 'best', 'top', 'first', 'new', 'pro', 'premier',
+  'elite', 'expert', 'quality', 'affordable', 'advanced', 'superior', 'supreme',
+  'american', 'national', 'united', 'general', 'complete', 'total', 'perfect',
+  'reliable', 'trusted', 'honest', 'friendly', 'local', 'family', 'home', 'my',
+  'your', 'our', 'us', 'usa', 'five', 'star', 'stars', 'gold', 'golden', 'silver',
+  'blue', 'red', 'green', 'white', 'black', 'north', 'south', 'east', 'west',
+  'central', 'greater', 'metro', 'city', 'town', 'valley', 'coast', 'coastal',
+  'service', 'services', 'company', 'co', 'inc', 'llc', 'group', 'solutions',
+  'systems', '1', '24', '247',
+]);
+// The first two meaningful words of a business name. Punctuation and legal
+// suffixes go; so does a leading generic adjective, because "The Ram Jack" and
+// "Ram Jack" are one brand. Two words rather than one: "Ram" alone would collide
+// with every business whose first word happens to be Ram.
+const chainBrandKey = (name) => {
+  const words = String(name || '').toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(w => w && !/^(llc|inc|corp|corporation|co|ltd|limited|pllc|pc|pa|lp|llp)$/.test(w));
+  if (words.length < 2) return '';
+  const key = words.slice(0, 2).join(' ');
+  // Every word generic means the key identifies nothing.
+  if (words.slice(0, 2).every(w => CHAIN_GENERIC_WORDS.has(w))) return '';
+  if (key.replace(/ /g, '').length < 6) return '';
+  return key;
+};
+const chainHostOf = (website) => {
+  const h = String(website || '').trim().toLowerCase()
+    .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('?')[0];
+  return h.includes('.') ? h : '';
+};
+// PURE. Takes the run's leads, returns which hosts and which brands appeared in
+// enough distinct metros to be a chain. Pure so the boot check can EXECUTE it
+// against real franchise names instead of reading the source and hoping.
+const detectChainOutlets = (leads, minMetros) => {
+  const need = Math.max(2, Number(minMetros) || 3);
+  const byHost = new Map(), byBrand = new Map();
+  const bump = (map, key, lead) => {
+    if (!key) return;
+    let e = map.get(key);
+    if (!e) { e = { metros: new Set(), names: new Set() }; map.set(key, e); }
+    for (const m of (Array.isArray(lead.marketsSeen) ? lead.marketsSeen : [])) if (m) e.metros.add(String(m));
+    if (lead.name) e.names.add(String(lead.name));
+    };
+  for (const l of (Array.isArray(leads) ? leads : [])) {
+    if (!l) continue;
+    bump(byHost, chainHostOf(l.website), l);
+    bump(byBrand, chainBrandKey(l.name), l);
+  }
+  const hosts = new Map(), brands = new Map();
+  // A chain needs several DISTINCT businesses, not one business we happened to
+  // find in three searches. One listing cannot be a chain of itself.
+  for (const [k, e] of byHost) if (e.metros.size >= need && e.names.size >= need) hosts.set(k, e);
+  for (const [k, e] of byBrand) if (e.metros.size >= need && e.names.size >= need) brands.set(k, e);
+  const reasonFor = (lead) => {
+    if (!lead) return '';
+    const h = chainHostOf(lead.website);
+    if (h && hosts.has(h)) {
+      const e = hosts.get(h);
+      return `${h} is the website for ${e.names.size} different businesses across ${e.metros.size} metros`;
+    }
+    const b = chainBrandKey(lead.name);
+    if (b && brands.has(b)) {
+      const e = brands.get(b);
+      return `"${b}" trades under ${e.names.size} names across ${e.metros.size} metros`;
+    }
+    return '';
+  };
+  return { hosts, brands, reasonFor };
+};
+
 // ══ FILTERS APPLIED AT THE PULL ══════════════════════════════════════════════
 // Filtering after the fact still spends the Places call. Narrowing the run means
 // only buying leads that match — which is the whole point of a narrow pull: one
@@ -4734,6 +4985,11 @@ const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|ai
 // which. A meter that presents a guessed rate as a measurement is the class of
 // error this file already records for the SMTP log line: a message that
 // overstates its own certainty costs exactly what one that understates it does.
+// Three of twenty metros. Two would be wrong: Charlotte and Raleigh are 140
+// miles apart and Greenville is 100 from Charlotte, so a real two-market
+// operator exists and is a GOOD lead \u2014 we even have a coverage-gap finding
+// built on exactly that shape.
+const GP_CHAIN_MIN_METROS = Math.max(2, parseInt(process.env.GP_CHAIN_MIN_METROS || '3', 10) || 3);
 const GP_RATE_SEARCH_PER_1K = Number(process.env.GP_RATE_SEARCH_PER_1K || 35);
 const GP_RATE_DETAILS_PER_1K = Number(process.env.GP_RATE_DETAILS_PER_1K || 35);
 const GP_FREE_SEARCH = Math.max(0, parseInt(process.env.GP_FREE_SEARCH || '1000', 10));
@@ -5451,6 +5707,36 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       if (_stop) break;
     } catch(e) { /* fail-safe per query */ }
   }
+  // ══ CHAINS, MEASURED FROM THIS RUN'S OWN RESULTS ═════════════════════════
+  // See detectChainOutlets. Runs over the in-band leads AND the demoted ones
+  // together, because a franchise outlet sitting outside the rating band is
+  // still a franchise outlet and would otherwise be evidence we threw away.
+  //
+  // Dropped rather than demoted, for the same reason GP_FRANCHISE drops: the
+  // local manager does not own the marketing, so there is no engagement to sell
+  // however reachable he is. This is the one filter in this function where the
+  // business is genuinely not our ICP rather than merely sorted lower.
+  let skippedChain = 0;
+  {
+    const _chains = detectChainOutlets([...out, ...benched], GP_CHAIN_MIN_METROS);
+    if (_chains.hosts.size || _chains.brands.size) {
+      const _why = new Map();
+      const _keep = (arr) => arr.filter(l => {
+        const r = _chains.reasonFor(l);
+        if (!r) return true;
+        skippedChain++;
+        if (!_why.has(r)) _why.set(r, []);
+        if (_why.get(r).length < 3) _why.get(r).push(l.name);
+        return false;
+      });
+      const _outKept = _keep(out), _benchKept = _keep(benched);
+      out.length = 0; out.push(..._outKept);
+      benched.length = 0; benched.push(..._benchKept);
+      if (skippedChain) {
+        console.log(`\u{1F517} CHAIN OUTLETS [Places]: ${skippedChain} business(es) dropped as branches of a chain, measured from this run rather than from a list \u2014 ${[..._why.entries()].slice(0, 4).map(([r, names]) => `${r} (${names.join(', ')})`).join(' | ')}. A single owner-operated business does not trade in ${GP_CHAIN_MIN_METROS} metros hundreds of miles apart; the branch manager does not own the marketing, so there is nothing to sell him.`);
+      }
+    }
+  }
   // ROUND-ROBIN INTERLEAVE. Results are collected query by query, so they leave this
   // function grouped in category blocks. Every Places lead also scores within a point
   // or two of every other, so the UI's tie-break falls back to insertion order and the
@@ -5466,7 +5752,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises by name${skippedChain ? `, ${skippedChain} chain outlet(s) measured` : ''}, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
   // ══ HOW DEEP THE RUN ACTUALLY REACHED ════════════════════════════════════
   // The number to watch when leads feel repetitive. Places answers each query
   // with its twenty most prominent businesses in the same order every time, so
@@ -7051,9 +7337,17 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
     let data = null;
     for (let attempt = 0; Date.now() < deadline; attempt++) {
       await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 3000));
-      const poll = await fcSerial(() => fetchT(`https://api.firecrawl.dev/v1/batch/scrape/${jobId}`, {
+      // ══ A POLL IS NOT A BROWSER ═══════════════════════════════════════
+      // This went through fcSerial, so every status check occupied one of the
+      // gate's concurrent-browser slots — and a batch is polled every three
+      // seconds for as long as it runs. Half the gate could be spent asking
+      // "are you done yet" while real scrapes waited behind it. The gate exists
+      // to bound how many PAGES Firecrawl is rendering for us at once; a status
+      // read renders nothing.
+      const poll = await fetchT(`https://api.firecrawl.dev/v1/batch/scrape/${jobId}`, {
         headers: { 'Authorization': `Bearer ${fcKey}` },
-      }, 15000));
+      }, 15000);
+      noteFirecrawlLimits(poll);
       const pd = await poll.json();
       if (pd && (pd.status === 'completed' || pd.status === 'complete')) { data = pd.data || []; break; }
       if (pd && pd.status === 'failed') { console.log('BATCH: job failed — falling back to individual scrapes'); return out; }
@@ -8983,6 +9277,7 @@ Return ONLY JSON:
   "heroIsBlank": true/false,          // Is the main hero area empty, a blank carousel, still loading, or broken-looking?
   "hasVisibleSocialProof": true/false,// Are testimonials, review stars, client logos, or trust badges visible ANYWHERE in the screenshot (not only above the fold)?
   "socialProofUncertain": true/false, // TRUE if you see a review/testimonial CONTAINER, widget frame, "Reviews" heading, or empty carousel that looks like it is still loading — i.e. proof may be present but not yet rendered. When true, we must NOT claim they lack social proof: third-party review widgets load a few seconds after the page and a screenshot can catch them empty.
+  "pageFullyLoaded": true/false,      // FALSE if this screenshot looks caught mid-load: blank panels, spinner, skeleton placeholders, images not yet in, a hero that is plainly still resolving. When false NOTHING absent in this image may be called missing — it may simply not have rendered yet. This field has been READ by the audit prompt since it was written and was never once ASKED for here, so the safeguard it feeds has never fired on any lead.
   "looksDated": true/false,           // Does the visual design look pre-2020 (old fonts, cluttered layout, dated styling)?
   "designObservation": "one factual sentence describing what the page looks like",
   "overallConversionReadiness": "strong|moderate|weak",  // Based only on what's visible: can this page convert a paid-ad visitor?
@@ -10863,7 +11158,14 @@ const HARM_LADDER = [
       // — puts the whole finding in the first ten words instead of the last four.
       if (names.length && Number.isFinite(ours)) {
         const top = names[0];
-        const more = names.length - 1;
+        // ══ COUNT FROM THE MEASUREMENT, NAME FROM THE LIST ══════════════
+        // This read `names.length - 1`, and names is a capped list. weakerAbove
+        // is the measurement — every business above them with fewer reviews —
+        // so the list decides WHO is named and the measurement decides HOW MANY
+        // there are. Falls back to the list only when the measurement is absent,
+        // and never states a number smaller than the names we are holding.
+        const measured = Number(m.weakerAbove);
+        const more = (Number.isFinite(measured) && measured >= names.length ? measured : names.length) - 1;
         // ══ THE RANKING IS THE FINDING. THE COUNTS ARE THE TWIST. ══════
         // "comes up above them" said the same thing as "shows up above them on
         // Google" and made the reader work for it. And the review numbers used
@@ -12035,8 +12337,16 @@ const resolveMeasurements = ({
     // sting, and it is the comparison already measured as weakerAbove.
     weakerNames: (() => {
       const ours = localRank && localRank.ours ? Number(localRank.ours.reviews) : null;
-      if (!localRank || !Array.isArray(localRank.above) || !Number.isFinite(ours)) return null;
-      const names = localRank.above
+      if (!localRank || !Number.isFinite(ours)) return null;
+      // weakerRows is the businesses above them holding FEWER reviews, taken
+      // from the whole field. `above` is a three-row slice of the TOP of that
+      // search and is a different question — see the note in checkLocalRank.
+      // It stays as the fallback so a result cached before this existed still
+      // produces a name rather than nothing.
+      const src = Array.isArray(localRank.weakerRows) && localRank.weakerRows.length
+        ? localRank.weakerRows
+        : (Array.isArray(localRank.above) ? localRank.above : []);
+      const names = src
         .filter(a => a && a.name && Number.isFinite(Number(a.reviews)) && Number(a.reviews) < ours)
         .map(a => ({ name: String(a.name).trim(), reviews: Number(a.reviews) }));
       return names.length ? names : null;
@@ -17222,6 +17532,39 @@ const buildProblemList = (harms, opts = {}) => {
 // is written and the email is shorter. That is the correct failure.
 //
 // Ranges are deliberately wide and conservative — the low end of national
+// ══ THE EMAIL HAS A MONEY GATE. THE AUDIT HAD NONE. ═════════════════════════
+// John Peters Roofing, live 2026-08-20. The audit asserted: "a customer cannot
+// tell what is different between a $5k gutter job and a $50k roof replacement
+// because the reason to choose you sounds the same for both." Its own
+// fact-checker caught it — "the $5k and $50k figures are not in evidence" — and
+// the sentence stayed in the audit anyway, because flagging and removing are
+// different things.
+//
+// Every figure in an EMAIL traces to permittedFigures; that has been true for
+// weeks. The audit is what Mike reads before the call and what he repeats on it,
+// and it was ungoverned. A price an owner knows is wrong discredits every
+// measured fact beside it — this file already records the same failure twice, on
+// a garage-door quote and an invented award.
+//
+// Vin's rule does not have an internal exemption: "Legit info is everything —
+// NEVER fabricate."
+//
+// Three sources of a legitimate figure, and nothing else:
+//   1. THEIR OWN WORDS. The figure appears in the corpus we scraped — their
+//      published pricing, a posted salary. This is the same rule the prices
+//      array already uses ("every price must literally appear in what we
+//      scraped"), applied to prose.
+//   2. THE TRADE TABLE. TRADE_JOB_VALUE is public knowledge about an industry,
+//      declared in code, deliberately conservative, and explicitly permitted:
+//      "state the value of ONE job in their trade and let him multiply."
+//   3. OUR OWN PRICES. What we charge is a fact about us.
+// Anything else is invented, and the SENTENCE carrying it is removed rather
+// than the figure alone — a sentence with the number cut out still asserts the
+// comparison it was built to make.
+const MONEY_TOKEN_RE = /\$\s?\d[\d,]*(?:\.\d+)?\s*(?:k|m|mm|million|billion)?/gi;
+const flatMoney = (s) => String(s || '').toLowerCase().replace(/[\s,]/g, '');
+// What CROJungle charges. Declared, not inferred, so a reviewer sees the list.
+const OUR_PRICE_FIGURES = ['$10k', '$35k', '$40k', '$50k', '$55k', '$70k', '$100k', '$125k', '$1m'];
 // figures. The claim is "a job in this trade runs about this", never "your job".
 const TRADE_JOB_VALUE = [
   // Home exterior / structural
@@ -17339,6 +17682,89 @@ const TRADE_JOB_VALUE = [
   { re: /\bcommercial clean|\bjanitorial|\bfacility/i, say: 'one building contract is recurring monthly revenue' },
   { re: /\bsecurity|\balarm|\bsurveillance/i, say: 'one monitored account is recurring monthly revenue' },
 ];
+
+// Built FROM the table rather than retyped beside it, so a figure added to a
+// trade row is permitted the moment it exists. The second copy is always the
+// one that rots.
+// ══ A FIGURE INSIDE A RANGE DOES NOT LICENSE THAT FIGURE ALONE ═════════════
+// The first version of this pulled individual tokens out of every trade row, so
+// "$8k-$40k" quietly licensed a bare "$8k" and "$40k" anywhere in any audit.
+// The boot check caught it immediately: "a $5k gutter job and a $50k roof
+// replacement" survived, because some row of the table happens to contain each
+// of those figures as one end of a range. A permission granted to a phrase had
+// leaked to its parts, which is the same disease as a guard in the wrong
+// function.
+//
+// The unit of permission is therefore the RANGE as written. "$15k-$80k" is
+// licensed when the sentence carries the whole thing, because that is the claim
+// the table actually makes; half of it is a different claim and nobody
+// declared it.
+const MONEY_RUN_RE = /\$[\d.,]+[a-z]*(?:-\$[\d.,]+[a-z]*)*/g;
+const TRADE_MONEY_UNITS = (() => {
+  const out = new Set();
+  for (const row of TRADE_JOB_VALUE) {
+    for (const u of (flatMoney(row.say).match(MONEY_RUN_RE) || [])) out.add(u);
+  }
+  return [...out];
+})();
+// ══ AND OUR OWN PRICE IS ONLY OURS WHEN IT IS ATTACHED TO OUR WORK ═════════
+// $50k is a legitimate figure in "a rebuild starts around $50k" and a
+// fabrication in "a $50k roof replacement". The token alone cannot tell them
+// apart; the sentence can. \w* on every stem deliberately — this file has a
+// whole section on a bare stem inside \b(...)\b matching nothing, where
+// RECURRING_NORMAL_TRADES failed on 22 of the 34 words it existed for.
+const OUR_PRODUCT_WORDS = /\b(rebuild\w*|retainer\w*|engagement\w*|advisory|ai brain|brain build\w*|custom (?:ai )?software|marketing (?:management|retainer)|crojungle|our (?:price|pricing|fee)\w*)\b/i;
+// PURE, so the boot check runs the real thing on real sentences instead of
+// reading the source and hoping. Returns the cleaned text and what was cut.
+const stripUnmeasuredMoney = (text, corpus) => {
+  const src = String(text || '');
+  if (!src || src.indexOf('$') < 0) return { text: src, cut: [], figures: [] };
+  const flatCorpus = flatMoney(corpus);
+  const permitted = (tok, sn) => {
+    const f = flatMoney(tok);
+    const flatSn = flatMoney(sn);
+    // 1. THEIR OWN WORDS.
+    if (flatCorpus && flatCorpus.includes(f)) return true;
+    // 2. THE TRADE TABLE, as a whole range rather than as loose digits.
+    if (TRADE_MONEY_UNITS.some(u => u.includes(f) && flatSn.includes(u))) return true;
+    // 3. OUR OWN PRICE, and only where the sentence is about our own work.
+    if (OUR_PRICE_FIGURES.some(p => flatMoney(p) === f) && OUR_PRODUCT_WORDS.test(sn)) return true;
+    // A bare figure with no magnitude suffix can also be matched on its digits
+    // alone, but only when there are enough of them to be a real number: "$5"
+    // against a corpus containing a 5 somewhere is not evidence of anything.
+    const digits = f.replace(/[^0-9]/g, '');
+    return digits.length >= 3 && flatCorpus.includes(digits);
+  };
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [], figures = [];
+  for (const sn of sentences) {
+    const bad = (sn.match(MONEY_TOKEN_RE) || []).filter(t => !permitted(t, sn));
+    if (bad.length) { cut.push(sn.trim()); figures.push(...bad.map(x => x.trim())); }
+    else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut, figures };
+};
+// Walks the model's own output. Skips our own fields (underscore-prefixed) and
+// anything we assembled, because those are already gated and re-checking them
+// here would be a second copy of a rule.
+const stripUnmeasuredMoneyDeep = (node, corpus, out, depth) => {
+  const d = Number(depth) || 0;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripUnmeasuredMoney(node, corpus);
+    if (r.cut.length) { out.cut.push(...r.cut); out.figures.push(...r.figures); return r.text; }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(x => stripUnmeasuredMoneyDeep(x, corpus, out, d + 1));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripUnmeasuredMoneyDeep(node[k], corpus, out, d + 1);
+    }
+    return node;
+  }
+  return node;
+};
 
 const tradeJobValue = (tradeWord) => {
   const t = String(tradeWord || '').trim();
@@ -17884,6 +18310,29 @@ const INTERNAL_ONLY_RUNGS = {
   partial_owner_replies:'how many of his reviews he answered — same afternoon, same nothing to buy',
   stale_reviews:        'the age of his newest review — tells us the business may be quiet, tells him only that we counted',
   low_rating:           'his star average — the single most insulting thing a stranger can open with, and unchangeable by anything we sell',
+};
+
+// ══ THE DEMOTION LOG WAS INVENTING ITS OWN REASON ═══════════════════════════
+// Pulled out of the compose block so a boot check can execute it. Inline, the
+// only possible guard was a regex over the source, and the sentence it printed
+// had been false on live leads for as long as it existed: it filtered on selfFix
+// alone and then announced the result as "N finding(s) scored higher on harm".
+// John Peters Roofing, 2026-08-20: it named a harm-64 finding against an opener
+// at harm 76 and said the 64 had scored higher.
+//
+// It also named INTERNAL_ONLY rungs, which are held out of the email by a
+// different and much stronger rule that the same run reports on its own line.
+// Two explanations for one omission, only one of them true, is how a reader
+// stops believing both.
+const selfFixableDemotions = (byHarm, top) => {
+  if (!Array.isArray(byHarm) || !top) return [];
+  const topHarm = Number(top.harm);
+  return byHarm.filter(h =>
+    h && (h.selfFix || 0) >= 4
+    && h.id !== top.id
+    && Number.isFinite(Number(h.harm)) && Number.isFinite(topHarm)
+    && Number(h.harm) > topHarm
+    && !INTERNAL_ONLY_RUNGS[h.id]);
 };
 
 const rankHarms = (m = {}) => {
@@ -20923,6 +21372,25 @@ ${replyBlocks}` }]
 // score would collide on the shared nav and footer that every page carries, and
 // a false positive here DELETES a page we correctly read. A redirect returns
 // identical bytes, so exact is enough to catch the real case with no risk.
+// ══ THE TEXT FINGERPRINT CANNOT SEE THE PICTURE ═════════════════════════════
+// pageFingerprint below compares what a page SAYS. Two URLs can differ by a
+// canonical tag or a breadcrumb and still render the identical image, which is
+// what Vin was looking at when he said "gregory and donna both have replicated
+// images". Nothing in this system compared two renders.
+//
+// Exact equality on the bytes, deliberately — a similarity score would collide
+// on the header every page of a site shares, and a false positive here DELETES
+// a render we paid for and captured correctly, which is worse than the bug it
+// would be fixing. The buffers are already in hand: every render is downloaded
+// to be sent to the model, so this costs nothing.
+const noteRenderBytes = (seen, buf, label) => {
+  if (!seen || !buf || !buf.length) return { dup: false, same: null };
+  const h = crypto.createHash('sha1').update(buf).digest('hex');
+  if (seen.has(h)) return { dup: true, same: seen.get(h) };
+  seen.set(h, label);
+  return { dup: false, same: null };
+};
+
 const pageFingerprint = (md) => {
   const t = String(md || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   return t.length < 200 ? '' : crypto.createHash('sha1').update(t).digest('hex');
@@ -27151,6 +27619,70 @@ const checkLocalRankStable = async (args) => {
 //                  coverage findings' territory, and the opposite of a problem.
 // Anything unprovable returns found:false and the rung stays silent. "I'd
 // rather send nothing than tell them something's wrong when it isn't."
+// ══ A LIMIT OF OUR READ IS NOT AN ASSERTION IN THE COPY ═════════════════════
+// Extracted so the boot check runs the real decision. Inline it was four lines
+// buried in a 1,900-line handler and the only thing that could have guarded it
+// was a regex over its own source.
+//
+// The rule, and why each half exists:
+//   · A headline or CTA we could not match in the scraped TEXT is suppressed —
+//     we never put words in his mouth we did not read. That half was always
+//     right.
+//   · Whether it is also a RISK depends entirely on the eyes. On John Peters
+//     Roofing the same response that failed to match "CALL NOW: (317) 786-3315"
+//     in the markdown reported CTA=true headline=true from the vision read: the
+//     element is on the page, in an image, exactly as expected. There was no
+//     risk of any kind, and the run printed "1 unverifiable assertion(s) in the
+//     generated copy ... do NOT send without checking". Nothing in the copy
+//     mentioned either element.
+//   · When the eyes did NOT confirm it, we genuinely do not know, and the note
+//     is worth keeping — as a scope note about what we may not claim, never as
+//     an assertion found in the copy.
+// Hero text is an image on a large share of home-services sites, so the false
+// version fired constantly, and a report in which nearly every lead is flagged
+// cannot be used to find the three that are really wrong.
+const quoteRiskFor = (quoteChecks, vision) => {
+  const q = quoteChecks || {};
+  const v = vision || null;
+  const confirms = {
+    heroHeadline: !!(v && v.hasHeadline === true),
+    ctaText: !!(v && v.hasVisibleCTA === true),
+  };
+  const unmatched = [], unconfirmed = [];
+  for (const [field, label] of [['heroHeadline', 'headline'], ['ctaText', 'CTA']]) {
+    if (q[field] !== false) continue;
+    unmatched.push(label);
+    if (!confirms[field]) unconfirmed.push(label);
+  }
+  return {
+    unmatched,
+    unconfirmed,
+    // Never a claim risk. Either a scope note, or nothing at all.
+    readLimit: unconfirmed.length
+      ? `QUOTE UNVERIFIED, NOT ABSENT — their ${unconfirmed.join(' and ')} could not be matched in the page text AND the vision read did not confirm it either, so we do not know whether it is there. Make no absence claim about it on this lead. This is a limit of our read, not something the copy said.`
+      : null,
+  };
+};
+
+// ══ GOOGLE PERMITS A PRACTITIONER A LISTING OF HIS OWN ══════════════════════
+// A doctor, dentist, surgeon or attorney may hold a personal listing at the same
+// address as the practice — that is Google's own published rule for licensed
+// practitioners, not an error somebody made. Telling a plastic surgeon he has a
+// duplicate listing splitting his reviews would be wrong, and wrong at the top
+// of our ICP: health and legal practices are where the ticket sizes are.
+//
+// The pair is unmistakable from the names alone: one carries a practitioner
+// credential the other does not. Only the unambiguous credentials are listed —
+// bare "DO", "OD", "DC", "PA" and "NP" are all ordinary words or legal suffixes
+// and would match businesses that have nothing to do with this, so they appear
+// only in their dotted form. Suppressing a true finding is the safe direction
+// here; asserting a false one at this price point is not.
+const PRACTITIONER_CREDENTIAL = /(^|[\s,.(])(m\.?d|d\.?d\.?s|d\.?m\.?d|d\.?v\.?m|d\.?p\.?m|f\.?a\.?c\.?s|esq|d\.o\.|o\.d\.|d\.c\.|attorney at law|law offices? of)([\s,.)]|$)/i;
+const looksLikePractitionerPair = (a, b) => {
+  const ca = PRACTITIONER_CREDENTIAL.test(String(a || ''));
+  const cb = PRACTITIONER_CREDENTIAL.test(String(b || ''));
+  return ca !== cb;   // one is the practitioner, the other is the practice
+};
 const matchDuplicateListing = (own, results) => {
   const o = own || {};
   if (!o.placeId) return { checked: false, why: 'no place id for their own listing' };
@@ -27166,6 +27698,10 @@ const matchDuplicateListing = (own, results) => {
       : (oPh && normPhone(r.phone) === oPh) ? 'the same phone number' : '';
     if (!proof) continue;
     if (streetOf(r.address) !== oSt) continue;   // second location, not a duplicate
+    if (looksLikePractitionerPair(o.name, r.name)) {
+      return { checked: true, found: false,
+        why: `a second listing exists at the same address ("${String(r.name || '').slice(0, 60)}"), and one of the two names carries a practitioner credential. Google permits a licensed practitioner a listing alongside the practice, so this is NOT a duplicate and no claim may be made about it.` };
+    }
     return {
       checked: true, found: true, matchedBy: proof,
       otherName: String(r.name || ''),
@@ -27181,7 +27717,9 @@ const matchDuplicateListing = (own, results) => {
 // read; this is the fourth, bought only when the lead has a place ID and a
 // provable identity to match against.
 const findDuplicateListing = async ({ companyName, placeId, website, phone, location, placesKey }) => {
-  const pre = matchDuplicateListing({ placeId, website, phone, address: location }, []);
+  // The NAME travels too: the practitioner-listing exemption compares our own
+  // name against the other listing's, and it was never being passed one.
+  const pre = matchDuplicateListing({ name: companyName, placeId, website, phone, address: location }, []);
   if (pre.checked === false) return pre;   // missing identity — do not spend the search
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!companyName || !location) return { checked: false, why: 'no name or address to search' };
@@ -27200,7 +27738,7 @@ const findDuplicateListing = async ({ companyName, placeId, website, phone, loca
     if (!d || d.error || !Array.isArray(d.places)) {
       return { checked: false, why: (d && d.error && d.error.message) || 'Places returned no readable answer' };
     }
-    return matchDuplicateListing({ placeId, website, phone, address: location },
+    return matchDuplicateListing({ name: companyName, placeId, website, phone, address: location },
       d.places.map(p => ({
         id: p.id,
         name: (p.displayName && p.displayName.text) || '',
@@ -27380,12 +27918,31 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     // The line that does the work: businesses ranking ABOVE them on a WEAKER
     // reputation. If this is non-zero, reviews are not the reason they are losing.
     const weakerAbove = above.filter(a => a.reviews < ours.reviews).length;
+    // ══ THE COUNT AND THE NAMES WERE READ OFF DIFFERENT LISTS ══════════
+    // `above` is truncated to three rows below, deliberately: summariseAboveReviews
+    // is documented as speaking about the TOP of that search, and three rows is
+    // what it means. But weakerNames was ALSO built from those three rows, while
+    // weakerAbove is counted over the whole field — so the email said "and 2
+    // others above them have fewer too" on a lead where eight of the ten above
+    // them had fewer. Its own fact-checker caught it: "this understates the
+    // competitive finding by 75%."
+    //
+    // Worse than the digit: when none of the top three happened to be weaker,
+    // weakerNames came back empty and the finding fell to the unnamed fallback —
+    // losing the named competitor on a lead that had seven of them. A named
+    // competitor is roughly double the reply rate of the same sentence without
+    // one, and outranked_by_weaker is one of only two findings with a real reply
+    // behind it.
+    //
+    // So the weaker businesses travel as their own list. Five is plenty: the
+    // sentence names one and counts the rest from the measurement.
+    const weakerRows = above.filter(a => a.reviews < ours.reviews).slice(0, 5);
     // Hand back their coordinates so a SECOND sample can anchor on the same
     // point. Without this the two samples answer slightly different questions
     // and "they disagree" tells us nothing about their actual rank.
     const _loc = places[idx] && places[idx].location;
     return { checked: true, found: true, rank: idx + 1, scanned: places.length,
-             query, city, phrase, ours, above: above.slice(0, 3), weakerAbove,
+             query, city, phrase, ours, above: above.slice(0, 3), weakerAbove, weakerRows,
              bizLat: _loc ? _loc.latitude : null, bizLng: _loc ? _loc.longitude : null };
   } catch (e) {
     return { checked: false, why: `local rank check failed: ${e.message}` };
@@ -30276,9 +30833,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           console.log(`\u2709 EMAIL OPENS ON [${company}]: ${top.band} opener=${top.opener} \u2014 ${top.finding}.`);
           // Name anything that lost the opener because he could fix it himself.
           // Silent demotion is how a scoring change becomes impossible to audit.
-          const _selfFixed = (_harms.byHarm || []).filter(h => (h.selfFix || 0) >= 4 && h.id !== top.id);
+          // ══ IT SAID "SCORED HIGHER" ABOUT FINDINGS THAT SCORED LOWER ═════
+          // This filtered on selfFix alone and then announced the result as
+          // "N finding(s) scored higher on harm". On John Peters Roofing, live
+          // 2026-08-20, it named a harm-64 finding against an opener at harm 76
+          // and said the 64 had scored higher. A demotion log whose sentence is
+          // not true of the thing it names is worse than no log: it is the only
+          // record of why a finding lost, and it was inventing the reason.
+          //
+          // And it named INTERNAL-ONLY rungs. Those are held out of the email by
+          // a stronger and completely different rule — they are review metrics
+          // and never leave the building — which the run has already reported on
+          // its own line. Two explanations for one omission, only one of them
+          // the real one, is how a reader stops trusting both.
+          const _selfFixed = selfFixableDemotions(_harms.byHarm, top);
           if (_selfFixed.length) {
-            console.log(`\u{1F381} SELF-FIXABLE, NOT LEADING [${company}]: ${_selfFixed.length} finding(s) scored higher on harm but he can resolve them without us, so the email does not open there \u2014 ${_selfFixed.slice(0, 2).map(h => `"${String(h.finding).slice(0, 44)}" (harm ${h.harm}, ${h.selfFixWhy})`).join(' | ')}. They stay in the audit and on the call sheet, where agreement is the point.`);
+            console.log(`\u{1F381} SELF-FIXABLE, NOT LEADING [${company}]: ${_selfFixed.length} finding(s) scored higher on harm than the opener (${top.harm}) but he can resolve them without us, so the email does not open there \u2014 ${_selfFixed.slice(0, 2).map(h => `"${String(h.finding).slice(0, 44)}" (harm ${h.harm}, ${h.selfFixWhy})`).join(' | ')}. They stay in the audit and on the call sheet, where agreement is the point.`);
           }
           if (top.forwardable) console.log(`\u26a0 FORWARDABLE [${company}]: he can hand this to whoever runs his site and consider it handled. The email MUST carry the count (${_harms.all.length}) and the accountability question, or the likely outcome is that it gets fixed and we never hear back.`);
           if (_harms.worst && _harms.worst.id !== top.id) {
@@ -30751,6 +31321,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     // If we have content OR screenshot, run the full Brain audit
     let visualAnalysis = null;
+    // ══ ONE NAME WAS HOLDING TWO DIFFERENT MEASUREMENTS ═══════════════════
+    // visualAnalysis is what the EYES saw: a vision model reading the rendered
+    // homepage and answering hasVisibleCTA, hasHeadline, heroIsBlank,
+    // hasVisibleSocialProof, socialProofUncertain, overallConversionReadiness.
+    //
+    // Six hundred lines later the BRAIN's audit was assigned over the top of it
+    // — `visualAnalysis = parsed` — and the brain returns none of those fields.
+    // So every read after that point got undefined, silently, and the reads
+    // were the ones that matter most:
+    //
+    //   · the fact-checker's prompt is handed "headline present = ${'$'}{...}" under
+    //     the label "this is a MEASUREMENT, not a guess". It has been receiving
+    //     the word undefined for all four, on every lead.
+    //   · hasVisibleSocialProof and socialProofUncertain feed the guard whose
+    //     own comment says "we never manufacture a no-social-proof claim from a
+    //     scrape that simply did not capture it" — and both read undefined, so
+    //     the guard could not fire and the flaw was pushed from a field that
+    //     does not exist.
+    //
+    // The brain's two quotable fields (heroHeadline, ctaText) travel under their
+    // own name now. Two measurements, two variables — this file's oldest lesson,
+    // in its purest form.
+    let brainVisual = null;
     let brainAudit = null;
     let brainError = '';
 
@@ -30972,12 +31565,52 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // or a palette source that re-encodes larger than the cap. Every one
           // of them used to take the whole visual channel with it.
           const _haveHome = msgContent.some(m => m && m.type === 'image');
+          // ══ THE TEXT FINGERPRINT CANNOT SEE THE PICTURE ═══════════════════
+          // auditSitePages already drops an interior page whose MARKDOWN is
+          // identical to another page's — a redirect, a soft 404, or a
+          // single-page app that had not routed. That catches the common cases,
+          // and it is blind to the one Vin was actually looking at: two pages
+          // whose text differs by a canonical tag or a breadcrumb and whose
+          // RENDER is the same picture. He said it plainly — "gregory and donna
+          // both have replicated images" — and the honest answer was that
+          // nothing in this system compared two renders.
+          //
+          // The bytes are already in hand: every render is downloaded here to be
+          // sent to the model. Hashing the buffer costs nothing and is exact, so
+          // a false positive is impossible — and a false positive here would
+          // DELETE a page we read correctly, which is worse than the bug.
+          // Compared against the homepage render too, because "four screenshots
+          // of the homepage" is the shape of the complaint.
+          const _seenImg = new Map();
+          for (const m of msgContent) {
+            if (m && m.type === 'image' && m.source && m.source.data) {
+              try { noteRenderBytes(_seenImg, Buffer.from(m.source.data, 'base64'), 'the homepage'); } catch (e) { void e; }
+            }
+          }
+          const _dupShots = [];
+          // Once the image cap is reached there is still a reason to fetch: the
+          // remaining renders are shown on the audit screen even though the model
+          // will not see them, so a duplicate among them still has to be found.
+          // Bounded, so a site with fifty mapped pages cannot turn this into a
+          // download loop.
+          const DUP_CHECK_BEYOND_CAP = 3;
+          let _extraChecked = 0;
           if (!_haveHome && _shots.length) {
             console.log(`\u26a0 NO HOMEPAGE RENDER [${company}]: the homepage produced no usable image, so ${_shots.length} interior render(s) are being sent WITHOUT it. Each is labelled as an interior page and the prompt is told there is no homepage render, so nothing can be mistaken for one. Four paid-for images used to be discarded here.`);
           }
           for (const pg of _ranked) {
-            if (_sent >= MAX_IMAGES || _bytes >= MAX_TOTAL) break;
+            // NOT `break`. The loop used to stop at the image cap, so a render
+            // beyond it was never fetched and never compared — and a duplicate
+            // sitting in that tail still reached the audit screen, which is the
+            // half of this Vin was looking at. Attaching stops at the cap;
+            // COMPARING does not.
+            if (_bytes >= MAX_TOTAL) break;
             if (!pg || !pg.shot) continue;
+            const _pastCap = _sent >= MAX_IMAGES;
+            if (_pastCap) {
+              if (_extraChecked >= DUP_CHECK_BEYOND_CAP) break;
+              _extraChecked++;
+            }
             try {
               const _r = await fetchT(pg.shot, {}, 8000);
               // A signed screenshot URL expires. Without this, a 403 or 404 HTML
@@ -30986,6 +31619,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // base64'd into the audit request labelled image/png.
               if (!_r || !_r.ok) { _skipped.push(`${pg.key} (HTTP ${_r ? _r.status : 'no response'})`); continue; }
               const _b = await _r.buffer();
+              {
+                const _dup = noteRenderBytes(_seenImg, _b, pg.key);
+                if (_dup.dup) { _dupShots.push({ key: pg.key, url: pg.url, same: _dup.same }); continue; }
+              }
               const _d = _png(_b);
               // FAIL CLOSED. `if (_d && oversize)` skipped the ceiling entirely
               // whenever the buffer was not a readable PNG - so the one payload
@@ -31014,10 +31651,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                 _send = _fit.buffer;
                 _rescaled.push(`${pg.key} ${_d.w}x${_d.h} → ${_fit.width}x${_fit.height}`);
               }
+              // Past the cap this render is fetched ONLY so it can be compared;
+              // it is never attached. The model's image budget is unchanged.
+              if (_pastCap) continue;
               msgContent.push({ type: 'text', text: `IMAGE ${_sent + (_haveHome ? 2 : 1)} \u2014 an INTERIOR page: ${pg.key}${pg.url ? ` (${pg.url})` : ''}. This is NOT the homepage. Nothing visible here may be described as the homepage.` });
               msgContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: _send.toString('base64') } });
               _sent++; _bytes += _send.length; _sentKeys.push(pg.key);
             } catch (e) { _skipped.push(`${pg.key} (${(e && e.message) || 'fetch failed'})`); }
+          }
+          if (_dupShots.length) {
+            console.log(`\u26a0 SAME PICTURE TWICE [${company}]: ${_dupShots.length} interior render(s) came back byte-identical to ${_dupShots.map(d => `${d.key} = ${d.same}`).join(', ')}. Their TEXT differed, so the page fingerprint kept them \u2014 this is the same page rendering under two URLs. Dropped from the model's evidence AND from the audit screen, because four copies of one picture is what "it is clearly not taking pics of the other important pages" looks like.`);
+            const _dropped = new Set(_dupShots.map(d => String(d.url)));
+            if (sitePages && Array.isArray(sitePages.pageShots)) {
+              sitePages.pageShots = sitePages.pageShots.filter(x => !_dropped.has(String(x.url)));
+            }
           }
           if (_sent) {
             console.log(`\u{1F441} PAGE RENDERS TO THE BRAIN [${company}]: ${_sent} interior page render(s) sent alongside the homepage — ${_sentKeys.join(', ')}. Already captured and already paid for; forwarding them costs nothing and is the difference between reading a site and looking at one.`);
@@ -31997,7 +32644,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               console.log('Brain JSON truncated — partial extraction used');
             }
           }
-          visualAnalysis = parsed;
+          brainVisual = parsed;
 
           // ═══ DETERMINISTIC SOURCE VERIFICATION ═══════════════════════════
           // The strongest guarantee: any EXACT quote Claude makes (headline, CTA)
@@ -32061,6 +32708,33 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             unverifiedQuotes.push(`CTA "${parsed.ctaText}" not matched in scraped text`);
             parsed.ctaText = null;
           }
+          // ══ VISION ALREADY ANSWERED THE ONLY QUESTION THAT MATTERED ══════
+          // The comment below is right that suppressing the quote is correct and
+          // that "not found" is a sentence about OUR SCRAPE. What it then did was
+          // push a note into _claimRisks — the list whose entries are announced
+          // as "N unverifiable assertion(s) IN THE GENERATED COPY" and which
+          // flags the lead in the session report. Nothing was asserted. The copy
+          // never mentioned the headline or the CTA.
+          //
+          // On John Peters Roofing, live 2026-08-20, the same response that
+          // failed to match "CALL NOW: (317) 786-3315" in the markdown ALSO
+          // reported VISION: CTA=true headline=true. The vision model looked at
+          // the rendered page and saw both. There was no risk of any kind, and
+          // the log said "do NOT send without checking these". Hero text is an
+          // image on a large share of home-services sites, so this fires
+          // constantly — and a report where nearly every lead is flagged is a
+          // report nobody can use to find the three that are really wrong. Same
+          // lesson as the SMTP line: a message that overstates its own severity
+          // costs exactly what one that understates it does.
+          //
+          // So the note survives only where there is genuinely something to be
+          // careful about: the element could not be matched in the text AND the
+          // vision read did not confirm it is on the page. Even then it is a
+          // SCOPE NOTE about what we may not claim, not an assertion found in
+          // the copy, and it is carried in its own list.
+          // ONE FUNCTION, executed at boot. See quoteRiskFor.
+          const _qr = quoteRiskFor(quoteChecks, visualAnalysis);
+          const _unconfirmed = _qr.unconfirmed;
           if (unverifiedQuotes.length) {
             // ── SUPPRESSION IS NOT AN ABSENCE FINDING ────────────────────────
             // Parke Gordon: we suppressed CTA "Call Now: (855) 322-7274" as "not
@@ -32074,11 +32748,19 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // is the exact reversal this system exists to prevent, and the same
             // shape as the electrician who was told he had "no social proof"
             // because a review widget had not finished loading.
-            parsed._quoteUnverifiedNotAbsent = true;
-            // DEFERRED ON PURPOSE: _claimRisks is declared further down, so a push
-            // here is a TDZ crash. Stash it and add it once the array exists.
-            _deferredQuoteRisk = 'QUOTE UNVERIFIED, NOT ABSENT \u2014 a headline or CTA could not be matched in the page text, which usually means it is rendered inside an image. Quote it we cannot; claim it is MISSING we must not. Make no absence claim about their headline or call-to-action on this lead.';
-            console.log(`SOURCE VERIFY: could not match ${unverifiedQuotes.length} quote(s) IN THE TEXT WE SCRAPED \u2014 ${unverifiedQuotes.join('; ')}. This is a limit of our read, NOT evidence the element is missing: hero text is frequently an image. Quote suppressed; no absence claim permitted.`);
+            // Set only when the vision read did NOT settle it, and now actually
+            // READ — it was assigned here and consumed by nothing at all for the
+            // life of the field, which is the computed-but-not-passed class this
+            // file records nineteen instances of.
+            parsed._quoteUnverifiedNotAbsent = _unconfirmed.length > 0;
+            if (_unconfirmed.length) {
+              // DEFERRED ON PURPOSE: _readLimits is declared further down, so a
+              // push here is a TDZ crash. Stash it and add it once the array exists.
+              _deferredQuoteRisk = _qr.readLimit;
+              console.log(`\u2139 READ LIMIT [${company}]: could not match ${unverifiedQuotes.length} quote(s) in the text we scraped \u2014 ${unverifiedQuotes.join('; ')} \u2014 and the vision read did not confirm the ${_unconfirmed.join(' or ')} either. Quote suppressed and NO absence claim is permitted about it. Nothing in the copy asserted it; this is a note about what we may not say.`);
+            } else {
+              console.log(`SOURCE VERIFY: could not match ${unverifiedQuotes.length} quote(s) IN THE TEXT WE SCRAPED \u2014 ${unverifiedQuotes.join('; ')}. The vision read CONFIRMED the element is on the page, so this is a limit of our scrape and nothing else: hero text is frequently an image. Quote suppressed, no claim risk, nothing to review.`);
+            }
           } else {
             console.log('SOURCE VERIFY: all quotes matched page source');
           }
@@ -32110,7 +32792,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             .filter(Boolean).join(' \n ');
           const _lrChecked = !!(localVisibility && localVisibility.checked);
           const _claimRisks = [];
-          if (_deferredQuoteRisk) _claimRisks.push(_deferredQuoteRisk);
+          // A SCOPE NOTE IS NOT A CLAIM RISK. _claimRisks is announced as
+          // assertions found in the generated copy and it flags the lead in the
+          // session report; a note about what we are not allowed to say belongs
+          // in its own list, where it informs without crying wolf.
+          const _readLimits = [];
+          if (_deferredQuoteRisk) _readLimits.push(_deferredQuoteRisk);
           const _flag = (re, why) => { const m = _allProse.match(re); if (m) _claimRisks.push(`${why} — "${m[0].slice(0,60)}"`); };
           // 1. Backend / post-submit behaviour we never observed
           _flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission backend behaviour');
@@ -32440,6 +33127,7 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             console.log(`\u26a0 ENGAGEMENT CHECK [${company}]: ${_m}`);
           }
 
+          if (_readLimits.length) parsed._readLimits = _readLimits;
           if (_claimRisks.length) {
             parsed._claimRisks = _claimRisks;
             console.log(`\u26d4 CLAIM VERIFY [${company}]: ${_claimRisks.length} unverifiable assertion(s) in the generated copy — ${_claimRisks.join(' | ')}. Flagged for review; do NOT send without checking these against what was actually measured.`);
@@ -32954,6 +33642,20 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
               (Array.isArray(publicPainSignals) ? publicPainSignals.join('\n') : ''),
             ].filter(Boolean).join('\n\n');
             const _corpus = jobSnippet ? `${_corpusBase}\n\n${jobSnippet}` : _corpusBase;
+            // ══ NO INVENTED PRICE SURVIVES INTO THE AUDIT ══════════════════
+            // See stripUnmeasuredMoney. Runs on the model's own output only —
+            // everything we assembled is already gated — and against the SAME
+            // corpus the quotes are verified against, so one body of evidence
+            // governs both. A figure that is neither on their pages, nor in the
+            // trade table, nor one of our own prices takes its sentence with it.
+            {
+              const _m = { cut: [], figures: [] };
+              stripUnmeasuredMoneyDeep(parsed, _corpus, _m, 0);
+              if (_m.cut.length) {
+                parsed._moneyRemoved = _m.cut.slice(0, 4);
+                console.log(`\u26d4 INVENTED MONEY [${company}]: removed ${_m.cut.length} sentence(s) carrying ${_m.figures.length} figure(s) that appear nowhere in what we read, are not our own prices, and are not the trade table's job value \u2014 ${_m.figures.slice(0, 4).join(', ')}. First one: "${String(_m.cut[0]).slice(0, 140)}". The email has traced every figure to a measurement for weeks; the audit is what Mike repeats on the call and it had no such rule. A price an owner knows is wrong discredits every measured fact next to it.`);
+              }
+            }
             const _origIn = Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [];
             const _origOk = [];
             for (const _it of _origIn.slice(0, 3)) {
@@ -33733,6 +34435,10 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // checklist can show them. brainAudit is an explicit literal, so without
             // this line _claimRisks would silently never reach the UI.
             _claimRisks: parsed._claimRisks,
+            // What we were not able to READ, as distinct from what the copy
+            // CLAIMED. Carried for the same reason as the line above it: a value
+            // computed here and not named in this literal never reaches anyone.
+            _readLimits: parsed._readLimits,
             positioningRead: parsed.positioningRead || null,
             // == PAID FOR ON EVERY AUDIT AND THROWN AWAY ======================
             // signalReads is requested in the schema with its own ordering
@@ -33883,7 +34589,7 @@ RAW EVIDENCE (what we actually confirmed):
 - THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + gbpHealth.photoCount + ' photos, hours ' + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
-- WHAT THE SCREENSHOT ACTUALLY SHOWED (a vision model READ their rendered homepage image \u2014 this is a MEASUREMENT, not a guess): ${visualAnalysis ? `MEASURED. Above the fold we saw: headline present = ${visualAnalysis.hasHeadline}, visible call-to-action present = ${visualAnalysis.hasVisibleCTA}, hero area blank = ${visualAnalysis.heroIsBlank}, overall conversion readiness = ${visualAnalysis.overallConversionReadiness}.${visualAnalysis.heroHeadline ? ` The headline read: "${visualAnalysis.heroHeadline}".` : ''}${visualAnalysis.ctaText ? ` The CTA read: "${visualAnalysis.ctaText}".` : ''}
+- WHAT THE SCREENSHOT ACTUALLY SHOWED (a vision model READ their rendered homepage image \u2014 this is a MEASUREMENT, not a guess): ${visualAnalysis ? `MEASURED. Above the fold we saw: headline present = ${visualAnalysis.hasHeadline}, visible call-to-action present = ${visualAnalysis.hasVisibleCTA}, hero area blank = ${visualAnalysis.heroIsBlank}, overall conversion readiness = ${visualAnalysis.overallConversionReadiness}.${brainVisual && brainVisual.heroHeadline ? ` The headline read: "${brainVisual.heroHeadline}".` : ''}${brainVisual && brainVisual.ctaText ? ` The CTA read: "${brainVisual.ctaText}".` : ''}
   \u26a0 A live critique flagged "the pitch implies specific knowledge of homepage visual layout \u2014 this comes from a screenshot read, which we cannot independently verify" and told the audit to strip it. That was WRONG and it cost a real finding. We rendered the page, captured it, and a vision model read the image \u2014 describing what is visibly on that page is reporting a measurement. Statements about what appears above the fold, whether there is a headline, and whether there is a visible call-to-action are ALLOWED and must NOT be flagged as unverifiable.
   \u26a0 THE LIMIT, WHICH STILL HOLDS: the screenshot shows the page ABOVE THE FOLD at one viewport at one moment. It cannot support claims about what loads further down, what a widget renders a few seconds later, what a mobile visitor sees, or what Google indexed. Flag those.` : 'NOT MEASURED \u2014 no screenshot was read on this lead. Any claim about what the page looks like, what is above the fold, or what a visitor sees is unsupported here and SHOULD be flagged.'}
 - REAL-WORLD SPEED (Google CrUX field data, mobile): ${realSpeed.checked ? (realSpeed.hasFieldData ? (realSpeed.isProblem ? 'MEASURED and IS a problem: ' + realSpeed.findings.join('; ') + '. Claims about slow loading or layout shift on mobile are CORRECT here and must not be flagged.' : 'MEASURED and is FINE (' + realSpeed.overall + '). Any claim that their site is slow would be FALSE \u2014 flag it.') : 'NO FIELD DATA \u2014 too few visitors for Google to report. Any speed claim is unsupported; flag it.') : 'NOT MEASURED \u2014 flag any claim about speed, load time or mobile performance.'}
@@ -34269,32 +34975,46 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // physically cannot measure. Not "underperforming" — literally blind.
 
 
-    const hasWeakHeadline = visualAnalysis ? visualAnalysis.headlineQuality === 'generic' : /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
+    // headlineQuality has not been a field on anything for months (its own
+    // removal note is above the truncated-JSON extractor). The eyes DO answer
+    // whether a value-proposition headline is visible at all, which is the
+    // measurement this line was reaching for.
+    const hasWeakHeadline = (visualAnalysis && typeof visualAnalysis.hasHeadline === 'boolean')
+      ? visualAnalysis.hasHeadline === false
+      : /^welcome to|we are a|we provide|we help businesses|we offer/i.test(content.slice(0,300));
     // ABSENCE IS NOT EVIDENCE OF ABSENCE. Reviews are the single most common thing a
     // scrape misses, because they are almost always loaded by a third-party widget
     // AFTER the page renders. We treat social proof as PRESENT unless we have a
     // positive, trustworthy signal that it is missing — and we never manufacture a
     // "no social proof" claim from a scrape that simply did not capture it.
-    const _visSaysProof = visualAnalysis?.hasSocialProof ?? visualAnalysis?.hasVisibleSocialProof;
+    // hasSocialProof is not a field the vision model returns; hasVisibleSocialProof is.
+    const _visSaysProof = visualAnalysis?.hasVisibleSocialProof === true;
     const _visUncertain = visualAnalysis?.socialProofUncertain === true;
     const _textHasProof = /testimonial|review|client said|case study|trusted by|\d+\s*(google|yelp)?\s*reviews?|based on \d+ reviews/i.test(content);
     const hasTestimonials = _visSaysProof || _textHasProof || _visUncertain;
     const hasPricing = /pricing|plans|per month|subscription|\$/i.test(content);
-    const hasVideo = visualAnalysis?.hasVideo ?? /video|youtube|vimeo|wistia/i.test(content);
+    // The eyes are not asked about video, so there is nothing to prefer here.
+    const hasVideo = /video|youtube|vimeo|wistia/i.test(content);
     const hasAgency = /powered by|designed by|marketing by/i.test(content);
-    const designQuality = visualAnalysis?.designQuality || 'unknown';
-    const conversionRating = visualAnalysis?.overallConversionRating || 'unknown';
+    // Both of these read fields that do not exist and have displayed 'unknown'
+    // on every lead. The eyes answer both questions under their real names.
+    const designQuality = visualAnalysis?.designObservation || (visualAnalysis?.looksDated === true ? 'looks dated' : 'unknown');
+    const conversionRating = visualAnalysis?.overallConversionReadiness || 'unknown';
 
     // Dunford positioning score
     const positioningScore = (() => {
       let s = 0;
       if (visualAnalysis) {
-        if (visualAnalysis.headlineQuality === 'specific') s+=3;
-        if (visualAnalysis.hasSocialProof) s+=2;
-        if (visualAnalysis.trustSignals?.length > 2) s+=2;
-        if (!visualAnalysis.aboveFoldClutter) s+=1;
-        if (visualAnalysis.hasVideo) s+=1;
-        if (visualAnalysis.designQuality === 'professional') s+=1;
+        // Every term here named a field the vision model stopped returning, so
+        // this branch scored the same handful of points on every lead that had a
+        // screenshot — a scorer with no input. Same questions, asked in the
+        // vocabulary the eyes actually answer in.
+        if (visualAnalysis.hasHeadline === true) s+=3;
+        if (visualAnalysis.hasVisibleSocialProof === true) s+=2;
+        if (visualAnalysis.hasVisibleCTA === true) s+=2;
+        if (visualAnalysis.heroIsBlank === false) s+=1;
+        if (hasVideo) s+=1;
+        if (visualAnalysis.looksDated === false) s+=1;
       } else {
         if (!hasWeakHeadline) s+=2;
         if (content.slice(0,1000).match(/for\s+\w+\s+(who|that|with)/i)) s+=2;
@@ -34345,12 +35065,12 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
       },
       CONVERSION: {
-        hasCTA: hasCTA ? `CTA present above fold${visualAnalysis?.ctaText ? ` — "${visualAnalysis.ctaText}"` : ''}` : 'No clear CTA detected above fold',
+        hasCTA: hasCTA ? `CTA present above fold${brainVisual?.ctaText ? ` — "${brainVisual.ctaText}"` : (visualAnalysis?.ctaObserved && visualAnalysis.ctaObserved !== 'none visible' ? ` — "${visualAnalysis.ctaObserved}"` : '')}` : 'No clear CTA detected above fold',
         headline: hasWeakHeadline
-          ? `Generic headline${visualAnalysis?.heroHeadline ? ` — "${visualAnalysis.heroHeadline}"` : ''}`
-          : `Specific headline${visualAnalysis?.heroHeadline ? ` — "${visualAnalysis.heroHeadline}"` : ''}`,
+          ? `Generic headline${brainVisual?.heroHeadline ? ` — "${brainVisual.heroHeadline}"` : ''}`
+          : `Specific headline${brainVisual?.heroHeadline ? ` — "${brainVisual.heroHeadline}"` : ''}`,
         socialProof: hasTestimonials
-          ? `Social proof present${visualAnalysis?.socialProofType ? ` (${visualAnalysis.socialProofType})` : ''}`
+          ? `Social proof present${visualAnalysis?.socialProofUncertain === true ? ' (a review widget was still loading when we looked, so this is not confirmed absent either way)' : ''}`
           : 'No social proof detected',
         pricing: hasPricing ? 'Pricing visible' : 'No pricing shown',
         mobileScore: pageSpeed.mobileScore
@@ -34360,7 +35080,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         positioningScore: `Dunford positioning: ${positioningScore}/10`,
         designQuality: visualAnalysis ? `Design: ${designQuality}` : '',
         conversionRating: visualAnalysis ? `Overall conversion: ${conversionRating}` : '',
-        biggestVisualIssue: visualAnalysis?.biggestVisualIssue || '',
+        // biggestVisualIssue was never a field on anything. designObservation is
+        // the one factual sentence the eyes are asked for.
+        biggestVisualIssue: visualAnalysis?.designObservation || '',
         visuallyAnalyzed: !!visualAnalysis,
       },
       AUTHORITY: {
@@ -34438,13 +35160,21 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     const flaws = [];
 
     // HIGH CONFIDENCE — visual or direct confirmation
-    if (!hasCTA && visualAnalysis && !visualAnalysis.hasCTAAboveFold) flaws.push('no_cta');
+    // hasCTAAboveFold is not a field the eyes return, so `!undefined` was always
+    // true and this condition reduced to `!hasCTA && visualAnalysis` — the guard
+    // read as a second opinion and was not one.
+    if (!hasCTA && visualAnalysis && visualAnalysis.hasVisibleCTA === false) flaws.push('no_cta');
     else if (!hasCTA && !visualAnalysis && content.length > 500) flaws.push('no_cta'); // fallback if no screenshot
 
-    if (hasWeakHeadline && visualAnalysis?.headlineQuality === 'generic') flaws.push('weak_hero');
+    if (hasWeakHeadline && visualAnalysis?.hasHeadline === false) flaws.push('weak_hero');
     else if (hasWeakHeadline && !visualAnalysis) flaws.push('weak_hero');
 
-    if (!hasTestimonials && visualAnalysis && !visualAnalysis.hasSocialProof) flaws.push('no_social_proof');
+    // The comment forty lines above says it plainly: "we never manufacture a
+    // no-social-proof claim from a scrape that simply did not capture it".
+    // hasSocialProof does not exist, so `!undefined` was true on every lead and
+    // the claim was manufactured exactly as forbidden. An uncertain read — a
+    // review widget still loading — must never produce this flaw either.
+    if (!hasTestimonials && visualAnalysis && visualAnalysis.hasVisibleSocialProof === false && visualAnalysis.socialProofUncertain !== true) flaws.push('no_social_proof');
     else if (!hasTestimonials && !visualAnalysis && content.length > 500) flaws.push('no_social_proof');
 
     // MEDIUM CONFIDENCE — BuiltWith confirmed absence (only flag if content is rich enough to be reliable)
@@ -34867,6 +35597,10 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     } else {
       console.log(`FIRECRAWL SPEND [${company}]: ~${FC_CREDITS_SPENT - _fcAtStart.spent} credits (no per-request ledger — figure may include concurrent leads)`);
     }
+    // ── WHERE THE SECONDS WENT, PER LEAD ─────────────────────────────────
+    // See NET_LEDGER. Printed next to the credits because the two answer the
+    // same question from opposite sides: what a lead COST and what it TOOK.
+    { const _t = netReport(); if (_t) console.log(`\u23f1 TIME [${company}]: ${_t}`); }
     { const _sp = placesSpendLine(company); if (_sp) console.log(_sp); }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
@@ -35092,7 +35826,8 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 // look like a regression when it had actually halved the bill.
 const runResearch = (req, res) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
-  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => _runResearchInner(req, res)));
+  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 },
+    () => NET_LEDGER.run({ by: new Map(), gateWaitMs: 0 }, () => _runResearchInner(req, res))));
 
 app.post('/api/research', runResearch);
 
@@ -35187,6 +35922,33 @@ const _sweepJobs = () => {
   }
 };
 
+// ══ ONE NUMBER THAT WAS TWO ═════════════════════════════════════════════════
+// "JOB ... done in 589.1s" printed finishedAt - startedAt, which is queue time
+// PLUS work time, and called the sum "done in". The kill clock measures WORK
+// (startedWorkAt), the client's poller measures WORK, and this line — the only
+// one anybody actually reads — measured neither.
+//
+// On the five-lead run of 2026-08-20, through a three-wide queue, it reported
+// the queue as though it were the audit. That is how "our research takes ten
+// minutes" gets believed, and it is the same defect this file records twice
+// already: the SMTP line that overstated its own severity, and the Supabase
+// line that named the one thing that was fine. A number that conflates two
+// things reads as a measurement of one of them.
+//
+// Pure, and taken out of the response stand-in so a boot check can run it.
+const jobDurationLine = (job, code) => {
+  const j = job || {};
+  const totalMs = Math.max(0, Number(j.finishedAt) - Number(j.startedAt) || 0);
+  const workMs = Number.isFinite(Number(j.startedWorkAt)) && j.startedWorkAt
+    ? Math.max(0, Number(j.finishedAt) - Number(j.startedWorkAt))
+    : totalMs;
+  const queueMs = Math.max(0, totalMs - workMs);
+  const s = (ms) => (ms / 1000).toFixed(1);
+  return `JOB ${j.id} [${j.company}]: ${j.status} in ${s(workMs)}s of WORK`
+    + (queueMs >= 1000 ? ` after ${s(queueMs)}s waiting for a slot (${s(totalMs)}s wall clock)` : ` (${s(totalMs)}s wall clock)`)
+    + ` (HTTP ${code}). The client gives up on ten minutes of WORK, not on the wall clock, so the first figure is the one that matters for a batch.`;
+};
+
 // Minimal Express-response stand-in. runResearch calls res.json(...) and
 // res.status(n).json(...) and nothing else, so this captures the outcome without
 // requiring a single change inside those 1,886 lines.
@@ -35217,8 +35979,16 @@ const _captureRes = (job) => {
         job.status = 'done';
         job.result = payload;
       }
-      const secs = ((job.finishedAt - job.startedAt) / 1000).toFixed(1);
-      console.log(`JOB ${job.id} [${job.company}]: ${job.status} in ${secs}s (HTTP ${code})`);
+      // ══ ONE NUMBER THAT WAS TWO ═══════════════════════════════════════
+      // This printed finishedAt - startedAt, which is queue time PLUS work
+      // time, and called it "done in 589.1s". The kill clock measures WORK
+      // (startedWorkAt), the client's poller measures WORK, and this line —
+      // the only one anybody reads — measured neither. On a five-lead run
+      // through a three-wide queue it reported the queue as though it were
+      // the audit, which is how "our research takes ten minutes" gets
+      // believed. Same defect as the SMTP line and the Supabase line already
+      // recorded in this file: a message that misattributes its own cause.
+      console.log(jobDurationLine(job, code));
       return api;
     },
   };
@@ -42320,6 +43090,524 @@ app.listen(PORT, () => {
     console.log(`⛔ DUPLICATE PAGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ THE COUNT AND THE NAMES WERE READ OFF DIFFERENT LISTS ═════════════════
+  // outranked_by_weaker is one of only two findings in this system with a real
+  // reply behind it. Live, 2026-08-20, its email sentence said "and 2 others
+  // above them have fewer too" on a lead where the measurement was eight — its
+  // own fact-checker caught it and called it a 75% understatement.
+  //
+  // The cause: weakerAbove is counted over the whole field, and weakerNames was
+  // built from `above`, which is deliberately truncated to three rows for a
+  // different consumer. Reading a display list as if it were the measurement.
+  //
+  // The second half is worse than the digit: when none of those three rows
+  // happened to be weaker, the named form was unavailable and the finding fell
+  // back to the unnamed sentence — on a lead holding seven qualifying names. A
+  // named competitor is roughly double the reply rate of the same body without
+  // one.
+  try {
+    const _fails = [];
+    // Eleven businesses above them; eight of the eleven have fewer reviews than
+    // their 176. The three-row `above` slice holds only the top of the search,
+    // and here NONE of those three is weaker — which is exactly the case that
+    // used to lose the name entirely.
+    const _above = [
+      { name: 'Big Roofing Co', reviews: 900 },
+      { name: 'Second Big', reviews: 800 },
+      { name: 'Third Big', reviews: 700 },
+    ];
+    const _weakerRows = [
+      { name: 'Hilltop Roofing', reviews: 41 },
+      { name: 'Cedar Ridge Exteriors', reviews: 58 },
+      { name: 'Nine Mile Roofing', reviews: 60 },
+    ];
+    const _m = {
+      rankChecked: true, rankFound: true, rankQuery: 'roofing contractor in Indianapolis, IN',
+      ourReviews: 176, weakerAbove: 8,
+      weakerNames: _weakerRows.map(r => ({ name: r.name, reviews: r.reviews })),
+    };
+    const _rung = HARM_LADDER.find(r => r.id === 'outranked_by_weaker');
+    if (!_rung) _fails.push('outranked_by_weaker is not in the ladder any more, so nothing here is being checked');
+    else {
+      const _said = String(_rung.say(_m));
+      if (!/Hilltop Roofing/.test(_said)) _fails.push(`the named competitor is missing from the sentence — "${_said.slice(0, 90)}"`);
+      if (!/\b7 others\b/.test(_said)) {
+        _fails.push(`the sentence counts from the LIST, not from the measurement — weakerAbove is 8 so it must say 7 others, and it said "${_said.slice(0, 120)}"`);
+      }
+      if (/\b2 others\b/.test(_said)) _fails.push('the sentence still reports names.length - 1, which is the truncation bug itself');
+      // And it must never state a number SMALLER than the names we hold, which
+      // is what a stale cached measurement could otherwise produce.
+      const _low = _rung.say({ ..._m, weakerAbove: 2 });
+      if (/\b1 other\b/.test(_low)) _fails.push('a measurement smaller than the name list won over the list — the sentence must never claim fewer than the businesses it is holding');
+      // The unnamed fallback must survive: no names, no comparison, no count.
+      const _bare = _rung.say({ ..._m, weakerNames: null });
+      if (/reviews/i.test(_bare)) _fails.push(`the unnamed fallback reintroduced review counts — "${_bare}" — which asserts a theory of local search that is false`);
+    }
+    // AND THE MEASUREMENT MUST TRAVEL. The first version of this assertion read
+    // the source for the weakerRows line, which is the weakest possible form —
+    // this file records three separate occasions where a source needle passed on
+    // a build that had lost the thing it guards. resolveMeasurements is a pure
+    // function, so run it: hand it a rank result whose top three are ALL
+    // stronger, which is the case that used to lose the name entirely, and
+    // require a name to come out the far side.
+    {
+      const _lr = {
+        checked: true, found: true, rank: 12, scanned: 20,
+        query: 'roofing contractor in Indianapolis, IN',
+        ours: { name: 'John Peters Roofing', reviews: 176, rating: 4.8 },
+        above: _above,                 // the three-row slice: none of them weaker
+        weakerRows: _weakerRows,       // the businesses that actually qualify
+        weakerAbove: 8,
+      };
+      const _res = resolveMeasurements({ localRank: _lr });
+      const _names = (_res && _res.weakerNames) || [];
+      if (!_names.length) {
+        _fails.push('resolveMeasurements produced no competitor name on a lead holding eight of them, because it is filtering the three-row top-of-search slice again — this is the half that loses the named-competitor sentence entirely');
+      } else if (_names[0].name !== 'Hilltop Roofing') {
+        _fails.push(`the named competitor came back as "${_names[0].name}" rather than one of the businesses that actually has fewer reviews`);
+      }
+      if (Number(_res && _res.weakerAbove) !== 8) _fails.push('weakerAbove no longer reaches the ladder, so the count has nothing to read');
+    }
+    if (_fails.length) {
+      console.log(`⛔ COMPETITOR COUNT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ COMPETITOR COUNT CHECK: the strongest finding in the system names a competitor from the businesses that actually qualify — not from a three-row slice kept for a different consumer — and counts the rest from weakerAbove. Eight measured reads as "7 others", where it used to read "2 others" because the list was capped at three. It never claims fewer than the names it holds, and with no names at all it states the position and stops.`);
+    }
+  } catch (e) {
+    console.log(`⛔ COMPETITOR COUNT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A CHAIN IS MEASURABLE FROM THE RUN THAT FOUND IT ══════════════════════
+  // Vin: "ive ran an audit on ram jack like 6 times it always pops up in the
+  // find section". Ram Jack is a national foundation-repair franchise and it is
+  // not in GP_FRANCHISE, which is a hand-kept list of brands somebody
+  // remembered. Adding one name is the band-aid; the list is the bug.
+  //
+  // BOTH halves are asserted, because a filter loosened until it catches
+  // nothing is the more expensive failure — the same discipline as ICP FILTER
+  // CHECK, which was written after a name pattern refused a dermatologist.
+  try {
+    const _fails = [];
+    const _mk = (name, website, city) => ({ name, website, marketsSeen: [city] });
+    // A franchise: different outlet names, one franchisor website, five metros.
+    const _chain = [
+      _mk('Ram Jack Durham', 'https://www.ramjackusa.com/durham', 'Raleigh NC'),
+      _mk('Ram Jack of the Carolinas', 'https://ramjackusa.com/carolinas', 'Charlotte NC'),
+      _mk('Ram Jack Foundation Solutions', 'https://www.ramjackusa.com/tn', 'Nashville TN'),
+      _mk('Ram Jack Texas', 'https://ramjackusa.com/tx', 'Dallas TX'),
+    ];
+    // A franchise whose outlets carry their OWN domains — caught on the brand.
+    const _brandOnly = [
+      _mk('Bearcat Plumbing Phoenix', 'https://bearcatphx.com', 'Phoenix AZ'),
+      _mk('Bearcat Plumbing Denver', 'https://bearcatdenver.com', 'Denver CO'),
+      _mk('Bearcat Plumbing Tampa', 'https://bearcattampa.com', 'Tampa FL'),
+    ];
+    // MUST SURVIVE. Three unrelated businesses whose names open on the same two
+    // generic words, in three metros. This is the false positive the generic
+    // stoplist exists for.
+    const _generic = [
+      _mk('All American Plumbing', 'https://allamericanplumbingaz.com', 'Phoenix AZ'),
+      _mk('All American Roofing', 'https://aaroofingtx.com', 'Dallas TX'),
+      _mk('All American Siding', 'https://allamericansidingfl.com', 'Tampa FL'),
+    ];
+    // MUST SURVIVE. A real two-market operator: Charlotte and Raleigh are 140
+    // miles apart and this is a GOOD lead — the coverage-gap finding is built
+    // on exactly this shape.
+    const _twoMarket = [
+      _mk('Tuck and Howell Plumbing', 'https://tuckhowell.com', 'Charlotte NC'),
+      _mk('Tuck and Howell Plumbing Raleigh', 'https://tuckhowell.com', 'Raleigh NC'),
+    ];
+    // MUST SURVIVE. One business found by three different searches in ONE metro.
+    const _oneBiz = [
+      _mk('John Peters Roofing', 'https://johnpetersroofing.com', 'Indianapolis IN'),
+      _mk('John Peters Roofing', 'https://johnpetersroofing.com', 'Indianapolis IN'),
+      _mk('John Peters Roofing', 'https://johnpetersroofing.com', 'Indianapolis IN'),
+    ];
+    const _all = [..._chain, ..._brandOnly, ..._generic, ..._twoMarket, ..._oneBiz];
+    const _det = detectChainOutlets(_all, 3);
+    const _caught = _all.filter(l => _det.reasonFor(l));
+    const _mustCatch = [..._chain, ..._brandOnly];
+    const _mustKeep = [..._generic, ..._twoMarket, ..._oneBiz];
+    const _missed = _mustCatch.filter(l => !_det.reasonFor(l)).map(l => l.name);
+    const _wrong = _mustKeep.filter(l => _det.reasonFor(l)).map(l => `${l.name} (${_det.reasonFor(l)})`);
+    if (_missed.length) _fails.push(`${_missed.length} chain outlet(s) survived: ${_missed.join(', ')}`);
+    if (_wrong.length) _fails.push(`${_wrong.length} ordinary business(es) were refused as chains: ${_wrong.join(' | ')} — a filter that catches these is worse than no filter`);
+    if (_caught.length && !/ramjackusa\.com/.test(_det.reasonFor(_chain[0]))) {
+      _fails.push('the shared-website reason does not name the host, so a log line about it says nothing checkable');
+    }
+    // A generic key must produce no key at all rather than a weak one.
+    if (chainBrandKey('All American Plumbing')) _fails.push('"all american" is being used as a brand key — every word in it is generic and it identifies nothing');
+    if (chainBrandKey('Ram Jack Durham') !== 'ram jack') _fails.push(`the brand key for "Ram Jack Durham" is "${chainBrandKey('Ram Jack Durham')}", not "ram jack"`);
+    // Two metros must never be enough: see GP_CHAIN_MIN_METROS.
+    const _two = detectChainOutlets(_chain.slice(0, 2), 3);
+    if (_two.reasonFor(_chain[0])) _fails.push('two metros was enough to call something a chain — Charlotte to Raleigh is 140 miles and a real operator covers both');
+    if (_fails.length) {
+      console.log(`⛔ CHAIN OUTLET CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ CHAIN OUTLET CHECK: a brand trading in three of our twenty metros is caught as a chain from the run's own results — by its franchisor's website when the outlets share one, and by its brand when they do not — with no list for anybody to keep up to date. Three unrelated "All American" businesses, a genuine two-market operator and one business found three times all survive, because a filter loosened until it catches nothing is the more expensive failure.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CHAIN OUTLET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ AN INVENTED PRICE IS A FABRICATION WHEREVER IT SITS ═══════════════════
+  // John Peters Roofing, live: the audit asserted "a customer cannot tell what
+  // is different between a $5k gutter job and a $50k roof replacement". Its own
+  // fact-checker caught it and the sentence shipped anyway, because flagging and
+  // removing are different things. Every figure in an EMAIL has traced to a
+  // measurement for weeks; the AUDIT — what Mike reads before the call and
+  // repeats on it — was ungoverned.
+  try {
+    const _fails = [];
+    const _corpus = 'Our tune-up is $189 and a full system replacement starts at $12,400. We also list a $95 diagnostic fee.';
+    const _invented = stripUnmeasuredMoney(
+      'They rank well and have the reviews. A customer cannot tell the difference between a $5k gutter job and a $50k roof replacement. Their booking path is phone only.',
+      _corpus);
+    if (/\$5k|\$50k/.test(_invented.text)) _fails.push(`an invented figure survived — "${_invented.text.slice(0, 90)}"`);
+    if (!/booking path is phone only/.test(_invented.text)) _fails.push('the sentences around the invented one were removed too — only the sentence carrying the figure may go');
+    if (!/They rank well/.test(_invented.text)) _fails.push('the sentence before the invented one was removed');
+    if (_invented.figures.length !== 2) _fails.push(`reported ${_invented.figures.length} invented figure(s), expected 2`);
+    // THEIR OWN PUBLISHED PRICE MUST SURVIVE. This is the whole point of having
+    // a corpus: a figure printed on their pricing page is a fact about them.
+    const _theirs = stripUnmeasuredMoney('Their tune-up is listed at $189 on the services page.', _corpus);
+    if (!/\$189/.test(_theirs.text)) _fails.push('a price printed on their own page was removed — the corpus is what makes a figure legitimate');
+    const _comma = stripUnmeasuredMoney('A replacement starts at $12,400 according to their own page.', _corpus);
+    if (!/12,400/.test(_comma.text)) _fails.push('a figure written with a comma failed to match the same figure in the corpus');
+    // THE TRADE TABLE MUST SURVIVE. CLAUDE.md permits exactly this: state the
+    // value of ONE job in their trade and let him multiply.
+    const _trade = stripUnmeasuredMoney('A kitchen or bathroom remodel runs $15k-$80k in this market.', '');
+    if (!/\$15k/.test(_trade.text)) _fails.push('a figure from TRADE_JOB_VALUE was removed — that table is the permitted money move and it is declared in code');
+    // HALF A RANGE IS A DIFFERENT CLAIM. This is the one the first version of
+    // this gate got wrong: it licensed every endpoint of every trade range as a
+    // free-standing figure, which is exactly how "$5k gutter job" survived.
+    const _half = stripUnmeasuredMoney('They quote about $15k for that.', '');
+    if (/\$15k/.test(_half.text)) _fails.push('one end of a trade range was permitted on its own — the table licenses the range it declares, not its parts, and this is how an invented job value gets through');
+    // OUR OWN PRICES MUST SURVIVE WHERE THEY ARE OURS.
+    const _ours = stripUnmeasuredMoney('A rebuild at $35k floor is the right first step.', '');
+    if (!/\$35k/.test(_ours.text)) _fails.push('one of our own prices was removed from a sentence about our own work');
+    // ...AND NOT WHERE THEY ARE NOT. $50k is our rebuild floor and it is also a
+    // plausible invented roof job; only the sentence can tell them apart.
+    const _theirJob = stripUnmeasuredMoney('A $50k roof replacement is a different sale for them.', '');
+    if (/\$50k/.test(_theirJob.text)) _fails.push('one of OUR prices was allowed to stand in as a figure about THEIR jobs — the token is the same and the claim is not');
+    // A one-digit figure must never be waved through by finding its digit
+    // somewhere in a long corpus.
+    const _loose = stripUnmeasuredMoney('That is a $7 problem.', 'we have 7 trucks and 7 crews and 77 employees');
+    if (/\$7\b/.test(_loose.text)) _fails.push('"$7" was permitted because a 7 appears somewhere in the corpus — digits alone are not a price');
+    // And the deep walk must reach a nested field and leave our own fields alone.
+    const _obj = { pitchAngle: 'Good reputation. A $5k gutter job proves nothing.', candidateFindings: [{ finding: 'They quote a $50k roof.' }], _claimRisks: ['a $99 note we wrote ourselves'] };
+    const _out = { cut: [], figures: [] };
+    stripUnmeasuredMoneyDeep(_obj, _corpus, _out, 0);
+    if (/\$5k/.test(_obj.pitchAngle)) _fails.push('the deep walk missed a top-level prose field');
+    if (/\$50k/.test(_obj.candidateFindings[0].finding)) _fails.push('the deep walk missed a nested finding');
+    if (!/\$99/.test(_obj._claimRisks[0])) _fails.push('the deep walk rewrote one of OUR fields — underscore-prefixed fields are ours and are already gated');
+    if (_fails.length) {
+      console.log(`⛔ AUDIT MONEY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ AUDIT MONEY CHECK: a dollar figure in the audit survives only if it is printed on their own pages, is the trade table's job value, or is one of our prices. An invented "$5k gutter job / $50k roof replacement" takes its sentence with it and leaves the sentences around it standing; a digit appearing loose in the corpus does not launder a price. The email has had this rule for weeks and the audit is what Mike repeats on the call.`);
+    }
+  } catch (e) {
+    console.log(`⛔ AUDIT MONEY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A LIMIT OF OUR READ IS NOT AN ASSERTION IN THE COPY ═══════════════════
+  // Live 2026-08-20: the same response that failed to match the CTA text in the
+  // markdown reported CTA=true from the vision read. The run printed "1
+  // unverifiable assertion(s) in the generated copy ... do NOT send without
+  // checking" about copy that never mentioned the CTA, and flagged the lead in
+  // the session report. Hero text is an image on a large share of
+  // home-services sites, so this fired constantly — and a report where nearly
+  // every lead is flagged cannot be used to find the three that are wrong.
+  try {
+    const _fails = [];
+    const _sawBoth = { hasHeadline: true, hasVisibleCTA: true };
+    const _sawNeither = { hasHeadline: false, hasVisibleCTA: false };
+    const _bothUnmatched = { heroHeadline: false, ctaText: false };
+    const _confirmed = quoteRiskFor(_bothUnmatched, _sawBoth);
+    if (_confirmed.readLimit) _fails.push('a quote the EYES confirmed is on the page still produced a note — there is nothing to be careful about there, and this is the false alarm that fires on every image hero');
+    if (_confirmed.unmatched.length !== 2) _fails.push('the quotes were not recorded as unmatched, so the suppression that keeps us from quoting them would not happen');
+    const _unknown = quoteRiskFor(_bothUnmatched, _sawNeither);
+    if (!_unknown.readLimit) _fails.push('a quote neither matched in the text NOR confirmed by the eyes produced no note — that is the case where an absence claim really would be unsafe');
+    if (/unverifiable assertion/i.test(String(_unknown.readLimit))) _fails.push('the note still calls itself an assertion in the copy');
+    const _noVision = quoteRiskFor(_bothUnmatched, null);
+    if (!_noVision.readLimit) _fails.push('with no vision read at all we know nothing, and that must produce the note');
+    const _clean = quoteRiskFor({ heroHeadline: true, ctaText: true }, _sawNeither);
+    if (_clean.readLimit || _clean.unmatched.length) _fails.push('quotes that matched the page text produced a note anyway');
+    const _one = quoteRiskFor({ heroHeadline: false, ctaText: true }, { hasHeadline: false, hasVisibleCTA: true });
+    if (!/headline/.test(String(_one.readLimit)) || /CTA/.test(String(_one.readLimit))) {
+      _fails.push(`the note names the wrong element — "${String(_one.readLimit).slice(0, 80)}"`);
+    }
+    // And the risk must be carried in its OWN list. _claimRisks is announced as
+    // assertions found in the copy and it flags the session report.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource();
+    if (!_src.includes(_needle('if (_deferredQuoteRisk) ', '_readLimits.push(_deferredQuoteRisk);'))) {
+      _fails.push('the scope note is back in _claimRisks, where it is announced as an unverifiable assertion in the generated copy and flags the lead in the session report');
+    }
+    if (_fails.length) {
+      console.log(`⛔ READ LIMIT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ READ LIMIT CHECK: a headline or CTA we could not match in the scraped text is always suppressed, and it only becomes something to review when the vision read did not confirm it either. When the eyes saw it, there is no risk and nothing is reported — that is the routine image-hero case that used to flag almost every lead as carrying an unverifiable assertion in copy that never mentioned it.`);
+    }
+  } catch (e) {
+    console.log(`⛔ READ LIMIT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ ONE NAME WAS HOLDING TWO DIFFERENT MEASUREMENTS ═══════════════════════
+  // visualAnalysis is what the EYES saw. Six hundred lines after it was filled,
+  // the BRAIN's audit was assigned over the top of it — and the brain returns
+  // none of the vision fields. So the fact-checker's prompt was handed "headline
+  // present = undefined" under the label "this is a MEASUREMENT, not a guess",
+  // and the guard whose own comment says "we never manufacture a
+  // no-social-proof claim from a scrape that simply did not capture it" read a
+  // field that does not exist, so `!undefined` was true and the claim was
+  // manufactured exactly as forbidden.
+  //
+  // A DECLARATION, not a spot check. Every visualAnalysis.<field> read anywhere
+  // in this file must be a field visionAuditPage actually returns — which is the
+  // only form of this check that survives the next field being renamed. The
+  // vocabulary is lifted from the vision PROMPT, so the prompt and the readers
+  // cannot drift apart in silence.
+  try {
+    const _fails = [];
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource();
+    // The prompt's own JSON keys are the contract. Read them out of the prompt
+    // rather than retyping them here, or this becomes the second copy that rots.
+    const _pStart = _src.indexOf(_needle('This is the above-the-fold screenshot of'));
+    const _pEnd = _pStart > -1 ? _src.indexOf('}`', _pStart) : -1;
+    const _promptBlock = _pStart > -1 && _pEnd > _pStart ? _src.slice(_pStart, _pEnd) : '';
+    const _visionFields = new Set((_promptBlock.match(/"([a-zA-Z]+)"\s*:/g) || []).map(x => x.replace(/[":\s]/g, '')));
+    if (_visionFields.size < 8) {
+      _fails.push(`could not read the vision prompt's field list (found ${_visionFields.size}), so nothing here is being checked`);
+    } else {
+      const _read = new Set((_src.match(/visualAnalysis\s*(?:\?\.|\.)\s*([a-zA-Z]+)/g) || [])
+        .map(x => x.replace(/^visualAnalysis\s*(?:\?\.|\.)\s*/, '')));
+      const _ghosts = [..._read].filter(f => !_visionFields.has(f));
+      if (_ghosts.length) {
+        _fails.push(`${_ghosts.length} field(s) are read off the vision result that the vision model does not return: ${_ghosts.join(', ')}. Every one of them evaluates to undefined on every lead, and the guards built on them cannot fire`);
+      }
+    }
+    // And the brain's audit must never be assigned over the eyes again.
+    // COMMENT LINES STRIPPED FIRST. The note explaining this defect quotes the
+    // broken assignment verbatim, so a needle run against the raw source finds
+    // the explanation and fails a correct build. This file has recorded that
+    // exact trap twice — once in RANK GATE CHECK and once in SUPABASE FAILURE
+    // CAUSE CHECK, where two comments deliberately quote the bad sentence.
+    const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (_code.includes(_needle('visualAnalysis = ', 'parsed;'))) {
+      _fails.push('the brain audit is assigned to visualAnalysis again — every vision field read after that point is undefined, including the four the fact-checker is told are measurements');
+    }
+    if (!_code.includes(_needle('brainVisual = ', 'parsed;'))) {
+      _fails.push('brainVisual is gone, so the brain’s heroHeadline and ctaText have nowhere to live');
+    }
+    if (_fails.length) {
+      console.log(`⛔ VISION HANDOFF CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ VISION HANDOFF CHECK: the vision read and the brain audit are two measurements under two names, and every field read off the vision result is one the vision prompt actually asks for. The brain used to be assigned over the top of it, which handed the fact-checker the word undefined for all four visual measurements it is told to trust, and let a no-social-proof claim be pushed from a field that does not exist.`);
+    }
+  } catch (e) {
+    console.log(`⛔ VISION HANDOFF CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ TWO RENDERS THAT ARE THE SAME PICTURE ═════════════════════════════════
+  // Vin: "gregory and donna both have replicated images". The page fingerprint
+  // compares what a page SAYS and drops a duplicate; two URLs can differ by a
+  // canonical tag and still render the identical image, and nothing compared
+  // the pictures. The bytes are already downloaded to be sent to the model.
+  try {
+    const _fails = [];
+    const _seen = new Map();
+    const _home = Buffer.from('PNG-HOME-'.repeat(200));
+    const _about = Buffer.from('PNG-ABOUT-'.repeat(200));
+    const _homeAgain = Buffer.from('PNG-HOME-'.repeat(200));
+    const _a = noteRenderBytes(_seen, _home, 'the homepage');
+    const _b = noteRenderBytes(_seen, _about, 'about');
+    const _c = noteRenderBytes(_seen, _homeAgain, 'services');
+    if (_a.dup) _fails.push('the first render was called a duplicate of itself');
+    if (_b.dup) _fails.push('two genuinely different renders collided — a false positive DELETES a page we captured correctly, which is worse than the bug');
+    if (!_c.dup) _fails.push('a byte-identical copy of the homepage render was accepted as a third page — this is exactly "four screenshots of the same page"');
+    if (_c.same !== 'the homepage') _fails.push(`the duplicate was not attributed to the homepage but to "${_c.same}", so the log cannot say what it matched`);
+    // An empty buffer must not be treated as a page, or every failed fetch
+    // would collide with every other failed fetch.
+    if (noteRenderBytes(_seen, Buffer.alloc(0), 'empty').dup) _fails.push('an empty buffer matched something');
+    // And the duplicate must leave the AUDIT SCREEN too, not only the model's
+    // evidence — the screen is the half Vin was looking at.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource();
+    if (!_src.includes(_needle('sitePages.pageShots = sitePages.pageShots.filter(', 'x => !_dropped.has(String(x.url)))'))) {
+      _fails.push('a duplicate render is dropped from the model evidence but still shown on the audit screen, which is the half that was reported');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SAME PICTURE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SAME PICTURE CHECK: two renders that are byte-identical are recognised as one page and the second is dropped from the model's evidence AND from the audit screen, named by what it matched. Exact equality on purpose: a similarity score would collide on the header every page of a site shares, and a false positive here deletes a render we paid for.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SAME PICTURE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ONE NUMBER ANYBODY READS HAD TWO THINGS IN IT ═════════════════════
+  // "JOB ... done in 589.1s" is queue time plus work time. The kill clock and
+  // the client's poller both measure WORK; this line measured neither, and on a
+  // five-lead run through a three-wide queue it reported the queue as though it
+  // were the audit.
+  try {
+    const _fails = [];
+    const _queued = jobDurationLine({ id: 'job_x', company: 'John Peters Roofing', status: 'done',
+      startedAt: 1000, startedWorkAt: 340000, finishedAt: 590000 }, 200);
+    if (!/250\.0s of WORK/.test(_queued)) _fails.push(`work time is wrong — "${_queued.slice(0, 120)}"`);
+    if (!/339\.0s waiting for a slot/.test(_queued)) _fails.push('the queue time is not reported separately, so a wide queue still reads as a slow audit');
+    if (!/589\.0s wall clock/.test(_queued)) _fails.push('the wall clock is gone — it is still the number that matches what somebody watched');
+    // A lead that never queued must not be given a phantom queue phrase.
+    const _straight = jobDurationLine({ id: 'job_y', company: 'Acme', status: 'done',
+      startedAt: 1000, startedWorkAt: 1000, finishedAt: 241000 }, 200);
+    if (/waiting for a slot/.test(_straight)) _fails.push('a lead that started immediately was reported as having queued');
+    if (!/240\.0s of WORK/.test(_straight)) _fails.push('a lead that never queued lost its work figure');
+    // A job killed before the work started must still produce a line rather
+    // than NaN — that is the case where somebody most needs to read it.
+    const _never = jobDurationLine({ id: 'job_z', company: 'Acme', status: 'error',
+      startedAt: 1000, startedWorkAt: null, finishedAt: 61000 }, 500);
+    if (/NaN/.test(_never)) _fails.push(`a job that never started work produced NaN — "${_never}"`);
+    if (_fails.length) {
+      console.log(`⛔ JOB CLOCK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ JOB CLOCK CHECK: the completion line reports WORK and QUEUE separately and still prints the wall clock. 589 seconds on a five-lead run was 250 of work behind 339 of queue, and the one line anybody reads called the sum "done in" — the client gives up on ten minutes of WORK, so the first figure is the one that decides whether a fifty-lead batch survives.`);
+    }
+  } catch (e) {
+    console.log(`⛔ JOB CLOCK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FIRECRAWL GATE WAS PINNED TO THE SMALLEST PLAN THEY SELL ══════════
+  // FC_CONCURRENCY defaults to 2, the Free tier's concurrent-browser cap,
+  // because it is the only number that is safe without knowing the plan. One
+  // lead makes ~14 paid calls and RESEARCH_CONCURRENCY is 3, so three leads
+  // contend for two browsers and the queue in front of the gate IS the wall
+  // clock. Firecrawl states the plan's per-minute limit on every response, so
+  // the plan is measured rather than guessed.
+  //
+  // An async IIFE, the same shape RENDER BYTE BUDGET CHECK uses below: the gate
+  // is a real asynchronous thing and the only honest way to test it is to run
+  // work through it. A synchronous assertion here could only read the source.
+  (async () => {
+  try {
+    const _fails = [];
+    if (fcBrowsersForLimit(10) !== 2) _fails.push('a 10/min limit (Free) no longer maps to the 2-browser cap that tier publishes');
+    if (fcBrowsersForLimit(100) !== 5) _fails.push('a 100/min limit (Hobby) no longer maps to 5');
+    if (fcBrowsersForLimit(500) <= 5) _fails.push('a 500/min limit (Standard) is still capped at the Hobby number, so the gate cannot open up on the plan that allows it');
+    if (fcBrowsersForLimit(500) > 20) _fails.push('the inference took more headroom than it should — the published cap is not ours to spend in full');
+    if (fcBrowsersForLimit(0) !== null || fcBrowsersForLimit('nonsense') !== null) {
+      _fails.push('an unreadable header produced a number instead of null, so a missing limit would silently resize the gate');
+    }
+    // THE GATE MUST READ THE CAP LIVE. Captured at construction, a plan learned
+    // at minute two would apply to nothing.
+    let _cap = 1, _running = 0, _peak = 0;
+    const _gate = makeFcGate({ concurrency: () => _cap, minGapMs: 0 });
+    const _hold = [];
+    const _job = () => new Promise((res) => { _running++; _peak = Math.max(_peak, _running); _hold.push(() => { _running--; res('x'); }); });
+    const _all = Array.from({ length: 6 }, () => _gate(_job));
+    await new Promise(r => setTimeout(r, 30));
+    if (_peak !== 1) _fails.push(`the gate ran ${_peak} at once against a cap of 1`);
+    _cap = 3;
+    // Releasing one job re-pumps the gate, which now reads the raised cap.
+    _hold.shift()();
+    await new Promise(r => setTimeout(r, 30));
+    if (_peak < 3) _fails.push(`the gate did not widen after the cap was raised — peak stayed at ${_peak}, so a plan detected mid-run changes nothing`);
+    // DRAIN IN A LOOP, not once. Releasing a job lets the gate start the NEXT
+    // one on a microtask, and that one pushes a fresh release handle — so a
+    // single pass leaves the last jobs holding and Promise.all never settles.
+    // The first version of this check hung here and printed nothing at all,
+    // which is the quietest way for a gate to stop being checked.
+    for (let i = 0; i < 50; i++) {
+      while (_hold.length) _hold.shift()();
+      await new Promise(r => setTimeout(r, 5));
+      if (!_hold.length && !_running) break;
+    }
+    await Promise.all(_all);
+    // AND A POLL IS NOT A BROWSER. A batch is polled every three seconds for as
+    // long as it runs; those status reads used to occupy gate slots while real
+    // scrapes waited behind them.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource();
+    const _pollIdx = _src.indexOf(_needle('const poll = await ', 'fetchT(`https://api.firecrawl.dev/v1/batch/scrape/'));
+    if (_pollIdx < 0) _fails.push('the batch poll no longer bypasses the gate, so status reads consume concurrent-browser slots');
+    if (_fails.length) {
+      console.log(`⛔ FIRECRAWL PLAN CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIRECRAWL PLAN CHECK: the gate reads its cap live, so a plan learned from their own x-ratelimit-limit header resizes it mid-run; the published per-minute tiers map to browser caps we deliberately do not take in full; an unreadable header changes nothing; and a batch status poll no longer holds a browser slot. The per-minute figure is measured and the browser cap is inferred, and the log says which is which.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIRECRAWL PLAN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
+
+  // ══ A DEMOTION LOG THAT INVENTED ITS OWN REASON ═══════════════════════════
+  // It filtered on selfFix alone and announced the result as "N finding(s)
+  // scored higher on harm". Live, it named a harm-64 finding against an opener
+  // at harm 76. It also named INTERNAL_ONLY rungs, which are held back by a
+  // different and stronger rule the same run reports on its own line.
+  try {
+    const _fails = [];
+    const _top = { id: 'no_recurring_offer', harm: 76, selfFix: 1 };
+    const _pool = [
+      _top,
+      { id: 'no_after_hours', harm: 81, selfFix: 5, selfFixWhy: 'he can add an after-hours line himself', finding: 'Nobody can start after hours' },
+      { id: 'not_compounding', harm: 64, selfFix: 5, selfFixWhy: 'asking finished customers needs nobody', finding: '176 reviews across 50 years' },
+      { id: 'thin_services', harm: 56, selfFix: 5, selfFixWhy: 'a page edit', finding: 'Nothing tells a stranger why' },
+    ];
+    const _out = selfFixableDemotions(_pool, _top);
+    const _ids = _out.map(h => h.id);
+    if (!_ids.includes('no_after_hours')) _fails.push('a genuinely higher-harm self-fixable finding was not reported');
+    if (_ids.includes('not_compounding')) _fails.push('an INTERNAL_ONLY review rung was reported as self-fixable — it is held out of the email by a stronger rule, and two explanations for one omission is how a reader stops believing both');
+    if (_ids.includes('thin_services')) _fails.push('a LOWER-harm finding was reported under a sentence that says it scored higher — this is the live defect itself');
+    if (_ids.includes('no_recurring_offer')) _fails.push('the opener reported itself as demoted');
+    if (selfFixableDemotions(null, _top).length || selfFixableDemotions(_pool, null).length) {
+      _fails.push('missing inputs produced rows instead of nothing');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SELF-FIXABLE DEMOTION CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SELF-FIXABLE DEMOTION CHECK: the only findings named as "scored higher on harm and he can fix them himself" are the ones that actually scored higher, and review metrics are never named here — they are kept out of the email by a different rule that the run already reports. This is the only record of why a finding lost the opener, and it was inventing the reason.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SELF-FIXABLE DEMOTION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ GOOGLE PERMITS A PRACTITIONER A LISTING OF HIS OWN ════════════════════
+  // duplicate_listing is a new finding and its first live firing was on a
+  // plastic surgeon. A doctor or an attorney may hold a personal listing at the
+  // practice address — Google's own published rule — and telling him it is a
+  // duplicate splitting his reviews would be wrong at the top of our ICP.
+  try {
+    const _fails = [];
+    const _own = { name: 'Krummen Plastic Surgery', placeId: 'A', website: 'https://kps.com', phone: '(513) 555-0100', address: '4460 Red Bank Rd, Cincinnati, OH' };
+    const _practitioner = [{ id: 'B', name: 'Donna Krummen, MD', website: 'https://kps.com', phone: '(513) 555-0100', address: '4460 Red Bank Rd, Cincinnati, OH', reviews: 93, rating: 4.9 }];
+    const _r1 = matchDuplicateListing(_own, _practitioner);
+    if (_r1.found) _fails.push('a permitted practitioner listing was reported as a duplicate — Google publishes this arrangement for licensed practitioners and the claim is simply false');
+    if (!/practitioner/i.test(String(_r1.why || ''))) _fails.push('the refusal does not say why, so nobody reading the log can tell it from "we found nothing"');
+    // A REAL duplicate must still be caught, or this exemption has quietly
+    // deleted the whole finding.
+    const _real = [{ id: 'C', name: 'Krummen Plastic Surgery Inc', website: 'https://kps.com', phone: '(513) 555-0100', address: '4460 Red Bank Rd, Cincinnati, OH', reviews: 93, rating: 4.7 }];
+    const _r2 = matchDuplicateListing(_own, _real);
+    if (!_r2.found) _fails.push('a genuine duplicate at the same address with the same phone was refused — the exemption has eaten the finding it was meant to narrow');
+    // A second LOCATION is not a duplicate and never was.
+    const _second = [{ id: 'D', name: 'Krummen Plastic Surgery', website: 'https://kps.com', phone: '(513) 555-0100', address: '900 Main St, Dayton, OH', reviews: 12 }];
+    if (matchDuplicateListing(_own, _second).found) _fails.push('a second location was reported as a duplicate');
+    // The credential test must not fire on ordinary trade names.
+    const _mustNotFire = ['Do It Right Plumbing', 'Odom Heating and Air', 'DC Roofing of Ohio', 'Napa Auto Care', 'Baltimore Siding Company'];
+    const _wrong = _mustNotFire.filter(n => looksLikePractitionerPair(n, 'Some Practice LLC'));
+    if (_wrong.length) _fails.push(`the credential test fired on ordinary business names: ${_wrong.join(', ')}`);
+    const _mustFire = ['Donna Krummen, MD', 'Jenkins & James DDS', 'Emily Taylor, Esq.', 'Law Offices of Karim Ali'];
+    const _missed = _mustFire.filter(n => !looksLikePractitionerPair(n, 'Cincinnati Plastic Surgery'));
+    if (_missed.length) _fails.push(`the credential test missed: ${_missed.join(', ')}`);
+    if (_fails.length) {
+      console.log(`⛔ PRACTITIONER LISTING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ PRACTITIONER LISTING CHECK: a second listing whose name carries a practitioner credential is refused by name and by reason, because Google permits a licensed practitioner a listing beside the practice — and a genuine duplicate at the same address is still caught, so the exemption narrows the finding rather than deleting it. Ordinary trade names that merely contain "do", "od" or "dc" do not trip it.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PRACTITIONER LISTING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THE PAGES WE RENDER MUST BE PAGES A CUSTOMER NAVIGATES TO ═════════════
   // Vin, on the 2026-08-20 run: "the screenshots are 4-5 screenshots of the
   // homepage, it's clearly not taking pics of the other important pages — that
@@ -43467,7 +44755,16 @@ app.listen(PORT, () => {
         // The credit-balance endpoint is deliberately NOT serialised: it is a
         // single user-initiated call and queueing it behind a research run's
         // scrapes would make a balance check hang for a minute.
-        .filter(u => !/^team\/credit-usage/.test(u));
+        .filter(u => !/^team\/credit-usage/.test(u))
+        // ══ AND A STATUS POLL IS NOT A BROWSER ═══════════════════════════
+        // This gate bounds how many PAGES Firecrawl renders for us at once.
+        // A batch job is polled every three seconds for as long as it runs,
+        // and those polls used to take gate slots — half the concurrency
+        // could be spent asking "are you done yet" while real scrapes waited
+        // behind them. A status read renders nothing, so it is exempt by
+        // construction rather than by somebody remembering. The SUBMIT still
+        // goes through the gate; only the poll is exempt.
+        .filter(u => !/^batch\/scrape\//.test(u));
       if (_direct.length) _fails.push(`${_direct.length} Firecrawl call(s) bypass fcSerial — ${_direct.join(', ')}`);
       if (_all.length < 6) _fails.push(`only ${_all.length} Firecrawl call sites are wrapped; the scrape, map, search and batch paths should all be`);
       if (typeof fcSerial !== 'function') _fails.push('fcSerial does not exist');
