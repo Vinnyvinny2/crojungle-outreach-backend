@@ -324,9 +324,47 @@ const mergeStat = runMergeCheck();
     }
     // The GATE condition, not any mention — the banner body also names the
     // function, so counting mentions passed with a gate deleted (falsified).
-    const gates = (src.match(/!lead\.approved && criticalClaimsOf\(lead\)\.length/g) || []).length;
+    const gates = (src.match(/!lead\.approved && sendBlockersOf\(lead\)\.length/g) || []).length;
     if (gates < 2) {
-      fails.push(`only ${gates} of the 2 approve buttons gate on criticalClaimsOf — the other one still approves a copy the fact-checker measured to be false`);
+      fails.push(`only ${gates} of the 2 approve buttons gate on sendBlockersOf — the other one still approves a lead the system itself refused`);
+    }
+    // ══ AND THE THREE REFUSALS THAT WERE ONLY EVER DECORATION ═══════════════
+    // Donna Krummen again, one build later: the screen said "NOTHING HERE IS
+    // WORTH A FIRST EMAIL" and the Approve button under it was enabled, because
+    // approval was gated on fabrication ALONE. The opener verdict and the
+    // under-floor body were computed, rendered as a red panel, and had no
+    // mechanical effect on anything.
+    let blkSrc = null;
+    walk(ast, (n) => {
+      if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'sendBlockersOf' && n.init) {
+        blkSrc = src.slice(n.init.start, n.init.end);
+      }
+    });
+    if (!blkSrc) {
+      fails.push('sendBlockersOf is gone, so the system\'s own "do not send this" verdict is back to being a warning beside an enabled button');
+    } else {
+      let blk;
+      try { blk = new Function('criticalClaimsOf', 'return ' + blkSrc)(fn || (() => [])); } catch (e) { blk = null; }
+      if (!blk) fails.push('sendBlockersOf no longer compiles standalone, so it cannot be verified');
+      else {
+        const cases = [
+          ['TOO_WEAK', { brainAudit: { openerStrength: { verdict: 'TOO_WEAK' } } },
+            'a lead whose own verdict is "nothing here is worth a first email" can still be approved'],
+          ['CALL_INSTEAD', { brainAudit: { openerStrength: { verdict: 'CALL_INSTEAD' } } },
+            'a lead the system routed to the phone can still be approved for email'],
+          ['tooThin', { composedEmail: { variantA: { tooThin: true } } },
+            'a body under the word floor can still be approved, and it reads as a mail-merge that failed'],
+          ['CRITICAL', { _claimRisks: ['fact-check: CRITICAL: wrong city'] },
+            'a CRITICAL fabrication no longer blocks approval'],
+        ];
+        for (const [name, lead, why] of cases) {
+          if (!blk(lead).length) fails.push(`${why} (${name})`);
+        }
+        // And a clean lead must still be approvable, or the gate is a wall.
+        if (blk({ brainAudit: { openerStrength: { verdict: 'STRONG' } } }).length) {
+          fails.push('a lead with no fabrication and a strong opener is being blocked, which makes the gate something the operator will want removed');
+        }
+      }
     }
   }
 }
