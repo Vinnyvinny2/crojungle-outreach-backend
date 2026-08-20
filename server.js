@@ -9581,6 +9581,46 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
 const rankLocationFrom = (leadLocation, gbp) =>
   String(leadLocation || '').trim() || String((gbp && gbp.formattedAddress) || '').trim();
 
+// ══ A STREET ADDRESS IS NOT A CITY, AND ONE CALLER NEVER KNEW ════════════════
+// This parser lived inline inside the local-rank check, where it was correct and
+// well-reasoned. readMarketClarity needed the same thing, did not have it, and
+// was handed the lead's `location` field raw — which is Google's formattedAddress,
+// a full street address: "8600 W 110th St, Overland Park, KS 66210, USA".
+//
+// That string is then normalised to letters and spaces and used as a REGEX over
+// their page copy, so the needle became "w th st overland park ks usa" and matched
+// nothing, ever. Every lead scored zero city mentions and collected the gap
+// "their own city barely appears in their copy". Falsified against the real
+// function: identical copy naming Overland Park five times reads band `partial`
+// with a clean town and band `undifferentiated` with the production address.
+//
+// The blast radius is why this is not cosmetic. That gap decrements the score,
+// which sets the band, which sets `isConstraint`, which is the MARKET branch of
+// measureGrowthConstraint — and BINDING_LAYER_BONUS then adds 10 to every rung in
+// the binding layer. So a street address in a city slot could move which layer the
+// whole email is built on. The gap text also reaches the situation read verbatim
+// and the email's MY READ block.
+//
+// Two callers want two different things and that is why the shape is an object:
+//   cityState — "Overland Park, KS". What a HUMAN types into a search, so it is
+//               what the rank query uses. The ZIP is deliberately dropped:
+//               "foundation repair in NC 28025" is not a search anybody performs.
+//   town      — "Overland Park". What their COPY would actually say. Appending
+//               the state here is the same bug in a smaller costume — no roofer
+//               writes "we serve Overland Park, KS" in a headline.
+const parseCityState = (location) => {
+  const parts = String(location || '').split(',').map(x => x.trim()).filter(Boolean)
+    .filter(x => !/^(usa|united states|us)$/i.test(x));
+  if (!parts.length) return { town: '', state: '', cityState: '' };
+  const stIdx = parts.findIndex(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x) || /^[A-Z]{2}$/.test(x));
+  if (stIdx > 0) {
+    const town = parts[stIdx - 1];
+    const st = (String(parts[stIdx]).match(/\b([A-Z]{2})\b/) || [])[1] || '';
+    return { town, state: st, cityState: st ? `${town}, ${st}` : town };
+  }
+  return { town: parts[0], state: '', cityState: parts[0] };
+};
+
 const fetchGBPHealth = async (placeId, placesKey) => {
   if (!placeId || !placesKey) return null;
   try {
@@ -9682,6 +9722,21 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       reviewCount: d.userRatingCount || 0,
       photoCount,
       hasHours: !!d.regularOpeningHours,
+      // ══ "UNTIL THE OFFICE OPENS" — TO A BUSINESS THAT NEVER CLOSES ═══════
+      // regularOpeningHours has been in the field mask all along and only its
+      // existence was kept. no_after_hours then asserts, in the email, that
+      // "someone deciding at nine at night finds nothing to start with until the
+      // office opens" — with nothing anywhere checking that they close.
+      //
+      // Emergency trades are the ICP and 24/7 is normal in them; URGENCY_ADJUST
+      // even adds 26 points to this rung on exactly those trades. So the rung was
+      // most confident precisely where it was most likely to be false, and the
+      // owner can disprove it by looking at his own Google listing.
+      //
+      // Google writes it in weekdayDescriptions as "Monday: Open 24 hours".
+      open24: Array.isArray(d.regularOpeningHours && d.regularOpeningHours.weekdayDescriptions)
+        ? d.regularOpeningHours.weekdayDescriptions.some(x => /open 24 hours/i.test(String(x || '')))
+        : false,
       hasWebsiteLink: !!d.websiteUri,
       hasDescription: !!d.editorialSummary,
       status: d.businessStatus || null,
@@ -9916,14 +9971,34 @@ const readOfferStrength = (text) => {
   const guarantee = /\b(money[- ]back|guarantee|guarantees|guaranteed|guaranteeing|warrant(y|ies|ied|s)|risk[- ]free|no[- ]risk|100% satisfaction|stand behind (our|the|all) (work|jobs?|service)|make it right|if you'?re not (happy|satisfied)|until you'?re (happy|satisfied))\b/.test(t);
   const urgency = /\b(this (month|week|season) only|ends? (on|in|this) \w+|limited (spots|slots|availability|time|time offer)|only \d+ (spots|slots|openings)|booking into \w+|next available|book (now|today) (before|to)|while (spots|slots|supplies) last|(spring|summer|fall|winter|seasonal|holiday) special|act (now|fast)|deadline)\b/.test(t);
   const bonus = /\b(free (inspection|consultation|design|assessment|audit|estimate|quote|evaluation|exam|cleaning|trial|second opinion)|complimentary \w+|no (cost|obligation) (estimate|consultation|quote)|financing available|0% financing|payment plans?|included at no|at no (extra )?(cost|charge))\b/.test(t);
+  // ══ namedOffer WAS INVERTED, AND THE WORST PAGE SCORED BEST ═══════════
+  // `namedOffer` used to be `!genericOnly`, and genericOnly is "a generic ask is
+  // present AND a specific ask is not". Run the truth table and it is backwards
+  // at both ends:
+  //
+  //   "Get a quote. $500 off our fall special this month."  -> namedOffer FALSE
+  //   a page with no call to action anywhere at all         -> namedOffer TRUE
+  //
+  // So no_offer fired on a business running a named seasonal promotion, and went
+  // SILENT on a business offering nothing whatsoever — which is the case the rung
+  // exists for. Both were falsified against the real function.
+  //
+  // The cause is that `namedOffer` was derived from CTA PHRASING while its name
+  // and every consumer mean "is there an actual offer here". The two things that
+  // ARE an offer were already being measured on the lines above and thrown away:
+  // `urgency` (a seasonal special, limited slots, a deadline) and `bonus` (a free
+  // inspection, financing, a no-obligation estimate). A specific ask is the third.
+  const specificAsk = /\b(book (your|a) [a-z]+|schedule (your|a) [a-z]+|claim your|reserve your)\b/.test(t);
   const genericOnly = /\b(contact us|get a quote|request a quote|learn more|get started|free estimate)\b/.test(t)
-    && !/\b(book (your|a) [a-z]+|schedule (your|a) [a-z]+|claim your|reserve your)\b/.test(t);
+    && !specificAsk;
+  // Positive evidence only. Nothing here is inferred from the absence of a phrase.
+  const namedOffer = !!(urgency || bonus || specificAsk);
   const gaps = [];
   if (!guarantee) gaps.push('no guarantee or risk reversal appears anywhere in the pages we read \u2014 per Hormozi the single biggest lever on whether a stranger believes it will work for them, and almost no competitor in their trade has one either');
   if (!urgency) gaps.push('no real urgency or scarcity \u2014 nothing on the page gives a reason to act now rather than in six months');
   if (!bonus) gaps.push('nothing stacked onto the ask \u2014 no free assessment, no financing, nothing that makes the first step worth taking');
   if (genericOnly) gaps.push('the only ask on the page is a generic one (contact us / get a quote / free estimate) with no named offer behind it \u2014 the same ask every competitor makes, which is what leaves them compared on price');
-  return { checked: true, guarantee, urgency, bonus, genericOnly, gaps, gapCount: gaps.length };
+  return { checked: true, guarantee, urgency, bonus, genericOnly, specificAsk, namedOffer, gaps, gapCount: gaps.length };
 };
 
 // ══ CAN THIS BUSINESS ACTUALLY FUND THE ENGAGEMENT? ══════════════════════════
@@ -10835,7 +10910,7 @@ const HARM_LADDER = [
   reframe: 'people comparing three options go with whichever one lets them start',
     // If their sitemap lists a booking page we never opened, we cannot say the
     // phone is the only route — we did not look at the page built to be the route.
-    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true,
+    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true && m.open24 !== true,
     // ══ FOUR AUDITS, THE SAME TWELVE WORDS ═══════════════════════════════
     // Appeared in 4 of 20 audits with identical wording. What "closed" means
     // depends entirely on the trade, and urgency is already measured: for an
@@ -11793,7 +11868,17 @@ const HARM_LADDER = [
       // after making its point. The list adds nothing he did not get from the
       // first half — he knows what is not on his own site — and it costs him
       // the fifteen words where his attention actually is.
-      return `Nothing on the site tells ${who} why to pick them instead of the next name on the list`;
+      // ══ THE SENTENCE CLAIMED MORE THAN THE TEST MEASURED ════════════════
+      // "why to pick them instead of the next name on the list" is a claim about
+      // DIFFERENTIATION. The test measures two absences: no guarantee anywhere,
+      // and no named offer. A business can be plainly differentiated — owner on
+      // every job, fifty years in one town, a trade nobody else there does — and
+      // still trip both. Telling that owner nothing on his site says why to pick
+      // him is false, and it is the kind of false a proud owner argues with.
+      //
+      // Say the two things measured. That is a narrower claim and a truer one,
+      // and it is still the thing worth selling him.
+      return `Nothing on the site gives ${who} a guarantee, or any offer beyond getting in touch`;
     },
     // say() already ends "why to pick them over the next name". Repeating it in
      // the cost line put the same five words twice in one short email.
@@ -12319,6 +12404,10 @@ const resolveMeasurements = ({
     // Read it off the destructured parameter like every other field here.
     unreadPricing: !!(sitePagesArg && sitePagesArg.existsButUnread && sitePagesArg.existsButUnread.pricing),
     unreadBooking: !!(sitePagesArg && sitePagesArg.existsButUnread && sitePagesArg.existsButUnread.booking),
+    // Their Google listing says they never close. Only ever used to SILENCE an
+    // after-hours claim, never to make one, so an unread listing reads false and
+    // costs nothing.
+    open24: !!(gbpHealth && gbpHealth.checked && gbpHealth.open24 === true),
     unreadReviews: !!(sitePagesArg && sitePagesArg.existsButUnread && sitePagesArg.existsButUnread.reviews),
     // ══ THE COMPETITOR'S NAME IS THE STRONGEST FACT WE HOLD ═══════════════
     // localRank.above already carries { name, reviews, rating } for every
@@ -17470,6 +17559,19 @@ const composeFullEmail = (spine, opts = {}) => {
 // reasoning still holds. This changes what the AUDIT SHOWS, not what the email
 // opens on.
 const AMBIENT_NOVEL_MAX = 35;
+// ══ THE ONLY FINDING WITH A DATE ON IT WAS BEING FILED AS TIMELESS ══════════
+// AMBIENT means "true, and true of nearly every business like theirs, so it
+// explains nothing about why THIS one is behind". That is a statement about
+// market-wide conditions. A job posting put up last week is the exact opposite:
+// it is the one thing in this system that has a clock on it, and CLAUDE.md PART
+// 4 §1 names the absence of a clock as the largest single gap in the whole
+// pipeline.
+//
+// hiring_marketing_now is harm 90 and novel 15, and the ambient rule keys on
+// novel alone — so the system's only catalytic signal was demoted below every
+// storefront observation unless the binding layer happened to be LEADS.
+// A dated event is not a market-wide condition, whatever its novelty score.
+const NEVER_AMBIENT = new Set(['hiring_marketing_now']);
 const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
   const bindingLayer = opts.bindingLayer || null;
@@ -17479,6 +17581,7 @@ const buildProblemList = (harms, opts = {}) => {
     // a rung that never got one from being silently deleted from the audit -
     // the "unmeasured treated as zero" failure, pointed the other way.
     const ambient = Number.isFinite(novel) && novel <= AMBIENT_NOVEL_MAX
+      && !NEVER_AMBIENT.has(h.id)
       && !(bindingLayer && HARM_LADDER_LAYER[h.id] === bindingLayer);
     return {
       area: AREA_OF[h.id] || 'Other',
@@ -17491,8 +17594,25 @@ const buildProblemList = (harms, opts = {}) => {
       id: h.id,
     };
   });
-  const real = rows.filter(r => !r.ambient).sort((a, b) => b.opener - a.opener);
-  const amb  = rows.filter(r =>  r.ambient).sort((a, b) => b.opener - a.opener);
+  // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
+  // This sorted by `opener`, which is the EMAIL's score. That score carries a
+  // 44-point penalty for anything an owner could fix himself and a further
+  // penalty for anything hard to sell against — both correct for choosing a cold
+  // open, both wrong for a briefing. rankHarms already computes `byHarm` and its
+  // own comment calls it "what is actually costing them most"; nothing rendered
+  // it.
+  //
+  // So the heading "worst first" was not true: it was "most likely to earn a
+  // reply, first". Those are different questions and this file already says so
+  // out loud in the TWO LADDERS block — the harm ladder owns what the email
+  // leads on, the finding ladder owns what the audit and the call sheet present.
+  // The audit was reading the email's answer.
+  //
+  // Only the ORDER changes. Membership, the ambient rule and the count are all
+  // untouched, so nothing the email reads moves.
+  const _byCost = (a, b) => (b.harm - a.harm) || (b.opener - a.opener) || String(a.id).localeCompare(String(b.id));
+  const real = rows.filter(r => !r.ambient).sort(_byCost);
+  const amb  = rows.filter(r =>  r.ambient).sort(_byCost);
   // A thin audit is worse than a padded one. When the measurements genuinely
   // produced almost nothing, the ambient conditions are all there is to say, so
   // they are let back in rather than showing a near-empty page.
@@ -17505,6 +17625,65 @@ const buildProblemList = (harms, opts = {}) => {
     console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
   }
   return out;
+};
+
+// ══ THE ONE-CHANGE DIAGNOSIS WAS NEVER MISSING. IT WAS UNPUBLISHED. ═════════
+// Vin: "it gives a bunch of issues which is good but doesn't seem to nail what is
+// actually worth selling them." He is describing a list where a diagnosis should
+// be — and the system computes THREE independent diagnoses, from measurements,
+// with no model involved and no fabrication surface, and rendered none of them:
+//
+//   measureGrowthConstraint  which of MARKET/OFFER/LEADS/CONVERSION/THROUGHPUT is
+//                            binding, WHY it is binding and not a cheaper layer
+//                            below it, and what that layer is worth selling.
+//                            Reached the screen as four words in 11px grey, and
+//                            its `why` was stripped by the server before it left.
+//   measureValueEquation     the interested-to-book-to-close friction Vin keeps
+//                            describing, as owner-checkable sentences, plus
+//                            `earnedButBlocked` — reputation earned, buying path
+//                            heavy. Returned, persisted, rendered NOWHERE.
+//   the bottleneck cascade   the FIRST broken link in the revenue chain, with the
+//                            dependency spelled out ("the site is the first
+//                            broken link and must be fixed before demand is worth
+//                            buying"). Never left the server at all; it existed
+//                            only as a string inside a prompt.
+//
+// Together those answer the question the advisor said the audit should answer and
+// this one does not: what ONE change would remove the biggest friction between
+// what this business has earned and a sale. It is a rendering job, not a
+// modelling job, which is why it carries no fabrication risk: every sentence
+// below was already assembled by code from a measurement.
+//
+// `costliest` is the other half of the same correction. rankHarms computes byHarm
+// and its own comment calls it "what is actually costing them most", and the
+// audit was showing findings ordered by cold-email opener score instead.
+const buildTheOneThing = ({ growthConstraint, valueEquation, bottleneck, bottleneckWhy, worst } = {}) => {
+  // ⚠ suffixes are internal notes appended for the model, and every client render
+  // strips them by hand. Strip once, here, so no consumer can forget.
+  const _clean = (s) => String(s || '').replace(/\s*⚠[^]*$/, '').trim();
+  const gc = (growthConstraint && growthConstraint.checked !== false && growthConstraint.layer) ? growthConstraint : null;
+  const ve = (valueEquation && valueEquation.checked) ? valueEquation : null;
+  const w  = (worst && worst.id) ? worst : null;
+  if (!gc && !ve && !bottleneck && !w) return null;
+  return {
+    // WHAT IS BINDING, and why it is not the cheaper thing underneath.
+    layer: gc ? gc.layer : null,
+    diagnosis: gc ? _clean(gc.condition) : null,
+    why: gc ? _clean(gc.why) : null,
+    role: gc ? _clean(gc.role) : null,
+    product: gc ? gc.product : null,
+    // WHAT MUST BE FIXED FIRST. The only dependency model in the system.
+    firstBrokenLink: bottleneck || null,
+    firstBrokenLinkWhy: _clean(bottleneckWhy) || null,
+    // THE PATH FROM INTERESTED TO BOOKED, in sentences the owner can check.
+    shape: ve ? ve.shape : null,
+    earnedButBlocked: !!(ve && ve.earnedButBlocked),
+    friction: ve && Array.isArray(ve.friction) ? ve.friction.slice(0, 4) : [],
+    frictionCount: ve ? Number(ve.frictionCount) || 0 : 0,
+    belief: ve && Array.isArray(ve.belief) ? ve.belief.slice(0, 3) : [],
+    // WHAT IT IS COSTING MOST — by harm, not by how well it would open an email.
+    costliest: w ? { id: w.id, problem: _clean(w.finding), costs: _clean(typeof w.costs === 'string' ? w.costs : ''), harm: Number(w.harm) || null } : null,
+  };
 };
 
 // ══ WHAT ONE JOB IS WORTH IN THEIR TRADE ═════════════════════════════════════
@@ -19104,26 +19283,42 @@ const measureBookingPath = (html, text) => {
   if (/>\s*[^<]{0,40}(book|schedule|appointment)[^<]{0,40}\s*</i.test(h) && BOOK_WORDS.test(h)) {
     return { booking: 'online_booking', why: 'a book/schedule action is offered on the page itself' };
   }
-  // ── FORM AND PHONE, IN MARKDOWN ────────────────────────────────────────
-  // Firecrawl renders a form's fields as plain lines and a phone as a tel:
-  // markdown link, so both need matching in that shape as well as in HTML.
-  // Two field labels AND a submit word: one alone appears in ordinary copy
-  // ("send us your name"), and a false form reading is as bad as a false absence.
-  const _fieldHits = (h.match(/^\s*(first name|last name|your name|full name|email address|phone number|e-?mail|phone|name|message)\s*\*?\s*$/gim) || []).length
-    + (h.match(/\b(first name|last name|email address|phone number)\b/gi) || []).length;
-  if (_fieldHits >= 2 && /\b(message|submit|send|comments?)\b/i.test(h)) {
-    return { booking: 'form', why: 'an enquiry form is present on the page' };
-  }
-  if (mdLinks.some(m => /^tel:/i.test(m[2]))) {
-    return { booking: 'phone_only', why: 'a phone link is the only route offered' };
-  }
-
+  // ══ PRECEDENCE IS BY STRENGTH OF EVIDENCE, NOT BY ORDER OF WRITING ═══
+  // These four checks used to run form → tel → scheduler → form, and the two
+  // weakest ran first. A trade site that embeds Calendly/ServiceTitan/Jobber AND
+  // prints its number in the header — which is most of them — returned
+  // 'phone_only', because the tel: check sat above the scheduler check and
+  // returned before it. One that embeds a scheduler AND carries a contact form
+  // returned 'form' for the same reason. Falsified against the real function:
+  // seven of sixteen realistic booking shapes ("Schedule Online", "Schedule
+  // Service", a Calendly link, a ServiceTitan portal) all came back phone_only,
+  // and removing the tel: link alone flipped the same page to online_booking.
+  //
+  // Both wrong answers are SENT. no_after_hours ("the only way to reach you is a
+  // phone call during office hours") is SELLABLE 5 — the maximum — and
+  // form_only_no_booking says "Someone ready to hire cannot book a time". A boot
+  // check in this file records them as the two most frequent fixed-string rungs
+  // after the offer trio: 4 of 20 and 6 of 20. Half the leads in that sample.
+  //
+  // So the order is now by how hard the evidence is. An embedded scheduler is
+  // unambiguous — nobody links calendly.com by accident — and it wins outright.
+  // A form is next. A phone route is what is left when no richer route exists,
+  // which is what 'the only route offered' was always supposed to mean.
   const SCHEDULERS = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook\.me|savvycal|cal\.com|hubspot\.com\/meetings|chilipiper|book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
   if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is embedded in the page source' };
 
-  // A real submitting form. <form> plus at least one text-ish input.
+  // ── A FORM, IN EITHER SHAPE ───────────────────────────────────
+  // Firecrawl renders a form's fields as plain lines, so the markdown shape needs
+  // matching as well as the HTML one. Two field labels AND a submit word: one
+  // alone appears in ordinary copy ("send us your name"), and a false form
+  // reading is as bad as a false absence.
+  const _fieldHits = (h.match(/^\s*(first name|last name|your name|full name|email address|phone number|e-?mail|phone|name|message)\s*\*?\s*$/gim) || []).length
+    + (h.match(/\b(first name|last name|email address|phone number)\b/gi) || []).length;
   const hasForm = /<form\b/i.test(h) && /<input\b[^>]*type=["'](text|email|tel)["']/i.test(h);
   const hasTextarea = /<textarea\b/i.test(h);
+  if (_fieldHits >= 2 && /\b(message|submit|send|comments?)\b/i.test(h)) {
+    return { booking: 'form', why: 'an enquiry form is present on the page' };
+  }
   if (hasForm || hasTextarea) return { booking: 'form', why: 'a submitting form is present in the page source' };
 
   // ══ 'PHONE_ONLY' REQUIRES A PHONE A CUSTOMER CAN ACTUALLY SEE ═════════════
@@ -19173,6 +19368,28 @@ const measureBookingPath = (html, text) => {
   // "there is no way to contact you from this page without filling something in"
   // (true, measured, and a stronger thing to say).
   return { booking: 'none_found', why: 'no scheduler, no form and no phone number visible anywhere on the page \u2014 there is no direct route to contact them from here' };
+};
+
+// ══ WHAT THE BOOKING READ IS ALLOWED TO SEE ══════════════════════════════════
+// A named function rather than three lines inside the caller, for one reason:
+// nothing could execute those three lines, so nothing could prove the homepage
+// reaches the measurement. It was absent for the life of the check and every
+// gate stayed green. Boot runs this now.
+//
+// The split is the whole point and it is not cosmetic:
+//   src  = page SOURCE. Scheduler <iframe>s, <form>s and href="tel:" live here
+//          and NONE of them survives markdown conversion.
+//   text = what a customer SEES. The printed-phone-number test reads this and
+//          only this, so a number inside a <script> or a JSON-LD block can never
+//          be reported to an owner as "the number on your page".
+// Putting source into `text` would reinstate the invented-phone-number bug
+// recorded inside measureBookingPath.
+const bookingSourceFor = (homepageHtml, homepageMd, corpus) => {
+  const _md = homepageMd ? String(homepageMd).slice(0, 40000) : '';
+  return {
+    src: [homepageHtml ? String(homepageHtml).slice(0, 150000) : '', _md, corpus || ''].filter(Boolean).join('\n\n'),
+    text: [_md, corpus || ''].filter(Boolean).join('\n\n'),
+  };
 };
 
 // ══ MARKET — THE TOP OF THE HIERARCHY, AND THE ONLY LAYER NEVER MEASURED ═════
@@ -20022,7 +20239,7 @@ CORRECT OUTPUT:
     {"label":"How you reach him","says":"A form is the only route. No scheduler. For a surgeon at capacity that may be deliberate."},
     {"label":"Positioning","says":"Homepage speaks to everyone. When you are the only real choice locally that costs nothing \u2014 outside Anderson it costs everything."}
   ],
-  "whatHeNeeds": "Not visibility \u2014 he has it. The two honest openings are reach beyond Anderson, where he is not yet the default, and the front desk, where 317 reviews of excellent surgery are being let down by two about the phone.",
+  "whatHeNeeds": "The front desk. 317 reviews of excellent surgery are being let down by two about the phone, and that is the one place the work he already does stops turning into money.",
   "askOnTheCall": "Is he trying to grow, or is he full? A surgeon at capacity does not want more demand, and that answer changes everything."
 }
 WHY IT IS RIGHT: the shape is built from FIVE facts at once and it contradicts the offer finding. A finding-level read would have said "no named offer", which is true, trivial, and would have wasted the call.
@@ -20072,7 +20289,7 @@ ${shapeList}
 
 \u2550\u2550\u2550 OUTPUT \u2550\u2550\u2550
 JSON only, no prose around it, exactly these keys:
-{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeNeeds":"one or two sentences \u2014 what would actually help, and what would NOT","askOnTheCall":"one question whose answer would confirm or kill this read"}
+{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeNeeds":"ONE recommendation, in one or two sentences. Name the single change that would remove the most friction between what this business has already earned and a sale, and say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
 
 \u2550\u2550\u2550 ABOUT \"rows\" \u2014 READ THIS TWICE \u2550\u2550\u2550
 Five to seven rows. YOU choose the labels for THIS business; they are not a fixed list and they are not the names of our measurements.
@@ -20188,6 +20405,28 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
       const GOLD_SHAPE = /^\s*[\w-]+\s+years?\s+(?:of|in)\b[^,.]{0,45}[,.]?\s*(?:and|but)\b/i;
       if (GOLD_SHAPE.test(_hl)) {
         console.log(`\u26a0 SHAPE LEAK [${company}]: the headline is "${_hl.slice(0, 70)}" \u2014 the worked example's own sentence ("Sixteen years of building, and almost none of it is visible") with this lead's nouns swapped in. Six businesses across four industries have produced that same construction. Say what is going on HERE, in whatever shape that takes.`);
+      }
+    } catch (e) { void e; }
+
+    // ══ THE CONCLUSION WAS A MENU, AND ITS OWN EXAMPLE TAUGHT IT ═══════════
+    // whatHeNeeds is the audit's closing paragraph, rendered under the heading
+    // "What is actually worth selling them". Its entire specification was eleven
+    // words, it was the only field with no validation of any kind, and one of the
+    // two worked examples in this very prompt said "The two honest openings
+    // are..." — so the prompt demonstrated the failure it needed to prevent.
+    //
+    // Live on John Peters Roofing it named three things: a path to buy outside
+    // business hours, a price somewhere findable, and one sentence on the
+    // homepage. Three recommendations is not a diagnosis, it is a fix list, and
+    // an owner handed a fix list either does none of it or does it himself.
+    //
+    // Instructional guards do not hold — that is written into this file as a
+    // rule — so the example is fixed AND the output is measured.
+    try {
+      const _whn = String((parsed && parsed.whatHeNeeds) || '');
+      const MENU = /\bthe (two|three) (honest )?(openings?|options?|things?|moves?)\b|\bboth of (these|those)\b|\bfirst,? .{5,60}\bsecond,?\b/i;
+      if (MENU.test(_whn)) {
+        console.log(`\u26a0 MENU, NOT A DIAGNOSIS [${company}]: "What is actually worth selling them" reads as a list \u2014 "${_whn.slice(0, 90)}". The audit's job is to name the ONE change that would remove the most friction between what this business has earned and a sale. A list of three is what the findings section already is, and an owner handed a list picks the cheapest item on it.`);
       }
     } catch (e) { void e; }
 
@@ -21468,7 +21707,7 @@ const PAGE_INTENT = [
   { key: 'proof',    re: /(review|testimonial|gallery|portfolio|our-work|past-work|projects?|case-stud|before-?and-?after|results)/i },
 ];
 
-const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd) => {
+const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, homepageHtml) => {
   if (!website || !fcKey || !apiKey) return null;
   try {
     const urls = await firecrawlMap(fcKey, website, 'pricing services about our story book schedule quote'); // cached — usually free
@@ -21824,10 +22063,38 @@ ${corpus}` }]
     // embed, a submitting form, a bare phone number) that evidence wins. Where
     // there is none, the model's read stands and is labelled as such.
     try {
-      // `corpus` is the concatenated markdown of every page we read, already in
-      // scope here. Markdown from Firecrawl preserves links, so tel: hrefs and
-      // scheduler URLs survive the conversion and remain detectable.
-      const _measured = measureBookingPath(corpus, corpus);
+      // ══ THE BOOKING BUTTON IS ON THE HOMEPAGE, AND IT IS NOT MARKDOWN ═════
+      // This was handed `corpus` twice. Two separate blindnesses, and together
+      // they decided the most privileged opener in the ladder.
+      //
+      // 1. `corpus` is the INTERIOR pages only. The homepage is excluded from it
+      //    on purpose (it is already scraped and would be paid for twice, which
+      //    is correct for the PRICE read this corpus was built for). But the
+      //    homepage is the one page on a small-business site that carries the
+      //    BOOK NOW button, the header phone number and the scheduler embed. So
+      //    the booking path was decided from the pages least likely to show it.
+      //    CLAUDE.md PART 4 §8 records this exact shape — the homepage dropping
+      //    out of the corpus and taking the findings with it — in the function
+      //    next door. Nobody checked what else read the same truncated corpus.
+      //
+      // 2. Markdown is not source. This function's own comment says it receives
+      //    markdown, and its <form>, <textarea> and href="tel:" branches have
+      //    been dead the whole time. Worse, an embedded scheduler is an <iframe>
+      //    or a <script>, and NEITHER survives the markdown conversion — so the
+      //    single most common shape of real online booking on a trade site was
+      //    invisible no matter what order the checks ran in. Reordering the
+      //    cascade alone would not have fixed this.
+      //
+      // The homepage source is already fetched, already paid for and already
+      // parsed for tel: links by extractHtmlSignals. It costs nothing to read.
+      //
+      // The two arguments are not interchangeable: `html` is what we PATTERN
+      // MATCH (source, so embeds and forms are visible) and `text` is what a
+      // customer SEES (markdown, so a phone number in a script tag can never be
+      // mistaken for a printed one). Passing source as `text` would reinstate
+      // the invented-phone-number bug recorded a few lines below.
+      const _book = bookingSourceFor(homepageHtml, homepageMd, corpus);
+      const _measured = measureBookingPath(_book.src, _book.text);
       if (_measured && _measured.booking !== out.booking) {
         console.log(`SITE AUDIT [${companyName}]: booking corrected ${out.booking} \u2192 ${_measured.booking} \u2014 ${_measured.why}. The model's read was an opinion; this is in the source.`);
         out.booking = _measured.booking;
@@ -21836,7 +22103,7 @@ ${corpus}` }]
         out.bookingMeasured = true;
       }
     } catch (e) { void e; }
-    console.log(`SITE AUDIT [${companyName}]: booking=${out.booking}${out.bookingMeasured ? ' (measured)' : ' (model read \u2014 no signature in source)'} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
+    console.log(`SITE AUDIT [${companyName}]: booking=${out.booking}${out.bookingMeasured ? ` (measured from ${homepageHtml ? 'the homepage SOURCE plus ' : 'NO homepage source \u2014 '}${usable.length} interior page(s))` : ' (model read \u2014 no signature in source)'} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
     // A dead page is a measured fact about their business and belongs with the
     // other measured facts, not only in a log line nobody reads at send time.
     if (brokenPages.length) out.brokenPages = brokenPages;
@@ -27162,6 +27429,56 @@ const WP_BUILDERS = [
   { id: 'WPBakery', re: /\bvc_row\b|js_composer/i },
   { id: 'Beaver Builder', re: /fl-builder/i },
 ];
+// ══ WE FETCH THE HOMEPAGE TWICE AND READ THE ADS OFF THE WORSE COPY ═════════
+// checkBuiltWith does a plain, no-JavaScript fetch of the homepage — and it runs
+// inside the SAME Promise.allSettled as the Firecrawl scrape of the identical
+// URL, which returns fully rendered markup. Three signals are read from the
+// plain copy and nothing else in the system reads them:
+//   hasGoogleAdsTag  gates paying_for_a_search_they_lose
+//   hasMetaPixel     gates social_spend_no_search
+//   hasTagManager    gates social_spend_no_search (a GTM container can hide an
+//                    ads tag we cannot see, so its ABSENCE is what licenses the
+//                    "no Google ads" half of that claim)
+//
+// These are the only live advertising signals in the whole system, and the copy
+// they are read from returns all-nulls the moment the site serves a bot
+// challenge — which is the common case on the sites worth auditing. This is
+// CLAUDE.md §13's "we bought the same reviews twice" with the extra twist that
+// the duplicate we kept is the lower-quality one.
+//
+// Positives only ever merge UP: a tag present in either copy is a tag. The
+// rendered copy cannot manufacture a false positive because these are literal
+// markers in the markup, not behaviour.
+//
+// One honest limit, stated because the absence direction depends on it: the
+// Firecrawl scrape sets blockAds, so an ads tag injected purely at RUNTIME by a
+// blocked container may be missing from the rendered copy. Every marker matched
+// below is inline in the source, so this is strictly better than the plain fetch,
+// which executes no JavaScript at all — but it is not proof of absence on its
+// own, which is why adsReadable still has to be true for any absence claim.
+const AD_TAG_SIGNATURES = {
+  hasGoogleAdsTag: /AW-\d{8,}|googleadservices|google_conversion/i,
+  hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i,
+  hasTagManager: /googletagmanager\.com\/(?:gtm|ns)|GTM-[A-Z0-9]{4,}/i,
+};
+const mergeAdSignals = (builtWith, renderedHtml) => {
+  const bw = builtWith && typeof builtWith === 'object' ? builtWith : {};
+  const html = String(renderedHtml || '');
+  const plainRead = bw.confirmed === true && !bw.blocked;
+  // 500 is checkBuiltWith's own floor for "enough markup to read". Same number
+  // on purpose: two different floors for one question is how they drift apart.
+  const renderedRead = html.length >= 500;
+  if (!renderedRead) {
+    return { hasGoogleAdsTag: bw.hasGoogleAdsTag ?? null, hasMetaPixel: bw.hasMetaPixel ?? null,
+      hasTagManager: bw.hasTagManager ?? null, adsRead: plainRead, adSource: plainRead ? 'plain fetch' : 'neither copy' };
+  }
+  const out = { adsRead: true, adSource: plainRead ? 'rendered page and plain fetch' : 'rendered page' };
+  for (const k of Object.keys(AD_TAG_SIGNATURES)) {
+    out[k] = (bw[k] === true || AD_TAG_SIGNATURES[k].test(html)) ? true : false;
+  }
+  return out;
+};
+
 // Pure function so the boot check can RUN it. Five checks in this file have
 // passed while the shipped code was broken, every one because the check
 // reimplemented what it meant to test.
@@ -27797,21 +28114,7 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
   // that geocodes hard to another state overrides it. The fix has to be in the
   // words, because those are what Google resolves first. A human searching for
   // a contractor in an ambiguous town types the state; so do we now.
-  const city = (() => {
-    const parts = String(location || '').split(',').map(x => x.trim()).filter(Boolean)
-      .filter(x => !/^(usa|united states|us)$/i.test(x));
-    if (!parts.length) return '';
-    const stIdx = parts.findIndex(x => /\b[A-Z]{2}\b\s*\d{5}/.test(x) || /^[A-Z]{2}$/.test(x));
-    if (stIdx > 0) {
-      const town = parts[stIdx - 1];
-      // "CO 80110" -> "CO". The ZIP is deliberately NOT kept: "foundation repair
-      // in NC 28025" is not a search any human performs, which is the note this
-      // parser already carried and got right.
-      const st = (String(parts[stIdx]).match(/\b([A-Z]{2})\b/) || [])[1] || '';
-      return st ? `${town}, ${st}` : town;
-    }
-    return parts[0];
-  })();
+  const city = parseCityState(location).cityState;
   if (!city) return { checked: false, why: 'no city could be parsed from the location' };
 
   const query = `${phrase} in ${city}`;
@@ -28486,6 +28789,28 @@ const _runResearchInner = async (req, res) => {
   let localVisibility = null;
   let gbpHealth = null;  // hoisted to function scope so the prompt (outside the Places-lead block) can read it
   let htmlSignals = { checked: false };  // hoisted to function scope so the prompt can read it
+  // The homepage's own SOURCE, hoisted for the same reason. rawHtml below is
+  // declared inside the Firecrawl branch, and auditSitePages runs several hundred
+  // lines later in a different block — "line order is not scope" is a recorded
+  // failure class in this file, so the value travels in a named function-scope
+  // variable rather than on an assumption about braces.
+  let homepageHtml = '';
+  // ══ THE FIRST BROKEN LINK, WHICH NEVER LEFT THE SERVER ═══════════════════
+  // The bottleneck cascade below walks the revenue chain — OPERATIONS, CAPTURE,
+  // CONVERSION, SCALE, FOLLOW-UP, DEMAND, FOUNDATION — and each branch names what
+  // has to be fixed BEFORE anything downstream is worth buying. It is the only
+  // dependency model in the whole system, and it was a pair of block-scoped
+  // locals interpolated into a prompt string. `grep bottleneck index.html`
+  // returned nothing: it was never persisted, never returned, never rendered.
+  // Hoisted, for the same reason as the two above, so buildTheOneThing can read
+  // it — "line order is not scope" is a recorded failure class in this file.
+  let bottleneck = '';
+  let bottleneckWhy = '';
+  // rankHarms runs inside a block far below and `worst` — its own comment calls
+  // it "what is actually costing them most" — died with that block. Hoisted for
+  // the same reason as the bottleneck: the audit should be able to say what this
+  // is costing, not only what would open an email best.
+  let costliestHarm = null;
   let offerStrength = { checked: false };  // hoisted alongside htmlSignals — the prompt reads it
   // Hoisted for the same reason: the prompt sits OUTSIDE the block where sitePages
   // lives, so computing this at prompt level would silently read undefined.
@@ -28884,6 +29209,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // to only run on a real page (rawHtml present); a bot-challenge page was
     // already blanked upstream, so this never reads a challenge page.
     htmlSignals = rawHtml ? extractHtmlSignals(rawHtml, website) : { checked: false };
+    // The same markup, kept for the booking read. extractHtmlSignals already
+    // proves this is a real page rather than a bot challenge (a challenge page is
+    // blanked upstream), so nothing downstream has to re-establish that.
+    homepageHtml = rawHtml || '';
     // Harvest this page's navigation while we hold its markup. This is the
     // common path — Firecrawl succeeded — and the links cost nothing because the
     // page is already fetched and parsed. They are only ever consulted if the
@@ -29092,6 +29421,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const fbAds = fbAdsRes.value || {};
     const enrichment = enrichRes.value || null;
     const builtWith = builtWithRes.value || {};
+    // The rendered homepage is already in hand and is the better copy. Merge the
+    // three advertising markers off it before anything reads them.
+    const _ads = mergeAdSignals(builtWith, homepageHtml);
+    builtWith.hasGoogleAdsTag = _ads.hasGoogleAdsTag;
+    builtWith.hasMetaPixel = _ads.hasMetaPixel;
+    builtWith.hasTagManager = _ads.hasTagManager;
+    builtWith.adsRead = _ads.adsRead;
+    console.log(`AD SIGNALS [${company}]: read from ${_ads.adSource} \u2014 google ads tag ${_ads.hasGoogleAdsTag === null ? 'NOT CHECKED' : _ads.hasGoogleAdsTag}, meta pixel ${_ads.hasMetaPixel === null ? 'NOT CHECKED' : _ads.hasMetaPixel}, tag manager ${_ads.hasTagManager === null ? 'NOT CHECKED' : _ads.hasTagManager}. These three gate both SPENDING findings and were previously read only from a plain no-JavaScript fetch, which returns nothing at all on a site that challenges bots.`);
     const email = emailData; // from browser via browserData
 
     // ═══ CONFIRM WE'RE AUDITING THE RIGHT COMPANY ════════════════════════════
@@ -29654,7 +29991,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // The homepage text goes in so the interior pages can be compared
         // against it: a redirect or a SPA shell returns the homepage for a URL
         // that is not the homepage, and until now nothing could tell.
-        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company, content) : Promise.resolve(null),
+        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company, content, homepageHtml) : Promise.resolve(null),
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
@@ -30164,7 +30501,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     marketClarity = readMarketClarity(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
-      { trade: customerTrade || verifiedIndustry || '', city: req.body.location || '' });
+      { trade: customerTrade || verifiedIndustry || '', city: parseCityState(req.body.location).town });
     if (marketClarity.checked) {
       console.log(`MARKET CLARITY [${company}]: ${marketClarity.band.toUpperCase()} \u2014 ${marketClarity.verdict}${marketClarity.gaps.length ? ' | ' + marketClarity.gaps.join(' | ') : ''}`);
     }
@@ -30451,7 +30788,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // null, and null is not false. tagManager is the second gate, and it
           // only ever silences: a GTM container can hold an ads tag we cannot
           // see, so its presence removes our right to say the tag is missing.
-          adsReadable: !!(builtWith && builtWith.confirmed === true && !builtWith.blocked),
+          // Was `confirmed && !blocked`, i.e. the PLAIN fetch alone — so a site
+          // that challenged bots silenced both spending findings even when the
+          // rendered homepage had been read perfectly well. adsRead is the merged
+          // answer: did EITHER copy give us markup to read.
+          adsReadable: !!(builtWith && builtWith.adsRead === true),
           googleAdsTag: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
             ? builtWith.hasGoogleAdsTag === true : null,
           metaPixel: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
@@ -30582,6 +30923,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           reviewsRead: _measured.reviewsRead,
           ownerReplies: _measured.ownerReplies,
           hoursListed: (gbpHealth && gbpHealth.checked) ? gbpHealth.hasHours !== false : null,
+          open24: !!(gbpHealth && gbpHealth.checked && gbpHealth.open24 === true),
           viewportChecked: !!(htmlSignals && htmlSignals.checked),
           // ══ A FAILED MATCH IS NOT PROOF OF ABSENCE ══════════════════════
           // This was hardcoded true, meaning "we ran a lookup" — and the ladder
@@ -30683,7 +31025,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           reviewCount: _measured.reviewCount,
           reviewsPerYear: _measured.reviewsPerYear,
           guarantee: offerStrength && offerStrength.checked ? offerStrength.guarantee : null,
-          namedOffer: offerStrength && offerStrength.checked ? !offerStrength.genericOnly : null,
+          // Read the measurement, not the inverse of a different one. See
+          // readOfferStrength: !genericOnly scored a page with no call to action
+          // at all as HAVING a named offer, which silenced this rung on exactly
+          // the business it was written for.
+          namedOffer: offerStrength && offerStrength.checked ? offerStrength.namedOffer === true : null,
           // ══ THE READER RETURNS hasAny, NOT found ═══════════════════════════
           // readLeadMagnet() returns { checked, hasAny, assets, gaps }. There is
           // no `found` field on it, so this read undefined, coerced to false, and
@@ -30808,6 +31154,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           pricesPublished: (sitePages && Array.isArray(sitePages.prices)) ? sitePages.prices.length : null,
         };
         const _harms = rankHarms(_harmInputs);
+        costliestHarm = _harms.worst || (_harms.byHarm || [])[0] || null;
         // ══ TRACE: THIS HAS TO PRINT ON EVERY LEAD ═══════════════════════════════
         // Five sessions have gone into guessing why the composer does not run, and
         // static analysis has said "it should" every time. It prints where it got to
@@ -31961,67 +32308,70 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     if (_revPerEmp) console.log(`OPS SIGNAL [${company}]: $${Math.round(_revPerEmp/1000)}k revenue per employee${_laborHeavy ? ' — LABOR-HEAVY, automation candidate' : ''}`);
     if (_opsPainConfirmed) console.log(`OPS SIGNAL [${company}]: ${_opsPainCount} operational pain pattern(s) in their own reviews — process problem, not a traffic problem`);
 
-    let _bottleneck, _bottleneckWhy;
+    // Assigned to the function-scope pair declared far above, not redeclared
+    // here: the cascade below is the only dependency model in the system and it
+    // has never left this block. See buildTheOneThing.
+    // eslint-disable-next-line no-unused-vars
     if (_realOpsSignal) {
-      _bottleneck = 'OPERATIONS';
-      _bottleneckWhy = 'They are hiring manual/ops roles — the constraint is labor cost and process, not demand. Software replaces the recurring salary.';
+      bottleneck = 'OPERATIONS';
+      bottleneckWhy = 'They are hiring manual/ops roles — the constraint is labor cost and process, not demand. Software replaces the recurring salary.';
     } else if (_laborHeavy && _opsPainConfirmed) {
       // Both operational signals agree: low output per head AND customers describing
       // process failures. That is an operations business, not a marketing business.
-      _bottleneck = 'OPERATIONS';
-      _bottleneckWhy = `They are carrying $${Math.round(_revPerEmp/1000)}k of revenue per employee across ${verifiedEmployees} people — labor-heavy for their size — AND their own reviews describe process failures (missed callbacks, scheduling, quote delays). That combination is not a traffic problem. Adding leads to a business that cannot service the ones it has makes the reviews worse. The constraint is throughput.`;
+      bottleneck = 'OPERATIONS';
+      bottleneckWhy = `They are carrying $${Math.round(_revPerEmp/1000)}k of revenue per employee across ${verifiedEmployees} people — labor-heavy for their size — AND their own reviews describe process failures (missed callbacks, scheduling, quote delays). That combination is not a traffic problem. Adding leads to a business that cannot service the ones it has makes the reviews worse. The constraint is throughput.`;
     } else if (_laborHeavy && !_hasAds) {
-      _bottleneck = 'OPERATIONS';
-      _bottleneckWhy = `$${Math.round(_revPerEmp/1000)}k revenue per employee across ${verifiedEmployees} people is labor-heavy, and they are not buying traffic — so the constraint is what it costs them to deliver, not what it costs to get found. Automation moves margin before marketing moves revenue.`;
+      bottleneck = 'OPERATIONS';
+      bottleneckWhy = `$${Math.round(_revPerEmp/1000)}k revenue per employee across ${verifiedEmployees} people is labor-heavy, and they are not buying traffic — so the constraint is what it costs them to deliver, not what it costs to get found. Automation moves margin before marketing moves revenue.`;
     } else if (_hasAds && !_hasCapture) {
-      _bottleneck = 'CAPTURE';
-      _bottleneckWhy = 'They are PAYING for traffic but have no capture layer (no CRM, no booking, no email capture). The ads work; the catching does not. Every ad dollar buys a visitor the site cannot hold. Selling them more ad management here is selling more water for a leaking bucket.';
+      bottleneck = 'CAPTURE';
+      bottleneckWhy = 'They are PAYING for traffic but have no capture layer (no CRM, no booking, no email capture). The ads work; the catching does not. Every ad dollar buys a visitor the site cannot hold. Selling them more ad management here is selling more water for a leaking bucket.';
     } else if (_hasAds && !_siteConverts) {
-      _bottleneck = 'CONVERSION';
-      _bottleneckWhy = 'They are paying for traffic that lands on a page which cannot convert it (no clear CTA / dated or weak structure). The traffic is already bought — the page is where it dies.';
+      bottleneck = 'CONVERSION';
+      bottleneckWhy = 'They are paying for traffic that lands on a page which cannot convert it (no clear CTA / dated or weak structure). The traffic is already bought — the page is where it dies.';
     } else if (_hasAds && _siteConverts) {
-      _bottleneck = 'SCALE';
-      _bottleneckWhy = 'Foundation is sound (site converts, capture exists) and they are already spending. The opportunity is owning and compounding the whole path from search to booked customer, not rebuilding anything.';
+      bottleneck = 'SCALE';
+      bottleneckWhy = 'Foundation is sound (site converts, capture exists) and they are already spending. The opportunity is owning and compounding the whole path from search to booked customer, not rebuilding anything.';
     } else if ((_siteBooking === 'form' || _siteBooking === 'phone_only') && !builtWith.hasCRM) {
       // THE MISSING BOTTLENECK. A quote form is not capture if it drops the lead into
       // a human callback queue — the prospect is captured and then made to WAIT. With
       // no CRM there is nothing responding automatically, so interest decays to zero
       // while a competitor answers first. This is a response-speed problem, which is
       // software/automation work — NOT a reason to buy more traffic.
-      _bottleneck = 'FOLLOW-UP';
-      _bottleneckWhy = `They capture interest (${_siteBooking === 'form' ? 'a quote/contact form' : 'phone only'}) but nothing responds automatically \u2014 no CRM, no automated reply. The lead is caught and then left waiting for a human. In any market where a competitor answers in minutes, that wait IS the lost sale. Sending more traffic into this makes the leak bigger, not smaller.`;
+      bottleneck = 'FOLLOW-UP';
+      bottleneckWhy = `They capture interest (${_siteBooking === 'form' ? 'a quote/contact form' : 'phone only'}) but nothing responds automatically \u2014 no CRM, no automated reply. The lead is caught and then left waiting for a human. In any market where a competitor answers in minutes, that wait IS the lost sale. Sending more traffic into this makes the leak bigger, not smaller.`;
     } else if (_mktgHire) {
-      _bottleneck = 'DEMAND';
-      _bottleneckWhy = 'They are HIRING for marketing: budget is allocated, direction is not chosen. A retainer outperforms one junior hire and they are actively deciding right now.';
+      bottleneck = 'DEMAND';
+      bottleneckWhy = 'They are HIRING for marketing: budget is allocated, direction is not chosen. A retainer outperforms one junior hire and they are actively deciding right now.';
     } else if (!_siteConverts) {
-      _bottleneck = 'FOUNDATION';
-      _bottleneckWhy = 'No confirmed ad spend AND the site cannot convert. Driving traffic to this site would waste money — the site is the first broken link and must be fixed before demand is worth buying.';
+      bottleneck = 'FOUNDATION';
+      bottleneckWhy = 'No confirmed ad spend AND the site cannot convert. Driving traffic to this site would waste money — the site is the first broken link and must be fixed before demand is worth buying.';
     } else {
-      _bottleneck = 'DEMAND';
-      _bottleneckWhy = 'The site is functional but nothing is driving qualified traffic to it. The constraint is demand generation.';
+      bottleneck = 'DEMAND';
+      bottleneckWhy = 'The site is functional but nothing is driving qualified traffic to it. The constraint is demand generation.';
     }
 
     // Prescribe by bottleneck — PRIMARY first (that is what the pitch must lead with)
-    if (_bottleneck === 'OPERATIONS') {
+    if (bottleneck === 'OPERATIONS') {
       _eligible.push(_realOpsSignal
         ? 'Custom AI Software Build ($40k-$100k+) — PRIMARY: a CONFIRMED ops/manual-labor hiring signal exists. Frame against the recurring salary they are about to commit to, not against software cost.'
         : `Custom AI Software Build ($40k-$100k+) — PRIMARY: the operational evidence is ${_revPerEmp ? '$' + Math.round(_revPerEmp/1000) + 'k revenue per employee across ' + verifiedEmployees + ' people' : 'a labor-heavy operation'}${_opsPainConfirmed ? ' plus process failures customers describe in their own reviews' : ''}. Pitch the LABOR MATH, not software: what those people cost per year versus what a one-time build handles permanently. Never claim they are hiring unless a hiring signal was confirmed.`);
       _eligible.push('AI Brain ($40k-$70k) — SECONDARY: an intelligence layer over their existing systems if a full build is too large a first step.');
       if (!_siteConverts) _eligible.push('Website Rebuild ($50k+) — SECONDARY: the site is also weak, but the hiring signal is the live, time-boxed decision. Lead with the build.');
-    } else if (_bottleneck === 'CAPTURE') {
+    } else if (bottleneck === 'CAPTURE') {
       _eligible.push('Website Rebuild / Conversion System ($50k+) — PRIMARY: build the capture layer (lead capture, booking, follow-up path) so the traffic they ALREADY pay for stops disappearing. Do NOT lead with ad management; the ads are the one part working.');
       _eligible.push('End-to-End Marketing / Ads Management OR Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: own the whole path so ads + capture + follow-up compound together. Frame as sealing the leak, never as "run more ads."');
-    } else if (_bottleneck === 'CONVERSION') {
+    } else if (bottleneck === 'CONVERSION') {
       _eligible.push('Website Rebuild ($50k+) — PRIMARY: they are buying traffic that lands on a page which cannot convert it. Rebuild the page the ad money is already flowing to.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: ongoing conversion optimization once the foundation converts.');
-    } else if (_bottleneck === 'SCALE') {
+    } else if (bottleneck === 'SCALE') {
       _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) — PRIMARY: foundation is sound and spend is live. Own the whole path and compound it. This is the rare case where ad management genuinely IS the answer.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: squeeze more from existing traffic.');
-    } else if (_bottleneck === 'FOLLOW-UP') {
+    } else if (bottleneck === 'FOLLOW-UP') {
       _eligible.push('AI Brain ($40k-$70k) — PRIMARY: an automated response/follow-up layer that answers the moment someone submits, then keeps working the lead. Pitch the WAIT, not the software: what it costs to be second to reply.');
       _eligible.push('Custom AI Software Build ($40k-$100k+) — SECONDARY: if the response gap is part of a bigger manual process (intake, quoting, scheduling), the full build replaces the whole chain.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — TERTIARY: ongoing ownership once the response layer exists. Do NOT lead with ad management; more traffic into a queue that already waits makes it worse.');
-    } else if (_bottleneck === 'FOUNDATION') {
+    } else if (bottleneck === 'FOUNDATION') {
       _eligible.push('Website Rebuild ($50k+) — PRIMARY: the site cannot convert and nothing is being spent driving traffic to it. Fix the foundation FIRST — buying traffic for this site would waste their money, and saying so earns trust.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: drive and convert demand once the foundation holds.');
     } else { // DEMAND
@@ -32052,8 +32402,8 @@ const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOM
   if (req.body.noWebsite === true) _L.push(`THEY HAVE NO WEBSITE AT ALL \u2014 their Google listing carries no site link. Everything a stranger can learn about them lives on one Google page.`);
   if (req.body.builderSite) _L.push(`THEIR SITE RUNS ON ${String(req.body.builderSite).toUpperCase()}, a free page builder. A fact about where the money went, not a design opinion. Never call it cheap or unprofessional \u2014 say what it means: the site was never the priority.`);
   return _L.length ? _L.join('\n') + '\n' : '';
-})()}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${_bottleneck} ═══
-${_bottleneckWhy}
+})()}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${bottleneck} ═══
+${bottleneckWhy}
 
 Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
 Money leaks at the FIRST broken link. Recommend the product that fixes THAT link — not a later one, and not the one their surface behaviour suggests. If they are already paying for something that works (e.g. ads), do NOT sell them more of it; sell the thing that stops the waste. Naming the real bottleneck instead of the obvious symptom is what makes the owner think "how do they know this?"
@@ -35630,6 +35980,24 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         layer: growthConstraint.layer,
         condition: growthConstraint.condition,
         product: growthConstraint.product,
+        // ══ THE ONE FIELD THAT SAYS WHY, AND IT WAS THE ONE DROPPED ═══════
+        // measureGrowthConstraint returns {checked, layer, condition, why,
+        // product, role} and this literal took four of them. `why` is the
+        // sentence explaining why THIS layer is binding and not a cheaper one
+        // below it — "he is visible and the reputation is earned, so the loss is
+        // happening after they arrive" — which is the entire argument for
+        // selling the layer rather than the tactic.
+        //
+        // The client has a render for it. That render sits behind a condition
+        // that also could not fire, so this has been undefined on screen since
+        // it was written and nobody could tell which of the two bugs was
+        // responsible. Both are fixed; this is the half that had to come back
+        // out of the server.
+        why: growthConstraint.why || null,
+        // Why this layer OUTRANKS the tactical finding underneath it. Already
+        // computed, never returned, and it is the sentence that tells Mike what
+        // to open the call on.
+        role: growthConstraint.role || null,
       } : null,
       // INTERNAL ONLY. Never rendered into prospect-facing copy.
       affordability: affordability.checked ? {
@@ -35700,6 +36068,12 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       marketClarity: marketClarity || null,
       leadMagnet: leadMagnet || null,
       valueEquation: valueEquation || null,
+      // ══ THE ONE-CHANGE DIAGNOSIS, PUBLISHED ═══════════════════════════════
+      // Three measurements that were all computed and none of them rendered. See
+      // buildTheOneThing. Code-assembled from measurements only — no model call,
+      // no new fabrication surface, and nothing here that was not already being
+      // paid for on every lead.
+      theOneThing: buildTheOneThing({ growthConstraint, valueEquation, bottleneck, bottleneckWhy, worst: costliestHarm }),
       realSpeed: realSpeed || null,
       // Two-listings measurement — on the call sheet it is the mechanical
       // explanation for an outranked finding, so it must survive the round trip.
@@ -42944,6 +43318,383 @@ app.listen(PORT, () => {
     console.log(`\u26d4 EM DASH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ THREE DIAGNOSES COMPUTED, NONE OF THEM PUBLISHED ═════════════════════
+  // "It gives a bunch of issues but doesn't nail what is actually worth selling
+  // them." The one-change diagnosis was never missing — it was unpublished.
+  // growthConstraint reached the screen as four words in 11px grey with its `why`
+  // stripped by the server; valueEquation was returned, persisted and rendered
+  // nowhere at all; the bottleneck cascade never left the server.
+  try {
+    const _fails = [];
+    const GC = { checked: true, layer: 'CONVERSION', condition: 'They are found and trusted, and the buying path is where it stops ⚠ internal note',
+                 why: 'He is visible and the reputation is earned, so the loss is happening after they arrive.',
+                 role: 'Open at this altitude.', product: 'Website rebuild' };
+    const VE = { checked: true, shape: 'earned_but_blocked', earnedButBlocked: true, frictionCount: 3,
+                 friction: ['the only way to start is a form that waits for a human', 'on a phone the number does not dial', 'the form asks for 9 separate fields', 'a fourth', 'a fifth'],
+                 belief: ['b1', 'b2', 'b3', 'b4'] };
+    const W  = { id: 'no_after_hours', finding: 'The only route in is a phone call', costs: 'outside those hours a customer cannot take a first step', harm: 74 };
+
+    const t = buildTheOneThing({ growthConstraint: GC, valueEquation: VE, bottleneck: 'CONVERSION',
+      bottleneckWhy: 'The traffic is already bought and the page is where it dies.', worst: W });
+    if (!t) _fails.push('buildTheOneThing returns nothing on a lead where all three diagnoses were measured');
+    else {
+      if (t.layer !== 'CONVERSION') _fails.push('the binding layer does not survive');
+      if (!t.why) _fails.push('the WHY is missing — that sentence is the entire argument for selling the layer rather than the tactic, and the server used to strip it');
+      if (/⚠/.test(String(t.diagnosis))) _fails.push('the internal warning suffix is reaching the diagnosis, so every consumer has to remember to strip it by hand');
+      if (t.firstBrokenLink !== 'CONVERSION') _fails.push('the first broken link does not survive, and it is the only dependency model in the system');
+      if (!t.firstBrokenLinkWhy) _fails.push('the first broken link arrives with no reason attached');
+      if (t.earnedButBlocked !== true) _fails.push('earned_but_blocked does not survive — that is the shape of the finding Vin singled out as the good one');
+      if (t.friction.length !== 4) _fails.push(`the friction list is ${t.friction.length} long and should be capped at 4`);
+      if (t.frictionCount !== 3) _fails.push('the friction COUNT is not the measured count');
+      if (!t.costliest || t.costliest.id !== 'no_after_hours') _fails.push('what it is COSTING most does not survive');
+    }
+    // A lead where nothing was measurable must produce nothing, not an empty shell.
+    if (buildTheOneThing({}) !== null) _fails.push('a lead with no measured diagnosis still produces a block, which puts an empty heading on the screen');
+    if (buildTheOneThing({ growthConstraint: { checked: false } }) !== null) _fails.push('an unmeasured growth constraint still produces a block');
+
+    // The audit list must order by what it COSTS, not by how well it would open
+    // a cold email. Those are different questions and the audit was reading the
+    // email's answer.
+    const _rows = buildProblemList({ byHarm: [
+      { id: 'a', finding: 'A', costs: 'a', harm: 90, opener: 10, novel: 80 },
+      { id: 'b', finding: 'B', costs: 'b', harm: 50, opener: 99, novel: 80 },
+    ] }, {});
+    if (!_rows.length || _rows[0].id !== 'a') {
+      _fails.push(`the audit still ranks findings by cold-email opener score rather than by what they cost — it led with "${(_rows[0] || {}).id}" at harm ${(_rows[0] || {}).harm}`);
+    }
+    // And the one rung with a date on it must never be filed as market-wide.
+    const _amb = buildProblemList({ byHarm: [
+      { id: 'hiring_marketing_now', finding: 'They are hiring a marketing manager', costs: 'x', harm: 90, opener: 40, novel: 15 },
+      { id: 'a', finding: 'A', costs: 'a', harm: 95, opener: 90, novel: 80 },
+      { id: 'b', finding: 'B', costs: 'b', harm: 94, opener: 80, novel: 80 },
+      { id: 'c', finding: 'C', costs: 'c', harm: 93, opener: 70, novel: 80 },
+    ] }, {});
+    if (!_amb.some(r => r.id === 'hiring_marketing_now')) {
+      _fails.push('a job posting from last week is still filed as a market-wide condition and dropped from the findings — it is the only signal in the system with a clock on it');
+    }
+    // The wiring: computed is not delivered, which is this file's named disease.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('theOneThing: ' + 'buildTheOneThing({') < 0) {
+        _fails.push('the one-thing block is built and not returned, which is exactly the computed-but-not-passed failure it was written to end');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ ONE THING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ ONE THING CHECK: the binding layer with its reason, the first broken link in the revenue chain with what must be fixed before anything downstream is worth buying, the interested-to-book-to-close friction in sentences the owner can check, and what is actually costing the most are assembled into one block and returned. All four were measured on every lead and none of them was rendered. The audit's findings now order by what they cost rather than by how well they would open a cold email, and the only finding with a date on it is no longer filed as a market-wide condition.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ONE THING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE OFFER READING WAS INVERTED AT BOTH ENDS ══════════════════════════
+  // namedOffer was `!genericOnly`, and the truth table is backwards: a page
+  // running "$500 off our fall special" scored FALSE (so no_offer fired on a
+  // business plainly making an offer) and a page with no call to action anywhere
+  // scored TRUE (so no_offer went silent on the exact business it exists for).
+  // Run against the real function, not a re-implementation.
+  try {
+    const _fails = [];
+    const PAD = ' We have served this town for thirty years and we answer the phone ourselves. '.repeat(4);
+    const _offer = (copy) => readOfferStrength(copy + PAD);
+    const _cases = [
+      ['a named seasonal promotion behind a generic ask', 'Get a quote today. $500 off our fall special this month only.', true],
+      ['a free inspection', 'Contact us for a free inspection of your roof, no obligation.', true],
+      ['a specific ask', 'Book your appointment online and we will be there this week.', true],
+      ['a generic ask and nothing else', 'Contact us. Get a quote. Learn more about what we do.', false],
+      ['no call to action at all', 'We install and repair roofs across the county. Our crews are employees, not subcontractors.', false],
+    ];
+    for (const [what, copy, want] of _cases) {
+      const r = _offer(copy);
+      if (!r.checked) { _fails.push(`${what}: the offer read refused copy long enough to judge`); continue; }
+      if (r.namedOffer !== want) _fails.push(`${what} reads namedOffer=${r.namedOffer} and it is ${want}`);
+    }
+    // The rung must follow the measurement in both directions.
+    const _rung = HARM_LADDER.find(h => h.id === 'no_offer');
+    if (!_rung) {
+      _fails.push('no_offer is gone from the ladder');
+    } else {
+      if (!_rung.test({ guarantee: false, namedOffer: false })) _fails.push('no_offer no longer fires on a site with neither a guarantee nor an offer');
+      if (_rung.test({ guarantee: false, namedOffer: true })) _fails.push('no_offer still fires on a business running a named offer');
+      if (_rung.test({ guarantee: true, namedOffer: false })) _fails.push('no_offer fires on a site that does carry a guarantee');
+      // And the sentence must not claim more than the two absences it measures.
+      const _said = String(_rung.say({ tradeWord: 'roofer' }) || '');
+      if (/why to pick them|instead of the next name/i.test(_said)) {
+        _fails.push(`no_offer still asserts differentiation, which its test never measures — "${_said}"`);
+      }
+      if (!/guarantee/i.test(_said)) _fails.push(`no_offer no longer names the guarantee it actually measured — "${_said}"`);
+    }
+    // ── AND THE DELIVERY, WHICH IS WHERE THE INVERSION LIVED ───────────────
+    // Everything above tests readOfferStrength and the rung. The bug was in
+    // neither: it was the single line that hands the rung its input, which read
+    // `!offerStrength.genericOnly` instead of the measurement. Falsified —
+    // restoring that line left every fixture above green. A check that exercises
+    // the producer and the consumer can still miss the wire between them.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('offerStrength.checked ? offerStrength.' + 'namedOffer === true') < 0) {
+        _fails.push('the rung is no longer handed the measured named offer, so it is back to being inferred from the absence of generic call-to-action wording');
+      }
+      if (_src.indexOf('namedOffer: offerStrength && offerStrength.checked ? !offerStrength.' + 'genericOnly') >= 0) {
+        _fails.push('the inverted derivation is still wired to the rung');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ OFFER MEASUREMENT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ OFFER MEASUREMENT CHECK: a named offer is now read from positive evidence — a dated promotion, something free or financed, or a specific ask — instead of being inferred from the absence of generic call-to-action wording. That inversion fired the finding on businesses running a seasonal special and silenced it on businesses offering nothing at all, which is the only case it exists for. The sentence now names the two absences it measures instead of asserting the owner's site says nothing about why to choose him.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OFFER MEASUREMENT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ONLY AD SIGNALS IN THE SYSTEM, READ OFF THE WORSE COPY ═══════════
+  // The homepage is fetched twice in the same Promise.allSettled — rendered by
+  // Firecrawl, and again as a plain no-JavaScript fetch. The three advertising
+  // markers were read only from the plain one, which returns all-nulls whenever
+  // the site challenges bots. Those three gate both SPENDING findings.
+  try {
+    const _fails = [];
+    const PAD = '<p>' + 'We roof houses. '.repeat(60) + '</p>';
+    const BLOCKED = { confirmed: false, blocked: true, hasGoogleAdsTag: null, hasMetaPixel: null, hasTagManager: null };
+    const PLAIN_OK = { confirmed: true, blocked: false, hasGoogleAdsTag: false, hasMetaPixel: false, hasTagManager: false };
+
+    // 1. The case this exists for: plain fetch refused, rendered page has the tag.
+    const a = mergeAdSignals(BLOCKED, '<script>gtag(\'config\',\'AW-12345678\');</script>' + PAD);
+    if (a.hasGoogleAdsTag !== true) _fails.push('a Google Ads tag in the rendered homepage is still missed when the plain fetch was refused, which is every bot-protected site');
+    if (a.adsRead !== true) _fails.push('a rendered page we read perfectly well still counts as "we did not look", which silences both spending findings');
+
+    // 2. A positive from the plain fetch must survive a rendered page without it.
+    const b = mergeAdSignals({ ...PLAIN_OK, hasMetaPixel: true }, PAD);
+    if (b.hasMetaPixel !== true) _fails.push('a pixel found in the plain fetch is lost when the rendered page does not show it — positives must only ever merge up');
+
+    // 3. Neither copy readable: nulls, never false. An absence claim needs a read.
+    const c = mergeAdSignals(BLOCKED, '');
+    if (c.hasGoogleAdsTag !== null || c.hasTagManager !== null) _fails.push('an unreadable page reports false rather than null, which licenses an absence claim we cannot support');
+    if (c.adsRead !== false) _fails.push('an unreadable page still claims we looked');
+
+    // 4. Tag Manager matters in the ABSENCE direction — it is what licenses the
+    //    "no Google ads" half of social_spend_no_search — so it must be found.
+    const d = mergeAdSignals(BLOCKED, '<script src="https://www.googletagmanager.com/gtm.js?id=GTM-ABCD"></script>' + PAD);
+    if (d.hasTagManager !== true) _fails.push('a GTM container in the rendered page is missed, so we would tell an owner he runs no Google ads while a container we cannot see through holds the tag');
+
+    // 5. A real absence must still read false once we HAVE read a page.
+    const e2 = mergeAdSignals(PLAIN_OK, PAD);
+    if (e2.hasGoogleAdsTag !== false) _fails.push('a page we read with no ads tag no longer reads false, so the spending findings can never fire');
+
+    // 6. And the wiring. Everything above tests the function; only this proves
+    //    the merged answer is what the rungs actually read. Needles assembled at
+    //    runtime, comment lines stripped — both recorded traps in this file.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('mergeAdSignals(builtWith, ' + 'homepageHtml)') < 0) {
+        _fails.push('the ad markers are no longer merged from the rendered homepage, so they are back to the plain fetch alone');
+      }
+      if (_src.indexOf('adsReadable: !!(builtWith && builtWith.' + 'adsRead === true)') < 0) {
+        _fails.push('the did-we-look gate no longer follows the merged read, so a bot-challenged plain fetch silences both spending findings again');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ AD SIGNAL SOURCE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ AD SIGNAL SOURCE CHECK: the three advertising markers are read from the rendered homepage we already pay for as well as the plain fetch, and a tag found in either counts. They gate both spending findings and were previously read only from a no-JavaScript fetch that returns nothing on a site that challenges bots. Positives only merge up, an unreadable page still reports null rather than false, and a page we genuinely read with no tag still reads false.`);
+    }
+  } catch (e) {
+    console.log(`⛔ AD SIGNAL SOURCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A STREET ADDRESS WHERE A CITY BELONGS ════════════════════════════════
+  // readMarketClarity was handed the lead's `location` — Google's
+  // formattedAddress — as its city. The needle became "w th st overland park ks
+  // usa" and matched nothing on every lead ever run, so every lead collected the
+  // gap "their own city barely appears in their copy".
+  //
+  // Two fixtures, and the second is the one that matters. The existing
+  // POSITIONING QUOTE CHECK only ever asserted that BAD copy reads
+  // undifferentiated, so it could not detect this rung OVER-firing — which is the
+  // whole failure. A filter with no negative fixture cannot fail in the direction
+  // it actually broke.
+  try {
+    const _fails = [];
+    const _addr = '8600 W 110th St, Overland Park, KS 66210, USA';
+    const _p = parseCityState(_addr);
+    if (_p.town !== 'Overland Park') _fails.push(`the town parses as "${_p.town}" and it is "Overland Park"`);
+    if (_p.cityState !== 'Overland Park, KS') _fails.push(`the search city parses as "${_p.cityState}" and it is "Overland Park, KS"`);
+    if (/\d/.test(_p.town)) _fails.push(`the town still carries digits — "${_p.town}" — which is the street number that made the needle unmatchable`);
+    for (const [raw_, want] of [['Springfield, MO', 'Springfield'], ['Durham, NC 27701, USA', 'Durham'], ['', ''], ['Raleigh', 'Raleigh']]) {
+      if (parseCityState(raw_).town !== want) _fails.push(`"${raw_}" parses to town "${parseCityState(raw_).town}" and it is "${want}"`);
+    }
+
+    // Good local copy, naming its town repeatedly. This must NOT collect the
+    // city gap, and must NOT read undifferentiated.
+    const _local = `Overland Park roof repair and replacement.
+We are the roofer Overland Park homeowners call when a storm takes shingles off.
+Serving homeowners across Overland Park since 1998, we replace roofs, repair
+storm damage and handle the insurance paperwork for you. Every Overland Park job
+is inspected by the owner before we call it finished. If you are in Overland Park
+and your roof is leaking, we will be on it the same week. Our crews live here.
+We hold a 25 year workmanship warranty on every full replacement we install.`;
+    const _good = readMarketClarity(_local, { trade: 'roofer', city: parseCityState(_addr).town });
+    if (!_good.checked) {
+      _fails.push('the positioning read refused copy long enough to judge');
+    } else {
+      const _cityGap = (_good.gaps || []).some(g => /own city barely appears/i.test(String(g)));
+      if (_cityGap) _fails.push('copy that names its town five times still collects "their own city barely appears in their copy"');
+      if (String(_good.band).toLowerCase() === 'undifferentiated') {
+        _fails.push('copy that names its buyer and its town reads as UNDIFFERENTIATED, which fires the rung and can flip the binding layer');
+      }
+    }
+    // And the falsification: the SAME copy with the raw address must be the thing
+    // that breaks. If it does not, this fixture is measuring nothing.
+    const _bad = readMarketClarity(_local, { trade: 'roofer', city: _addr });
+    if (!(_bad.gaps || []).some(g => /own city barely appears/i.test(String(g)))) {
+      _fails.push('passing the raw street address no longer produces the false city gap, so this fixture cannot prove the fix');
+    }
+    // The one caller that must never regress.
+    if (parseCityState('Durham, NC 27701, USA').cityState !== 'Durham, NC') {
+      _fails.push('the rank query would no longer carry the state, which is the guard against a text search geocoding to another state');
+    }
+    // ── AND THE WIRING, WHICH IS WHERE THE BUG ACTUALLY WAS ────────────────
+    // Everything above tests the FUNCTION. The defect was never in the function
+    // — it was one caller handing it the wrong argument. Falsification proved
+    // this: with the caller reverted to `req.body.location`, every fixture above
+    // still passed and this check stayed green on the broken build. A check that
+    // exercises the callee cannot see a call site.
+    //
+    // Needles assembled at runtime and matched against source with comment lines
+    // stripped: a literal needle sits in this check's own body and finds itself,
+    // and the comment above quotes the broken call verbatim. Both traps are
+    // recorded in CLAUDE.md and both have been hit here before.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('city: ' + 'parseCityState(req.body.location).town') < 0) {
+        _fails.push('the positioning read is no longer handed a parsed town, so it is being given a street address again and the false city gap is back on every lead');
+      }
+      if (_src.indexOf('city: ' + "req.body.location || ''") >= 0) {
+        _fails.push('a caller is still passing the raw location straight into the positioning read');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ CITY PARSE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ CITY PARSE CHECK: one parser now serves both callers and each gets the shape it needs — "Overland Park, KS" for the search a human would type, "Overland Park" for the words their own copy would use. Copy that names its town five times no longer collects "their own city barely appears", which was firing on every lead, decrementing the positioning score, and able to flip the binding layer the whole email is built on. The negative fixture is proven to break when the raw street address is passed.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CITY PARSE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BOOKING READ DECIDED THE MOST PRIVILEGED OPENER, AND WAS BLIND ═══
+  // measureBookingPath had ONE production call site and no boot check had ever
+  // executed it. Three defects at once, all of which send:
+  //
+  //   ORDER  — the tel: and form checks ran ABOVE the scheduler check, so a site
+  //            embedding Calendly AND printing its number returned 'phone_only'.
+  //   INPUT  — it was handed the INTERIOR pages only. The homepage, which is
+  //            where the BOOK NOW button is, was excluded on purpose (correctly,
+  //            for the PRICE read the corpus was built for) and nobody checked
+  //            what else read it.
+  //   FORMAT — it was handed markdown. A scheduler embed is an <iframe> and does
+  //            not survive markdown conversion at all, so the most common shape
+  //            of real online booking was invisible whatever the order.
+  //
+  // What that sends: "the only way anyone can reach you is a phone call during
+  // office hours" to a business with online booking, and "someone ready to hire
+  // cannot book a time" to the same. Both are checkable by the owner in five
+  // seconds, and no_after_hours is SELLABLE 5 — the maximum in the ladder.
+  //
+  // Fixtures are the shapes that actually broke it, run through the real
+  // function. Falsified: restoring the old order turns 1-3 red, and dropping the
+  // homepage argument turns 4-6 red.
+  try {
+    const _fails = [];
+    const NAV = '# Riverside Roofing\n\n[Home](/) [Services](/services) [About](/about)\n\n';
+    const TEL = '[(317) 555-0142](tel:+13175550142)\n\n';
+    const FORM = 'First Name *\nLast Name *\nEmail Address *\nMessage\nSubmit\n';
+    const _say = (r) => (r && r.booking) || 'NULL';
+
+    // 1-3: a real booking route must beat a phone number and a form.
+    const _cases = [
+      ['a Calendly link beside a phone number',
+        NAV + TEL + '[Book an appointment](https://calendly.com/riverside/estimate)\n' + 'x'.repeat(300),
+        'online_booking'],
+      ['a ServiceTitan portal beside a contact form',
+        NAV + FORM + '[Schedule service](https://book.servicetitan.com/riverside)\n' + 'x'.repeat(300),
+        'online_booking'],
+      ['a Calendly IFRAME, which markdown deletes entirely',
+        NAV + TEL + '<iframe src="https://calendly.com/riverside/estimate"></iframe>' + 'x'.repeat(300),
+        'online_booking'],
+      // And the answers that must NOT change, or the fix has simply disabled the rung.
+      ['a phone link and nothing else', NAV + TEL + 'x'.repeat(300), 'phone_only'],
+      ['a form and nothing else', NAV + FORM + 'x'.repeat(300), 'form'],
+      ['no route of any kind', NAV + 'We have roofed Indianapolis since 1974. ' + 'x'.repeat(300), 'none_found'],
+    ];
+    for (const [what, page, want] of _cases) {
+      const got = _say(measureBookingPath(page, page));
+      if (got !== want) _fails.push(`${what} reads as "${got}" and it is "${want}"`);
+    }
+
+    // 4-6: the homepage has to REACH the function. This is the half that a source
+    // regex cannot prove, so the assembly is a named function and boot runs it.
+    const _home = '<iframe src="https://calendly.com/riverside/estimate"></iframe>';
+    const _interior = '--- ABOUT PAGE ---\nWe have roofed Indianapolis since 1974. ' + 'x'.repeat(300);
+    const _b = bookingSourceFor(_home, NAV, _interior);
+    if (_b.src.indexOf('calendly.com') < 0) {
+      _fails.push('the homepage SOURCE does not reach the booking read, which is the exact blindness this check exists for');
+    }
+    if (_b.text.indexOf('calendly.com') >= 0) {
+      _fails.push('page source is being passed as the VISIBLE text, which is how a phone number inside a script tag gets reported to an owner as the number on his page');
+    }
+    if (_b.text.indexOf('Riverside Roofing') < 0) _fails.push('the homepage markdown does not reach the visible-text argument');
+    if (_b.src.indexOf('ABOUT PAGE') < 0) _fails.push('the interior pages no longer reach the booking read');
+    if (_say(measureBookingPath(_b.src, _b.text)) !== 'online_booking') {
+      _fails.push('assembled end to end, a homepage carrying a scheduler embed still does not read as online booking');
+    }
+    // The interior corpus ALONE must get it wrong — otherwise the fixture proves
+    // nothing about the homepage and would pass on the build that shipped.
+    const _without = bookingSourceFor('', NAV, _interior);
+    if (_say(measureBookingPath(_without.src, _without.text)) === 'online_booking') {
+      _fails.push('the fixture passes without the homepage too, so it is not measuring what it claims to measure');
+    }
+
+    // 6b: and the call site has to hand it a homepage. Everything above proves
+    // the assembly works when it is given one; only this proves it is given one.
+    // Falsified: blanking the argument at the call site left every fixture above
+    // green, because a fixture that calls the function directly cannot see a
+    // caller. Needle assembled at runtime, source stripped of comment lines.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (_src.indexOf('apiKey, company, content, ' + 'homepageHtml)') < 0) {
+        _fails.push('the homepage source is not passed into the page audit, so the booking read is back to interior markdown only and cannot see a scheduler embed');
+      }
+      if (_src.indexOf('const _measured = ' + 'measureBookingPath(_book.src, _book.text)') < 0) {
+        _fails.push('the booking read no longer goes through the assembled source, so what it is actually reading is unverified');
+      }
+    }
+
+    // 7: the after-hours claim must be silent on a business that never closes.
+    const _rung = HARM_LADDER.find(h => h.id === 'no_after_hours');
+    if (!_rung) {
+      _fails.push('no_after_hours is gone from the ladder');
+    } else {
+      const _base = { booking: 'phone_only', bookingMeasured: true, unreadBooking: false, open24: false };
+      if (!_rung.test(_base)) _fails.push('no_after_hours no longer fires on a genuinely phone-only business');
+      if (_rung.test({ ..._base, open24: true })) {
+        _fails.push('no_after_hours still tells a business whose Google listing says "Open 24 hours" that nobody can reach it until the office opens');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ BOOKING PATH CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ BOOKING PATH CHECK: an embedded scheduler now outranks a phone number and a contact form, in page SOURCE as well as markdown, and the homepage reaches the read — the three defects that together told businesses with working online booking that the only way to reach them is a phone call during office hours. A genuinely phone-only site, a form-only site and a site with no route at all still read exactly as before, and the fixture is proven to fail without the homepage. The after-hours claim is silent on a business whose listing says it never closes.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BOOKING PATH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ NOTHING IN THIS FILE HAD EVER RUN THE SCREENSHOT SCALER ═════════════
   // The only thing guarding the audit's eyes was a source-text regex asserting
   // that the string `_pngscale.fitWithin(` appears in the homepage block. That
@@ -43074,7 +43825,7 @@ app.listen(PORT, () => {
       if (_src.indexOf('const _homeFp = ' + 'pageFingerprint(homepageMd)') < 0) {
         _fails.push('the interior pages are no longer compared against the HOMEPAGE, which is the exact case reported: four renders that were all the homepage');
       }
-      if (_src.indexOf('auditSitePages(website, firecrawlKey, apiKey, company, ' + 'content)') < 0) {
+      if (_src.indexOf('auditSitePages(website, firecrawlKey, apiKey, company, ' + 'content, homepageHtml)') < 0) {
         _fails.push('the homepage text is not passed into the page audit, so the comparison has nothing to compare against and silently never fires');
       }
       if (_src.indexOf('if (_seenShot.has(' + 'x.shot))') < 0) {
