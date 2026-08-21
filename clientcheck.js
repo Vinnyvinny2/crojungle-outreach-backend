@@ -318,6 +318,30 @@ const mergeStat = runMergeCheck();
 // findings — wrong city, wrong count, wrong rank — and the green Approve button
 // sat under it, enabled. A warning beside an enabled button is a decoration.
 {
+  // ── AN UNKNOWN COLUMN MUST NOT KILL EVERY SAVE ─────────────────────────
+  // Live 2026-08-21: two new leadToRow keys with no Supabase columns made every
+  // save fail with HTTP 400 — the red NOT SAVING banner on launch night. The
+  // recovery hinges on parsing which column Supabase could not find, so that
+  // parser is executed here against the real PGRST204 body shape.
+  {
+    let pSrc = null;
+    walk(ast, (n) => {
+      if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'sbUnknownColumnFrom' && n.init) pSrc = src.slice(n.init.start, n.init.end);
+    });
+    if (!pSrc) fails.push('sbUnknownColumnFrom is gone — a 400 from one unknown column takes every save down again, which was the launch-night NOT SAVING banner');
+    else {
+      let fn; try { fn = new Function('return ' + pSrc)(); } catch (e) { fn = null; }
+      if (!fn) fails.push('sbUnknownColumnFrom no longer compiles standalone');
+      else {
+        const real = JSON.stringify({ code: 'PGRST204', details: null, hint: null, message: "Could not find the 'held_back_contact' column of 'leads' in the schema cache" });
+        if (fn(400, real) !== 'held_back_contact') fails.push('the real PGRST204 body does not yield the column name, so the strip-and-retry can never fire and a new field still kills every save');
+        if (fn(500, real) !== null) fails.push('a 500 is being treated as an unknown column — 500 is a size symptom with its own halve-and-retry path');
+        if (fn(400, '{"message":"permission denied for table leads"}') !== null) fails.push('an RLS refusal is misread as a missing column, which would strip fields forever instead of naming the policy problem');
+        if (fn(400, 'not json at all') !== null) fails.push('garbage in the body crashes or misparses the recovery');
+      }
+    }
+  }
+
   // claimRisksOf is lifted with it: the fact-check lives in two places (the
   // lead top level before a reload, brainAudit after one) and three readers used
   // to hand-write that two-place read. The EXPORT got it wrong and printed no
