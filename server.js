@@ -397,8 +397,10 @@ const noteFirecrawlLimits = (r) => {
     // of: an operator who pinned the browser cap would silently have lost
     // pacing entirely. FC_MIN_GAP_MS is a FLOOR by its own name, so raising
     // past it is what that setting asks for.
-    if (wantGap && wantGap !== FC_GAP_LIVE) {
+    if (wantGap && Math.max(FC_MIN_GAP_MS, wantGap) !== FC_GAP_LIVE) {
       const beforeGap = FC_GAP_LIVE;
+      // May move DOWN as well as up: until this line runs we are pacing for the
+      // smallest plan they sell, and a measurement outranks that assumption.
       FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, wantGap);
       console.log(`FIRECRAWL PACE: their header says ${perMin} request(s)/minute, so the gap between starts moves ${beforeGap}ms \u2192 ${FC_GAP_LIVE}ms (${FC_GAP_SAFETY}x headroom). This number was being read and stored and never used for pacing, which is why a run could take eleven rate-limit hits while the gate happily started something new every 350ms.`);
     }
@@ -426,7 +428,36 @@ const noteFirecrawlLimits = (r) => {
 // The gap is derived from the limit with a quarter of headroom, and never goes
 // below the configured floor — a fast plan should not be slowed by this.
 const FC_GAP_SAFETY = 1.25;
-let FC_GAP_LIVE = FC_MIN_GAP_MS;
+// ══ THE CONCURRENCY DEFAULT WAS CONSERVATIVE AND THE PACE DEFAULT WAS NOT ══
+// Six lines up, FC_CONCURRENCY's own comment says "Default 2 — the Free tier's
+// concurrent-browser cap, so this is safe on the smallest plan Vin could be on."
+// The GAP defaulted to 350ms, which dispatches 171 requests a minute. The free
+// tier allows ten. Two settings describing one plan, one assuming the smallest
+// and one assuming the largest.
+//
+// And the limit can only be LEARNED FROM A RESPONSE. A lead's first fan-out is
+// seven page reads; at 350ms apart all seven are dispatched inside two and a
+// half seconds, long before the first answer comes back to teach us anything.
+// So on a small plan the burst is refused, the retries are spent, and the audit
+// runs blind — while Places, Apify and the model have already been paid for that
+// same lead. Live, 2026-08-21: three of five leads read ZERO pages, each with
+// "FIRECRAWL THROTTLED 3x" and one second of gate wait, which is the 350ms
+// default having applied throughout.
+//
+// The asymmetry is now resolved in the safe direction: assume the SMALLEST plan
+// until their own header proves otherwise, and let the measurement RELAX it.
+// Being wrong the safe way costs one gap interval, once per process, because the
+// first response teaches us the truth. Being wrong the fast way costs a blind
+// audit plus every other API already spent on that lead.
+const FC_FREE_TIER_PER_MIN = 10;
+const FC_GAP_UNKNOWN_MS = Math.max(0, parseInt(process.env.FC_GAP_UNKNOWN_MS || '', 10) || Math.ceil((60000 / FC_FREE_TIER_PER_MIN) * FC_GAP_SAFETY));
+let FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, FC_GAP_UNKNOWN_MS);
+// The pace this PROCESS actually started at, captured before anything can move
+// it. The boot check runs after fixtures have set FC_GAP_LIVE by hand, so the
+// starting value would otherwise be unobservable — and the starting value is
+// the whole point: it is the pace the first fan-out of the first lead uses,
+// before any response exists to teach us better.
+const FC_GAP_AT_START = FC_GAP_LIVE;
 const fcGapForLimit = (perMin) => {
   const n = Number(perMin);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -49754,6 +49785,28 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = 1234;
       noteFirecrawlLimits(_resp('not-a-number'));
       if (FC_GAP_LIVE !== 1234) _fails.push('an unreadable header repaced the gate');
+      // ── AND THE PLAN WE ASSUME BEFORE WE HAVE MEASURED ONE ──────────────
+      // The limit can only be learned from a RESPONSE, and a lead's first
+      // fan-out is seven page reads dispatched before any answer comes back.
+      // So the pace we start at IS the pace that decides whether the first
+      // lead reads anything. It used to be 350ms — 171 requests a minute,
+      // against a free tier that allows ten — while the concurrency default
+      // six lines above it assumed the smallest plan they sell.
+      if (FC_GAP_AT_START < fcGapForLimit(FC_FREE_TIER_PER_MIN)) {
+        _fails.push(`this process STARTED at ${FC_GAP_AT_START}ms between Firecrawl starts, which is ${Math.round(60000 / FC_GAP_AT_START)} requests a minute against a free tier that allows ${FC_FREE_TIER_PER_MIN} — and the limit can only be learned from a response, so the first fan-out is refused before anything can teach us better`);
+      }
+      if (FC_GAP_UNKNOWN_MS < fcGapForLimit(FC_FREE_TIER_PER_MIN)) {
+        _fails.push(`before any plan is measured the gate paces at ${FC_GAP_UNKNOWN_MS}ms, which is faster than the smallest plan Firecrawl sells allows — the first fan-out of every cold process is refused and the lead audits blind with Places, Apify and the model already paid for`);
+      }
+      // AND A MEASUREMENT MUST BE ABLE TO RELAX IT, or a paid plan is paced
+      // like a free one forever.
+      FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, FC_GAP_UNKNOWN_MS);
+      const _slowStart = FC_GAP_LIVE;
+      noteFirecrawlLimits(_resp('500'));
+      if (!(FC_GAP_LIVE < _slowStart)) {
+        _fails.push(`a measured 500/min plan left the gap at ${FC_GAP_LIVE}ms — the conservative assumption outranks their own header, so every paid plan runs at free-tier pace`);
+      }
+      if (FC_GAP_LIVE < FC_MIN_GAP_MS) _fails.push('relaxing went under the operator-configured floor');
     } finally {
       FC_GAP_LIVE = _gapBefore; FC_LIMIT_PER_MIN = _limBefore; FC_CONCURRENCY_LIVE = _concBefore;
     }
