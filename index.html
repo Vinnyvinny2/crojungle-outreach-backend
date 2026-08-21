@@ -3195,6 +3195,67 @@ function FindView({
       .catch(e => console.log('find options unavailable:', e.message));
     return () => { alive = false; };
   }, []);
+  // ══ SCOPE THE RUN BEFORE YOU PAY FOR IT ═══════════════════════════════════
+  // The market and trade pickers existed, and lived in a COLLAPSED panel BELOW
+  // the results list — which only renders once discovered.length > 0. So before
+  // the first run there was no way to choose a market at all, and after a run
+  // you had to know to expand a toggle five hundred lines down the page. Vin,
+  // plainly: "theres nothing on the frontend that allows me to apply the filter
+  // for when i find leads for location based."
+  //
+  // It is the same pullFilters state, rendered once, where the decision is
+  // actually made: directly above the Find button, always visible, both when the
+  // queue is empty and when it is full. Nothing was duplicated — the two controls
+  // were REMOVED from the collapsed panel, so each one has exactly one home.
+  const scopeBar = React.createElement('div', {
+    style: { border: '1px solid var(--b)', borderRadius: 12, padding: '16px 18px', marginBottom: 18, maxWidth: 920 },
+  },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 } },
+      React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)' } }, 'Scope this run'),
+      (pullFilters.cities.length || pullFilters.niches.length)
+        ? React.createElement('button', {
+            onClick: () => setPullFilters(p => ({ ...p, cities: [], niches: [] })),
+            style: { background: 'none', border: 'none', color: 'var(--m2)', fontSize: 12, cursor: 'pointer', padding: 0 },
+          }, 'Reset')
+        : React.createElement('div', { style: { fontSize: 12, color: 'var(--m)' } }, 'Everything, everywhere')),
+
+    React.createElement('div', { style: { marginBottom: 14 } },
+      React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginBottom: 7 } }, 'Trade'),
+      React.createElement('select', {
+        value: pullFilters.niches[0] || '',
+        onChange: e => setPullFilters(p => ({ ...p, niches: e.target.value ? [e.target.value] : [] })),
+        style: { padding: '8px 11px', borderRadius: 8, border: '1px solid var(--b)', background: 'var(--s)',
+          color: 'var(--t)', fontFamily: 'Inter,sans-serif', fontSize: 13, minWidth: 240 },
+      },
+        React.createElement('option', { value: '' }, 'All trades'),
+        ...(findOptions.categories || []).map(n => React.createElement('option', { key: n, value: n }, n)))),
+
+    React.createElement('div', null,
+      React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginBottom: 7 } },
+        pullFilters.cities.length ? ('Markets \u2014 ' + pullFilters.cities.length + ' selected') : 'Markets \u2014 all'),
+      (findOptions.cities || []).length
+        ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+            findOptions.cities.map(c => {
+              const on = pullFilters.cities.includes(c);
+              return React.createElement('button', {
+                key: c,
+                onClick: () => setPullFilters(p => ({ ...p,
+                  cities: on ? p.cities.filter(x => x !== c) : p.cities.concat([c]) })),
+                style: {
+                  fontSize: 12, padding: '5px 11px', borderRadius: 8, cursor: 'pointer',
+                  border: '1px solid ' + (on ? 'var(--a)' : 'var(--b)'),
+                  background: on ? 'var(--a)' : 'transparent',
+                  color: on ? '#0b0d10' : 'var(--m2)',
+                  fontWeight: on ? 600 : 400,
+                },
+              }, c);
+            }))
+        : React.createElement('div', { style: { fontSize: 12, color: 'var(--m)' } },
+            'Market list unavailable \u2014 the run will search every market.')),
+
+    React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', marginTop: 12, lineHeight: 1.5 } },
+      'Narrowing costs less. One trade in one market makes a fraction of the searches a national run does.'));
+
   const [error, setError] = useState('');
   const [loadingCount, setLoadingCount] = useState(0);
   const [lastRun, _setLastRun] = useState(localStorage.getItem('cj_last_discover') || null);
@@ -4122,7 +4183,7 @@ function FindView({
     style: {
       maxWidth: 920
     }
-  }, loading && React.createElement(FindLoader, { count: loadingCount }), !loading && discovered.length === 0 && React.createElement('div', {
+  }, scopeBar, loading && React.createElement(FindLoader, { count: loadingCount }), !loading && discovered.length === 0 && React.createElement('div', {
     style: {
       textAlign: 'center',
       padding: '48px 0',
@@ -4610,46 +4671,10 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             React.createElement('input', { type:'number', min:'0', placeholder:'any',
               value: pullFilters.minReviews, style:_fInput, onChange: e => _set('minReviews', e.target.value) })),
 
-          React.createElement('div', { style:{ ..._fWrap, minWidth:200 } },
-            React.createElement('div', { style:_fLabel }, 'Niche'),
-            React.createElement('select', { value: pullFilters.niches[0] || '', style:{ ..._fInput, minWidth:200 },
-              onChange: e => _set('niches', e.target.value ? [e.target.value] : []) },
-              React.createElement('option', { value:'' }, 'All trades'),
-              ...[...new Set(sorted.map(c => c.industry).filter(Boolean))].sort()
-                .map(n => React.createElement('option', { key:n, value:n }, n)))),
-
-          // ══ SEVERAL MARKETS, NOT ONE ═══════════════════════════════════════
-          // A single dropdown could only ever express "all twenty" or "exactly
-          // one". The server has always accepted an array and filtered GP_CITIES
-          // against it; only the picker was the bottleneck. Tick as many as you
-          // want and the run searches those and nothing else.
-          React.createElement('div', { style:{ ..._fWrap, minWidth: 250, flexBasis: '100%' } },
-            React.createElement('div', { style: { display:'flex', alignItems:'baseline', gap:8, marginBottom:4 } },
-              React.createElement('div', { style:_fLabel },
-                pullFilters.cities.length ? 'Markets \u2014 ' + pullFilters.cities.length + ' selected' : 'Markets \u2014 all'),
-              pullFilters.cities.length ? React.createElement('button', {
-                style: { background:'none', border:'none', color:'var(--m2)', fontSize:11, cursor:'pointer', padding:0 },
-                onClick: () => _set('cities', []),
-              }, 'clear') : null),
-            React.createElement('div', {
-              style: { display:'flex', flexWrap:'wrap', gap:6, maxHeight: 132, overflowY:'auto' },
-            }, (findOptions.cities.length ? findOptions.cities : []).map(c => {
-              const on = pullFilters.cities.includes(c);
-              return React.createElement('button', {
-                key: c,
-                onClick: () => _set('cities', on ? pullFilters.cities.filter(x => x !== c) : pullFilters.cities.concat([c])),
-                style: {
-                  fontSize: 11, padding: '4px 9px', borderRadius: 99, cursor: 'pointer',
-                  border: '1px solid ' + (on ? 'var(--a)' : 'var(--b)'),
-                  background: on ? 'var(--a)' : 'transparent',
-                  color: on ? '#0b0d10' : 'var(--m2)',
-                  fontWeight: on ? 700 : 500,
-                },
-              }, c);
-            })),
-            findOptions.cities.length ? null : React.createElement('div',
-              { style: { fontSize: 11, color: 'var(--m)' } },
-              'Market list unavailable \u2014 the run will search every market.')),
+          // Trade and Markets are NOT here any more. They decide what the next
+          // run BUYS, so they belong beside the Find button where that decision
+          // is made, not in a collapsed panel below the results. Same state,
+          // one home each. What is left here narrows the list on screen only.
 
           _activeCount ? React.createElement('button', {
             onClick: () => setPullFilters({ niches:[], cities:[], minRating:'', maxRating:'', minReviews:'', websiteShape:'any' }),
@@ -4657,7 +4682,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               color:'var(--m2)', cursor:'pointer', fontFamily:'Inter,sans-serif', fontSize:13 } }, 'Clear') : null,
 
           React.createElement('div', { style:{ flexBasis:'100%', fontSize:11.5, color:'var(--m2)', marginTop:2 } },
-            'These narrow the list below straight away. They also narrow the next pull \u2014 a single niche in one market makes a fraction of the queries.')
+            'These narrow the list on screen only. Trade and market live above, next to Find, because they decide what the next run buys.')
         ) : null);
 
       return React.createElement(React.Fragment, null, filterBar, verifiedToggle, tabBar, emptyState, ...cards);
@@ -6046,6 +6071,10 @@ function ResearchView({
   };
   const links = lead ? RLINKS(lead.name, lead.website) : [];
   const hasResearch = !!(lead && (lead.buckets || lead.flaws && lead.flaws.length > 0));
+  // NOTE: BucketCard is defined here and rendered nowhere in this file. Left in
+  // place deliberately on launch night - it costs nothing at runtime, and
+  // removing a component means finding its true closing brace, which is exactly
+  // the kind of edit that breaks a screen the night before it is needed.
   const BucketCard = ({
     title,
     emoji,
@@ -6054,7 +6083,7 @@ function ResearchView({
   }) => {
     if (!data) return null;
     const entries = Object.entries(data).filter(([k, v]) => v && typeof v === 'string' && !k.match(/Weak$|onfirmed$|Detail$|Note$/));
-    return React.createElement('div', {
+  return React.createElement('div', {
       style: {
         background: borderColor + '08',
         border: '1px solid ' + borderColor + '30',
@@ -6395,7 +6424,7 @@ function ResearchView({
       // when the real answer is that we were not allowed to look. Shown above the
       // reachability breakdown because it invalidates it.
       lead.rateLimited && React.createElement('div', {
-        style: { marginBottom: 10, padding: '9px 12px', background: 'rgba(245,158,11,.08)', borderRadius: 7, border: '1px solid rgba(245,158,11,.35)' }
+        style: { marginBottom: 10, padding: '10px 13px', background: 'transparent', borderRadius: 9, border: '1px solid var(--b)' }
       },
         React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--am)', marginBottom: 4 } }, 'Rate limited — this audit is incomplete'),
         React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.5 } },
@@ -6404,7 +6433,7 @@ function ResearchView({
       // Always-visible reachability breakdown — so you can see EXACTLY why the
       // score is what it is (this was buried in a hover tooltip before).
       !!(lead.reachabilityReasons && lead.reachabilityReasons.length) && React.createElement('div', {
-        style: { marginBottom: 10, padding: '9px 12px', background: (lead.reachability||0) < 45 ? 'rgba(239,68,68,.06)' : 'var(--s)', borderRadius: 7, border: '1px solid ' + ((lead.reachability||0) < 45 ? 'rgba(239,68,68,.25)' : 'var(--b)') } },
+        style: { marginBottom: 10, padding: '10px 13px', background: 'transparent', borderRadius: 9, border: '1px solid var(--b)' } },
         React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: (lead.reachability||0) < 45 ? 'var(--r)' : 'var(--m)', marginBottom: 6 } }, 'Why reachability is ' + (lead.reachability || 0) + '/100'),
         ...(lead.reachabilityReasons || []).map((r, i) => React.createElement('div', {
           key: i, style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.5, marginBottom: 3, paddingLeft: 12, position: 'relative' }
@@ -6442,8 +6471,8 @@ function ResearchView({
         style: {
           padding: '9px 13px', borderRadius: 8, marginBottom: 2,
           display: 'flex', alignItems: 'center', gap: 9,
-          background: lead.domainMatch === 'no' ? 'rgba(239,68,68,.1)' : lead.domainMatch === 'yes' ? 'rgba(34,197,94,.08)' : 'var(--s)',
-          border: '1px solid ' + (lead.domainMatch === 'no' ? 'var(--r)' : lead.domainMatch === 'yes' ? 'rgba(34,197,94,.3)' : 'var(--b)')
+          background: 'transparent',
+          border: '1px solid ' + (lead.domainMatch === 'no' ? 'rgba(248,113,113,.45)' : 'var(--b)')
         }
       },
         React.createElement('span', { style: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: lead.domainMatch === 'no' ? 'var(--r)' : lead.domainMatch === 'yes' ? 'var(--g)' : 'var(--am)' } }),
@@ -6492,8 +6521,8 @@ function ResearchView({
       hasResearch && (lead.ownerEmailMatch === 'different_person' || lead.ownerEmailMatch === 'shared_inbox') && React.createElement('div', {
         style: {
           padding: '10px 14px', borderRadius: 9,
-          background: lead.ownerEmailMatch === 'different_person' ? 'rgba(239,68,68,.10)' : 'rgba(245,158,11,.10)',
-          border: '1px solid ' + (lead.ownerEmailMatch === 'different_person' ? 'var(--r)' : 'rgba(245,158,11,.35)')
+          background: 'transparent',
+          border: '1px solid ' + (lead.ownerEmailMatch === 'different_person' ? 'rgba(248,113,113,.45)' : 'var(--b)')
         }
       },
         React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: lead.ownerEmailMatch === 'different_person' ? 'var(--r)' : '#fbbf24', marginBottom: 4 } },
@@ -6663,9 +6692,9 @@ function ResearchView({
                 key: t.label,
                 style: {
                   fontSize: 11, padding: '3px 9px', borderRadius: 5, fontWeight: 500,
-                  background: t.tone === 'good' ? 'rgba(34,197,94,.10)' : t.tone === 'urgent' ? 'rgba(245,158,11,.12)' : 'var(--b)',
+                  background: 'transparent',
                   color: t.tone === 'good' ? '#4ade80' : t.tone === 'urgent' ? '#fbbf24' : 'var(--t)',
-                  border: '1px solid ' + (t.tone === 'good' ? 'rgba(34,197,94,.25)' : t.tone === 'urgent' ? 'rgba(245,158,11,.3)' : 'transparent')
+                  border: '1px solid var(--b)'
                 }
               }, t.label))
             ) : null;
@@ -9072,15 +9101,11 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
     className: 'content'
   }, isHot && React.createElement('div', {
     style: {
-      padding: '12px 16px',
-      background: 'rgba(239,68,68,0.08)',
-      border: '1px solid rgba(239,68,68,0.25)',
-      borderRadius: 10,
       marginBottom: 16,
       fontSize: 13,
-      color: 'var(--r)'
+      color: 'var(--m2)'
     }
-  }, '🔥 Hot Lead — ICP Score ' + (lead.icpScore || 0) + '/100 · CEO personal outreach recommended'),
+  }, 'ICP score ' + (lead.icpScore || 0) + ' of 100. Worth Mike taking personally.'),
     // ── SAY IT LOUDLY IF THIS IS NOT THE LEAD YOU ASKED FOR ──────────────
     // Placed ABOVE the email, not below it, because the failure mode is reading
     // the copy first and only then noticing the company name in the header.
@@ -9128,14 +9153,13 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
     style: {
       display: 'inline-block',
       fontSize: 11,
-      padding: '3px 8px',
-      borderRadius: 20,
-      background: 'rgba(239,68,68,0.1)',
-      border: '1px solid rgba(239,68,68,0.2)',
-      color: '#fca5a5',
+      padding: '4px 9px',
+      borderRadius: 8,
+      border: '1px solid var(--b)',
+      color: 'var(--m2)',
       margin: 3
     }
-  }, '✗ ' + f))), React.createElement('div', {
+  }, f))), React.createElement('div', {
     style: {
       fontSize: 12,
       color: 'var(--m2)',
@@ -9236,9 +9260,8 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
     // morning's because it WAS the morning's prompt, and nothing on screen said
     // so, so we both judged the output and guessed at the cause.
     lead.promptPath && React.createElement('div', {
-      style: { fontSize: 11, marginTop: 6, marginBottom: 2, padding: '6px 9px', borderRadius: 6,
-        background: lead.promptPath === 'measured' ? 'rgba(34,197,94,.10)' : 'rgba(245,158,11,.10)',
-        color: lead.promptPath === 'measured' ? '#4ade80' : '#fbbf24', fontWeight: 400, fontFamily: 'inherit' },
+      style: { fontSize: 11, marginTop: 8, marginBottom: 2, lineHeight: 1.5,
+        color: 'var(--m)', fontWeight: 400, fontFamily: 'inherit' },
     // ══ THE LABEL MUST MATCH WHO ACTUALLY WROTE IT ═══════════════════════════
     // The composed path now hands its verified pieces to the model, which
     // connects them into prose — so "no model wrote any part of this email" was
@@ -9708,14 +9731,12 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
     const _sim = (lead.generatedResult && lead.generatedResult.prospectSim) || lead.prospectSim || null;
     const _simPanel = _sim ? React.createElement('div', {
       style: {
-        marginTop: 10, marginBottom: 6, padding: '11px 13px', borderRadius: 8,
-        background: _sim.verdict === 'reply' ? 'rgba(74,222,128,.08)' : _sim.verdict === 'ignore' ? 'rgba(245,158,11,.08)' : 'rgba(248,113,113,.10)',
-        border: '1px solid ' + (_sim.verdict === 'reply' ? 'rgba(74,222,128,.3)' : _sim.verdict === 'ignore' ? 'rgba(245,158,11,.3)' : 'rgba(248,113,113,.35)'),
+        marginTop: 10, marginBottom: 6, padding: '13px 15px', borderRadius: 10,
+        background: 'transparent', border: '1px solid var(--b)',
       },
     },
       React.createElement('div', {
-        style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 5,
-          color: _sim.verdict === 'reply' ? '#4ade80' : _sim.verdict === 'ignore' ? '#fbbf24' : '#f87171' },
+        style: { fontSize: 11, fontWeight: 600, marginBottom: 6, color: 'var(--m2)' },
       }, 'Read as ' + (lead.founderName || 'the owner') + ' \u2014 ' + _sim.verdict),
       React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: _sim.wouldReply ? 5 : 0 } },
         '\u201c' + _sim.reaction + '\u201d'),
@@ -9747,8 +9768,8 @@ const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
     const _blocked = (_ov && (_ov.verdict === 'CALL_INSTEAD' || _ov.verdict === 'TOO_WEAK')) || _thinBody;
     const _verdictPanel = _blocked ? React.createElement('div', {
       style: {
-        marginTop: 10, marginBottom: 6, padding: '11px 13px', borderRadius: 8,
-        background: 'rgba(248,113,113,.10)', border: '1px solid rgba(248,113,113,.35)',
+        marginTop: 10, marginBottom: 6, padding: '13px 15px', borderRadius: 10,
+        background: 'transparent', border: '1px solid rgba(248,113,113,.35)',
       },
     },
       React.createElement('div', {
