@@ -7017,8 +7017,19 @@ function ResearchView({
       // ═══ RESEARCH LOADING OVERLAY — shows real progress while research runs ═
       (researchingId && lead && researchingId === lead.id) && React.createElement(ResearchLoader, { step: researchStep }),
 
-      // ═══ AUDIT INTEGRITY BANNER — always know WHAT we audited ═══════════
-      hasResearch && React.createElement('div', {
+      // ═══ AUDIT INTEGRITY BANNER — only when something needs saying ══════
+      // This used to render on EVERY audited lead, and on a healthy one it said
+      // "Confirmed: auditing https://x.com" with the same URL repeated on the
+      // line beneath — under a header that already reads "✓ real domain
+      // resolved", beside a Website field carrying it a fourth time. Four copies
+      // of one domain is most of why this screen felt busy.
+      //
+      // Same rule the colour pass established: a panel confirming the ordinary
+      // case appears on nearly every lead and is exactly what drowns the two
+      // that mean DO NOT AUDIT THIS. So it speaks only when the domain is wrong,
+      // unconfirmed, or no site was read at all — and on a clean lead the header
+      // carries it in four words.
+      hasResearch && !(lead.domainMatch === 'yes' && lead.auditedWebsite) && React.createElement('div', {
         style: {
           padding: '9px 13px', borderRadius: 8, marginBottom: 2,
           display: 'flex', alignItems: 'center', gap: 9,
@@ -7050,8 +7061,10 @@ function ResearchView({
               ? 'No website audited — findings are from signals only'
             : 'Website not fully confirmed — verify before sending'
           ),
-          (lead.domainMatchReason || lead.auditedWebsite) && React.createElement('div', { style: { fontSize: 11, color: 'var(--m2)', marginTop: 2 } },
-            lead.domainMatch === 'no' ? lead.domainMatchReason : lead.auditedWebsite
+          // Only the REASON. This second line used to echo lead.auditedWebsite,
+          // which is the same string the line above it already contains.
+          (lead.domainMatch === 'no' && lead.domainMatchReason) && React.createElement('div', { style: { fontSize: 11, color: 'var(--m2)', marginTop: 2 } },
+            lead.domainMatchReason
           )
         ),
         (lead.domainMatch === 'no' || !lead.auditedWebsite) && React.createElement('button', {

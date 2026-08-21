@@ -7005,6 +7005,8 @@ const fcNote = (paid, kind, what) => {
     // itself for two other leads that were mid-run.
     if (FIRECRAWL_OUT_OF_CREDITS) {
       FIRECRAWL_OUT_OF_CREDITS = false;
+      FIRECRAWL_CREDITS_EMPTY_AT = 0;
+      _fcProbeAt = 0;
       console.log(`\u{1F7E2} FIRECRAWL CREDITS ARE BACK \u2014 a paid [${kind}] call just succeeded. Every lead that started before this moment still ran short and is still marked as such; the latch only stops blocking NEW work.`);
     }
     const _cost = fcCreditCost(kind);
@@ -7360,7 +7362,7 @@ const cachedSiteMap = (url) => {
 const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   void search;
   if (!fcKey || !url) return [];
-  if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
+  if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
   let _mk = '';
   try { _mk = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { _mk = url; }
   const _hit = _MAP_CACHE.get(_mk);
@@ -7467,7 +7469,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 // full page content, not just snippets.
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
   if (!fcKey || !query) return [];
-  if (FIRECRAWL_OUT_OF_CREDITS) return [];   // fail fast — no point firing doomed calls
+  if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
   // Flag whether the results are being SCRAPED, not just listed — search bills 2
   // per 10 results, and each page read on top is a further credit. Without this the
   // meter reported 2 for a call that actually cost 5.
@@ -7517,6 +7519,45 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
 // has since recovered.
 let FIRECRAWL_OUT_OF_CREDITS = false;
 let FIRECRAWL_CREDITS_EMPTY_AT = 0;
+// ══ A LATCH WITH NO WAY BACK IS A DEADLOCK ═════════════════════════════════
+// 2026-08-21: the reset moved off "a request started" (where three concurrent
+// leads cleared it for each other) and onto "a paid call SUCCEEDED". That half
+// was right. The consequence was not thought through: every Firecrawl door
+// fails fast while the latch is set, and the queue refuses the lead before it
+// starts — so no paid call can EVER be made, so fcNote(true) can never run, so
+// the latch can never clear. One 402 killed Firecrawl for the whole process
+// until Render restarted it. Vin topped the account up and the server had no
+// way to find out; a five-lead batch came back "4 audit failed: FIRECRAWL IS
+// OUT OF CREDITS" against an account with credits in it.
+//
+// This is a circuit breaker that was built without its half-open state.
+//
+// Time-based on purpose. An in-flight flag would have to be released on every
+// exit path — success, credit error, timeout, 429, throw — and the one path
+// somebody forgets is a second deadlock wearing different clothes. A clock
+// cannot be forgotten.
+const FC_CREDIT_RETRY_MS = Math.max(15000, parseInt(process.env.FC_CREDIT_RETRY_MS || '60000', 10) || 60000);
+let _fcProbeAt = 0;
+// READ-ONLY. True while the balance has read empty and the cooldown has not run
+// out. The queue gate uses this, so it can hold a lead back without spending
+// the probe on a lead that has not started.
+const fcCreditsCoolingDown = () =>
+  FIRECRAWL_OUT_OF_CREDITS && (Date.now() - (FIRECRAWL_CREDITS_EMPTY_AT || 0) < FC_CREDIT_RETRY_MS);
+// The question every Firecrawl door asks. It spends ONE probe per cooldown
+// window: once the cooldown is over, exactly one caller is let through to find
+// out whether the balance is back. If it answers, fcNote clears the latch for
+// everybody; if it is refused again, the trip restarts the clock. This is the
+// ONLY way a topped-up account is ever discovered, because every other door is
+// shut by definition.
+const fcCreditsBlocked = () => {
+  if (!FIRECRAWL_OUT_OF_CREDITS) return false;
+  const now = Date.now();
+  if (now - (FIRECRAWL_CREDITS_EMPTY_AT || 0) < FC_CREDIT_RETRY_MS) return true;
+  if (now - _fcProbeAt < FC_CREDIT_RETRY_MS) return true;
+  _fcProbeAt = now;
+  console.log(`\u{1F7E1} FIRECRAWL CREDIT PROBE \u2014 the balance has read empty for ${Math.round((now - (FIRECRAWL_CREDITS_EMPTY_AT || now)) / 1000)}s. Letting ONE call through to find out whether it has been topped up. If it answers, the latch clears for every lead; if it is refused again the clock restarts. Without this the first 402 would shut Firecrawl down for the life of the process.`);
+  return false;
+};
 
 // ═══ HUNTER QUOTA — THE OTHER SILENT FALSE NEGATIVE ════════════════════════
 // hunterFindPersonEmail ended in `if (!email) return null`. When Hunter has quota
@@ -7594,11 +7635,32 @@ const hunterGuard = (d, status, where) => {
   return false;
 };
 
-const isCreditError = (d, status) =>
-  status === 402 ||
-  /insufficient credits|payment required|out of credits|credit limit|upgrade your plan/i.test(
-    String(d?.error || d?.message || '')
-  );
+// ══ "UPGRADE YOUR PLAN" IS AN UPSELL LINE, NOT AN EMPTY BALANCE ════════════
+// Firecrawl appends that phrase to several different errors, and their
+// CONCURRENCY limit message is one of them \u2014 which comes back 429, not 402.
+//
+// So on a BULK run, where three leads each fan out seven page reads against a
+// two-browser cap, an ordinary throttle read "...upgrade your plan for higher
+// limits", this predicate called it an empty balance, and the credit latch
+// tripped on an account with credits in it. A single lead never reaches the
+// concurrency cap and never tripped it. That is exactly the shape Vin reported:
+// "when auditing in bulk they all come back saying firecrawl out of credits even
+// tho its not out of credits \u2014 when i ran one singular lead it worked".
+//
+// The two predicates are mutually exclusive now and a THROTTLE always wins, so
+// the answer cannot depend on which one a call site happens to test first \u2014
+// fcAsk tested credits first, which is why the throttle never got a hearing.
+// A 402 is still definitive and short-circuits ahead of everything.
+const isCreditError = (d, status) => {
+  if (status === 402) return true;
+  // Never latch on a throttle. Holding the gate is cheap and self-clearing;
+  // latching wrongly shut Firecrawl down for the life of the process.
+  if (isRateLimited(d, status)) return false;
+  const t = String(d?.error || d?.message || '');
+  // "upgrade your plan" is deliberately absent: on its own it is marketing copy
+  // attached to whatever went wrong, not a statement about the balance.
+  return /insufficient credits|out of credits|no credits|credit limit (reached|exceeded)|payment required/i.test(t);
+};
 
 // ═══ RATE LIMITING — THE SILENT FALSE NEGATIVE ═════════════════════════════
 // Firecrawl throttles per minute (roughly 20/min on free, 60-200 on paid tiers),
@@ -7640,9 +7702,13 @@ const fcNoteRateLimited = (r, fallbackMs, where, gate = _fcGate) => {
   console.log(`⏳ FIRECRAWL RATE LIMITED${where ? ' on ' + String(where).slice(0, 70) : ''} — holding the WHOLE gate for ${Math.round(waitMs / 1000)}s (${src}). Backing off one request while the gate starts the next 350ms later is what turned a limit into eleven hits and an incomplete audit.`);
   return waitMs;
 };
+// Concurrency is a throttle, not a balance. Their concurrent-browser message is
+// the one that carries "upgrade your plan", so it has to be recognised HERE or
+// isCreditError claims it. Stems written without a trailing word boundary on
+// purpose \u2014 CLAUDE.md records \\bplumb\\b failing to match "plumbing" three times.
 const isRateLimited = (d, status) =>
   status === 429 ||
-  /local_rate_limited|rate.?limit|too many requests|slow down/i.test(
+  /local_rate_limited|rate.?limit|too many requests|slow down|concurren\w*|browser limit/i.test(
     String(d?.error || d?.message || d?.data?.markdown || d?.markdown || '')
   );
 
@@ -7706,7 +7772,7 @@ const rememberPageShot = (url, shot) => {
 const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
   const out = new Map();
   if (!fcKey || !Array.isArray(urls) || urls.length === 0) return out;
-  if (FIRECRAWL_OUT_OF_CREDITS) return out;
+  if (fcCreditsBlocked()) return out;
 
   // Serve anything we already hold for free, and only pay for the rest.
   const need = [];
@@ -7862,7 +7928,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
   // FAIL FAST once the account is empty. Without this every lead still fires ~20
   // doomed HTTP calls and burns 15+ seconds before failing, which is what made the
   // UI look like it was still working when nothing was happening.
-  if (FIRECRAWL_OUT_OF_CREDITS) return '';
+  if (fcCreditsBlocked()) return '';
   // OUR OWN dedupe layer — a repeat URL inside the same run costs nothing.
   const _ck = String(url);
   const _c = _SCRAPE_CACHE.get(_ck);
@@ -31157,7 +31223,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // as a real 402 so the caller's branch is unchanged — and that branch
         // already refuses to remember the domain as empty, which is what keeps
         // an unread page from becoming an absence claim.
-        if (FIRECRAWL_OUT_OF_CREDITS) {
+        if (fcCreditsBlocked()) {
           console.log(`\u{1F534} NOT ASKING [${kind}] ${target} \u2014 Firecrawl is out of credits, so this request would be refused and would still cost a browser slot and 20 seconds of this lead's clock. NOTHING about this site is known.`);
           return { refused: true, status: 402, body: null, reason: 'out of credits (not asked)', ms: 0 };
         }
@@ -31180,7 +31246,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const ms = Date.now() - t0;
         const errText = String(body?.error || body?.message || (body?.details ? JSON.stringify(body.details) : '') || '').slice(0, 400);
         if (isCreditError(body, r.status)) {
-          FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
+          FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
           console.log(`🔴 FIRECRAWL OUT OF CREDITS — the homepage request for ${target} was refused (HTTP ${r.status}). NOTHING about this site is known and no absence may be claimed from it. Top up before judging any audit from this run.`);
           return { refused: true, status: r.status, body, reason: errText || 'out of credits', ms };
         }
@@ -39084,11 +39150,39 @@ app.post('/api/research-async', (req, res) => {
   // On five leads that is one wasted lead. On fifty it is forty-seven half-blind
   // audits handed to a salesperson, and the money is spent either way. Refusing
   // is strictly cheaper than proceeding, and the refusal says what to do.
-  const _refuseIfBroke = () => {
+  //
+  // But refusing INSTANTLY turned a five-lead batch into "4 audit failed" on an
+  // account that had credits in it, because the latch could not clear. It waits
+  // now: an empty balance is usually a top-up away, and a lead that waits two
+  // minutes and then runs properly is worth far more than a lead failed in one
+  // second. The wait is bounded, so a genuinely empty account still ends the
+  // batch rather than hanging it.
+  const FC_CREDIT_WAIT_MS = Math.max(0, parseInt(process.env.FC_CREDIT_WAIT_MS || '180000', 10) || 180000);
+  const _refuseIfBroke = async () => {
     if (!FIRECRAWL_OUT_OF_CREDITS) return null;
+    const _t0 = Date.now();
+    let _said = false;
+    // Waits out the cooldown, then lets the loop go round once more so a probe
+    // has a chance to fire and clear the latch before we give up on this lead.
+    while (FIRECRAWL_OUT_OF_CREDITS && Date.now() - _t0 < FC_CREDIT_WAIT_MS) {
+      if (!_said) {
+        _said = true;
+        console.log(`\u23f8 JOB ${id} [${job.company}]: HOLDING \u2014 the Firecrawl balance last read empty. Nothing is being spent while this waits. It will re-test every ${Math.round(FC_CREDIT_RETRY_MS / 1000)}s and start on its own the moment a call answers; if the balance is still empty in ${Math.round(FC_CREDIT_WAIT_MS / 60000)} minutes this lead is refused untouched so you can re-run it after topping up.`);
+      }
+      await new Promise(r => setTimeout(r, 5000));
+      // A door somewhere else may have probed and cleared it; if not, and the
+      // cooldown has expired, spend a probe here so a waiting batch is not
+      // dependent on some other lead happening to try.
+      if (FIRECRAWL_OUT_OF_CREDITS && !fcCreditsCoolingDown()) fcCreditsBlocked();
+    }
+    if (!FIRECRAWL_OUT_OF_CREDITS) {
+      console.log(`\u25b6 JOB ${id} [${job.company}]: the balance answered after ${Math.round((Date.now() - _t0) / 1000)}s of holding \u2014 starting normally.`);
+      return null;
+    }
     return 'Firecrawl is out of credits, so this lead was NOT researched and nothing was spent on it. '
+      + `We held it for ${Math.round((Date.now() - _t0) / 1000)}s and re-tested the balance, and it was still empty. `
       + 'An audit run now would be built on zero pages of their website while still paying for Google Places, the review pull and four model calls. '
-      + 'Top up and re-run this lead.';
+      + 'Top up at firecrawl.dev/pricing and re-run this lead.';
   };
   const _waitForSlot = async () => {
     let waited = 0;
@@ -39144,12 +39238,12 @@ app.post('/api/research-async', (req, res) => {
 
   Promise.resolve()
     .then(() => _waitForSlot())
-    .then(() => {
+    .then(async () => {
       // Checked AFTER the wait, not before it: a lead can queue for ninety
       // seconds and the balance can empty while it waits, which is exactly what
       // happened to Stanley Schultze. Refusing here costs nothing; proceeding
       // costs a full paid research cycle and produces an audit nobody can use.
-      const _broke = _refuseIfBroke();
+      const _broke = await _refuseIfBroke();
       if (_broke) {
         job.status = 'error';
         job.phase = 'dead';
@@ -40550,6 +40644,118 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ QUOTE PROVENANCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE CREDIT LATCH HAD NO WAY BACK ══════════════════════════════════════
+  // Live, 2026-08-21: a five-lead batch came back "4 audit failed: FIRECRAWL IS
+  // OUT OF CREDITS" on an account with credits in it. The latch is cleared only
+  // by a paid call SUCCEEDING, and while it is set every Firecrawl door fails
+  // fast and the queue refuses the lead — so no paid call could ever be made and
+  // the latch could never clear. One 402 shut Firecrawl down for the life of the
+  // process. A single lead run right after a deploy worked, which is what made
+  // it look like a bulk-only bug.
+  //
+  // Executed against the real functions, and the assertion that matters is
+  // RECOVERY: a breaker that cannot re-close is not a breaker, it is an outage.
+  try {
+    const _fails = [];
+    const _saveLatch = FIRECRAWL_OUT_OF_CREDITS, _saveAt = FIRECRAWL_CREDITS_EMPTY_AT, _saveProbe = _fcProbeAt;
+    try {
+      // Healthy: nothing is blocked and nothing is cooling down.
+      FIRECRAWL_OUT_OF_CREDITS = false; FIRECRAWL_CREDITS_EMPTY_AT = 0; _fcProbeAt = 0;
+      if (fcCreditsBlocked()) _fails.push('a healthy account reads as blocked, so no lead could ever be scraped');
+      if (fcCreditsCoolingDown()) _fails.push('a healthy account reads as cooling down, so the queue would hold every lead');
+
+      // Just tripped: everything is blocked, and the queue holds rather than spends.
+      FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); _fcProbeAt = 0;
+      if (!fcCreditsBlocked()) _fails.push('a freshly emptied balance does not block the doors, so every lead fires doomed paid calls');
+      if (!fcCreditsCoolingDown()) _fails.push('a freshly emptied balance does not hold the queue, so leads are admitted to spend Places, Apify and four model calls on a site nobody can read');
+
+      // THE ONE THAT WAS MISSING. Once the cooldown has passed, exactly one
+      // caller is let through to find out whether the account was topped up.
+      FIRECRAWL_CREDITS_EMPTY_AT = Date.now() - (FC_CREDIT_RETRY_MS + 5000); _fcProbeAt = 0;
+      if (fcCreditsCoolingDown()) _fails.push('the cooldown never expires, so the queue holds leads for ever');
+      if (fcCreditsBlocked()) {
+        _fails.push('after the cooldown NOTHING is let through to re-test the balance — this is the deadlock exactly: the latch clears only on a successful paid call, and no paid call can be made while the latch is set, so a topped-up account is never discovered and the process is dead until Render restarts it');
+      }
+      // ...and only one. The second caller in the same window still waits, so a
+      // fifty-lead batch cannot throw fifty requests at a closed door.
+      if (!fcCreditsBlocked()) _fails.push('every caller is let through after the cooldown, so a batch hammers an empty account instead of testing it once');
+
+      // A probe that succeeds clears the latch for everybody, through fcNote —
+      // the real function, not a copy of its logic.
+      fcNote(true, 'scrape', 'boot-selftest://credit-probe');
+      if (FIRECRAWL_OUT_OF_CREDITS) _fails.push('a paid call answering does not clear the latch, so recovery never propagates past the one call that proved it');
+      if (fcCreditsBlocked()) _fails.push('the doors stay shut after recovery');
+      if (_fcProbeAt !== 0) _fails.push('the probe clock survives recovery, so the next outage waits out a stale timer before it can re-test');
+
+      // A re-trip after a failed probe restarts the clock rather than opening the gate.
+      FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); _fcProbeAt = Date.now();
+      if (!fcCreditsBlocked()) _fails.push('a re-trip does not re-close the breaker');
+    } finally {
+      FIRECRAWL_OUT_OF_CREDITS = _saveLatch; FIRECRAWL_CREDITS_EMPTY_AT = _saveAt; _fcProbeAt = _saveProbe;
+    }
+
+    // ── WHAT IS ALLOWED TO TRIP IT IN THE FIRST PLACE ─────────────────────
+    // The breaker above fixes how long a trip lasts. This fixes what trips it.
+    // Firecrawl's CONCURRENCY error carries "upgrade your plan" and returns 429,
+    // and isCreditError matched that phrase — so a bulk run (three leads fanning
+    // out seven page reads against a two-browser cap) latched the balance as
+    // empty on an account with credits in it, while a single lead never reached
+    // the cap and never tripped it. Executed against the real message shapes.
+    const _concurrency = { error: 'Concurrency limit reached. You have 2 concurrent browsers on your current plan. Upgrade your plan for higher limits.' };
+    if (isCreditError(_concurrency, 429)) _fails.push('a CONCURRENCY throttle is read as an empty balance again — this is the bulk-only failure exactly: three leads fanning out page reads trip a two-browser cap, the message says "upgrade your plan", and the whole account latches as broke');
+    if (!isRateLimited(_concurrency, 429)) _fails.push('a concurrency limit is not recognised as a throttle, so the gate never holds and the fan-out keeps hammering the cap');
+    // AT A STATUS THAT IS NOT 429, where the TEXT is the only thing that can
+    // classify it. Firecrawl returns some failures as HTTP 200 with an error
+    // body, and the first version of this check tested the concurrency message
+    // only at 429 — where the status alone decides — so deleting the
+    // concurrency pattern from isRateLimited entirely left the check GREEN.
+    // Found by falsification, which is the only thing that finds a fixture
+    // measuring nothing.
+    if (!isRateLimited(_concurrency, 200)) _fails.push('the concurrency message is recognised only by its 429 status, not by its words — returned as HTTP 200 with an error body, which Firecrawl does, nothing classifies it as a throttle');
+    // A generic upsell attached to some other failure must not latch either.
+    if (isCreditError({ error: 'Something went wrong. Upgrade your plan for priority support.' }, 500)) {
+      _fails.push('a bare "upgrade your plan" upsell line still reads as an empty balance');
+    }
+    // And the real thing must still latch, both ways it arrives.
+    if (!isCreditError({ error: 'Payment required' }, 402)) _fails.push('a real 402 no longer latches, so a genuinely empty account keeps buying doomed calls');
+    if (!isCreditError({ error: 'Insufficient credits to perform this request.' }, 200)) _fails.push('an explicit "insufficient credits" message no longer latches');
+    if (isCreditError({ data: { markdown: 'hello' } }, 200)) _fails.push('a healthy response is being read as an empty balance');
+    // Mutually exclusive, so the verdict cannot depend on which predicate a call
+    // site happens to test first — fcAsk tests credits first, which is why the
+    // throttle never got a hearing.
+    if (isCreditError(_concurrency, 429) && isRateLimited(_concurrency, 429)) {
+      _fails.push('both predicates claim the same response, so the answer depends on call-site order');
+    }
+
+    // AND THE CALL SITES. A door that reads the raw latch instead of the breaker
+    // is a door that can never reopen — which is what all five were.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    // A DOOR gates work on the latch; the CLEAR inside fcNote also reads it and
+    // is the one place that SHOULD. The first version of this counted the clear
+    // as a door and failed a correct build — and a check that cries wolf is one
+    // somebody switches off, taking the real assertions beside it. The
+    // distinguishing property is what the branch DOES, so the exclusion is the
+    // assignment, not a line number.
+    const _rawReads = [..._src.matchAll(/if \(FIRECRAWL_OUT_OF_CREDITS\)[\s\S]{0,120}/g)].map(m => m[0]);
+    const _rawDoors = _rawReads.filter(t => !/FIRECRAWL_OUT_OF_CREDITS\s*=\s*false/.test(t) && /\breturn\b/.test(t)).length;
+    if (_rawDoors) _fails.push(`${_rawDoors} Firecrawl door(s) still gate on the raw latch instead of the breaker, so they can never reopen once it trips`);
+    // And the clear must still be there, or recovery has no mechanism at all.
+    if (!_rawReads.some(t => /FIRECRAWL_OUT_OF_CREDITS\s*=\s*false/.test(t))) {
+      _fails.push('nothing clears the latch on a successful paid call, so the breaker can open a door and never re-close the circuit');
+    }
+    if (!_src.includes(_needle('const _broke = await ', '_refuseIfBroke();'))) {
+      _fails.push('the queue no longer waits on the balance before refusing a lead, so a top-up thirty seconds away still fails the whole batch');
+    }
+    if (_fails.length) {
+      console.log(`⛔ CREDIT BREAKER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ CREDIT BREAKER CHECK: an empty Firecrawl balance shuts the doors and holds the queue, and then RE-OPENS — after ${Math.round(FC_CREDIT_RETRY_MS / 1000)}s exactly one call is let through to re-test, a call that answers clears the latch for every lead, and a call that is refused restarts the clock. All five doors go through the breaker rather than the raw latch. Without the re-test, one 402 shut Firecrawl down for the life of the process and a topped-up account could never be discovered.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ EVERY FIELD A RUNG READS MUST ACTUALLY ARRIVE ════════════════════════
