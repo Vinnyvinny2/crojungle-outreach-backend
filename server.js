@@ -6808,7 +6808,37 @@ const _jsonEscapeStrays = (s) => {
       let j = i + 1;
       while (j < s.length && /\s/.test(s[j])) j++;
       const nxt = s[j];
-      if (nxt === undefined || nxt === ',' || nxt === '}' || nxt === ']' || nxt === ':') { out += c; inStr = false; }
+      // ══ A COMMA IS NOT STRUCTURE. IT IS AMBIGUOUS ═════════════════════════
+      // Live, 2026-08-21, on TWO of five leads: the fact-checker's answer could
+      // not be parsed, so the last gate between a composed email and somebody's
+      // inbox did not run at all. The payload:
+      //
+      //   "The pitch angle claims 'Slater & Zurz LLP shows up above them on
+      //    Google for "personal injury lawyer in Cincinnati, OH", with 83 …
+      //
+      // The quote after OH is followed by a comma, so this rule called it a real
+      // closing quote, ended the string there, and everything after it parsed as
+      // garbage. And the trigger is OUR OWN SENTENCE: the factual spine is always
+      // shaped `for "<the search we ran>", with N reviews`, so every critique
+      // that reproduces an outranked_by_weaker spine hits it. Both leads that
+      // lost their fact-check on that run led on that finding.
+      //
+      // The comma alone cannot decide it. What comes AFTER the comma can: in real
+      // JSON the next thing is a new key or value — a quote, a brace, a bracket,
+      // a digit, or true/false/null. A bare word means the comma was inside the
+      // sentence and the quote was too.
+      let real = (nxt === undefined || nxt === '}' || nxt === ']' || nxt === ':');
+      if (!nxt) real = true;
+      else if (nxt === ',') {
+        let k = j + 1;
+        while (k < s.length && /\s/.test(s[k])) k++;
+        const after = s[k];
+        real = after === undefined || after === '"' || after === '{' || after === '['
+          || after === '}' || after === ']'
+          || /[0-9-]/.test(after)
+          || s.slice(k, k + 4) === 'true' || s.slice(k, k + 5) === 'false' || s.slice(k, k + 4) === 'null';
+      }
+      if (real) { out += c; inStr = false; }
       else out += '\\"';
       continue;
     }
@@ -6847,6 +6877,60 @@ const _jsonCloseTruncated = (s) => {
   }
   while (stack.length) out += (stack.pop() === '{' ? '}' : ']');
   return out;
+};
+
+// ══ A mailto: TARGET IS URL-ENCODED, AND NOBODY WAS DECODING IT ═══════════
+// Live on the 2026-08-21 run, printed on Jones Kahan's call sheet as the address
+// to write to:
+//
+//     %20mailclerk@jklawoffices.com
+//
+// Their page carries <a href="mailto:%20mailclerk@jklawoffices.com">. %20 is a
+// URL-encoded space, and every one of the three mailto scanners in this file
+// took the href verbatim. The strict address pattern does not save it either:
+// `%` and digits are both inside the local-part character class, so
+// "%20mailclerk" IS a syntactically valid local part.
+//
+// It is not a cosmetic defect. A hard bounce is charged to the sending DOMAIN,
+// not to the lead, and this project has two bounces in twelve sends and one
+// mailbox carrying all of it. An address that cannot exist must never reach the
+// send queue, and it must never reach a call sheet either.
+//
+// Decode, then trim, then match. Decoding first is what matters: without it the
+// pattern happily keeps the %20.
+const addressFromMailto = (rawHref) => {
+  let s = String(rawHref == null ? '' : rawHref).replace(/^\s*mailto:/i, '').split('?')[0];
+  try { s = decodeURIComponent(s); } catch (e) { void e; }
+  // NO + -> space here. That rule belongs to form-encoded query strings; in a
+  // mailto target a plus is a literal, and it is legal in a local part. The first
+  // version did the swap and turned bob.smith+jobs@example.com into jobs@… —
+  // a real address rewritten into somebody else's, which is worse than dropping
+  // it. Caught by running the function, not by reading it.
+  s = s.replace(/\s+/g, ' ').trim();
+  const m = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.exec(s);
+  return m ? m[0].toLowerCase().replace(/[.,;:]+$/, '') : '';
+};
+
+// ══ WHO THE WRITE-UP SAYS OWNS IT ═════════════════════════════════════════
+// Thrive Dental, 2026-08-21: the header said "Nathan Coughlin (no title found)"
+// and the narrative said "The owner, Dr. Shen, personally replies to nearly
+// every review". Two model-derived names from two different sources — their
+// pages, and their review replies — on one sheet, and Mike has to ask for one.
+// PURE so the boot check runs it on the real sentence.
+const ownerNameInProse = (audit) => {
+  const a = audit || {};
+  const t = ['realPain', 'whatHeCaresAbout', 'whatHeNeeds', 'recommendedReason', 'embarrassingFinding']
+    .map(k => (typeof a[k] === 'string' ? a[k] : '')).join(' \n ');
+  const m = /\b(?:the\s+)?owner(?:\s+is|\s*,)\s+(?:Dr\.?|Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Z][a-zA-Z'\u2019-]{1,}(?:\s+[A-Z][a-zA-Z'\u2019-]{1,}){0,2})/.exec(t);
+  return m ? String(m[1]).trim() : '';
+};
+// Same person written two ways is not a conflict: a first name against a full
+// name shares a word. Refusing over that would put a caution on every sheet.
+const namesConflict = (a, b) => {
+  const words = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3));
+  const x = words(a), y = words(b);
+  if (!x.size || !y.size) return false;
+  return ![...x].some(w => y.has(w));
 };
 
 const parseLLMJSON = (raw) => {
@@ -8715,8 +8799,8 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       .replace(/[*_`~]{1,3}(?=[A-Za-z0-9._%+-]+@)/g, '')
       .replace(/(@[A-Za-z0-9.-]+)[*_`~]{1,3}/g, '$1');
     const found = new Set();
-    (text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/gi) || [])
-      .forEach(m => found.add(m.replace(/mailto:/i, '').toLowerCase()));
+    (text.match(/mailto:[^"'\s>)\]]+/gi) || [])
+      .forEach(m => { const a = addressFromMailto(m); if (a) found.add(a); });
     // The negative lookbehind is load-bearing. Scraped markdown carries emphasis
     // markers mid-word (a styled first letter becomes "J**oe@domain.com"), and the
     // local-part class excludes "*", so the match STARTS after it and silently
@@ -13854,6 +13938,51 @@ const containsReviewRatio = (t) => /(?<!\bnot\s)(?<!\bnone\s)\b(?:\d+|one|two|th
 // count, stated as a fact about his business, with nothing to divide it by.
 //
 // So the ratio still never reaches an email, and the count now can.
+// ══ WHICH COMPLAINTS ARE ABOUT DELIVERY, AND HOW MANY PEOPLE SAID SO ══════
+// There were two notions of "operational pain" in this file and the one that
+// mattered read the wrong one.
+//
+//   OPS SIGNAL      filtered publicPainSignals through these words, correctly,
+//                   and used the result for a log line nobody acts on.
+//   opsPainCount    passed publicPainSignals.LENGTH straight into
+//                   measureGrowthConstraint, unfiltered.
+//
+// The constraint's first branch is `if (opsPainCount >= 2) layer = THROUGHPUT`,
+// and THROUGHPUT is checked FIRST, above everything, because it INVERTS the
+// advice: it tells Mike not to sell this business more leads. So two mined
+// review themes of ANY kind decided the single most commercially consequential
+// sentence in the audit.
+//
+// Live, 2026-08-21, four of five leads came back THROUGHPUT with the identical
+// paragraph — the generic-audit complaint that created this section in the first
+// place. And on Thrive Dental the two themes were "aggressive upselling" and
+// "missed pre-appointment confirmations": the first is a sales-practice problem,
+// not a business drowning in work, and it was counted as evidence of one.
+//
+// It is also a SHARE question, not a count question. Two complaints in a hundred
+// and fifty reviews is 1.3%, and "their own customers describe the business
+// struggling to keep up" is not a fair reading of it. The bar is both: at least
+// two DELIVERY themes, and enough people saying it to be a pattern in the record
+// rather than a pair of bad days.
+const OPS_PAIN_WORDS = /callback|call ?back|never called|no one (called|answered|got back)|took (weeks|days|forever)|slow(er)? (response|to respond|quote)|quote (delay|took)|schedul|reschedul|missed (the )?appointment|no follow[- ]?up|had to chase|kept waiting|paperwork|double[- ]?book|lost my|disorganiz/i;
+// PURE, so the boot check runs the real thing on the real strings the miner
+// emits rather than on a re-implementation of them.
+const readOperationalPain = (signals, reviewsRead) => {
+  const rows = (Array.isArray(signals) ? signals : []).map(String).filter(s => OPS_PAIN_WORDS.test(s));
+  const themes = rows.length;
+  // reviewPainMentions parses "3 of the 150 reviews we read say it" out of the
+  // miner's own string. A theme with no stated count is worth one person, never
+  // zero — it was found, we just do not know how widely.
+  const mentions = rows.reduce((n, s) => n + (reviewPainMentions(s) || 1), 0);
+  const read = Number(reviewsRead);
+  const haveRead = Number.isFinite(read) && read > 0;
+  const share = haveRead ? mentions / read : null;
+  // Two themes AND a real share. Without a review count we cannot compute a
+  // share, so the bar becomes an absolute one rather than an assumption.
+  const binding = themes >= 2 && (haveRead ? (mentions >= 3 && share >= 0.04) : mentions >= 6);
+  return { themes, mentions, reviewsRead: haveRead ? read : null, share, binding };
+};
+
 const reviewPainMentions = (t) => {
   const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
     eleven: 11, twelve: 12 };
@@ -22529,7 +22658,7 @@ const diagnosisConflict = (layer, bottleneck) => {
 const measureGrowthConstraint = ({
   marketClarity = { checked: false },
   rank, rankScanned, reviewCount, reviewRating, weakerAbove,
-  offerStrength, valueEquation, opsPainCount, bottleneck, city, trade,
+  offerStrength, valueEquation, opsPainCount, opsPain, bottleneck, city, trade,
 } = {}) => {
   const ve = valueEquation || {};
   const os = offerStrength || {};
@@ -22589,9 +22718,24 @@ const measureGrowthConstraint = ({
   // If their own customers are describing failures of delivery, more demand
   // actively harms them, and that overrides everything above it. The bar is real
   // review evidence, not an inference.
-  if (opsPainCount >= 2) {
+  // opsPainCount is kept for callers that have not been updated and for the boot
+  // fixtures; when the measured reading is supplied it decides, because a count
+  // of THEMES OF ANY KIND is what produced four identical THROUGHPUT diagnoses
+  // in one run. See readOperationalPain.
+  const _ops = opsPain || null;
+  const _throughputBinding = _ops ? _ops.binding : (opsPainCount >= 2);
+  if (_throughputBinding) {
     layer = 'THROUGHPUT';
-    condition = `Demand is not the problem \u2014 delivery is. Their own customers describe the business struggling to keep up with the work it already has.`;
+    // The measurement travels in the sentence. Four leads read word for word
+    // identically on 2026-08-21, which is the generic-audit complaint this whole
+    // section was built to answer — and a claim this consequential should say
+    // what it rests on, because Mike repeats it on a call.
+    const _evidence = _ops && _ops.mentions
+      ? (_ops.reviewsRead
+          ? `${_ops.mentions} of the ${_ops.reviewsRead} reviews we read describe the work itself going wrong \u2014 ${_ops.themes} separate patterns of it`
+          : `${_ops.mentions} of their reviews describe the work itself going wrong, across ${_ops.themes} separate patterns`)
+      : `their own customers describe the work itself going wrong, more than once and in more than one way`;
+    condition = `Demand is not the problem \u2014 delivery is. ${_evidence[0].toUpperCase()}${_evidence.slice(1)}.`;
     why = `More leads here makes it worse, not better: every extra enquiry lands in the same queue that is already producing complaints. Capacity and follow-through have to be fixed before demand is worth buying.`;
     product = 'operations and follow-through';
   }
@@ -22909,7 +23053,7 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   // LEDGER stage 4 — "New leads route to a named owner, never a shared inbox
   // where everyone means no one." Read from the addresses printed on their own
   // page, so this is about what a CUSTOMER is given, not about their routing.
-  const _mails = [...new Set((html.match(/mailto:([^"'?>\s]+)/gi) || []).map(x => x.replace(/^mailto:/i, '').toLowerCase()))];
+  const _mails = [...new Set((html.match(/mailto:([^"'?>\s]+)/gi) || []).map(addressFromMailto).filter(Boolean))];
   const sharedInboxOnly = _mails.length > 0
     && _mails.every(a => /^(?:info|office|admin|contact|hello|sales|enquir|inquir|team|mail|support|service)/.test(a));
 
@@ -29753,7 +29897,7 @@ const checkBuiltWith = async (domain) => {
       copyrightYear: (() => { const ys = [...html.matchAll(/(?:©|&copy;|copyright)[^0-9]{0,20}(20\d\d)/gi)].map(m=>parseInt(m[1])); return ys.length ? Math.max(...ys) : 0; })(),
       // ── CONTACT INTELLIGENCE — extracted from THEIR page (facts, not guesses) ──
       contacts: (() => {
-        const emails = [...new Set([...html.matchAll(/mailto:([^"'?\s>]+)/gi)].map(m=>m[1].toLowerCase()))].slice(0,5);
+        const emails = [...new Set([...html.matchAll(/mailto:([^"'?\s>]+)/gi)].map(m=>addressFromMailto(m[1])).filter(Boolean))].slice(0,5);
         const phones = [...new Set([...html.matchAll(/tel:([+\d()\-. ]{7,20})/gi)].map(m=>m[1].trim()))].slice(0,3);
         const linkedin = [...new Set([...html.matchAll(/https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in)\/[a-z0-9\-_%]+/gi)].map(m=>m[0]))].slice(0,3);
         const facebook = [...new Set([...html.matchAll(/https?:\/\/(?:www\.)?facebook\.com\/[a-zA-Z0-9.\-_]+/gi)].map(m=>m[0]).filter(u=>!/facebook\.com\/(tr|plugins|sharer)/i.test(u)))].slice(0,2);
@@ -33153,6 +33297,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
           offerStrength, valueEquation, marketClarity,
           opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
+          opsPain: readOperationalPain(publicPainSignals, reviewsRead),
           city: localRank ? localRank.city : '',
           trade: customerTrade || verifiedIndustry || req.body.industry || '',
         });
@@ -34140,6 +34285,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
         offerStrength, valueEquation, marketClarity,
         opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
+        opsPain: readOperationalPain(publicPainSignals, reviewsRead),
         city: localRank ? localRank.city : '',
         trade: customerTrade || verifiedIndustry || req.body.industry || '',
       });
@@ -34903,8 +35049,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // 2) OPERATIONAL PAIN IN THEIR OWN REVIEWS. "Took three weeks for a quote",
     //    "nobody called me back", "had to chase them" are NOT marketing failures —
     //    they are process failures, and process failures are what software fixes.
-    const _opsPainWords = /callback|call ?back|never called|no one (called|answered|got back)|took (weeks|days|forever)|slow(er)? (response|to respond|quote)|quote (delay|took)|schedul|reschedul|missed (the )?appointment|no follow[- ]?up|had to chase|kept waiting|paperwork|double[- ]?book|lost my|disorganiz/i;
-    const _opsPainCount = (publicPainSignals || []).filter(p => _opsPainWords.test(String(p))).length;
+    const _opsPainCount = readOperationalPain(publicPainSignals, reviewsRead).themes;
     const _opsPainConfirmed = _opsPainCount >= 1;
 
     if (_revPerEmp) console.log(`OPS SIGNAL [${company}]: $${Math.round(_revPerEmp/1000)}k revenue per employee${_laborHeavy ? ' — LABOR-HEAVY, automation candidate' : ''}`);
@@ -35831,6 +35976,26 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // in its own list, where it informs without crying wolf.
           const _readLimits = [];
           if (_deferredQuoteRisk) _readLimits.push(_deferredQuoteRisk);
+          // ══ TWO NAMES FOR THE OWNER ON ONE CALL SHEET ═════════════════════
+          // Thrive Dental, 2026-08-21. The header said "Nathan Coughlin (no
+          // title found)" — a name the BRAIN read off their pages because the
+          // resolver found nobody. The narrative, four lines down, said "The
+          // owner, Dr. Shen, personally replies to nearly every review" — a name
+          // the brain read off the review replies. Two model-derived names, two
+          // different sources, one sheet, and Mike has to ask for one of them.
+          //
+          // Neither is provably wrong, so picking one would be inventing
+          // certainty. Saying so is the honest output, and it costs one line.
+          // Only fires when BOTH names exist and they share no word: a first
+          // name against a full name is the same person written twice.
+          const _proseOwner = ownerNameInProse(parsed);
+          const _sheetOwner = String((decisionMaker && decisionMaker.name) || '').trim();
+          if (_proseOwner && _sheetOwner) {
+            if (namesConflict(_proseOwner, _sheetOwner)) {
+              _claimRisks.push(`Two different people are named as the owner: the contact on this sheet is ${_sheetOwner}, and the write-up calls the owner ${_proseOwner}. Neither is confirmed against the other, so confirm who runs it before asking for either by name.`);
+              console.log(`\u26a0 OWNER NAME CONFLICT [${company}]: the sheet carries "${_sheetOwner}" and the audit prose calls the owner "${_proseOwner}". Both are model-read from different sources (their pages, and their review replies) and neither overrules the other. Said out loud rather than resolved \u2014 picking one would be inventing certainty.`);
+            }
+          }
           // The account-level Apify state, read once here rather than inferred
           // from a per-lead "nothing found". A mine that never ran and a business
           // with no repeating complaint are opposite facts and used to print the
@@ -38037,7 +38202,33 @@ Return ONLY valid JSON:
 // into a warning. "No claim flagged" is the checker's own natural phrasing for
 // approval and it was the one form this pattern did not recognise.
 const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims|VERIFIED as measured|is ALLOWED|allowed per rules|correct and (must not|should not) be flagged|no unverifiable|nothing to flag|this is (a )?(valid|general truth|general behaviou?ral))\b/i;
-            const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f));
+            // ══ "THIS IS CORRECT, BUT THE PHRASING COULD IMPLY…" ══════════════
+            // Two of five call sheets on 2026-08-21 told Mike not to say
+            // something the checker had just confirmed was TRUE:
+            //
+            //   Pitch angle states 'Isaacs & Isaacs shows up above them on
+            //   Google for "personal injury lawyer in Cincinnati, OH", with 337
+            //   reviews against their 379' — THIS IS CORRECT per measured
+            //   evidence, but the phrasing 'shows up above them' could imply
+            //   recency or activity comparison, which is not measured.
+            //
+            // That is a note about connotation, not a claim the prospect can
+            // disprove, and "Do not say" is the section that stops a false
+            // sentence being said out loud. Filling it with true sentences is
+            // how an operator learns to skip it — this file records the same
+            // cost three times, most recently at the CTA precaution that fired
+            // on nearly every lead.
+            //
+            // Bounded hard in the other direction: it must AFFIRM the claim AND
+            // object only to wording, and anything the critical pattern matches
+            // is never cleared here. "The claim is correct but the number is
+            // wrong" is not a wording note.
+            const _CORRECT_BUT = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|matches the measured|supported by the measured)\b[\s\S]{0,120}\bbut\b[\s\S]{0,160}\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
+            const _wordingOnly = _rawFlags.filter(f => !_CLEARED.test(f) && _CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f));
+            if (_wordingOnly.length) {
+              console.log(`\u{1F50E} WORDING NOTE [${company}]: ${_wordingOnly.length} fact-check entr(y/ies) confirmed the claim is CORRECT and objected only to how it is phrased. Kept out of "Do not say", which exists to stop a FALSE sentence being said out loud \u2014 a section full of true sentences is one nobody reads. First: "${String(_wordingOnly[0]).slice(0, 150)}"`);
+            }
+            const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && !(_CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f)));
             // NOW the merge — real flags only, cleared entries never reach the sheet.
             if (_realFlags.length) {
               brainAudit._claimRisks = (brainAudit._claimRisks || []).concat(
@@ -41248,6 +41439,211 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ APIFY ACCOUNT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE LAST GATE DIED ON OUR OWN SENTENCE ════════════════════════════════
+  // Two of five leads, 2026-08-21: "FACT CHECK DID NOT RUN - the critique
+  // response could not be parsed". The repair pass treated a quote followed by a
+  // comma as a real closing quote, and the factual spine is always shaped
+  // `for "<the search we ran>", with N reviews` — so every critique that
+  // reproduces an outranked_by_weaker spine broke its own JSON. Both leads that
+  // lost the check led on that finding. Run against the real payload.
+  try {
+    const _fails = [];
+    const _live = '{ "confidenceScore": 9, "flaggedClaims": [ "The pitch angle claims \'Slater & Zurz LLP '
+      + 'shows up above them on Google for "personal injury lawyer in Cincinnati, OH", with 83 reviews '
+      + 'against their 199\' — correct.", "a second flag" ], "ok": true }';
+    const _got = parseLLMJSON(_live);
+    if (!_got) _fails.push('the fact-checker answer STILL cannot be parsed — this is the live payload from the run where two of five leads shipped with nothing checked');
+    else {
+      if (_got.confidenceScore !== 9) _fails.push(`confidence parsed as ${_got.confidenceScore}, not 9`);
+      if (!Array.isArray(_got.flaggedClaims) || _got.flaggedClaims.length !== 2) {
+        _fails.push(`${(_got.flaggedClaims || []).length} flag(s) recovered, expected 2 — a half-read critique reports fewer problems than were found`);
+      } else if (!/199/.test(String(_got.flaggedClaims[0]))) {
+        _fails.push('the first flag was truncated at the inner quote, so the claim it describes is unreadable');
+      }
+    }
+    // AND ORDINARY JSON MUST BE UNTOUCHED. A repair that mangles healthy output
+    // is a worse trade than the bug it fixes.
+    const _plain = parseLLMJSON('{ "a": "one", "b": "two", "n": 3, "t": true, "arr": ["x", "y"], "o": { "k": "v" } }');
+    if (!_plain || _plain.a !== 'one' || _plain.b !== 'two' || _plain.n !== 3 || _plain.t !== true
+        || !Array.isArray(_plain.arr) || _plain.arr[1] !== 'y' || !_plain.o || _plain.o.k !== 'v') {
+      _fails.push('healthy JSON no longer parses correctly, which is a far bigger problem than the one being fixed');
+    }
+    // A quoted phrase at the END of a value, before a real key, must still close.
+    const _edge = parseLLMJSON('{ "why": "they rank for \'x\'", "next": "ok" }');
+    if (!_edge || _edge.next !== 'ok') _fails.push('a normal two-key object broke');
+    if (_fails.length) console.log(`⛔ CRITIQUE JSON CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ CRITIQUE JSON CHECK: the fact-checker's answer survives a quoted search phrase followed by a comma \u2014 the exact shape our own factual spine produces, which silently removed the last gate before a prospect on two of five leads. Healthy JSON is untouched.`);
+  } catch (e) {
+    console.log(`⛔ CRITIQUE JSON CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ "DELIVERY IS THE PROBLEM" IS THE MOST EXPENSIVE SENTENCE WE WRITE ══════
+  // It tells Mike NOT to sell this business more leads, and it is checked first,
+  // above every other layer. On 2026-08-21 four of five leads came back
+  // THROUGHPUT with the identical paragraph, because the test was "two mined
+  // review themes of ANY kind" — a filtered version of the same idea already
+  // existed twenty lines away and was being used for a log line.
+  try {
+    const _fails = [];
+    // THE FOUR LIVE LEADS. None of these is a business drowning in work.
+    const _live = [
+      ['Thrive Dental', ['aggressive upselling of unnecessary dental work \u2014 3 of the 150 reviews we read say it',
+                         'unnecessary treatment recommendations \u2014 2 of the 150 reviews we read say it'], 150],
+      ['Colorado CPA', ['decided I was not a great fit without asking questions \u2014 2 of the 114 reviews we read say it',
+                        'missed appointment calls with no follow-up \u2014 2 of the 114 reviews we read say it'], 114],
+      ['Jones Kahan', ['disorganization toward case closure \u2014 2 of the 150 reviews we read say it',
+                       'billing errors and lack of transparency about fees \u2014 2 of the 150 reviews we read say it'], 150],
+    ];
+    for (const [name, signals, read] of _live) {
+      const r = readOperationalPain(signals, read);
+      if (r.binding) {
+        _fails.push(`${name} still reads as a delivery-bound business off ${r.mentions} mention(s) in ${read} reviews (${r.themes} theme(s)) \u2014 that sentence tells Mike not to sell them leads`);
+      }
+    }
+    // A REAL ONE MUST STILL BIND, or the fix has deleted the diagnosis.
+    const _real = readOperationalPain([
+      'callbacks that never come \u2014 6 of the 40 reviews we read say it',
+      'scheduling chaos and reschedules \u2014 5 of the 40 reviews we read say it',
+      'no follow-up after the estimate \u2014 4 of the 40 reviews we read say it',
+    ], 40);
+    if (!_real.binding) _fails.push(`a business with ${_real.mentions} delivery complaints in 40 reviews across ${_real.themes} themes did NOT read as delivery-bound \u2014 the bar is now so high the diagnosis can never fire`);
+    if (_real.themes !== 3) _fails.push(`counted ${_real.themes} operational themes, expected 3`);
+    if (_real.mentions !== 15) _fails.push(`counted ${_real.mentions} mentions, expected 15`);
+    // NON-DELIVERY COMPLAINTS ARE NOT DELIVERY COMPLAINTS.
+    const _sales = readOperationalPain(['aggressive upselling', 'rude staff', 'too expensive'], 100);
+    if (_sales.themes !== 0) _fails.push('pricing, attitude and upselling complaints are being counted as evidence the business cannot keep up with its workload');
+    // WITHOUT A REVIEW COUNT WE CANNOT COMPUTE A SHARE, SO THE BAR IS ABSOLUTE.
+    const _noRead = readOperationalPain(['callbacks that never come', 'scheduling chaos'], null);
+    if (_noRead.binding) _fails.push('with no review count at all it still concluded delivery is the constraint \u2014 a share cannot be assumed');
+    // AND BOTH CALL SITES MUST PASS THE MEASURED READING, or the fixtures above
+    // prove a rule that never runs. This file records four checks that passed on
+    // a reverted build for exactly this reason.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _wired = (_src.match(new RegExp(_needle('opsPain: readOperational', 'Pain\\('), 'g')) || []).length;
+    if (_wired < 2) _fails.push(`${_wired} of the 2 constraint call sites pass the measured reading \u2014 the other one still decides on a raw count of themes`);
+    // POSITIVE, AND SPLIT SO IT CANNOT FIND ITSELF. The first version searched
+    // for the OLD condition with _needle(x, '') — an empty second part joins to
+    // the whole literal, so the check's own line contained the string it was
+    // hunting and it failed a correct build. Eighth recorded instance of this
+    // trap in this file; an empty part is not a split.
+    if (!_src.includes(_needle('const _throughputBinding = _ops ? ', '_ops.binding'))) {
+      _fails.push('the constraint no longer lets the measured reading decide, so it is back to a raw count of themes of any kind');
+    }
+    if (_fails.length) console.log(`⛔ THROUGHPUT EVIDENCE CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ THROUGHPUT EVIDENCE CHECK: "delivery is the problem" now needs delivery complaints \u2014 at least two of them, and enough people saying it to be a pattern in the record rather than a pair of bad days. All three leads that wrongly got it on 2026-08-21 are refused, a genuine case (15 complaints in 40 reviews) still binds, and upselling, rudeness and price are no longer read as a business drowning in work.`);
+  } catch (e) {
+    console.log(`⛔ THROUGHPUT EVIDENCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ AN ADDRESS THAT CANNOT EXIST MUST NEVER REACH A SHEET OR A SEND ═══════
+  // Jones Kahan's call sheet, live: %20mailclerk@jklawoffices.com. A hard bounce
+  // is charged to the sending DOMAIN, and this project has two bounces in twelve
+  // sends on one mailbox.
+  try {
+    const _fails = [];
+    const _cases = [
+      ['mailto:%20mailclerk@jklawoffices.com', 'mailclerk@jklawoffices.com', 'the live defect: a URL-encoded space kept as part of the local part'],
+      ['mailto:%20%20dave%40acme.com', 'dave@acme.com', 'a fully encoded address'],
+      ['mailto:info@acme.com?subject=Hello%20there', 'info@acme.com', 'a subject parameter'],
+      ['mailto:Bob.Smith%2Bjobs@Example.COM', 'bob.smith+jobs@example.com', 'a plus in the local part must survive: it is legal, and + means space only in a form-encoded query'],
+      ['mailto:barry@askbarrynow.com', 'barry@askbarrynow.com', 'an ordinary address'],
+      ['mailto:', '', 'an empty target'],
+      ['mailto:not-an-address', '', 'a target that is not an address'],
+      ['mailto:someone@example.com.', 'someone@example.com', 'a trailing full stop'],
+    ];
+    for (const [input, want, why] of _cases) {
+      const got = addressFromMailto(input);
+      if (got !== want) _fails.push(`"${input}" produced "${got}", expected "${want}" \u2014 ${why}`);
+    }
+    // AND THE CALL SITES: three scanners read mailto links and all three took the
+    // href verbatim. A helper nothing calls fixes nothing.
+    const _needle2 = (...parts) => parts.join('');
+    const _src2 = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    // EACH SCANNER BY NAME. Counting call sites was wrong twice over: the
+    // definition does not contain "addressFromMailto(" at all, and one scanner
+    // passes the function by REFERENCE inside a .map, so a count of parenthesised
+    // calls reported two of three and failed a correct build.
+    const _scanners = [
+      [_needle2('found.add(a); ', '});'), 'the page-text scanner'],
+      [_needle2('.map(addressFrom', 'Mailto).filter(Boolean)'), 'the markup scanner'],
+      [_needle2('addressFromMailto(m[1])', ''), 'the leadership-page scanner'],
+    ];
+    for (const [needle, which] of _scanners) {
+      if (!_src2.includes(needle)) _fails.push(`${which} does not go through the decoder \u2014 the scanner that skips it is the one that ships a bounce`);
+    }
+    if (_fails.length) console.log(`⛔ MAILTO ADDRESS CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ MAILTO ADDRESS CHECK: a mailto target is decoded before an address is read out of it, so "%20mailclerk@..." resolves to the real mailbox instead of an address that cannot exist. A plus survives, a subject parameter is dropped, and all three scanners go through the one decoder.`);
+  } catch (e) {
+    console.log(`⛔ MAILTO ADDRESS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ "DO NOT SAY" MUST ONLY HOLD THINGS THAT ARE FALSE ═════════════════════
+  // Two of five call sheets, 2026-08-21, told Mike not to say something the
+  // checker had just confirmed was TRUE — it affirmed the claim and objected to
+  // the connotation of "shows up above them". A section full of true sentences
+  // is one an operator learns to skip, and this file records that cost three
+  // times. Both directions asserted, using the real flags from that run.
+  try {
+    const _fails = [];
+    const _CORRECT_BUT = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|matches the measured|supported by the measured)\b[\s\S]{0,120}\bbut\b[\s\S]{0,160}\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
+    const _wording = [
+      `Pitch angle states 'Isaacs & Isaacs Law Firm shows up above them on Google for "personal injury lawyer in Cincinnati, OH", with 337 reviews against their 379' \u2014 this is correct per measured evidence, but the phrasing 'shows up above them' could imply recency or activity comparison, which is not measured.`,
+      `Pitch angle states 'Abacus Accounting Center, LLC - CPA Firm shows up above them' \u2014 this is correct per measured facts, but the phrasing and the comparative framing could be read as implying search dominance, which are NOT measured.`,
+    ];
+    const _realErrors = [
+      `The pitch angle states 'Two of your own reviews describe you recommending treatments a second opinion found unnecessary' \u2014 the measured evidence says '3 of the 150 reviews we read'. The count is wrong.`,
+      `CRITICAL: '380 five-star reviews' \u2014 evidence shows 156. This is a 2.4x overstatement and must be corrected.`,
+      `'5 of the 6 practices ahead of you have more reviews' \u2014 the evidence shows 1 of 6. The claim inverts the actual ratio and it is backwards.`,
+      `WEBSITE STATUS CONTRADICTION \u2014 the copy says the site is down. EVIDENCE CONTRADICTS THIS.`,
+    ];
+    for (const f of _wording) {
+      if (!(_CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f))) {
+        _fails.push(`a flag that CONFIRMS the claim and objects only to phrasing is still going into "Do not say" \u2014 "${f.slice(0, 90)}"`);
+      }
+    }
+    for (const f of _realErrors) {
+      if (_CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f)) {
+        _fails.push(`a REAL error was cleared as a wording note, which is the expensive direction \u2014 "${f.slice(0, 90)}"`);
+      }
+    }
+    // AND THE CALL SITE, or the pattern is right and unused.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle('const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && ', '!(_CORRECT_BUT.test(f)'))) {
+      _fails.push('the fact-check flag list no longer separates confirmed-correct wording notes, so "Do not say" fills with true sentences again');
+    }
+
+    // ── AND TWO NAMES FOR THE OWNER ON ONE SHEET ──────────────────────────
+    const _thrive = { realPain: 'The owner, Dr. Shen, personally replies to nearly every review. The listing is complete.' };
+    if (ownerNameInProse(_thrive) !== 'Shen') {
+      _fails.push(`the owner named in the write-up read as "${ownerNameInProse(_thrive)}", not "Shen" \u2014 this is the live sentence from Thrive Dental`);
+    }
+    if (!namesConflict('Shen', 'Nathan Coughlin')) {
+      _fails.push('"Dr. Shen" in the write-up and "Nathan Coughlin" on the sheet were treated as the same person');
+    }
+    // The other direction, and it is the one that would put a caution on every
+    // sheet: the same person written two ways must NOT conflict.
+    if (namesConflict('Shen', 'Dr. Wei Shen')) _fails.push('a first name against a full name was called a conflict');
+    if (namesConflict('Barry Rothchild', 'Barry')) _fails.push('a full name against a first name was called a conflict');
+    if (namesConflict('', 'Nathan Coughlin') || namesConflict('Shen', '')) {
+      _fails.push('a missing name produced a conflict \u2014 with only one name there is nothing to disagree with');
+    }
+    // Ordinary prose must not be mined for a name.
+    for (const _t of [{ realPain: 'the owner is still carrying his own caseload' },
+                      { realPain: 'The owner-doctor sets the price here.' },
+                      { realPain: 'Nothing about who runs it appears anywhere.' }]) {
+      if (ownerNameInProse(_t)) _fails.push(`a name was invented out of ordinary prose: "${ownerNameInProse(_t)}"`);
+    }
+    if (!_src.includes(_needle('const _proseOwner = ownerName', 'InProse(parsed);'))) {
+      _fails.push('the audit is no longer checked for a second owner name, so two people can be named on one call sheet again');
+    }
+    if (_fails.length) console.log(`⛔ SHEET TRUTHFULNESS CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ SHEET TRUTHFULNESS CHECK: "Do not say" holds only claims a prospect could disprove \u2014 a fact-check entry that CONFIRMS the claim and objects to its connotation is a wording note, not a warning, while a wrong count, an overstatement, an inversion and a contradiction all still stop the sheet. And when the write-up names a different owner from the contact, the sheet says so instead of picking one.`);
+  } catch (e) {
+    console.log(`⛔ SHEET TRUTHFULNESS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE CREDIT LATCH HAD NO WAY BACK ══════════════════════════════════════

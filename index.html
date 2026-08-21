@@ -2218,7 +2218,7 @@ const auditExportHtml = (records, meta) => {
           + (r.read ? '<p>' + p(r.read) + '</p>' : '')
           + (r.bindingLayer ? '<p class="dim">Binding layer: ' + e(r.bindingLayer) + '</p>' : '')
           + ul(r.rows, x => '<li><b>' + e(x.label) + '</b> &mdash; ' + p(x.says) + '</li>'))
-      + sec('What we found by reading their pages',
+      + sec('What we found in their own words',
           ul(r.originalFindings, f => '<li>' + p(f.finding || f.what || f) + (f.quote ? '<br><q>' + p(f.quote) + '</q>' : '') + '</li>'))
       + sec('What is broken, worst first',
           r.problems.length ? '<table><tr><th>Area</th><th>Problem</th><th>What it costs</th></tr>'
@@ -5814,7 +5814,7 @@ function LeadBriefing({ lead }) {
 
         Array.isArray(lead.originalFindings) && lead.originalFindings.length ? React.createElement('div', { style: { marginBottom: 18 } },
           React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#4ade80', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid rgba(74,222,128,.25)' } },
-            'What we found by reading their pages \u2014 ' + lead.originalFindings.length),
+            'What we found in their own words \u2014 ' + lead.originalFindings.length),
           lead.originalFindings.map((f, i) => React.createElement('div', {
             key: 'of' + i,
             style: { padding: '9px 0', borderBottom: i < lead.originalFindings.length - 1 ? '1px solid var(--b)' : 'none' },
