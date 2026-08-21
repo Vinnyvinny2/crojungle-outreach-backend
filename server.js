@@ -13446,9 +13446,26 @@ const resolveMeasurements = ({
 
     // Search position. rankFound is a GATE, not a figure: without it a rank of
     // null reads as position zero.
-    rankFound: !!(localRank && localRank.found),
-    rank: (localRank && localRank.found) ? num(localRank.rank) : null,
-    scanned: localRank ? num(localRank.scanned) : null,
+    // ══ HALF-FIXING THIS WAS WORSE THAN NOT FIXING IT ═══════════════════════
+    // The wrong-row guard below nulls every REVIEW number when the matched row
+    // turns out not to be this business, and left the POSITION alone. But
+    // localRank.rank is that row's index in the result list — if the row is
+    // somebody else, so is the position, and eight conversion rungs scale their
+    // harm by it while the spine can assert "#N of M" to the owner.
+    //
+    // Nor can it simply become "not found": absent_from_search is harm 96 and
+    // tests `rankChecked === true && rankFound === false`, so reporting a
+    // failed MATCH as a failed SEARCH would tell an owner he does not appear in
+    // his own search when the truth is that we could not identify his row. That
+    // is a worse false claim than the one being repaired.
+    //
+    // The honest state is neither: we ran the search and cannot say what it
+    // means for them. rankChecked goes false with everything else, so no rung
+    // on either side of the question can fire.
+    rankChecked: !!(localRank && localRank.checked) && !_rowMismatch,
+    rankFound: !_rowMismatch && !!(localRank && localRank.found),
+    rank: (!_rowMismatch && localRank && localRank.found) ? num(localRank.rank) : null,
+    scanned: (localRank && !_rowMismatch) ? num(localRank.scanned) : null,
     // Counted with `ours` as the yardstick, so if the row is not us the count is
     // not about us either. Both halves move together or the named sentence and
     // the number behind it disagree.
@@ -33697,7 +33714,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Distinguish "we looked and they were absent" from "we never looked".
           // Without this the absence entry could fire on a lead where the rank
           // check was skipped, which would be a fabricated finding.
-          rankChecked: !!(localRank && localRank.checked),
+          // Both halves move together: see the wrong-row note in
+          // resolveMeasurements. A row that is not us leaves us with no sayable
+          // position AND no sayable absence.
+          rankChecked: _measured.rankChecked,
           // The position when it was measured but is NOT sayable, so the eight
           // conversion-side rungs keep their traffic damper on a lead whose two
           // rank samples disagreed. Delivered explicitly, because "computed but
@@ -41029,8 +41049,16 @@ app.listen(PORT, () => {
   // reads like a data problem rather than a typo. So this check calls the
   // resolver the way the pipeline does and asserts the ladder survives.
   try {
+    // FOUND IN THE SEARCH, which is the ordinary lead. This fixture used to say
+    // found:false while asserting that the review complaint leads, and it only
+    // passed because resolveMeasurements did not yet return rankChecked — so the
+    // ladder here ran without the "did we look?" flag that every live lead
+    // carries, and absent_from_search (harm 96) could not fire. That is the
+    // recorded half-a-call-site shape: the check used the resolver's output and
+    // then hand-added what the route adds. The absent case is asserted below on
+    // its own, where it is the subject rather than an accident.
     const _m = resolveMeasurements({
-      localRank: { checked: true, found: false, scanned: 20, unstable: true },
+      localRank: { checked: true, found: true, rank: 6, scanned: 20 },
       gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
       history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
       reviewsRead: 116, ownerReplyCount: 4,
@@ -41042,6 +41070,29 @@ app.listen(PORT, () => {
     const _r = rankHarms({ ..._m, reviewPainCount: 2,
       reviewPainTop: 'poor communication during and after surgery',
       reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    // ---- AND THE SAME BUSINESS, MISSING FROM ITS OWN SEARCH ----
+    // Identical measurements, one field moved: they were not in the results.
+    // absent_from_search is harm 96, above every review rung, and it is the most
+    // checkable sentence in the file - he either appears or he does not.
+    // Asserted because the fixture above WAS this shape until 2026-08-21 and
+    // asserted the opposite, and passed: the resolver did not yet report whether
+    // the search had been run, so the rung could not fire here at all. Both
+    // halves of the question are now pinned, on one measurement set.
+    const _mGone = resolveMeasurements({
+      localRank: { checked: true, found: false, scanned: 20 },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
+      reviewsRead: 116, ownerReplyCount: 4,
+      sitePagesArg: { booking: 'none_found', bookingMeasured: true, prices: [] },
+      tradeWordArg: 'plastic surgeon',
+      reviewPainArg: { pattern: 'poor communication during and after surgery' },
+      growthConstraintArg: { checked: true, layer: 'THROUGHPUT', condition: 'x' },
+    });
+    const _rGone = rankHarms({ ..._mGone, reviewPainCount: 2,
+      reviewPainTop: 'poor communication during and after surgery',
+      reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    const _goneLead = (_rGone && Array.isArray(_rGone.byHarm) && _rGone.byHarm[0]) ? _rGone.byHarm[0].id : '';
+
     // ══ AND THE REAL CALL SITES, NOT JUST A LITERAL ════════════════════════
     // The check above passes a hand-built object, which is exactly how the
     // fuzzers missed both crashes. What broke twice was the ARGUMENT LIST at the
@@ -41074,10 +41125,12 @@ app.listen(PORT, () => {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the harm ladder produced nothing on a lead with a repeating review complaint. When it throws, the whole email falls back to the model writing unassisted and the log says only "harm ladder failed".`);
     } else if (_lead !== 'review_pain_pattern') {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: a lead whose own customers repeat a complaint opened on ${_lead} instead. The strongest finding this system produces is not leading.`);
+    } else if (_goneLead !== 'absent_from_search') {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: the same business, absent from its own search, opened on ${_goneLead || 'nothing'} instead of absent_from_search. Harm 96 and binary \u2014 he either appears or he does not \u2014 and it can only fire if the resolver reports that the search was actually run.`);
     } else if (!_m.painTheme) {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the mined complaint did not reach the resolver as painTheme, so the subject line falls back to the generic set on exactly the leads with the best finding.`);
     } else {
-      console.log(`\u2713 LADDER SURVIVAL CHECK: a realistic measurement set runs through resolveMeasurements and rankHarms, a repeating review complaint reaches the ladder, leads it, and carries into the subject line \u2014 and the two argument-list names that killed the ladder before are still absent from the reviewPainArg slot. HONEST LIMIT: this check builds its own arguments, so it cannot see a bad name at the live call site; scopecheck.js's runtime-split globals list is the guard for that class, and LADDER CRASH VISIBILITY CHECK is the guard for the consequence.`);
+      console.log(`\u2713 LADDER SURVIVAL CHECK: a realistic measurement set runs through resolveMeasurements and rankHarms, a repeating review complaint reaches the ladder, leads it, and carries into the subject line; the same business absent from that search opens on absent_from_search instead \u2014 and the two argument-list names that killed the ladder before are still absent from the reviewPainArg slot. HONEST LIMIT: this check builds its own arguments, so it cannot see a bad name at the live call site; scopecheck.js's runtime-split globals list is the guard for that class, and LADDER CRASH VISIBILITY CHECK is the guard for the consequence.`);
     }
   } catch (e) {
     console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
@@ -41486,6 +41539,22 @@ app.listen(PORT, () => {
     if (_bva.weakerAbove !== null) _fails.push('weakerAbove survived a row that is not us — it is counted against that row, so both halves must move together');
     if (_bva.weakerNames !== null) _fails.push('a named competitor survived a row that is not us — that is the finding with a real reply behind it, built on somebody else\'s numbers');
     if (_bva.rankRowNotUs !== true) _fails.push('the mismatch was not reported, so nothing downstream can say why the finding is missing');
+    // ══ THE POSITION IS THAT ROW'S TOO ════════════════════════════════════
+    // The first version of this guard nulled every review number and left rank
+    // and scanned alone — but localRank.rank IS that row's index, so another
+    // business's position went to eight conversion rungs that scale harm by it
+    // and to a spine that can assert "#N of M" to the owner.
+    if (_bva.rank !== null) _fails.push(`the position ${_bva.rank} survived a row we just decided is a different business — eight rungs scale their harm by it and the spine can say it out loud`);
+    if (_bva.scanned !== null) _fails.push('the size of the result list survived a row that is not us, so a band can still be derived from it');
+    // AND IT MUST NOT BECOME AN ABSENCE. absent_from_search is harm 96 and fires
+    // on rankChecked && !rankFound, so reporting a failed MATCH as a failed
+    // SEARCH tells an owner he does not appear in his own search. Neither side
+    // of the question may fire.
+    if (_bva.rankFound !== false) _fails.push('rankFound was left true on a row that is not us');
+    if (_bva.rankChecked !== false) {
+      _fails.push('rankChecked stayed true while rankFound went false, so absent_from_search (harm 96) now tells the owner he is invisible when the truth is that we could not identify his row — a worse false claim than the one being repaired');
+    }
+
 
     // AN IDENTITY MATCH IS NEVER QUESTIONED. A stale search index is not a
     // different business, and the comparison inside one search is still valid.
@@ -41495,6 +41564,10 @@ app.listen(PORT, () => {
                    weakerRows: [{ name: 'Rival A', reviews: 5 }] },
       gbpHealth: { checked: true, reviewCount: 150, rating: 4.9 },
     });
+    // AND A GOOD LEAD KEEPS ITS POSITION, or the guard has deleted the finding.
+    if (_byId.rank !== 4 || _byId.rankFound !== true) {
+      _fails.push(`an exact place-ID match lost its measured position (rank=${_byId.rank}, found=${_byId.rankFound}) — the guard is deleting the rank finding on healthy leads`);
+    }
     if (_byId.ourReviews !== 8) _fails.push('a row matched on the exact place ID was refused — that is an identity, not a guess, and refusing it deletes the outranked finding on every lead');
 
     // AND THE FIGURE COMES FROM GOOGLE'S RECORD EVEN WHEN THE ROW IS US. The
