@@ -3152,6 +3152,76 @@ function FindLoader({ count }) {
   );
 }
 
+// ══ ONE PLACE TURNS A FOUND COMPANY INTO A LEAD ═══════════════════════════
+// This was a sixty-line object literal inside addAndResearch, which adds ONE
+// company. Bulk-adding needed the same shape, and writing it a second time is
+// the disease this file records more than any other — "the second copy is
+// always the one that rots, because it only runs in the case nobody tests".
+// Extracted verbatim; both paths call it.
+const leadFromCompany = (company) => {
+  const id = uid();
+  return {
+      id, createdAt: today(), name: company.name,
+      website: company.website || '', email: company.email || '',
+      founderName: company.founderName || '', location: company.location || '',
+      jobTitle: company.jobTitle || '', jobSnippet: company.jobSnippet || '',
+      source: company.source || 'find', flaws: [], richData: {},
+      signals: company.signals || {}, stackCombo: company.stackCombo || null,
+      buckets: null, topPain: null, positioningScore: null,
+      homepageContent: '', icpScore: company.icpScore || 0,
+      status: 'new', brainFailed: false, brainFailReason: '',
+      discoverySource: company.source || '',
+      discoveryReason: company.discoveryReason || company.jobTitle || '',
+      discoverySourceUrl: company.jobUrl || company.link || '',
+      listingUrl: company.listingUrl || '',
+      manualRoleCount: company.manualRoleCount || 0,
+      reachability: company.reachability || 0,
+      reachabilityReasons: company.reachabilityReasons || [],
+      stacked: company.stacked || false, sourceCount: company.sourceCount || 1,
+      // ══ THE FIND-TIME PAYLOAD, ON THE LIVE PATH ═══════════════════════
+      // Everything below was already being copied — 280 lines further down,
+      // BELOW the early return, where none of it could ever run. That dead
+      // code carried the documented fixes for the placeId, the lane, the
+      // market coverage and the whole job-posting window ("NOTHING has ever
+      // sent these", its own comment says — and nothing ever did, because the
+      // fix lived in unreachable code). Research then received buyingLane
+      // 'software' on retainer leads and no placeId on every Places lead.
+      placeId: company.placeId || '',
+      industry: company.industry || company.category || '',
+      phone: company.phone || '',
+      reviewCount: company.reviewCount ?? null,
+      rating: company.rating ?? null,
+      marketsSeen: company.marketsSeen || [],
+      marketsAbsent: company.marketsAbsent || [],
+      noWebsite: company.noWebsite || false,
+      builderSite: company.builderSite || false,
+      leadChannel: company.leadChannel || '',
+      buyingLane: company.buyingLane || '',
+      verifiedCEO: company.verifiedCEO || '',
+      verifiedEmployees: company.verifiedEmployees ?? null,
+      reachPredict: company.reachPredict ?? null,
+      reachPredictWhy: company.reachPredictWhy || '',
+      signalAgeDays: company.signalAgeDays ?? null,
+      signalDate: company.signalDate || null,
+      raiseAmount: company.raiseAmount ?? null,
+      jobPostingUrl: company.jobPostingUrl || '',
+      jobPostedAt: company.jobPostedAt || null,
+      marketingRoles: company.marketingRoles || [],
+      opsRoles: company.opsRoles || [],
+      marketingChannels: company.marketingChannels || [],
+      discoverySignals: company.signals || {},
+      pitch: '', subject: '', previewPageHtml: '',
+      opens: 0, pageVisits: 0, sentAt: null,
+      followUps: [
+        {day:3,label:'Follow up 1',done:false,dueDate:daysFromNow(3)},
+        {day:7,label:'Follow up 2',done:false,dueDate:daysFromNow(7)},
+        {day:14,label:'Follow up 3',done:false,dueDate:daysFromNow(14)},
+      ],
+      notes: '', icpProfile: company.icpProfile || '',
+      preResearchScore: company.icpScore || 0,
+    };
+};
+
 function FindView({
   onCreate,
   settings,
@@ -3257,6 +3327,7 @@ function FindView({
       'Narrowing costs less. One trade in one market makes a fraction of the searches a national run does.'));
 
   const [error, setError] = useState('');
+  const [movedNote, setMovedNote] = useState('');
   const [loadingCount, setLoadingCount] = useState(0);
   const [lastRun, _setLastRun] = useState(localStorage.getItem('cj_last_discover') || null);
   const setLastRun = (v) => { _setLastRun(v); if (onLastRunChange) onLastRunChange(v); };
@@ -3649,69 +3720,38 @@ function FindView({
       return '';
     }
   };
+  // ══ THE QUEUE AND THE PIPELINE ARE TWO DIFFERENT LISTS ═══════════════════
+  // Find fills a QUEUE. The batch audits the PIPELINE. Nothing moved companies
+  // between them except addAndResearch, one at a time — so a queue of 195 and a
+  // pipeline of 4 reported "3 ready", and a fifty-lead batch would have meant
+  // fifty individual clicks before any research could start.
+  //
+  // Same builder as the single-add path, same name-dedupe, same removal from
+  // the queue. One write to storage rather than N, because saveLeads re-reads
+  // and re-serialises every time.
+  const addManyToPipeline = (companies) => {
+    const existing = getLeads();
+    const have = new Set(existing.map(l => String(l.name || '').toLowerCase()));
+    const added = [];
+    for (const c of (companies || [])) {
+      const key = String((c && c.name) || '').toLowerCase();
+      if (!key || have.has(key)) continue;
+      have.add(key);
+      added.push(leadFromCompany(c));
+    }
+    if (!added.length) return 0;
+    saveLeads([...existing, ...added], added[added.length - 1]);
+    const moved = new Set(added.map(l => String(l.name || '').toLowerCase()));
+    const newQ = loadDiscovered().filter(c => !moved.has(String((c && c.name) || '').toLowerCase()));
+    saveDiscovered(newQ); setDiscovered(newQ);
+    return added.length;
+  };
+
   const addAndResearch = async company => {
     // Immediately add to pipeline + navigate to Research — research continues there
-    const id = uid();
-    const lead = {
-      id, createdAt: today(), name: company.name,
-      website: company.website || '', email: company.email || '',
-      founderName: company.founderName || '', location: company.location || '',
-      jobTitle: company.jobTitle || '', jobSnippet: company.jobSnippet || '',
-      source: company.source || 'find', flaws: [], richData: {},
-      signals: company.signals || {}, stackCombo: company.stackCombo || null,
-      buckets: null, topPain: null, positioningScore: null,
-      homepageContent: '', icpScore: company.icpScore || 0,
-      status: 'new', brainFailed: false, brainFailReason: '',
-      discoverySource: company.source || '',
-      discoveryReason: company.discoveryReason || company.jobTitle || '',
-      discoverySourceUrl: company.jobUrl || company.link || '',
-      listingUrl: company.listingUrl || '',
-      manualRoleCount: company.manualRoleCount || 0,
-      reachability: company.reachability || 0,
-      reachabilityReasons: company.reachabilityReasons || [],
-      stacked: company.stacked || false, sourceCount: company.sourceCount || 1,
-      // ══ THE FIND-TIME PAYLOAD, ON THE LIVE PATH ═══════════════════════
-      // Everything below was already being copied — 280 lines further down,
-      // BELOW the early return, where none of it could ever run. That dead
-      // code carried the documented fixes for the placeId, the lane, the
-      // market coverage and the whole job-posting window ("NOTHING has ever
-      // sent these", its own comment says — and nothing ever did, because the
-      // fix lived in unreachable code). Research then received buyingLane
-      // 'software' on retainer leads and no placeId on every Places lead.
-      placeId: company.placeId || '',
-      industry: company.industry || company.category || '',
-      phone: company.phone || '',
-      reviewCount: company.reviewCount ?? null,
-      rating: company.rating ?? null,
-      marketsSeen: company.marketsSeen || [],
-      marketsAbsent: company.marketsAbsent || [],
-      noWebsite: company.noWebsite || false,
-      builderSite: company.builderSite || false,
-      leadChannel: company.leadChannel || '',
-      buyingLane: company.buyingLane || '',
-      verifiedCEO: company.verifiedCEO || '',
-      verifiedEmployees: company.verifiedEmployees ?? null,
-      reachPredict: company.reachPredict ?? null,
-      reachPredictWhy: company.reachPredictWhy || '',
-      signalAgeDays: company.signalAgeDays ?? null,
-      signalDate: company.signalDate || null,
-      raiseAmount: company.raiseAmount ?? null,
-      jobPostingUrl: company.jobPostingUrl || '',
-      jobPostedAt: company.jobPostedAt || null,
-      marketingRoles: company.marketingRoles || [],
-      opsRoles: company.opsRoles || [],
-      marketingChannels: company.marketingChannels || [],
-      discoverySignals: company.signals || {},
-      pitch: '', subject: '', previewPageHtml: '',
-      opens: 0, pageVisits: 0, sentAt: null,
-      followUps: [
-        {day:3,label:'Follow up 1',done:false,dueDate:daysFromNow(3)},
-        {day:7,label:'Follow up 2',done:false,dueDate:daysFromNow(7)},
-        {day:14,label:'Follow up 3',done:false,dueDate:daysFromNow(14)},
-      ],
-      notes: '', icpProfile: company.icpProfile || '',
-      preResearchScore: company.icpScore || 0,
-    };
+    const lead = leadFromCompany(company);
+    const id = lead.id;
+
     const existing = getLeads();
     if (!existing.some(l => l.name.toLowerCase() === company.name.toLowerCase())) {
       saveLeads([...existing, lead], lead);
@@ -4685,7 +4725,36 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             'These narrow the list on screen only. Trade and market live above, next to Find, because they decide what the next run buys.')
         ) : null);
 
-      return React.createElement(React.Fragment, null, filterBar, verifiedToggle, tabBar, emptyState, ...cards);
+      // ══ MOVE WHAT YOU ARE LOOKING AT INTO THE PIPELINE ═══════════════════
+      // Acts on `filtered` — the list actually on screen — so the scope bar and
+      // the panel filters decide what moves. Fifty is the batch size, and the
+      // count says how many of them are genuinely new so the number on the
+      // button is never a promise it cannot keep.
+      const _movable = filtered.filter(c => c && c.name && !alreadyAdded(c.name));
+      const _bulkBar = _movable.length ? React.createElement('div', {
+        style: { display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',
+          border:'1px solid var(--b)', borderRadius:12, padding:'13px 16px', marginBottom:14 },
+      },
+        React.createElement('div', { style:{ fontSize:13, color:'var(--m2)' } },
+          movedNote || (_movable.length + ' of these are not in the pipeline yet. The batch audits the pipeline, not this queue.')),
+        React.createElement('button', {
+          className:'btn btn-sm',
+          style:{ marginLeft:'auto', background:'var(--a)', color:'#0b0d10', border:'none', fontWeight:600 },
+          onClick: () => {
+            const take = _movable.slice(0, 50);
+            const n = addManyToPipeline(take);
+            if (n) setMovedNote(n + ' moved to the pipeline. Open Research to audit them.');
+          },
+        }, 'Move ' + Math.min(50, _movable.length) + ' to pipeline'),
+        _movable.length > 50 ? React.createElement('button', {
+          className:'btn btn-g btn-sm',
+          onClick: () => {
+            const n = addManyToPipeline(_movable);
+            if (n) setMovedNote(n + ' moved to the pipeline. Open Research to audit them.');
+          },
+        }, 'Move all ' + _movable.length) : null) : null;
+
+      return React.createElement(React.Fragment, null, filterBar, _bulkBar, verifiedToggle, tabBar, emptyState, ...cards);
     })()))))  , mode === 'manual' && React.createElement('div', {
     style: {
       maxWidth: 640
