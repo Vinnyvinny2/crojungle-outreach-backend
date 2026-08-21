@@ -11964,7 +11964,10 @@ const HARM_LADDER = [
         // have made him open the email in thirty seconds — but it belongs at the
         // end of the sentence, not the front of the email.
         return `${top.name} shows up above them on Google for "${m.rankQuery}", with ${top.reviews} reviews against their ${ours}`
-          + (more > 0 ? `, and ${more} other${more === 1 ? '' : 's'} above them have fewer too` : '');
+          // "1 other above them HAVE fewer" shipped on McCormick Law's sheet.
+          // One wrong verb on the most checkable sentence in the system reads
+          // as carelessness about the very numbers we are asking him to trust.
+          + (more > 0 ? `, and ${more} other${more === 1 ? '' : 's'} above them ${more === 1 ? 'has' : 'have'} fewer too` : '');
       }
       // ══ WITHOUT A NAME, THE REVIEW COMPARISON IS ALL COST ═════════════
       // Stephen M. Davis, live: "businesses with fewer reviews than yours are
@@ -19777,6 +19780,10 @@ const callWindowFor = (hoursText, tradeWord) => {
   // Two shapes, and the difference is where the owner physically is at 10am.
   const onSite = /roof|plumb|electric|hvac|heating|cooling|landscap|paving|concrete|excavat|fenc|tree|pest|clean|restor|remodel|construct|contractor|builder|garage|window|sider|gutter|foundation|septic|well|pool/.test(t);
   const inRooms = /dent|surg|derm|ortho|chiro|vet|clinic|medical|physician|attorney|lawyer|account|cpa|therap|optom|podiat/.test(t);
+  // Within the practices, the person in the room differs — and "with patients"
+  // on a CPA's call sheet is the tell that a machine wrote the sheet. Fit Money
+  // CPA shipped exactly that on 2026-08-21.
+  const _withWhom = /attorney|lawyer|account|cpa/.test(t) ? 'clients' : 'patients';
   const open = Number.isFinite(earliest) ? earliest : 8;
   if (onSite) {
     return { checked: true, open24: false,
@@ -19784,7 +19791,7 @@ const callWindowFor = (hoursText, tradeWord) => {
   }
   if (inRooms) {
     return { checked: true, open24: false,
-      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. A practice owner is with patients or clients through the day, so the realistic windows are before the first appointment and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
+      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. A practice owner is with ${_withWhom} through the day, so the realistic windows are before the first ${_withWhom === 'clients' ? 'meeting' : 'appointment'} and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
   }
   return { checked: true, open24: false,
     say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. Early is usually better than late for an owner-operated business.` };
@@ -22070,7 +22077,15 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     // counting several platforms is the classic way a wrong figure gets in.
     const _factNums = new Set((String(facts).match(/\d[\d,.]*/g) || []).map(x => x.replace(/[,.]$/, '')));
     const _readNums = (String(parsed.read || '').match(/\b\d{2,}\b/g) || []);
-    const _unsourced = _readNums.filter(n => !_factNums.has(n) && Number(n) > 20);
+    // The > 20 floor exists so "3 things" and "10 seconds" are not flagged —
+    // and it exempted exactly the wrong number on Dr Joseph Jensen, whose read
+    // shipped "15 reviews at 3.5 stars" against a measured count of 150. A
+    // dropped digit produces a small number by construction, so smallness is no
+    // alibi: a sub-floor number is still flagged when it is a measured number
+    // with one digit missing (or added), which is the shape a truncation takes.
+    const _factArr = [..._factNums];
+    const _digitDropped = (n) => _factArr.some(f => f !== n && (f.startsWith(n) || n.startsWith(f)) && Math.abs(f.length - n.length) === 1);
+    const _unsourced = _readNums.filter(n => !_factNums.has(n) && (Number(n) > 20 || _digitDropped(n)));
     if (_unsourced.length) {
       console.log(`\u26a0 SITUATION READ [${company}]: ${_unsourced.join(', ')} appear(s) in the read but not in the measured facts. Check before this reaches any email \u2014 an unsourced number is the most checkable false statement we can send.`);
     }
@@ -34665,6 +34680,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     } else if (_mktgHire) {
       bottleneck = 'DEMAND';
       bottleneckWhy = 'They are HIRING for marketing: budget is allocated, direction is not chosen. A retainer outperforms one junior hire and they are actively deciding right now.';
+    // ══ THE BLIND GUARD SITS ABOVE EVERY ABSENCE-BUILT BRANCH ══════════════
+    // McCormick Law, live 2026-08-21: the sheet's own banner said "We never read
+    // a single page of their website" and two blocks later "Fix this first —
+    // FOUNDATION: the site cannot convert". _siteConverts is hasCTA && !_weakSite,
+    // and hasCTA is false when nothing was read — so an UNREAD site satisfied
+    // "cannot convert" and the guard written for exactly this sat one branch too
+    // low to fire. Every branch above here rests on POSITIVE evidence (a hire, a
+    // headcount, an ads tag, a booking read), which proves we looked; everything
+    // from FOUNDATION down rests on absences, so the guard goes here.
+    } else if (sitePages === null || !builtWith || builtWith.checked === false) {
+      bottleneck = 'NOT MEASURED';
+      bottleneckWhy = 'We could not read enough of their funnel to name the first broken link. That is a statement about our read, not about their business, and nothing should be sold off it. Re-run this lead before using this section.';
     } else if (!_siteConverts) {
       bottleneck = 'FOUNDATION';
       bottleneckWhy = 'No confirmed ad spend AND the site cannot convert. Driving traffic to this site would waste money — the site is the first broken link and must be fixed before demand is worth buying.';
@@ -34689,13 +34716,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     } else if (growthConstraint && growthConstraint.checked && growthConstraint.layer
                && growthConstraint.layer !== 'DEMAND') {
       bottleneck = growthConstraint.layer;
-      bottleneckWhy = `Nothing in the funnel read as the first broken link, and the binding constraint we DID measure is ${growthConstraint.layer}. ${String(growthConstraint.condition || '').trim()} Deferring to it rather than naming a demand problem nobody measured: more traffic cannot be the answer on a business whose constraint sits upstream of traffic.`;
-    } else if (sitePages === null || !builtWith || builtWith.checked === false) {
-      // Here because inputs were MISSING, not because they were measured and
-      // came back negative. "The site is functional" read off a site we could
-      // not open is the absence-claim failure this whole file exists to prevent.
-      bottleneck = 'NOT MEASURED';
-      bottleneckWhy = 'We could not read enough of their funnel to name the first broken link. That is a statement about our read, not about their business, and nothing should be sold off it. Re-run this lead before using this section.';
+      // ONE sentence, not the whole condition: on David Price this restated
+      // the entire "one thing" paragraph directly beneath itself, and a block
+      // that repeats the block above it teaches the reader to skip both.
+      bottleneckWhy = `Same answer as the one thing above: nothing earlier in the funnel read as broken, so the first thing to fix IS the ${growthConstraint.layer} constraint — and more traffic cannot be the answer on a business whose constraint sits upstream of traffic.`;
     } else {
       bottleneck = 'DEMAND';
       bottleneckWhy = 'Their site converts, a capture path exists, and no ad spend was found on the pages we read \u2014 so the first broken link sits upstream of the site: nothing we measured is bringing qualified people to it. Every clause in that sentence was measured on this lead.';
@@ -37629,12 +37653,12 @@ Return ONLY valid JSON:
               note: critique.critiqueNote || '',
               verifiedCount: (critique.verifiedClaims || []).length,
             };
-            // Merge the fact-checker's flags into the same _claimRisks the review
-            // checklist already surfaces, so both fabrication layers show in one place.
-            if ((critique.flaggedClaims || []).length) {
-              brainAudit._claimRisks = (brainAudit._claimRisks || []).concat(
-                critique.flaggedClaims.map(f => 'fact-check: ' + f));
-            }
+            // The merge into _claimRisks happens BELOW, after the cleared-entry
+            // filter — it used to run here on the RAW list, so the checker's own
+            // approval sentence reached the call sheet as a warning: McCormick
+            // Law's "Do not say" section shipped carrying the literal item
+            // "fact-check: No flagged claims." A clearance rendered as a caution
+            // teaches the reader that the section is noise.
             // A low-confidence audit is a loud warning, not a silent pass.
             if (conf <= 4) {
               brainAudit._lowConfidence = conf;
@@ -37662,6 +37686,11 @@ Return ONLY valid JSON:
 // approval and it was the one form this pattern did not recognise.
 const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims|VERIFIED as measured|is ALLOWED|allowed per rules|correct and (must not|should not) be flagged|no unverifiable|nothing to flag|this is (a )?(valid|general truth|general behaviou?ral))\b/i;
             const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f));
+            // NOW the merge — real flags only, cleared entries never reach the sheet.
+            if (_realFlags.length) {
+              brainAudit._claimRisks = (brainAudit._claimRisks || []).concat(
+                _realFlags.map(f => 'fact-check: ' + f));
+            }
             // ══ A CRITICAL FLAG IS NOT AN ANNOTATION ═══════════════════════════
             // Wade Orthodontics shipped with this, twice:
             //   CRITICAL: '380 five-star reviews' — evidence shows 156. This is a
@@ -40284,7 +40313,8 @@ app.listen(PORT, () => {
     // publicPainSignals is declared from req.body at the top of the route, so it
     // exists on every path; the two names that failed were declared inside
     // blocks that had already closed.
-    const _srcHere = String(resolveMeasurements) + '';
+    // (a dead `String(resolveMeasurements)` capture sat here for the life of
+    // the check — assigned, never read, looking like evidence)
     const _liveArg = /reviewPainArg:\s*\(Array\.isArray\(publicPainSignals\)/;
     const _stale = /reviewPainArg:[^,]*\b(deepPain|reviewPainFound|painSummary)\b/;
     const _ran = !!(_r && Array.isArray(_r.byHarm) && _r.byHarm.length);
@@ -40308,7 +40338,7 @@ app.listen(PORT, () => {
     } else if (!_m.painTheme) {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the mined complaint did not reach the resolver as painTheme, so the subject line falls back to the generic set on exactly the leads with the best finding.`);
     } else {
-      console.log(`\u2713 LADDER SURVIVAL CHECK: the resolver is called the way the pipeline calls it \u2014 every argument in scope \u2014 and a repeating review complaint reaches the ladder, leads it, and carries into the subject line.`);
+      console.log(`\u2713 LADDER SURVIVAL CHECK: a realistic measurement set runs through resolveMeasurements and rankHarms, a repeating review complaint reaches the ladder, leads it, and carries into the subject line \u2014 and the two argument-list names that killed the ladder before are still absent from the reviewPainArg slot. HONEST LIMIT: this check builds its own arguments, so it cannot see a bad name at the live call site; scopecheck.js's runtime-split globals list is the guard for that class, and LADDER CRASH VISIBILITY CHECK is the guard for the consequence.`);
     }
   } catch (e) {
     console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
@@ -40431,6 +40461,17 @@ app.listen(PORT, () => {
     // And the deferral must exist, or every unreadable funnel becomes a demand problem.
     if (!_src.includes(_needle("bottleneck = 'NOT MEASURED';", ''))) {
       _fails.push('a lead whose funnel we could not read is diagnosed rather than reported as unread, which is the absence-claim failure aimed at the diagnosis itself');
+    }
+    // AND ITS POSITION. The guard existed and still shipped "the site cannot
+    // convert" on McCormick Law, whose own sheet said we never read a page —
+    // because it sat BELOW the !_siteConverts branch, and an unread site
+    // satisfies "cannot convert". The guard must come before every branch that
+    // is built on an absence.
+    const _blindAt = _src.indexOf(_needle('} else if (sitePages === null || ', '!builtWith || builtWith.checked === false) {'));
+    const _foundationAt = _src.indexOf(_needle('} else if (!_siteConverts) {', ''));
+    if (_blindAt < 0) _fails.push('the blind guard is gone from the cascade');
+    else if (_foundationAt >= 0 && _blindAt > _foundationAt) {
+      _fails.push('the blind guard sits below the FOUNDATION branch again, so an unread site is diagnosed as "cannot convert" before the guard can fire — which is exactly what reached McCormick Law\u2019s sheet');
     }
     if (_fails.length) {
       console.log(`⛔ DIAGNOSIS AGREEMENT CHECK: ${_fails.join(' | ')}.`);

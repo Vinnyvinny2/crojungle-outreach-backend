@@ -2273,7 +2273,20 @@ const auditExportHtml = (records, meta) => {
             if (cut > 0 && (q < 0 || cut > q)) return t.slice(0, cut + 1);
             return t.length > 300 ? t.slice(0, 300).replace(/\s+\S*$/, '') + '\u2026' : t;
           };
-          const items = r.criticalFactCheck.concat(r.claimRisks);
+          // The same flag arrives twice — once as a critical fact-check entry
+          // and once inside claimRisks with a "fact-check:" prefix — and Fit
+          // Money's sheet printed the veterinary-headline warning twice in a
+          // row. Deduplicate on normalised text, keeping the critical copy,
+          // which lists first.
+          const _seen = [];
+          const _norm = (x) => String(typeof x === 'string' ? x : (x && x.what) || '').toLowerCase().replace(/^fact-check:\s*/, '').replace(/[^a-z0-9]+/g, '').slice(0, 160);
+          const items = r.criticalFactCheck.concat(r.claimRisks).filter(x => {
+            const n = _norm(x);
+            if (!n) return true;
+            if (_seen.some(k => k === n || k.startsWith(n) || n.startsWith(k))) return false;
+            _seen.push(n);
+            return true;
+          });
           if (items.length) return ul(items, x => '<li>' + p(firstSentence(x)) + '</li>')
             + '<p class="dim">Shortened for the call. The full reasoning for each is on the audit screen.</p>';
           return r.status === 'not audited' ? '' : '<p class="dim">Nothing was flagged on this audit. This is a checked result, not a missing one.</p>';
@@ -2657,6 +2670,31 @@ const cacheLeadsBestEffort = (arr) => {
     }
   }
 };
+// ══ AN UNKNOWN COLUMN MUST COST ONE FIELD, NOT THE WHOLE SAVE ═══════════════
+// Live, 2026-08-21 16:43 UTC: the red NOT SAVING banner, HTTP 400, on every
+// save. The cause was two row keys added that day — held_back_contact and
+// corpus_read — with no matching columns in the leads table. PostgREST refuses
+// the ENTIRE payload when one key has no column, so two new fields took down
+// persistence for everything: audits, emails, approvals, all of it.
+//
+// Adding a field to leadToRow is a routine edit and it will happen again. The
+// root fix is that it must never again be able to stop ALL saving: when
+// Supabase names the column it cannot find, that one key is stripped from the
+// rows and the save is retried, the console prints the exact ALTER TABLE that
+// fixes it permanently, and the banner names the field. The field still lives
+// in memory and localStorage — it is just not durable until the column exists.
+const sbUnknownColumnFrom = (status, bodyText) => {
+  if (status !== 400) return null;
+  try {
+    const b = JSON.parse(String(bodyText || '{}'));
+    // PGRST204: "Could not find the 'held_back_contact' column of 'leads' in the schema cache"
+    const m = /Could not find the '([A-Za-z0-9_]+)' column/.exec(String(b.message || bodyText || ''));
+    return m ? m[1] : null;
+  } catch {
+    const m = /Could not find the '([A-Za-z0-9_]+)' column/.exec(String(bodyText || ''));
+    return m ? m[1] : null;
+  }
+};
 const sbPushRows = rows => {
   // BATCHED upsert. This used to fire ONE request per lead — with 85 leads in the
   // pipeline every save queued 85 HTTP requests, and browsers only run ~6 at a time.
@@ -2732,6 +2770,30 @@ const sbPushRows = rows => {
           const half = Math.ceil(chunk.length / 2);
           sbPushRows(chunk.slice(0, half));
           sbPushRows(chunk.slice(half));
+        } else if (res && res.status === 400) {
+          // 400 usually means the payload names a column the table does not
+          // have. Supabase says WHICH one in its body — read it, strip that one
+          // key, and retry, so a new field degrades to "one field not durable,
+          // loudly named with its fix" instead of "nothing saves at all".
+          res.text().then(body => {
+            const col = sbUnknownColumnFrom(400, body);
+            if (col && chunk.some(r => r && Object.prototype.hasOwnProperty.call(r, col))) {
+              console.error('CLOUD SAVE: the leads table has no "' + col + '" column, so Supabase refused the whole payload. '
+                + 'Saving everything else without it now. To store this field too, run this once in the Supabase SQL editor:\n'
+                + '    alter table leads add column if not exists ' + col + ' jsonb;');
+              window.__cjSync = { state: 'fail', at: Date.now(),
+                fails: (window.__cjSync?.fails || 0) + 1,
+                lastError: 'The leads table is missing the "' + col + '" column. Everything else is being saved without it; run the ALTER TABLE printed in the console to store it too.' };
+              sbPushRows(chunk.map(r => { const c = { ...r }; delete c[col]; return c; }));
+            } else {
+              window.__cjSync = { state: 'fail', at: Date.now(),
+                fails: (window.__cjSync?.fails || 0) + 1,
+                lastError: 'HTTP 400 — ' + String(body || '').slice(0, 200) };
+              console.error('CLOUD SAVE FAILED: HTTP 400 — this work is NOT saved. ' + chunk.length + ' lead(s) affected. Supabase said: ' + String(body || '').slice(0, 300));
+            }
+          }).catch(() => {
+            window.__cjSync = { state: 'fail', at: Date.now(), fails: (window.__cjSync?.fails || 0) + 1, lastError: 'HTTP 400' };
+          });
         } else {
           window.__cjSync = { state: 'fail', at: Date.now(),
             fails: (window.__cjSync?.fails || 0) + 1,
@@ -6671,33 +6733,72 @@ function ResearchView({
         // two copies of a rule: the one nobody watches is the one that rots.
       )
     ),
+    // ══ ONE LIST WAS THREE DIFFERENT KINDS OF LEAD ═══════════════════════════
+    // Vin, launch night: "we need like a line seperating leads that research has
+    // been ran on... theyre combining with ones that havent been audited this is
+    // confusing... theres a section for the ones in progress." He was reading a
+    // single score-sorted pile in which a finished audit, a lead mid-research and
+    // a lead nobody has touched are visually identical rows — and the same pile
+    // is why "Export 7 audits" after a five-lead run read as a miscount.
+    //
+    // Three sections now, in the order of attention: what is running RIGHT NOW,
+    // then what still needs auditing, then what is done. Score-sorted within
+    // each. The card itself is one renderer used by all three, because two
+    // copies of a row is the two-copies disease with a screen attached.
     React.createElement('div', { style: { overflowY: 'auto', flex: 1 } },
-      allLeads.map(l => {
-        const isActive = l.id === lead?.id;
-        const statusLabel = l.approved ? 'approved' : l.brainAudit ? 'researched' : 'new';
-        return React.createElement('div', {
-          key: l.id,
-          style: { position:'relative', borderBottom: '1px solid var(--b)', borderLeft: isActive ? '2px solid var(--t)' : '2px solid transparent', background: isActive ? 'var(--s2)' : 'transparent', opacity: l.brainAudit ? 1 : 0.65 }
-        },
-          React.createElement('div', {
-            onClick: () => onSelectLead && onSelectLead(l.id),
-            style: { padding: '9px 12px', paddingRight: 26, cursor: 'pointer' }
+      (() => {
+        const _inf = getInflightJobs();
+        const _runningNames = new Set(batchAt.running || []);
+        const isRunning = (l) => !!(l && (
+          (_inf[l.id] && _inf[l.id].jobId && (Date.now() - (_inf[l.id].at || 0) < 10 * 60 * 1000))
+          || _runningNames.has(l.name)
+          || researchingId === l.id));
+        const isAudited = (l) => !!(l && (l.problemList || l.brainAudit || l.theOneThing));
+        const running = allLeads.filter(isRunning);
+        const audited = allLeads.filter(l => !isRunning(l) && isAudited(l));
+        const waiting = allLeads.filter(l => !isRunning(l) && !isAudited(l));
+        const header = (label, count, color) => React.createElement('div', {
+          key: 'h-' + label,
+          style: { position: 'sticky', top: 0, zIndex: 2, padding: '7px 12px 6px', background: 'var(--s)',
+            borderBottom: '1px solid var(--b)', fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em',
+            textTransform: 'uppercase', color: color || 'var(--m)' }
+        }, label + ' (' + count + ')');
+        const leadRow = (l) => {
+          const isActive = l.id === lead?.id;
+          const running = isRunning(l);
+          const statusLabel = running ? 'auditing\u2026' : (l.approved ? 'approved' : isAudited(l) ? 'audited' : 'not audited');
+          return React.createElement('div', {
+            key: l.id,
+            style: { position:'relative', borderBottom: '1px solid var(--b)', borderLeft: isActive ? '2px solid var(--t)' : '2px solid transparent', background: isActive ? 'var(--s2)' : 'transparent', opacity: (isAudited(l) || running) ? 1 : 0.65 }
           },
-            React.createElement('div', { style: { fontSize: 12, fontWeight: isActive ? 600 : 400, color: 'var(--t)', marginBottom: 2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, l.name),
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginBottom: 5 } },
-              (l.icpScore || 0) + (l.decisionMaker?.name ? ' · ' + l.decisionMaker.name.split(' ').filter((_,i,a) => i===0||i===a.length-1).join(' ') : '')
+            React.createElement('div', {
+              onClick: () => onSelectLead && onSelectLead(l.id),
+              style: { padding: '9px 12px', paddingRight: 26, cursor: 'pointer' }
+            },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: isActive ? 600 : 400, color: 'var(--t)', marginBottom: 2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, l.name),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginBottom: 5 } },
+                (l.icpScore || 0) + (l.decisionMaker?.name ? ' \u00b7 ' + l.decisionMaker.name.split(' ').filter((_,i,a) => i===0||i===a.length-1).join(' ') : '')
+              ),
+              React.createElement('span', {
+                style: { fontSize: 10, padding: '1px 6px', borderRadius: 10,
+                  background: statusLabel==='approved' ? 'rgba(34,197,94,.1)' : statusLabel==='audited' ? 'var(--s2)' : 'transparent',
+                  border: '1px solid '+(statusLabel==='approved' ? 'rgba(34,197,94,.3)' : 'var(--b)'),
+                  color: statusLabel==='approved' ? 'var(--g)' : 'var(--m)' }
+              }, statusLabel)
             ),
-            React.createElement('span', {
-              style: { fontSize: 10, padding: '1px 6px', borderRadius: 10, background: statusLabel==='approved' ? 'rgba(34,197,94,.1)' : statusLabel==='researched' ? 'var(--s2)' : 'transparent', border: '1px solid '+(statusLabel==='approved' ? 'rgba(34,197,94,.3)' : 'var(--b)'), color: statusLabel==='approved' ? 'var(--g)' : 'var(--m)' }
-            }, statusLabel)
-          ),
-          React.createElement('button', {
-            onClick: e => { e.stopPropagation(); setDeleteModal({ id: l.id, name: l.name }); },
-            title: 'Remove from pipeline',
-            style: { position:'absolute', top:'50%', right:6, transform:'translateY(-50%)', background:'transparent', border:'none', color:'var(--m)', fontSize:16, cursor:'pointer', lineHeight:1, padding:'3px 5px', opacity: isActive ? 0.7 : 0.35 }
-          }, '×')
-        );
-      })
+            React.createElement('button', {
+              onClick: e => { e.stopPropagation(); setDeleteModal({ id: l.id, name: l.name }); },
+              title: 'Remove from pipeline',
+              style: { position:'absolute', top:'50%', right:6, transform:'translateY(-50%)', background:'transparent', border:'none', color:'var(--m)', fontSize:16, cursor:'pointer', lineHeight:1, padding:'3px 5px', opacity: isActive ? 0.7 : 0.35 }
+            }, '\u00d7')
+          );
+        };
+        const out = [];
+        if (running.length) { out.push(header('Auditing now', running.length, 'var(--t)')); running.forEach(l => out.push(leadRow(l))); }
+        if (waiting.length) { out.push(header('Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
+        if (audited.length) { out.push(header('Audited \u2014 what Export covers', audited.length)); audited.forEach(l => out.push(leadRow(l))); }
+        return out;
+      })()
     )
   ),
 
