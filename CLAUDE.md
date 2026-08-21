@@ -2496,6 +2496,28 @@ before and after is identical except for four new `div`s, which are the scope
 bar. No `select`, `button` or `option` count changed, so nothing was removed
 from the screen — only moved and repainted.
 
+**And the queue is not the pipeline.** Vin: "it only lets me do 3 it says 3
+readys" — with 195 companies in the Find queue and 4 leads in the pipeline.
+Find fills a QUEUE; the batch audits the PIPELINE; and the only thing that
+moved a company between them was `addAndResearch`, one at a time. A fifty-lead
+batch meant fifty individual clicks before any research could start, which
+would have been discovered at nine tomorrow morning.
+
+The sixty-line lead literal is now `leadFromCompany` at module scope, called by
+both the single-add path and a new `addManyToPipeline`. Extracted rather than
+copied, and verified by lifting it out and executing it: **all 68 fields the
+original inline literal produced are present**, the Find-time payload
+(`placeId`, review count, rating, `buyingLane`, `jobPostedAt`, markets) survives,
+and two calls get distinct ids. The requirement list is read from the
+PRE-EXTRACTION file, because a check whose requirement comes from the code under
+test cannot fail — the first version scraped it from the new source, matched
+nothing, and reported "all 0 fields present" as a pass.
+
+The bulk bar acts on `filtered`, so the scope bar decides what moves, and its
+count is of companies genuinely not in the pipeline yet. Its first draft called
+`setToast`, which is declared in the App component and not in FindView — a
+ReferenceError on the first click, caught before it shipped.
+
 ---
 
 # PART 5 — WHAT IS PROVEN
