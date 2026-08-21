@@ -6488,7 +6488,30 @@ const selfSource = () => {
   if (_selfSourceCache === null) _selfSourceCache = require('fs').readFileSync(__filename, 'utf8');
   return _selfSourceCache;
 };
-const releaseSelfSource = () => { _selfSourceCache = null; };
+// ══ FOURTEEN CHECKS, FOURTEEN COPIES OF THE SAME 3MB STRING ═══════════════
+// selfSource() is memoised to ONE copy for the reason BOOT HEAP CHECK records:
+// 47 checks each grew a private readFileSync of this file, boot settled near
+// 140MB over, and a build that was green here crash-looped on Render.
+//
+// The comment-stripped view was never given the same treatment. Every check that
+// asserts a call site writes `selfSource().split('\n').filter(...).join('\n')`,
+// and each one of those builds a 55,000-element array AND a fresh multi-megabyte
+// string. Fourteen of them. Adding five more today pushed the settled heap from
+// 184MB to 211MB and BOOT HEAP CHECK went red — which is the check doing exactly
+// its job, on the same disease one level down.
+//
+// One copy, released with the other.
+let _selfSourceNoCommentsCache = null;
+const selfSourceNoComments = () => {
+  if (_selfSourceNoCommentsCache === null) {
+    // NOT selfSourceNoComments() — the blanket rewrite of the fifteen call
+    // sites caught this one too and every check died on "Maximum call stack
+    // size exceeded". The boot found it in one run.
+    _selfSourceNoCommentsCache = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  }
+  return _selfSourceNoCommentsCache;
+};
+const releaseSelfSource = () => { _selfSourceCache = null; _selfSourceNoCommentsCache = null; };
 const AUDIT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const _auditCache = new Map();   // hash -> { at, company, payload }
 
@@ -6963,6 +6986,58 @@ const namesConflict = (a, b) => {
   if (!x.size || !y.size) return false;
   return ![...x].some(w => y.has(w));
 };
+
+// ══ DID WE ACTUALLY SEE THEIR SITE ════════════════════════════════════════
+// One predicate, because "we looked" is the gate on every judgement about their
+// pages and this codebase's most expensive failures are absence claims made from
+// a read that never happened. 300 characters is the same floor corpusWarningFor
+// uses for a blind homepage, so the banner on the sheet and the judgements
+// inside it agree about the same lead. PURE, so the boot check runs it.
+// ══ THE VERIFY-AT-SEND GATE HAS NEVER ONCE EXECUTED ═══════════════════════
+// PART 4 §3 has carried "there is now a verify-at-send gate but it is untested
+// at volume" for weeks. It is not untested. It is INERT, and it has been since
+// the day it shipped.
+//
+// The gate reads `lead.emailTier || lead.emailMeta.tier`. Neither field exists
+// anywhere in this system. The tier lives on `emailResult.tier` — EMAIL_TIERS
+// declares it (1 published on their site, 2 SMTP-verified, 3 pattern-learned,
+// 4 pattern-inferred, 5 none) and index.html reads `L.emailResult.tier` when it
+// builds a research request. So `_tier` was 0 on every lead, `if (_tier > 2)`
+// was false on every lead, and the SMTP check never ran.
+//
+// The cost is exactly the failure it was built to prevent. Both hard bounces
+// this project has had came from addresses it "labelled 'pattern-built, not
+// confirmed' and marked sendable" — tier 3 — and a hard bounce is charged to the
+// sending DOMAIN, which is the one asset here that cannot be rebuilt in an
+// afternoon.
+//
+// And SEND VERIFICATION CHECK is green, because it builds its OWN `_ok` with its
+// own `emailTier` fixtures and tests that. A check that exercises a
+// re-implementation cannot see the shipped rule at all — the recorded
+// "two implementations of one operation", with one copy inside the guard.
+//
+// PURE, and the route calls these. An unknown tier now VERIFIES rather than
+// waving through: we do not know where that address came from, and "we did not
+// measure it" has never meant "it is fine" anywhere else in this file.
+const emailTierOf = (lead) => {
+  const l = lead || {};
+  const raw = (l.emailResult && l.emailResult.tier) != null ? l.emailResult.tier
+    : (l.emailTier != null ? l.emailTier
+      : (l.emailMeta && l.emailMeta.tier != null ? l.emailMeta.tier : 0));
+  const t = Number(raw);
+  return Number.isFinite(t) && t > 0 ? t : 0;
+};
+const sendAlreadyProven = (lead) => {
+  const l = lead || {};
+  if (l.smtpVerified === true) return true;
+  const t = emailTierOf(l);
+  if (t === 1 || t === 2) return true;
+  return /SMTP-verified/i.test(String((l.emailResult && l.emailResult.label) || ''));
+};
+const sendNeedsVerify = (lead) => !sendAlreadyProven(lead);
+
+const siteWasRead = (content, visualAnalysis) =>
+  !!visualAnalysis || String(content == null ? '' : content).trim().length >= 300;
 
 const parseLLMJSON = (raw) => {
   if (raw == null) return null;
@@ -38478,7 +38553,25 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     const conversionRating = visualAnalysis?.overallConversionReadiness || 'unknown';
 
     // Dunford positioning score
-    const positioningScore = (() => {
+    // ══ A SCORE ABOUT A PAGE WE NEVER OPENED ══════════════════════════════
+    // Every term below reads `content` or `visualAnalysis`. On a lead where
+    // Firecrawl was refused, content is empty and visualAnalysis is null, so the
+    // scorer runs over nothing and returns 0-2 out of 10 — and 0 is not "we did
+    // not look", it is "we looked and it is terrible". Three consumers then act
+    // on it: a `weak_positioning` flaw is pushed, the audit prompt is told
+    // "Dunford positioning: 0/10", and the rule-based product fallback declares
+    // `isBroken` and recommends a rebuild because "Homepage has critical
+    // conversion failures".
+    //
+    // Live 2026-08-21: three of five leads read ZERO pages and every one of them
+    // got that treatment. It is the recorded "unmeasured treated as zero" class
+    // pointed at the softest, least defensible judgement in the system — and
+    // CLAUDE.md's own bucket text for weak_positioning already says it is "our
+    // opinion, not a measured fact, and the owner cannot verify it".
+    //
+    // null, not zero. Every consumer below asks whether it is a number first.
+    const _positioningMeasurable = siteWasRead(content, visualAnalysis);
+    const positioningScore = !_positioningMeasurable ? null : (() => {
       let s = 0;
       if (visualAnalysis) {
         // Every term here named a field the vision model stopped returning, so
@@ -38553,7 +38646,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           ? `${pageSpeed.mobileScore}/100 mobile score${pageSpeed.mobileScoreSource === 'lab' ? ' (Google lab test)' : ''}${pageSpeed.fieldSaysFine ? ' — real-visitor data says the site performs fine, so this is not a finding' : ''}`
           : 'Mobile score unavailable',
         lcp: pageSpeed.lcp ? `Load time: ${pageSpeed.lcp}` : '',
-        positioningScore: `Dunford positioning: ${positioningScore}/10`,
+        positioningScore: Number.isFinite(positioningScore)
+          ? `Dunford positioning: ${positioningScore}/10`
+          : 'Dunford positioning: NOT MEASURED — we did not read enough of their site to judge it, so say nothing about their positioning',
         designQuality: visualAnalysis ? `Design: ${designQuality}` : '',
         conversionRating: visualAnalysis ? `Overall conversion: ${conversionRating}` : '',
         // biggestVisualIssue was never a field on anything. designObservation is
@@ -38666,7 +38761,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // Google's real-visitor data says the site performs fine: the lab score is
     // a simulation, and the record beats the simulation every time they argue.
     if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50 && !pageSpeed.fieldSaysFine) flaws.push('slow_mobile');
-    if (positioningScore < 4) flaws.push('weak_positioning');
+    if (Number.isFinite(positioningScore) && positioningScore < 4) flaws.push('weak_positioning');
 
     // OPERATIONS — AI-replacement signals (from discovery, high confidence)
     if (manualRoleCount >= 5) flaws.push('heavy_manual_labor');
@@ -38729,12 +38824,28 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       const hasAdSpend = !!builtWith.hasGoogleAdsTag || !!fbAds.hasAds;
       const hasInfra = builtWith.hasCRM || builtWith.hasPixel;
       const isAIOpportunity = !builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat;
-      const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40 && !pageSpeed.fieldSaysFine);
+      const isBroken = flaws.includes('no_cta') || (Number.isFinite(positioningScore) && positioningScore < 4) || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40 && !pageSpeed.fieldSaysFine);
       const isMediaOrAgency = /media|agency|creative|PR|communications|marketing firm|studio/i.test(content.slice(0,500));
       if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$40k–$100k+', reason:'Merged or growing operation with no unified tech stack', flag:'' };
       if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$10k–$35k/mo', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
       if (isAIOpportunity && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'No connected analytics or automation tags detected on-page', flag:'' };
       if (isBroken) return { product:'Website Rebuild', price:'$50k+', reason:'Homepage has critical conversion failures', flag:'' };
+      // ══ THE CATCH-ALL ASSERTED A PAGE WE MAY NEVER HAVE OPENED ══════════
+      // Every branch above rests on something measured — an ads tag, a CRM, the
+      // trade words in their copy. This one rests on nothing, and it names the
+      // homepage. On a lead Firecrawl refused, that sentence goes onto the sheet
+      // Mike reads: "Homepage conversion gaps identified", about a page that
+      // returned zero characters. Three of five leads on 2026-08-21 were in
+      // exactly that state.
+      //
+      // The product does not change — a business with no readable site is still
+      // a rebuild candidate, and that is the honest reason. What changes is that
+      // the reason stops claiming we saw something.
+      if (!_positioningMeasurable) {
+        return { product:'Website Rebuild', price:'$50k+',
+                 reason:'We could not read their site on this run, so nothing here is a judgement about their pages. Re-run before pitching from it.',
+                 flag:'site-not-read' };
+      }
       return { product:'Website Rebuild', price:'$50k+', reason:'Homepage conversion gaps identified', flag:'' };
     };
 
@@ -38751,8 +38862,19 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           fromBrain: true,
         };
       }
-      // Fallback to rule-based if Brain didn't run (no API key or no content)
-      return getRecommendedProduct();
+      // ══ fromBrain WAS SET AND NOBODY EVER READ IT ═══════════════════════
+      // Two branches above stamp fromBrain:true. Nothing in server.js or
+      // index.html has ever read it, so a product the AUDIT chose and a product
+      // a five-line rule guessed are indistinguishable everywhere they are
+      // shown — including the handoff brief's "BRAND + OFFERING FIT", which is
+      // what Mike walks into the call with. Instance N of computed-but-not-
+      // passed, on the field that decides what we try to sell.
+      //
+      // Live 2026-08-21: Thrive Dental's audit returned no product at all
+      // ("Brain audit complete: null"), so the rule chose Website Rebuild and
+      // the sheet showed it exactly like a chosen one.
+      const _ruled = getRecommendedProduct();
+      return { ..._ruled, fromBrain: false };
     })();
 
     // Post-research score — adds up to 15 points on top of discovery score
@@ -40982,7 +41104,7 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
 
     // ONE — the catch must REMEMBER, not only log. A console line is not state.
     if (!_src.includes(_needle('_ladderFailure = (e && e.message)', ' || String(e);'))) {
@@ -41067,7 +41189,7 @@ app.listen(PORT, () => {
     // assembled at runtime with comment lines stripped, because a literal needle
     // finds itself and these comments quote the code.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _conflict = diagnosisConflict(', 'growthConstraint && growthConstraint.layer, bottleneck);'))) {
       _fails.push('the cascade no longer reconciles against the binding layer, so the two blocks can contradict each other on the sheet again');
     }
@@ -41196,7 +41318,7 @@ app.listen(PORT, () => {
     // with nothing under it. The last gate before Mike's phone call was absent
     // on the leads that needed it most. Asserted by POSITION in the source.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     const _qCall = _src.indexOf(_needle('stripUnverifiedQuotesDeep(parsed[k],', ' _corpus, _q, 1);'));
     const _mCall = _src.indexOf(_needle('stripUnmeasuredMoneyDeep(parsed[k],', ' _corpus, _m, 1, k);'));
     const _ladderGuard = _src.indexOf(_needle('if (_harmsForResponse', ' && parsed) {'));
@@ -41303,7 +41425,7 @@ app.listen(PORT, () => {
     // see a caller: this file records four checks that passed on a build with
     // their own fix reverted for exactly that reason.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _auditFilled = auditFilledness(', 'brainAudit);'))) {
       _fails.push('the BRAIN GATE no longer uses the shared test, so the rule the fixtures above prove is not the rule that runs on a lead');
     }
@@ -41448,7 +41570,7 @@ app.listen(PORT, () => {
     // AND THE THREE PLACES IT HAS TO BE WIRED. Needles assembled at runtime with
     // comment lines stripped: the comments above quote these.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _note = apifyAccount', 'Problem(code);'))) {
       _fails.push('the review mine no longer classifies its own failure, so a dead token is a per-lead mystery again');
     }
@@ -41552,7 +41674,7 @@ app.listen(PORT, () => {
     // prove a rule that never runs. This file records four checks that passed on
     // a reverted build for exactly this reason.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     const _wired = (_src.match(new RegExp(_needle('opsPain: readOperational', 'Pain\\('), 'g')) || []).length;
     if (_wired < 2) _fails.push(`${_wired} of the 2 constraint call sites pass the measured reading \u2014 the other one still decides on a raw count of themes`);
     // POSITIVE, AND SPLIT SO IT CANNOT FIND ITSELF. The first version searched
@@ -41592,7 +41714,7 @@ app.listen(PORT, () => {
     // AND THE CALL SITES: three scanners read mailto links and all three took the
     // href verbatim. A helper nothing calls fixes nothing.
     const _needle2 = (...parts) => parts.join('');
-    const _src2 = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src2 = selfSourceNoComments();
     // EACH SCANNER BY NAME. Counting call sites was wrong twice over: the
     // definition does not contain "addressFromMailto(" at all, and one scanner
     // passes the function by REFERENCE inside a .map, so a count of parenthesised
@@ -41642,7 +41764,7 @@ app.listen(PORT, () => {
     }
     // AND THE CALL SITE, or the pattern is right and unused.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && ', '!(_CORRECT_BUT.test(f)'))) {
       _fails.push('the fact-check flag list no longer separates confirmed-correct wording notes, so "Do not say" fills with true sentences again');
     }
@@ -41675,6 +41797,45 @@ app.listen(PORT, () => {
     else console.log(`✓ SHEET TRUTHFULNESS CHECK: "Do not say" holds only claims a prospect could disprove \u2014 a fact-check entry that CONFIRMS the claim and objects to its connotation is a wording note, not a warning, while a wrong count, an overstatement, an inversion and a contradiction all still stop the sheet. And when the write-up names a different owner from the contact, the sheet says so instead of picking one.`);
   } catch (e) {
     console.log(`⛔ SHEET TRUTHFULNESS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ NO JUDGEMENT ABOUT A PAGE WE NEVER OPENED ═════════════════════════════
+  // Three of five leads on 2026-08-21 read ZERO pages. Every one of them was
+  // still scored on positioning — a scorer whose every term reads `content` or
+  // `visualAnalysis`, returning 0-2 out of 10 from nothing — and 0 is not "we did
+  // not look", it is "we looked and it is terrible". That number then pushed a
+  // weak_positioning flaw, told the audit prompt "Dunford positioning: 0/10", and
+  // drove the rule-based product fallback to recommend a rebuild because
+  // "Homepage has critical conversion failures". The recorded unmeasured-as-zero
+  // class, pointed at the softest judgement in the system.
+  try {
+    const _fails = [];
+    if (siteWasRead('', null)) _fails.push('a lead with no content and no screenshot reads as a site we looked at');
+    if (siteWasRead(null, null) || siteWasRead(undefined, null)) _fails.push('a missing content field reads as a site we looked at');
+    if (siteWasRead('   \n  ', null)) _fails.push('whitespace reads as a page');
+    if (siteWasRead('x'.repeat(120), null)) _fails.push('120 characters reads as a page we can judge positioning from');
+    if (!siteWasRead('x'.repeat(600), null)) _fails.push('600 characters of their copy did NOT read as a page, so every judgement is suppressed on healthy leads');
+    if (!siteWasRead('', { hasHeadline: true })) _fails.push('a captured screenshot did not count as having seen the site — the vision read is the other way we look');
+    // AND EVERY CONSUMER. A predicate nothing consults changes nothing, and this
+    // file records four checks that passed on a reverted build because they
+    // exercised a function and never its call site.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSourceNoComments();
+    const _wired = [
+      [_needle('const _positioningMeasurable = siteWas', 'Read(content, visualAnalysis);'), 'the positioning scorer'],
+      [_needle('const positioningScore = !_positioningMeasurable ? null', ' :'), 'positioning returning NULL rather than a low score when blind'],
+      [_needle('if (Number.isFinite(positioningScore) && positioningScore < 4) flaws.push(', "'weak_positioning');"), 'the weak_positioning flaw'],
+      [_needle('const isBroken = flaws.includes(', "'no_cta') || (Number.isFinite(positioningScore)"), 'the rule-based product fallback'],
+      [_needle('if (!_positioningMeasurable) {', ''), 'the catch-all product reason'],
+      [_needle('return { ..._ruled, fromBrain: ', 'false };'), 'marking a rule-guessed product as not the audit\'s choice'],
+    ];
+    for (const [n, what] of _wired) {
+      if (!_src.includes(n)) _fails.push(`${what} no longer asks whether we read their site — a judgement about a page nobody opened goes back onto the sheet Mike dials from`);
+    }
+    if (_fails.length) console.log(`⛔ BLIND JUDGEMENT CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ BLIND JUDGEMENT CHECK: on a lead whose site we could not read, positioning is NOT MEASURED rather than zero, no weak-positioning flaw is raised, the audit prompt is told to say nothing about it, and the product recommendation stops claiming we saw a homepage. A rule-guessed product is also marked as one, so the handoff brief can tell it from a choice the audit actually made.`);
+  } catch (e) {
+    console.log(`⛔ BLIND JUDGEMENT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE CREDIT LATCH HAD NO WAY BACK ══════════════════════════════════════
@@ -41763,7 +41924,7 @@ app.listen(PORT, () => {
     // AND THE CALL SITES. A door that reads the raw latch instead of the breaker
     // is a door that can never reopen — which is what all five were.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     // A DOOR gates work on the latch; the CLEAR inside fcNote also reads it and
     // is the one place that SHOULD. The first version of this counted the clear
     // as a door and failed a correct build — and a check that cries wolf is one
@@ -42049,28 +42210,58 @@ app.listen(PORT, () => {
     // invalid blocks, and unknown sends — because a catch-all domain cannot be
     // verified at all and refusing every one would delete a large slice of the
     // pipeline on no evidence.
+    // ══ THIS CHECK USED TO TEST ITS OWN COPY OF THE RULE ══════════════════
+    // It declared a local `_ok` reading `lead.emailTier` and ran fixtures
+    // through THAT. The shipped gate read the same non-existent field, so both
+    // agreed perfectly and both were wrong — the tier lives on
+    // `emailResult.tier`. Two implementations of one operation, with the second
+    // copy inside the guard, which is the disease this file is mostly a record
+    // of. It now runs the REAL functions the route calls.
+    const _fails = [];
     const _ok = (lead, verdict) => {
-      const t = Number(lead.emailTier || 0);
-      if (!t || lead.smtpVerified === true || t === 1 || t === 2) return true;
-      if (verdict === 'invalid') return false;
-      return true;   // valid, unknown, catch-all, or no verifier configured
+      if (!sendNeedsVerify(lead)) return true;   // proven already, no call made
+      return verdict !== 'invalid';              // only a refusal blocks
     };
-    // Only a mailbox the server has REFUSED is blocked.
+    // THE SHAPE A LEAD ACTUALLY HAS. This is the regression that shipped: every
+    // one of these carries its tier where the system really puts it, and the old
+    // gate read 0 from all of them.
     const _mustBlock = [
-      ['mail server says it does not exist', { emailTier: 3, email: 'joseph@jbarnthousemd.com' }, 'invalid'],
+      ['mail server says it does not exist', { emailResult: { tier: 3, email: 'joseph@jbarnthousemd.com' }, email: 'joseph@jbarnthousemd.com' }, 'invalid'],
+      ['an address with no tier at all, refused by the server', { email: 'x@example.com' }, 'invalid'],
     ];
-    // Everything else sends. These three are the live cases: two tier-3
-    // addresses that delivered fine, and a catch-all that cannot be proven.
     const _mustSend = [
-      ['published on their site', { emailTier: 1, email: 'info@example.com' }, null],
-      ['SMTP-verified mailbox', { emailTier: 2, email: 'brandon@example.com' }, 'valid'],
-      ['tier 3, server confirms it', { emailTier: 3, email: 'grantrenne@grantrenne.com' }, 'valid'],
-      ['tier 3, catch-all so unprovable', { emailTier: 3, email: 'bchong@anthonysylvan.com' }, 'unknown'],
-      ['tier 3, no verifier configured', { emailTier: 3, email: 'x@example.com' }, null],
+      ['published on their site', { emailResult: { tier: 1, email: 'info@example.com' } }, null],
+      ['SMTP-verified mailbox', { emailResult: { tier: 2, email: 'brandon@example.com' } }, 'valid'],
+      ['SMTP-verified by label alone', { emailResult: { tier: 3, label: 'SMTP-verified (mailbox exists)' } }, null],
+      ['tier 3, server confirms it', { emailResult: { tier: 3, email: 'grantrenne@grantrenne.com' } }, 'valid'],
+      ['tier 3, catch-all so unprovable', { emailResult: { tier: 3, email: 'bchong@anthonysylvan.com' } }, 'unknown'],
+      ['tier 3, no verifier configured', { emailResult: { tier: 3, email: 'x@example.com' } }, null],
     ];
+    // THE FIELD ITSELF. These are the assertions that would have caught it.
+    if (emailTierOf({ emailResult: { tier: 3 } }) !== 3) {
+      _fails.push('the tier is not being read from emailResult.tier, which is the only place this system has ever put it — the send-time verification silently does not run on any lead');
+    }
+    if (emailTierOf({}) !== 0) _fails.push('a lead with no tier did not read as unknown');
+    if (!sendNeedsVerify({ emailResult: { tier: 3, email: 'a@b.com' } })) {
+      _fails.push('a pattern-built tier-3 address is not verified before sending — that is the exact class both of this project\'s hard bounces came from, and a bounce is charged to the sending DOMAIN');
+    }
+    if (!sendNeedsVerify({ email: 'a@b.com' })) {
+      _fails.push('an address whose provenance we do not know is waved through unverified — "we did not measure it" has never meant "it is fine" anywhere else in this file');
+    }
+    if (sendNeedsVerify({ emailResult: { tier: 1 } }) || sendNeedsVerify({ emailResult: { tier: 2 } })) {
+      _fails.push('an address already published on their site or already SMTP-verified is being re-verified, which spends a call and 30 seconds of a synchronous send route for nothing');
+    }
+    // AND THE CALL SITE, because a correct rule the route does not call is not a gate.
+    const _needleS = (...parts) => parts.join('');
+    const _srcS = selfSourceNoComments();
+    if (!_srcS.includes(_needleS('if (sendNeedsVerify(', 'lead)) {'))) {
+      _fails.push('the Hunter push no longer asks whether this address needs verifying, so the gate is inert again');
+    }
     const _leaked = _mustBlock.filter(([, l, v]) => _ok(l, v)).map(([n]) => n);
     const _blocked = _mustSend.filter(([, l, v]) => !_ok(l, v)).map(([n]) => n);
-    if (_leaked.length) {
+    if (_fails.length) {
+      console.log(`\u26d4 SEND VERIFICATION CHECK: ${_fails.join(' | ')}.`);
+    } else if (_leaked.length) {
       console.log(`\u26d4 SEND VERIFICATION CHECK: ${_leaked.join(', ')} would still enter the sequence. That is the joseph@jbarnthousemd.com case \u2014 the server told us the mailbox does not exist and we sent anyway.`);
     } else if (_blocked.length) {
       console.log(`\u26d4 SEND VERIFICATION CHECK: ${_blocked.join(', ')} would be blocked. Two tier-3 addresses delivered fine \u2014 refusing everything uncertain deletes real leads from a queue already paid for.`);
@@ -49853,7 +50044,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // at runtime with comment lines stripped, because a literal needle finds
     // itself in the check's own body and these comments quote the calls.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE,', ' minGapMs: () => FC_GAP_LIVE })'))) {
       _fails.push('the live gate is no longer constructed to read the live pace, so a measured plan repaces nothing');
     }
@@ -49979,7 +50170,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // does not use it. Needle assembled at runtime, comment lines stripped: this
     // check's own comments quote the call.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle("}, 45000, 'critique',", " { retryOnTimeout: true });"))) {
       _fails.push('the critique call no longer asks for the retry, or its ceiling moved back under what a 1600-token answer takes');
     }
@@ -50398,7 +50589,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // The old skip sentence must be gone from CODE (comments may quote it — they
     // are how the bug is explained). Needle assembled; comments stripped first.
     {
-      const _code = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _code = selfSourceNoComments();
       if (_code.indexOf('skipping image, ' + 'auditing from text') >= 0) {
         _fails.push('the "skip the homepage render on bytes" branch is back — the byte ceiling deletes the picture again instead of shrinking it');
       }
@@ -53982,9 +54173,9 @@ app.post('/api/send-to-hunter', async (req, res) => {
       //
       // If no verifier key is configured the lead sends as it did before — the
       // gate is an improvement on the default, never a new way to lose leads.
-      const _tier = Number(lead.emailTier || (lead.emailMeta && lead.emailMeta.tier) || 0);
-      let _verified = lead.smtpVerified === true || _tier === 1 || _tier === 2;
-      if (_tier > 2 && !_verified) {
+      const _tier = emailTierOf(lead);
+      let _verified = sendAlreadyProven(lead);
+      if (sendNeedsVerify(lead)) {
         const _vKey = req.body.verifierKey || process.env.MYEMAILVERIFIER_KEY || '';
         if (_vKey) {
           try {
