@@ -5979,6 +5979,20 @@ function ResearchView({
   const [savedFlag, setSavedFlag] = useState(false);
   const [allLeads, setAllLeads] = useState([]);
   const [deleteModal, setDeleteModal] = useState(null);
+  // ══ EXPORT WAS A BUTTON IN A 190px COLUMN ═════════════════════════════
+  // Vin: "that skinny bar displaying is not big enough we need to widen it out
+  // or change the whole fomrat." The file it produces is what Mike dials from,
+  // and the only control over it was a button whose label was the whole
+  // interface — so the only two questions that matter (WHICH leads, and is that
+  // the set I meant) could not be asked at all. Two buttons existed, in two
+  // places, with two different scopes, and neither showed you what was in it.
+  //
+  // One screen now, full width, listing every audited lead with a tick box.
+  // Deliberately not drag-and-drop: dragging fifty rows to build a file is more
+  // work than ticking them, it cannot be undone by accident, and a mis-drop on
+  // a fifty-lead day silently ships the wrong sheet.
+  const [exportOpen, setExportOpen] = useState(null);   // null | {ids:Set|null}
+  const [exportPick, setExportPick] = useState(() => new Set());
   const handleDeleteLead = (id, name) => {
     const remaining = deleteLead(id).sort((a,b) => (b.icpScore||0)-(a.icpScore||0));
     setAllLeads(remaining);
@@ -6629,8 +6643,8 @@ function ResearchView({
           return React.createElement('button', {
             className: 'btn btn-sm btn-p',
             title: 'Only the leads this run audited. One self-contained HTML file.',
-            onClick: () => { if (!downloadAudits(mine, 'CROJungle audits')) alert('No audited leads to export yet.'); },
-          }, 'Export these ' + mine.length);
+            onClick: () => { setExportPick(new Set(mine.map(x => x.id))); setExportOpen({ scope: 'run' }); },
+          }, 'Export these ' + mine.length + '\u2026');
         })(),
         !batchRunning && React.createElement('button', {
           className: 'btn btn-sm', onClick: () => { setBatchResults([]); setBatchStartedAt(0); },
@@ -6765,12 +6779,9 @@ function ResearchView({
           return React.createElement('button', {
             className: 'btn btn-sm btn-g',
             style: { marginTop: 6, width: '100%' },
-            title: 'One self-contained HTML file. Opens in any browser and prints to PDF.',
-            onClick: () => {
-              const n = downloadAudits(done, 'CROJungle audits');
-              if (!n) alert('No audited leads to export yet.');
-            },
-          }, 'Export ' + done.length + ' audit' + (done.length === 1 ? '' : 's'));
+            title: 'Choose which audits go in the file. One self-contained HTML page, opens anywhere, prints to PDF.',
+            onClick: () => { setExportPick(new Set(done.map(x => x.id))); setExportOpen({ scope: 'all' }); },
+          }, 'Export audits\u2026');
         })(),
         // ══ "IT SAID EXPORT 4 AUDITS" AFTER A THREE-LEAD RUN ═══════════════
         // It was right and it read as a miscount: the fourth lead was audited
@@ -6783,7 +6794,7 @@ function ResearchView({
           const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
           if (batchRunning || !done.length) return null;
           return React.createElement('div', { style: { fontSize: 10, color: 'var(--m)', marginTop: 4, lineHeight: 1.45 } },
-            'Everything in the pipeline that has been audited, not only the last run.');
+            done.length + ' lead' + (done.length === 1 ? ' has' : 's have') + ' an audit. You pick which of them go in the file.');
         })(),
         // Progress and outcomes live in batchBar at the bottom of the screen —
         // ONE home each. Two copies of a status display is the same disease as
@@ -6819,8 +6830,23 @@ function ResearchView({
         // watching a run most wants to see, because they are what is left.
         const _queuedNames = new Set(batchAt.queued || []);
         const isQueued = (l) => !!(l && !isRunning(l) && _queuedNames.has(l.name));
-        const running = allLeads.filter(isRunning);
-        const queued = allLeads.filter(isQueued);
+        // ══ THREE SECTIONS, AND THEY SAY WHAT THEY ARE ═════════════════════
+        // Vin: "Not in this run (1) . Audited — what Export covers (12) - those
+        // are confusing on the UI side - we need an auditing in progress section
+        // - an audited section and i think thats it."
+        //
+        // He is right that four was too many. "Queued in this run" and "Auditing
+        // now" are one idea to a person watching a run — the lead is IN PROGRESS
+        // — and splitting them made him count two boxes to answer one question.
+        // The per-row chip still says running or queued, because that is where
+        // the difference belongs: on the lead, not as a heading.
+        //
+        // "Not in this run" was a label about the RUN. Leads nobody has picked
+        // are a permanent fact about the pipeline, so the heading is about them
+        // and not about what happens to be running. And Export's scope moved to
+        // the export screen, where you can see and choose it, so the heading no
+        // longer has to carry it.
+        const inProgress = allLeads.filter(l => isRunning(l) || isQueued(l));
         const audited = allLeads.filter(l => !isRunning(l) && !isQueued(l) && isAudited(l));
         const waiting = allLeads.filter(l => !isRunning(l) && !isQueued(l) && !isAudited(l));
         const header = (label, count, color) => React.createElement('div', {
@@ -6860,10 +6886,9 @@ function ResearchView({
           );
         };
         const out = [];
-        if (running.length) { out.push(header('Auditing now', running.length, 'var(--t)')); running.forEach(l => out.push(leadRow(l))); }
-        if (queued.length) { out.push(header('Queued in this run', queued.length, 'var(--t)')); queued.forEach(l => out.push(leadRow(l))); }
-        if (waiting.length) { out.push(header(queued.length || running.length ? 'Not in this run' : 'Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
-        if (audited.length) { out.push(header('Audited \u2014 what Export covers', audited.length)); audited.forEach(l => out.push(leadRow(l))); }
+        if (inProgress.length) { out.push(header('Auditing now', inProgress.length, 'var(--t)')); inProgress.forEach(l => out.push(leadRow(l))); }
+        if (waiting.length) { out.push(header('Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
+        if (audited.length) { out.push(header('Audited', audited.length)); audited.forEach(l => out.push(leadRow(l))); }
         return out;
       })()
     )
@@ -6901,6 +6926,96 @@ function ResearchView({
           onClick:()=>{ websiteModal.onConfirm(websiteModal.website); }
         }, 'Confirm & run Research →')
       )
+    )
+  ),
+
+  // ══ THE EXPORT SCREEN ═══════════════════════════════════════════════════
+  // Full width, because the question it answers is "which of these" and that
+  // cannot be answered in a 190px column. Every audited lead, newest score
+  // first, with what the file will actually carry: the company, the person Mike
+  // will ask for, and whether we managed to read their site — because a sheet
+  // built on a blind read is one he should not dial from, and until now nothing
+  // said so before the file was open.
+  exportOpen && React.createElement('div', {
+    style: { position:'fixed', inset:0, background:'rgba(0,0,0,.78)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, padding:24 },
+    onClick: () => setExportOpen(null)
+  },
+    React.createElement('div', {
+      style: { background:'var(--s)', border:'1px solid var(--b2)', borderRadius:14,
+               width:'min(860px, 96vw)', maxHeight:'86vh', display:'flex', flexDirection:'column' },
+      onClick: e => e.stopPropagation()
+    },
+      (() => {
+        const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
+        const picked = done.filter(x => exportPick.has(x.id));
+        // The SAME rule the audit screen and the exported sheet already use.
+        // A second copy of "did we read their site" is the two-hand-kept-copies
+        // disease with a checkbox attached, and the copy that rots is always the
+        // one that only runs where nobody looks.
+        const blindOf = (l) => {
+          const w = corpusWarningFor(l);
+          if (!w) return '';
+          return /never read a single page/.test(w) ? 'site not read' : 'partial read';
+        };
+        return React.createElement(React.Fragment, null,
+          React.createElement('div', { style:{ padding:'20px 24px 14px', borderBottom:'1px solid var(--b)' } },
+            React.createElement('div', { style:{ fontWeight:700, fontSize:16, marginBottom:4 } }, 'Export audits'),
+            React.createElement('div', { style:{ fontSize:12.5, color:'var(--m)', lineHeight:1.5 } },
+              'One self-contained page \u2014 opens in any browser, prints to PDF, one audit per page with a clickable index. Tick the ones Mike is calling.'),
+            React.createElement('div', { style:{ display:'flex', gap:8, marginTop:12, flexWrap:'wrap', alignItems:'center' } },
+              React.createElement('button', { className:'btn btn-sm',
+                onClick: () => setExportPick(new Set(done.map(x => x.id))) }, 'Select all ' + done.length),
+              React.createElement('button', { className:'btn btn-sm',
+                onClick: () => setExportPick(new Set()) }, 'Clear'),
+              batchResults.length ? React.createElement('button', { className:'btn btn-sm',
+                onClick: () => {
+                  const ids = new Set(batchResults.map(x => x && x.id).filter(Boolean));
+                  setExportPick(new Set(done.filter(x => ids.has(x.id)).map(x => x.id)));
+                } }, 'Just this run') : null,
+              React.createElement('div', { style:{ flex:1 } }),
+              React.createElement('div', { style:{ fontSize:12, color: picked.length ? 'var(--t)' : 'var(--m)' } },
+                picked.length + ' of ' + done.length + ' selected'))),
+          React.createElement('div', { style:{ overflowY:'auto', flex:1 } },
+            done.length === 0
+              ? React.createElement('div', { style:{ padding:'28px 24px', fontSize:13, color:'var(--m)' } },
+                  'Nothing has been audited yet, so there is nothing to export.')
+              : done.map(l => {
+                  const on = exportPick.has(l.id);
+                  const blind = blindOf(l);
+                  return React.createElement('label', {
+                    key: l.id,
+                    style: { display:'flex', gap:12, alignItems:'center', padding:'11px 24px',
+                             borderBottom:'1px solid var(--b)', cursor:'pointer',
+                             background: on ? 'var(--s2)' : 'transparent' }
+                  },
+                    React.createElement('input', { type:'checkbox', checked:on, onChange: () => {
+                      setExportPick(prev => { const n = new Set(prev); if (n.has(l.id)) n.delete(l.id); else n.add(l.id); return n; });
+                    } }),
+                    React.createElement('div', { style:{ flex:1, minWidth:0 } },
+                      React.createElement('div', { style:{ fontSize:13, color:'var(--t)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, l.name),
+                      React.createElement('div', { style:{ fontSize:11, color:'var(--m)', marginTop:2 } },
+                        (l.industry || 'trade unknown')
+                        + (l.decisionMaker && l.decisionMaker.name ? ' \u00b7 ' + l.decisionMaker.name : '')
+                        + (l.location ? ' \u00b7 ' + String(l.location).split(',').slice(-3, -1).join(',').trim() : ''))),
+                    blind ? React.createElement('span', {
+                      style:{ fontSize:10.5, color:'var(--m2)', border:'1px solid var(--b)', borderRadius:10, padding:'1px 7px', whiteSpace:'nowrap' }
+                    }, blind) : null,
+                    React.createElement('span', { style:{ fontSize:12, color:'var(--m)', width:28, textAlign:'right' } }, l.icpScore || 0));
+                })),
+          React.createElement('div', { style:{ padding:'14px 24px 18px', borderTop:'1px solid var(--b)', display:'flex', gap:10, alignItems:'center' } },
+            React.createElement('div', { style:{ fontSize:11.5, color:'var(--m)', flex:1, lineHeight:1.45 } },
+              picked.length
+                ? ('The file will contain ' + picked.length + ' audit' + (picked.length === 1 ? '' : 's') + '.')
+                : 'Nothing selected, so there is nothing to download.'),
+            React.createElement('button', { className:'btn btn-sm', onClick: () => setExportOpen(null) }, 'Cancel'),
+            React.createElement('button', {
+              className:'btn btn-sm btn-p', disabled: !picked.length,
+              onClick: () => {
+                if (downloadAudits(picked, 'CROJungle audits')) setExportOpen(null);
+                else alert('No audited leads to export yet.');
+              }
+            }, 'Download ' + (picked.length || '') + ' audit' + (picked.length === 1 ? '' : 's'))));
+      })()
     )
   ),
 

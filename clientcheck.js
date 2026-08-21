@@ -516,6 +516,28 @@ const mergeStat = runMergeCheck();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
+    // ══ ONE DOOR OUT ══════════════════════════════════════════════════════
+    // There used to be two export buttons in two places with two different
+    // scopes, and neither showed what was in the file. Vin, 2026-08-21: "that
+    // skinny bar displaying is not big enough we need to widen it out or change
+    // the whole fomrat." Both now open one screen, and there is one call that
+    // actually writes the file. A second call site is how the two scopes drifted
+    // apart in the first place.
+    {
+      const calls = (src.match(/downloadAudits\(/g) || []).length;
+      const defs = (src.match(/const downloadAudits\s*=/g) || []).length;
+      if (defs !== 1) fails.push(`${defs} definition(s) of downloadAudits — the exported sheet is what Mike dials from and it must have one implementation`);
+      // The definition reads `const downloadAudits = (leads, title)`, so it does
+      // NOT match `downloadAudits(` — the first version subtracted it anyway and
+      // reported a correct build as broken. Count the call sites as they are.
+      if (calls !== 1) {
+        fails.push(`${calls} place(s) call downloadAudits — there must be exactly one, or two export buttons drift into two different scopes again and neither shows what is in the file`);
+      }
+      // And the blind-read badge must read the SHARED rule, not a private copy.
+      if (!/const blindOf[\s\S]{0,220}corpusWarningFor\(/.test(src)) {
+        fails.push('the export screen decides "did we read their site" from its own copy of the rule rather than from corpusWarningFor — the copy that rots is always the one that only runs where nobody looks');
+      }
+    }
     if (mod) {
       const LEAD = {
         id: 'x1', name: 'Smith & Sons <Roofing>', website: 'https://smith.example',
