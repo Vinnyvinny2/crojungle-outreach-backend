@@ -7931,10 +7931,20 @@ const fcNoteRateLimited = (r, fallbackMs, where, gate = _fcGate) => {
 // the one that carries "upgrade your plan", so it has to be recognised HERE or
 // isCreditError claims it. Stems written without a trailing word boundary on
 // purpose \u2014 CLAUDE.md records \\bplumb\\b failing to match "plumbing" three times.
+//
+// AND IT READS THE ENVELOPE, NEVER THE PAGE. It used to also test
+// `d?.data?.markdown || d?.markdown` \u2014 which is the page we just successfully
+// scraped. Every one of these words is ordinary English on a home-services or
+// medical site: "don't let a slow drain slow you down", "concurrent projects",
+// "we limit the rate of". A homepage carrying one of them was thrown away as a
+// throttle, FIRECRAWL RATE LIMITED printed for a request nobody throttled, the
+// WHOLE gate was held for four seconds on a lie, and the audit ran blind on a
+// page we had already paid for. Whether we were throttled is a fact about
+// THEIR answer, not about the words in the document they handed us.
 const isRateLimited = (d, status) =>
   status === 429 ||
   /local_rate_limited|rate.?limit|too many requests|slow down|concurren\w*|browser limit/i.test(
-    String(d?.error || d?.message || d?.data?.markdown || d?.markdown || '')
+    String((d && (d.error || d.message)) || '')
   );
 
 // Process-wide flag so a throttled run can say so plainly instead of reporting a
@@ -10616,6 +10626,34 @@ const checkHttpsSupport = async (website) => {
 // after it and keeps the punctuation, and any unpaired quote characters left in
 // the span are removed so a fragment of their quotation marks cannot survive
 // inside ours.
+// ---- OUR FEE, OR THE VALUE OF HIS JOB ------------------------------------
+// These four lived inside the compose route, so nothing could execute them.
+// scopecheck.js refused the boot check that tried, which is the gate doing its
+// job: a check that cannot reach the code cannot guard it.
+const _PRICE_TAGS = /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i;
+// Our offer vocabulary. A price is only OUR price when it sits beside one of
+// these; beside "a kitchen remodel" it is his revenue and it stays.
+const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|the build|the project would|investment|package|scope of work|per month|monthly|advisory|valuation|website (?:rebuild|project))\b/i;
+// The sentence around the figure, not the whole email. A price 400 characters
+// from the word "retainer" is not that retainer's price, and widening this to
+// the whole body would put the flag back on every lead that mentions monthly
+// anything.
+const priceWindow = (text, at, len) => {
+  const s = String(text == null ? '' : text);
+  const i = Number.isFinite(Number(at)) ? Number(at) : 0;
+  const n = Number.isFinite(Number(len)) ? Number(len) : 0;
+  return s.slice(Math.max(0, i - 120), Math.min(s.length, i + n + 120));
+};
+// ONE DECISION, so the boot check cannot run a copy of it. Five checks passed
+// this session while their bug was live, every one because the check ran a
+// copy of the code instead of the code.
+const quotesOurPrice = (text) => {
+  const t = String(text == null ? '' : text);
+  const m = t.match(_PRICE_TAGS);
+  if (!m) return '';
+  return _OUR_OFFER_NEARBY.test(priceWindow(t, m.index, m[0].length)) ? m[0] : '';
+};
+
 const phraseAround = (t, hit) => {
   t = String(t || '');
   const at = t.toLowerCase().indexOf(String(hit).toLowerCase());
@@ -33561,6 +33599,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         } else {
           console.log(`⏱ NO LEDGER KEY [${company}]: no place id, no usable domain and no city, so nothing about this business can be recognised on a second look.`);
         }
+        // How a stranger can act on the page, read once and used twice: the
+        // paid-click rung needs it to say what the click lands on, and three
+        // other rungs read it directly. resolveMeasurements does not carry it,
+        // so before this existed the rung was handed an object without it and
+        // silently took its last branch on every lead.
+        const _bookingRead = {
+          booking: sitePages && sitePages.booking,
+          bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+        };
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           // The four fields the ledger produces. Delivered through
@@ -33580,7 +33627,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // is true.
           adsTagConfirmed: !!(builtWith && builtWith.confirmed === true && !builtWith.blocked
             && (builtWith.hasGoogleAdsTag === true || builtWith.hasMetaPixel === true)),
-          paidLeakGap: paidLeakGapFrom(_measured),
+          // ONE DERIVATION. paidLeakGapFrom reads booking and bookingMeasured
+          // and resolveMeasurements returns neither \u2014 they are assembled from
+          // sitePages sixty lines below, in this same literal. So two of the
+          // rung's three sentences ("the only published way to reach them is a
+          // phone line", "the only way to act on it is a form and a wait")
+          // could not be produced on any lead, and harm 93 spoke only when a
+          // single form on the page asked for seven fields.
+          paidLeakGap: paidLeakGapFrom({ ..._measured, ..._bookingRead }),
           // ══ ONE FLAG FOR TWO DIFFERENT ADVERTISERS ════════════════════════
           // adsTagConfirmed above is true for a Google Ads tag OR a Facebook
           // pixel, which is exactly right for paid_traffic_leaks — a paid click
@@ -33644,8 +33698,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           phoneMismatch: !!(phoneConsistency && phoneConsistency.finding),
           googlePhone: phoneConsistency && phoneConsistency.googlePhone,
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
-          booking: sitePages && sitePages.booking,
-          bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          booking: _bookingRead.booking,
+          bookingMeasured: _bookingRead.bookingMeasured,
           // ══ THE COVERAGE TABLE, WHICH HAS NEVER BEEN A FINDING ═══════════
           // Find measures these for free on every run and they have only ever
           // been logged and handed to the writer as background. RUNG INPUT CHECK
@@ -36404,19 +36458,23 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
 // The two are told apart by what the sentence is ABOUT, not by the shape of the
 // number \u2014 so the pattern below matches a price, and the check that uses it
 // requires our own product language nearby before flagging.
-const _PRICE_TAGS = /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i;
-// Our offer vocabulary. A price is only OUR price when it sits beside one of
-// these; beside "a kitchen remodel" it is his revenue and it stays.
-const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|the build|the project would|investment|package|scope of work|per month|monthly|advisory|valuation|website (?:rebuild|project))\b/i;
             const _pm = _facing.match(_PRODUCT_NAMES);
             if (_pm) {
               const _msg = `NAMES OUR PRODUCT IN PROSPECT-FACING COPY \u2014 "${_pm[0]}". Mike's rule is absolute: the email never names what we sell. It turns a colleague who found a problem into a vendor with something to move, and that is the switch that kills the reply. Diagnose the problem the product fixes; do not name the product.`;
               console.log(`\u26a0 PRODUCT NAME [${company}]: ${_msg}`);
               _claimRisks.push(_msg);
             }
-            const _pp = _facing.match(_PRICE_TAGS);
+            // _OUR_OFFER_NEARBY was written for exactly this and then never
+            // called, so the false positive the comment above it describes went
+            // on firing: "$30k\u2013$80k" for a kitchen remodel is HIS revenue and
+            // read as our fee. The window is the sentence around the figure, so
+            // a price quoted three paragraphs from the word "retainer" is still
+            // his. Executed by CLAIM RISK PRECISION CHECK in both directions,
+            // because a flag that fires on every lead is one nobody reads and a
+            // flag that fires on none is not a flag.
+            const _pp = quotesOurPrice(_facing);
             if (_pp) {
-              const _msg2 = `QUOTES OUR PRICE IN PROSPECT-FACING COPY \u2014 "${_pp[0]}". Price belongs on the call, never in email 1. It converts a free audit into a sales pitch before he has agreed to anything.`;
+              const _msg2 = `QUOTES OUR PRICE IN PROSPECT-FACING COPY \u2014 "${_pp}". Price belongs on the call, never in email 1. It converts a free audit into a sales pitch before he has agreed to anything.`;
               console.log(`\u26a0 PRODUCT PRICE [${company}]: ${_msg2}`);
               _claimRisks.push(_msg2);
             }
@@ -42023,6 +42081,126 @@ app.listen(PORT, () => {
     console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- HIS REVENUE IS NOT OUR FEE -----------------------------------------
+  // "QUOTES OUR PRICE IN PROSPECT-FACING COPY" fired on "$30k-$80k" in a live
+  // email. That was the cost of a kitchen remodel, in the prospect's own trade,
+  // which the brief explicitly permits as the money move. _OUR_OFFER_NEARBY was
+  // written to tell the two apart, its comment says the check "requires our own
+  // product language nearby before flagging", and it was referenced by nothing
+  // for the life of the file.
+  //
+  // The cost is on the sheet Mike dials from: a "Do not say" list carrying a
+  // sentence that is correct is how a reader stops believing the entries that
+  // are not. This file records the same disease at the CTA note and at the
+  // integrity strip.
+  //
+  // Both directions, because a flag that fires on every lead and a flag that
+  // fires on none are equally useless.
+  try {
+    const _fails = [];
+    const _his = [
+      'A full kitchen remodel runs $30k-$80k depending on finishes and layout.',
+      'Most roof replacements in this market land between $12k to $25k.',
+      'A single case at this practice is worth $8k-$40k over its life.',
+    ];
+    _his.forEach((s, n) => {
+      const hit = quotesOurPrice(s);
+      if (hit) _fails.push(`the prospect's own job value (#${n + 1}) is flagged as our fee \u2014 "${hit}" \u2014 and the money move the brief permits reads as a pitch`);
+    });
+    const _ours = [
+      'The rebuild is $50k+ and we could start in March.',
+      'Our fee for that engagement is $10k-$35k per month.',
+      'That scope of work would be $25,000 up front.',
+    ];
+    _ours.forEach((s, n) => {
+      if (!quotesOurPrice(s)) _fails.push(`our own price (#${n + 1}) reached prospect-facing copy unflagged \u2014 price belongs on the call, never in email 1`);
+    });
+    // PROXIMITY, not presence. A price and an offer word in the same long body
+    // are not the same claim; widening the window to the whole email puts the
+    // flag back on every lead that mentions anything monthly.
+    const _far = 'We charge for that work. ' + 'x'.repeat(400) + ' A kitchen remodel runs $30k-$80k.';
+    if (quotesOurPrice(_far)) _fails.push('an offer word four hundred characters from the figure still flags it, so the window is not a window');
+    // AND THE CALL SITE USES THE SHARED DECISION. Needle assembled at runtime
+    // with comment lines stripped: the comment beside the call quotes it.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('const _pp = quotesOur', 'Price(_facing);'))) {
+        _fails.push('the prospect-facing price flag no longer goes through the shared decision, so the proximity rule can be true here and false where it runs');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 CLAIM RISK PRECISION CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 CLAIM RISK PRECISION CHECK: a five-figure number in an email is flagged as OUR price only when our own offer vocabulary sits in the sentence around it. Three real prospect job values are left alone, three of our own prices are still caught, and an offer word four hundred characters away does not count. _OUR_OFFER_NEARBY was written for this and referenced by nothing, so the false positive its own comment describes went on reaching the call sheet.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 CLAIM RISK PRECISION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- A PAGE WE READ IS NOT A THROTTLE MESSAGE ----------------------------
+  // isRateLimited used to test the scraped page's own markdown alongside the
+  // response's error field. Every word in that pattern is ordinary English on
+  // the sites this system audits: a plumber writing "don't let a slow drain
+  // slow you down", a builder listing "concurrent projects", a clinic saying
+  // "we limit the rate of". A homepage carrying one of them was refused as a
+  // throttle, FIRECRAWL RATE LIMITED printed for a request nobody throttled,
+  // fcNoteRateLimited held the WHOLE gate for four seconds on the strength of
+  // it, and the audit ran blind on a page already paid for. On the 2026-08-21
+  // run eleven of those lines printed on three leads.
+  //
+  // Both directions are asserted. A predicate loosened until it catches nothing
+  // costs a page per retry; one tightened until it catches everything costs the
+  // website half of an audit, plus the gate, plus a log line that sends the
+  // next reader after the wrong cause.
+  try {
+    const _fails = [];
+    // THEIR REAL MESSAGES. Both carry "upgrade your plan", which is why the
+    // credit test may not key on that phrase (see CREDIT BREAKER CHECK).
+    const _throttles = [
+      [{ error: 'Rate limit exceeded. Consumed (req/min): 10, Remaining (req/min): 0. Upgrade your plan to increase the rate limit.' }, 429],
+      [{ error: 'This request has been rate limited: local_rate_limited' }, 200],
+      [{ success: false, error: "You've exceeded the concurrent browsers limit for your plan. Upgrade your plan to increase the concurrent browser limit." }, 200],
+      [{ message: 'Too Many Requests' }, 200],
+      [{}, 429],
+    ];
+    _throttles.forEach((t, n) => {
+      if (!isRateLimited(t[0], t[1])) _fails.push(`a real Firecrawl throttle (#${n + 1}) reads as a normal answer, so the retry loop gives up and the gate is never held`);
+    });
+    // PAGES WE SUCCESSFULLY BOUGHT. Written the way these trades write.
+    const _pages = [
+      "Don't let a slow drain slow you down. Call us today for same-day service.",
+      'We run several concurrent projects across the metro and never subcontract.',
+      'Our team can concurrently manage your roof, siding and gutters.',
+      'We limit the rate of new bookings each week so every job gets our full attention.',
+      'Too many requests for quotes go unanswered in this industry. Not here.',
+      'Browser limit reached? Our site works on any device.',
+    ];
+    _pages.forEach((md, n) => {
+      if (isRateLimited({ data: { markdown: md }, markdown: md }, 200)) {
+        _fails.push(`a homepage we read successfully (#${n + 1}) is being thrown away as a throttle, and the whole Firecrawl gate held with it`);
+      }
+    });
+    // AND THE SOURCE CANNOT GO BACK TO READING THE BODY. Needle assembled at
+    // runtime with comment lines stripped: the comment above the function
+    // quotes the broken expression verbatim, and a literal needle finds itself.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      const _fn = _s.slice(_s.indexOf(_n('const isRate', 'Limited = (d, status)')));
+      if (_fn.slice(0, 400).includes(_n('d?.data?.mark', 'down'))) {
+        _fails.push('the throttle test reads the scraped page again, so an ordinary phrase in their own copy discards the page and holds the gate');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 THROTTLE READING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 THROTTLE READING CHECK: whether Firecrawl throttled us is read from THEIR answer \u2014 the status and the error field \u2014 and never from the document they handed us. Five real throttle bodies are still caught; six homepages written the way plumbers, builders and clinics actually write are left alone. Reading the page for these words discarded pages we had already paid for and held the whole gate for four seconds each time.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 THROTTLE READING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ EVERY FIELD A RUNG READS MUST ACTUALLY ARRIVE ════════════════════════
   // MEASUREMENT DELIVERY CHECK guards eleven hand-listed fields that
   // resolveMeasurements owns. That leaves every OTHER field a rung reads
@@ -47064,6 +47242,24 @@ app.listen(PORT, () => {
     // A refused fetch must not read as "we measured the destination".
     if (paidLeakGapFrom({}) !== '') _fails.push('paidLeakGapFrom invents a gap from nothing measured');
     if (!paidLeakGapFrom({ bookingMeasured: true, booking: 'phone_only' })) _fails.push('a measured phone-only route produces no gap sentence');
+    // AND THE CALL SITE HANDS IT THE BOOKING READ. The two fixtures above pass
+    // their own arguments, so they cannot see what the route passes \u2014 the
+    // recorded half-a-call-site shape. The route used to hand it _measured
+    // alone, and resolveMeasurements returns neither booking nor
+    // bookingMeasured, so on every real lead only the form-field branch could
+    // fire and harm 93's two best sentences were unreachable. Needle assembled
+    // at runtime with comment lines stripped: a literal needle finds itself,
+    // and the comment at the call site quotes the broken call.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('paidLeakGapFrom({ ..._meas', 'ured, ..._bookingRead })'))) {
+        _fails.push('the paid-click rung is no longer handed how a stranger can actually contact them, so two of its three sentences cannot be produced on any lead');
+      }
+      if (!_s.includes(_n('booking: _booking', 'Read.booking,'))) {
+        _fails.push('the booking read stopped reaching the ladder as a named field, so three more rungs lose it too');
+      }
+    }
 
     // ── 2. THE FIELDS ARRIVE AT THE LADDER ─────────────────────────────
     // Source scan, because "computed but not passed" is the bug class that has
