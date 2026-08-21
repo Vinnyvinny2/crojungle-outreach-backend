@@ -426,7 +426,9 @@ const leadToRow = (l) => ({
   pain_summary: l.painSummary || null,
   reachability_verdict: l.reachabilityVerdict || null,
   reachability_reasons: l.reachabilityReasons || null,
-  firecrawl_out_of_credits: !!l.firecrawlOutOfCredits
+  firecrawl_out_of_credits: !!l.firecrawlOutOfCredits,
+  held_back_contact: l.heldBackContact || null,
+  corpus_read: l.corpusRead || null
 });
 
 // Convert a Supabase row back to a lead object
@@ -563,10 +565,67 @@ function CallOutcomeBar({ lead }) {
       'Not stored \u2014 ' + err + '. The call happened and the record did not, so write it down somewhere before you move on.') : null);
 }
 
-const criticalClaimsOf = (lead) => {
-  const risks = ((lead && lead.brainAudit && lead.brainAudit._claimRisks) || (lead && lead._claimRisks) || []);
-  return risks.filter(x => /\bCRITICAL\b/.test(String(x)));
+// ══ THREE READERS, THREE HAND-WRITTEN ACCESSORS, AND THE NEWEST WAS WRONG ═══
+// The fact-check lives in TWO places depending on how the lead got here. The
+// server puts _claimRisks and _criticalFactCheck on brainAudit; the live merge
+// also copies _claimRisks onto the lead top level; and leadToRow persists only
+// what is inside brain_audit — so after ANY reload the top-level copy is gone.
+//
+// criticalClaimsOf and LeadBriefing each wrote their own two-place read and got
+// it right. auditRecordFor — the EXPORT, the artefact Mike holds while dialling
+// — read only the lead top level, so:
+//   · _criticalFactCheck was ALWAYS empty (nothing anywhere writes it there),
+//     so the export has never once printed a claim the prospect could disprove
+//   · _claimRisks emptied on every lead that had been through Supabase
+// and sec() renders nothing for an empty body, so a "Do not say" section that
+// should have carried a warning printed no heading at all. Absence of checking
+// and a clean audit looked identical, which is the one failure this file keeps
+// coming back to.
+// ══ WHAT THIS AUDIT WAS BUILT FROM ═════════════════════════════════════════
+// Stanley Schultze's export read exactly like the three built on real page
+// reads, on a lead where BOTH homepage requests came back 402 and we opened
+// nothing at all. Absence of reading rendered as a clean read.
+//
+// Returns null when the corpus was normal — a banner on every lead is a banner
+// nobody sees, and CLAUDE.md records twice that a message overstating its own
+// severity costs exactly what one understating it costs.
+const corpusWarningFor = (lead) => {
+  const l = lead || {};
+  const c = l.corpusRead;
+  const blind = c ? (Number(c.homepageChars) || 0) < 300 : false;
+  const thin = c ? (!blind && (Number(c.interiorPages) || 0) === 0) : false;
+  if (!c && !l.firecrawlOutOfCredits) return null;
+  if (blind) {
+    return 'We never read a single page of their website on this run'
+      + (l.firecrawlOutOfCredits ? ' (Firecrawl ran out of credits mid-run)' : '')
+      + '. Nothing below about their site is a measurement. Re-run this lead before saying any of it out loud.';
+  }
+  if (l.firecrawlOutOfCredits) {
+    return 'Firecrawl ran out of credits during this run, so this audit was built from '
+      + (c ? ((Number(c.interiorPages) || 0) + ' interior page(s) plus the homepage') : 'less of their site than usual')
+      + '. Treat anything phrased as missing from their site with care, and re-run the lead if it matters.';
+  }
+  if (thin) {
+    return 'Only their homepage was read on this run \u2014 no interior pages. Anything phrased as missing from their site is a statement about one page.';
+  }
+  return null;
 };
+const claimRisksOf = (lead) => {
+  const l = lead || {};
+  const ba = l.brainAudit || {};
+  const pick = (a, b) => (Array.isArray(a) && a.length ? a : (Array.isArray(b) && b.length ? b : []));
+  return {
+    all: pick(ba._claimRisks, l._claimRisks),
+    critical: pick(ba._criticalFactCheck, l._criticalFactCheck),
+    internal: Array.isArray(ba._internalOnlyFactCheck) ? ba._internalOnlyFactCheck : [],
+    // What we could not READ, as distinct from what the copy CLAIMED. The
+    // server has computed, named and shipped this for weeks and no surface in
+    // this file ever rendered it — so a caller had no way to know which parts
+    // of a sheet rest on something we never looked at.
+    limits: pick(ba._readLimits, l._readLimits),
+  };
+};
+const criticalClaimsOf = (lead) => claimRisksOf(lead).all.filter(x => /\bCRITICAL\b/.test(String(x)));
 
 // ══ THE SCREEN SAID DO NOT SEND THIS AND THE BUTTON SAID APPROVE ════════════
 // Live, Donna Krummen: a red panel reading "NOTHING HERE IS WORTH A FIRST EMAIL
@@ -806,6 +865,8 @@ const rowToLead = (r) => ({
   reachabilityVerdict: r.reachability_verdict || '',
   reachabilityReasons: r.reachability_reasons || [],
   firecrawlOutOfCredits: !!r.firecrawl_out_of_credits,
+  heldBackContact: r.held_back_contact || null,
+  corpusRead: r.corpus_read || null,
   // ══ NOTHING RESTORED ABOVE MAY BE RE-DECLARED HERE ═══════════════════════
   // This line is where restored data came to die. It once carried nine keys;
   // each was also read correctly further up, and the last duplicate key in an
@@ -912,9 +973,20 @@ const CF_PROXY = 'https://silent-credit-94eb.vindesil2.workers.dev/?url=';
 // completes and is silently thrown away. Persisting the job id means a run can be
 // picked back up exactly where it was.
 const INFLIGHT_KEY = 'cj_inflight_jobs_v1';
+// One id per browser TAB, not per browser. localStorage is shared across tabs,
+// so without this a second tab auto-collects — and re-enters — a run the first
+// tab is still working on. sessionStorage is per-tab and dies with it, which is
+// exactly the lifetime wanted here.
+const TAB_ID = (() => {
+  try {
+    let t = sessionStorage.getItem('cj_tab_id');
+    if (!t) { t = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); sessionStorage.setItem('cj_tab_id', t); }
+    return t;
+  } catch { return 't-nostorage'; }
+})();
 const getInflightJobs = () => { try { return JSON.parse(localStorage.getItem(INFLIGHT_KEY) || '{}'); } catch { return {}; } };
 const setInflightJob = (leadId, jobId) => {
-  try { const m = getInflightJobs(); m[leadId] = { jobId, at: Date.now() }; localStorage.setItem(INFLIGHT_KEY, JSON.stringify(m)); } catch {}
+  try { const m = getInflightJobs(); m[leadId] = { jobId, at: Date.now(), tab: TAB_ID }; localStorage.setItem(INFLIGHT_KEY, JSON.stringify(m)); } catch {}
 };
 const clearInflightJob = (leadId) => {
   try { const m = getInflightJobs(); delete m[leadId]; localStorage.setItem(INFLIGHT_KEY, JSON.stringify(m)); } catch {}
@@ -1377,6 +1449,16 @@ const applyResearchResult = (prev, data, ctx) => {
         // Use it verbatim — do NOT override with a crude local heuristic.
         if (data.localVisibility) L.localVisibility = data.localVisibility;
         if (data._claimRisks) L._claimRisks = data._claimRisks;
+        // The name the resolver found and REFUSED. Carried so the caller can see
+        // there IS a name and that we do not stand behind it — without this the
+        // sheet says "no decision-maker identified" and somebody re-researches a
+        // lead we already paid for. Always assigned, never conditionally, so a
+        // re-run that now clears the block cannot leave the old refusal standing.
+        L.heldBackContact = data.heldBackContact || null;
+        // How much of their site this audit was actually built from. Always
+        // assigned: a re-run that read everything must clear a previous run's
+        // "we read nothing", or the warning outlives the problem.
+        L.corpusRead = data.corpusRead || null;
         // These three were computed and returned by the server but never copied
         // onto the lead, so their audit rows always read "Not checked"/"Not
         // assessed" no matter what was actually measured. Same wiring shape as
@@ -1708,6 +1790,24 @@ const applyGeneratedEmail = (prev, raw, opts) => {
   return { ok: true, lead: L, result, variant: _useB ? 'B' : 'A', error: '' };
 };
 
+// ══ NOTHING MAY SPEND CREDITS WITHOUT A GESTURE ═════════════════════════════
+// Vin, 2026-08-21: "i added 5 to pipeline most certiantly didnt hit run research
+// and some of the leads started running research". Whatever started them, the
+// answer is not to find the one path and patch it — three call sites can submit
+// and any future effect becomes a fourth. CLAUDE.md PART 3: instructional guards
+// do not hold; guards must be mechanical.
+//
+// So a SUBMIT now requires a trigger naming the human action behind it, from a
+// closed set. A caller that does not name one does not spend: it refuses, loudly,
+// with the stack in the console. Collecting a job that was ALREADY paid for needs
+// no trigger, because it costs nothing and throwing the result away is the only
+// alternative.
+const RESEARCH_TRIGGERS = new Set([
+  'run-research-button',   // the button on the Research screen
+  'website-modal',         // the confirm dialog that gates the first run
+  'bulk-audit',            // the Audit N leads button
+  'find-add',              // the Find card's own add-and-research path
+]);
 const researchViaQueue = async (body, opts) => {
   const o = opts || {};
   // RESUME: poll a job that was already accepted, instead of starting a new one.
@@ -1715,6 +1815,13 @@ const researchViaQueue = async (body, opts) => {
   // because the credits were already spent when the job was submitted.
   if (o.resumeJobId) {
     return pollResearchJob(o.resumeJobId, o);
+  }
+  if (!RESEARCH_TRIGGERS.has(o.trigger)) {
+    const err = new Error('research was not started: no user action was named for it'
+      + (o.trigger ? ' (got "' + o.trigger + '")' : '')
+      + '. Every submit must name the gesture behind it, because this is the call that spends Firecrawl, Apify, Places and Anthropic credits.');
+    console.error('[research] REFUSED TO SPEND', err.message, new Error('stack').stack);
+    throw err;
   }
   const submit = await fetch(BACKEND + '/api/research-async', {
     method: 'POST',
@@ -1829,7 +1936,7 @@ const runBatchAudit = async (opts) => {
     try {
       const r = await researchViaQueue(
         buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null }),
-        { onJobId: (jid) => setInflightJob(lead.id, jid) }
+        { trigger: 'bulk-audit', onJobId: (jid) => setInflightJob(lead.id, jid) }
       );
       const data = await r.json();
       // The row as it stands NOW, not as it stood when the batch was assembled.
@@ -2011,10 +2118,22 @@ const auditRecordFor = (lead) => {
     unlinkedPages: ((l.sitePages && l.sitePages.unlinkedPages) || {}).pages || [],
     unlinkedCount: ((l.sitePages && l.sitePages.unlinkedPages) || {}).unlinkedCount || 0,
     askOnTheCall: (sr && sr.askOnTheCall) || '',
+    // ══ THIS AUDIT HAS NOTHING MEASURED UNDER IT ═════════════════════════
+    // When the harm ladder crashes, every measured finding is lost and the
+    // model writes the audit unassisted — but the page looks exactly like a
+    // good one. On 2026-08-21 four audits shipped that way and the export
+    // handed to a salesperson said nothing at all. Carried FIRST, because it
+    // changes how every other line on the sheet should be read.
+    ladderFailed: (ba._ladderFailed && typeof ba._ladderFailed === 'object') ? ba._ladderFailed : null,
+    corpusWarning: corpusWarningFor(l),
+    readLimits: claimRisksOf(l).limits,
     // WHAT NOT TO SAY. Carried deliberately: an exported audit that drops the
     // fact-check is an audit somebody repeats on a call believing all of it.
-    criticalFactCheck: arr(l._criticalFactCheck),
-    claimRisks: arr(l._claimRisks),
+    // The refused candidate, labelled. Mike still gets the name; what he does
+    // not get is a title nobody read.
+    heldBack: (l.heldBackContact && l.heldBackContact.name) ? l.heldBackContact : null,
+    criticalFactCheck: claimRisksOf(l).critical,
+    claimRisks: claimRisksOf(l).all,
     // THE EMAIL, if one exists, so the caller can open on what was actually asked.
     subject: l.subject || '',
     pitch: l.pitch || '',
@@ -2038,9 +2157,21 @@ const auditExportHtml = (records, meta) => {
     const t = r.oneThing;
     return '<article id="a' + i + '">'
       + '<header><h2>' + e(r.company) + '</h2><div class="meta">'
-      + [r.trade, r.location, r.owner ? e(r.owner) + (r.ownerTitle ? ', ' + e(r.ownerTitle) : '') : '',
+      + [r.trade, r.location,
+         // The owner line, and the ONLY place a title may appear. An absent
+         // title now prints as absent: it used to default to the word "Owner",
+         // which is what put "Michelle Musacchio, Owner" on a sheet after the
+         // resolver had explicitly refused that title.
+         r.owner ? e(r.owner) + (r.ownerTitle ? ', ' + e(r.ownerTitle) : ' (no title found)') : '',
          r.phone, r.email, r.website].filter(Boolean).map(e).join(' &middot; ')
       + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></header>'
+      + (r.corpusWarning ? '<div class="stop"><b>Read this first.</b> ' + p(r.corpusWarning) + '</div>' : '')
+      + (r.ladderFailed && r.ladderFailed.why
+          ? '<div class="stop"><b>Do not call from this sheet.</b> The measured checks failed on this lead'
+            + (r.ladderFailed.rungs ? ' (all ' + e(String(r.ladderFailed.rungs)) + ' of them)' : '')
+            + ', so everything below was written with nothing under it. Re-run this lead before using any of it. Cause: '
+            + e(String(r.ladderFailed.why)) + '</div>'
+          : '')
       + sec('What this business is', r.background ? '<p>' + p(r.background) + '</p>' : '')
       + (t ? '<section class="one"><h3>The one thing' + (t.layer ? ' &mdash; ' + e(t.layer) : '') + '</h3>'
           + (t.diagnosis ? '<p class="big">' + p(t.diagnosis) + '</p>' : '')
@@ -2089,7 +2220,13 @@ const auditExportHtml = (records, meta) => {
               + '<p class="dim">These are the only facts on this sheet with a date attached. Everything else is how the business looks today.</p>'
             : '')
       + sec('Before you dial',
-          (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
+          (r.heldBack && r.heldBack.name
+            ? '<p><b>We have a name and we do not stand behind it: ' + e(r.heldBack.name)
+              + (r.heldBack.title ? ' (' + e(r.heldBack.title) + ')' : ', no title found')
+              + '.</b> ' + p(String(r.heldBack.why || 'it did not clear the buying-authority floor'))
+              + ' Use it to get past the front desk if it helps, but do not open by calling them the owner: if they are not, the call ends there.</p>'
+            : '')
+          + (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
           + (r.expectObjection ? '<p><b>Expect to hear:</b> <q>' + p(r.expectObjection) + '</q> That is our own prospect model reading this as the owner. Have an answer ready.</p>' : '')
           + (r.ageDays === null ? ''
              : r.ageDays <= 1
@@ -2110,7 +2247,38 @@ const auditExportHtml = (records, meta) => {
       // reading a grid is what you are there to do. auditRecordFor keeps
       // carrying them so nothing downstream loses a measurement — this is a
       // rendering decision about one artefact, not a deletion.
-      + sec('Do not say', ul(r.claimRisks.concat(r.criticalFactCheck), x => '<li>' + p(typeof x === 'string' ? x : (x.what || JSON.stringify(x))) + '</li>'))
+      // Never silent on an audited lead. sec() renders nothing for an empty
+      // body, so a dropped fact-check printed no heading — and no heading reads
+      // as "we checked and it is clean". Those are opposite facts.
+      // ══ WRITTEN FOR A DEVELOPER, PRINTED ON A SALES DOCUMENT ═════════════
+      // Real entries from the 2026-08-21 export: a paragraph beginning
+      // "This is a claim about backend behaviour (tap-to-call functionality)
+      // made without evidence. The site scan confirms 'tap-to-call (tel:) link
+      // ABSENT'..." — three sentences of engineering rationale for a man holding
+      // the page while a phone rings.
+      //
+      // The section is NOT deleted: it is the thing that stops Mike repeating a
+      // claim we cannot stand behind, and dropping it is how a false sentence
+      // gets said out loud. What changes is the register. The first sentence is
+      // the instruction; everything after it is why, and why belongs on the
+      // audit screen where somebody is debugging, not on a sheet somebody is
+      // dialling from. The full text is still on the screen and still in the
+      // stored lead — nothing is lost, it is just not in the caller's way.
+      + sec('Do not say', (() => {
+          const firstSentence = (x) => {
+            const t = String(typeof x === 'string' ? x : (x && x.what) || JSON.stringify(x)).trim();
+            // Keep any quoted example whole: the quote IS the instruction.
+            const q = t.indexOf('"');
+            const cut = t.search(/(?<=[a-z0-9)"'\u201d])\.\s+(?=[A-Z])/);
+            if (cut > 0 && (q < 0 || cut > q)) return t.slice(0, cut + 1);
+            return t.length > 300 ? t.slice(0, 300).replace(/\s+\S*$/, '') + '\u2026' : t;
+          };
+          const items = r.criticalFactCheck.concat(r.claimRisks);
+          if (items.length) return ul(items, x => '<li>' + p(firstSentence(x)) + '</li>')
+            + '<p class="dim">Shortened for the call. The full reasoning for each is on the audit screen.</p>';
+          return r.status === 'not audited' ? '' : '<p class="dim">Nothing was flagged on this audit. This is a checked result, not a missing one.</p>';
+        })())
+      + sec('What we could not check', ul(r.readLimits, x => '<li>' + p(String(x)) + '</li>'))
       + sec('The email as written', r.pitch ? '<p class="dim">Subject: ' + p(r.subject) + '</p><pre>' + p(r.pitch) + '</pre>' : '')
       + sec('Full-page renders', ul(r.renders, s => '<li>' + e(s.label) + ': <a href="' + e(s.url) + '">' + e(s.url) + '</a></li>'))
       + '</article>';
@@ -2121,6 +2289,7 @@ const auditExportHtml = (records, meta) => {
     + ':root{color-scheme:light}body{margin:0;padding:28px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#16181d;background:#fff;max-width:920px;margin:0 auto}'
     + 'h1{font-size:22px;margin:0 0 4px}h2{font-size:20px;margin:0 0 4px}h3{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#6b7280;margin:20px 0 6px;padding-bottom:5px;border-bottom:1px solid #e5e7eb}'
     + 'h4{font-size:12px;margin:14px 0 4px;color:#374151}p{margin:0 0 8px}.big{font-size:17px;font-weight:600}.dim{color:#6b7280;font-size:13px}'
+    + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:6px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:26px 0;border-top:3px solid #16181d}article:first-of-type{border-top:none}header .meta{color:#6b7280;font-size:13px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#eef2ff;color:#4338ca}'
     + '.one{background:#f5f6ff;border-left:3px solid #6366f1;padding:2px 16px 12px;border-radius:6px}.one h3{border-bottom:none;color:#4338ca}'
@@ -2167,6 +2336,7 @@ const downloadAudits = (leads, title) => {
       headline: 'These leads are in the batch but their stored audit has a shape this export could not read.',
       background: _broken.map(b => b.name + ': ' + b.why).join(' | '),
       rows: [], problems: [], originalFindings: [], signals: [], claimRisks: [], criticalFactCheck: [],
+      ladderFailed: null, heldBack: null, corpusWarning: '', readLimits: [],
       renders: [], unlinkedPages: [], read: '', whatHeNeeds: '', whatHeCaresAbout: '', askOnTheCall: '',
       callWindow: '', expectObjection: '', researchedAt: '', ageDays: null, adsVerified: false,
       unlinkedCount: 0, pitch: '', subject: '',
@@ -2198,6 +2368,7 @@ const batchCandidates = (allLeads, o) => {
   const opts = o || {};
   const limit = Math.max(1, Number(opts.limit) || BATCH_DEFAULT_SIZE);
   const includeDone = !!opts.includeResearched;
+  const inflight = opts.inflight || null;
   return (allLeads || [])
     .filter((l) => l && l.id)
     .filter((l) => !l.notAFit)
@@ -2205,6 +2376,18 @@ const batchCandidates = (allLeads, o) => {
     // to the phone, and spending a research cycle on it returns an empty read.
     .filter((l) => (l.website || '').trim() || l.leadChannel === 'rebuild')
     .filter((l) => includeDone || !(l.status === 'researched' || l.status === 'generated' || l.status === 'approved' || l.status === 'sent'))
+    // ══ A LEAD ALREADY RUNNING IS NOT A CANDIDATE ═════════════════════════
+    // status is only written by the MERGE, after the result comes back, so a
+    // lead whose research is running right now still reads 'new' and was still
+    // picked. The 2026-08-21 log shows three submissions inside 61ms and then
+    // "duplicate request ignored — job already running (started 25s ago)": the
+    // server caught one of them. It cannot catch them all — it dedupes on the
+    // display name — and every one it misses is a second full paid audit of a
+    // business we are already auditing.
+    //
+    // Passed IN rather than read from localStorage here, so this stays a pure
+    // function the harness can drive.
+    .filter((l) => !(inflight && inflight[l.id] && inflight[l.id].jobId))
     .slice()
     .sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0))
     .slice(0, limit);
@@ -3884,7 +4067,7 @@ function FindView({
       // Job queue instead of one long request — see researchViaQueue. Same
       // response shape, so everything below this call is unchanged.
       // ONE builder, shared with the re-run path — see buildResearchBody.
-      const r = await researchViaQueue(buildResearchBody(company, settings, { website }));
+      const r = await researchViaQueue(buildResearchBody(company, settings, { website }), { trigger: 'find-add' });
       const researchData = await r.json();
 
       // Step 4: Check if Brain failed
@@ -5325,7 +5508,7 @@ function LeadBriefing({ lead }) {
   const NOT_RUN = /^(not checked|not measured|not assessed|not readable|unknown|n\/a|\u2014|-)\b/i;
   const counted = rows.filter(r => r && !NOT_RUN.test(String(r.val || '').trim()));
   const problems = counted.filter(r => r.ok === false);
-  const risks = (ba._claimRisks || lead._claimRisks || []);
+  const risks = claimRisksOf(lead).all;
 
   // Phone as a person reads it. "+12143304682" is a database value; "(214)
   // 330-4682" is what someone dials, and this row exists to be dialled from.
@@ -5643,6 +5826,19 @@ function LeadBriefing({ lead }) {
     // A behavioural reframe the checker disliked is a note. A number the prospect
     // can disprove by opening his own Google profile is a different category, and
     // it belongs above everything else in red.
+    // ── THE MEASUREMENTS ARE GONE ON THIS LEAD ─────────────────────────────
+    // Above the send-blocker because it is wider than one claim: it says the
+    // whole page below is unverified narrative. A crash and a genuinely clean
+    // business produced the identical screen until this existed.
+    (ba._ladderFailed && ba._ladderFailed.why) ? React.createElement('div', {
+      style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
+    },
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
+        'Do not call from this audit \u2014 the measurements failed'),
+      React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55 } },
+        'All ' + (ba._ladderFailed.rungs || 'the') + ' measured checks were lost on this lead, so everything below was written with nothing under it. Re-run Research before using any of it. Cause: ' + String(ba._ladderFailed.why))
+    ) : null,
+
     (ba._criticalFactCheck && ba._criticalFactCheck.length) ? React.createElement('div', {
       style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
     },
@@ -5740,7 +5936,7 @@ function ResearchView({
   const batchStopRef = React.useRef(false);
   const startBatch = async () => {
     if (batchRunning) { batchStopRef.current = true; return; }
-    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone });
+    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone, inflight: getInflightJobs() });
     if (!pool.length) { setResearchError('Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.'); return; }
     batchStopRef.current = false;
     setBatchResults([]);
@@ -5865,12 +6061,12 @@ function ResearchView({
       onConfirm: (confirmedUrl) => {
         setWebsiteModal(null);
         setWebsiteOverride(confirmedUrl);
-        runResearch(confirmedUrl);
+        runResearch(confirmedUrl, null, 'website-modal');
       }
     });
   };
 
-  const runResearch = async (confirmedWebsite, resumeJobId) => {
+  const runResearch = async (confirmedWebsite, resumeJobId, startedBy) => {
     // Lock onto THIS lead's id for the whole run. Everything below writes to this id,
     // so switching leads mid-research can't misfile results — the fetch keeps going
     // in the background and lands on the right lead.
@@ -6063,6 +6259,11 @@ function ResearchView({
         browserData: { pageSpeed, emailData, companyData },
       }), {
         signal: _ac.signal,
+        // The resume path passes a job id and NO trigger, so it can only ever
+        // collect. If resumeJobId is absent this is a real submit and the caller
+        // must have named the gesture — runResearch takes it as an argument
+        // rather than assuming one, so a future caller cannot inherit consent.
+        trigger: resumeJobId ? null : (startedBy || null),
         resumeJobId: resumeJobId || null,
         // Persist the moment the server accepts it. If the view unmounts a second
         // later, the id is on disk and the run can be collected on return.
@@ -6162,8 +6363,23 @@ function ResearchView({
     // Older than the server's own 8-minute abandon window: it will never return
     // anything useful, so clear it rather than poll something already dead.
     if (Date.now() - (rec.at || 0) > 10 * 60 * 1000) { clearInflightJob(lead.id); return; }
-    console.log('Resuming interrupted research for', lead.name, '-> job', rec.jobId);
-    runResearch(lead.website, rec.jobId);
+    // ══ ONLY THIS TAB'S OWN RUNS ARE COLLECTED AUTOMATICALLY ═══════════════
+    // The dependency is the lead id, so this fires on mount, on every sidebar
+    // click, and again on the automatic navigation App does after every add —
+    // and A -> B -> A fires it twice. That is lead SELECTION being treated as
+    // consent to re-enter a research cycle.
+    //
+    // Two things stop it now. It passes NO trigger, so researchViaQueue refuses
+    // to submit and it can only collect a job already paid for. And it collects
+    // only a job THIS TAB submitted: a record left by another tab, or by a
+    // previous page load, is somebody else's run and is left alone rather than
+    // silently re-entered.
+    if (rec.tab && rec.tab !== TAB_ID) {
+      console.log('[research] not auto-collecting', lead.name, '- that job was submitted by a different tab or an earlier page load');
+      return;
+    }
+    console.log('Collecting a run this tab already paid for:', lead.name, '-> job', rec.jobId);
+    runResearch(lead.website, rec.jobId, null);
   }, [lead && lead.id]);
 
   const save = () => {
@@ -6382,8 +6598,11 @@ function ResearchView({
         // this is the control that spends real credits.
         React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7 } }, 'Audit in bulk'),
         (() => {
-          const ready = batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length;
-          const pool = batchCandidates(allLeads, { limit: 9999, includeResearched: batchIncludeDone }).length;
+          // The count on the button must come from the SAME filtered pool the
+          // button will act on, or it promises leads it will then skip.
+          const _inf = getInflightJobs();
+          const ready = batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone, inflight: _inf }).length;
+          const pool = batchCandidates(allLeads, { limit: 9999, includeResearched: batchIncludeDone, inflight: _inf }).length;
           return React.createElement(React.Fragment, null,
             React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center', marginBottom: 5 } },
               React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'Audit up to'),
@@ -6743,7 +6962,7 @@ function ResearchView({
             warning: lead.domainMatch === 'no'
               ? 'The site we found was a different business. Enter their real URL to re-run the audit on the right company.'
               : 'No website was audited. Find their site (search "' + lead.name + ' official site") and paste the URL to run a full audit.',
-            onConfirm: (url) => { setWebsiteModal(null); if (url) { setWebsiteOverride(url); runResearch(url); } }
+            onConfirm: (url) => { setWebsiteModal(null); if (url) { setWebsiteOverride(url); runResearch(url, null, 'run-research-button'); } }
           })
         }, lead.domainMatch === 'no' ? 'Fix website \u2192' : 'Add website \u2192')
       ),

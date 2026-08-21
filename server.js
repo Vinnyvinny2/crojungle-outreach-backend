@@ -7000,6 +7000,13 @@ const fcCreditCost = (kind) => {
 const fcNote = (paid, kind, what) => {
   const _led = FC_LEDGER.getStore();
   if (paid) {
+    // A PAID call answering is proof the balance is back. This is where the
+    // latch clears — not at the start of a request, where it used to clear
+    // itself for two other leads that were mid-run.
+    if (FIRECRAWL_OUT_OF_CREDITS) {
+      FIRECRAWL_OUT_OF_CREDITS = false;
+      console.log(`\u{1F7E2} FIRECRAWL CREDITS ARE BACK \u2014 a paid [${kind}] call just succeeded. Every lead that started before this moment still ran short and is still marked as such; the latch only stops blocking NEW work.`);
+    }
     const _cost = fcCreditCost(kind);
     FC_CREDITS_SPENT += _cost;
     if (_led) { _led.spent += _cost; _led.ops += 1; }
@@ -7397,7 +7404,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       }
     }
     if (isCreditError(d, r.status)) {
-      FIRECRAWL_OUT_OF_CREDITS = true;
+      FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
       console.log('🔴 FIRECRAWL OUT OF CREDITS (map)');
       return [];
     }
@@ -7477,7 +7484,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
     }, 30000));
     const d = await r.json();
     if (isCreditError(d, r.status)) {
-      FIRECRAWL_OUT_OF_CREDITS = true;
+      FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
       console.log('🔴 FIRECRAWL OUT OF CREDITS (search)');
       return [];
     }
@@ -7496,7 +7503,20 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
 
 // Global flag — set the moment Firecrawl reports it's out of credits, so the
 // whole run can report it honestly instead of silently producing empty results.
+// ══ ONE VARIABLE CANNOT HOLD THREE REQUESTS' ANSWERS ══════════════════════
+// This is a process-wide latch and every incoming research request reset it to
+// false. RESEARCH_CONCURRENCY is 3, so on 2026-08-21 the credits ran out at
+// 14:39:35 with three leads in flight and any lead that started afterwards
+// cleared the flag for all of them. A lead that ran completely blind could
+// report that credits were fine.
+//
+// Two facts, not one. The LATCH stays process-wide, because an empty balance is
+// an account-level fact and the fail-fast guards are right to read it globally.
+// The TIMESTAMP is what makes a per-request answer possible: any lead that
+// started before the balance ran out was affected, whether or not the balance
+// has since recovered.
 let FIRECRAWL_OUT_OF_CREDITS = false;
+let FIRECRAWL_CREDITS_EMPTY_AT = 0;
 
 // ═══ HUNTER QUOTA — THE OTHER SILENT FALSE NEGATIVE ════════════════════════
 // hunterFindPersonEmail ended in `if (!email) return null`. When Hunter has quota
@@ -7764,7 +7784,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
     }, 20000));
     const sub = await submit.json();
     if (isCreditError(sub, submit.status)) {
-      FIRECRAWL_OUT_OF_CREDITS = true;
+      FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
       console.log('\ud83d\udd34 FIRECRAWL OUT OF CREDITS (batch)');
       return out;
     }
@@ -7884,7 +7904,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       await new Promise(res => setTimeout(res, waitMs));
     }
     if (isCreditError(d, r.status)) {
-      FIRECRAWL_OUT_OF_CREDITS = true;
+      FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
       console.log('🔴 FIRECRAWL OUT OF CREDITS — scrapes, searches, and maps will all fail until topped up.');
       return '';
     }
@@ -19167,6 +19187,69 @@ const stripUnmeasuredMoney = (text, corpus) => {
 // Walks the model's own output. Skips our own fields (underscore-prefixed) and
 // anything we assembled, because those are already gated and re-checking them
 // here would be a second copy of a rule.
+
+// ══ A QUOTE IS THE MOST CHECKABLE CLAIM WE MAKE, AND NOTHING CHECKED IT ═════
+// SOURCE VERIFY guards exactly two fields — heroHeadline and ctaText — and
+// verifyOriginalFinding guards originalFindings. Every other prose field the
+// audit produces could carry a quotation mark round anything.
+//
+// Stanley Schultze, 2026-08-21: Firecrawl was out of credits, BOTH homepage
+// requests came back 402, and his exported call sheet still read: Your homepage
+// says "We pride ourselves on delivering high-quality products and services
+// that have been tested and proven throughout our 80 years of experience". That
+// may well be a real sentence recovered by the plain-fetch salvage. It may also
+// not be. Nothing in the system could tell the difference, and Mike was about to
+// read it down a phone to the man who wrote the page.
+//
+// Same shape as stripUnmeasuredMoneyDeep, for the same reason: the SENTENCE
+// goes, not just the quote. A sentence with the quotation marks removed still
+// asserts that they said it.
+//
+// Deliberately narrow, because a gate that fires on correct output is one the
+// operator learns to ignore:
+//   · four or more words, so "no" or a product name is not a quotation
+//   · straight and curly quotes both, because models emit both
+//   · matched on letters and digits only, so punctuation and whitespace
+//     differences between their markup and our text cannot cause a false cut
+//   · an EMPTY corpus removes nothing: that is the read-limit case, and it is
+//     reported by the corpus banner instead. Deleting every quoted sentence on
+//     a lead we could not read would be a different way of being unhelpful.
+const _quoteFlat = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const QUOTED_SPAN = /[“"]([^"“”]{12,300})[”"]/g;
+const stripUnverifiedQuotes = (text, corpus) => {
+  const src = String(text == null ? '' : text);
+  if (!src) return { text: src, cut: [] };
+  const flatCorpus = _quoteFlat(corpus);
+  if (flatCorpus.length < 200) return { text: src, cut: [] };   // we read nothing worth checking against
+  const cut = [];
+  const out = src.split(/(?<=[.!?])\s+/).filter((sentence) => {
+    QUOTED_SPAN.lastIndex = 0;
+    let m, bad = false;
+    while ((m = QUOTED_SPAN.exec(sentence))) {
+      const inner = String(m[1]).trim();
+      if (inner.split(/\s+/).length < 4) continue;          // too short to be a quotation
+      if (!flatCorpus.includes(_quoteFlat(inner))) { bad = true; break; }
+    }
+    if (bad) cut.push(sentence.trim());
+    return !bad;
+  }).join(' ');
+  return { text: out, cut };
+};
+const stripUnverifiedQuotesDeep = (node, corpus, out, depth) => {
+  const d = depth || 0;
+  if (d > 6 || node === null || node === undefined) return node;
+  if (typeof node === 'string') {
+    const r = stripUnverifiedQuotes(node, corpus);
+    if (r.cut.length) out.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripUnverifiedQuotesDeep(x, corpus, out, d + 1));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) node[k] = stripUnverifiedQuotesDeep(node[k], corpus, out, d + 1);
+    return node;
+  }
+  return node;
+};
 const stripUnmeasuredMoneyDeep = (node, corpus, out, depth) => {
   const d = Number(depth) || 0;
   if (d > 6 || node == null) return node;
@@ -22189,6 +22272,40 @@ const measureHistory = ({ tenure, reviewCount, reviewRating, reviewRecencyDays, 
   return out;
 };
 
+
+// ══ TWO DIAGNOSES THAT COULD NOT AGREE BY CONSTRUCTION ═══════════════════════
+// Every exported audit renders "The one thing — <BINDING LAYER>" and then
+// "Fix this first — <BOTTLENECK>". On the 2026-08-21 run, twice:
+//
+//   The one thing — THROUGHPUT: "Demand is not the problem, delivery is.
+//     More leads here makes it worse, not better."
+//   Fix this first — DEMAND: "nothing is driving qualified traffic to it.
+//     The constraint is demand generation."
+//
+// In one audit, two headline blocks apart. A salesperson cannot act on that, and
+// the second half is the pitch every agency makes — the one Vin's own deleted
+// emails came back on ("that's not how I get customers").
+//
+// They were never rivals: the binding layer is WHAT holds the business back, the
+// bottleneck is the FIRST BROKEN LINK on the way to fixing it. So most pairings
+// are fine and only one family is a contradiction — telling an owner to go and
+// buy demand when the thing we measured says demand is not his problem.
+//
+// Deliberately narrow. THROUGHPUT + CAPTURE is not a conflict: both say "do not
+// buy traffic yet", which is the same advice arrived at two ways. A check that
+// flags every disagreement would flag the useful ones too and get switched off.
+const DEMAND_SIDE_BOTTLENECKS = new Set(['DEMAND', 'SCALE']);
+const diagnosisConflict = (layer, bottleneck) => {
+  const L = String(layer || '').toUpperCase();
+  const B = String(bottleneck || '').toUpperCase();
+  if (!L || !B) return null;
+  // THROUGHPUT is the only layer that says, in its own words, that MORE demand
+  // makes things worse. Everything else is compatible with a demand-side answer.
+  if (L === 'THROUGHPUT' && DEMAND_SIDE_BOTTLENECKS.has(B)) {
+    return 'the binding layer says more demand makes this business worse, and the first broken link says to go and buy demand';
+  }
+  return null;
+};
 const measureGrowthConstraint = ({
   marketClarity = { checked: false },
   rank, rankScanned, reviewCount, reviewRating, weakerAbove,
@@ -30624,7 +30741,12 @@ const _runResearchInner = async (req, res) => {
   // hasCTA is used across Brain audit + response assembly. Declared at
   // outer scope so it's visible to all references (fixes scope-leak crash).
   let hasCTA = false;
-  FIRECRAWL_OUT_OF_CREDITS = false; // reset per run so the flag reflects THIS request
+  // When THIS request started. The out-of-credits latch is no longer cleared
+  // here: clearing it on a request START is what let a lead that ran blind report
+  // clean credits, because three leads share one variable. It is cleared by a
+  // Firecrawl call actually SUCCEEDING (see fcNote), which is the only evidence
+  // the balance is back.
+  const _fcRunStartedAt = Date.now();
   const { company, keys, apiKey } = req.body;
   let website = req.body.website;  // mutable — the website guard may resolve/blank it
   // ══ AUDIT THE HOMEPAGE, NOT THE PAGE WE WERE HANDED ════════════════════════
@@ -30714,6 +30836,12 @@ const _runResearchInner = async (req, res) => {
   let verifiedRevenue = req.body.verifiedRevenue || null;
   let verifiedCEO = req.body.verifiedCEO || null;
   let verifiedCEOTitle = req.body.verifiedCEOTitle || null;
+  // ══ A REFUSED CANDIDATE IS NOT A VERIFIED ONE ══════════════════════════════
+  // findDecisionMaker computes canBuy and blockReason and the caller consulted
+  // neither, so the whole authority gate survived only as a console.log. A name
+  // the resolver HELD BACK now lands here instead, under a name no render site
+  // can mistake for a verified contact.
+  let heldBackContact = null;
   // ══ A RE-RUN MUST NOT INHERIT THE LAST RUN'S FINDINGS ════════════════════
   // Seeding from req.body means the client posts back the pain signals from the
   // PREVIOUS research, and if this run's review pull fails or comes back
@@ -30788,6 +30916,16 @@ const _runResearchInner = async (req, res) => {
   // runs before `parsed` exists. Writing straight to `parsed` threw on the
   // first live run and silently killed the entire chain.
   let _harmsForResponse = null;
+  // ══ A DEAD LADDER MUST NOT LOOK LIKE A QUIET ONE ═══════════════════════════
+  // The ladder's catch printed one grey line — "harm ladder failed — location is
+  // not defined" — and everything downstream carried on as though the ladder had
+  // simply found nothing. On the 2026-08-21 run that shipped four audits written
+  // by the model unassisted, and the export handed to a salesperson looked
+  // completely normal. Three times now one out-of-scope name has done this.
+  //
+  // Losing all 43 measured rungs and finding nothing on a genuinely clean
+  // business are opposite facts, and until now they produced the same page.
+  let _ladderFailure = null;
   let _openerForResponse = null;
   let phoneResult = { phone: '', display: '', source: 'none' };
   let realSpeed = { checked: false };
@@ -30997,6 +31135,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // with the status and Firecrawl's own words, and is NOT charged to the
       // credit ledger. The next payload mistake costs one log line, not a month.
       const fcAsk = async (target, formats, waitFor, timeout, kind) => {
+        // The other four Firecrawl entry points fail fast on an empty balance;
+        // this one, the HOMEPAGE reader, did not. Stanley Schultze fired both of
+        // his requests 52 seconds after the balance ran out, got 402 twice, and
+        // occupied two slots in the browser gate on the way. Same refusal shape
+        // as a real 402 so the caller's branch is unchanged — and that branch
+        // already refuses to remember the domain as empty, which is what keeps
+        // an unread page from becoming an absence claim.
+        if (FIRECRAWL_OUT_OF_CREDITS) {
+          console.log(`\u{1F534} NOT ASKING [${kind}] ${target} \u2014 Firecrawl is out of credits, so this request would be refused and would still cost a browser slot and 20 seconds of this lead's clock. NOTHING about this site is known.`);
+          return { refused: true, status: 402, body: null, reason: 'out of credits (not asked)', ms: 0 };
+        }
         const t0 = Date.now();
         let r;
         try {
@@ -31016,7 +31165,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const ms = Date.now() - t0;
         const errText = String(body?.error || body?.message || (body?.details ? JSON.stringify(body.details) : '') || '').slice(0, 400);
         if (isCreditError(body, r.status)) {
-          FIRECRAWL_OUT_OF_CREDITS = true;
+          FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
           console.log(`🔴 FIRECRAWL OUT OF CREDITS — the homepage request for ${target} was refused (HTTP ${r.status}). NOTHING about this site is known and no absence may be claimed from it. Top up before judging any audit from this run.`);
           return { refused: true, status: r.status, body, reason: errText || 'out of credits', ms };
         }
@@ -31597,10 +31746,31 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           industry: customerTrade || verifiedIndustry || '',
           apifyToken,
         });
+        // ══ "OWNER" WAS A DEFAULT, NOT SOMETHING ANYBODY READ ══════════════
+        // This line was `decisionMaker.title || verifiedCEOTitle || 'Owner'`.
+        // Fit Money CPA, live 2026-08-21, in this order:
+        //   DM/bizname: "Michelle Musacchio" ... never in an owner context - REJECTED
+        //   DM/websearch: no owner found in web results
+        //   DM: WARN Michelle Musacchio - "no title found" (authority 30) is
+        //       below the buying floor. HELD BACK.
+        // and the exported call sheet Mike dials from read "Michelle Musacchio,
+        // Owner". Nobody read that word anywhere: it is this `||` default. An
+        // absent title is a MEASUREMENT THAT DID NOT RUN, the same class as the
+        // "0 photos" claim on leads where photos were never counted.
         if (decisionMaker && decisionMaker.name) {
-          if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
+          if (decisionMaker.canBuy === false) {
+            heldBackContact = {
+              name: decisionMaker.name,
+              title: decisionMaker.title || null,
+              authority: decisionMaker.authority,
+              why: decisionMaker.blockReason || 'did not clear the buying-authority floor',
+              sources: decisionMaker.sources || [],
+            };
+            console.log(`DM [${company}]: NOT promoted to verified — ${decisionMaker.name} is held back (${heldBackContact.why}). The call sheet shows them as an unverified candidate, which is what they are. This used to become "${decisionMaker.name}, Owner" with nothing behind the word.`);
+          } else if (!verifiedCEO || decisionMaker.corroborated || decisionMaker.confidence === 'high') {
             verifiedCEO = decisionMaker.name;
-            verifiedCEOTitle = decisionMaker.title || verifiedCEOTitle || 'Owner';
+            // No default. An unknown title stays unknown.
+            verifiedCEOTitle = decisionMaker.title || verifiedCEOTitle || null;
           }
         }
       } catch(e) { console.log('Decision-maker engine failed (non-fatal):', e.message); }
@@ -32782,7 +32952,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             console.log(`\u{1F4D8} NO NICHE BRIEF [${company}]: nothing in the library matches "${[verifiedIndustry, customerTrade, req.body.industry].filter(Boolean).join(' / ') || 'no trade resolved'}". A business we cannot place gets no brief, which costs a paragraph on the call sheet; placing one in the WRONG bucket would hand the caller a page of confident vocabulary about somebody else's trade.`);
           }
         }
-        const _obsKey = observationKeyFor({ placeId: effectivePlaceId, website, company, location });
+        // ══ THE THIRD TIME ONE NAME KILLED THE WHOLE LADDER ════════════════
+        // This read `location` as a shorthand property. There is no `location`
+        // in this scope — the lead's city arrives as req.body.location — so the
+        // line threw ReferenceError on EVERY lead, inside the ladder's try, and
+        // the log said only "harm ladder failed — location is not defined".
+        //
+        // The cost is not one field. It is all 43 rungs: no factual spine, no
+        // problem list, no subjects, no opener verdict, and _harmsForResponse
+        // false. Both findings with a real human reply behind them
+        // (review_pain_pattern, outranked_by_weaker) are rungs, and on the
+        // 2026-08-21 run Bret Rodgers had BOTH measured and neither reached his
+        // audit. Every audit in that run was written by the model unassisted.
+        //
+        // CLAUDE.md records this exact shape twice already — "deepPain is not
+        // defined", then "reviewPainFound is not defined" — and scopecheck.js
+        // was supposed to be the answer. It could not see this one because its
+        // GLOBALS list is shared with index.html and whitelists the BROWSER
+        // globals, and `location` is one of them. One list serving two runtimes.
+        const _obsKey = observationKeyFor({ placeId: effectivePlaceId, website, company, location: req.body.location });
         const _obsNow = observationSnapshot({
           reviewCount: _measured.reviewCount,
           rating: _measured.rating,
@@ -33412,7 +33600,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // fault is far worse than a missed one, because he checks and we lose.
           push(`\u2605 NOW LOOK BEYOND THAT LIST. The detections above are mechanical and cannot see everything. Read the page text and find anything BROKEN, WRONG or ABANDONED that a visitor would run into: a stale copyright year, a blog dead since 2021, placeholder text still in production, a link to nowhere, two different prices for the same service, hours that disagree with their Google listing, an offline chat widget. If you find one, it belongs at the top with the DEAD items. \u26a0 Only if you actually SAW it in the text provided \u2014 quote it. Never invent a fault: he checks, and a wrong accusation ends the conversation permanently.`);
         }
-      } catch (e) { console.log('harm ladder failed \u2014', e && e.message); }
+      } catch (e) {
+        // Named as the whole-system failure it is. Everything this block builds
+        // is gone: the factual spine the email may assert, the measured problem
+        // list, the subject lines, the opener verdict and the ranked findings —
+        // including review_pain_pattern and outranked_by_weaker, the only two
+        // findings in this system with a real human reply behind them.
+        _ladderFailure = (e && e.message) || String(e);
+        console.log(`\u{1F534} HARM LADDER CRASHED [${company}]: ${_ladderFailure}`);
+        console.log(`   \u21b3 This is NOT "we found nothing". All ${HARM_LADDER.length} measured rungs are gone for this lead, along with the factual spine, the problem list, the subject lines and the opener verdict. The audit below was written by the model with no measured findings under it, so treat every sentence in it as unverified narrative. Re-run this lead after the crash is fixed; do not call from this audit and do not send from it.`);
+      }
 
       // ══ A DEAD PAGE OUTRANKS EVERY OTHER FINDING ══════════════════════════
       // Nothing else we measure is this strong. A long form is a matter of
@@ -34471,12 +34668,54 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     } else if (!_siteConverts) {
       bottleneck = 'FOUNDATION';
       bottleneckWhy = 'No confirmed ad spend AND the site cannot convert. Driving traffic to this site would waste money — the site is the first broken link and must be fixed before demand is worth buying.';
+    // ══ THE TAIL WAS ASSERTING TWO THINGS NOTHING MEASURED ═════════════════
+    // The old else read: "The site is functional but nothing is driving
+    // qualified traffic to it." Neither half is measured on this path. It
+    // printed verbatim on three of four leads in the 2026-08-21 run, and on two
+    // of them it sat directly under "The one thing - THROUGHPUT: Demand is not
+    // the problem, delivery is. More leads here makes it worse, not better."
+    // One audit, two headline blocks, flatly contradicting each other, and a
+    // salesperson cannot act on either.
+    //
+    // The two were never rivals. The BINDING LAYER is what holds the business
+    // back; the BOTTLENECK is the first broken link on the way to fixing it. So
+    // when the cascade has nothing left to say it defers to the layer that DID
+    // measure something, instead of inventing a demand problem.
+    //
+    // OPERATIONS is also unreachable from review evidence alone — its branches
+    // need a verified headcount and revenue-per-employee, and this ICP almost
+    // never has either ("REVENUE: skipped — headcount is unknown" on every lead
+    // of that run). So THROUGHPUT-versus-DEMAND was structural, not incidental.
+    } else if (growthConstraint && growthConstraint.checked && growthConstraint.layer
+               && growthConstraint.layer !== 'DEMAND') {
+      bottleneck = growthConstraint.layer;
+      bottleneckWhy = `Nothing in the funnel read as the first broken link, and the binding constraint we DID measure is ${growthConstraint.layer}. ${String(growthConstraint.condition || '').trim()} Deferring to it rather than naming a demand problem nobody measured: more traffic cannot be the answer on a business whose constraint sits upstream of traffic.`;
+    } else if (sitePages === null || !builtWith || builtWith.checked === false) {
+      // Here because inputs were MISSING, not because they were measured and
+      // came back negative. "The site is functional" read off a site we could
+      // not open is the absence-claim failure this whole file exists to prevent.
+      bottleneck = 'NOT MEASURED';
+      bottleneckWhy = 'We could not read enough of their funnel to name the first broken link. That is a statement about our read, not about their business, and nothing should be sold off it. Re-run this lead before using this section.';
     } else {
       bottleneck = 'DEMAND';
-      bottleneckWhy = 'The site is functional but nothing is driving qualified traffic to it. The constraint is demand generation.';
+      bottleneckWhy = 'Their site converts, a capture path exists, and no ad spend was found on the pages we read \u2014 so the first broken link sits upstream of the site: nothing we measured is bringing qualified people to it. Every clause in that sentence was measured on this lead.';
     }
 
-    // Prescribe by bottleneck — PRIMARY first (that is what the pitch must lead with)
+    // ── AND THE TWO DIAGNOSES MAY NOT CONTRADICT EACH OTHER ────────────────
+    // Enforced here rather than trusted: the deferral above closes the tail path
+    // but a future branch could reopen it, and this is the one pairing a reader
+    // cannot act on. The LAYER wins, because it is derived from complaints their
+    // own customers wrote down and the demand answer is a fallback.
+    {
+      const _conflict = diagnosisConflict(growthConstraint && growthConstraint.layer, bottleneck);
+      if (_conflict) {
+        console.log(`\u26a0 DIAGNOSIS CONFLICT [${company}]: ${_conflict}. Taking the binding layer (${growthConstraint.layer}) and dropping the demand answer \u2014 an audit that says both is one a salesperson cannot use, and "buy more leads" is the pitch that got three of our four real emails deleted.`);
+        bottleneck = growthConstraint.layer;
+        bottleneckWhy = `Their own customers describe the business struggling to keep up with the work it already has. ${String((growthConstraint && growthConstraint.condition) || '').trim()} Fix delivery and follow-through before any of the demand work is worth buying.`;
+      }
+    }
+
+    // Prescribe by bottleneck \u2014 PRIMARY first (that is what the pitch must lead with)
     if (bottleneck === 'OPERATIONS') {
       _eligible.push(_realOpsSignal
         ? 'Custom AI Software Build ($40k-$100k+) — PRIMARY: a CONFIRMED ops/manual-labor hiring signal exists. Frame against the recurring salary they are about to commit to, not against software cost.'
@@ -34499,6 +34738,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     } else if (bottleneck === 'FOUNDATION') {
       _eligible.push('Website Rebuild ($50k+) — PRIMARY: the site cannot convert and nothing is being spent driving traffic to it. Fix the foundation FIRST — buying traffic for this site would waste their money, and saying so earns trust.');
       _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) — SECONDARY: drive and convert demand once the foundation holds.');
+    // ══ THE DEFERRED LAYERS NEED THEIR OWN PRESCRIPTION ═══════════════════
+    // Without these, the else below sold ads management to a business whose own
+    // customers say it cannot keep up with the work it already has — which is
+    // the exact error the binding-layer read exists to prevent, moved from the
+    // narrative into the product recommendation.
+    } else if (bottleneck === 'NOT MEASURED') {
+      _eligible.push('NOTHING TO RECOMMEND YET \u2014 we could not read enough of their funnel on this run to say what they need. Re-run the lead. Guessing here is how a $200 fix gets pitched as a $30k engagement, or the reverse.');
+    } else if (bottleneck === 'THROUGHPUT' || bottleneck === 'OPERATIONS') {
+      _eligible.push('Custom AI Software Build ($40k-$100k+) OR AI Brain ($40k-$70k) \u2014 PRIMARY: their own customers describe the business struggling to keep up with the work it already has. Selling traffic here makes the reviews worse, not the revenue better. Sell capacity and follow-through first.');
+      _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) \u2014 SECONDARY, and only AFTER delivery holds. Say that out loud on the call: it is the sentence that separates us from every agency that pitches more leads.');
+    } else if (bottleneck === 'OFFER') {
+      _eligible.push('Website Rebuild / Conversion System ($50k+) \u2014 PRIMARY: they have earned the reputation and given a stranger no reason to pick them. What they promise and what they stand behind is an owner decision, so it is his call and nobody else\u2019s.');
+      _eligible.push('Revenue Growth / CRO Retainer ($10k-$35k/mo) \u2014 SECONDARY: compound it once the offer is decided.');
+    } else if (bottleneck === 'MARKET') {
+      _eligible.push('Website Rebuild / Conversion System ($50k+) \u2014 PRIMARY: their copy does not name who it is for, so every visitor has to decide for himself whether it applies. Positioning first; traffic into an unclear promise converts worse, not better.');
     } else { // DEMAND
       _eligible.push('End-to-End Marketing / Ads Management ($10k-$35k/mo) or Revenue Growth / CRO Retainer ($10k-$35k/mo) — PRIMARY: the constraint is qualified demand.' + (_mktgHire ? ' They are HIRING for marketing — budget allocated, direction not chosen. The retainer pitch writes itself; do NOT pitch a software build for marketing roles.' : ''));
       if (!_siteConverts) _eligible.push('Website Rebuild ($50k+) — SECONDARY: the site also needs work; mention as the foundation that makes the demand work harder.');
@@ -34579,7 +34833,12 @@ Your recommendedProduct and every item in topThreeProducts MUST come from this l
 COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
 VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google)' : 'Not verified — treat as unknown size'}
-VERIFIED DECISION-MAKER: ${verifiedCEO ? verifiedCEO + ' (' + (verifiedCEOTitle || 'CEO') + ') — found in public search results, use their real name in the pitch' : 'Not identified — pitch to "the owner/CEO"'}
+VERIFIED DECISION-MAKER: ${verifiedCEO
+    ? verifiedCEO + (verifiedCEOTitle ? ' (' + verifiedCEOTitle + ')' : ' — NO TITLE was found for this person. Do NOT call them the owner, the CEO, or anything else.')
+      + ' — corroborated across: ' + (((decisionMaker && decisionMaker.sources) || []).join(' + ') || 'our own read of their pages') + '. Use their real name in the pitch.'
+    : (heldBackContact
+      ? heldBackContact.name + ' is the only name we have and they DID NOT clear the buying-authority floor (' + heldBackContact.why + '). Do NOT describe them as the owner and do NOT give them a title. Treat the decision-maker as unidentified.'
+      : 'Not identified — pitch to "the owner/CEO"')}
 ═══ WHAT THEIR HOMEPAGE ACTUALLY LOOKS LIKE (vision — we SAW this, not guessed) ═══
 ${visualAnalysis ? `${visualAnalysis.heroIsBlank ? '⚠ THE HERO IS BLANK OR BROKEN-LOOKING. ' : ''}Headline visible: ${visualAnalysis.hasHeadline ? 'yes — "' + (visualAnalysis.headlineObserved || '') + '"' : 'NO — no value-proposition headline visible on arrival'}. CTA visible: ${visualAnalysis.hasVisibleCTA ? 'yes — "' + (visualAnalysis.ctaObserved || '') + '"' : 'NO — no clear call-to-action button above the fold'}. Social proof above fold: ${visualAnalysis.hasVisibleSocialProof ? 'yes' : (visualAnalysis.socialProofUncertain ? 'a review/widget area is present but had not finished loading when we looked \u2014 do NOT say they lack reviews' : 'none seen in the screenshot \u2014 but review widgets load late, so do NOT claim they have no reviews')}.${visualAnalysis.pageFullyLoaded === false ? ' \u26a0 THE PAGE WAS NOT FULLY LOADED IN THIS SCREENSHOT \u2014 treat every "absent" visual finding as UNCONFIRMED; something may simply not have rendered. Do not claim the page lacks a CTA, headline, or social proof.' : ''} Design: ${visualAnalysis.designObservation || (visualAnalysis.looksDated ? 'looks dated' : 'current')}. Conversion readiness: ${visualAnalysis.overallConversionReadiness || 'unknown'}.
 → These are VISUAL FACTS — we looked at their actual rendered homepage. "Your homepage loads with a blank hero and no call-to-action" is undeniable when we've literally seen it. This is your sharpest, most credible ammunition. Use the exact observation.
@@ -35282,7 +35541,25 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // in its own list, where it informs without crying wolf.
           const _readLimits = [];
           if (_deferredQuoteRisk) _readLimits.push(_deferredQuoteRisk);
-          const _flag = (re, why) => { const m = _allProse.match(re); if (m) _claimRisks.push(`${why} — "${m[0].slice(0,60)}"`); };
+          // ══ IT QUOTED THE REGEX MATCH, NOT THE SENTENCE ═══════════════════
+          // Stanley Schultze's exported call sheet, under "Do not say", read in
+          // its entirety:
+          //     states the visitor disappears — unobserved — "disappears"
+          // One word in quotation marks. Mike is holding that while dialling and
+          // cannot tell which sentence he must not repeat, which makes the whole
+          // section unusable on the one lead where it fired.
+          //
+          // A one-word pattern produces a one-word quote by construction, and
+          // several of these patterns are deliberately one word. phraseAround
+          // already exists for this — it was written when an email opened
+          // mid-question because a quote was cut at the wrong boundary — so the
+          // SENTENCE is quoted and the match only locates it.
+          const _flag = (re, why) => {
+            const m = _allProse.match(re);
+            if (!m) return;
+            const sentence = phraseAround(_allProse, m[0]) || String(m[0]);
+            _claimRisks.push(`${why} — "${String(sentence).trim().slice(0, 220)}"`);
+          };
           // 1. Backend / post-submit behaviour we never observed
           _flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission backend behaviour');
           _flag(/\bdisappears? forever\b/i, 'claims backend outcome (no record) we cannot see');
@@ -35365,10 +35642,30 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // check, silently disabling it. Found by a static scan for names
             // bound nowhere, not by any run.
             const _bookingRead = (sitePages && sitePages.booking) || '';
-            const _noPhoneOnSite = !_siteHasTel && !_phoneFromSite;
+            const _TAP_PRECHECK = /\btap (the|your|that) (number|phone)\b|\btry to (tap|dial|call)\b|\bit does ?n'?t dial\b|\bwon'?t dial\b|\bnot tappable\b|\bcopy (it|the number) by hand\b/i;
+            // ══ AN ABSENCE READ OFF A MEASUREMENT THAT NEVER RAN ═══════════
+            // htmlSignals is `{ checked: false }` whenever the markup was not
+            // read — a refused scrape, a blocked site, an empty balance. In that
+            // state _siteHasTel is false, and if the number came off their Google
+            // listing _phoneFromSite is false too, so this fired from TWO
+            // measurements that never happened and then printed "we measured NONE
+            // there" while saying "booking read: unknown" in the same breath.
+            //
+            // Dr. Binh Nguyen carried exactly that entry into an exported call
+            // sheet. Which is the third recorded instance of this class in this
+            // file: the error page scored as missing tags, the empty Hunter
+            // response read as "no mailbox", the 429 recorded as a PageSpeed
+            // score. If we did not look, there is nothing to say — and saying so
+            // belongs in _readLimits, the list built for exactly this
+            // distinction, not in the list that flags the lead as risky.
+            const _markupRead = !!(htmlSignals && htmlSignals.checked);
+            const _noPhoneOnSite = _markupRead && !_siteHasTel && !_phoneFromSite;
+            if (!_markupRead && _TAP_PRECHECK.test(_allProse)) {
+              _readLimits.push(`The copy talks about tapping or dialling a number on their site and WE NEVER READ THEIR MARKUP on this run, so we cannot say whether it is tappable. That is a limit of our read, not a fault of theirs. Do not repeat it on the call, and re-run the lead if it matters.`);
+            }
             const _TAP = /\btap (the|your|that) (number|phone)\b|\btry to (tap|dial|call)\b|\bit does ?n'?t dial\b|\bwon'?t dial\b|\bthe number (on|does)\b|\bplain text\b|\bnot tappable\b|\bcopy (it|the number) by hand\b/i;
             if (_noPhoneOnSite && _TAP.test(_allProse)) {
-              _claimRisks.push(`NO PHONE ON THAT PAGE \u2014 the copy talks about tapping or dialling a number on their site, and we measured NONE there (tel link: ${_siteHasTel ? 'yes' : 'no'}, booking read: ${_bookingRead || 'unknown'}${phoneResult && phoneResult.source === 'google_business_profile' ? ', and the number we hold came from their GOOGLE LISTING, not their website' : ''}). He will open the page, find nothing to tap, and stop believing the rest of the email.`);
+              _claimRisks.push(`Do not say their number is not tappable. We read their markup and found no phone link on it${phoneResult && phoneResult.source === 'google_business_profile' ? ', and the number we hold came from their Google listing rather than their site' : ''} \u2014 so the sentence may be right, but he will open the page expecting to find what we described and we cannot show him where.`);
             }
             if (_bookingRead === 'none_found' && /\bphone[- ]only\b|\bonly way (to|is to) call\b|\bhope someone picks up\b/i.test(_allProse)) {
               _claimRisks.push('CALLED IT PHONE-ONLY WHEN NOTHING IS OFFERED \u2014 the measured read is none_found: no scheduler, no form and no visible phone. "Phone-only" describes a route that exists. Here there is no direct route at all, which is a stronger and TRUE thing to say.');
@@ -35768,6 +36065,17 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
         // inside a check on the model's output.
         console.log(`\u25b6 COMPOSE TRACE [${company}] step 3: reached the attach block \u2014 _harmsForResponse=${!!_harmsForResponse}, parsed=${!!parsed}. If step 4 does not follow, one of those two is false.`);
 
+        // OUTSIDE the guard below on purpose: that guard is false in precisely
+        // the case this reports, so writing the flag inside it would mean the
+        // one lead that needs the warning is the one lead that cannot carry it.
+        if (_ladderFailure && parsed) {
+          parsed._ladderFailed = {
+            why: String(_ladderFailure).slice(0, 300),
+            rungs: HARM_LADDER.length,
+            note: 'Every measured finding was lost for this lead. What follows was written by the model with nothing under it. Re-run this lead before calling from it.',
+          };
+        }
+
         if (_harmsForResponse && parsed) {
           // ══ THE AUDIT LEADS ON WHAT THE EMAIL WILL LEAD ON ═══════════════════
           // Two things were deciding what matters: the LADDER (30 measured findings,
@@ -35987,8 +36295,15 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // seven things to correct by hand.
             {
               const _pr = (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead : [];
-              const _n = narrowAuditAbsence(parsed, _pr);
-              if (_n) console.log(`\u2702 ABSENCE NARROWED [${company}]: ${_n} claim(s) about the whole site rewritten to the page we actually opened (${_pr.length ? _pr.join(', ') : 'homepage only'}). The prompt already forbade this in words and seven got through on one lead \u2014 narrowing is mechanical and can only make a claim more true.`);
+              // Whether the HOMEPAGE itself was read, which pagesRead cannot say:
+              // it counts interior pages, so zero and one looked the same and zero
+              // is the blind case. 300 characters is the same floor the corpus
+              // guards use elsewhere; a 402 or an empty scrape lands far below it.
+              const _homeRead = String(trustedContent || '').length > 300;
+              const _n = narrowAuditAbsence(parsed, _pr, _homeRead);
+              if (_n) console.log(_homeRead
+                ? `\u2702 ABSENCE NARROWED [${company}]: ${_n} claim(s) about the whole site rewritten to the page we actually opened (${_pr.length ? _pr.join(', ') : 'the homepage'}). Mechanical, and it can only make a claim more true \u2014 the prompt forbade this in words and seven got through on one lead.`
+                : `\u2702 ABSENCE DELETED [${company}]: ${_n} sentence(s) claiming something is missing from their site have been REMOVED, because we never read a single page of it. Rewriting the scope word would have turned a vague claim into a precise one about a page nobody opened, which is what happened to Stanley Schultze when Firecrawl ran out of credits mid-run.`);
             }
             // ══ NOW SYNTHESISE, WITH EVERYTHING IN HAND ══════════════
             // Runs here rather than before the audit so it can read their actual
@@ -36157,6 +36472,19 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // corpus the quotes are verified against, so one body of evidence
             // governs both. A figure that is neither on their pages, nor in the
             // trade table, nor one of our own prices takes its sentence with it.
+            // ══ AND NO QUOTE THEY NEVER WROTE ═══════════════════════════════
+            // Runs against the same corpus as the money gate and the original
+            // findings, so one body of evidence governs all three. A quotation
+            // is the single most checkable thing in an audit: the owner wrote
+            // the page, and being wrong about his own words ends the call.
+            {
+              const _q = { cut: [] };
+              stripUnverifiedQuotesDeep(parsed, _corpus, _q, 0);
+              if (_q.cut.length) {
+                parsed._quotesRemoved = _q.cut.slice(0, 4);
+                console.log(`\u26d4 UNVERIFIED QUOTE [${company}]: removed ${_q.cut.length} sentence(s) quoting words that appear nowhere in anything we read. First one: "${String(_q.cut[0]).slice(0, 160)}". SOURCE VERIFY only ever covered two fields, so every other prose field could quote anything \u2014 and Mike reads these down a phone to the person who wrote the page.`);
+              }
+            }
             {
               const _m = { cut: [], figures: [] };
               stripUnmeasuredMoneyDeep(parsed, _corpus, _m, 0);
@@ -36850,6 +37178,13 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             //
             // This is why the composer appeared not to work for six sessions.
             // It was working the entire time; its output had nowhere to go.
+            // ══ NAMED HERE OR IT DOES NOT EXIST ═══════════════════════════
+            // brainAudit is an explicit literal, so the crash flag written onto
+            // `parsed` above would have reached exactly nobody — the same
+            // "computed but not passed" trap this literal's own comment block
+            // was written about. The one lead that needs the warning is the one
+            // lead whose ladder is gone, so it has to be named right here.
+            _ladderFailed: parsed._ladderFailed || null,
             composedEmail: parsed.composedEmail || null,
             factualSpine: parsed.factualSpine || null,
             harmsRanked: Array.isArray(parsed.harmsRanked) ? parsed.harmsRanked : [],
@@ -37021,10 +37356,29 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             const isGeneric = /^(the |our |team|leadership|management|owner|founder|ceo|president|staff)$/i.test(dmName);
             const looksLikeName = /^[A-Z][a-z]+(\s+[A-Z][a-z.]+){1,2}$/.test(dmName);
             if (!isGeneric && looksLikeName && (dm.confidence === 'high' || dm.confidence === 'medium')) {
-              if (!verifiedCEO || dm.confidence === 'high') {
+              // ══ ONE SOURCE QUOTED BACK TO ITSELF IS NOT CORROBORATION ══
+              // The audit prompt is HANDED verifiedCEO and verifiedCEOTitle. The
+              // model returns them. This line wrote them straight back and logged
+              // "Brain extracted decision-maker ... [high]", which reads like a
+              // second independent source agreeing. It is a closed loop, and the
+              // [high] is a label the model assigns itself under a prompt that
+              // was pre-told the answer.
+              //
+              // Live, Fit Money CPA: the resolver refused the title, this line
+              // restored it as "Owner", the prompt carried "Michelle Musacchio
+              // (Owner)", the model echoed it, and the log recorded a confident
+              // extraction. Three lines of agreement, one source, no evidence.
+              //
+              // So the brain may ADD a name we did not have. It may never
+              // overrule a resolver that looked at registries and licence
+              // records, and it may never supply a TITLE, because the title is
+              // the field that was being invented.
+              if (!verifiedCEO) {
                 verifiedCEO = dmName;
-                verifiedCEOTitle = dm.title || verifiedCEOTitle || 'Owner';
-                console.log(`Brain extracted decision-maker: ${verifiedCEO} (${verifiedCEOTitle}) [${dm.confidence}]`);
+                verifiedCEOTitle = verifiedCEOTitle || null;
+                console.log(`Brain read a decision-maker off their own pages: ${verifiedCEO}${verifiedCEOTitle ? ' (' + verifiedCEOTitle + ')' : ' \u2014 no title, and none is being invented'}. This ADDS a name nothing else found. It cannot overrule the resolver and it cannot supply a title: the prompt is handed the title, so echoing it back is not a second source.`);
+              } else if (dm.confidence === 'high' && dmName !== verifiedCEO) {
+                console.log(`\u26a0 DM DISAGREEMENT [${company}]: the resolver settled on ${verifiedCEO} and the audit brain read ${dmName} off the pages. Keeping the resolver's answer, which is corroborated across independent sources; the brain's is one read of one corpus. Worth a human glance if this lead matters.`);
               }
             }
           }
@@ -37883,7 +38237,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       console.log(`Brain gate blocked: ${reason}`);
       return res.status(422).json({
         brainFailed: true,
-        outOfCredits: FIRECRAWL_OUT_OF_CREDITS,
+        outOfCredits: FIRECRAWL_OUT_OF_CREDITS || FIRECRAWL_CREDITS_EMPTY_AT >= _fcRunStartedAt,
         reason,
         screenshotUrl: screenshotUrl || null, // still return screenshot so user can verify website
         partialData: {
@@ -38218,6 +38572,21 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // the consumer already knows the shape, do not invent a second one.
       localVisibility: localVisibility || null,
       offerStrength: offerStrength || null,
+      // ══ HOW MUCH OF THIS BUSINESS DID WE ACTUALLY READ ══════════════════
+      // Stanley Schultze, 2026-08-21: Firecrawl out of credits, BOTH homepage
+      // requests refused with HTTP 402, and the exported call sheet looked
+      // exactly like the three built on real page reads. The degraded-audit
+      // marker existed for one cause only; the general question — how much did
+      // we open — was never on the response at all.
+      //
+      // Outside the sitePages block deliberately: sitePages is NULL in precisely
+      // the blind case, so anything nested inside it disappears exactly when it
+      // is needed. Same shape as the ladder crash flag two hundred lines up.
+      corpusRead: {
+        homepageChars: String(trustedContent || '').length,
+        interiorPages: (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead.length : 0,
+        trustworthy: !!scrapeTrustworthy,
+      },
       sitePages: sitePages ? {
         booking: sitePages.booking || null,
         bookingMeasured: !!sitePages.bookingMeasured,
@@ -38325,6 +38694,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       pageShots: (sitePages && sitePages.pageShots) || [],
       companyTriggers,
       verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
+      // The name we found and REFUSED. Named here or it does not exist as far as
+      // the browser is concerned — the same trap as the crash flag two hundred
+      // lines up. Without it the caller sees "no decision-maker identified" on a
+      // lead where we DO have a name, just not one we can stand behind, and the
+      // most likely outcome is that somebody re-researches a lead we already paid
+      // for. Labelled as unverified everywhere it renders.
+      heldBackContact,
       emailResult, decisionMaker,
       publicPainSignals, painSummary,
       // localVisibility, gbpHealth and htmlSignals are returned ABOVE, in the block
@@ -38368,7 +38744,10 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         positioning:    { level: 'judgment', method: 'Claude structured opinion (Dunford framework) — always verify' },
         operational_pain: { level: publicPainSignals.length ? 'mechanical' : 'limited', method: 'verified against exact quotes from real reviews' },
       },
-      firecrawlOutOfCredits: FIRECRAWL_OUT_OF_CREDITS,
+      // TRUE if the balance ran out at any point during THIS lead, even if it has
+      // since recovered for a later one. The bare latch answered for whichever
+      // request wrote to it last.
+      firecrawlOutOfCredits: FIRECRAWL_OUT_OF_CREDITS || FIRECRAWL_CREDITS_EMPTY_AT >= _fcRunStartedAt,
       signals: { no_cta:!hasCTA, weak_positioning:positioningScore<5, no_crm:(builtWith.hasCRM === false && builtWith.confirmed === true && !builtWith.blocked), no_tracking:(builtWith.hasPixel === false && builtWith.confirmed === true && !builtWith.blocked), running_google_ads:!!builtWith.hasGoogleAdsTag, has_meta_pixel:!!builtWith.hasMetaPixel, running_fb_ads:!!fbAds.hasAds },
       homepageContent: content.slice(0,3000),
       richData: {
@@ -38666,6 +39045,22 @@ app.post('/api/research-async', (req, res) => {
   };
 
   // Wait for a slot before starting. Polling keeps the client contract identical.
+  // ══ A QUEUE THAT ADMITS LEADS AFTER THE MONEY IS GONE ══════════════════
+  // The gate read concurrency and resident memory and nothing else. On
+  // 2026-08-21 the balance ran out at 14:39:36; Stanley Schultze had queued at
+  // 14:38:49, was admitted at 14:40:28, and then paid for Places calls, a review
+  // pull, the Anthropic audit, the synthesis, the fact-check and the compose to
+  // produce an audit built on zero pages of his website.
+  //
+  // On five leads that is one wasted lead. On fifty it is forty-seven half-blind
+  // audits handed to a salesperson, and the money is spent either way. Refusing
+  // is strictly cheaper than proceeding, and the refusal says what to do.
+  const _refuseIfBroke = () => {
+    if (!FIRECRAWL_OUT_OF_CREDITS) return null;
+    return 'Firecrawl is out of credits, so this lead was NOT researched and nothing was spent on it. '
+      + 'An audit run now would be built on zero pages of their website while still paying for Google Places, the review pull and four model calls. '
+      + 'Top up and re-run this lead.';
+  };
   const _waitForSlot = async () => {
     let waited = 0;
     // Counts only jobs actually WORKING. Queued jobs no longer block each other.
@@ -38721,6 +39116,21 @@ app.post('/api/research-async', (req, res) => {
   Promise.resolve()
     .then(() => _waitForSlot())
     .then(() => {
+      // Checked AFTER the wait, not before it: a lead can queue for ninety
+      // seconds and the balance can empty while it waits, which is exactly what
+      // happened to Stanley Schultze. Refusing here costs nothing; proceeding
+      // costs a full paid research cycle and produces an audit nobody can use.
+      const _broke = _refuseIfBroke();
+      if (_broke) {
+        job.status = 'error';
+        job.phase = 'dead';
+        job.workDone = true;
+        job.finishedAt = Date.now();
+        job.error = _broke;
+        job.outOfCredits = true;
+        console.log(`\u{1F534} JOB ${id} [${job.company}]: REFUSED BEFORE SPENDING \u2014 ${_broke}`);
+        return null;
+      }
       // The work begins HERE, so the timeout begins here too.
       job.phase = 'running';
       job.startedWorkAt = Date.now();
@@ -39902,6 +40312,203 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
+  }
+
+  // ══ A CRASHED LADDER AND A CLEAN BUSINESS LOOKED IDENTICAL ════════════════
+  // 2026-08-21, live: `location` was passed as a shorthand property inside the
+  // ladder's try. It threw on every lead, the log said one grey line — "harm
+  // ladder failed — location is not defined" — and four audits shipped written
+  // by the model with no measured findings under them. The export handed to a
+  // salesperson looked completely normal. Bret Rodgers had BOTH findings that
+  // have ever earned a human reply measured on that run, and neither reached
+  // his sheet.
+  //
+  // This is the third time one out-of-scope name has killed all 43 rungs
+  // (deepPain, reviewPainFound, location). scopecheck.js now catches the CAUSE
+  // — its globals list is split by runtime, so a browser global in server.js is
+  // an error rather than a pass. This check guards the CONSEQUENCE instead: if
+  // the ladder ever dies again for a reason nobody predicted, it must be
+  // impossible to mistake for a quiet lead.
+  //
+  // Source needles assembled at runtime with comment lines stripped — a literal
+  // needle finds itself, and the comments above quote the code.
+  try {
+    const _fails = [];
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+
+    // ONE — the catch must REMEMBER, not only log. A console line is not state.
+    if (!_src.includes(_needle('_ladderFailure = (e && e.message)', ' || String(e);'))) {
+      _fails.push('the harm ladder catch no longer records the failure, so nothing downstream can know the measurements are gone');
+    }
+    // TWO — the log must name what was LOST, not just the error text. "harm
+    // ladder failed — location is not defined" reads like a data problem.
+    if (!_src.includes(_needle('HARM LADDER CRASHED [', '${company}]'))) {
+      _fails.push('the crash is logged under a name that does not say the whole ladder died');
+    }
+    if (!_src.includes(_needle('This is NOT "we found nothing".', ' All ${HARM_LADDER.length} measured rungs are gone'))) {
+      _fails.push('the crash line no longer distinguishes a dead ladder from a lead with nothing to find — those are opposite facts and they produced the same page for the life of that build');
+    }
+    // THREE — the flag must be attached OUTSIDE the `_harmsForResponse && parsed`
+    // guard. Inside it, the one lead that needs the warning is the one lead that
+    // cannot carry it, because that guard is false precisely when this happens.
+    const _attach = _src.indexOf(_needle('if (_ladderFailure && parsed) {', ''));
+    const _guard = _src.indexOf(_needle('if (_harmsForResponse && parsed) {', ''));
+    if (_attach < 0) _fails.push('nothing attaches the crash to the response at all');
+    else if (_guard >= 0 && _attach > _guard) {
+      _fails.push('the crash flag is attached inside or after the _harmsForResponse guard, which is false in exactly the case being reported — so it can never be set');
+    }
+    // FOUR — and it must be NAMED in the brainAudit literal or the browser never
+    // sees it. That literal's own comment records this trap: a field not named
+    // there does not exist as far as the client is concerned.
+    if (!_src.includes(_needle('_ladderFailed: parsed._ladderFailed', ' || null,'))) {
+      _fails.push('the crash flag is not named in the brainAudit literal, so it is computed and not passed — the exact class that literal was rewritten to fix');
+    }
+    // FIVE — and the client has to render it. Checked against the real file
+    // rather than assumed, because index.html deploys separately by hand and a
+    // server-side flag nobody renders is worth nothing.
+    try {
+      const _ui = require('fs').readFileSync(require('path').join(__dirname, 'index.html'), 'utf8');
+      if (!_ui.includes(_needle('ladderFailed: (ba._ladderFailed', ' && typeof ba._ladderFailed'))) {
+        _fails.push('auditRecordFor does not carry the crash flag, so the EXPORT — the thing Mike actually dials from — cannot show it');
+      }
+      if (!_ui.includes(_needle('Do not call from this ', 'audit'))) {
+        _fails.push('the audit screen does not render the crash, so a broken audit still looks like a good one');
+      }
+      if (!_ui.includes(_needle('Do not call from this sheet.', ''))) {
+        _fails.push('the exported sheet does not carry the crash banner');
+      }
+    } catch (e) {
+      _fails.push(`could not read index.html to verify the client half renders the crash (${(e && e.message) || e})`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ LADDER CRASH VISIBILITY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ LADDER CRASH VISIBILITY CHECK: if the harm ladder dies, the run says all ${HARM_LADDER.length} rungs are gone rather than printing one error string, the fact is recorded outside the guard that goes false when it happens, it is named in the response literal so the browser receives it, and both the audit screen and the exported call sheet refuse to look normal. A crash and a clean business are opposite facts and produced the same page until this existed.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LADDER CRASH VISIBILITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE AUDIT CONTRADICTED ITSELF IN ITS TWO HEADLINE BLOCKS ══════════════
+  // 2026-08-21, on two of four leads: "The one thing — THROUGHPUT: demand is not
+  // the problem, more leads makes it worse" directly above "Fix this first —
+  // DEMAND: the constraint is demand generation". Mike reads both on one sheet.
+  //
+  // The old DEMAND tail also asserted two things nothing measured — "the site is
+  // functional" and "nothing is driving qualified traffic to it" — and printed
+  // verbatim on three of four leads, which is the shape of a fallback firing as
+  // if it were a finding.
+  try {
+    const _fails = [];
+    // The conflict that matters, both ways round.
+    if (!diagnosisConflict('THROUGHPUT', 'DEMAND')) _fails.push('a business whose own customers say it cannot keep up is still being told to go and buy demand, in the same audit that says more demand makes it worse');
+    if (!diagnosisConflict('THROUGHPUT', 'SCALE')) _fails.push('"scale it up" is not being treated as a demand answer, so it survives against a delivery constraint');
+    // And the pairings that are NOT conflicts. A check that flags every
+    // disagreement flags the useful ones too and gets switched off.
+    for (const [l, b] of [['THROUGHPUT', 'CAPTURE'], ['THROUGHPUT', 'FOLLOW-UP'], ['THROUGHPUT', 'OPERATIONS'],
+                          ['OFFER', 'DEMAND'], ['LEADS', 'DEMAND'], ['CONVERSION', 'CONVERSION'],
+                          ['MARKET', 'FOUNDATION'], ['LEADS', 'SCALE']]) {
+      if (diagnosisConflict(l, b)) _fails.push(`${l} + ${b} is reported as a contradiction and it is not — both halves say the same thing or address different links in one chain`);
+    }
+    // Unmeasured is not a conflict either. Nothing may be concluded from a blank.
+    if (diagnosisConflict(null, 'DEMAND') || diagnosisConflict('THROUGHPUT', null) || diagnosisConflict('', '')) {
+      _fails.push('a missing diagnosis is being read as a contradiction, which would fire on every lead where one half did not run');
+    }
+    // AND THE CALL SITE. A fixture supplies its own arguments and cannot see a
+    // caller — the rule this file earned four times in one session. Needles
+    // assembled at runtime with comment lines stripped, because a literal needle
+    // finds itself and these comments quote the code.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle('const _conflict = diagnosisConflict(', 'growthConstraint && growthConstraint.layer, bottleneck);'))) {
+      _fails.push('the cascade no longer reconciles against the binding layer, so the two blocks can contradict each other on the sheet again');
+    }
+    // The two sentences nothing measured must be gone for good.
+    if (_src.includes(_needle('The site is functional but nothing is driving', ' qualified traffic to it'))) {
+      _fails.push('the DEMAND fallback is asserting "the site is functional" and "nothing is driving qualified traffic" again, neither of which is measured on that path');
+    }
+    // And the deferral must exist, or every unreadable funnel becomes a demand problem.
+    if (!_src.includes(_needle("bottleneck = 'NOT MEASURED';", ''))) {
+      _fails.push('a lead whose funnel we could not read is diagnosed rather than reported as unread, which is the absence-claim failure aimed at the diagnosis itself');
+    }
+    if (_fails.length) {
+      console.log(`⛔ DIAGNOSIS AGREEMENT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ DIAGNOSIS AGREEMENT CHECK: the binding layer and the first-broken-link cascade can no longer tell one owner both that more leads would hurt him and that he needs more leads. Compatible pairings are untouched, a missing half concludes nothing, a funnel we could not read is reported as unread rather than diagnosed, and the fallback no longer asserts that a site we may never have opened is "functional".`);
+    }
+  } catch (e) {
+    console.log(`⛔ DIAGNOSIS AGREEMENT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE AUDIT COULD QUOTE ANYTHING ════════════════════════════════════════
+  // SOURCE VERIFY covers heroHeadline and ctaText. verifyOriginalFinding covers
+  // originalFindings. Every OTHER prose field the audit writes could put
+  // quotation marks around a sentence nobody ever wrote — and those fields are
+  // what Mike reads down a phone to the person who owns the page.
+  //
+  // Both directions matter equally here. A gate that deletes a real quote costs
+  // the strongest thing in an audit; a gate that passes a fabricated one ends a
+  // relationship. Executed against the real function.
+  try {
+    const _fails = [];
+    const _corpus = 'We pride ourselves on delivering high-quality products and services that have been '
+      + 'tested and proven throughout our 80 years of experience. Give us a call or submit your '
+      + 'information through the form on our contact page to get started. Our team serves Louisville '
+      + 'and the surrounding area with commercial glass, storefronts and custom mirrors, and has done '
+      + 'so since 1938 under the same family ownership.';
+
+    // ONE — a real quote, verbatim, survives.
+    const _real = 'Your homepage says "We pride ourselves on delivering high-quality products and services". That is a real promise.';
+    if (stripUnverifiedQuotes(_real, _corpus).cut.length) _fails.push('a quote taken verbatim from their own page was deleted — the gate is eating the strongest thing an audit can carry');
+
+    // TWO — punctuation and whitespace differences must not cause a false cut.
+    const _punct = 'They write: "high‑quality products, and services  that have been tested".';
+    if (stripUnverifiedQuotes(_punct, _corpus).cut.length) _fails.push('a real quote was deleted over a hyphen or a double space, which is what makes an operator switch a gate off');
+
+    // THREE — an invented quote takes its whole sentence with it. Not just the
+    // quotation marks: the sentence still asserts they said it.
+    const _fake = 'Their homepage is clean. Your site promises "same day service with a lifetime warranty on every install". Nothing else stands out.';
+    const _r3 = stripUnverifiedQuotes(_fake, _corpus);
+    if (!_r3.cut.length) _fails.push('a quotation that appears nowhere in anything we read was allowed through, which is the single most checkable false claim we can make');
+    if (/same day service/.test(_r3.text)) _fails.push('the invented quote survived in the text after being counted as removed');
+    if (!/Their homepage is clean/.test(_r3.text) || !/Nothing else stands out/.test(_r3.text)) {
+      _fails.push('removing one bad sentence destroyed the good sentences around it');
+    }
+
+    // FOUR — a short quoted fragment is not a quotation and must not be cut.
+    if (stripUnverifiedQuotes('The button just says "Submit" and nothing else.', _corpus).cut.length) {
+      _fails.push('a two-word UI label in quotes was treated as a fabricated quotation, which would fire on the checklist findings we deliberately measure');
+    }
+
+    // FIVE — AN EMPTY CORPUS REMOVES NOTHING. This is the read-limit case: on a
+    // lead we could not open, deleting every quoted sentence would be a second
+    // way of being useless, and the corpus banner already says we read nothing.
+    if (stripUnverifiedQuotes(_fake, '').cut.length) {
+      _fails.push('with no corpus at all the gate deletes everything, so a lead we simply could not read comes back stripped rather than marked');
+    }
+
+    // SIX — the deep walker reaches nested prose, which is where these fields live.
+    const _obj = { situationRead: { rows: [{ says: 'He writes "we answer every call within one hour, guaranteed" on the homepage.' }] } };
+    const _out = { cut: [] };
+    stripUnverifiedQuotesDeep(_obj, _corpus, _out, 0);
+    if (!_out.cut.length || /within one hour/.test(JSON.stringify(_obj))) {
+      _fails.push('the walker does not reach nested prose, so the fields that carry the strategic read are ungoverned');
+    }
+
+    // AND THE CALL SITE, against the same corpus the money gate uses.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle('stripUnverifiedQuotesDeep(parsed,', ' _corpus, _q, 0);'))) {
+      _fails.push('the audit is no longer run through the quote gate, so every prose field can quote anything again');
+    }
+    if (_fails.length) {
+      console.log(`⛔ QUOTE PROVENANCE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ QUOTE PROVENANCE CHECK: a sentence quoting words that appear nowhere in anything we read is REMOVED WHOLE from the audit, while a verbatim quote survives punctuation and spacing differences, a short UI label is left alone, and a lead with no corpus at all is marked rather than stripped. Only two fields were ever checked before this; the rest are what a salesperson reads to the person who wrote the page.`);
+    }
+  } catch (e) {
+    console.log(`⛔ QUOTE PROVENANCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ EVERY FIELD A RUNG READS MUST ACTUALLY ARRIVE ════════════════════════
@@ -52268,18 +52875,43 @@ const _storedMeasurements = (audit, tradeWordFallback) => {
 // true when the claim was false. It can never widen a claim and can never invent
 // one. Only sentences that BOTH make an absence claim AND scope it to the whole
 // site are touched; everything else is returned byte for byte.
-const narrowAbsenceToPagesRead = (text, pagesRead) => {
+// ══ NARROWING A CLAIM ABOUT A PAGE NOBODY OPENED ══════════════════════════
+// This function's own comment said "narrowing is mechanical and can only make a
+// claim more true". That holds when the homepage WAS read. It is false when it
+// was not, and the two cases were indistinguishable because the only input is
+// pagesRead, which counts INTERIOR pages.
+//
+// Stanley Schultze, live 2026-08-21: Firecrawl was out of credits, BOTH homepage
+// requests came back 402, auditSitePages returned null, and pagesRead was []. So
+// read.length was 0, the narrowing fired, and a model's vague "nothing anywhere
+// on their website" was rewritten into a precise claim about "your homepage" —
+// a page we never opened. The log even printed "(homepage only)" when the true
+// answer was "nothing at all".
+//
+// A sentence with the scope word swapped out still asserts the absence it was
+// built to assert, so when the homepage was not read the sentence is DELETED,
+// exactly as stripUnmeasuredMoneyDeep deletes a sentence carrying an unlicensed
+// figure. CLAUDE.md PART 3: absence claims require that we actually looked.
+const narrowAbsenceToPagesRead = (text, pagesRead, homepageRead) => {
   const src = String(text == null ? '' : text);
   if (!src) return { text: src, changed: 0 };
   const read = (Array.isArray(pagesRead) ? pagesRead : []).filter(Boolean).map(String);
   // With several pages read, "the site" is a fair description of what we looked
   // at. This only fires when the homepage really was all we opened.
   if (read.length > 1) return { text: src, changed: 0 };
+  // Explicit false only. An undefined here means an older caller that never
+  // passed the flag, and silently deleting sentences on those would be a worse
+  // failure than the one being fixed — DELIVERY CHECK-style, unmeasured is not
+  // the same as measured-false.
+  const blind = homepageRead === false;
   const ABSENCE = /\b(?:no|not|nothing|never|none|missing|absent|lacks?|lacking|without|nowhere|cannot|can'?t|doesn'?t|does not|isn'?t|is not|won'?t|only)\b/i;
   const SITE = /\b(?:anywhere|nowhere)\s+(?:on|in|across)\s+(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b|\bacross\s+(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b|\bsite[-\s]?wide\b|\b(?:the|your|their|his|her)\s+(?:entire\s+|whole\s+)?(?:site|website)\b/gi;
   let changed = 0;
   const out = src.split(/(?<=[.!?])\s+/).map((s) => {
     if (!ABSENCE.test(s) || !SITE.test(s)) return s;
+    // Nothing was read. There is no narrower true version of this sentence, so
+    // it goes. A rewritten scope word would make it MORE confident, not less.
+    if (blind) { changed++; return ''; }
     let touched = false;
     const rewritten = s.replace(SITE, (m) => {
       touched = true;
@@ -52296,7 +52928,7 @@ const narrowAbsenceToPagesRead = (text, pagesRead) => {
     });
     if (touched) changed++;
     return rewritten;
-  }).join(' ');
+  }).filter(x => String(x).trim()).join(' ');
   return { text: out, changed };
 };
 
@@ -52304,15 +52936,15 @@ const narrowAbsenceToPagesRead = (text, pagesRead) => {
 // to the object rather than to a list of named fields, because the narrative
 // fields have been renamed twice and a hand-kept list of them would go stale in
 // exactly the way measuredNumbers did.
-const narrowAuditAbsence = (obj, pagesRead, depth = 0) => {
+const narrowAuditAbsence = (obj, pagesRead, homepageRead, depth = 0) => {
   let changed = 0;
   if (depth > 6 || obj === null || obj === undefined) return changed;
   if (Array.isArray(obj)) {
     for (let i = 0; i < obj.length; i++) {
       if (typeof obj[i] === 'string') {
-        const r = narrowAbsenceToPagesRead(obj[i], pagesRead);
+        const r = narrowAbsenceToPagesRead(obj[i], pagesRead, homepageRead);
         if (r.changed) { obj[i] = r.text; changed += r.changed; }
-      } else if (obj[i] && typeof obj[i] === 'object') changed += narrowAuditAbsence(obj[i], pagesRead, depth + 1);
+      } else if (obj[i] && typeof obj[i] === 'object') changed += narrowAuditAbsence(obj[i], pagesRead, homepageRead, depth + 1);
     }
     return changed;
   }
@@ -52320,9 +52952,9 @@ const narrowAuditAbsence = (obj, pagesRead, depth = 0) => {
   for (const k of Object.keys(obj)) {
     const v = obj[k];
     if (typeof v === 'string') {
-      const r = narrowAbsenceToPagesRead(v, pagesRead);
+      const r = narrowAbsenceToPagesRead(v, pagesRead, homepageRead);
       if (r.changed) { obj[k] = r.text; changed += r.changed; }
-    } else if (v && typeof v === 'object') changed += narrowAuditAbsence(v, pagesRead, depth + 1);
+    } else if (v && typeof v === 'object') changed += narrowAuditAbsence(v, pagesRead, homepageRead, depth + 1);
   }
   return changed;
 };

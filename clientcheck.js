@@ -318,17 +318,30 @@ const mergeStat = runMergeCheck();
 // findings — wrong city, wrong count, wrong rank — and the green Approve button
 // sat under it, enabled. A warning beside an enabled button is a decoration.
 {
-  let fnSrc = null;
+  // claimRisksOf is lifted with it: the fact-check lives in two places (the
+  // lead top level before a reload, brainAudit after one) and three readers used
+  // to hand-write that two-place read. The EXPORT got it wrong and printed no
+  // "Do not say" heading at all on every lead that had been through Supabase —
+  // absence of checking rendering as a clean audit. One accessor now, so this
+  // check must exercise it too or it verifies a shell.
+  let fnSrc = null, accSrc = null;
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'criticalClaimsOf' && n.init) {
       fnSrc = src.slice(n.init.start, n.init.end);
     }
+    if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'claimRisksOf' && n.init) {
+      accSrc = src.slice(n.init.start, n.init.end);
+    }
   });
+  if (!accSrc) fails.push('claimRisksOf is gone, so each reader is back to hand-writing its own two-place read of the fact-check — which is how the export came to print no "Do not say" heading at all');
   if (!fnSrc) {
     fails.push('criticalClaimsOf is gone, so nothing separates a CRITICAL fabrication from an advisory note and Approve is enabled over both');
   } else {
-    let fn;
-    try { fn = new Function('return ' + fnSrc)(); } catch (e) { fn = null; }
+    let fn, acc;
+    try {
+      acc = accSrc ? new Function('return ' + accSrc)() : null;
+      fn = new Function('claimRisksOf', 'return ' + fnSrc)(acc || (() => ({ all: [], critical: [], internal: [] })));
+    } catch (e) { fn = null; }
     if (!fn) fails.push('criticalClaimsOf no longer compiles standalone, so it cannot be verified');
     else {
       if (fn({ _claimRisks: ['fact-check: CRITICAL: wrong city, wrong rank'] }).length !== 1) {
@@ -336,6 +349,21 @@ const mergeStat = runMergeCheck();
       }
       if (fn({ _claimRisks: ['marketing jargon banned in the email voice'] }).length !== 0) {
         fails.push('an advisory note is being treated as CRITICAL, which blocks approval on every routine flag and teaches the operator to want the gate gone');
+      }
+      // ── AND THE SHAPE THAT COMES BACK FROM SUPABASE ────────────────────
+      // After a reload the top-level copy is gone and everything lives inside
+      // brainAudit. That is the shape the export was blind to, so it is the
+      // shape this check must run.
+      if (acc) {
+        const reloaded = { brainAudit: {
+          _claimRisks: ['fact-check: CRITICAL: says he has no reviews, he has 341'],
+          _criticalFactCheck: ['the pitch names a competitor we never measured'],
+        } };
+        if (acc(reloaded).all.length !== 1) fails.push('a reloaded lead loses _claimRisks, so the export prints no "Do not say" heading at all and a missing check reads as a clean audit');
+        if (acc(reloaded).critical.length !== 1) fails.push('_criticalFactCheck is not read off brainAudit, which is the ONLY place anything writes it — the export has never printed a claim the prospect could disprove');
+        if (fn(reloaded).length !== 1) fails.push('a CRITICAL flag on a reloaded lead no longer blocks Approve');
+        // And the live-merge shape must still work, or one fix breaks the other.
+        if (acc({ _claimRisks: ['x'] }).all.length !== 1) fails.push('the freshly-merged shape (top-level _claimRisks) is no longer read');
       }
     }
     // The GATE condition, not any mention — the banner body also names the
@@ -439,7 +467,11 @@ const mergeStat = runMergeCheck();
 // one helper they call and run against a lead whose every field is a unique
 // marker; then every marker is looked for in the rendered page.
 {
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows'];
+  // claimRisksOf joins the list because auditRecordFor now calls it. Lifting a
+  // function without its dependencies is how a harness starts lying: it would
+  // throw here rather than silently pass, which is the good failure mode, but
+  // only if the name is actually required.
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -455,7 +487,7 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
+      mod = new Function(found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
         + '\nreturn { rec: auditRecordFor, html: auditExportHtml };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
@@ -484,6 +516,34 @@ const mergeStat = runMergeCheck();
       let page = '';
       try { page = mod.html([mod.rec(LEAD)], { title: 'T', at: 'now' }); }
       catch (e) { fails.push('the audit export threw on a normal lead: ' + e.message); }
+
+      // ══ A BLIND AUDIT MUST NOT PRINT AS A NORMAL ONE ═══════════════════════
+      // Stanley Schultze, live 2026-08-21: BOTH homepage requests came back 402
+      // (Firecrawl out of credits), we opened not one page of his site, and his
+      // exported call sheet was indistinguishable from the three built on real
+      // reads. Executed, not read: the warning only exists if a blind record
+      // actually produces it and a healthy one actually does not.
+      {
+        const blind = mod.rec({ ...LEAD, corpusRead: { homepageChars: 0, interiorPages: 0 }, firecrawlOutOfCredits: true });
+        if (!blind.corpusWarning) {
+          fails.push('an audit built on ZERO pages of their website carries no warning, so it exports looking exactly like one built on seven — which is what happened to Stanley Schultze');
+        }
+        let blindPage = '';
+        try { blindPage = mod.html([blind], { title: 'T', at: 'now' }); } catch (e) { blindPage = ''; }
+        if (blindPage && blindPage.indexOf('never read a single page') < 0) {
+          fails.push('the blind-audit warning is computed and never rendered on the sheet Mike dials from');
+        }
+        // And the other direction, which matters just as much: a banner on every
+        // lead is a banner nobody reads, and it would bury the real ones.
+        const healthy = mod.rec({ ...LEAD, corpusRead: { homepageChars: 9000, interiorPages: 6 }, firecrawlOutOfCredits: false });
+        if (healthy.corpusWarning) {
+          fails.push(`a normal audit (9000 chars, 6 interior pages) carries a degraded-corpus warning: "${healthy.corpusWarning}" — a warning on every sheet is one nobody reads`);
+        }
+        // A homepage-only read is a real limit and must be said, because every
+        // "nothing on their site" sentence becomes a claim about one page.
+        const thin = mod.rec({ ...LEAD, corpusRead: { homepageChars: 9000, interiorPages: 0 }, firecrawlOutOfCredits: false });
+        if (!thin.corpusWarning) fails.push('a homepage-only audit is presented as a full read of their site');
+      }
       if (page) {
         const MARKERS = ['MARKER_OWNER', 'MARKER_TITLE', 'MARKER_PHONE', 'MARKER_BACKGROUND',
           'MARKER_HEADLINE', 'MARKER_READ', 'MARKER_ROWLABEL', 'MARKER_ROWSAYS', 'MARKER_LAYER',

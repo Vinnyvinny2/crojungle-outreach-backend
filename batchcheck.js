@@ -46,7 +46,11 @@ const walk = (n, fn) => {
 // The functions the batch actually needs, in dependency order. Named
 // explicitly: pulling "everything that looks like a helper" would drag React
 // components in and the harness would start lying about what it ran.
-const NEED = ['measuredFieldsFrom', 'finalLeadScore', 'predictReach', 'buildResearchBody',
+// RESEARCH_TRIGGERS first: researchViaQueue REFUSES to submit without a named
+// user gesture, so a harness that does not lift it measures a run that never
+// spends anything. That refusal is the point — it is what stops a stray useEffect
+// starting fifty audits nobody asked for.
+const NEED = ['RESEARCH_TRIGGERS', 'measuredFieldsFrom', 'finalLeadScore', 'predictReach', 'buildResearchBody',
   'applyResearchResult', 'buildComposeBody', 'readComposeResponse', 'applyGeneratedEmail',
   'pollResearchJob', 'researchViaQueue', 'runBatchAudit', 'batchCandidates',
   // The progress panel's own reducer. It lives at module scope precisely so it
@@ -211,6 +215,24 @@ const runBatch = async (opts) => {
     if (panel.total !== 50) fails.push(`the panel reported a total of ${panel.total}`);
     if (peakRunning > 8) fails.push(`the panel showed ${peakRunning} leads in flight at once against a pool of at most 8 — it is not tracking what is running, it is accumulating names`);
     if (peakRunning < 2) fails.push(`the panel never showed more than ${peakRunning} lead in flight, so the one thing it exists to show — three leads at once — is invisible`);
+    // ── AND NOTHING MAY SPEND WITHOUT NAMING THE GESTURE ───────────────────
+    // Vin: "i added 5 to pipeline most certiantly didnt hit run research and some
+    // of the leads started running research". Three call sites can submit and any
+    // future useEffect becomes a fourth, so the guard is on the SPEND, not on the
+    // callers. Executed here, not read: the gate is only real if an unnamed call
+    // actually refuses.
+    {
+      const W2 = makeW({});
+      const api2 = new Function('__W', makeWorld().replace(EXPORTS, EXPORTS.replace('__store: () => __store', 'submitUnnamed: (b) => researchViaQueue(b, {}), submitNamed: (b) => researchViaQueue(b, { trigger: "bulk-audit" }), store: () => __store')))(W2);
+      let refused = false;
+      try { await api2.submitUnnamed({ company: 'x', website: 'https://x.com' }); }
+      catch (e) { refused = /no user action was named/i.test(String(e && e.message)); }
+      if (!refused) fails.push('research can be submitted with no user gesture behind it — the exact shape of "some of the leads started running research" on a run nobody asked for, and it spends Firecrawl, Apify, Places and Anthropic on every one');
+      if (W2.calls.research !== 0) fails.push(`an unnamed submit still reached the network ${W2.calls.research} time(s), so the refusal happens after the money is spent`);
+      // And a NAMED one must still go through, or the guard has simply broken research.
+      try { await api2.submitNamed({ company: 'x', website: 'https://x.com' }); } catch (e) { void e; }
+      if (W2.calls.research !== 1) fails.push('a submit that DID name its gesture was refused too, so the guard broke the thing it was protecting');
+    }
   }
 
   // 3 — with emails.
