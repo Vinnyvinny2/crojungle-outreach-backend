@@ -2927,8 +2927,31 @@ const meterAnthropic = (company, label, model, usage) => {
 // The timed-out request was already billed by Anthropic: they processed it and
 // we gave up waiting. So the retry's real cost is one extra call on a call that
 // is a fraction of a cent, against an audit that ships with nothing verified.
+// ══ AND A "BUSY" ANSWER IS NOT AN ANSWER EITHER ═══════════════════════════
+// The retry above covers the one failure where the request was never answered.
+// There is a second, and at fifty leads a day it is the more likely one: 429
+// rate limited, 529 overloaded, 500 api_error. Anthropic's own guidance for all
+// three is "retry in a moment", and this file's error branch already says so in
+// those words — and then throws the lead away.
+//
+// The cost of not retrying is not one call. The audit is the call the BRAIN GATE
+// depends on, so a single 429 blocks the lead, returns 422, and discards a full
+// research cycle: Firecrawl, Places, Apify and seven other Anthropic calls,
+// already paid for. Fifty leads through a three-wide pool is exactly where a
+// per-minute limit is met. Vin, 2026-08-21: "this cant happen when we are doing
+// 50 at a time this could drain our moeny."
+//
+// Same discipline as the timeout retry and separately opted into, so the two are
+// separately falsifiable. A 400 is never retried: a malformed request, a bad key
+// and a credit balance too low all fail identically the second time, and this
+// list is deliberately statuses only — no message matching, because "overloaded"
+// appears in prose that has nothing to do with the server's state.
+const ANTHROPIC_BUSY_STATUS = new Set([429, 500, 502, 503, 529]);
+const ANTHROPIC_BUSY_WAIT_MS = 4000;
+const ANTHROPIC_BUSY_MAX_MS = 20000;
 const anthropicFetch = async (url, opts, timeoutMs, label, o = {}) => {
-  const tries = o && o.retryOnTimeout ? 2 : 1;
+  const tries = (o && (o.retryOnTimeout || o.retryOnBusy)) ? 2 : 1;
+  const _pause = (o && o.sleepImpl) || ((ms) => new Promise(res => setTimeout(res, ms)));
   // The transport is a PARAMETER so this loop can be EXECUTED at boot rather
   // than read. CLAUDE.md records why that matters twice over: a check that does
   // not assert its call site is half a check, and the ask-arm assertions could
@@ -2938,11 +2961,23 @@ const anthropicFetch = async (url, opts, timeoutMs, label, o = {}) => {
   const _send = (o && o.fetchImpl) || fetchT;
   let r = null;
   for (let attempt = 1; attempt <= tries; attempt++) {
-    try { r = await _send(url, opts, timeoutMs); break; } catch (e) {
+    try { r = await _send(url, opts, timeoutMs); } catch (e) {
       const isTimeout = /timeout/i.test(String((e && e.message) || e));
-      if (!isTimeout || attempt === tries) throw e;
+      if (!isTimeout || !(o && o.retryOnTimeout) || attempt === tries) throw e;
       console.log(`\u21bb ANTHROPIC RETRY [${label || 'anthropic'}]: no answer within ${Math.round(timeoutMs / 1000)}s. Asking once more \u2014 a timeout is the one failure where the same question can get a different answer. A refusal or an HTTP error is never retried.`);
+      continue;
     }
+    const _busy = !!(o && o.retryOnBusy) && r && ANTHROPIC_BUSY_STATUS.has(Number(r.status));
+    if (!_busy || attempt === tries) break;
+    // Their own Retry-After when they send one, ours when they do not, and never
+    // longer than the cap: one bad header must not stall a fifty-lead run.
+    let _ms = ANTHROPIC_BUSY_WAIT_MS;
+    try {
+      const _ra = r.headers && typeof r.headers.get === 'function' ? Number(r.headers.get('retry-after')) : NaN;
+      if (Number.isFinite(_ra) && _ra > 0) _ms = Math.min(ANTHROPIC_BUSY_MAX_MS, Math.round(_ra * 1000));
+    } catch (e) { void e; }
+    console.log(`\u21bb ANTHROPIC BUSY [${label || 'anthropic'}]: HTTP ${r.status} \u2014 rate limited or overloaded, which is their word for "ask again in a moment". Waiting ${Math.round(_ms / 1000)}s and asking once more. Without this a single busy minute discards the whole lead: the audit is what the BRAIN GATE depends on, and the Firecrawl, Places and Apify spend behind it is already gone.`);
+    await _pause(_ms);
   }
   try {
     // Clone first: a Response body can only be read once, and the caller still
@@ -13163,25 +13198,72 @@ const resolveMeasurements = ({
     return null;
   };
 
-  const _ours = (localRank && localRank.ours) ? localRank.ours : null;
+  // ══ AND THE ROW WE MATCHED MIGHT NOT BE US ═══════════════════════════════
+  // checkLocalRank finds our business in the search result by place ID, else by
+  // domain, else by an exact normalised NAME. The first two are identities. The
+  // third is a guess, and when it is wrong every number read off that row —
+  // our review count, and therefore which rivals count as "weaker" — belongs to
+  // a different business. That is the finding with a real human reply behind it,
+  // built on somebody else's numbers.
+  //
+  // Google's Place Details read is keyed on the exact place ID, so when the two
+  // disagree materially on a NAME match, the row is not us. 25% or five reviews,
+  // whichever is larger: search-index counts do lag Details by a few, and
+  // refusing a correct match over a lag would delete the finding on every lead.
+  // A placeId or domain match is never questioned, and a lead where we hold only
+  // one of the two numbers is left exactly as it was.
+  const _rowRaw = (localRank && localRank.ours) ? localRank.ours : null;
+  const _rowMismatch = (() => {
+    if (!_rowRaw || !localRank) return false;
+    if (localRank.matchedBy === 'placeId' || localRank.matchedBy === 'domain') return false;
+    const a = num(gbpHealth && gbpHealth.reviewCount);
+    const b = num(_rowRaw.reviews);
+    if (a === null || b === null || a <= 0) return false;
+    return Math.abs(b - a) > Math.max(5, a * 0.25);
+  })();
+  const _ours = _rowMismatch ? null : _rowRaw;
   const _recency = (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked)
     ? gbpHealth.reviewRecency : null;
 
   return {
-    // Reviews and rating: the rank search is the narrowest source and the first
-    // to go missing, so it is tried first only because it is same-query; Places
-    // Details and the review read are both authoritative and always attempted.
-    reviewCount: first(_ours && _ours.reviews, gbpHealth && gbpHealth.reviewCount,
-                       deepReviews && deepReviews.totalReviews),
-    rating: first(_ours && _ours.rating, gbpHealth && gbpHealth.rating,
-                  deepReviews && deepReviews.rating),
+    // ══ THE FIGURE AND THE COMPARISON WANT DIFFERENT SOURCES ═══════════════
+    // This used to read the rank-search row FIRST, and the reason written here
+    // was "it is the same query" — which is a real argument, but only for the
+    // COMPARISON. Two different jobs were sharing one number:
+    //
+    //   · outranked_by_weaker compares us against the businesses in ONE search
+    //     result. Both sides must come from that same search or the comparison
+    //     is meaningless. That is `ourReviews`, below, and it is unchanged.
+    //   · reviewCount is a FIGURE we state about the business and check other
+    //     measurements against. The authority for that is Place Details, read on
+    //     the exact place ID. The rank row is a match made on placeId, else on
+    //     domain, else on an exact name — and the last of those can land on
+    //     another business entirely.
+    //
+    // Live on BVA, 2026-08-21: "⛔ MEASUREMENT LOOKS WRONG: we read 150 reviews
+    // of 8 — we cannot read more than exist". The mine reads the place ID, so
+    // 150 reviews exist; the 8 came from the search row. And the consequence was
+    // not one odd log line: an impossible measurement refuses the factual spine,
+    // composeFullEmail returns null, and the lead falls through to the model
+    // writing the whole email from scratch — the highest-invention path in the
+    // system, reached by a number that was never about them.
+    reviewCount: first(gbpHealth && gbpHealth.reviewCount,
+                       deepReviews && deepReviews.totalReviews,
+                       _ours && _ours.reviews),
+    rating: first(gbpHealth && gbpHealth.rating,
+                  deepReviews && deepReviews.rating,
+                  _ours && _ours.rating),
 
     // Search position. rankFound is a GATE, not a figure: without it a rank of
     // null reads as position zero.
     rankFound: !!(localRank && localRank.found),
     rank: (localRank && localRank.found) ? num(localRank.rank) : null,
     scanned: localRank ? num(localRank.scanned) : null,
-    weakerAbove: localRank ? num(localRank.weakerAbove) : null,
+    // Counted with `ours` as the yardstick, so if the row is not us the count is
+    // not about us either. Both halves move together or the named sentence and
+    // the number behind it disagree.
+    weakerAbove: (localRank && !_rowMismatch) ? num(localRank.weakerAbove) : null,
+    rankRowNotUs: _rowMismatch,
     // Derived from the trade read off their own homepage — a measurement, not a
     // judgement, so no verification pass is needed.
     purchaseUrgency: purchaseUrgency(tradeWordArg || ''),
@@ -13231,8 +13313,8 @@ const resolveMeasurements = ({
     // Only businesses ABOVE him with FEWER reviews qualify — that is the whole
     // sting, and it is the comparison already measured as weakerAbove.
     weakerNames: (() => {
-      const ours = localRank && localRank.ours ? Number(localRank.ours.reviews) : null;
-      if (!localRank || !Number.isFinite(ours)) return null;
+      const ours = _ours ? Number(_ours.reviews) : null;
+      if (!localRank || _rowMismatch || !Number.isFinite(ours)) return null;
       // weakerRows is the businesses above them holding FEWER reviews, taken
       // from the whole field. `above` is a three-row slice of the TOP of that
       // search and is a different question — see the note in checkLocalRank.
@@ -13246,8 +13328,8 @@ const resolveMeasurements = ({
         .map(a => ({ name: String(a.name).trim(), reviews: Number(a.reviews) }));
       return names.length ? names : null;
     })(),
-    ourReviews: (localRank && localRank.ours && Number.isFinite(Number(localRank.ours.reviews)))
-      ? Number(localRank.ours.reviews) : null,
+    ourReviews: (_ours && Number.isFinite(Number(_ours.reviews)))
+      ? Number(_ours.reviews) : null,
 
     // Google profile.
     photoCount: gbpHealth ? num(gbpHealth.photoCount) : null,
@@ -19223,9 +19305,26 @@ const TRADE_MONEY_UNITS = (() => {
 // whole section on a bare stem inside \b(...)\b matching nothing, where
 // RECURRING_NORMAL_TRADES failed on 22 of the 34 words it existed for.
 const OUR_PRODUCT_WORDS = /\b(rebuild\w*|retainer\w*|engagement\w*|advisory|ai brain|brain build\w*|custom (?:ai )?software|marketing (?:management|retainer)|crojungle|our (?:price|pricing|fee)\w*)\b/i;
+// ══ AND TWO FIELDS ARE NOTHING BUT OUR OWN PRICE LIST ══════════════════════
+// The rule above asks the SENTENCE whether it is about our work, because "$50k"
+// is ours in "a rebuild starts around $50k" and invented in "a $50k roof
+// replacement". Two fields in the audit schema have no sentence to ask: they are
+// price fragments, filled from our own declared catalogue.
+//
+// Live on BVA, 2026-08-21: removed "$40k-$70k implementation, variable ongoing"
+// — our AI Brain price, out of the field built to hold our AI Brain price, on a
+// lead that then died. The fact-checker prompt has carried the exemption in
+// words for months ("this and its price are shown to our own team... do NOT flag
+// the product or its price"), and the gate that actually DELETES had never been
+// told. A guard in the wrong function, which is a named failure class here.
+//
+// Still bounded: only a figure in OUR_PRICE_FIGURES is licensed by the field.
+// An invented number in a catalogue field is cut exactly as before.
+const OUR_CATALOGUE_FIELD = /^(?:recommendedPrice|topThreeProducts\[\]\.price)$/;
 // PURE, so the boot check runs the real thing on real sentences instead of
 // reading the source and hoping. Returns the cleaned text and what was cut.
-const stripUnmeasuredMoney = (text, corpus) => {
+const stripUnmeasuredMoney = (text, corpus, opts) => {
+  const ourCatalogue = !!(opts && opts.ourCatalogue);
   const src = String(text || '');
   if (!src || src.indexOf('$') < 0) return { text: src, cut: [], figures: [] };
   const flatCorpus = flatMoney(corpus);
@@ -19237,7 +19336,7 @@ const stripUnmeasuredMoney = (text, corpus) => {
     // 2. THE TRADE TABLE, as a whole range rather than as loose digits.
     if (TRADE_MONEY_UNITS.some(u => u.includes(f) && flatSn.includes(u))) return true;
     // 3. OUR OWN PRICE, and only where the sentence is about our own work.
-    if (OUR_PRICE_FIGURES.some(p => flatMoney(p) === f) && OUR_PRODUCT_WORDS.test(sn)) return true;
+    if (OUR_PRICE_FIGURES.some(p => flatMoney(p) === f) && (ourCatalogue || OUR_PRODUCT_WORDS.test(sn))) return true;
     // A bare figure with no magnitude suffix can also be matched on its digits
     // alone, but only when there are enough of them to be a real number: "$5"
     // against a corpus containing a 5 somewhere is not evidence of anything.
@@ -19314,28 +19413,68 @@ const stripUnverifiedQuotesDeep = (node, corpus, out, depth) => {
   }
   if (Array.isArray(node)) return node.map(x => stripUnverifiedQuotesDeep(x, corpus, out, d + 1));
   if (typeof node === 'object') {
-    for (const k of Object.keys(node)) node[k] = stripUnverifiedQuotesDeep(node[k], corpus, out, d + 1);
-    return node;
-  }
-  return node;
-};
-const stripUnmeasuredMoneyDeep = (node, corpus, out, depth) => {
-  const d = Number(depth) || 0;
-  if (d > 6 || node == null) return node;
-  if (typeof node === 'string') {
-    const r = stripUnmeasuredMoney(node, corpus);
-    if (r.cut.length) { out.cut.push(...r.cut); out.figures.push(...r.figures); return r.text; }
-    return node;
-  }
-  if (Array.isArray(node)) return node.map(x => stripUnmeasuredMoneyDeep(x, corpus, out, d + 1));
-  if (typeof node === 'object') {
+    // Underscore keys are OURS. The money walker has skipped them since it was
+    // written and this one did not, which is half of why it deleted the spine.
     for (const k of Object.keys(node)) {
       if (k.charAt(0) === '_') continue;
-      node[k] = stripUnmeasuredMoneyDeep(node[k], corpus, out, d + 1);
+      node[k] = stripUnverifiedQuotesDeep(node[k], corpus, out, d + 1);
     }
     return node;
   }
   return node;
+};
+const stripUnmeasuredMoneyDeep = (node, corpus, out, depth, path) => {
+  const d = Number(depth) || 0;
+  const p = String(path || '');
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripUnmeasuredMoney(node, corpus, { ourCatalogue: OUR_CATALOGUE_FIELD.test(p) });
+    if (r.cut.length) { out.cut.push(...r.cut); out.figures.push(...r.figures); return r.text; }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(x => stripUnmeasuredMoneyDeep(x, corpus, out, d + 1, `${p}[]`));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripUnmeasuredMoneyDeep(node[k], corpus, out, d + 1, p ? `${p}.${k}` : k);
+    }
+    return node;
+  }
+  return node;
+};
+
+// ══ IS THERE AN AUDIT IN HERE AT ALL ══════════════════════════════════════
+// The BRAIN GATE exists for one case: 31 Jul, the Anthropic balance ran out, the
+// repair path salvaged an object with every field null, and an object with
+// nothing in it is truthy — so a lead came out marked researched, carrying a
+// product recommendation and a 95/100 score derived from an audit that never
+// happened.
+//
+// It was written as "pitchAngle must be over twenty characters AND something
+// else must exist", which was a fair proxy on the day and stopped being one the
+// moment the quote gate started running over the audit. One sentence carrying
+// one quotation we could not trace leaves pitchAngle blank, and blank was
+// reported as "the audit is EMPTY". Live 2026-08-21: Jones Kahan Law had a
+// recommended product, THREE candidate findings and a fact-check that came back
+// 9 out of 10, and was destroyed as an empty audit after 310 seconds of paid
+// research. Four of the five leads in that batch died the same way.
+//
+// So it asks the question it means, across the fields rather than at one of
+// them. PURE, so the boot check runs the real thing instead of reading source:
+// the husk and the survivor are both fixtures.
+const AUDIT_PROSE_FIELDS = ['pitchAngle', 'realPain', 'embarrassingFinding', 'whatHeNeeds', 'recommendedReason', 'situationRead', 'patternLine'];
+const auditFilledness = (a) => {
+  const o = a || {};
+  const prose = AUDIT_PROSE_FIELDS
+    .filter(k => typeof o[k] === 'string' && o[k].trim().length > 20).length;
+  const lists = (Array.isArray(o.candidateFindings) ? o.candidateFindings.length : 0)
+    + (Array.isArray(o.topThreeProducts) ? o.topThreeProducts.length : 0)
+    + (Array.isArray(o.originalFindings) ? o.originalFindings.length : 0);
+  // Same three the previous gate accepted, so this loosens nothing about WHAT
+  // counts as an audit having happened — only about WHERE the content has to be.
+  const named = !!(o.recommendedProduct || o.leadSignal
+    || (Array.isArray(o.candidateFindings) && o.candidateFindings.length));
+  return { prose, lists, named, usable: named && (prose + lists) > 0 };
 };
 
 const tradeJobValue = (tradeWord) => {
@@ -22828,6 +22967,36 @@ const APIFY_ACTOR = 'compass~google-maps-reviews-scraper';
 // times out returns {checked:false} — no claim, but also no finding.
 const APIFY_MAX_REVIEWS = 150;
 const APIFY_TIMEOUT_MS = 150000;
+// ══ A REJECTED TOKEN IS AN ACCOUNT FACT, NOT A FACT ABOUT THIS BUSINESS ════
+// Live 2026-08-21: Apify answered 403 on every lead in the batch. The message
+// was correct and it was in the Render log, one grey line per lead, under a
+// heading that reads like something about the prospect ("REVIEW MINE: NOT
+// MEASURED"). Nothing on the screen and nothing on the call sheet said the
+// review mine had not run at all.
+//
+// The cost is not cosmetic. `review_pain_pattern` is one of only two findings
+// in this system with a real human reply behind it, and a run with a dead token
+// loses it on every lead while still paying Firecrawl, Places and Anthropic in
+// full. Fifty audits could go out with their strongest finding missing and the
+// only trace would be fifty identical log lines nobody was reading.
+//
+// Same shape as the Firecrawl credit latch: the balance and the key are facts
+// about the ACCOUNT, so they are held once, cleared the moment a call succeeds,
+// and surfaced on the lead as a read limit rather than as a fault of the
+// business. Only 401/402/403 latch — a timeout or a bad actor response is a
+// per-lead event and must not be reported as a dead account.
+let APIFY_ACCOUNT_PROBLEM = '';
+const apifyAccountNote = () => APIFY_ACCOUNT_PROBLEM;
+// PURE, so the boot check runs the real classifier instead of reading source.
+// Statuses only, and only the three that are about the ACCOUNT: a 500, a 502 or
+// a timeout is a bad moment at Apify, not a dead token, and reporting one as the
+// other sends whoever reads it to change a setting that was never wrong.
+const apifyAccountProblem = (status) => {
+  const s = Number(status);
+  if (s === 402) return 'Apify is out of credits for this month, so no lead in this run had its reviews mined.';
+  if (s === 401 || s === 403) return 'The Apify token is being rejected (HTTP ' + s + '), so no lead in this run had its reviews mined. Fix it in Settings.';
+  return '';
+};
 
 const normalizeApifyReview = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -22872,8 +23041,17 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     const code = res ? res.status : 'no response';
     const hint = (code === 401 || code === 403) ? ' (token rejected — check Settings)'
                : code === 402 ? ' (Apify credits exhausted for this month)' : '';
+    const _note = apifyAccountProblem(code);
+    if (_note) {
+      if (APIFY_ACCOUNT_PROBLEM !== _note) {
+        console.log(`\u26d4 APIFY ACCOUNT [${companyName || '?'}]: ${_note} The repeating-complaint finding is one of only two in this system with a real human reply behind it, and it is missing from every audit until this is fixed \u2014 while Firecrawl, Places and Anthropic are still being paid in full. This is said once, not once per lead.`);
+      }
+      APIFY_ACCOUNT_PROBLEM = _note;
+    }
     return { checked: false, why: `Apify returned ${code}${hint}` };
   }
+  // Answered. Whatever was wrong with the account is over.
+  APIFY_ACCOUNT_PROBLEM = '';
   let items;
   try { items = await res.json(); }
   catch (e) { return { checked: false, why: `Apify response was not JSON: ${e.message}` }; }
@@ -30361,12 +30539,19 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     // placeId is exact and always preferred. Domain is next. Name last, and only on
     // a full normalised match — a substring test would match "Foundation Doctor"
     // against any other foundation company in the city.
+    // HOW we matched travels with the result. placeId and domain are identities;
+    // a name match is a guess that happens to be right nearly always, and the
+    // one time it is not, every number read off that row belongs to somebody
+    // else. Nothing downstream could tell the three apart, so nothing could
+    // apply the extra care the third one needs.
+    let matchedBy = '';
     const idx = places.findIndex(p => {
-      if (placeId && p.id === placeId) return true;
+      if (placeId && p.id === placeId) { matchedBy = 'placeId'; return true; }
       if (ourDomain && p.websiteUri) {
-        try { if (new URL(p.websiteUri).hostname.replace(/^www\./, '').toLowerCase() === ourDomain) return true; } catch {}
+        try { if (new URL(p.websiteUri).hostname.replace(/^www\./, '').toLowerCase() === ourDomain) { matchedBy = 'domain'; return true; } } catch {}
       }
-      return ourName.length > 5 && norm(p.displayName?.text) === ourName;
+      if (ourName.length > 5 && norm(p.displayName?.text) === ourName) { matchedBy = 'name'; return true; }
+      return false;
     });
 
     const row = (p) => ({ name: p.displayName?.text || '', rating: p.rating || null, reviews: p.userRatingCount || 0 });
@@ -30403,7 +30588,7 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     // and "they disagree" tells us nothing about their actual rank.
     const _loc = places[idx] && places[idx].location;
     return { checked: true, found: true, rank: idx + 1, scanned: places.length,
-             query, city, phrase, ours, above: above.slice(0, 3), weakerAbove, weakerRows,
+             query, city, phrase, ours, matchedBy, above: above.slice(0, 3), weakerAbove, weakerRows,
              bizLat: _loc ? _loc.latitude : null, bizLng: _loc ? _loc.longitude : null };
   } catch (e) {
     return { checked: false, why: `local rank check failed: ${e.message}` };
@@ -30997,6 +31182,20 @@ const _runResearchInner = async (req, res) => {
   // runs before `parsed` exists. Writing straight to `parsed` threw on the
   // first live run and silently killed the entire chain.
   let _harmsForResponse = null;
+  // ══ WHAT THE MODEL WROTE, RECORDED AT THE MOMENT IT ARRIVED ══════════════
+  // The two strippers below police the MODEL's prose. By the time they ran,
+  // `parsed` was also carrying the factual spine, the problem list, the subject
+  // options and the composed email — all code-assembled from measurements and
+  // all already gated. The walkers cannot tell the two apart, so they audited
+  // our own output and deleted it. The stripper's own comment claimed it
+  // "skips anything we assembled"; it skipped underscore-prefixed keys, and not
+  // one of those fields is underscore-prefixed.
+  //
+  // A denylist of our own field names would rot the first time somebody adds
+  // one. This is derived instead: the key set is captured the instant the
+  // model's JSON parses, so anything attached afterwards is out of scope by
+  // construction and there is no list to keep in step.
+  let _modelFields = null;
   // ══ A DEAD LADDER MUST NOT LOOK LIKE A QUIET ONE ═══════════════════════════
   // The ladder's catch printed one grey line — "harm ladder failed — location is
   // not defined" — and everything downstream carried on as though the ladder had
@@ -35395,7 +35594,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             max_tokens: THINKING_FOR(BRAIN_MODEL) ? 9000 : 4200,
             messages: [{ role: 'user', content: msgContent }]
           }),
-        }, 90000);  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
+        }, 90000, 'audit', { retryOnBusy: true });  // was 45s — the audit prompt now carries rank, GBP, HTML and positioning evidence, so generation legitimately takes longer. On Render free tier a 45s cap was aborting valid audits mid-flight and leaving the STALE previous audit on screen, which is how a fixed bug appeared unfixed.
 
         const vd = _cachedAudit ? _cachedAudit : await safeJson(visionRes);
         if (!_cachedAudit && vd && !vd.error) writeAuditCache(_auditKey, vd, company);
@@ -35478,6 +35677,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             }
           }
           brainVisual = parsed;
+          _modelFields = Object.keys(parsed || {}).filter(k => k.charAt(0) !== '_');
 
           // ═══ DETERMINISTIC SOURCE VERIFICATION ═══════════════════════════
           // The strongest guarantee: any EXACT quote Claude makes (headline, CTA)
@@ -35631,6 +35831,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // in its own list, where it informs without crying wolf.
           const _readLimits = [];
           if (_deferredQuoteRisk) _readLimits.push(_deferredQuoteRisk);
+          // The account-level Apify state, read once here rather than inferred
+          // from a per-lead "nothing found". A mine that never ran and a business
+          // with no repeating complaint are opposite facts and used to print the
+          // same sentence.
+          if (apifyAccountNote()) {
+            _readLimits.push(`Their Google reviews were NOT mined on this run. ${apifyAccountNote()} Say nothing about what their reviewers do or do not complain about \u2014 we did not look.`);
+          }
           // ══ IT QUOTED THE REGEX MATCH, NOT THE SENTENCE ═══════════════════
           // Stanley Schultze's exported call sheet, under "Do not say", read in
           // its entirety:
@@ -36166,6 +36373,144 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
           };
         }
 
+        // ══ THE TWO GATES WERE POLICING OUR OWN FACTS, FROM INSIDE THE
+        //    GUARD THAT SILENCES THEM ════════════════════════════════════════
+        // Both strippers were built to police the MODEL's prose. They used to
+        // run four hundred lines below here, and that put them in two wrong
+        // places at once.
+        //
+        // WRONG PLACE ONE — AFTER our own facts were merged in. By then `parsed`
+        // also carried factualSpine, problemList, subjectOptions, harmsRanked and
+        // composedEmail: code-assembled from measurements, every figure already
+        // traced, every sentence already gated. A walker cannot tell those from
+        // model prose, so it audited our own output. Live on Thrive Dental it
+        // deleted the FACTUAL SPINE — "Fusion Orthodontics | Dallas shows up
+        // above them on Google for <the search we ran>, with 492 reviews against
+        // their 540" — because the quoted span is the SEARCH WE RAN, which is not
+        // a sentence on their website and never could be. Seven sentences went on
+        // that lead, pitchAngle emptied, the BRAIN GATE read the empty field as
+        // an empty audit, and 310 seconds of paid research died as a 422.
+        //
+        // WRONG PLACE TWO — inside `if (_harmsForResponse && parsed)`. When the
+        // ladder crashes that guard is false, so the last gate between a
+        // fabricated quote and Mike's phone call was ABSENT on exactly the leads
+        // where the model wrote everything with nothing under it. §40 is a whole
+        // section about the ladder having been dead on every lead for weeks.
+        //
+        // Both are fixed by position: HERE, before anything of ours is attached,
+        // guarded on `parsed` alone, and walking only the key set captured when
+        // the model's JSON parsed.
+        //
+        // ══ THE HOMEPAGE WAS FALLING OUT OF ITS OWN CORPUS ═══════════
+        // This read `sitePages.rawText || trustedContent`, an OR — so the
+        // moment any interior page was scraped, the HOMEPAGE text stopped
+        // being part of the corpus entirely. Claude Reynolds, live: the
+        // audit quoted "Your Trusted, Independent Insurance Age…", which is
+        // the tagline at the top of their homepage, and it was dropped as
+        // "does not appear on any page we read". We had read it. We were
+        // checking against the wrong pages.
+        //
+        // ══ AND A REVIEW QUOTE CAN NEVER APPEAR ON A WEB PAGE ═════════
+        // The mined review evidence is text we captured verbatim from their
+        // profile, so it belongs in the corpus on exactly the same footing as
+        // their page copy. A category error, not a threshold.
+        //
+        // ══ NOR CAN THE SEARCH WE RAN, OR THE NAME OF THE BUSINESS ABOVE
+        //    THEM ══════════════════════════════════════════════════════════
+        // The same category error a third time. An audit legitimately puts
+        // quotation marks round three kinds of thing: their own copy, a
+        // complaint their reviewers wrote, and the query WE typed into Google
+        // with the competitor it returned. The third is ours, we hold it
+        // verbatim, and it was in no corpus at all — which is what killed the
+        // spine above.
+        //
+        // STRINGS ONLY, never numbers. One corpus governs the quote gate, the
+        // money gate and the original findings, so a review count dropped in
+        // here would quietly license "$492" in a sentence about their money.
+        const _weHoldVerbatim = [
+          localRank && localRank.query,
+          localRank && localRank.phrase,
+          localRank && localRank.city,
+          ...(localRank && Array.isArray(localRank.above) ? localRank.above.map(r => r && r.name) : []),
+          ...(localRank && Array.isArray(localRank.weakerRows) ? localRank.weakerRows.map(r => r && r.name) : []),
+          company,
+          customerTrade || verifiedIndustry || '',
+        ].filter(s => typeof s === 'string' && s.trim()).join('\n');
+        // ══ THE JOB POSTING IS PART OF THE CORPUS, NOT PART OF THE CLAIM ══
+        // verifyOriginalFinding takes the corpus as a PARAMETER, so a finding
+        // that quotes the owner's own advertisement VERIFIES instead of being
+        // dropped as unquotable, and one that invents a sentence he never wrote
+        // is still dropped exactly as before.
+        const _corpusBase = [
+          trustedContent,
+          sitePages && sitePages.rawText,
+          (Array.isArray(publicPainSignals) ? publicPainSignals.join('\n') : ''),
+        ].filter(Boolean).join('\n\n');
+        // ══ THEIR WORDS AND OUR WORDS ANSWER DIFFERENT QUESTIONS ═══════════
+        // One rule — "we hold the words you are quoting" — asked of two
+        // different claims:
+        //
+        //   · the strippers ask "did ANYONE we can point to write this?" The
+        //     search phrase and the competitor's name qualify: we typed one and
+        //     Google returned the other, and both are quoted in our own spine.
+        //   · verifyOriginalFinding asks "is this read off THEIR OWN COPY?" Our
+        //     search phrase emphatically does not qualify, and its whole job is
+        //     to be the one finding a scanner could not produce.
+        //
+        // So the second keeps the pages-and-reviews corpus it has always had.
+        // Widening it would let a model write "their page says 'orthodontist
+        // office in Dallas, TX'" and have it VERIFY — and originalFindings can
+        // be promoted into the factual spine by the sharper-claim swap, so a
+        // false one reaches the email, not just the sheet.
+        const _corpusTheirs = jobSnippet ? `${_corpusBase}\n\n${jobSnippet}` : _corpusBase;
+        const _corpus = _weHoldVerbatim ? `${_corpusTheirs}\n\n${_weHoldVerbatim}` : _corpusTheirs;
+        if (parsed) {
+          // The model's own keys. Falls back to every key only when the capture
+          // did not happen, which is the truncated-salvage path — there is
+          // nothing of ours on that object anyway.
+          const _mf = (Array.isArray(_modelFields) && _modelFields.length)
+            ? _modelFields.filter(k => Object.prototype.hasOwnProperty.call(parsed, k))
+            : Object.keys(parsed);
+          // ══ AND A GATE MUST NOT BE ABLE TO EMPTY A FIELD IN SILENCE ══════
+          // Whatever the cause, a field that goes from prose to nothing is worth
+          // a line: either the model fabricated a whole field, or our corpus is
+          // wrong again. Both are things somebody must be told. What it must
+          // never be is a blank field four hundred lines away, read by a
+          // different gate as "the audit is empty".
+          const _was = {};
+          for (const k of _mf) if (typeof parsed[k] === 'string') _was[k] = parsed[k];
+          // ══ AND NO QUOTE THEY NEVER WROTE ═══════════════════════════════
+          // A quotation is the single most checkable thing in an audit: the
+          // owner wrote the page, and being wrong about his own words ends the
+          // call. Runs against the same corpus as the money gate and the
+          // original findings, so one body of evidence governs all three.
+          const _q = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripUnverifiedQuotesDeep(parsed[k], _corpus, _q, 1);
+          }
+          if (_q.cut.length) {
+            parsed._quotesRemoved = _q.cut.slice(0, 4);
+            console.log(`⛔ UNVERIFIED QUOTE [${company}]: removed ${_q.cut.length} sentence(s) quoting words that appear nowhere in anything we read. First one: "${String(_q.cut[0]).slice(0, 160)}". SOURCE VERIFY only ever covered two fields, so every other prose field could quote anything — and Mike reads these down a phone to the person who wrote the page.`);
+          }
+          // ══ NO INVENTED PRICE SURVIVES INTO THE AUDIT ══════════════════
+          // A figure that is neither on their pages, nor in the trade table, nor
+          // one of our own prices takes its sentence with it.
+          const _m = { cut: [], figures: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripUnmeasuredMoneyDeep(parsed[k], _corpus, _m, 1, k);
+          }
+          if (_m.cut.length) {
+            parsed._moneyRemoved = _m.cut.slice(0, 4);
+            console.log(`⛔ INVENTED MONEY [${company}]: removed ${_m.cut.length} sentence(s) carrying ${_m.figures.length} figure(s) that appear nowhere in what we read, are not our own prices, and are not the trade table's job value — ${_m.figures.slice(0, 4).join(', ')}. First one: "${String(_m.cut[0]).slice(0, 140)}". The email has traced every figure to a measurement for weeks; the audit is what Mike repeats on the call and it had no such rule. A price an owner knows is wrong discredits every measured fact next to it.`);
+          }
+          const _emptied = Object.keys(_was).filter(k => String(_was[k]).trim() && !String(parsed[k] || '').trim());
+          if (_emptied.length) {
+            parsed._fieldsEmptiedByGates = _emptied;
+            console.log(`⚠ GATE EMPTIED A FIELD [${company}]: ${_emptied.join(', ')} had prose in it and has none now. Every sentence in it either quoted words we do not hold or carried a figure we cannot trace. That is either a whole fabricated field or a corpus that is missing something we DO hold — the second is what deleted the factual spine on 2026-08-21. The lead is NOT blocked for this: the measured ladder is untouched and is the half a call is made from.`);
+          }
+        }
         if (_harmsForResponse && parsed) {
           // ══ THE AUDIT LEADS ON WHAT THE EMAIL WILL LEAD ON ═══════════════════
           // Two things were deciding what matters: the LADDER (30 measured findings,
@@ -36524,69 +36869,10 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // that quotes the owner's own advertisement now VERIFIES instead of
             // being dropped as unquotable, and one that invents a sentence he
             // never wrote is still dropped exactly as before.
-            // ══ THE HOMEPAGE WAS FALLING OUT OF ITS OWN CORPUS ═══════════
-            // This read `sitePages.rawText || trustedContent`, an OR — so the
-            // moment any interior page was scraped, the HOMEPAGE text stopped
-            // being part of the corpus entirely. Claude Reynolds, live: the
-            // audit quoted "Your Trusted, Independent Insurance Age…", which is
-            // the tagline at the top of their homepage, and it was dropped as
-            // "does not appear on any page we read". We had read it. We were
-            // checking against the wrong pages.
-            //
-            // Five of the eight worked examples this prompt gives the model
-            // quote the homepage, so the single most-encouraged kind of finding
-            // was the kind most likely to be discarded.
-            //
-            // ══ AND A REVIEW QUOTE CAN NEVER APPEAR ON A WEB PAGE ═════════
-            // The second dropped finding was "Google review pattern: callback
-            // delays and agent unavailability" — checked against the SITE. No
-            // amount of loosening would ever have let that through, because it
-            // was being asked to appear somewhere it cannot exist. A category
-            // error, not a threshold.
-            //
-            // The mined review evidence is text we captured verbatim from their
-            // profile, so it belongs in the corpus on exactly the same footing
-            // as their page copy: the finding must quote something a real person
-            // actually wrote. Nothing is loosened — the rule is still "we hold
-            // the words you are quoting". This just stops the rule being applied
-            // to a corpus that could not contain them.
-            const _corpusBase = [
-              trustedContent,
-              sitePages && sitePages.rawText,
-              (Array.isArray(publicPainSignals) ? publicPainSignals.join('\n') : ''),
-            ].filter(Boolean).join('\n\n');
-            const _corpus = jobSnippet ? `${_corpusBase}\n\n${jobSnippet}` : _corpusBase;
-            // ══ NO INVENTED PRICE SURVIVES INTO THE AUDIT ══════════════════
-            // See stripUnmeasuredMoney. Runs on the model's own output only —
-            // everything we assembled is already gated — and against the SAME
-            // corpus the quotes are verified against, so one body of evidence
-            // governs both. A figure that is neither on their pages, nor in the
-            // trade table, nor one of our own prices takes its sentence with it.
-            // ══ AND NO QUOTE THEY NEVER WROTE ═══════════════════════════════
-            // Runs against the same corpus as the money gate and the original
-            // findings, so one body of evidence governs all three. A quotation
-            // is the single most checkable thing in an audit: the owner wrote
-            // the page, and being wrong about his own words ends the call.
-            {
-              const _q = { cut: [] };
-              stripUnverifiedQuotesDeep(parsed, _corpus, _q, 0);
-              if (_q.cut.length) {
-                parsed._quotesRemoved = _q.cut.slice(0, 4);
-                console.log(`\u26d4 UNVERIFIED QUOTE [${company}]: removed ${_q.cut.length} sentence(s) quoting words that appear nowhere in anything we read. First one: "${String(_q.cut[0]).slice(0, 160)}". SOURCE VERIFY only ever covered two fields, so every other prose field could quote anything \u2014 and Mike reads these down a phone to the person who wrote the page.`);
-              }
-            }
-            {
-              const _m = { cut: [], figures: [] };
-              stripUnmeasuredMoneyDeep(parsed, _corpus, _m, 0);
-              if (_m.cut.length) {
-                parsed._moneyRemoved = _m.cut.slice(0, 4);
-                console.log(`\u26d4 INVENTED MONEY [${company}]: removed ${_m.cut.length} sentence(s) carrying ${_m.figures.length} figure(s) that appear nowhere in what we read, are not our own prices, and are not the trade table's job value \u2014 ${_m.figures.slice(0, 4).join(', ')}. First one: "${String(_m.cut[0]).slice(0, 140)}". The email has traced every figure to a measurement for weeks; the audit is what Mike repeats on the call and it had no such rule. A price an owner knows is wrong discredits every measured fact next to it.`);
-              }
-            }
             const _origIn = Array.isArray(parsed.originalFindings) ? parsed.originalFindings : [];
             const _origOk = [];
             for (const _it of _origIn.slice(0, 3)) {
-              const _v = verifyOriginalFinding(_it, _corpus);
+              const _v = verifyOriginalFinding(_it, _corpusTheirs);
               if (_v.ok) _origOk.push({ finding: _v.finding, evidence: _v.evidence });
               else console.log(`\u{1F50E} ORIGINAL FINDING [${company}]: dropped \u2014 ${_v.why}`);
             }
@@ -38285,15 +38571,30 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // reported ANY error, nothing salvaged from that response can be trusted,
     // however parseable the fragment was. Better a 422 the operator sees than a
     // lead that quietly enters the send queue with an invented recommendation.
-    const _auditUnusable = !!brainAudit && !(
-      (brainAudit.pitchAngle && String(brainAudit.pitchAngle).trim().length > 20) &&
-      (brainAudit.recommendedProduct || brainAudit.leadSignal ||
-       (Array.isArray(brainAudit.candidateFindings) && brainAudit.candidateFindings.length))
-    );
+    // ══ AND IT MUST NOT HANG THE WHOLE LEAD ON ONE FIELD ══════════════════
+    // It required pitchAngle to be over twenty characters. That was written when
+    // the only thing that could empty pitchAngle was the model returning nothing,
+    // and it stopped being true the day the quote gate started running over the
+    // audit: a single sentence carrying one quotation we could not trace leaves
+    // the field blank, and the field being blank was reported as "the audit is
+    // EMPTY".
+    //
+    // Live, 2026-08-21: Jones Kahan Law — recommendedProduct set, THREE candidate
+    // findings, a fact-check that came back 9 out of 10 — destroyed as an empty
+    // audit after 310 seconds of paid research, because one field was blank. Four
+    // of five leads in that batch died and the money was already spent.
+    //
+    // What the gate is actually for is the 31 Jul husk: an object salvaged from a
+    // failed response with every field null. So it asks the question it means —
+    // is there anything in here at all — across the fields rather than at one of
+    // them. A husk still has no product, no findings and no prose, and is still
+    // refused.
+    const _auditFilled = auditFilledness(brainAudit);
+    const _auditUnusable = !!brainAudit && !_auditFilled.usable;
     if (brainError && brainAudit) {
       console.log(`\u26d4 BRAIN GATE [${company}]: an audit object survived the parse, but the API ALSO reported an error ("${String(brainError).slice(0, 90)}"). Nothing recovered from a failed response is trustworthy. Blocking rather than shipping a lead that would look researched.`);
     } else if (_auditUnusable) {
-      console.log(`\u26d4 BRAIN GATE [${company}]: the audit parsed but is EMPTY \u2014 pitchAngle="${String(brainAudit.pitchAngle || '').slice(0, 40)}", product=${brainAudit.recommendedProduct || 'null'}, candidates=${(brainAudit.candidateFindings || []).length}. An object with nothing in it is still truthy, which is how this used to pass. Blocking.`);
+      console.log(`\u26d4 BRAIN GATE [${company}]: the audit parsed but is EMPTY \u2014 named=${_auditFilled.named ? (brainAudit.recommendedProduct || brainAudit.leadSignal) : 'nothing'}, ${_auditFilled.prose} prose field(s) with anything in them, ${_auditFilled.lists} finding/product row(s). An object with nothing in it is still truthy, which is how this used to pass. Blocking.`);
     }
     if (!brainAudit || brainError || _auditUnusable) {
       const reason = FIRECRAWL_OUT_OF_CREDITS
@@ -40631,11 +40932,101 @@ app.listen(PORT, () => {
       _fails.push('the walker does not reach nested prose, so the fields that carry the strategic read are ungoverned');
     }
 
-    // AND THE CALL SITE, against the same corpus the money gate uses.
+    // SEVEN — THE SEARCH WE RAN IS NOT A SENTENCE ON THEIR WEBSITE, AND THE
+    // FACTUAL SPINE QUOTES IT. Live on Thrive Dental, 2026-08-21: the gate
+    // deleted our own code-assembled spine because the quoted span was the query
+    // we typed into Google. Both halves are asserted — the query is in the
+    // corpus so the sentence survives, and a query we never ran does not.
+    const _rankCorpus = _corpus + '\n\northodontist office in Dallas, TX\nFusion Orthodontics | Dallas';
+    const _spineish = 'Fusion Orthodontics | Dallas shows up above them on Google for "orthodontist office in Dallas, TX", with more reviews than they have.';
+    if (stripUnverifiedQuotes(_spineish, _rankCorpus).cut.length) {
+      _fails.push('a sentence quoting the search WE RAN was deleted — that is the factual spine, and deleting it emptied pitchAngle and killed four leads in one batch');
+    }
+    if (!stripUnverifiedQuotes('They rank below others for "emergency dentist near me tonight" on Google.', _rankCorpus).cut.length) {
+      _fails.push('a search phrase we never ran was accepted as ours — the corpus must hold the query, not license any quoted phrase that looks like one');
+    }
+
+    // SEVEN-B — AND OUR WORDS ARE NOT THEIR WORDS. The strippers may accept the
+    // search phrase; verifyOriginalFinding may not. Its whole job is the finding
+    // read off THEIR OWN COPY, and the sharper-claim swap can promote one into
+    // the factual spine — so a false one reaches the EMAIL, not just the sheet.
+    // verifyOriginalFinding cannot tell whose words it was handed — only the
+    // CALLER can, by choosing which corpus to pass. So the property under test
+    // is the SPLIT, built here exactly as the route builds it.
+    const _theirWords = _corpus;                       // pages and reviews, as before
+    const _ourWords = 'orthodontist office in Dallas, TX\nFusion Orthodontics | Dallas';
+    const _bothWords = `${_theirWords}\n\n${_ourWords}`;
+    const _origItem = { finding: 'Their homepage names the exact phrase a patient types',
+                        evidence: 'orthodontist office in Dallas, TX' };
+    if (verifyOriginalFinding(_origItem, _theirWords).ok) {
+      _fails.push('a finding quoting the search WE typed verified against their own pages, which means the two corpora are the same object again');
+    }
+    if (!verifyOriginalFinding(_origItem, _bothWords).ok) {
+      _fails.push('the fixture proves nothing: the quote does not verify even against a corpus that contains it, so the refusal above is not evidence of the split');
+    }
+    if (!stripUnverifiedQuotes(`They rank below "${_ourWords.split('\n')[0]}" on Google.`, _bothWords).text.includes('Google')) {
+      _fails.push('the strippers refuse the search phrase even when it IS in their corpus — the two corpora have been swapped');
+    }
+
+    // EIGHT — THE GATE MUST RUN ON EVERY LEAD. It used to sit inside
+    // `if (_harmsForResponse && parsed)`, and that guard is false exactly when
+    // the harm ladder crashed — which is when the model wrote the whole audit
+    // with nothing under it. The last gate before Mike's phone call was absent
+    // on the leads that needed it most. Asserted by POSITION in the source.
     const _needle = (...parts) => parts.join('');
     const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
-    if (!_src.includes(_needle('stripUnverifiedQuotesDeep(parsed,', ' _corpus, _q, 0);'))) {
-      _fails.push('the audit is no longer run through the quote gate, so every prose field can quote anything again');
+    const _qCall = _src.indexOf(_needle('stripUnverifiedQuotesDeep(parsed[k],', ' _corpus, _q, 1);'));
+    const _mCall = _src.indexOf(_needle('stripUnmeasuredMoneyDeep(parsed[k],', ' _corpus, _m, 1, k);'));
+    const _ladderGuard = _src.indexOf(_needle('if (_harmsForResponse', ' && parsed) {'));
+    if (_qCall < 0) _fails.push('the audit is no longer run through the quote gate, so every prose field can quote anything again');
+    if (_mCall < 0) _fails.push('the audit is no longer run through the money gate');
+    if (_qCall >= 0 && _ladderGuard >= 0 && _qCall > _ladderGuard) {
+      _fails.push('the quote gate runs after the ladder guard again — inside it, it is silent on every lead whose ladder crashed, and it audits our own factual spine instead of the model');
+    }
+    if (_mCall >= 0 && _ladderGuard >= 0 && _mCall > _ladderGuard) {
+      _fails.push('the money gate runs after the ladder guard again');
+    }
+    // NINE — IT WALKS THE MODEL'S KEYS, NOT OURS. If the walk is ever pointed at
+    // the whole object again it will delete the spine again.
+    // AND THE WIDENING ITSELF, AT THE CALL SITE. The fixtures above hand the
+    // function a corpus that already contains the search phrase, so they cannot
+    // see the ROUTE narrowing its corpus back — the recorded "a check that does
+    // not assert its call site is half a check", and the falsification run caught
+    // this one passing on a build with the widening reverted.
+    if (!_src.includes(_needle('const _corpus = _weHoldVerbatim ? ', '`${_corpusTheirs}'))) {
+      _fails.push('the search WE ran and the names Google returned above them are no longer in the corpus the gates check against — that is exactly what deleted the factual spine and killed four leads on 2026-08-21');
+    }
+    // SCOPED TO THE BLOCK. The first version looked for each name anywhere in the
+    // file, and `localRank.query` appears in four other places — so deleting it
+    // from the corpus left every assertion green. A needle that can be satisfied
+    // by an unrelated line is not an assertion about the line it names.
+    const _heldBlock = (() => {
+      const a = _src.indexOf(_needle('const _weHoldVerbatim', ' = ['));
+      if (a < 0) return '';
+      const b = _src.indexOf(_needle('].filter(s =>', ' typeof s'), a);
+      return b > a ? _src.slice(a, b) : '';
+    })();
+    if (!_heldBlock) {
+      _fails.push('the corpus no longer assembles the words we hold verbatim at all');
+    } else {
+      for (const _held of ['localRank.query', 'localRank.phrase', 'localRank.above', 'localRank.weakerRows']) {
+        if (!_heldBlock.includes(_held)) {
+          _fails.push(`the corpus no longer holds ${_held}, so an audit sentence quoting it reads as a fabrication and is deleted whole`);
+        }
+      }
+    }
+    if (!_src.includes(_needle('verifyOriginalFinding(_it,', ' _corpusTheirs);'))) {
+      _fails.push('the original-finding check is verifying against our own search phrase again — one rule, two different claims, and this is the one that must ask whether the words are THEIRS');
+    }
+    if (!_src.includes(_needle('_modelFields = Object.keys(parsed', ' || {})'))) {
+      _fails.push('the model key set is no longer captured at the parse, so the gates cannot tell the model\'s prose from our own assembled facts');
+    }
+    const _mine = { pitchAngle: 'Their page promises "a lifetime warranty on every single install we do".', _quotesRemoved: ['keep "this one exactly as it is written here"'] };
+    const _mineOut = { cut: [] };
+    stripUnverifiedQuotesDeep(_mine, _corpus, _mineOut, 0);
+    if (/lifetime warranty/.test(_mine.pitchAngle)) _fails.push('the quote walker missed a top-level prose field');
+    if (!/this one exactly/.test(String(_mine._quotesRemoved[0]))) {
+      _fails.push('the quote walker rewrote one of OUR fields — underscore-prefixed fields are ours, the money walker has skipped them since it was written, and this one did not');
     }
     if (_fails.length) {
       console.log(`⛔ QUOTE PROVENANCE CHECK: ${_fails.join(' | ')}.`);
@@ -40644,6 +41035,219 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ QUOTE PROVENANCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE GATE THAT DESTROYED FOUR LEADS IN ONE BATCH ═══════════════════════
+  // It refused any audit whose pitchAngle was under twenty characters. That was
+  // a proxy for "the response was a husk", and it stopped being one the day the
+  // quote gate started running over the audit — one untraceable quotation empties
+  // the field, and an empty field was reported as an empty audit.
+  //
+  // Live 2026-08-21, after 310 seconds of paid research each: Jones Kahan Law,
+  // recommendedProduct set, THREE candidate findings, fact-check 9/10 — blocked.
+  // Executed against the real function, both directions, because a gate loosened
+  // until it passes a husk is the more expensive failure and it is the one this
+  // gate was written for.
+  try {
+    const _fails = [];
+    // THE HUSK. 31 Jul, the Anthropic balance ran out and the repair path
+    // salvaged an object with every field null. It came out the far side marked
+    // researched with a product recommendation and a 95/100 score.
+    const _husk = { heroHeadline: null, ctaText: null, realPain: null, embarrassingFinding: null,
+                    recommendedProduct: null, pitchAngle: null, _truncated: true };
+    if (auditFilledness(_husk).usable) {
+      _fails.push('an audit with every field null passed — that is the exact object this gate exists to refuse, and it ships a lead that looks researched');
+    }
+    if (auditFilledness({}).usable) _fails.push('an empty object passed');
+    if (auditFilledness(null).usable) _fails.push('null passed');
+    // JONES KAHAN. Everything real, one field emptied by our own gate.
+    const _jones = { recommendedProduct: 'Revenue Growth / CRO Retainer', pitchAngle: '',
+                     candidateFindings: [{ finding: 'a' }, { finding: 'b' }, { finding: 'c' }],
+                     realPain: 'Their intake is a phone line during office hours and nothing else.' };
+    if (!auditFilledness(_jones).usable) {
+      _fails.push('a lead with a product, three candidate findings and real prose was refused because ONE field was blank — this is what killed four of five leads in the 2026-08-21 batch');
+    }
+    // A blank pitchAngle must not be enough on its own to save a husk either.
+    if (auditFilledness({ pitchAngle: 'x'.repeat(40) }).usable) {
+      _fails.push('prose with no product, no signal and no findings passed — a partial parse is not an audit');
+    }
+    // And the field list must be real: a typo'd name silently counts nothing.
+    const _unknown = AUDIT_PROSE_FIELDS.filter(k => !/^[a-zA-Z]+$/.test(k));
+    if (_unknown.length) _fails.push(`prose field name(s) that cannot be object keys: ${_unknown.join(', ')}`);
+    if (auditFilledness({ recommendedProduct: 'Website Rebuild' }).usable) {
+      _fails.push('a product name with no findings and no prose passed — the husk carried one of those too');
+    }
+    // THE CALL SITE. A fixture supplies its own arguments and therefore cannot
+    // see a caller: this file records four checks that passed on a build with
+    // their own fix reverted for exactly that reason.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle('const _auditFilled = auditFilledness(', 'brainAudit);'))) {
+      _fails.push('the BRAIN GATE no longer uses the shared test, so the rule the fixtures above prove is not the rule that runs on a lead');
+    }
+    // ASSERT THE DECISION, NOT A SHAPE. The first version of this was a regex
+    // looking for the old field name anywhere near the gate name, and the
+    // falsification run walked straight through it: the reverted gate spanned
+    // TWO LINES, and a same-line regex cannot see across a newline. It also
+    // matched its own source when written as one literal, which is the trap this
+    // file has now recorded six times.
+    //
+    // Both problems go away by naming the decision itself. There is exactly one
+    // right-hand side, and anything else — however it is spelled or wrapped —
+    // fails.
+    if (!_src.includes(_needle('const _auditUnusable = !!brainAudit && ', '!_auditFilled.usable;'))) {
+      _fails.push('the BRAIN GATE decides on something other than the shared test, so the fixtures above are proving a rule that is no longer the one running on a lead — a blank field could destroy a paid audit again');
+    }
+    if (_fails.length) {
+      console.log(`⛔ BRAIN GATE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ BRAIN GATE CHECK: an audit is refused when there is nothing in it — every field null, an empty object, a bare product name — and kept when it carries findings or prose, even if one field was emptied by our own quote and money gates. That single field used to decide the lead: on 2026-08-21 it threw away four audits with 310 seconds of paid research in each.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BRAIN GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ROW WE MATCHED IN THE SEARCH MIGHT NOT BE US ══════════════════════
+  // Live on BVA, 2026-08-21: "⛔ MEASUREMENT LOOKS WRONG: we read 150 reviews of
+  // 8 — we cannot read more than exist". The mine reads the exact place ID, so
+  // 150 reviews exist. The 8 came from the rank-search row, which is matched by
+  // place ID, else by domain, else by an exact NAME — and a name match can land
+  // on another business.
+  //
+  // The cost is not the log line. An impossible measurement refuses the factual
+  // spine, composeFullEmail returns null, and the lead falls through to the model
+  // writing the whole email from scratch: the highest-invention path in the
+  // system, reached by a number that was never about them. And the same row
+  // decides which rivals count as "weaker", which is the finding with a real
+  // human reply behind it.
+  //
+  // Executed against the real resolver and the real sanity check.
+  try {
+    const _fails = [];
+    const _mk = (o) => resolveMeasurements(Object.assign({
+      localRank: null, gbpHealth: null, reviewsRead: null, deepReviews: null,
+    }, o));
+
+    // BVA. Place Details says 150, the name-matched row says 8, the mine read 150.
+    const _bva = _mk({
+      localRank: { checked: true, found: true, rank: 4, scanned: 20, query: 'q', city: 'Dallas',
+                   matchedBy: 'name', ours: { reviews: 8, rating: 4.9 }, weakerAbove: 2,
+                   weakerRows: [{ name: 'Rival A', reviews: 5 }] },
+      gbpHealth: { checked: true, reviewCount: 150, rating: 4.9 },
+      reviewsRead: 150,
+    });
+    if (_bva.reviewCount !== 150) _fails.push(`reviewCount resolved to ${_bva.reviewCount}, not the authoritative Place Details count of 150 — this is the number every other measurement is checked against`);
+    if (measurementLooksWrong(_bva).length) _fails.push(`the resolved measurements still read as impossible (${measurementLooksWrong(_bva).join(' | ')}) — that refuses the factual spine and drops the lead onto the model-writes-everything path`);
+    if (_bva.ourReviews !== null) _fails.push('a name-matched row whose review count contradicts Google\'s own record was still used as OUR review count');
+    if (_bva.weakerAbove !== null) _fails.push('weakerAbove survived a row that is not us — it is counted against that row, so both halves must move together');
+    if (_bva.weakerNames !== null) _fails.push('a named competitor survived a row that is not us — that is the finding with a real reply behind it, built on somebody else\'s numbers');
+    if (_bva.rankRowNotUs !== true) _fails.push('the mismatch was not reported, so nothing downstream can say why the finding is missing');
+
+    // AN IDENTITY MATCH IS NEVER QUESTIONED. A stale search index is not a
+    // different business, and the comparison inside one search is still valid.
+    const _byId = _mk({
+      localRank: { checked: true, found: true, rank: 4, scanned: 20, query: 'q', city: 'Dallas',
+                   matchedBy: 'placeId', ours: { reviews: 8, rating: 4.9 }, weakerAbove: 2,
+                   weakerRows: [{ name: 'Rival A', reviews: 5 }] },
+      gbpHealth: { checked: true, reviewCount: 150, rating: 4.9 },
+    });
+    if (_byId.ourReviews !== 8) _fails.push('a row matched on the exact place ID was refused — that is an identity, not a guess, and refusing it deletes the outranked finding on every lead');
+
+    // AND THE FIGURE COMES FROM GOOGLE'S RECORD EVEN WHEN THE ROW IS US. The
+    // search index trails Place Details by a few reviews constantly, so a row
+    // matched on the exact place ID can still hold a smaller number than the
+    // mine actually read — and reviewsRead > reviewCount is an IMPOSSIBLE
+    // measurement, which refuses the factual spine and drops the lead onto the
+    // model-writes-everything path. The wrong-row guard cannot help here,
+    // because the row really is us. Only the precedence can.
+    const _lagId = _mk({
+      localRank: { checked: true, found: true, rank: 4, scanned: 20, query: 'q', city: 'Dallas',
+                   matchedBy: 'placeId', ours: { reviews: 140, rating: 4.9 }, weakerAbove: 1,
+                   weakerRows: [{ name: 'Rival A', reviews: 5 }] },
+      gbpHealth: { checked: true, reviewCount: 150, rating: 4.9 },
+      reviewsRead: 148,
+    });
+    if (_lagId.reviewCount !== 150) _fails.push(`the stated review count is ${_lagId.reviewCount} — read off a lagging search row rather than Google's own record of that place ID`);
+    if (measurementLooksWrong(_lagId).length) _fails.push(`a business we read 148 reviews of reads as impossible (${measurementLooksWrong(_lagId).join(' | ')}) — the spine refuses, and the email is written by the model from nothing`);
+    if (_lagId.ourReviews !== 140) _fails.push('the same-search comparison stopped using the same-search number — that is the one thing the rank row is authoritative for');
+
+    // A SMALL LAG MUST NOT DELETE A CORRECT MATCH. Search-index counts trail
+    // Place Details by a few reviews constantly; a filter that fires on that is
+    // one somebody switches off.
+    const _lag = _mk({
+      localRank: { checked: true, found: true, rank: 4, scanned: 20, query: 'q', city: 'Dallas',
+                   matchedBy: 'name', ours: { reviews: 148, rating: 4.9 }, weakerAbove: 2,
+                   weakerRows: [{ name: 'Rival A', reviews: 5 }] },
+      gbpHealth: { checked: true, reviewCount: 150, rating: 4.9 },
+    });
+    if (_lag.ourReviews !== 148) _fails.push('a two-review lag between the search index and Place Details was treated as a different business');
+    if (_lag.weakerNames === null) _fails.push('the named competitor was deleted over a two-review lag');
+
+    // AND WITH ONLY ONE OF THE TWO NUMBERS, NOTHING IS CONCLUDED.
+    const _alone = _mk({
+      localRank: { checked: true, found: true, rank: 4, scanned: 20, query: 'q', city: 'Dallas',
+                   matchedBy: 'name', ours: { reviews: 8, rating: 4.9 }, weakerAbove: 1,
+                   weakerRows: [{ name: 'Rival A', reviews: 5 }] },
+    });
+    if (_alone.ourReviews !== 8) _fails.push('a lead with no Place Details read had its rank row refused — with nothing to compare against, refusing is a guess in the other direction');
+    if (_fails.length) {
+      console.log(`⛔ RANK ROW IDENTITY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RANK ROW IDENTITY CHECK: the figure we state comes from Google's own record of that place ID; the comparison against rivals comes from the one search that produced them. A row matched only by NAME whose review count contradicts Google's record is refused as a different business, and the named-competitor finding goes with it rather than being built on someone else's numbers. An exact place-ID match and a two-review index lag are both left alone.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RANK ROW IDENTITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A DEAD APIFY TOKEN IS ONE FACT, NOT FIFTY ═════════════════════════════
+  // Live 2026-08-21: Apify answered 403 on every lead in the batch. The message
+  // was correct and it was in the Render log, one grey line per lead, under a
+  // heading that reads like something about the prospect ("REVIEW MINE: NOT
+  // MEASURED"). Nothing on the screen or the call sheet said the review mine had
+  // not run at all — and review_pain_pattern is one of only two findings here
+  // with a real human reply behind it, so a run with a dead token loses it on
+  // every lead while Firecrawl, Places and Anthropic are paid in full.
+  try {
+    const _fails = [];
+    const _tok = apifyAccountProblem(403);
+    const _tok401 = apifyAccountProblem(401);
+    const _credit = apifyAccountProblem(402);
+    if (!_tok || !/token/i.test(_tok)) _fails.push('a 403 does not report a rejected token, so the one action that fixes it is not named');
+    if (!_tok401 || !/token/i.test(_tok401)) _fails.push('a 401 does not report a rejected token');
+    if (!_credit || !/credit/i.test(_credit)) _fails.push('a 402 does not report exhausted credits');
+    if (_tok === _credit) _fails.push('a rejected token and an empty balance produce the same sentence — two different causes with two different fixes');
+    // THE OTHER DIRECTION, and it is the expensive one. A bad moment at Apify
+    // reported as a dead account sends somebody to change a setting that was
+    // never wrong, which this file records as costing exactly what saying
+    // nothing costs.
+    for (const _s of [200, 429, 500, 502, 503, 0, undefined, null, 'x']) {
+      if (apifyAccountProblem(_s)) _fails.push(`HTTP ${_s} was reported as an account problem — a throttle or a bad moment is not a dead token`);
+    }
+    // AND THE THREE PLACES IT HAS TO BE WIRED. Needles assembled at runtime with
+    // comment lines stripped: the comments above quote these.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle('const _note = apifyAccount', 'Problem(code);'))) {
+      _fails.push('the review mine no longer classifies its own failure, so a dead token is a per-lead mystery again');
+    }
+    // COUNTED, NOT FOUND. The first version searched for the clear as a plain
+    // string and the DECLARATION is that same string, so deleting the clear left
+    // the assertion green — the self-matching-needle trap wearing its seventh
+    // costume. There must be two: the declaration and the clear.
+    const _clearTok = _needle('APIFY_ACCOUNT_PROBLEM', " = '';");
+    if (_src.split(_clearTok).length - 1 < 2) {
+      _fails.push('the latch is never cleared, so a token fixed mid-run keeps being reported as broken — a stale cause is the same lie pointing the other way');
+    }
+    if (!_src.includes(_needle('if (apifyAccountNote())', ' {'))) {
+      _fails.push('the account note never reaches the read limits, so the call sheet still cannot say the reviews were not read');
+    }
+    if (_fails.length) {
+      console.log(`⛔ APIFY ACCOUNT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ APIFY ACCOUNT CHECK: a rejected token and an empty balance are named separately and said once for the run, not once per lead; a throttle, a 500 and a timeout are never reported as a dead account; the latch clears the moment Apify answers; and the lead carries it as a READ LIMIT, so a call sheet says the reviews were not read instead of implying the business has no repeating complaint.`);
+    }
+  } catch (e) {
+    console.log(`⛔ APIFY ACCOUNT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE CREDIT LATCH HAD NO WAY BACK ══════════════════════════════════════
@@ -43634,7 +44238,7 @@ app.listen(PORT, () => {
     if (!/const jobSnippet = String\(req\.body\.jobSnippet/.test(_code)) {
       _fails.push('the research route never reads req.body.jobSnippet');
     }
-    if (!/const _corpus = jobSnippet \? /.test(_code)) {
+    if (!/const _corpusTheirs = jobSnippet \? /.test(_code) || !/_weHoldVerbatim \? `\$\{_corpusTheirs\}/.test(_code)) {
       _fails.push('the posting is read but never joined to the corpus — computed but not passed, on the one field this build exists to deliver');
     }
     // ── THE CLIENT HALF, WHICH LIVES IN ANOTHER REPO ──────────────────────
@@ -48436,6 +49040,35 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (/\$5k/.test(_obj.pitchAngle)) _fails.push('the deep walk missed a top-level prose field');
     if (/\$50k/.test(_obj.candidateFindings[0].finding)) _fails.push('the deep walk missed a nested finding');
     if (!/\$99/.test(_obj._claimRisks[0])) _fails.push('the deep walk rewrote one of OUR fields — underscore-prefixed fields are ours and are already gated');
+    // ══ AND THE TWO FIELDS THAT ARE NOTHING BUT OUR OWN PRICE LIST ═════════
+    // Live on BVA, 2026-08-21: "$40k-$70k implementation, variable ongoing" was
+    // deleted out of recommendedPrice. That is our AI Brain price in the field
+    // built to hold our AI Brain price, and the lead died. The sentence test
+    // cannot help here — a price fragment has no sentence to be about our work.
+    // The fact-checker prompt has carried this exemption in words for months;
+    // the gate that actually deletes had never been told. Both directions
+    // asserted, because a field-wide exemption that licenses ANY figure would be
+    // a hole rather than a fix.
+    const _cat = { recommendedPrice: '$40k-$70k implementation, variable ongoing',
+                   topThreeProducts: [{ product: 'AI Brain', price: '$40k-$70k', why: 'they quote by hand' },
+                                      { product: 'Retainer', price: '$10k-$35k/mo', why: 'no demand engine' }],
+                   pitchAngle: 'A $40k roof is a different conversation for them.' };
+    const _catOut = { cut: [], figures: [] };
+    for (const _k of Object.keys(_cat)) _cat[_k] = stripUnmeasuredMoneyDeep(_cat[_k], _corpus, _catOut, 1, _k);
+    if (!/\$40k-\$70k/.test(_cat.recommendedPrice)) _fails.push('our own price was deleted out of recommendedPrice, the field built to hold it — this is what killed four leads in one batch');
+    if (!/\$40k-\$70k/.test(String(_cat.topThreeProducts[0].price))) _fails.push('our own price was deleted out of topThreeProducts[].price');
+    if (!/\$10k-\$35k/.test(String(_cat.topThreeProducts[1].price))) _fails.push('the retainer range was deleted out of topThreeProducts[].price');
+    if (/\$40k roof/.test(_cat.pitchAngle)) _fails.push('the catalogue exemption leaked into prose — "$40k" is ours in a price field and invented in a sentence about HIS roof');
+    // Driven exactly as the loop above drives it. The first version handed the
+    // OBJECT in with the path already set to 'recommendedPrice', so the key made
+    // it 'recommendedPrice.recommendedPrice', the field exemption could never
+    // match, and the assertion passed on a build with the exemption wide open.
+    // A fixture that cannot reach the branch it names measures nothing.
+    const _catBad = { recommendedPrice: '$275k for the first phase' };
+    for (const _k of Object.keys(_catBad)) {
+      _catBad[_k] = stripUnmeasuredMoneyDeep(_catBad[_k], _corpus, { cut: [], figures: [] }, 1, _k);
+    }
+    if (/\$275k/.test(_catBad.recommendedPrice)) _fails.push('a figure that is NOT one of our declared prices survived in a catalogue field — the exemption licenses OUR_PRICE_FIGURES, not the field');
     if (_fails.length) {
       console.log(`⛔ AUDIT MONEY CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -48849,6 +49482,50 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     const _once = async () => { _calls++; throw new Error('timeout'); };
     try { await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest', { fetchImpl: _once }); } catch (e) { void e; }
     if (_calls !== 1) _fails.push('a call that did not ask for the retry got one anyway, so every Anthropic call in the file now bills twice on a slow afternoon');
+    // ── AND THE SECOND KIND OF NON-ANSWER: BUSY ──────────────────────────
+    // 429 rate limited, 529 overloaded, 500 api_error. At fifty leads through a
+    // three-wide pool this is the likely failure, and on the AUDIT call it does
+    // not cost one call: the BRAIN GATE depends on that audit, so a busy minute
+    // returns 422 and discards the Firecrawl, Places and Apify spend behind it.
+    // Slept through an injected clock so the check does not actually wait.
+    const _statusRes = (status, body) => ({ status, headers: { get: () => null },
+      clone: () => ({ json: async () => (body || {}) }), json: async () => (body || {}) });
+    const _noSleep = async () => {};
+    // FIVE — a 429 that answers on the second attempt.
+    _calls = 0;
+    const _busyThenOk = async () => { _calls++; return _calls === 1 ? _statusRes(429) : _statusRes(200, { ok: 1 }); };
+    const _r5 = await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest',
+      { retryOnBusy: true, fetchImpl: _busyThenOk, sleepImpl: _noSleep });
+    if (_calls !== 2) _fails.push(`a rate-limited audit was asked ${_calls} time(s), not twice — one busy minute discards a whole paid research cycle`);
+    if (!_r5 || _r5.status !== 200) _fails.push('the retry after a 429 did not return the good answer');
+    // SIX — a busy answer is NOT retried where it was not asked for.
+    _calls = 0;
+    const _busyAlways = async () => { _calls++; return _statusRes(429); };
+    await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest', { fetchImpl: _busyAlways });
+    if (_calls !== 1) _fails.push('a call that did not ask for the busy retry got one anyway — one fix would become twenty-two extra calls on a busy afternoon');
+    // SEVEN — a 400 is never retried. A malformed request, a bad key and a
+    // credit balance too low all fail identically the second time.
+    for (const _st of [400, 401, 403, 404]) {
+      _calls = 0;
+      const _hardStatus = async () => { _calls++; return _statusRes(_st); };
+      await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest',
+        { retryOnBusy: true, fetchImpl: _hardStatus, sleepImpl: _noSleep });
+      if (_calls !== 1) _fails.push(`HTTP ${_st} was retried — it fails the same way twice and the second call is pure spend`);
+    }
+    // EIGHT — it stops at two even when they stay busy.
+    _calls = 0;
+    await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest',
+      { retryOnBusy: true, fetchImpl: _busyAlways, sleepImpl: _noSleep });
+    if (_calls !== 2) _fails.push(`a permanently rate-limited endpoint was called ${_calls} times`);
+    // NINE — the busy retry must not quietly grant the timeout retry. They are
+    // separate opt-ins so they stay separately falsifiable.
+    _calls = 0;
+    const _slow = async () => { _calls++; throw new Error('timeout'); };
+    try {
+      await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest',
+        { retryOnBusy: true, fetchImpl: _slow, sleepImpl: _noSleep });
+    } catch (e) { void e; }
+    if (_calls !== 1) _fails.push('asking for the busy retry silently granted the timeout retry too, so the two can no longer be reasoned about separately');
     // AND THE CALL SITE. The loop being correct is worth nothing if the critique
     // does not use it. Needle assembled at runtime, comment lines stripped: this
     // check's own comments quote the call.
@@ -48857,13 +49534,16 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (!_src.includes(_needle("}, 45000, 'critique',", " { retryOnTimeout: true });"))) {
       _fails.push('the critique call no longer asks for the retry, or its ceiling moved back under what a 1600-token answer takes');
     }
+    if (!_src.includes(_needle("}, 90000, 'audit',", " { retryOnBusy: true });"))) {
+      _fails.push('the AUDIT call no longer asks for the busy retry — that is the one call the BRAIN GATE depends on, so a single 429 blocks the lead and the Firecrawl, Places and Apify spend behind it is already gone');
+    }
     if (_fails.length) {
-      console.log(`⛔ FACT CHECK RELIABILITY CHECK: ${_fails.join(' | ')}.`);
+      console.log(`⛔ ANTHROPIC RETRY CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FACT CHECK RELIABILITY CHECK: the critique call is asked twice when the first attempt times out and exactly once when it fails for any other reason, it gives up at two, and every other Anthropic call in the file is unchanged. Two fact-checks of four did not run on the first bulk rehearsal, and an audit with nothing verified displays as an audit with nothing wrong.`);
+      console.log(`✓ ANTHROPIC RETRY CHECK: the critique is asked twice when the first attempt times out, the AUDIT is asked twice when the answer comes back rate limited or overloaded, both give up at two, and neither a 4xx nor a call that did not opt in is ever retried. Two fact-checks of four did not run on the first bulk rehearsal; and a single 429 on the audit call blocks the lead and discards the Firecrawl, Places and Apify spend already made for it, which at fifty leads a day is the money.`);
     }
   } catch (e) {
-    console.log(`⛔ FACT CHECK RELIABILITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+    console.log(`⛔ ANTHROPIC RETRY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   })();
 

@@ -172,25 +172,47 @@ const runBatch = async (opts) => {
   // The panel's state, driven by the runner's own events through the REAL
   // reducer — not a copy of it written here, which would be the second
   // implementation this whole harness exists to prevent.
-  let panel = { finished: 0, total: 0, running: [] };
+  let panel = { finished: 0, total: 0, running: [], queued: [], done: [] };
   let peakRunning = 0;
+  // ── THE THREE STATES MUST ALWAYS ADD UP TO THE TOTAL ────────────────────
+  // Vin pressed Audit on five leads and read "2 of 2 waiting will run" above a
+  // button saying "Stop — 0 of 5 done". The missing idea was QUEUED: with three
+  // running at a time, two leads are picked and not started for most of a
+  // five-lead run, and nothing on the screen had a word for them. Checked at
+  // EVERY event rather than at the end, because a panel that is only right when
+  // the run is over is exactly the one nobody can read while it matters.
+  const panelDrift = [];
+  let sawRoster = 0;
   const out = await api.runBatchAudit({
     leads: opts.leads, settings: { apiKey: 'k' }, withEmail: !!opts.withEmail,
     concurrency: opts.concurrency, shouldStop: opts.shouldStop,
     onProgress: (ev) => {
       panel = api.batchProgressReduce(panel, ev);
       peakRunning = Math.max(peakRunning, panel.running.length);
+      if (ev.phase === 'roster') {
+        sawRoster++;
+        if ((panel.queued || []).length !== panel.total) {
+          panelDrift.push(`the roster event left ${(panel.queued || []).length} queued of ${panel.total}`);
+        }
+      }
+      {
+        const sum = (panel.running || []).length + (panel.queued || []).length + (panel.finished || 0);
+        if (sum !== panel.total) panelDrift.push(`after "${ev.phase}" the panel showed ${(panel.running || []).length} running + ${(panel.queued || []).length} queued + ${panel.finished} done = ${sum}, not ${panel.total}`);
+      }
       if (opts.onProgress) opts.onProgress(ev);
     },
   });
-  return { out, W, store: api.store(), panel, peakRunning };
+  return { out, W, store: api.store(), panel, peakRunning, panelDrift, sawRoster };
 };
 
 (async () => {
   // 1 + 2 + 5 + 7 — fifty leads, audits only.
   {
     const leads = seed(50);
-    const { out, W, store, panel, peakRunning } = await runBatch({ leads });
+    const { out, W, store, panel, peakRunning, panelDrift, sawRoster } = await runBatch({ leads });
+    if (sawRoster !== 1) fails.push(`the runner emitted the run's roster ${sawRoster} time(s) — without it the panel has to infer what is waiting by subtracting from a filter that deliberately hides leads that are running`);
+    if (panelDrift.length) fails.push(`the progress panel does not add up during the run: ${panelDrift.slice(0, 3).join(' | ')}${panelDrift.length > 3 ? ` (+${panelDrift.length - 3} more)` : ''}`);
+    if ((panel.queued || []).length !== 0) fails.push(`the run ended with ${(panel.queued || []).length} lead(s) still shown as queued`);
     if (W.calls.research !== 50) fails.push(`fifty leads produced ${W.calls.research} research submissions`);
     if (W.calls.compose !== 0) fails.push(`"audits only" still made ${W.calls.compose} compose call(s) — Mike asked for audits, and a batch that quietly writes fifty emails spends tokens nobody asked for`);
     if (W.peak > 8) fails.push(`${W.peak} leads were in flight at once — the pool is not bounding anything, which is fifty poll loops and fifty job ids in one tab`);

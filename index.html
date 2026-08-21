@@ -1889,18 +1889,46 @@ const BATCH_CONCURRENCY = 3;
 // never removed on done — is invisible on three leads and puts fifty names on
 // the screen on fifty. batchcheck.js folds every event of a real 50-lead run
 // through it and asserts the set empties.
+// ══ THE NUMBERS WERE OFF BECAUSE THERE WAS NO WORD FOR "WAITING" ══════════
+// Vin, 2026-08-21: "nto sure why the numbers are off i clealry added 5 into the
+// que abnd hit audit 5 - and for some reason the not audited yet section ws not
+// used at all... woudl also like to be able to track."
+//
+// A run of five goes through a pool of three, so at any moment two leads are
+// neither running nor audited. The batch had no name for that state, so those
+// two fell wherever the other filters left them: the panel headline counted them
+// as "waiting will run" (a label about a FUTURE press, whose own filter hides
+// the leads that are running), and the sidebar could only ask "is this one
+// running" and "is this one audited" — both false, so they landed under "not
+// audited yet" alongside leads nobody had picked at all.
+//
+// Three states, named: QUEUED IN THIS RUN, RUNNING, DONE. The roster is the
+// run's own list and nothing else decides it, so the counts add up to the total
+// at every moment of the run.
 const batchProgressReduce = (state, ev) => {
-  const s = state || { finished: 0, total: 0, running: [] };
+  const s = state || { finished: 0, total: 0, running: [], queued: [], done: [] };
   if (!ev) return s;
   const name = (ev.lead && (ev.lead.name || ev.lead.company)) || '';
   const total = Number.isFinite(ev.total) ? ev.total : s.total;
-  if (ev.phase === 'start') return { ...s, total, running: s.running.concat([name]) };
   // Remove ONE instance by name, not every match: two leads can carry the same
   // name and dropping both would show the panel as emptier than it is.
-  const running = s.running.slice();
-  const i = running.indexOf(name);
-  if (i >= 0) running.splice(i, 1);
-  return { ...s, total, finished: Number.isFinite(ev.finished) ? ev.finished : s.finished, running };
+  const dropOne = (arr, n) => {
+    const a = (arr || []).slice();
+    const i = a.indexOf(n);
+    if (i >= 0) a.splice(i, 1);
+    return a;
+  };
+  if (ev.phase === 'roster') {
+    return { finished: 0, total, running: [], done: [], queued: (ev.names || []).slice() };
+  }
+  if (ev.phase === 'start') {
+    return { ...s, total, queued: dropOne(s.queued, name), running: (s.running || []).concat([name]) };
+  }
+  return { ...s, total,
+    finished: Number.isFinite(ev.finished) ? ev.finished : s.finished,
+    running: dropOne(s.running, name),
+    queued: dropOne(s.queued, name),
+    done: (s.done || []).concat([name]) };
 };
 
 const runBatchAudit = async (opts) => {
@@ -1929,6 +1957,11 @@ const runBatchAudit = async (opts) => {
   const total = queue.length;
   const results = new Array(total);
   let started = 0, finished = 0;
+  // The run's own roster, before a single lead starts. Without it the panel has
+  // to infer what is waiting by subtracting, and the filter it would subtract
+  // from deliberately hides leads that are running.
+  report({ phase: 'roster', total, finished: 0,
+           names: queue.map(l => (l && (l.name || l.company || l.id)) || '') });
 
   const one = async (lead) => {
     const base = { id: lead.id, name: lead.name || lead.company || lead.id };
@@ -5981,7 +6014,7 @@ function ResearchView({
   // visible reason. It is the set of leads actually in flight now, and the
   // panel below reports finished, in flight, elapsed and every outcome as it
   // lands rather than a tally at the end.
-  const [batchAt, setBatchAt] = useState({ finished: 0, total: 0, running: [] });
+  const [batchAt, setBatchAt] = useState({ finished: 0, total: 0, running: [], queued: [], done: [] });
   const [batchResults, setBatchResults] = useState([]);
   const [batchStartedAt, setBatchStartedAt] = useState(0);
   // A one-second tick, running ONLY while the batch runs, so the elapsed figure
@@ -6002,7 +6035,11 @@ function ResearchView({
     if (!pool.length) { setResearchError('Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.'); return; }
     batchStopRef.current = false;
     setBatchResults([]);
-    setBatchAt({ finished: 0, total: pool.length, running: [] });
+    // Seeded here as well as by the runner's roster event, so the panel is
+    // correct in the moment between pressing the button and the first lead
+    // starting — which on a fifty-lead run is where somebody is looking.
+    setBatchAt({ finished: 0, total: pool.length, running: [], done: [],
+                 queued: pool.map(l => (l && (l.name || l.company || l.id)) || '') });
     setBatchStartedAt(Date.now());
     setBatchRunning(true);
     setResearchError('');
@@ -6022,7 +6059,7 @@ function ResearchView({
       setResearchError('The bulk run stopped: ' + ((e && e.message) || e) + '. Every lead that finished before it stopped is saved.');
     }
     setBatchRunning(false);
-    setBatchAt(s => ({ ...s, running: [] }));
+    setBatchAt(s => ({ ...s, running: [], queued: [] }));
     batchStopRef.current = false;
     // Whatever finished is on disk; show it.
     const _fresh = getLeads().sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0));
@@ -6604,7 +6641,12 @@ function ResearchView({
         React.createElement('span', { style: { color: 'var(--m)' } }, 'Working on:'),
         (batchAt.running.length
           ? batchAt.running.map((n, i) => React.createElement('span', { key: 'r' + i }, n))
-          : React.createElement('span', { style: { color: 'var(--m)' } }, 'starting…'))),
+          : React.createElement('span', { style: { color: 'var(--m)' } }, 'starting…')),
+        (batchAt.queued || []).length
+          ? React.createElement('span', { style: { color: 'var(--m)' } },
+              '· then ' + batchAt.queued.length + ' more: ' + batchAt.queued.slice(0, 3).join(', ')
+              + (batchAt.queued.length > 3 ? ' and ' + (batchAt.queued.length - 3) + ' others' : ''))
+          : null),
       (batchResults.length > 0) && React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m)', display: 'flex', gap: 12, flexWrap: 'wrap' } },
         Object.keys(tally).map(k => React.createElement('span', { key: k }, tally[k] + ' ' + (LABEL[k] || k)))),
       (flagged.length > 0) && React.createElement('div', { style: { fontSize: 11, color: 'var(--m2)', lineHeight: 1.5 } },
@@ -6677,8 +6719,23 @@ function ResearchView({
             // The pool BEFORE the limit, because "50 ready" against a pipeline of
             // 4 and against a pipeline of 400 are different situations and the
             // old line could not tell them apart.
+            // ══ ONE LINE ANSWERING TWO DIFFERENT QUESTIONS ═════════════════
+            // "N of M waiting will run" is a statement about what the NEXT press
+            // would pick, and its own filter deliberately excludes leads that are
+            // already running. Left on screen during a run it counted down as
+            // leads started: Vin pressed Audit on five and read "2 of 2 waiting
+            // will run" directly above a button saying "Stop — 0 of 5 done".
+            // Both numbers were correct answers to questions nobody asked.
+            //
+            // While a run is on, this line reports THAT RUN.
             React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginBottom: 8, lineHeight: 1.45 } },
-              pool === 0
+              batchRunning
+                ? ((batchAt.total || 0) + ' lead' + ((batchAt.total || 0) === 1 ? '' : 's') + ' in this run: '
+                    + (batchAt.running || []).length + ' running, '
+                    + (batchAt.queued || []).length + ' queued, '
+                    + (batchAt.finished || 0) + ' done. '
+                    + BATCH_CONCURRENCY + ' run at a time.')
+                : pool === 0
                 ? 'Nothing to audit. Every lead with a website has been done \u2014 tick re-audit below to run them again.'
                 : (ready + ' of ' + pool + ' waiting will run' + (batchEmail ? ', each with an email written after it.' : '. Audit only \u2014 no emails.'))),
             React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 6, cursor: 'pointer' } },
@@ -6754,9 +6811,18 @@ function ResearchView({
           || _runningNames.has(l.name)
           || researchingId === l.id));
         const isAudited = (l) => !!(l && (l.problemList || l.brainAudit || l.theOneThing));
+        // ══ THE FOURTH KIND OF LEAD ═══════════════════════════════════════
+        // "the not audited yet section ws not used at all." Three at a time
+        // through a run of five means two leads are picked, paid for, and not
+        // started — and with only "running" and "audited" to ask about, they sat
+        // among leads nobody had chosen at all. They are the leads somebody
+        // watching a run most wants to see, because they are what is left.
+        const _queuedNames = new Set(batchAt.queued || []);
+        const isQueued = (l) => !!(l && !isRunning(l) && _queuedNames.has(l.name));
         const running = allLeads.filter(isRunning);
-        const audited = allLeads.filter(l => !isRunning(l) && isAudited(l));
-        const waiting = allLeads.filter(l => !isRunning(l) && !isAudited(l));
+        const queued = allLeads.filter(isQueued);
+        const audited = allLeads.filter(l => !isRunning(l) && !isQueued(l) && isAudited(l));
+        const waiting = allLeads.filter(l => !isRunning(l) && !isQueued(l) && !isAudited(l));
         const header = (label, count, color) => React.createElement('div', {
           key: 'h-' + label,
           style: { position: 'sticky', top: 0, zIndex: 2, padding: '7px 12px 6px', background: 'var(--s)',
@@ -6766,10 +6832,10 @@ function ResearchView({
         const leadRow = (l) => {
           const isActive = l.id === lead?.id;
           const running = isRunning(l);
-          const statusLabel = running ? 'auditing\u2026' : (l.approved ? 'approved' : isAudited(l) ? 'audited' : 'not audited');
+          const statusLabel = running ? 'auditing\u2026' : isQueued(l) ? 'queued' : (l.approved ? 'approved' : isAudited(l) ? 'audited' : 'not audited');
           return React.createElement('div', {
             key: l.id,
-            style: { position:'relative', borderBottom: '1px solid var(--b)', borderLeft: isActive ? '2px solid var(--t)' : '2px solid transparent', background: isActive ? 'var(--s2)' : 'transparent', opacity: (isAudited(l) || running) ? 1 : 0.65 }
+            style: { position:'relative', borderBottom: '1px solid var(--b)', borderLeft: isActive ? '2px solid var(--t)' : '2px solid transparent', background: isActive ? 'var(--s2)' : 'transparent', opacity: (isAudited(l) || running || isQueued(l)) ? 1 : 0.65 }
           },
             React.createElement('div', {
               onClick: () => onSelectLead && onSelectLead(l.id),
@@ -6795,7 +6861,8 @@ function ResearchView({
         };
         const out = [];
         if (running.length) { out.push(header('Auditing now', running.length, 'var(--t)')); running.forEach(l => out.push(leadRow(l))); }
-        if (waiting.length) { out.push(header('Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
+        if (queued.length) { out.push(header('Queued in this run', queued.length, 'var(--t)')); queued.forEach(l => out.push(leadRow(l))); }
+        if (waiting.length) { out.push(header(queued.length || running.length ? 'Not in this run' : 'Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
         if (audited.length) { out.push(header('Audited \u2014 what Export covers', audited.length)); audited.forEach(l => out.push(leadRow(l))); }
         return out;
       })()
