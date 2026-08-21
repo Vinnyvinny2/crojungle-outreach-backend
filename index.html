@@ -4930,7 +4930,13 @@ function buildAuditRows(lead) {
           + (svcInvis.length ? ' They do not appear at all for: ' + svcInvis.map(r => '"' + r.phrase + '"').join(', ') + '.' : '')
           + (best && best.weakerAbove ? ' ' + best.weakerAbove + ' business(es) ranking above them have FEWER reviews — the reputation is there, the visibility is not.' : '')
           + ' Position only — no claim about their traffic, ad spend, or why they rank where they do.',
-        tags: lv.results.map(r => r.found ? ('#' + r.rank + ' — ' + r.phrase) : ('absent — ' + r.phrase)),
+        // (lv.results || []).filter(Boolean): a lead persisted by an older build
+        // can carry checked:true with no results array, or a null row inside
+        // one, and a bare .map here threw — turning that lead into a
+        // "could not be rendered" row in the export instead of a partial audit.
+        // Found by the export hammer (1,000 randomized shapes), 119 of which
+        // came back broken through exactly this line.
+        tags: (lv.results || []).filter(Boolean).map(r => r.found ? ('#' + r.rank + ' — ' + r.phrase) : ('absent — ' + r.phrase)),
       };
     })(),
     // GOOGLE BUSINESS PROFILE — free, measured, top of the local revenue funnel.
