@@ -15629,6 +15629,52 @@ const verifyBrainEmail = (body, opts = {}) => {
     if (_m) {
       return { ok: false, why: `"${_m[0].trim()}" — this states something about his whole industry, and what we measured was about HIS business. A claim about every attorney in Phoenix is one he disproves with a single search, and it tells him we were never really looking at him` };
     }
+    // ══ AND THE SAME SHIFT IN THE POSITIVE ════════════════════════════════
+    // The gate above catches a plural trade noun in front of a NEGATIVE verb,
+    // because that is the shape Emily Taylor's email took. A niche brief
+    // introduces the other half of the family and it is just as false:
+    //
+    //   "roofers typically give up 15-25% to lead platforms"
+    //   "most practices your size already run one"
+    //   "businesses like yours usually see..."
+    //
+    // Every one of those is a sentence about a category, offered to somebody who
+    // knows his own category better than we do. It cannot be checked, it cannot
+    // be wrong in a way he can correct, and it reads as a template — which is
+    // the one thing this email cannot afford to read as.
+    //
+    // This is ALSO the mechanism that makes NICHE_BRIEFS safe. The library's
+    // sourced half is written in exactly this register on purpose, and this is
+    // the wall that stops the register reaching an inbox. Instructional guards
+    // do not hold; a refusal does.
+    //
+    // Keyed on a trade or business noun NEXT TO the generality marker, never on
+    // the marker alone: PATTERN_GENERALITY requires "usually" in the review
+    // pattern sentence, and "several customers usually wait a week" is a fact
+    // about his customers rather than a claim about his industry.
+    {
+      const _tradeAlt = _t ? _t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 's?|' : '';
+      // Singular AND plural. "The average practice loses money here" reads as a
+      // category claim in every way that matters and the first version of this
+      // list only held plurals, so it passed — caught by this gate's own boot
+      // fixtures on their first run.
+      const _BIZ = `(?:${_tradeAlt}attorneys?|lawyers?|surgeons?|dentists?|doctors?|contractors?|builders?|plumbers?|roofers?|electricians?|agenc(?:y|ies)|clinics?|practices?|firms?|business(?:es)?|compan(?:y|ies)|shops?|operators?|owners?|hotels?|properties|property)`;
+      const GENERAL = [
+        // "most roofers", "the average practice", "the majority of firms"
+        new RegExp(`\\b(?:most|many|typical|the average|the majority of|plenty of)\\s+${_BIZ}\\b`, 'i'),
+        // "roofers typically", "practices usually", "firms on average"
+        new RegExp(`\\b${_BIZ}\\s+(?:typically|usually|generally|normally|on average|tend to|tends to|often|routinely)\\b`, 'i'),
+        // the two purest forms of template-speak
+        new RegExp(`\\b${_BIZ}\\s+(?:like|of)\\s+(?:yours|your size|your kind|theirs)\\b`, 'i'),
+        /\b(?:in|across)\s+(?:your|this|the)\s+industry\b|\bindustry[-\s]wide\b|\bin your space\b|\bfor a (?:business|firm|practice|company) (?:like|of) yours\b/i,
+      ];
+      for (const re of GENERAL) {
+        const g = text.match(re);
+        if (g) {
+          return { ok: false, why: `"${g[0].trim()}" — a claim about his CATEGORY, not about him. He knows his category better than we do, he cannot check it, and a sentence he cannot check is one that makes him doubt the one measured fact standing next to it. Industry knowledge is how we understand him on a call; it is never what we say to him in a first email` };
+        }
+      }
+    }
   }
 
   // ══ THE FINDING MUST BE IN THE FIRST TWELVE WORDS ═══════════════════════
@@ -18500,12 +18546,471 @@ const TRADE_JOB_VALUE = [
 // licensed when the sentence carries the whole thing, because that is the claim
 // the table actually makes; half of it is a different claim and nobody
 // declared it.
+// ══ THE NICHE LIBRARY ══════════════════════════════════════════════════════
+// Vin, 2026-08-21, after hand-researching a brief on independent hotels for
+// Mike: "why dont we have info like this for every single niche we are
+// targeting so we can come in pre audit knowing all the big issues."
+//
+// He is right, and the warning he was given is right too: a static niche
+// library is a fabrication engine if it is not bounded. "Restaurants lose 30%
+// to DoorDash" sent to a restaurant that does not deliver is a confident false
+// claim, and this system's one unbreakable rule is that nothing false reaches a
+// prospect.
+//
+// ══ WHY THIS IS NOT A NEW MECHANISM ════════════════════════════════════════
+// TRADE_JOB_VALUE, forty lines above, is already a niche library. It is public
+// knowledge about an industry, declared in code, deliberately conservative, and
+// its comment already states the rule this whole block generalises: "The claim
+// is 'a job in this trade runs about this', never 'your job'." AUDIT MONEY
+// CHECK already enforces it. So this extends a working, falsified gate rather
+// than inventing a second one — the two-hand-kept-copies disease this file
+// records more than any other.
+//
+// ══ THE BOUNDARY, AND WHY IT IS STRUCTURAL RATHER THAN INSTRUCTIONAL ═══════
+// PART 3: "Instructional guards do not hold. The prompt banned post-submission
+// claims 19 times and every audit produced one anyway." So "use this as framing,
+// never as a claim" written into a prompt is worth nothing. Every brief is
+// therefore split into two halves that the boot check enforces by SHAPE:
+//
+//   DECLARED  vocabulary, the unit of business, who buys, which software to ASK
+//             about, what kind of leak the segment has, and questions worth
+//             asking on a call. NONE OF IT IS A QUANTITY, so none of it can be
+//             wrong about a specific business. Boot check: no digits allowed.
+//
+//   SOURCED   figures. Every row carries the figure, the source it came from and
+//             the date it was verified, or it does not exist. Boot check: all
+//             three required — and the sentence may not contain "you", "your",
+//             "they" or "their", so a sourced figure is STRUCTURALLY INCAPABLE
+//             of becoming a claim about the business in front of us. It is a
+//             fact about a segment, with a citation, and it reads as one.
+//
+// Where each half may go:
+//                      call sheet    audit    EMAIL
+//   DECLARED               yes        yes     only naming something we measured
+//   SOURCED                yes        yes     never
+//   software list      as a QUESTION  yes     never
+//
+// The email half needs no new gate either: nothing here is added to
+// permittedFigures, so any brief figure that leaks into a body is already
+// refused by the figure trace that has been running for weeks, and the
+// industry-generalisation gate below verifyBrainEmail's review-word rule
+// catches the wordless version.
+//
+// ══ WHAT IS DELIBERATELY EMPTY ═════════════════════════════════════════════
+// Most `sourced` arrays are EMPTY, and that is not an oversight. Vin's own
+// framework budgets 2-4 hours per brief and its rule 4 is "never estimate a
+// number that could be sourced". Filling these from memory would be the exact
+// failure this system exists to prevent, so they stay empty until somebody does
+// the research, and the boot check refuses any row that arrives without a
+// source and a date. The DECLARED half is the half that needed no research and
+// it is most of the value on a phone call anyway.
+const NICHE_BRIEFS = [
+  {
+    id: 'crew_trades',
+    label: 'Crew trades — the truck-and-crew half of the target list',
+    // Matched on the trade word we already resolve, never on a guess.
+    match: /\b(hvac|heating|cooling|air ?condition\w*|furnace|plumb\w*|electric\w*|roof\w*|restorat\w*|water damage|foundation|waterproof\w*|solar|remodel\w*|kitchen|bath(?:room)?|window\w*|siding|door\w*|pav\w*|asphalt|concrete|masonry|pool|home ?build\w*|general contract\w*|construct\w*|fire ?protect\w*|sprinkler|excavat\w*|grading|hardscap\w*|landscap\w*|tree (?:service|care|remov\w*)|insulat\w*|spray foam|floor\w*|garage door|deck\w*|patio|sign(?:age|s)?|well drill\w*|septic|gutter\w*|chimney|fenc\w*)\b/i,
+    // A supplier, a manufacturer or a franchise head office is not a crew.
+    notWhen: /\b(supply|supplies|wholesale\w*|manufactur\w*|distribut\w*|franchis\w*|equipment rental)\b/i,
+    declared: {
+      unit: 'one job, from the phone ringing to the invoice',
+      buyer: 'the owner, who in this size of business is usually still running estimates himself',
+      whatTheyDoNotHave: 'a marketing person. It is the owner, the office manager, or a contractor who does a bit of everything.',
+      leakType: 'lead platforms and unbooked crew hours. Somebody else owns the customer relationship and rents it back, and a crew that is idle costs the same as a crew that is working.',
+      vocabulary: [
+        { term: 'close rate', means: 'the share of estimates that turn into jobs. Owners in these trades know this number or feel its absence.' },
+        { term: 'booked call rate', means: 'the share of inbound calls that end with a job on the calendar. The gap between this and the close rate is usually the office, not the estimator.' },
+        { term: 'job costing', means: 'what a finished job actually cost against what it was quoted at' },
+        { term: 'change order', means: 'work added after the quote was signed' },
+        { term: 'truck hour', means: 'the unit of capacity. An idle truck costs the same as a working one.' },
+        { term: 'a square', means: 'roofing only: one hundred square feet of roof. Roofers quote in squares, not square feet.' },
+      ],
+      software: [
+        { category: 'field service and dispatch', products: ['ServiceTitan', 'Housecall Pro', 'Jobber', 'FieldEdge'] },
+        { category: 'roofing and exteriors specifically', products: ['JobNimbus', 'AccuLynx', 'CompanyCam'] },
+        { category: 'estimating', products: ['Xactimate (restoration)', 'Buildertrend (build and remodel)'] },
+      ],
+      askOnCall: [
+        'When somebody calls and you are up on a roof, who picks up?',
+        'Out of the estimates you write in a month, roughly how many turn into jobs?',
+        'Where do most of your calls come from right now?',
+        'Are you buying leads from anybody?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'recurring_services',
+    label: 'Route-based recurring services — pest control, lawn care',
+    match: /\b(pest|exterminat\w*|termite|mosquito|lawn ?care|lawn ?treat\w*|fertiliz\w*|weed control|irrigation)\b/i,
+    notWhen: /\b(supply|supplies|equipment|wholesale\w*)\b/i,
+    declared: {
+      unit: 'one account on a route, billed every visit or every month',
+      buyer: 'the owner. In this trade he often still runs a route one day a week.',
+      whatTheyDoNotHave: 'anyone whose job is keeping accounts from cancelling. Retention is nobody’s job title.',
+      leakType: 'churn and route density. A cancelled account is a permanent loss of a monthly, and a thin route means paying for drive time instead of service time.',
+      vocabulary: [
+        { term: 'route density', means: 'how many stops fit in a day inside one area. The whole economics of this trade sit here.' },
+        { term: 'churn', means: 'the share of accounts that cancel in a year' },
+        { term: 'stops per day', means: 'the capacity number a technician is measured on' },
+        { term: 'recurring versus one-off', means: 'a one-time treatment against a subscription. The second is worth many times the first.' },
+      ],
+      software: [
+        { category: 'pest control', products: ['PestPac', 'Briostack', 'FieldRoutes'] },
+        { category: 'lawn care', products: ['RealGreen', 'Service Autopilot', 'Jobber'] },
+      ],
+      askOnCall: [
+        'What share of your customers are on a recurring plan versus one-off calls?',
+        'When somebody cancels, does anybody find out why?',
+        'How tight are your routes right now?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'aesthetic_practices',
+    label: 'Cash-pay aesthetics — med spa, plastic surgery, dermatology, LASIK, cosmetic dentistry',
+    match: /\b(med ?spa|medspa|aesthetic\w*|plastic surg\w*|cosmetic surg\w*|derm\w*|lasik|cosmetic dent\w*|laser (?:clinic|center|centre)|injectable\w*|botox)\b/i,
+    notWhen: /\b(hospital|health system|university|supply|supplies|distribut\w*)\b/i,
+    declared: {
+      unit: 'one consultation, and then whether it becomes a treatment',
+      buyer: 'the physician-owner, sometimes with a practice manager who controls the calendar',
+      whatTheyDoNotHave: 'a sales function, even though the consultation IS a sales conversation. Nobody follows up a consult that did not book.',
+      leakType: 'leaked demand and unsold room time. Interest arrives and is not converted, and an empty treatment room costs the same as a full one.',
+      vocabulary: [
+        { term: 'consult-to-treatment conversion', means: 'the share of consultations that become paid treatments. The single number this business runs on.' },
+        { term: 'room or chair utilisation', means: 'how much of the available treatment time is actually sold' },
+        { term: 'retail attachment', means: 'product sold alongside a treatment' },
+        { term: 'membership', means: 'a monthly plan that converts a one-off patient into a recurring one' },
+        { term: 'per-treatment revenue', means: 'what one visit is worth, which in this segment is usually four figures' },
+      ],
+      software: [
+        { category: 'med spa practice management', products: ['Boulevard', 'Zenoti', 'Mangomint', 'AestheticsPro'] },
+        { category: 'surgical and dermatology', products: ['Nextech', 'Symplast', 'PatientNow', 'ModMed'] },
+      ],
+      askOnCall: [
+        'Out of the people who come in for a consultation, roughly what share book something?',
+        'When somebody consults and does not book, what happens next?',
+        'Do you run a membership, or is it treatment by treatment?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'clinical_practices',
+    label: 'Insurance-facing practices — dental, orthodontics, oral surgery, vet, chiropractic, physical therapy, fertility',
+    match: /\b(dent(?:al|ist\w*)|orthodont\w*|oral surg\w*|periodont\w*|endodont\w*|veterinar\w*|vet(?:erinary)? (?:hospital|clinic)|animal (?:hospital|clinic)|chiroprac\w*|physical therap\w*|physiotherap\w*|fertility|ivf|reproductive (?:medicine|endocrin\w*))\b/i,
+    notWhen: /\b(hospital system|health system|university|dso|supply|supplies|distribut\w*|laborator\w*)\b/i,
+    declared: {
+      unit: 'one new patient, and the course of treatment that follows',
+      buyer: 'the owner-doctor. Confirm he still owns it: this segment is being consolidated and the buyer may be a group.',
+      whatTheyDoNotHave: 'anybody whose job is the gap between diagnosis and acceptance, or between a missed appointment and a rebooking.',
+      leakType: 'payer discount and unsold chair time. A third party sets the price, and an empty chair or an unfilled appointment slot is gone for good.',
+      vocabulary: [
+        { term: 'case acceptance', means: 'the share of recommended treatment the patient agrees to. The number that separates two otherwise identical practices.' },
+        { term: 'production versus collections', means: 'what was billed against what was actually received' },
+        { term: 'write-off', means: 'the difference between the fee and what an insurer allows' },
+        { term: 'recall', means: 'bringing an existing patient back on schedule' },
+        { term: 'chair time', means: 'the capacity unit. Unsold chair time cannot be recovered.' },
+        { term: 'new patient count', means: 'the growth number every practice owner watches monthly' },
+      ],
+      software: [
+        { category: 'dental practice management', products: ['Dentrix', 'Open Dental', 'Eaglesoft', 'Curve'] },
+        { category: 'patient communication', products: ['Weave', 'Solutionreach', 'RevenueWell'] },
+        { category: 'veterinary', products: ['ezyVet', 'Cornerstone', 'AVImark'] },
+        { category: 'chiropractic and physical therapy', products: ['ChiroTouch', 'WebPT', 'Jane'] },
+      ],
+      askOnCall: [
+        'How many new patients came in last month, roughly?',
+        'When somebody is told they need treatment and does not schedule it, who follows up?',
+        'What does a no-show cost you on a given day?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'law_firms',
+    label: 'Owner-operated law firms — personal injury, estate planning',
+    match: /\b(law (?:firm|office|group)|attorney\w*|lawyer\w*|legal (?:group|team)|personal injury|estate plan\w*|probate|elder law|injury (?:law|attorney))\b/i,
+    notWhen: /\b(legal aid|public defender|university|court|bar association|title (?:company|agency)|legal shield)\b/i,
+    declared: {
+      unit: 'one signed case',
+      buyer: 'the managing partner, who is usually still carrying his own caseload',
+      whatTheyDoNotHave: 'an intake function that runs when he is in court. The phone is the whole front door and it is answered by whoever is free.',
+      leakType: 'leaked demand at intake. Cases arrive and are lost between the first contact and the signature, and in this trade one lost case is the size of the whole marketing budget.',
+      vocabulary: [
+        { term: 'cost per signed case', means: 'total marketing spend divided by cases actually signed. Not cost per lead, which is the number vendors quote.' },
+        { term: 'intake', means: 'everything between the first contact and the signed agreement' },
+        { term: 'signed case', means: 'the only conversion that counts here' },
+        { term: 'contingency', means: 'paid out of the recovery, so the firm carries the cost of every case that does not settle' },
+        { term: 'matter', means: 'one client engagement, the unit a case management system tracks' },
+      ],
+      software: [
+        { category: 'case management', products: ['Clio', 'Filevine', 'Litify', 'Smokeball', 'MyCase'] },
+        { category: 'intake specifically', products: ['Lawmatics', 'Captorra', 'Intaker'] },
+      ],
+      askOnCall: [
+        'When somebody calls at seven in the evening, what happens?',
+        'Do you know what a signed case costs you to get?',
+        'Who handles intake when you are in court all day?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'accounting_firms',
+    label: 'Accounting and CPA firms',
+    match: /\b(cpa|certified public account\w*|account(?:ing|ants?)|bookkeep\w*|tax (?:service|prepar\w*|resolution)|payroll service)\b/i,
+    notWhen: /\b(software|university|college|institute|association|staffing)\b/i,
+    declared: {
+      unit: 'one client engagement across a year, not one return',
+      buyer: 'the managing partner or sole practitioner',
+      whatTheyDoNotHave: 'capacity outside busy season and a way to sell anything other than compliance work.',
+      leakType: 'the manual labour tax and seasonality. Skilled people spend the year doing work software does once, and the revenue arrives in a four-month window.',
+      vocabulary: [
+        { term: 'realisation rate', means: 'the share of billable time actually collected' },
+        { term: 'write-down', means: 'time worked that was never billed' },
+        { term: 'advisory versus compliance', means: 'the split between work anybody can do and work only they can. The whole strategy conversation in this segment lives here.' },
+        { term: 'busy season', means: 'January to April. Nothing else gets decided in it.' },
+        { term: 'WIP', means: 'work in progress — started, unbilled, and uncollected' },
+      ],
+      software: [
+        { category: 'practice management', products: ['Karbon', 'Canopy', 'Jetpack Workflow'] },
+        { category: 'tax preparation', products: ['UltraTax', 'Lacerte', 'Drake'] },
+        { category: 'billing and proposals', products: ['Ignition', 'Practice Ignition'] },
+      ],
+      askOnCall: [
+        'What share of your revenue is compliance work versus advisory?',
+        'What happens to your capacity between May and December?',
+        'How do new clients find you now?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'insurance_agencies',
+    label: 'Independent insurance agencies',
+    match: /\b(insurance (?:agency|agent|group|services)|independent (?:agent|agency)|risk (?:management|advisor)|benefits (?:agency|group))\b/i,
+    notWhen: /\b(carrier|underwrit\w*|title insurance|university|association|adjuster)\b/i,
+    declared: {
+      unit: 'one household or one commercial account, renewed every year',
+      buyer: 'the principal, who is usually also the top producer',
+      whatTheyDoNotHave: 'anyone working retention. Renewals are assumed until they are not.',
+      leakType: 'retention and manual quoting. The book leaks a few points a year quietly, and quoting is done by hand across several carrier portals.',
+      vocabulary: [
+        { term: 'book of business', means: 'the total premium the agency controls. The asset.' },
+        { term: 'retention rate', means: 'the share of the book that renews. A few points here is the whole growth number.' },
+        { term: 'remarket', means: 'requoting an existing client with another carrier at renewal' },
+        { term: 'producer', means: 'the person who writes new business, often the owner' },
+        { term: 'carrier appointment', means: 'permission to sell a given carrier’s products' },
+      ],
+      software: [
+        { category: 'agency management', products: ['Applied Epic', 'AMS360', 'HawkSoft', 'EZLynx'] },
+        { category: 'comparative rating', products: ['EZLynx Rating', 'PL Rating', 'Turbo Rater'] },
+      ],
+      askOnCall: [
+        'What is your retention running at?',
+        'Who is talking to a client between the sale and the renewal?',
+        'How much of your new business comes from referral versus anything else?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  {
+    id: 'senior_care',
+    label: 'Assisted living and senior communities',
+    match: /\b(assisted living|senior living|memory care|retirement (?:community|home)|independent living|senior care)\b/i,
+    // The whole segment is dominated by national operators; the community name
+    // rarely reveals the parent, which is why GP_CATEGORIES already flags it.
+    notWhen: /\b(brookdale|atria|sunrise senior|life care services|holiday by atria|five star senior|capital senior|reit)\b/i,
+    declared: {
+      unit: 'one occupied unit-month',
+      buyer: 'the executive director or the owner. Confirm which — national operators run most of this segment.',
+      whatTheyDoNotHave: 'a marketing team at the building. Enquiries are handled by whoever is at the desk.',
+      leakType: 'unsold capacity. A vacant unit earns nothing and costs almost the same as a full one, and the tour is the entire conversion event.',
+      vocabulary: [
+        { term: 'census', means: 'how many units are occupied. The number the whole operation runs on.' },
+        { term: 'move-in', means: 'the conversion. Everything upstream is measured against it.' },
+        { term: 'tour', means: 'the visit. Tour-to-move-in is this segment’s close rate.' },
+        { term: 'level of care', means: 'the add-on pricing tier above the base rent' },
+        { term: 'length of stay', means: 'how long a resident stays, which sets the lifetime value of one move-in' },
+      ],
+      software: [
+        { category: 'operations and clinical', products: ['PointClickCare', 'Yardi Senior Living', 'ALIS', 'Eldermark'] },
+        { category: 'enquiry and CRM', products: ['Sherpa', 'Enquire', 'Aline'] },
+      ],
+      askOnCall: [
+        'Where is your census sitting right now?',
+        'When a family enquires at nine at night, what happens?',
+        'What share of tours turn into move-ins?',
+      ],
+    },
+    sourced: [],
+    verifiedAt: '2026-08-21',
+  },
+
+  // ══ THE WORKED EXAMPLE, AND THE ONLY BRIEF WITH ITS SOURCED HALF FILLED ═══
+  // Vin researched this one by hand against primary sources and verified it in
+  // July 2026. It is here as the proof that the SOURCED half works end to end,
+  // and every figure carries its own citation.
+  //
+  // STATED PLAINLY: independent hotels are NOT in GP_CATEGORIES, so this brief
+  // cannot attach to anything the pipeline currently finds. It fires the day
+  // hotels are added as a target category and not before.
+  {
+    id: 'independent_hotels',
+    label: 'Independent hotels, 50-120 rooms, US',
+    match: /\b(hotel|inn\b|boutique hotel|lodge|resort|motel|bed and breakfast)\b/i,
+    // A flagged property has a franchisor doing distribution; the entire brief
+    // is about not having one.
+    notWhen: /\b(marriott|hilton|hyatt|wyndham|choice hotels|ihg|best western|holiday inn|hampton|courtyard|fairfield|la quinta|comfort (?:inn|suites)|days inn|super 8|motel 6)\b/i,
+    declared: {
+      unit: 'one room-night',
+      buyer: 'the general manager or owner-operator. Full authority, no franchisor sign-off.',
+      whatTheyDoNotHave: 'brand marketing, a corporate booking engine, a loyalty programme or a marketing department. Nobody is doing distribution for them.',
+      leakType: 'the middleman tax. A booking platform charges a share to deliver a guest who was frequently already searching for them by name.',
+      vocabulary: [
+        { term: 'OTA', means: 'online travel agency — Expedia, Booking.com, Hotels.com' },
+        { term: 'PMS', means: 'property management system, the hotel’s core operating software' },
+        { term: 'channel manager', means: 'keeps rates and availability in sync across the booking platforms' },
+        { term: 'booking engine', means: 'takes the reservation on the hotel’s own site. Where direct bookings are won or lost.' },
+        { term: 'ADR', means: 'average daily rate — the average price per room sold' },
+        { term: 'RevPAR', means: 'revenue per available room, occupancy multiplied by rate' },
+        { term: 'GOP', means: 'gross operating profit. The metric operators actually manage to, not "profit".' },
+        { term: 'CPOR', means: 'cost per occupied room' },
+        { term: 'metasearch', means: 'the price comparison layer — Google Hotel Ads, Trivago, Kayak' },
+        { term: 'rate parity', means: 'the contract terms governing rate consistency across channels' },
+      ],
+      software: [
+        { category: 'property management', products: ['Cloudbeds', 'Mews', 'roomMaster'] },
+        { category: 'channel management', products: ['SiteMinder', 'Cloudbeds Channel Manager'] },
+        { category: 'guest messaging and upsell', products: ['Akia', 'Canary Technologies', 'Duve'] },
+      ],
+      askOnCall: [
+        'Roughly what share of your bookings come through the travel sites?',
+        'What do you actually net on a room booked through Expedia against one booked on your own site?',
+        'Who is doing your distribution now?',
+      ],
+    },
+    // Every row: a segment fact, a figure, a source, a date. No second person
+    // anywhere — the boot check refuses it, so a citation can never turn into a
+    // claim about the property in front of us.
+    sourced: [
+      { say: 'US independents take about 53.3% of bookings through the travel platforms and 46.7% direct',
+        figure: '53.3%', source: 'Cloudbeds, 2026 State of Independent Hotels', at: '2026-07' },
+      { say: 'the widely quoted 63.4% platform share is the GLOBAL figure and overstates the US by ten points',
+        figure: '63.4%', source: 'Cloudbeds, 2026 State of Independent Hotels', at: '2026-07' },
+      { say: 'platform commission runs 15-25% on the headline rate and 18-30% once the visibility programmes are added',
+        figure: '15-25%', source: 'StayNTouch / RevPARGenius, OTA commission structures', at: '2026-07' },
+      { say: 'a direct booking costs roughly 4.5% all in, and metasearch sits at 8-14%',
+        figure: '4.5%', source: 'BookingWhizz / Foundry CRO, channel cost comparison', at: '2026-07' },
+      { say: 'cancellation runs 21.8% on platform bookings against 10.6% direct',
+        figure: '21.8%', source: 'Cloudbeds, 2026 State of Independent Hotels', at: '2026-07' },
+      { say: 'average booking value is $519 direct against $320 through a platform, a 62% premium',
+        figure: '$519', source: 'SiteMinder, 125M reservations across 44,500 hotels', at: '2026-07' },
+      { say: 'a typical independent site converts between 0.73% and 2.25%, against 4-6% for an optimised one',
+        figure: '0.73%', source: 'Foundry CRO conversion benchmarks', at: '2026-07' },
+      { say: 'North American independents ran ADR down 1.6% and RevPAR down 3.1% across 2025, while every other chain scale improved',
+        figure: '3.1%', source: 'CoStar / Tourism Economics', at: '2026-07' },
+      { say: 'labour cost per occupied room was $46.79 industry-wide in Q1 2026, with wages per occupied room up 21% year on year',
+        figure: '$46.79', source: 'HotelData.com Q1 2026 labour and profitability report', at: '2026-07' },
+    ],
+    verifiedAt: '2026-07-01',
+  },
+];
+
+// Which brief, if any. Pure, so the boot check runs the shipping decision.
+//
+// A brief attaches only on a positive match with NO disqualifier. There is no
+// fallback and no nearest-neighbour: a business we cannot place gets no brief,
+// which costs us a paragraph on a call sheet, while a business placed in the
+// WRONG bucket gets a page of confident vocabulary about somebody else's trade.
+// Those are not the same mistake and only one of them is recoverable.
+const matchNicheBrief = (tradeText) => {
+  const t = String(tradeText || '').toLowerCase().trim();
+  if (t.length < 3) return null;
+  for (const b of NICHE_BRIEFS) {
+    if (!b.match.test(t)) continue;
+    if (b.notWhen && b.notWhen.test(t)) return null;
+    return b;
+  }
+  return null;
+};
+// What travels: a small, serialisable slice. askOnCall is deliberately NOT sent
+// to any model — those are Mike's questions for a phone call, and a model handed
+// a list of questions turns them into assertions, which is the whole failure
+// this block is built to prevent.
+const nicheBriefPayload = (b, nowMs) => {
+  if (!b) return null;
+  const t = Date.parse(String(b.verifiedAt || ''));
+  const ageDays = Number.isFinite(t) ? Math.floor(((Number(nowMs) || Date.now()) - t) / 86400000) : null;
+  const d = b.declared || {};
+  return {
+    id: b.id, label: b.label,
+    unit: d.unit || '', buyer: d.buyer || '', leakType: d.leakType || '',
+    whatTheyDoNotHave: d.whatTheyDoNotHave || '',
+    vocabulary: (d.vocabulary || []).slice(0, 8),
+    software: (d.software || []).slice(0, 4),
+    askOnCall: (d.askOnCall || []).slice(0, 4),
+    sourced: (b.sourced || []).slice(0, 8),
+    verifiedAt: b.verifiedAt || '', ageDays,
+    // Said out loud rather than left for a reader to work out. A brief with no
+    // sourced rows is not broken; it means nobody has done the 2-4 hours of
+    // research yet, and the alternative was inventing the figures.
+    hasFigures: (b.sourced || []).length > 0,
+  };
+};
+// The figures a brief is allowed to put in front of a model, as whole ranges,
+// in exactly the form TRADE_MONEY_UNITS uses. Folded into that list below so
+// there is ONE money rule rather than two.
+// ══ EXTRACT FROM THE RAW SENTENCE, THEN FLATTEN EACH TOKEN ═════════════════
+// The original did it the other way round: flatten the sentence, then match.
+// flatMoney strips every space, so the `[a-z]*` that exists to catch the "k" in
+// "$40k" ran on into the next word and produced units like "$519directagainst",
+// which match nothing. It never showed up on TRADE_JOB_VALUE because every row
+// there ends on its figure; the first sentence with a figure in the MIDDLE
+// exposed it, and this check caught it on its first boot.
+//
+// One extractor, used by the trade table and the library both, so there is
+// still exactly one money rule.
+const moneyUnitsIn = (text) => {
+  const raw = String(text || '').match(/\$\s?[\d.,]+\s*(?:k|m|mm|million|billion)?(?:\s*[-–]\s*\$?\s?[\d.,]+\s*(?:k|m|mm|million|billion)?)?/gi) || [];
+  return raw.map(t => flatMoney(t)).filter(Boolean);
+};
+const NICHE_MONEY_UNITS = (() => {
+  const out = new Set();
+  for (const b of NICHE_BRIEFS) {
+    for (const row of (b.sourced || [])) for (const u of moneyUnitsIn(row.say)) out.add(u);
+  }
+  return [...out];
+})();
+
 const MONEY_RUN_RE = /\$[\d.,]+[a-z]*(?:-\$[\d.,]+[a-z]*)*/g;
 const TRADE_MONEY_UNITS = (() => {
   const out = new Set();
   for (const row of TRADE_JOB_VALUE) {
-    for (const u of (flatMoney(row.say).match(MONEY_RUN_RE) || [])) out.add(u);
+    for (const u of moneyUnitsIn(row.say)) out.add(u);
   }
+  // A niche brief's SOURCED figures are the same kind of thing as a trade job
+  // value: public knowledge about an industry, declared in code, carrying a
+  // citation. They join the existing rule rather than getting one of their own,
+  // and they are licensed under the same condition — the sentence must carry
+  // the WHOLE range, because half of it is a different claim nobody declared.
+  for (const u of NICHE_MONEY_UNITS) out.add(u);
   return [...out];
 })();
 // ══ AND OUR OWN PRICE IS ONLY OURS WHEN IT IS ATTACHED TO OUR WORK ═════════
@@ -32007,6 +32512,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // sheet reads this from the RESPONSE, and a value scoped to where it was
     // computed is the shape that has silently eaten measurements here before.
     let _obsCmp = { days: null, changes: [], why: 'the ledger was not consulted on this lead' };
+    // Which industry brief, if any. Declared beside the other cross-cutting
+    // values for the same reason: the call sheet reads this from the RESPONSE.
+    let _niche = null;
     try {
       const F = [];
       const push = (x) => { if (x) F.push('\u2022 ' + x); };
@@ -32141,6 +32649,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // from a job board. See the observation ledger for why this is the one
         // build that can close PART 4 §1, and for the honest limit: on a business
         // we have never seen before it produces nothing and says so.
+        // ══ WHOSE WORLD IS THIS ═══════════════════════════════════════════
+        // Matched on what WE resolved their trade to be — the search category
+        // and the trade they name on their own homepage — never on the business
+        // name. "Coral Springs Plumbing" and "Moral Fiber Landscaping" are why:
+        // a name is a marketing decision and a category is a measurement.
+        {
+          const _b = matchNicheBrief([verifiedIndustry, customerTrade, req.body.industry].filter(Boolean).join(' '));
+          _niche = nicheBriefPayload(_b, Date.now());
+          if (_niche) {
+            console.log(`\u{1F4D8} NICHE BRIEF [${company}]: ${_niche.label}. The unit is ${_niche.unit}. ${_niche.hasFigures ? `${_niche.sourced.length} sourced figure(s), verified ${_niche.verifiedAt}` : 'no sourced figures yet — the vocabulary and the questions are live, the numbers wait on the research'}. Framing and vocabulary only: nothing here is a claim about THIS business, and none of it can reach an email.`);
+          } else {
+            console.log(`\u{1F4D8} NO NICHE BRIEF [${company}]: nothing in the library matches "${[verifiedIndustry, customerTrade, req.body.industry].filter(Boolean).join(' / ') || 'no trade resolved'}". A business we cannot place gets no brief, which costs a paragraph on the call sheet; placing one in the WRONG bucket would hand the caller a page of confident vocabulary about somebody else's trade.`);
+          }
+        }
         const _obsKey = observationKeyFor({ placeId: effectivePlaceId, website, company, location });
         const _obsNow = observationSnapshot({
           reviewCount: _measured.reviewCount,
@@ -32858,6 +33380,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (careers && careers.totalOpenings) push(`He is hiring right now: ${(careers.roles || []).slice(0, 4).map(r => r.title).filter(Boolean).join(', ') || careers.totalOpenings + ' opening(s)'}. What a business hires for is what it is trying to become.`);
       if (sitePages && sitePages.unlinkedPages && sitePages.unlinkedPages.checked && sitePages.unlinkedPages.unlinkedCount) {
         push(`${sitePages.unlinkedPages.unlinkedCount} page(s) exist on their site that their own navigation does not link to${sitePages.unlinkedPages.campaignCount ? `, ${sitePages.unlinkedPages.campaignCount} of them shaped like campaign pages` : ''}. A page built for an ad is deliberately not in the menu. INTERNAL and POSITIVE ONLY: their absence proves nothing, because a campaign page is routinely kept out of the sitemap.`);
+      }
+      // ══ WHOSE WORLD THIS IS ══════════════════════════════════════════════
+      // Framing, never a finding. See NICHE_BRIEFS: the sourced rows are written
+      // about the SEGMENT and the boot check refuses a second person in them, so
+      // none of this can turn into a claim about the business in front of us.
+      if (_niche) {
+        push(`THEIR SEGMENT (background, not a measurement of them): ${_niche.label}. The unit of business is ${_niche.unit}. Where margin leaks in this kind of business: ${_niche.leakType}`);
+        if (_niche.whatTheyDoNotHave) push(`What a business of this kind does not have: ${_niche.whatTheyDoNotHave}`);
+        for (const row of _niche.sourced.slice(0, 4)) push(`SEGMENT FACT, not about them: ${row.say} [${row.source}, ${row.at}]`);
       }
       // ══ THE ONLY FACTS HERE WITH A DATE ON THEM ══════════════════════════
       // Everything else in this list is a photograph of the business today. See
@@ -33877,7 +34408,7 @@ const eligibleProductsGuidance = `\u2550\u2550\u2550 WHAT WE READ BEYOND THE HOM
   if (req.body.noWebsite === true) _L.push(`THEY HAVE NO WEBSITE AT ALL \u2014 their Google listing carries no site link. Everything a stranger can learn about them lives on one Google page.`);
   if (req.body.builderSite) _L.push(`THEIR SITE RUNS ON ${String(req.body.builderSite).toUpperCase()}, a free page builder. A fact about where the money went, not a design opinion. Never call it cheap or unprofessional \u2014 say what it means: the site was never the priority.`);
   return _L.length ? _L.join('\n') + '\n' : '';
-})()}\n\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${bottleneck} ═══
+})()}\n\n${_niche ? `\u2550\u2550\u2550 THEIR INDUSTRY \u2014 FRAMING ONLY, NEVER A FINDING \u2550\u2550\u2550\nThis is background about the SEGMENT. It is not a measurement of this business and it is not evidence. Use it to understand what the owner's day looks like and to use his own words; never state any of it as something true of HIM. Every finding you write must still come from the measured evidence above.\nSegment: ${_niche.label}.\nThe unit of business: ${_niche.unit}.\nWho buys: ${_niche.buyer}.\nWhat this kind of business does not have: ${_niche.whatTheyDoNotHave}\nWhere the margin usually leaks in this segment: ${_niche.leakType}\n${_niche.vocabulary.length ? `Their vocabulary (use these words, they are his): ${_niche.vocabulary.map(v => `${v.term} = ${v.means}`).join(' | ')}` : ''}\n${_niche.software.length ? `Software this segment runs, by category: ${_niche.software.map(x => `${x.category} \u2014 ${x.products.join(', ')}`).join(' | ')}. You may NOT claim they run any of these. We did not check.` : ''}\n${_niche.sourced.length ? `Published figures for the SEGMENT, each with its source. These describe the category, never this business, and they may only ever appear in a sentence about the category:\n${_niche.sourced.map(x => `- ${x.say} [${x.source}, ${x.at}]`).join('\\n')}` : 'No published figures are on file for this segment yet. Do NOT supply any from your own knowledge \u2014 an industry number nobody sourced is the same fabrication as an invented price.'}\n` : ''}\n\u2550\u2550\u2550 OPERATIONAL EVIDENCE \u2550\u2550\u2550\n${careers && careers.roles.length ? `THEY ARE HIRING RIGHT NOW (from their own careers page): ${careers.roles.map(r => r.title + ' [' + r.type + ']' + (r.salary ? ' \u2014 posted at ' + r.salary : '')).join('; ')}.${careers.opsRoles.length ? ` \u26a0 ${careers.opsRoles.length} of these are repetitive back-office roles \u2014 recurring salary that a one-time build absorbs permanently. This is the software-build argument and it is made of THEIR numbers.` : ''}${careers.salaries.length ? ` \u2705 THESE POSTED SALARIES ARE HIS OWN PUBLISHED NUMBERS \u2014 you may use them in the pitch arithmetic. They are the strongest dollar figure available because he wrote them.` : ''}` : 'No careers page found or no open roles listed \u2014 do NOT claim they are hiring.'}\n${_revPerEmp ? `Revenue per employee: $${Math.round(_revPerEmp/1000)}k across ${verifiedEmployees} people.${_laborHeavy ? ' \u26a0 LABOR-HEAVY \u2014 they are carrying revenue on payroll. This is the strongest automation buy-signal that exists, and it is a MARGIN argument, not a marketing one.' : ' Efficient for their size \u2014 automation is a weak pitch here.'}` : 'Revenue per employee: unknown \u2014 do not speculate about their labor efficiency.'}\n${_opsPainConfirmed ? `\u26a0 Their own reviews describe PROCESS failures (missed callbacks / scheduling / quote delays). That is a throughput problem. Sending more leads into a business that cannot service the ones it has makes their reviews worse \u2014 say so plainly if it fits.` : ''}\n\n    ═══ DIAGNOSED BOTTLENECK: ${bottleneck} ═══
 ${bottleneckWhy}
 
 Their revenue chain is: DEMAND → SITE/CONVERSION → CAPTURE → FOLLOW-UP → OPS.
@@ -37602,6 +38133,14 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // what a person on a cold call wants in front of him. It travels whole so
       // the call sheet can show it and a reload cannot destroy it.
       whatChanged: (_obsCmp && (_obsCmp.changes || []).length) ? _obsCmp : null,
+      // ══ THE INDUSTRY BRIEF ═══════════════════════════════════════════════
+      // Vin's own hotel brief opens "This is background, not a script... Knowing
+      // these numbers isn't so you can present them; it's so you understand what
+      // a GM means." That is precisely what this is for and precisely where it
+      // goes: in front of the person making the call. It reaches the call sheet
+      // and the export, and it is barred from the email by three separate walls
+      // (see NICHE_BRIEFS).
+      nicheBrief: _niche || null,
       // ══ WHEN THIS WAS MEASURED ═══════════════════════════════════════════
       // Nothing anywhere recorded it. On an email that is survivable — it goes
       // out the same day. On a COLD CALL it is not: a rank, a review count and a
@@ -44677,6 +45216,194 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ OBSERVATION LEDGER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE NICHE LIBRARY, AND THE WALL BETWEEN IT AND AN INBOX ═════════════
+  // A static industry library is a fabrication engine if it is not bounded.
+  // "Restaurants lose 30% to DoorDash" sent to a restaurant that does not
+  // deliver is a confident false claim, and PART 3 has exactly one rule that
+  // cannot bend: nothing false may reach a prospect.
+  //
+  // The boundary is enforced by SHAPE, not by an instruction in a prompt —
+  // PART 3 again: "the prompt banned post-submission claims 19 times and every
+  // audit produced one anyway."
+  try {
+    const _fails = [];
+    // ── 1. THE DECLARED HALF CARRIES NO QUANTITIES ───────────────────────
+    // Nothing here is a number, so nothing here can be wrong about a specific
+    // business. Product names are exempt because a proper noun that happens to
+    // contain a digit (AMS360) is not a claim; `label` is exempt because a
+    // segment's size band is part of what the segment IS.
+    for (const b of NICHE_BRIEFS) {
+      const d = b.declared || {};
+      const prose = [d.unit, d.buyer, d.leakType, d.whatTheyDoNotHave]
+        .concat((d.vocabulary || []).map(v => `${v.term} ${v.means}`))
+        .concat(d.askOnCall || []);
+      for (const line of prose) {
+        const hit = String(line || '').match(/\d/);
+        if (hit) _fails.push(`${b.id}: the DECLARED half carries a digit ("${String(line).slice(0, 70)}") — that half exists precisely because it holds nothing that can be a wrong number about a business`);
+      }
+      if (!d.unit || !d.buyer || !d.leakType) _fails.push(`${b.id}: incomplete — a brief without the unit of business, who buys and where the margin leaks is not a brief`);
+      if (!Number.isFinite(Date.parse(String(b.verifiedAt || '')))) _fails.push(`${b.id}: no verification date. Vin's own framework rule six is "date every figure. Markets move."`);
+    }
+
+    // ── 2. EVERY SOURCED ROW IS A CITED FACT ABOUT A SEGMENT ─────────────
+    // The second-person test is the whole safety property. A row that cannot
+    // say "you" or "their" cannot become a claim about the business in front of
+    // us, however it is quoted downstream. That is structural, not advisory.
+    const SECOND_PERSON = /\b(you|your|yours|they|their|theirs|them|his|her)\b/i;
+    let _sourcedRows = 0;
+    for (const b of NICHE_BRIEFS) {
+      for (const row of (b.sourced || [])) {
+        _sourcedRows++;
+        if (!row.say || !row.figure || !row.source || !row.at) {
+          _fails.push(`${b.id}: a sourced row is missing its figure, its source or its date — "${String(row.say || '').slice(0, 60)}". Rule four of the framework: never estimate a number that could be sourced`);
+          continue;
+        }
+        const sp = String(row.say).match(SECOND_PERSON);
+        if (sp) _fails.push(`${b.id}: a sourced row says "${sp[0]}" — that turns a cited segment figure into a claim about THIS business, which is the DoorDash failure exactly`);
+        if (!String(row.say).includes(String(row.figure))) {
+          _fails.push(`${b.id}: the row cites ${row.figure} and its sentence does not contain it, so the citation is attached to the wrong number`);
+        }
+        if (!Number.isFinite(Date.parse(String(row.at).length === 7 ? row.at + '-01' : row.at))) {
+          _fails.push(`${b.id}: a figure carries no readable date`);
+        }
+      }
+    }
+
+    // ── 3. MATCHING. A business we cannot place gets NO brief. ────────────
+    const MATCHES = [
+      ['roofing company', 'crew_trades'], ['plumbing company', 'crew_trades'],
+      ['HVAC contractor', 'crew_trades'], ['custom home builder', 'crew_trades'],
+      ['pest control company', 'recurring_services'],
+      ['med spa', 'aesthetic_practices'], ['plastic surgery practice', 'aesthetic_practices'],
+      ['dermatology practice', 'aesthetic_practices'],
+      ['dental practice', 'clinical_practices'], ['veterinary hospital', 'clinical_practices'],
+      ['personal injury law firm', 'law_firms'], ['estate planning law firm', 'law_firms'],
+      ['accounting and CPA firm', 'accounting_firms'],
+      ['independent insurance agency', 'insurance_agencies'],
+      ['assisted living facility', 'senior_care'],
+    ];
+    for (const [trade, want] of MATCHES) {
+      const got = matchNicheBrief(trade);
+      if (!got || got.id !== want) _fails.push(`"${trade}" resolved to ${got ? got.id : 'NOTHING'}, not ${want} — a business in the wrong bucket gets a page of confident vocabulary about somebody else's trade`);
+    }
+    const NO_MATCH = [
+      ['plumbing supply wholesale', 'a supplier is not a crew'],
+      ['Marriott hotel', 'a flagged property has a franchisor doing distribution — the whole hotel brief is about not having one'],
+      ['bicycle courier service', 'a trade nobody has written a brief for'],
+      ['', 'nothing resolved at all'],
+      ['ab', 'too little to place anybody on'],
+    ];
+    for (const [trade, why] of NO_MATCH) {
+      const got = matchNicheBrief(trade);
+      if (got) _fails.push(`"${trade}" was placed in ${got.id} — ${why}`);
+    }
+
+    // ── 4. THE WALL. A brief sentence cannot become an email. ─────────────
+    // Executed, not asserted from source. And PAIRED: the same email without
+    // the brief sentence must PASS, or this proves nothing at all — a fixture
+    // refused for its word count would tick green on a build with the whole
+    // gate deleted, which is this file's most-recorded trap.
+    {
+      const _spine = 'two of the 65 reviews we read name the same missed callback';
+      const _opts = { spine: _spine, figures: ['2', '65'], money: '', earned: '', count: '', trade: 'roofer' };
+      const _clean =
+        'Dave, two of your reviews describe the same missed callback, and both are from the last few months.\n\n'
+        + 'That is the week somebody decides whether to keep waiting or call the next name on the list.\n\n'
+        + 'Was that a one-off, or does it come up on your end?';
+      const _base = verifyBrainEmail(_clean, _opts);
+      if (!_base.ok) {
+        _fails.push(`the CONTROL email is refused (${_base.why}) — every refusal below would then prove nothing, because the fixture was already failing for a different reason`);
+      } else {
+        // One brief sentence, dropped into an otherwise passing email.
+        const INTRUDERS = [
+          'Roofers typically give up a quarter of every job to lead platforms.',
+          'Most contractors your size are running the same setup.',
+          'Businesses like yours usually see this.',
+          'In your industry that is the normal pattern.',
+          'The average practice loses money here.',
+        ];
+        for (const line of INTRUDERS) {
+          const withIt = 'Dave, two of your reviews describe the same missed callback, and both are from the last few months.\n\n'
+            + line + '\n\n'
+            + 'Was that a one-off, or does it come up on your end?';
+          const v = verifyBrainEmail(withIt, _opts);
+          if (v.ok) _fails.push(`"${line}" passed into an email body — a claim about his CATEGORY, which he knows better than we do and cannot check`);
+        }
+      }
+    }
+
+    // ── 5. AND THE GATE MUST NOT EAT A LEGITIMATE SENTENCE ────────────────
+    // A filter loosened until it catches nothing is one failure; a filter
+    // tightened until it catches the working copy is the more expensive one.
+    // PATTERN_GENERALITY REQUIRES "usually" in the review-pattern sentence, so
+    // the generality marker alone can never be what triggers a refusal.
+    {
+      const _spine2 = 'six of the 40 reviews we read describe a quote that never came back';
+      const _opts2 = { spine: _spine2, figures: ['6', '40'], money: '', earned: '', count: '', trade: 'roofer' };
+      const KEEP = [
+        'Dave, six different people describe a quote that never came back, and it is usually the same week they give up.\n\nThat is somebody who had already decided to spend money with you.\n\nIs that something you have seen from your end?',
+        'Dave, six people typically wait about a week for a quote from you before they call somebody else.\n\nThat is the gap where the job goes elsewhere.\n\nHad you seen that?',
+      ];
+      for (const body of KEEP) {
+        const v = verifyBrainEmail(body, _opts2);
+        if (!v.ok && /claim about his CATEGORY|whole industry/.test(String(v.why))) {
+          _fails.push(`a sentence about HIS OWN customers was refused as an industry claim: ${v.why}. The gate must key on a trade noun beside the generality marker, never on the marker alone`);
+        }
+      }
+    }
+
+    // ── 6. THE MONEY RULE IS ONE RULE, NOT TWO ───────────────────────────
+    // A brief's cited figure survives the audit gate under exactly the trade
+    // table's condition — the sentence carries the WHOLE range — and an
+    // invented one still does not.
+    {
+      const _keep = stripUnmeasuredMoney('Average booking value is $519 direct against $320 through a platform.', '');
+      if (_keep.cut.length) _fails.push('a cited segment figure is being stripped out of the audit, so the library can be read and never used');
+      const _drop = stripUnmeasuredMoney('A room booked through them nets about $777 after fees.', '');
+      if (!_drop.cut.length) _fails.push('an INVENTED price survives the audit gate — folding the library into TRADE_MONEY_UNITS has licensed arbitrary figures');
+    }
+
+    // ── 7. AND THE WIRES. Needles assembled at runtime, comments stripped.
+    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (_src.indexOf('matchNiche' + 'Brief([verifiedIndustry') < 0) {
+      _fails.push('the research route no longer looks a brief up, so the library is a data structure nothing reads');
+    }
+    if (_src.indexOf('niche' + 'Brief: _niche || null') < 0) {
+      _fails.push('the brief is computed and never returned, so the call sheet and the export cannot show it — instance twenty-three of measured, correct, and dropped one line before use');
+    }
+    if (_src.indexOf('for (const u of NICHE_MONEY' + '_UNITS) out.add(u)') < 0) {
+      _fails.push('the library’s figures are outside the one money rule, so a cited figure would be stripped from the audit that quotes it');
+    }
+    // The library must never be handed to the writer. Nothing in an email path
+    // may read it, and a source scan is the only way to see that from here.
+    // ══ AND THE HOLE THIS ASSERTION HAD ON ITS FIRST RUN ══════════════════
+    // It was `if (i < 0) continue;` — so renaming or moving any of the three
+    // functions made the whole assertion evaporate and the check ticked green
+    // on a build it was no longer guarding. Found by falsification: pointing the
+    // list at three names that do not exist passed cleanly. A check that cannot
+    // find what it guards has to SAY so, or it is the vacuous pass this file
+    // records more than any other failure.
+    for (const forbidden of ['buildWriterBrief', 'buildRewriteBrief', 'buildEmailEvidence']) {
+      const i = _src.indexOf('const ' + forbidden);
+      if (i < 0) {
+        _fails.push(`${forbidden} could not be found, so nothing here is checking whether the email path reads the library. Rename it back or point this list at the new name`);
+        continue;
+      }
+      const body = _src.slice(i, i + 6000);
+      if (/NICHE_BRIEFS|_niche\b|nicheBrief/.test(body)) {
+        _fails.push(`${forbidden} reads the niche library — industry framing is for the call and the audit, and the email path must never see it`);
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ NICHE BRIEF CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ NICHE BRIEF CHECK: ${NICHE_BRIEFS.length} briefs, split so the boundary is structural rather than instructional. The DECLARED half — the unit of business, who buys, the vocabulary, which software to ASK about, the questions worth asking — carries no digit anywhere, so none of it can be a wrong number about a business. The ${_sourcedRows} SOURCED row(s) each carry a figure, a source and a date, and none may contain a second person, so a cited segment fact is structurally incapable of becoming a claim about the company in front of us. A brief sentence dropped into an otherwise passing email is refused five ways; the same email without it passes, so the refusals mean something. A sentence about his own customers using the same words is untouched. Cited figures join the ONE money rule the audit already had. And no email-building function reads the library at all.`);
+    }
+  } catch (e) {
+    console.log(`⛔ NICHE BRIEF CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ HIS REVIEWS ARE OUR READ ON HIM, NOT OUR SENTENCE TO HIM ════════════

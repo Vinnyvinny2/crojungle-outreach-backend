@@ -376,6 +376,7 @@ const leadToRow = (l) => ({
         rateLimited: l.rateLimited ?? null,
         duplicateListing: l.duplicateListing ?? null,
         whatChanged: l.whatChanged ?? null,
+        nicheBrief: l.nicheBrief ?? null,
         // A refusal is terminal — the server refused to research a non-owner
         // and the lead must not render as an ordinary un-researched lead after
         // a refresh, inviting the exact re-run that can only refuse again.
@@ -663,6 +664,7 @@ const rowToLead = (r) => ({
   rateLimited: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rateLimited) ?? null,
   duplicateListing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.duplicateListing) ?? null,
   whatChanged: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.whatChanged) ?? null,
+  nicheBrief: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.nicheBrief) ?? null,
   notAFit: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.notAFit) ?? null,
   rejectedReason: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rejectedReason) ?? null,
   rejectedAt: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rejectedAt) ?? null,
@@ -1248,6 +1250,9 @@ const applyResearchResult = (prev, data, ctx) => {
         // most of them are internal-only, which is exactly what a person on a
         // cold call wants in front of him.
         L.whatChanged = data.whatChanged ?? L.whatChanged ?? null;
+        // The industry brief for this segment. Framing and vocabulary for the
+        // person making the call; the server has already barred it from email.
+        L.nicheBrief = data.nicheBrief ?? L.nicheBrief ?? null;
         L.researchedAt = data.researchedAt ?? L.researchedAt ?? null;
         L.callWindow = data.callWindow ?? L.callWindow ?? null;
         // Only overwrite when the incoming one actually has results. A merge that
@@ -1330,6 +1335,9 @@ const applyResearchResult = (prev, data, ctx) => {
         // most of them are internal-only, which is exactly what a person on a
         // cold call wants in front of him.
         L.whatChanged = data.whatChanged ?? L.whatChanged ?? null;
+        // The industry brief for this segment. Framing and vocabulary for the
+        // person making the call; the server has already barred it from email.
+        L.nicheBrief = data.nicheBrief ?? L.nicheBrief ?? null;
         L.researchedAt = data.researchedAt ?? L.researchedAt ?? null;
         L.callWindow = data.callWindow ?? L.callWindow ?? null;
         L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
@@ -1923,6 +1931,29 @@ const auditRecordFor = (lead) => {
     // you are looking at; the export is for the fifty you are dialling.
     researchedAt: l.researchedAt || '',
     ageDays: l.researchedAt ? Math.floor((Date.now() - new Date(l.researchedAt).getTime()) / 86400000) : null,
+    // ══ WHOSE WORLD THIS IS ════════════════════════════════════════════════
+    // Vin's own hotel brief opens: "This is background, not a script. Knowing
+    // these numbers isn't so you can present them; it's so you understand what
+    // a GM means when he says his OTA mix is about half, and so you ask a
+    // sharper next question." That is exactly the job this block does on the
+    // sheet somebody is holding while they dial.
+    //
+    // The server decided what is in here. Nothing on this side reclassifies
+    // anything: the sourced rows arrive already written about the SEGMENT, with
+    // their citations attached, and they are rendered that way.
+    niche: (() => {
+      const n = l.nicheBrief || null;
+      if (!n) return null;
+      return {
+        label: n.label || '', unit: n.unit || '', buyer: n.buyer || '',
+        leakType: n.leakType || '', whatTheyDoNotHave: n.whatTheyDoNotHave || '',
+        vocabulary: arr(n.vocabulary).filter(v => v && v.term),
+        software: arr(n.software).filter(x => x && x.category),
+        askOnCall: arr(n.askOnCall).filter(Boolean),
+        sourced: arr(n.sourced).filter(x => x && x.say),
+        verifiedAt: n.verifiedAt || '', ageDays: Number.isFinite(n.ageDays) ? n.ageDays : null,
+      };
+    })(),
     // ══ THE ONLY FACTS ON THIS SHEET WITH A DATE ═══════════════════════════
     // Everything else here is a photograph of the business as it is today. This
     // is what MOVED between two looks, and the server has already decided which
@@ -2008,6 +2039,26 @@ const auditExportHtml = (records, meta) => {
           (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to. A page built for an ad is not in the menu by design. Their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li>' + e(x) + '</li>') : '')
           + (r.adsVerified ? '<p>Listed as a verified advertiser in Google\'s Ads Transparency Center.</p>' : ''))
       + sec('What he clearly cares about', r.whatHeCaresAbout ? '<p>' + p(r.whatHeCaresAbout) + '</p>' : '')
+      + (r.niche ? sec('Their world',
+          '<p class="dim">Background on the segment, not a measurement of this business. None of it is a claim about them and none of it is in the email.</p>'
+          + '<p><b>' + e(r.niche.label) + '</b></p>'
+          + (r.niche.unit ? '<p>The unit of business: ' + p(r.niche.unit) + '</p>' : '')
+          + (r.niche.buyer ? '<p>Who buys: ' + p(r.niche.buyer) + '</p>' : '')
+          + (r.niche.whatTheyDoNotHave ? '<p>What this kind of business does not have: ' + p(r.niche.whatTheyDoNotHave) + '</p>' : '')
+          + (r.niche.leakType ? '<p>Where the margin usually leaks: ' + p(r.niche.leakType) + '</p>' : '')
+          + (r.niche.vocabulary.length ? '<h4>Their words</h4><table class="sig">' + r.niche.vocabulary.map(v =>
+              '<tr><td>' + e(v.term) + '</td><td>' + p(v.means || '') + '</td></tr>').join('') + '</table>' : '')
+          + (r.niche.software.length ? '<h4>Ask which of these they run</h4>' + ul(r.niche.software, x =>
+              '<li>' + e(x.category) + ': ' + e((x.products || []).join(', ')) + '</li>')
+              + '<p class="dim">We did not check. Asking is a diagnostic that costs nothing; asserting one would be a guess.</p>' : '')
+          + (r.niche.sourced.length ? '<h4>Published figures for the segment</h4>' + ul(r.niche.sourced, x =>
+              '<li>' + p(x.say) + ' <span class="dim">[' + e(x.source || '') + ', ' + e(x.at || '') + ']</span></li>')
+              + '<p class="dim">These describe the category. Not one of them is a measurement of this business, and saying one as if it were is the fastest way to lose an operator who knows his own numbers.</p>' : '')
+          + (r.niche.askOnCall.length ? '<h4>Questions worth asking</h4>' + ul(r.niche.askOnCall, q => '<li>' + p(q) + '</li>') : '')
+          + (r.niche.ageDays !== null && r.niche.ageDays > 540
+              ? '<p class="dim">This brief was verified ' + e(r.niche.verifiedAt) + ', over eighteen months ago. Re-check any figure before saying it out loud.</p>'
+              : (r.niche.verifiedAt ? '<p class="dim">Verified ' + e(r.niche.verifiedAt) + '.</p>' : ''))
+        ) : '')
       + sec('What changed since we last looked',
           (r.changes || []).length
             ? '<ul>' + (r.changes || []).map(c => '<li>' + p(c.say) + (c.sayable ? '' : ' <span class="dim">(ours to know, not his to hear)</span>') + '</li>').join('') + '</ul>'
@@ -2023,14 +2074,18 @@ const auditExportHtml = (records, meta) => {
       + sec('What is actually worth selling them',
           (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
           + (r.askOnTheCall ? '<p class="ask"><b>Ask before pitching:</b> ' + p(r.askOnTheCall) + '</p>' : ''))
-      // ══ THE VALUES, NOT HOW WE GOT THEM ═══════════════════════════════════
-      // The third column was the proof of method — how each signal was checked.
-      // Useful while debugging the machine, noise on a sheet somebody is holding
-      // during a cold call. The numbers stay because "176 reviews at 4.8, third
-      // of twenty" is exactly what gets said out loud; the provenance goes.
-      + sec('Measured signals',
-          r.signals.length ? '<table class="sig">' + r.signals.map(x =>
-            '<tr><td>' + e(x.label) + '</td><td class="' + (x.ok === false ? 'bad' : x.ok === true ? 'good' : '') + '">' + p(x.val) + '</td></tr>').join('') + '</table>' : '')
+      // ══ THE SIGNAL TABLE IS GONE FROM THE EXPORT, ON PURPOSE ══════════════
+      // It went in two steps. First the provenance column left — useful while
+      // debugging the machine, noise on a sheet somebody is holding during a
+      // cold call. Then the table itself, because what remained was a column of
+      // "Not checked" rows next to a handful of numbers that the prose sections
+      // above already say better: "176 reviews at 4.8, third of twenty" belongs
+      // in the read, not in a grid the caller has to interpret mid-dial.
+      //
+      // The signals are STILL COMPUTED and still on the audit screen, where
+      // reading a grid is what you are there to do. auditRecordFor keeps
+      // carrying them so nothing downstream loses a measurement — this is a
+      // rendering decision about one artefact, not a deletion.
       + sec('Do not say', ul(r.claimRisks.concat(r.criticalFactCheck), x => '<li>' + p(typeof x === 'string' ? x : (x.what || JSON.stringify(x))) + '</li>'))
       + sec('The email as written', r.pitch ? '<p class="dim">Subject: ' + p(r.subject) + '</p><pre>' + p(r.pitch) + '</pre>' : '')
       + sec('Full-page renders', ul(r.renders, s => '<li>' + e(s.label) + ': <a href="' + e(s.url) + '">' + e(s.url) + '</a></li>'))
@@ -10249,6 +10304,28 @@ function callDataFor(lead, result) {
         return days <= 1
           ? 'Measured today. Everything below is current.'
           : `Measured ${days} days ago. Re-check the search position and the review count before you say either out loud \u2014 both move, and being wrong about one is how this call ends.`;
+      })(),
+      // ══ WHOSE WORLD THIS IS ═════════════════════════════════════════════
+      // Background on the segment. Vin's own brief for this says it best: it is
+      // not so you can present the numbers, it is so you understand what the
+      // owner means and can ask a sharper question. Rendered in that order —
+      // what the business IS, then his words, then what to ASK.
+      (() => {
+        const n = lead.nicheBrief || null;
+        if (!n) return '';
+        const L = [];
+        L.push(`Their world \u2014 ${n.label}`);
+        if (n.unit) L.push(`\u2022 The unit of business: ${n.unit}`);
+        if (n.whatTheyDoNotHave) L.push(`\u2022 What this kind of business does not have: ${n.whatTheyDoNotHave}`);
+        if (n.leakType) L.push(`\u2022 Where the margin usually leaks: ${n.leakType}`);
+        const vocab = (n.vocabulary || []).slice(0, 5);
+        if (vocab.length) L.push(`\u2022 His words: ${vocab.map(v => `${v.term} (${v.means})`).join(' \u00b7 ')}`);
+        const sw = (n.software || []).slice(0, 3);
+        if (sw.length) L.push(`\u2022 Ask which he runs: ${sw.map(x => `${x.category} \u2014 ${(x.products || []).join(', ')}`).join(' \u00b7 ')}. We did not check, so ask; do not assert.`);
+        for (const row of (n.sourced || []).slice(0, 4)) L.push(`\u2022 SEGMENT, not him: ${row.say} [${row.source}]`);
+        for (const q of (n.askOnCall || []).slice(0, 3)) L.push(`\u2022 Worth asking: ${q}`);
+        L.push('None of this is a measurement of this business and none of it is in the email. It is here so you follow what he means and ask a better next question.');
+        return L.join('\n');
       })(),
       // ══ WHAT MOVED. THE ONLY DATED FACTS ON THIS SHEET ══════════════════
       // Every other line here describes the business as it is today. These come
