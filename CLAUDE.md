@@ -2113,9 +2113,22 @@ as successful either way.
   lookup timed out would be the false-absence failure aimed at the one setting
   that decides whether anything arrives at all.
 
-**Unproven against a live domain.** DNS is blocked from the build environment, so
-the parsing is exercised and the lookup is stock Node that has never run here. The
-boot check says so rather than implying it was tested.
+**Was unproven against a live domain. RUN FOR REAL 2026-08-21 and it came back
+clean.** `crojungleteam.com`: SPF present (`v=spf1 include:_spf.google.com ~all`,
+soft fail, normal and fine), DMARC present at `p=quarantine`, MX present so the
+domain can RECEIVE the reply this whole system exists to earn. No blockers, no
+warnings. DKIM correctly reported as not checked rather than guessed.
+
+That matters beyond one lookup: PART 4 §3 has carried "deliverability is unproven"
+for weeks as though the whole of it needed real sends to answer. Half of it never
+did, and that half is now measured and healthy. What remains unproven is the part
+only sending can settle — inbox placement, reputation at volume, and whether one
+mailbox at 25 a day holds. The two hard bounces in twelve sends are still the only
+send evidence this project has.
+
+DNS is blocked from the BUILD environment, so the boot check still says the lookup
+has never run there and only the parsing is exercised. That wording stays accurate
+and should not be loosened on the strength of one live call from Render.
 
 **And a fifth self-matching needle.** The assertion guarding the resolver-failure
 branch was written as a literal, sat in the check's own body, and passed on a
