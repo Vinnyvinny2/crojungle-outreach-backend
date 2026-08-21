@@ -1079,6 +1079,22 @@ const TAB_ID = (() => {
   } catch { return 't-nostorage'; }
 })();
 const getInflightJobs = () => { try { return JSON.parse(localStorage.getItem(INFLIGHT_KEY) || '{}'); } catch { return {}; } };
+// ---- HOW LONG A JOB RECORD MEANS ANYTHING -------------------------------
+// A record means "a poller may still be watching this job". The poller gives
+// up at its own wall-clock backstop of 90 minutes, so past that no poller
+// exists anywhere and the record is dead.
+//
+// batchCandidates had NO age check at all. A tab closed mid-run leaves up to
+// three records behind, and the resume path deliberately collects only records
+// from its OWN tab - so those leads were excluded from every future batch
+// forever, with nothing on screen saying why. Three consumers were each
+// hand-writing their own version of this test and one of them was missing.
+const INFLIGHT_LIVE_MS = 90 * 60 * 1000;
+const inflightIsLive = (rec, now) => {
+  if (!rec || !rec.jobId) return false;
+  const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  return (t - (Number(rec.at) || 0)) < INFLIGHT_LIVE_MS;
+};
 const setInflightJob = (leadId, jobId) => {
   try { const m = getInflightJobs(); m[leadId] = { jobId, at: Date.now(), tab: TAB_ID }; localStorage.setItem(INFLIGHT_KEY, JSON.stringify(m)); } catch {}
 };
@@ -2527,7 +2543,7 @@ const batchCandidates = (allLeads, o) => {
     //
     // Passed IN rather than read from localStorage here, so this stays a pure
     // function the harness can drive.
-    .filter((l) => !(inflight && inflight[l.id] && inflight[l.id].jobId))
+    .filter((l) => !(inflight && inflightIsLive(inflight[l.id], opts.now)))
     .slice()
     .sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0))
     .slice(0, limit);
@@ -4136,7 +4152,13 @@ function FindView({
       added.push(leadFromCompany(c));
     }
     if (!added.length) return 0;
-    saveLeads([...existing, ...added], added[added.length - 1]);
+    // EVERY lead, not the last one. saveLeads pushes only what it is told
+    // changed, and this handed it added[added.length - 1] - so moving fifty
+    // businesses from Find wrote ONE row to Supabase and left the other
+    // forty-nine existing in the browser tab alone. Close the tab, or open the
+    // app anywhere else, and they were gone. saveLeads has always accepted an
+    // array here; nothing else needed to change.
+    saveLeads([...existing, ...added], added);
     const moved = new Set(added.map(l => String(l.name || '').toLowerCase()));
     const newQ = loadDiscovered().filter(c => !moved.has(String((c && c.name) || '').toLowerCase()));
     saveDiscovered(newQ); setDiscovered(newQ);
@@ -6569,7 +6591,7 @@ function ResearchView({
     if (!rec || !rec.jobId) return;
     // Older than the server's own 8-minute abandon window: it will never return
     // anything useful, so clear it rather than poll something already dead.
-    if (Date.now() - (rec.at || 0) > 10 * 60 * 1000) { clearInflightJob(lead.id); return; }
+    if (!inflightIsLive(rec)) { clearInflightJob(lead.id); return; }
     // ══ ONLY THIS TAB'S OWN RUNS ARE COLLECTED AUTOMATICALLY ═══════════════
     // The dependency is the lead id, so this fires on mount, on every sidebar
     // click, and again on the automatic navigation App does after every add —
@@ -6810,11 +6832,16 @@ function ResearchView({
         // this is the control that spends real credits.
         React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7 } }, 'Audit in bulk'),
         (() => {
-          // The count on the button must come from the SAME filtered pool the
-          // button will act on, or it promises leads it will then skip.
+          // The count on the button must come from the SAME pool the button
+          // will act on. It read allLeads, which the Search box above it
+          // REPLACES with a filtered subset - while startBatch spends money on
+          // getLeads(), the whole pipeline. So typing three letters made the
+          // button say "3 ready" and then audit fifty. The search box is a
+          // find-a-lead box, not a scope control; the scope is the pipeline.
           const _inf = getInflightJobs();
-          const ready = batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone, inflight: _inf }).length;
-          const pool = batchCandidates(allLeads, { limit: 9999, includeResearched: batchIncludeDone, inflight: _inf }).length;
+          const _batchPool = getLeads();
+          const ready = batchCandidates(_batchPool, { limit: batchSize, includeResearched: batchIncludeDone, inflight: _inf }).length;
+          const pool = batchCandidates(_batchPool, { limit: 9999, includeResearched: batchIncludeDone, inflight: _inf }).length;
           return React.createElement(React.Fragment, null,
             React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center', marginBottom: 5 } },
               React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'Audit up to'),
@@ -6912,7 +6939,7 @@ function ResearchView({
         const _inf = getInflightJobs();
         const _runningNames = new Set(batchAt.running || []);
         const isRunning = (l) => !!(l && (
-          (_inf[l.id] && _inf[l.id].jobId && (Date.now() - (_inf[l.id].at || 0) < 10 * 60 * 1000))
+          inflightIsLive(_inf[l.id])
           || _runningNames.has(l.name)
           || researchingId === l.id));
         const isAudited = leadHasAudit;

@@ -793,6 +793,23 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ WHAT THE BULK CONTROLS SPEND ON ═══════════════════════════════════════
+// Two defects on the path Vin uses every morning, both invisible to any test
+// that does not read the call site. Needles assembled at runtime with comment
+// lines stripped: a literal needle finds itself, and both comments quote the
+// broken lines.
+{
+  const N = (...p) => p.join('');
+  const bare = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  if (bare.indexOf(N('saveLeads([...existing, ...add', 'ed], added);')) < 0) {
+    fails.push('moving companies from Find to the pipeline no longer pushes every lead to Supabase - it used to hand saveLeads the LAST one, so fifty moved and one was saved, and the other forty-nine existed only in that browser tab');
+  }
+  if (bare.indexOf(N('const _batchPool = getLe', 'ads();')) < 0
+      || bare.indexOf(N('batchCandidates(_batchP', 'ool, { limit: batchSize')) < 0) {
+    fails.push('the bulk panel counts a different pool from the one startBatch spends on - it read allLeads, which the Search box above it REPLACES with a filtered subset, so typing three letters made the button say "3 ready" and then audit fifty');
+  }
+}
+
 // 7. AND EVERY MERGE GOES THROUGH IT. A second call site that assembles the
 // lead by hand is the same defect as a second research body, one stage later.
 {

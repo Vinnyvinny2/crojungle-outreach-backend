@@ -51,6 +51,7 @@ const walk = (n, fn) => {
 // spends anything. That refusal is the point — it is what stops a stray useEffect
 // starting fifty audits nobody asked for.
 const NEED = ['RESEARCH_TRIGGERS', 'measuredFieldsFrom', 'finalLeadScore', 'predictReach', 'buildResearchBody',
+  'INFLIGHT_LIVE_MS', 'inflightIsLive',
   'applyResearchResult', 'buildComposeBody', 'readComposeResponse', 'applyGeneratedEmail',
   'pollResearchJob', 'researchViaQueue', 'runBatchAudit', 'batchCandidates',
   // The progress panel's own reducer. It lives at module scope precisely so it
@@ -122,11 +123,11 @@ const fetch = async (url, init) => {
   throw new Error('the batch called an endpoint this harness does not know about: ' + url);
 };
 ${[...NEED].map(n => found.get(n)).join('\n')}
-return { runBatchAudit, batchCandidates, pollResearchJob, batchProgressReduce, clock: () => __W.clock, __store: () => __store };
+return { runBatchAudit, batchCandidates, pollResearchJob, batchProgressReduce, inflightIsLive, INFLIGHT_LIVE_MS, clock: () => __W.clock, __store: () => __store };
 `;
 
 // The clock and the immediate-timer, shared by every scenario.
-const EXPORTS = "return { runBatchAudit, batchCandidates, pollResearchJob, batchProgressReduce, clock: () => __W.clock, __store: () => __store };";
+const EXPORTS = "return { runBatchAudit, batchCandidates, pollResearchJob, batchProgressReduce, inflightIsLive, INFLIGHT_LIVE_MS, clock: () => __W.clock, __store: () => __store };";
 const RealDate = Date;
 const makeW = (opts) => {
   const W = {
@@ -307,6 +308,28 @@ const runBatch = async (opts) => {
     if (withDone !== 'c,e,a') fails.push(`"include re-runs" produced [${withDone}] instead of putting the researched lead back in`);
     const capped = api.batchCandidates(mixed, { limit: 1 }).map(x => x.id).join(',');
     if (capped !== 'e') fails.push(`the size limit produced [${capped}] instead of the single highest-scoring candidate`);
+
+    // ══ AND A JOB RECORD FROM A DEAD TAB MUST NOT STRAND A LEAD ═══════════
+    // This filter had no age check at all. A tab closed mid-run leaves up to
+    // three in-flight records behind, and the resume path deliberately collects
+    // only records from its OWN tab — so those leads were refused by every
+    // future batch forever, and nothing on screen said why. Both directions:
+    // a lead genuinely running must still be skipped, or an interrupted run
+    // pays twice for the same audit.
+    {
+      const now = 1_800_000_000_000;
+      const live = { e: { jobId: 'j1', at: now - 60_000 } };
+      const dead = { e: { jobId: 'j1', at: now - (api.INFLIGHT_LIVE_MS + 60_000) } };
+      const withLive = api.batchCandidates(mixed, { limit: 50, inflight: live, now }).map(x => x.id).join(',');
+      if (withLive !== 'a') fails.push(`a lead whose research is running right now was taken again [${withLive}] — that is a second full paid audit of a business we are already auditing`);
+      const withDead = api.batchCandidates(mixed, { limit: 50, inflight: dead, now }).map(x => x.id).join(',');
+      if (withDead !== 'e,a') fails.push(`a job record older than the poller's own give-up point still excludes the lead [${withDead}] — a tab closed mid-run strands up to three leads outside every future batch, permanently and silently`);
+      if (api.inflightIsLive(null, now)) fails.push('a missing job record reads as a running job');
+      if (api.inflightIsLive({ at: now }, now)) fails.push('a record with no job id reads as a running job');
+      if (api.INFLIGHT_LIVE_MS < 30 * 60 * 1000) {
+        fails.push(`the live window is ${Math.round(api.INFLIGHT_LIVE_MS / 60000)} minutes — shorter than a lead can legitimately spend queued behind a fifty-lead run, so a running lead would be picked a second time`);
+      }
+    }
   }
 
   // ══ THE POLLER'S CLOCK MUST MEASURE WORK, NOT QUEUE TIME ═════════════════
