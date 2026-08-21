@@ -93,6 +93,300 @@ const sbFetch = async (path, options = {}) => {
   } catch(e) { console.warn('Supabase fetch failed:', e.message); return null; }
 };
 
+// ---- ONE PERSISTED BLOCK, NOT TWO ----------------------------------------
+// leadToRow used to build this list inside the first branch of a ternary and a
+// SECOND, five-field version inside the else. A lead added from Find has no
+// brainAudit yet, so it took the short branch and every Find-time measurement
+// was dropped on save: placeId, industry, reviewCount, rating, marketsSeen,
+// marketsAbsent, buyingLane, reachPredict, jobPostedAt, icpProfile. Those are
+// exactly the leads about to be researched, and placeId is what locates their
+// Google reviews - the review-pattern mine, one of only two findings with a
+// real human reply behind it. Add fifty from Find, reload the tab, run the
+// batch, and every one of them is researched without its own place id.
+//
+// Two implementations of one operation is the disease this file is mostly a
+// record of, and the second copy is always the one that rots because it only
+// runs in the case nobody tests. clientcheck.js EXECUTES this one.
+const persistedFieldsFrom = (l) => ({
+
+      lsa: l.lsa ?? null,
+      // ══ THE PREDICTOR HAS NEVER BEEN GRADED, AND THIS IS WHY ═══════════
+      // Twelve leads across twelve runs all logged: "no prediction was sent for
+      // this lead, so there is nothing to grade. This is a LEGACY LEAD." Every
+      // one of them. Including leads discovered minutes earlier, which the
+      // message insists "do carry it".
+      //
+      // reachPredict is computed at Find time and held in memory. It was never
+      // written to leadToRow, so it never reached Supabase, so the moment a lead
+      // was saved and reloaded the value was gone. The pipeline holds 160+ leads
+      // and every one of them is loaded from the cloud at boot — so by the time
+      // anything is researched, the prediction has always already been lost.
+      //
+      // The consequence is not a missing log line. The predictor decides which
+      // leads are worth spending Firecrawl and Hunter credits on, and its
+      // accuracy has never once been measured. We have been running a bet-sizing
+      // model for months with the scoreboard disconnected.
+      reachPredict: l.reachPredict ?? null,
+      reachPredictWhy: l.reachPredictWhy ?? null,
+      // ══ THE SAME LEAK, FIVE MORE FIELDS ═══════════════════════════════
+      // Auditing every field the research request sends against what leadToRow
+      // actually writes turned up five more computed at Find time and never
+      // saved. Each one is gone the moment a lead makes a round trip through
+      // Supabase, which every one of the 160+ leads in this pipeline has done.
+      //
+      // verifiedCEO is the costly one: scoreReachability reads it, so a lead
+      // that had a confirmed decision-maker at discovery arrives at research
+      // with none, and scores lower than the evidence we already paid for
+      // justifies. The other four quietly weaken the pitch framing rather than
+      // the score \u2014 a funding or exit trigger that would have set the buying
+      // window, the ICP condition that matched, the lane, and which roles were
+      // manual (the whole software-build argument).
+      //
+      // None of these is expensive to keep. They were simply never added to the
+      // one function that decides what survives.
+      verifiedCEO: l.verifiedCEO ?? null,
+      verifiedCEOTitle: l.verifiedCEOTitle ?? null,
+      // The job-signal fields, so a re-run does not lose the window. These are
+      // NOT duplicated below — rowToLead has produced nine separate
+      // duplicate-key collisions and every one silently blanked data that had
+      // just loaded correctly, so each of these appears exactly once here and
+      // exactly once in rowToLead.
+      signalAgeDays: l.signalAgeDays ?? null,
+      signalDate: l.signalDate ?? null,
+      raiseAmount: l.raiseAmount ?? null,
+      jobPostingUrl: l.jobPostingUrl ?? null,
+      jobPostedAt: l.jobPostedAt ?? null,
+      marketingRoles: l.marketingRoles ?? null,
+      opsRoles: l.opsRoles ?? null,
+      marketingChannels: l.marketingChannels ?? null,
+      discoverySignals: l.discoverySignals ?? null,
+      icpProfile: l.icpProfile ?? null,
+      buyingLane: l.buyingLane ?? null,
+      manualCategories: l.manualCategories ?? null,
+      adCount: l.adCount ?? null,
+      outreachChannel: l.outreachChannel ?? null,
+      ownerEmailMatch: l.ownerEmailMatch ?? null,
+      ownerEmailMatchReason: l.ownerEmailMatchReason ?? null,
+      localVisibility: l.localVisibility ?? null,
+      // placeId and industry are INPUTS to research, not outputs, which is why they
+      // were never saved — and why the two highest-value signals in the system
+      // silently switched themselves off the moment a lead was reloaded.
+      // placeId locates their Google reviews (the review-pattern mine); industry
+      // builds the query a customer would type (the local-rank audit). Without them
+      // research logs "SKIPPED — no Google placeId" and "skipped — no industry" and
+      // carries on, so the loss is invisible unless you read the log line by line.
+      // A live run lost both on all three leads, including one that had them an
+      // hour earlier straight out of discovery.
+      placeId: l.placeId ?? null,
+      // Find's own read of the business. Persisted so a Research re-run after
+      // a page reload still knows the markets and the website grade — the
+      // "computed but not passed" shape this project has lost fields to before.
+      marketsSeen: l.marketsSeen ?? null,
+      marketsAbsent: l.marketsAbsent ?? null,
+      marketCount: l.marketCount ?? null,
+      noWebsite: l.noWebsite ?? null,
+      builderSite: l.builderSite ?? null,
+      leadChannel: l.leadChannel ?? null,
+      industry: l.industry ?? null,
+      // The measured binding layer, and whether they can fund the engagement.
+      // Both are needed AFTER research — the write-up picks its case study from
+      // the layer, and affordability decides who is worth a send — so both have
+      // to survive a reload. Nested here for the same reason as everything else
+      // above: no migration, no risk of PostgREST rejecting the whole row.
+      growthConstraint: l.growthConstraint ?? null,
+      situationRead: l.situationRead ?? null,
+      affordability: l.affordability ?? null,
+      // Frozen at send time. Without this surviving a reload the whole point
+      // of capturing it is lost.
+      sentSnapshot: l.sentSnapshot ?? null,
+      abVariant: l.abVariant ?? null,
+      phone: l.phone ?? null,
+      phoneDisplay: l.phoneDisplay ?? null,
+      edited: l.edited ?? null,
+      candidateFindings: l.candidateFindings ?? null,
+      ownerReplyCount: l.ownerReplyCount ?? null,
+      reviewsRead: l.reviewsRead ?? null,
+      // ── THE AUDIT'S OWN CONTEXT ──────────────────────────────────────
+      // auditedWebsite and domainMatch were merged onto the lead and never
+      // saved, so after a reload the Research tab reported "No website audited
+      // \u2014 findings are from signals only" on a business whose site HAD been
+      // audited, and every signal row fell back to "Not checked". The audit had
+      // not been cut short; its result had been forgotten.
+      auditedWebsite: l.auditedWebsite ?? null,
+      // Merged onto the lead and never saved, so after a reload nothing could
+      // prove the page had been fetched. Trimmed \u2014 we only need enough to
+      // establish that we read it, not the whole page again.
+      homepageContent: (l.homepageContent || '').slice(0, 4000) || null,
+      // ── THE REST OF THE AUDIT ────────────────────────────────────────
+      // These were merged onto the lead and never saved, so a reload lost the
+      // audit's own conclusions, its pain evidence, what the screenshot showed
+      // and the value-equation read. Everything downstream \u2014 the call sheet,
+      // the write-up, the Research tab \u2014 then had to reconstruct from
+      // whatever survived, which is the root of every "nothing on file" we
+      // have chased tonight.
+      brainAudit: l.brainAudit ? (({ _persisted, ...rest }) => rest)(l.brainAudit) : null,
+      flaws: l.flaws ?? null,
+      publicPainSignals: l.publicPainSignals ?? null,
+      visualAnalysis: l.visualAnalysis ?? null,
+      valueEquation: l.valueEquation ?? null,
+      // The published one-change diagnosis. Code-assembled server-side from the
+      // binding layer, the first broken link and the buying-path friction, all
+      // three of which were measured on every lead and rendered nowhere.
+      theOneThing: l.theOneThing ?? null,
+      // Positive-only advertising evidence from Google's own Transparency
+      // Centre. Never a negative: only verified advertisers appear there.
+      adsTransparency: l.adsTransparency ?? null,
+      ctaMode: l.ctaMode ?? null,
+      // When the measurements were taken, and when to phone. Both matter only
+      // for the call sheet, and the first one matters a lot: a rank or a review
+      // count asserted three weeks late is how a call ends badly.
+      researchedAt: l.researchedAt ?? null,
+      callWindow: l.callWindow ?? null,
+      pageUrl: l.pageUrl ?? null,
+      topPain: l.topPain ?? null,
+      buckets: l.buckets ?? null,
+      signals: l.signals ?? null,
+      auditedWebsiteResolved: l.auditedWebsiteResolved ?? null,
+      domainMatch: l.domainMatch ?? null,
+      domainMatchConfidence: l.domainMatchConfidence ?? null,
+      domainMatchReason: l.domainMatchReason ?? null,
+      richData: l.richData ?? null,
+      // (flaws is already persisted above. The second copy was identical so it
+      // changed nothing — but a duplicate-key report you have learned to shrug
+      // at is exactly where a harmful one hides. The gate is only useful at 0.)
+      // (visualAnalysis is already persisted above — storing it twice doubled
+      // its cost in every row for nothing.)
+      // The remainder of what a research run produces. Everything the audit
+      // learns should survive a page reload \u2014 anything that does not comes back
+      // as "Not checked" and reads as a thin audit rather than a lost one.
+      copyFlags: l.copyFlags ?? null,
+      positioningRead: l.positioningRead ?? null,
+      positioningScore: l.positioningScore ?? null,
+      signalConfidence: l.signalConfidence ?? null,
+      companyTriggers: l.companyTriggers ?? null,
+      verifiedEmployees: l.verifiedEmployees ?? null,
+      verifiedRevenue: l.verifiedRevenue ?? null,
+      employees: l.employees ?? null,
+      // ══ DO NOT PERSIST AN INLINE SCREENSHOT ═══════════════════════════
+      // Firecrawl sometimes returns the screenshot as a data: URI — a base64
+      // PNG, frequently hundreds of kilobytes. Stored per lead that is the
+      // single largest thing in the table by a wide margin, and it is the main
+      // reason 161 leads came to 13.87MB and Supabase answered 500.
+      //
+      // A hosted URL is a few dozen bytes and worth keeping. An inline image is
+      // not: it re-renders from the next research run, and keeping it costs the
+      // durability of everything stored alongside it.
+      screenshotUrl: (typeof l.screenshotUrl === 'string' && l.screenshotUrl.startsWith('data:')) ? null : (l.screenshotUrl ?? null),
+      // The scrollable render. Without it the audit view shows only the top of
+      // the page — which is how "none of it is on that page" gets written about
+      // content that is simply further down.
+      fullPageUrl: (typeof l.fullPageUrl === 'string' && l.fullPageUrl.startsWith('data:')) ? null : (l.fullPageUrl ?? null),
+      // Renders of the inner pages. Without this line they disappear on reload
+      // and the audit view silently goes back to showing only the homepage.
+      pageShots: Array.isArray(l.pageShots) ? l.pageShots.filter(x => x && typeof x.shot === 'string' && !x.shot.startsWith('data:')) : [],
+      // The measured problems section. Without this it disappears on reload and
+      // the audit silently falls back to the old signal commentary \u2014 exactly the
+      // failure the page-render persistence had.
+      problemList: Array.isArray(l.problemList) ? l.problemList : [],
+      // ══ THE SAME PERSISTENCE BUG, THIRD TIME ══════════════════════════
+      // pageShots needed this. problemList needed this. subjectOptions was
+      // built, attached, read and put in the prompt \u2014 and dropped on reload,
+      // so by the time Generate ran the model had no subjects and invented
+      // its own. Four live emails, none using a built subject, and the
+      // pipeline looked correct at every step except the last one.
+      subjectOptions: Array.isArray(l.subjectOptions) ? l.subjectOptions : [],
+      // The email the server composed from measurements. Same round-trip rule
+      // as everything else: stored and reloaded, or it exists until refresh.
+      composedEmail: l.composedEmail || null,
+      // Found by the round-trip check, not by me. The allowlist reads these
+      // to decide whether a figure in the copy is real \u2014 without them it holds
+      // an empty set and flags true numbers as invented.
+      // The ladder's own 61-field input. measuredNumbers is an 18-field
+      // Google-side snapshot and the website half of the ladder was never
+      // stored at all, so a reloaded lead could not rebuild a website
+      // finding and fell through to the raw model path. Each of these keys
+      // appears exactly ONCE here and exactly once in rowToLead - this
+      // function has produced nine duplicate-key collisions, every one of
+      // them silently blanking data that had just loaded correctly.
+      ladderInputs: l.ladderInputs || null,
+      measuredNumbers: l.measuredNumbers || null,
+      // Found by the round-trip check, not by me. harmsRanked is the ranked
+      // list the email prompt uses for the follow-up sequence; problemCount is
+      // the number the email states out loud. Both were reaching the client and
+      // both vanished on reload, which means a regenerate after a refresh had
+      // no ranked list and no count.
+      harmsRanked: Array.isArray(l.harmsRanked) ? l.harmsRanked : [],
+      problemCount: Number.isFinite(Number(l.problemCount)) ? Number(l.problemCount) : null,
+      factualSpine: l.factualSpine || null,
+      allowedReframes: Array.isArray(l.allowedReframes) ? l.allowedReframes : [],
+      // The brain's judgement line — what a finding like this usually means in
+      // a business of this kind. Validated server-side as category-level.
+      patternLine: typeof l.patternLine === 'string' ? l.patternLine : '',
+      originalFindings: Array.isArray(l.originalFindings) ? l.originalFindings : [],
+      businessModel: l.businessModel || null,
+      // growthConstraint and situationRead are NOT repeated here — they are
+      // already persisted about a hundred lines above, with the reasoning for
+      // why. Adding them again created a duplicate key that quietly overwrote
+      // the first, which is the exact collision this object has produced before.
+      visionAudit: l.visionAudit ?? null,
+      reachabilityVerified: l.reachabilityVerified ?? null,
+      researchBonus: l.researchBonus ?? null,
+      preResearchScore: l.preResearchScore ?? null,
+      offerStrength: l.offerStrength ?? null,
+      sitePages: l.sitePages ?? null,
+      htmlSignals: l.htmlSignals ?? null,
+      gbpHealth: l.gbpHealth ?? null,
+      socialPresence: l.socialPresence ?? null,
+      marketClarity: l.marketClarity ?? null,
+      leadMagnet: l.leadMagnet ?? null,
+      reviewCount: l.reviewCount ?? null,
+      rating: l.rating ?? null,
+      leadSignal: l.leadSignal ?? null,
+      // ══ THE WARNING VANISHED ON THE FIRST RELOAD ══════════════════
+      // Dr. Levi Young, live: Firecrawl was throttled mid-run, the owner
+      // lookup never got to read the pages it needed, and the card came
+      // back "No decision-maker identified — 18/100". The amber banner that
+      // exists to say "we were not allowed to look" was rendering correctly
+      // and was never SAVED, so the moment the app reloaded the lead looked
+      // genuinely unreachable and there was nothing on screen to say
+      // otherwise. Same disease as reachPredict and the other five fields
+      // above: computed, rendered once, and gone on the round trip.
+      rateLimited: l.rateLimited ?? null,
+      duplicateListing: l.duplicateListing ?? null,
+      whatChanged: l.whatChanged ?? null,
+      nicheBrief: l.nicheBrief ?? null,
+      // A refusal is terminal — the server refused to research a non-owner
+      // and the lead must not render as an ordinary un-researched lead after
+      // a refresh, inviting the exact re-run that can only refuse again.
+      notAFit: l.notAFit ?? null,
+      rejectedReason: l.rejectedReason ?? null,
+      rejectedAt: l.rejectedAt ?? null,
+      brainFailReason: l.brainFailReason ?? null,
+      promptPath: l.promptPath ?? null,
+      // Saved for the same reason. A run that came back with a screenshot
+      // and no audit must be able to say so after a reload, instead of
+      // rendering as a lead nobody has researched yet.
+      brainFailed: l.brainFailed ?? null,
+      // ---- THE CALL LOG SURVIVES A RELOAD -------------------------------
+      // CallOutcomeBar writes these onto the lead and its own comment says why:
+      // "so a reload shows what already happened and the same call is not
+      // logged twice". Neither had a key here or in rowToLead, so both were
+      // gone on the next load - the button read empty again, and the server
+      // stamps a fresh uuid per POST with no dedupe, so the same conversation
+      // was counted twice in the only evidence this project will ever have.
+      callOutcome: l.callOutcome ?? null,
+      callOutcomeAt: l.callOutcomeAt ?? null,
+    });
+// Is there anything worth a row at all? An empty object per lead would be
+// write-only bloat, and this file has a documented 13.87MB PostgREST failure
+// behind exactly that kind of growth.
+const persistedHasAnything = (p) => Object.keys(p || {}).some((k) => {
+  const v = p[k];
+  if (v === null || v === undefined || v === '') return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === 'object') return Object.keys(v).length > 0;
+  return true;
+});
 // Convert a lead object to a Supabase row
 const leadToRow = (l) => ({
   id: l.id,
@@ -129,276 +423,11 @@ const leadToRow = (l) => ({
   // write-only bloat feeding the documented 13.87MB / PostgREST-500 failure.
   // Strip the old _persisted from the spread, and nest an audit copy that
   // carries no _persisted of its own. Nothing reads either back.
-  brain_audit: l.brainAudit
-    ? { ...(({ _persisted, ...rest }) => rest)(l.brainAudit), _persisted: {
-        lsa: l.lsa ?? null,
-        // ══ THE PREDICTOR HAS NEVER BEEN GRADED, AND THIS IS WHY ═══════════
-        // Twelve leads across twelve runs all logged: "no prediction was sent for
-        // this lead, so there is nothing to grade. This is a LEGACY LEAD." Every
-        // one of them. Including leads discovered minutes earlier, which the
-        // message insists "do carry it".
-        //
-        // reachPredict is computed at Find time and held in memory. It was never
-        // written to leadToRow, so it never reached Supabase, so the moment a lead
-        // was saved and reloaded the value was gone. The pipeline holds 160+ leads
-        // and every one of them is loaded from the cloud at boot — so by the time
-        // anything is researched, the prediction has always already been lost.
-        //
-        // The consequence is not a missing log line. The predictor decides which
-        // leads are worth spending Firecrawl and Hunter credits on, and its
-        // accuracy has never once been measured. We have been running a bet-sizing
-        // model for months with the scoreboard disconnected.
-        reachPredict: l.reachPredict ?? null,
-        reachPredictWhy: l.reachPredictWhy ?? null,
-        // ══ THE SAME LEAK, FIVE MORE FIELDS ═══════════════════════════════
-        // Auditing every field the research request sends against what leadToRow
-        // actually writes turned up five more computed at Find time and never
-        // saved. Each one is gone the moment a lead makes a round trip through
-        // Supabase, which every one of the 160+ leads in this pipeline has done.
-        //
-        // verifiedCEO is the costly one: scoreReachability reads it, so a lead
-        // that had a confirmed decision-maker at discovery arrives at research
-        // with none, and scores lower than the evidence we already paid for
-        // justifies. The other four quietly weaken the pitch framing rather than
-        // the score \u2014 a funding or exit trigger that would have set the buying
-        // window, the ICP condition that matched, the lane, and which roles were
-        // manual (the whole software-build argument).
-        //
-        // None of these is expensive to keep. They were simply never added to the
-        // one function that decides what survives.
-        verifiedCEO: l.verifiedCEO ?? null,
-        verifiedCEOTitle: l.verifiedCEOTitle ?? null,
-        // The job-signal fields, so a re-run does not lose the window. These are
-        // NOT duplicated below — rowToLead has produced nine separate
-        // duplicate-key collisions and every one silently blanked data that had
-        // just loaded correctly, so each of these appears exactly once here and
-        // exactly once in rowToLead.
-        signalAgeDays: l.signalAgeDays ?? null,
-        signalDate: l.signalDate ?? null,
-        raiseAmount: l.raiseAmount ?? null,
-        jobPostingUrl: l.jobPostingUrl ?? null,
-        jobPostedAt: l.jobPostedAt ?? null,
-        marketingRoles: l.marketingRoles ?? null,
-        opsRoles: l.opsRoles ?? null,
-        marketingChannels: l.marketingChannels ?? null,
-        discoverySignals: l.discoverySignals ?? null,
-        icpProfile: l.icpProfile ?? null,
-        buyingLane: l.buyingLane ?? null,
-        manualCategories: l.manualCategories ?? null,
-        adCount: l.adCount ?? null,
-        outreachChannel: l.outreachChannel ?? null,
-        ownerEmailMatch: l.ownerEmailMatch ?? null,
-        ownerEmailMatchReason: l.ownerEmailMatchReason ?? null,
-        localVisibility: l.localVisibility ?? null,
-        // placeId and industry are INPUTS to research, not outputs, which is why they
-        // were never saved — and why the two highest-value signals in the system
-        // silently switched themselves off the moment a lead was reloaded.
-        // placeId locates their Google reviews (the review-pattern mine); industry
-        // builds the query a customer would type (the local-rank audit). Without them
-        // research logs "SKIPPED — no Google placeId" and "skipped — no industry" and
-        // carries on, so the loss is invisible unless you read the log line by line.
-        // A live run lost both on all three leads, including one that had them an
-        // hour earlier straight out of discovery.
-        placeId: l.placeId ?? null,
-        // Find's own read of the business. Persisted so a Research re-run after
-        // a page reload still knows the markets and the website grade — the
-        // "computed but not passed" shape this project has lost fields to before.
-        marketsSeen: l.marketsSeen ?? null,
-        marketsAbsent: l.marketsAbsent ?? null,
-        marketCount: l.marketCount ?? null,
-        noWebsite: l.noWebsite ?? null,
-        builderSite: l.builderSite ?? null,
-        leadChannel: l.leadChannel ?? null,
-        industry: l.industry ?? null,
-        // The measured binding layer, and whether they can fund the engagement.
-        // Both are needed AFTER research — the write-up picks its case study from
-        // the layer, and affordability decides who is worth a send — so both have
-        // to survive a reload. Nested here for the same reason as everything else
-        // above: no migration, no risk of PostgREST rejecting the whole row.
-        growthConstraint: l.growthConstraint ?? null,
-        situationRead: l.situationRead ?? null,
-        affordability: l.affordability ?? null,
-        // Frozen at send time. Without this surviving a reload the whole point
-        // of capturing it is lost.
-        sentSnapshot: l.sentSnapshot ?? null,
-        abVariant: l.abVariant ?? null,
-        phone: l.phone ?? null,
-        phoneDisplay: l.phoneDisplay ?? null,
-        edited: l.edited ?? null,
-        candidateFindings: l.candidateFindings ?? null,
-        ownerReplyCount: l.ownerReplyCount ?? null,
-        reviewsRead: l.reviewsRead ?? null,
-        // ── THE AUDIT'S OWN CONTEXT ──────────────────────────────────────
-        // auditedWebsite and domainMatch were merged onto the lead and never
-        // saved, so after a reload the Research tab reported "No website audited
-        // \u2014 findings are from signals only" on a business whose site HAD been
-        // audited, and every signal row fell back to "Not checked". The audit had
-        // not been cut short; its result had been forgotten.
-        auditedWebsite: l.auditedWebsite ?? null,
-        // Merged onto the lead and never saved, so after a reload nothing could
-        // prove the page had been fetched. Trimmed \u2014 we only need enough to
-        // establish that we read it, not the whole page again.
-        homepageContent: (l.homepageContent || '').slice(0, 4000) || null,
-        // ── THE REST OF THE AUDIT ────────────────────────────────────────
-        // These were merged onto the lead and never saved, so a reload lost the
-        // audit's own conclusions, its pain evidence, what the screenshot showed
-        // and the value-equation read. Everything downstream \u2014 the call sheet,
-        // the write-up, the Research tab \u2014 then had to reconstruct from
-        // whatever survived, which is the root of every "nothing on file" we
-        // have chased tonight.
-        brainAudit: l.brainAudit ? (({ _persisted, ...rest }) => rest)(l.brainAudit) : null,
-        flaws: l.flaws ?? null,
-        publicPainSignals: l.publicPainSignals ?? null,
-        visualAnalysis: l.visualAnalysis ?? null,
-        valueEquation: l.valueEquation ?? null,
-        // The published one-change diagnosis. Code-assembled server-side from the
-        // binding layer, the first broken link and the buying-path friction, all
-        // three of which were measured on every lead and rendered nowhere.
-        theOneThing: l.theOneThing ?? null,
-        // Positive-only advertising evidence from Google's own Transparency
-        // Centre. Never a negative: only verified advertisers appear there.
-        adsTransparency: l.adsTransparency ?? null,
-        ctaMode: l.ctaMode ?? null,
-        // When the measurements were taken, and when to phone. Both matter only
-        // for the call sheet, and the first one matters a lot: a rank or a review
-        // count asserted three weeks late is how a call ends badly.
-        researchedAt: l.researchedAt ?? null,
-        callWindow: l.callWindow ?? null,
-        pageUrl: l.pageUrl ?? null,
-        topPain: l.topPain ?? null,
-        buckets: l.buckets ?? null,
-        signals: l.signals ?? null,
-        auditedWebsiteResolved: l.auditedWebsiteResolved ?? null,
-        domainMatch: l.domainMatch ?? null,
-        domainMatchConfidence: l.domainMatchConfidence ?? null,
-        domainMatchReason: l.domainMatchReason ?? null,
-        richData: l.richData ?? null,
-        // (flaws is already persisted above. The second copy was identical so it
-        // changed nothing — but a duplicate-key report you have learned to shrug
-        // at is exactly where a harmful one hides. The gate is only useful at 0.)
-        // (visualAnalysis is already persisted above — storing it twice doubled
-        // its cost in every row for nothing.)
-        // The remainder of what a research run produces. Everything the audit
-        // learns should survive a page reload \u2014 anything that does not comes back
-        // as "Not checked" and reads as a thin audit rather than a lost one.
-        copyFlags: l.copyFlags ?? null,
-        positioningRead: l.positioningRead ?? null,
-        positioningScore: l.positioningScore ?? null,
-        signalConfidence: l.signalConfidence ?? null,
-        companyTriggers: l.companyTriggers ?? null,
-        verifiedEmployees: l.verifiedEmployees ?? null,
-        verifiedRevenue: l.verifiedRevenue ?? null,
-        employees: l.employees ?? null,
-        // ══ DO NOT PERSIST AN INLINE SCREENSHOT ═══════════════════════════
-        // Firecrawl sometimes returns the screenshot as a data: URI — a base64
-        // PNG, frequently hundreds of kilobytes. Stored per lead that is the
-        // single largest thing in the table by a wide margin, and it is the main
-        // reason 161 leads came to 13.87MB and Supabase answered 500.
-        //
-        // A hosted URL is a few dozen bytes and worth keeping. An inline image is
-        // not: it re-renders from the next research run, and keeping it costs the
-        // durability of everything stored alongside it.
-        screenshotUrl: (typeof l.screenshotUrl === 'string' && l.screenshotUrl.startsWith('data:')) ? null : (l.screenshotUrl ?? null),
-        // The scrollable render. Without it the audit view shows only the top of
-        // the page — which is how "none of it is on that page" gets written about
-        // content that is simply further down.
-        fullPageUrl: (typeof l.fullPageUrl === 'string' && l.fullPageUrl.startsWith('data:')) ? null : (l.fullPageUrl ?? null),
-        // Renders of the inner pages. Without this line they disappear on reload
-        // and the audit view silently goes back to showing only the homepage.
-        pageShots: Array.isArray(l.pageShots) ? l.pageShots.filter(x => x && typeof x.shot === 'string' && !x.shot.startsWith('data:')) : [],
-        // The measured problems section. Without this it disappears on reload and
-        // the audit silently falls back to the old signal commentary \u2014 exactly the
-        // failure the page-render persistence had.
-        problemList: Array.isArray(l.problemList) ? l.problemList : [],
-        // ══ THE SAME PERSISTENCE BUG, THIRD TIME ══════════════════════════
-        // pageShots needed this. problemList needed this. subjectOptions was
-        // built, attached, read and put in the prompt \u2014 and dropped on reload,
-        // so by the time Generate ran the model had no subjects and invented
-        // its own. Four live emails, none using a built subject, and the
-        // pipeline looked correct at every step except the last one.
-        subjectOptions: Array.isArray(l.subjectOptions) ? l.subjectOptions : [],
-        // The email the server composed from measurements. Same round-trip rule
-        // as everything else: stored and reloaded, or it exists until refresh.
-        composedEmail: l.composedEmail || null,
-        // Found by the round-trip check, not by me. The allowlist reads these
-        // to decide whether a figure in the copy is real \u2014 without them it holds
-        // an empty set and flags true numbers as invented.
-        // The ladder's own 61-field input. measuredNumbers is an 18-field
-        // Google-side snapshot and the website half of the ladder was never
-        // stored at all, so a reloaded lead could not rebuild a website
-        // finding and fell through to the raw model path. Each of these keys
-        // appears exactly ONCE here and exactly once in rowToLead - this
-        // function has produced nine duplicate-key collisions, every one of
-        // them silently blanking data that had just loaded correctly.
-        ladderInputs: l.ladderInputs || null,
-        measuredNumbers: l.measuredNumbers || null,
-        // Found by the round-trip check, not by me. harmsRanked is the ranked
-        // list the email prompt uses for the follow-up sequence; problemCount is
-        // the number the email states out loud. Both were reaching the client and
-        // both vanished on reload, which means a regenerate after a refresh had
-        // no ranked list and no count.
-        harmsRanked: Array.isArray(l.harmsRanked) ? l.harmsRanked : [],
-        problemCount: Number.isFinite(Number(l.problemCount)) ? Number(l.problemCount) : null,
-        factualSpine: l.factualSpine || null,
-        allowedReframes: Array.isArray(l.allowedReframes) ? l.allowedReframes : [],
-        // The brain's judgement line — what a finding like this usually means in
-        // a business of this kind. Validated server-side as category-level.
-        patternLine: typeof l.patternLine === 'string' ? l.patternLine : '',
-        originalFindings: Array.isArray(l.originalFindings) ? l.originalFindings : [],
-        businessModel: l.businessModel || null,
-        // growthConstraint and situationRead are NOT repeated here — they are
-        // already persisted about a hundred lines above, with the reasoning for
-        // why. Adding them again created a duplicate key that quietly overwrote
-        // the first, which is the exact collision this object has produced before.
-        visionAudit: l.visionAudit ?? null,
-        reachabilityVerified: l.reachabilityVerified ?? null,
-        researchBonus: l.researchBonus ?? null,
-        preResearchScore: l.preResearchScore ?? null,
-        offerStrength: l.offerStrength ?? null,
-        sitePages: l.sitePages ?? null,
-        htmlSignals: l.htmlSignals ?? null,
-        gbpHealth: l.gbpHealth ?? null,
-        socialPresence: l.socialPresence ?? null,
-        marketClarity: l.marketClarity ?? null,
-        leadMagnet: l.leadMagnet ?? null,
-        reviewCount: l.reviewCount ?? null,
-        rating: l.rating ?? null,
-        leadSignal: l.leadSignal ?? null,
-        // ══ THE WARNING VANISHED ON THE FIRST RELOAD ══════════════════
-        // Dr. Levi Young, live: Firecrawl was throttled mid-run, the owner
-        // lookup never got to read the pages it needed, and the card came
-        // back "No decision-maker identified — 18/100". The amber banner that
-        // exists to say "we were not allowed to look" was rendering correctly
-        // and was never SAVED, so the moment the app reloaded the lead looked
-        // genuinely unreachable and there was nothing on screen to say
-        // otherwise. Same disease as reachPredict and the other five fields
-        // above: computed, rendered once, and gone on the round trip.
-        rateLimited: l.rateLimited ?? null,
-        duplicateListing: l.duplicateListing ?? null,
-        whatChanged: l.whatChanged ?? null,
-        nicheBrief: l.nicheBrief ?? null,
-        // A refusal is terminal — the server refused to research a non-owner
-        // and the lead must not render as an ordinary un-researched lead after
-        // a refresh, inviting the exact re-run that can only refuse again.
-        notAFit: l.notAFit ?? null,
-        rejectedReason: l.rejectedReason ?? null,
-        rejectedAt: l.rejectedAt ?? null,
-        brainFailReason: l.brainFailReason ?? null,
-        promptPath: l.promptPath ?? null,
-        // Saved for the same reason. A run that came back with a screenshot
-        // and no audit must be able to say so after a reload, instead of
-        // rendering as a lead nobody has researched yet.
-        brainFailed: l.brainFailed ?? null,
-      } }
-    : (l.lsa != null || l.adCount != null || l.outreachChannel != null || l.ownerEmailMatch != null)
-      // No audit yet but the fields exist — keep them rather than drop them.
-      ? { _persisted: {
-          lsa: l.lsa ?? null, adCount: l.adCount ?? null,
-          outreachChannel: l.outreachChannel ?? null,
-          ownerEmailMatch: l.ownerEmailMatch ?? null,
-          ownerEmailMatchReason: l.ownerEmailMatchReason ?? null,
-        } }
-      : null,
+  brain_audit: (() => {
+    const _p = persistedFieldsFrom(l);
+    if (l.brainAudit) return { ...(({ _persisted, ...rest }) => rest)(l.brainAudit), _persisted: _p };
+    return persistedHasAnything(_p) ? { _persisted: _p } : null;
+  })(),
   recommended_product: l.recommendedProduct || null,
   top_three_products: l.topThreeProducts || [],
   stack_combo: l.stackCombo || null,
@@ -627,6 +656,55 @@ const claimRisksOf = (lead) => {
 };
 const criticalClaimsOf = (lead) => claimRisksOf(lead).all.filter(x => /\bCRITICAL\b/.test(String(x)));
 
+// ---- "AUDITED" IS CONTENT, NOT A KEY THAT EXISTS -------------------------
+// Six places asked "is this lead audited?" as a bare truthiness test on
+// l.problemList || l.brainAudit || l.theOneThing. rowToLead sets problemList
+// to [] unconditionally, and [] is truthy; it also sets brainAudit straight
+// from the row, and a lead added from Find now carries { _persisted: ... }
+// with no audit in it at all. So after one page reload EVERY lead read as
+// audited: the sidebar filed never-researched businesses under "Audited",
+// the export screen pre-ticked them, "Export N audits" counted them, and a
+// call sheet went to Mike stamped audited with nothing on it.
+//
+// One predicate, testing whether an audit is actually IN there. _persisted is
+// storage, not an audit, so it is excluded by name.
+// ---- THE NEWEST DRAFT, NOT THE OLDEST -----------------------------------
+// Two places picked the current composed email and both put the RESEARCH-time
+// copy first. The server assembles brainAudit.composedEmail before any writer
+// runs; applyGeneratedEmail then writes the model's version onto the lead, and
+// leadToRow stores THAT in _persisted - while brainAudit.composedEmail keeps
+// the old assembled one. `??` only falls through on null, so the template won
+// every time: the brain-written draft and its provenance were replaced on
+// every page reload, and pressing Generate afterwards recomposed from the
+// template rather than from what actually shipped. One precedence now.
+// The full _persisted path is written out rather than destructured, because
+// clientcheck's write-only sweep looks for exactly that string: a field read
+// through a local alias reads as never read at all, which is a false alarm in
+// the gate whose whole job is finding the real ones.
+const composedEmailFrom = (audit, live) => {
+  const ba = (audit && typeof audit === 'object') ? audit : {};
+  return (live ?? null)
+    ?? ((ba._persisted && ba._persisted.composedEmail) ?? null)
+    ?? (ba.composedEmail ?? null)
+    ?? null;
+};
+const leadHasAudit = (l) => {
+  if (!l || typeof l !== 'object') return false;
+  if (Array.isArray(l.problemList) && l.problemList.length) return true;
+  if (l.theOneThing && typeof l.theOneThing === 'object' && Object.keys(l.theOneThing).length) return true;
+  const ba = l.brainAudit;
+  if (!ba || typeof ba !== 'object') return false;
+  return Object.keys(ba).some((k) => {
+    if (k === '_persisted') return false;
+    const v = ba[k];
+    if (v === null || v === undefined || v === '') return false;
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === 'object') return Object.keys(v).length > 0;
+    return true;
+  });
+};
+
+
 // ══ THE SCREEN SAID DO NOT SEND THIS AND THE BUTTON SAID APPROVE ════════════
 // Live, Donna Krummen: a red panel reading "NOTHING HERE IS WORTH A FIRST EMAIL
 // — the strongest thing we found is a free fix he can do himself in an
@@ -807,7 +885,10 @@ const rowToLead = (r) => ({
   // disagree, the round-trip check catches it, which is how they were found.
   problemList: (r.brain_audit && r.brain_audit.problemList) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.problemList) ?? [],
   subjectOptions: (r.brain_audit && r.brain_audit.subjectOptions) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.subjectOptions) ?? [],
-  composedEmail: (r.brain_audit && r.brain_audit.composedEmail) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.composedEmail) ?? null,
+  composedEmail: composedEmailFrom(r.brain_audit, null),
+  // The call log survives a reload; see the note beside these in leadToRow.
+  callOutcome: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.callOutcome) ?? null,
+  callOutcomeAt: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.callOutcomeAt) ?? null,
   ladderInputs: (r.brain_audit && r.brain_audit.ladderInputs) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ladderInputs) ?? null,
   measuredNumbers: (r.brain_audit && r.brain_audit.measuredNumbers) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.measuredNumbers) ?? null,
   harmsRanked: (r.brain_audit && r.brain_audit.harmsRanked) ?? (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.harmsRanked) ?? [],
@@ -842,6 +923,19 @@ const rowToLead = (r) => ({
   // so this keeps working if placeId/industry are promoted to columns later.
   placeId: r.place_id || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.placeId) || '',
   industry: r.industry || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.industry) || '',
+  // ---- SIX MORE THAT WERE STORED AND NEVER READ BACK ---------------------
+  // All six are written by leadToRow and all six are read by the research
+  // request builder; not one had a line here. So a lead saved and reloaded went
+  // into research with no coverage table (the coverage-gap finding cannot exist
+  // on a re-run at all - this file's own comment says "nothing downstream can
+  // recover them") and no channel, and leadChannel is what routes a business
+  // with no website away from an audit it has nothing to read.
+  marketsSeen: (r.brain_audit && r.brain_audit._persisted && Array.isArray(r.brain_audit._persisted.marketsSeen)) ? r.brain_audit._persisted.marketsSeen : [],
+  marketsAbsent: (r.brain_audit && r.brain_audit._persisted && Array.isArray(r.brain_audit._persisted.marketsAbsent)) ? r.brain_audit._persisted.marketsAbsent : [],
+  marketCount: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.marketCount) ?? null,
+  noWebsite: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.noWebsite) ?? null,
+  builderSite: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.builderSite) ?? null,
+  leadChannel: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.leadChannel) ?? null,
   topThreeProducts: r.top_three_products || [], stackCombo: r.stack_combo,
   pitch: r.pitch, subject: r.subject, opens: r.opens || 0, pageVisits: r.page_visits || 0,
   sentAt: r.sent_at, notes: r.notes || '', stacked: r.stacked, sourceCount: r.source_count,
@@ -2064,7 +2158,7 @@ const auditRecordFor = (lead) => {
     location: l.location || '',
     trade: l.tradeWord || l.industry || '',
     icpScore: Number.isFinite(Number(l.icpScore)) ? Number(l.icpScore) : null,
-    status: l.approved ? 'approved' : (l.pitch ? 'email written' : (ba.situationRead || l.problemList ? 'audited' : 'not audited')),
+    status: l.approved ? 'approved' : (l.pitch ? 'email written' : (leadHasAudit(l) ? 'audited' : 'not audited')),
     // WHAT IT IS
     background: (sr && sr.background) || '',
     // THE ONE THING
@@ -6638,7 +6732,7 @@ function ResearchView({
           // have an audit — a lead that errored has nothing to export and
           // counting it would overstate the file before it is opened.
           const ids = new Set(batchResults.map(x => x && x.id).filter(Boolean));
-          const mine = allLeads.filter(x => x && ids.has(x.id) && (x.problemList || x.brainAudit || x.theOneThing));
+          const mine = allLeads.filter(x => x && ids.has(x.id) && leadHasAudit(x));
           if (!mine.length) return null;
           return React.createElement('button', {
             className: 'btn btn-sm btn-p',
@@ -6774,7 +6868,7 @@ function ResearchView({
         // browser. Deliberately not a spreadsheet — an audit is prose with
         // structure and a CSV destroys it.
         (() => {
-          const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
+          const done = allLeads.filter(x => x && leadHasAudit(x));
           if (batchRunning || !done.length) return null;
           return React.createElement('button', {
             className: 'btn btn-sm btn-g',
@@ -6791,7 +6885,7 @@ function ResearchView({
         // mixed into it and no way to tell which is which. The run's OWN set is
         // offered separately, in the progress bar, where the run is.
         (() => {
-          const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
+          const done = allLeads.filter(x => x && leadHasAudit(x));
           if (batchRunning || !done.length) return null;
           return React.createElement('div', { style: { fontSize: 10, color: 'var(--m)', marginTop: 4, lineHeight: 1.45 } },
             done.length + ' lead' + (done.length === 1 ? ' has' : 's have') + ' an audit. You pick which of them go in the file.');
@@ -6821,7 +6915,7 @@ function ResearchView({
           (_inf[l.id] && _inf[l.id].jobId && (Date.now() - (_inf[l.id].at || 0) < 10 * 60 * 1000))
           || _runningNames.has(l.name)
           || researchingId === l.id));
-        const isAudited = (l) => !!(l && (l.problemList || l.brainAudit || l.theOneThing));
+        const isAudited = leadHasAudit;
         // ══ THE FOURTH KIND OF LEAD ═══════════════════════════════════════
         // "the not audited yet section ws not used at all." Three at a time
         // through a run of five means two leads are picked, paid for, and not
@@ -6946,7 +7040,7 @@ function ResearchView({
       onClick: e => e.stopPropagation()
     },
       (() => {
-        const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
+        const done = allLeads.filter(x => x && leadHasAudit(x));
         const picked = done.filter(x => exportPick.has(x.id));
         // The SAME rule the audit screen and the exported sheet already use.
         // A second copy of "did we read their site" is the two-hand-kept-copies
@@ -9136,10 +9230,7 @@ Do not restate this brief, do not explain your reasoning, do not list what you a
       // No model call, so nothing can be invented at write time. The model path
       // stays as a fallback for leads researched before this existed, and for
       // anyone who wants to compare.
-      const _composed = (_ba && _ba.composedEmail)
-        || lead.composedEmail
-        || (_ba && _ba._persisted && _ba._persisted.composedEmail)
-        || null;
+      const _composed = composedEmailFrom(_ba, lead.composedEmail);
       // ══ IF IT IS NOT ALREADY COMPOSED, COMPOSE IT NOW ═════════════════════
       // The composer used to run only during research, so pressing Generate on a
       // lead researched earlier fell back to the model with nothing on screen to

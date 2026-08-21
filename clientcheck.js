@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,7 +511,7 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
+      mod = new Function(found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
         + '\nreturn { rec: auditRecordFor, html: auditExportHtml };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
@@ -644,6 +644,155 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ THE SUPABASE ROUND TRIP, EXECUTED ═══════════════════════════════════════
+// leadToRow and rowToLead are the ONLY door between Supabase and the app, and
+// nothing in this repo had ever run them. They have produced nine duplicate-key
+// collisions, each silently blanking data that had just loaded correctly, and
+// on 2026-08-21 four more persistence defects at once:
+//
+//   · a lead added from Find took the short branch of a ternary and lost every
+//     Find-time measurement on save - placeId included, which is what locates
+//     their Google reviews
+//   · problemList was written unconditionally as [], which is truthy, so after
+//     one reload every never-researched lead read as AUDITED: filed under
+//     Audited in the sidebar, pre-ticked in the export, and exported to Mike as
+//     a call sheet with nothing on it
+//   · the research-time email template outranked the model-written draft, so
+//     the draft and its provenance were replaced on every reload
+//   · the call outcome had no key at all, so the same conversation could be
+//     logged twice into the only evidence this project will ever have
+//
+// A source scan cannot see any of these. This runs the real pair.
+{
+  const NEEDR = ['leadToRow', 'rowToLead', 'persistedFieldsFrom', 'persistedHasAnything',
+                 'composedEmailFrom', 'leadHasAudit', 'pickSituationRead'];
+  const gotR = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && NEEDR.includes(n.id.name) && n.init) {
+      gotR[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+    if (n.type === 'FunctionDeclaration' && n.id && NEEDR.includes(n.id.name)) {
+      gotR[n.id.name] = src.slice(n.start, n.end);
+    }
+  });
+  const missR = NEEDR.filter(k => !gotR[k]);
+  if (missR.length) {
+    fails.push(`the Supabase round trip cannot be verified: ${missR.join(', ')} not found at module scope. A check that cannot reach the code cannot guard it, and this pair is the only door between the app and its data.`);
+  } else {
+    let rt = null;
+    try {
+      rt = new Function(NEEDR.map(k => gotR[k]).join('\n')
+        + '\nreturn { toRow: leadToRow, toLead: rowToLead, audited: leadHasAudit, persisted: persistedFieldsFrom };')();
+    } catch (e) {
+      fails.push('the Supabase round trip no longer compiles standalone, so it cannot be verified: ' + e.message);
+    }
+    if (rt) {
+      const trip = (lead) => rt.toLead(rt.toRow(lead));
+
+      // ── 0. WRITTEN AND NEVER READ BACK ─────────────────────────────────
+      // The storage half of "computed but not passed", and it has the same
+      // signature: the write succeeds, the log is clean, and the value is gone
+      // on the next load. Six fields were in this state on 2026-08-21 -
+      // marketsSeen, marketsAbsent, marketCount, noWebsite, builderSite and
+      // leadChannel - all six written here, all six read by the research
+      // request builder, not one of them read back. The coverage-gap finding
+      // could not exist on a re-run at all.
+      //
+      // Both directions, like STEM_COMPLETE_WORDS: a name that stops being
+      // written cannot sit in the exception list looking checked.
+      {
+        const WRITE_ONLY = {
+          // The nested audit copy. leadToRow's own comment says nothing reads
+          // either back; it exists so a reload-then-save cannot stack a fresh
+          // copy per cycle.
+          brainAudit: 'a storage artefact, not a field - nothing has ever read it back',
+        };
+        const pKeys = Object.keys(rt.persisted({ id: 'k' }) || {});
+        if (pKeys.length < 50) {
+          fails.push(`persistedFieldsFrom produced only ${pKeys.length} keys, so this sweep is looking at almost nothing`);
+        }
+        const neverRead = pKeys.filter(k => !WRITE_ONLY[k] && src.indexOf('_persisted.' + k) < 0);
+        if (neverRead.length) {
+          fails.push(`${neverRead.length} field(s) are written to Supabase and never read back - ${neverRead.join(', ')}. The save succeeds, the log is clean, and the value is gone on the next load, which is how the coverage table stopped being recoverable on a re-run.`);
+        }
+        const staleExceptions = Object.keys(WRITE_ONLY).filter(k => !pKeys.includes(k));
+        if (staleExceptions.length) {
+          fails.push(`${staleExceptions.join(', ')} is declared write-only and is not written at all any more - an exception nobody can see is how a list stops meaning anything`);
+        }
+      }
+
+      // ── 1. A LEAD STRAIGHT OUT OF FIND, NEVER RESEARCHED ───────────────
+      // leadFromCompany sets these and no brainAudit. They are the inputs to
+      // research, so losing them means paying for a worse audit than the one
+      // we could have had.
+      const findLead = {
+        id: 'find-1', name: 'Twin Pines Roofing', website: 'http://twinpines.example',
+        placeId: 'ChIJ_test_place_id', industry: 'roofing contractor',
+        reviewCount: 214, rating: 4.6, buyingLane: 'call',
+        marketsSeen: ['Dallas, TX'], marketsAbsent: ['Plano, TX'],
+        reachPredict: 0.71, jobPostedAt: '2026-08-01T00:00:00Z', icpProfile: 'CREW_TRADE',
+      };
+      const findBack = trip(findLead);
+      for (const k of ['placeId', 'industry', 'reviewCount', 'rating', 'buyingLane', 'reachPredict']) {
+        if (JSON.stringify(findBack[k]) !== JSON.stringify(findLead[k])) {
+          fails.push(`a lead added from Find loses ${k} on save (${JSON.stringify(findBack[k])} came back for ${JSON.stringify(findLead[k])}) — that is the state every lead is in at the moment we decide to pay to research it`);
+        }
+      }
+      if (!Array.isArray(findBack.marketsSeen) || findBack.marketsSeen[0] !== 'Dallas, TX') {
+        fails.push('the multi-market coverage a Find run measured for free does not survive a save, and nothing downstream can recover it');
+      }
+
+      // ── 2. AND IT IS NOT AUDITED ───────────────────────────────────────
+      if (rt.audited(findBack)) {
+        fails.push('a lead nobody has researched reads as AUDITED after one round trip — it is filed under Audited in the sidebar, pre-ticked in the export screen, counted in "Export N audits", and handed to Mike as a call sheet with nothing on it');
+      }
+      if (rt.audited({ id: 'x' })) fails.push('a bare lead object reads as audited');
+      if (!rt.audited({ id: 'x', problemList: [{ id: 'no_offer' }] })) {
+        fails.push('a lead with a measured problem list does NOT read as audited, so real audits would vanish from the export');
+      }
+      if (!rt.audited({ id: 'x', brainAudit: { pitchAngle: 'something the brain wrote' } })) {
+        fails.push('a lead carrying a written audit does NOT read as audited');
+      }
+      if (rt.audited({ id: 'x', brainAudit: { _persisted: { placeId: 'p' } } })) {
+        fails.push('storage is being read as an audit — _persisted is where Find-time fields live and it exists on every saved lead');
+      }
+
+      // ── 3. THE MODEL'S DRAFT BEATS THE RESEARCH-TIME TEMPLATE ──────────
+      const written = { variantA: { subject: 'S', body: 'the model wrote this', writtenBy: 'brain' }, brainWriter: { wrote: true } };
+      const template = { variantA: { subject: 'S1', body: 'assembled at research time' } };
+      const emailBack = trip({
+        id: 'e-1', name: 'Co', composedEmail: written,
+        brainAudit: { pitchAngle: 'p', composedEmail: template },
+      });
+      const gotBody = emailBack.composedEmail && emailBack.composedEmail.variantA && emailBack.composedEmail.variantA.body;
+      if (gotBody !== 'the model wrote this') {
+        fails.push(`the draft that survives a reload is "${gotBody}" — the research-time template, not what the writer actually produced. The provenance caption goes with it, and pressing Generate afterwards recomposes from the template.`);
+      }
+      // And a lead that never had a writer keeps the template rather than nothing.
+      const tmplOnly = trip({ id: 'e-2', name: 'Co', brainAudit: { pitchAngle: 'p', composedEmail: template } });
+      if (!tmplOnly.composedEmail) {
+        fails.push('a lead whose email was only ever composed at research time comes back with no email at all');
+      }
+
+      // ── 4. THE CALL LOG ────────────────────────────────────────────────
+      const callBack = trip({ id: 'c-1', name: 'Co', brainAudit: { pitchAngle: 'p' },
+                              callOutcome: 'reached', callOutcomeAt: '2026-08-21T18:00:00Z' });
+      if (callBack.callOutcome !== 'reached' || !callBack.callOutcomeAt) {
+        fails.push('the call outcome does not survive a reload, so the button reads empty again and the same conversation is logged twice — and the server stamps a fresh id per POST with no dedupe');
+      }
+
+      // ── 5. AN EMPTY LEAD STILL STORES NOTHING ──────────────────────────
+      // A _persisted block per lead whatever it holds is write-only bloat, and
+      // this file has a 13.87MB PostgREST failure behind that kind of growth.
+      const bareRow = rt.toRow({ id: 'z', name: 'Nothing Co' });
+      if (bareRow.brain_audit !== null) {
+        fails.push('a lead with nothing measured still writes a storage block, which is the row growth behind the documented 13.87MB PostgREST failure');
+      }
+      roundTrip = { fields: Object.keys(rt.persisted({ id: 'k' }) || {}).length };
+    }
+  }
+}
+
 // 7. AND EVERY MERGE GOES THROUGH IT. A second call site that assembles the
 // lead by hand is the same defect as a second research body, one stage later.
 {
@@ -660,4 +809,5 @@ if (fails.length) {
   process.exit(1);
 }
 console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
+if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
 if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
