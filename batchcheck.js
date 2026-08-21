@@ -48,7 +48,11 @@ const walk = (n, fn) => {
 // components in and the harness would start lying about what it ran.
 const NEED = ['measuredFieldsFrom', 'finalLeadScore', 'predictReach', 'buildResearchBody',
   'applyResearchResult', 'buildComposeBody', 'readComposeResponse', 'applyGeneratedEmail',
-  'pollResearchJob', 'researchViaQueue', 'runBatchAudit', 'batchCandidates'];
+  'pollResearchJob', 'researchViaQueue', 'runBatchAudit', 'batchCandidates',
+  // The progress panel's own reducer. It lives at module scope precisely so it
+  // can be run here: a name added on start and never removed on done is
+  // invisible on three leads and puts fifty names on the screen on fifty.
+  'batchProgressReduce'];
 const found = new Map();
 for (const node of ast.body) {
   if (node.type !== 'VariableDeclaration') continue;
@@ -114,11 +118,11 @@ const fetch = async (url, init) => {
   throw new Error('the batch called an endpoint this harness does not know about: ' + url);
 };
 ${[...NEED].map(n => found.get(n)).join('\n')}
-return { runBatchAudit, batchCandidates, pollResearchJob, clock: () => __W.clock, __store: () => __store };
+return { runBatchAudit, batchCandidates, pollResearchJob, batchProgressReduce, clock: () => __W.clock, __store: () => __store };
 `;
 
 // The clock and the immediate-timer, shared by every scenario.
-const EXPORTS = "return { runBatchAudit, batchCandidates, pollResearchJob, clock: () => __W.clock, __store: () => __store };";
+const EXPORTS = "return { runBatchAudit, batchCandidates, pollResearchJob, batchProgressReduce, clock: () => __W.clock, __store: () => __store };";
 const RealDate = Date;
 const makeW = (opts) => {
   const W = {
@@ -161,19 +165,28 @@ const runBatch = async (opts) => {
   );
   const api = new Function('__W', body)(W);
   api.prime(opts.leads);
+  // The panel's state, driven by the runner's own events through the REAL
+  // reducer — not a copy of it written here, which would be the second
+  // implementation this whole harness exists to prevent.
+  let panel = { finished: 0, total: 0, running: [] };
+  let peakRunning = 0;
   const out = await api.runBatchAudit({
     leads: opts.leads, settings: { apiKey: 'k' }, withEmail: !!opts.withEmail,
     concurrency: opts.concurrency, shouldStop: opts.shouldStop,
-    onProgress: opts.onProgress,
+    onProgress: (ev) => {
+      panel = api.batchProgressReduce(panel, ev);
+      peakRunning = Math.max(peakRunning, panel.running.length);
+      if (opts.onProgress) opts.onProgress(ev);
+    },
   });
-  return { out, W, store: api.store() };
+  return { out, W, store: api.store(), panel, peakRunning };
 };
 
 (async () => {
   // 1 + 2 + 5 + 7 — fifty leads, audits only.
   {
     const leads = seed(50);
-    const { out, W, store } = await runBatch({ leads });
+    const { out, W, store, panel, peakRunning } = await runBatch({ leads });
     if (W.calls.research !== 50) fails.push(`fifty leads produced ${W.calls.research} research submissions`);
     if (W.calls.compose !== 0) fails.push(`"audits only" still made ${W.calls.compose} compose call(s) — Mike asked for audits, and a batch that quietly writes fifty emails spends tokens nobody asked for`);
     if (W.peak > 8) fails.push(`${W.peak} leads were in flight at once — the pool is not bounding anything, which is fifty poll loops and fifty job ids in one tab`);
@@ -189,6 +202,15 @@ const runBatch = async (opts) => {
       if (!(k in b)) fails.push(`the batch's research request has no "${k}" — it is not going through buildResearchBody, which is how the two hand-written bodies came to disagree about seventeen fields`);
     }
     if (b.browserData !== null) fails.push('the batch is sending browser data — doing the browser-side Hunter lookup fifty times spends a whole month of a 50-credit plan in one press');
+    // ── AND THE PROGRESS PANEL, DRIVEN BY THE SAME RUN ──────────────────────
+    // Vin had to read the server log to know where a run was. What replaced that
+    // is only worth having if it is right, so it is folded from the runner's own
+    // events rather than trusted.
+    if (panel.running.length !== 0) fails.push(`the progress panel finished the run still showing ${panel.running.length} lead(s) as in flight — "Working on:" leaks one name per lead and reads as a run that never ended`);
+    if (panel.finished !== 50) fails.push(`the panel reported ${panel.finished} of 50 finished`);
+    if (panel.total !== 50) fails.push(`the panel reported a total of ${panel.total}`);
+    if (peakRunning > 8) fails.push(`the panel showed ${peakRunning} leads in flight at once against a pool of at most 8 — it is not tracking what is running, it is accumulating names`);
+    if (peakRunning < 2) fails.push(`the panel never showed more than ${peakRunning} lead in flight, so the one thing it exists to show — three leads at once — is invisible`);
   }
 
   // 3 — with emails.

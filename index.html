@@ -1772,6 +1772,30 @@ const researchViaQueue = async (body, opts) => {
 const BATCH_DEFAULT_SIZE = 50;
 const BATCH_CONCURRENCY = 3;
 
+// ══ WHERE THE RUN ACTUALLY IS ══════════════════════════════════════════════
+// The panel used to hold ONE name while the runner runs three leads at once, so
+// it showed whichever started last and changed under you for no visible reason.
+// This folds the runner's own start/done events into { finished, total, running }.
+//
+// Module scope and pure ON PURPOSE: written inline in a React callback, nothing
+// in this repo could execute it, and a leak here — a name added on start and
+// never removed on done — is invisible on three leads and puts fifty names on
+// the screen on fifty. batchcheck.js folds every event of a real 50-lead run
+// through it and asserts the set empties.
+const batchProgressReduce = (state, ev) => {
+  const s = state || { finished: 0, total: 0, running: [] };
+  if (!ev) return s;
+  const name = (ev.lead && (ev.lead.name || ev.lead.company)) || '';
+  const total = Number.isFinite(ev.total) ? ev.total : s.total;
+  if (ev.phase === 'start') return { ...s, total, running: s.running.concat([name]) };
+  // Remove ONE instance by name, not every match: two leads can carry the same
+  // name and dropping both would show the panel as emptier than it is.
+  const running = s.running.slice();
+  const i = running.indexOf(name);
+  if (i >= 0) running.splice(i, 1);
+  return { ...s, total, finished: Number.isFinite(ev.finished) ? ev.finished : s.finished, running };
+};
+
 const runBatchAudit = async (opts) => {
   const o = opts || {};
   const queue = (o.leads || []).slice();
@@ -4299,24 +4323,22 @@ function FindView({
       // most likely to yield a contactable owner belong at the top.
       const sorted = [...withReach].sort((a,b) =>
         ((b.reachPredict||0) - (a.reachPredict||0)) || ((b.icpScore||0) - (a.icpScore||0)));
-      const tabCounts = { all: sorted.length, ai: 0, funded: 0, trigger: 0, sale: 0, reachable: 0, named: 0, sizeok: 0 };
+      const tabCounts = { all: sorted.length, ai: 0, funded: 0, trigger: 0, sale: 0 };
       sorted.forEach(c => {
         const k = SRC_TAB[c.source]; if (k) tabCounts[k]++;
-        const rp = c.reachPredict || 0;
-        if (rp >= 22) tabCounts.reachable++;   // at/above the average of leads where we DID find the owner
-        if (rp >= 30) tabCounts.named++;       // full personal name / hyphenated pair / name in domain
-        if (c.sizeVerified) tabCounts.sizeok++;
       });
+      // ══ THREE FILTERS THAT SPLIT ONE PILE THREE WAYS ══════════════════════
+      // "Likely reachable", "Named after a person" and "Size verified" were all
+      // views of reachPredict and sizeVerified, and both of those already decide
+      // the ORDER of this list — the strongest leads are at the top whether you
+      // press anything or not. So the tabs re-sliced a pile that was already
+      // sorted, and the operator's real question at this screen is which trade
+      // and which market, which the scope bar above answers.
+      //
+      // The prediction itself is untouched: it still ranks the list and still
+      // feeds isTrustworthy. Only the three ways of looking at it are gone.
       const TABS = [
         { id:'all', label:'All', count:tabCounts.all },
-        // Research costs ~9 Firecrawl credits per lead, so the only filter that
-        // saves real money is one that predicts whether we will actually find a
-        // reachable owner. reachPredict comes from the business name + domain:
-        // a business named after a person resolved almost every time in real runs;
-        // a generic institutional name repeatedly did not.
-        { id:'reachable', label:'Likely reachable', count:tabCounts.reachable },
-        { id:'named', label:'Named after a person', count:tabCounts.named },
-        { id:'sizeok', label:'Size verified', count:tabCounts.sizeok },
         // 'Just funded' / 'For sale' only ever match sec_edgar / sba_loan / bizbuysell.
         // Shown only when those sources actually returned something, so they cannot
         // sit at a permanent 0 like the old Adzuna/TheirStack tabs did.
@@ -4353,13 +4375,12 @@ function FindView({
       };
       const trustCount = sorted.filter(isTrustworthy).length;
       const filtered = sorted.filter(c => {
-        const _rp = c.reachPredict || 0;
-        const tabMatch =
-          activeTab === 'all'       ? true
-          : activeTab === 'reachable' ? _rp >= 22
-          : activeTab === 'named'     ? _rp >= 30
-          : activeTab === 'sizeok'    ? !!c.sizeVerified
-          : SRC_TAB[c.source] === activeTab;
+        // An id no longer in TABS must fall back to 'all'. Without this a tab
+        // selected before the three were removed drops through to a source
+        // comparison that can never match, and the screen shows an empty list
+        // with no way to tell why.
+        const _known = TABS.some(t => t.id === activeTab);
+        const tabMatch = (!_known || activeTab === 'all') ? true : SRC_TAB[c.source] === activeTab;
         const winMatch = winFilter === 'any' || SOON_SET.has(c.freshness) || !c.freshness;
         const verMatch = !verifiedOnly || isTrustworthy(c);
         // ══ THE SAME FILTERS, APPLIED TO LEADS ALREADY IN HAND ═══════════════
@@ -5696,8 +5717,24 @@ function ResearchView({
   const [batchEmail, setBatchEmail] = useState(false);
   const [batchIncludeDone, setBatchIncludeDone] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
-  const [batchAt, setBatchAt] = useState({ finished: 0, total: 0, now: '' });
+  // ══ "I HAD TO CHECK THE LOGS TO KNOW WHERE WE ARE" ═════════════════════
+  // This held ONE name while the runner runs three leads at once, so "now:"
+  // showed whichever of the three started last and changed under you for no
+  // visible reason. It is the set of leads actually in flight now, and the
+  // panel below reports finished, in flight, elapsed and every outcome as it
+  // lands rather than a tally at the end.
+  const [batchAt, setBatchAt] = useState({ finished: 0, total: 0, running: [] });
   const [batchResults, setBatchResults] = useState([]);
+  const [batchStartedAt, setBatchStartedAt] = useState(0);
+  // A one-second tick, running ONLY while the batch runs, so the elapsed figure
+  // moves. Without it the panel would freeze between leads finishing, which on a
+  // lead taking three minutes reads exactly like the run having stalled.
+  const [batchTick, setBatchTick] = useState(0);
+  useEffect(() => {
+    if (!batchRunning) return;
+    const t = setInterval(() => setBatchTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [batchRunning]);
   // A ref, not state: the worker loop reads it between leads and a state value
   // captured in that closure would never see the change.
   const batchStopRef = React.useRef(false);
@@ -5707,7 +5744,8 @@ function ResearchView({
     if (!pool.length) { setResearchError('Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.'); return; }
     batchStopRef.current = false;
     setBatchResults([]);
-    setBatchAt({ finished: 0, total: pool.length, now: pool[0].name || '' });
+    setBatchAt({ finished: 0, total: pool.length, running: [] });
+    setBatchStartedAt(Date.now());
     setBatchRunning(true);
     setResearchError('');
     try {
@@ -5717,8 +5755,7 @@ function ResearchView({
         withEmail: batchEmail,
         shouldStop: () => batchStopRef.current,
         onProgress: (ev) => {
-          if (ev.phase === 'start') setBatchAt(s => ({ ...s, now: (ev.lead && ev.lead.name) || '', total: ev.total }));
-          else setBatchAt(s => ({ ...s, finished: ev.finished, total: ev.total }));
+          setBatchAt(s => batchProgressReduce(s, ev));
           if (ev.phase === 'done' && ev.result) setBatchResults(rs => rs.concat([ev.result]));
         },
       });
@@ -5727,6 +5764,7 @@ function ResearchView({
       setResearchError('The bulk run stopped: ' + ((e && e.message) || e) + '. Every lead that finished before it stopped is saved.');
     }
     setBatchRunning(false);
+    setBatchAt(s => ({ ...s, running: [] }));
     batchStopRef.current = false;
     // Whatever finished is on disk; show it.
     const _fresh = getLeads().sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0));
@@ -6138,6 +6176,10 @@ function ResearchView({
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
+  React.useLayoutEffect(() => {
+    const h = batchBarRef.current ? batchBarRef.current.offsetHeight : 0;
+    setBatchBarH(prev => (Math.abs(prev - h) > 2 ? h : prev));
+  });
   const links = lead ? RLINKS(lead.name, lead.website) : [];
   const hasResearch = !!(lead && (lead.buckets || lead.flaws && lead.flaws.length > 0));
   // NOTE: BucketCard is defined here and rendered nowhere in this file. Left in
@@ -6193,9 +6235,112 @@ function ResearchView({
       }, v));
     })));
   };
+
+  // ══ A RUN YOU HAD TO READ THE SERVER LOG TO FOLLOW ═══════════════════════
+  // Vin, mid-run: "we need something on the front end so i know where we are in
+  // the run i had to chekc the logs to know". The only progress this screen had
+  // was "now: <one name>" in 10px grey inside a 200px sidebar, and it showed
+  // whichever of the three concurrent leads started last — so it changed under
+  // you for no visible reason and never said how far along anything was.
+  //
+  // A bottom bar rather than a banner at the top: it covers nothing, it cannot
+  // be scrolled away from, and it is the one thing on screen that is moving.
+  // Every number in it is measured. The estimate is the only derived figure and
+  // it says out loud that it is an estimate, appears only once two leads have
+  // actually finished, and is computed from THIS run's own wall clock rather
+  // than a per-lead guess — which is what makes it correct at any concurrency.
+  // Measured, not assumed. The bar grows with the number of leads that need a
+  // human, so a hardcoded floor would be right on a clean run and would cover
+  // the bottom of the list on the run where something went wrong — which is the
+  // run you are watching it for.
+  const batchBarRef = React.useRef(null);
+  const [batchBarH, setBatchBarH] = useState(0);
+  const batchBar = (() => {
+    if (!batchRunning && !(batchResults.length && batchStartedAt)) return null;
+    // Read so the second-by-second re-render is visible as a dependency rather
+    // than as a state value nothing appears to use.
+    void batchTick;
+    const done = batchAt.finished || 0;
+    const total = batchAt.total || 0;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const elapsed = batchStartedAt ? Math.max(0, Date.now() - batchStartedAt) : 0;
+    const mmss = (ms) => {
+      const t = Math.round(ms / 1000);
+      return Math.floor(t / 60) + 'm ' + String(t % 60).padStart(2, '0') + 's';
+    };
+    // Two finished leads before any estimate. One is a sample of one, and the
+    // first lead of a run is the slowest one there is — nothing is cached yet.
+    const left = (done >= 2 && done < total && elapsed > 0)
+      ? Math.round(((elapsed / done) * (total - done)) / 60000) : null;
+    const tally = {};
+    for (const x of batchResults) tally[x.outcome] = (tally[x.outcome] || 0) + 1;
+    const LABEL = {
+      researched: 'audited', generated: 'audited + written',
+      audited_no_email: 'audited, no email', email_blocked: 'blocked by the fact-check',
+      brain_failed: 'audit failed', not_a_fit: 'not a fit', error: 'error',
+    };
+    // Anything that is not a clean audit is what a person needs to see, so those
+    // are listed by name and the clean ones are counted. A run reported only as
+    // "48 done" hides the two that need a human.
+    const NEEDS_EYES = new Set(['email_blocked', 'brain_failed', 'not_a_fit', 'error', 'audited_no_email']);
+    const flagged = batchResults.filter(x => NEEDS_EYES.has(x.outcome));
+    return React.createElement('div', {
+      ref: batchBarRef,
+      style: {
+        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40,
+        background: 'var(--s)', borderTop: '1px solid var(--b)',
+        padding: '10px 16px 11px', display: 'flex', flexDirection: 'column', gap: 7,
+        // A hard ceiling as well, so a run where twenty leads need attention
+        // cannot grow the bar over the whole screen.
+        maxHeight: '38vh', overflowY: 'auto',
+      },
+    },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } },
+        React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)' } },
+          batchRunning ? ('Auditing ' + done + ' of ' + total) : ('Finished — ' + done + ' of ' + total)),
+        React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m)' } },
+          mmss(elapsed) + (left != null ? ' · about ' + (left < 1 ? 'a minute' : left + ' min') + ' left, estimated from this run so far' : '')),
+        React.createElement('div', { style: { flex: 1 } }),
+        batchRunning && React.createElement('button', {
+          className: 'btn btn-sm', onClick: startBatch,
+        }, 'Stop'),
+        !batchRunning && (() => {
+          // Scoped to THIS run by id, then filtered to the ones that actually
+          // have an audit — a lead that errored has nothing to export and
+          // counting it would overstate the file before it is opened.
+          const ids = new Set(batchResults.map(x => x && x.id).filter(Boolean));
+          const mine = allLeads.filter(x => x && ids.has(x.id) && (x.problemList || x.brainAudit || x.theOneThing));
+          if (!mine.length) return null;
+          return React.createElement('button', {
+            className: 'btn btn-sm btn-p',
+            title: 'Only the leads this run audited. One self-contained HTML file.',
+            onClick: () => { if (!downloadAudits(mine, 'CROJungle audits')) alert('No audited leads to export yet.'); },
+          }, 'Export these ' + mine.length);
+        })(),
+        !batchRunning && React.createElement('button', {
+          className: 'btn btn-sm', onClick: () => { setBatchResults([]); setBatchStartedAt(0); },
+        }, 'Dismiss')),
+      React.createElement('div', { style: { height: 3, borderRadius: 3, background: 'var(--s2)', overflow: 'hidden' } },
+        React.createElement('div', { style: { height: '100%', width: pct + '%', background: 'var(--t)', transition: 'width .3s' } })),
+      batchRunning && React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m2)', display: 'flex', gap: 8, flexWrap: 'wrap' } },
+        React.createElement('span', { style: { color: 'var(--m)' } }, 'Working on:'),
+        (batchAt.running.length
+          ? batchAt.running.map((n, i) => React.createElement('span', { key: 'r' + i }, n))
+          : React.createElement('span', { style: { color: 'var(--m)' } }, 'starting…'))),
+      (batchResults.length > 0) && React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m)', display: 'flex', gap: 12, flexWrap: 'wrap' } },
+        Object.keys(tally).map(k => React.createElement('span', { key: k }, tally[k] + ' ' + (LABEL[k] || k)))),
+      (flagged.length > 0) && React.createElement('div', { style: { fontSize: 11, color: 'var(--m2)', lineHeight: 1.5 } },
+        flagged.slice(-4).map((x, i) => React.createElement('div', { key: 'f' + i },
+          x.name + ' — ' + (LABEL[x.outcome] || x.outcome) + (x.note ? ': ' + String(x.note).slice(0, 110) : '')))));
+  })();
   return React.createElement('div', {
-    style: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg)' }
+    style: { display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg)',
+      // box-sizing is border-box globally, so this takes the room out of the
+      // flex row rather than adding to the page: the bar covers nothing.
+      paddingBottom: batchBar ? (batchBarH || 116) : 0 }
   },
+
+  batchBar,
 
   // ══ RE-RUN CONFIRM MODAL ══════════════════════════════════════════════
   rerunConfirm && React.createElement('div', {
@@ -6229,26 +6374,47 @@ function ResearchView({
       // many leads it would take BEFORE anything is spent, because a research
       // cycle costs real credits and "50" is a limit, not a promise.
       React.createElement('div', { style: { marginTop: 9, paddingTop: 9, borderTop: '1px solid var(--b)' } },
-        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 6 } }, 'Audit in bulk'),
-        React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 } },
-          React.createElement('input', {
-            type: 'number', min: 1, max: 200, value: batchSize, disabled: batchRunning,
-            onChange: e => setBatchSize(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1))),
-            style: { width: 58, fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--b)', background: 'var(--s2)', color: 'var(--t)' },
-          }),
-          React.createElement('div', { style: { fontSize: 11, color: 'var(--m)' } },
-            batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length + ' ready')),
-        React.createElement('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: 'var(--m)', marginBottom: 4, cursor: 'pointer' } },
-          React.createElement('input', { type: 'checkbox', checked: batchEmail, disabled: batchRunning, onChange: e => setBatchEmail(e.target.checked) }),
-          React.createElement('span', null, 'also write the email')),
-        React.createElement('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: 'var(--m)', marginBottom: 7, cursor: 'pointer' } },
-          React.createElement('input', { type: 'checkbox', checked: batchIncludeDone, disabled: batchRunning, onChange: e => setBatchIncludeDone(e.target.checked) }),
-          React.createElement('span', null, 'include re-runs')),
-        React.createElement('button', {
-          className: 'btn btn-sm ' + (batchRunning ? 'btn-g' : 'btn-p'),
-          style: { width: '100%' },
-          onClick: startBatch,
-        }, batchRunning ? ('Stop \u2014 ' + batchAt.finished + '/' + batchAt.total) : ('Audit ' + batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length + (batchEmail ? ' + write' : ''))),
+        // ══ "WHY IS THIS ALL MY OPTIONS FOR RUN" ═══════════════════════════
+        // A number box, a bare count, two lowercase checkboxes and a button whose
+        // label changed shape depending on a tick box. Every control is still
+        // here — nothing was taken away — but each one now says in plain words
+        // what it does and what will happen when the button is pressed, because
+        // this is the control that spends real credits.
+        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7 } }, 'Audit in bulk'),
+        (() => {
+          const ready = batchCandidates(allLeads, { limit: batchSize, includeResearched: batchIncludeDone }).length;
+          const pool = batchCandidates(allLeads, { limit: 9999, includeResearched: batchIncludeDone }).length;
+          return React.createElement(React.Fragment, null,
+            React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center', marginBottom: 5 } },
+              React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'Audit up to'),
+              React.createElement('input', {
+                type: 'number', min: 1, max: 200, value: batchSize, disabled: batchRunning,
+                onChange: e => setBatchSize(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1))),
+                style: { width: 54, fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--b)', background: 'var(--s2)', color: 'var(--t)' },
+              }),
+              React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'leads')),
+            // The pool BEFORE the limit, because "50 ready" against a pipeline of
+            // 4 and against a pipeline of 400 are different situations and the
+            // old line could not tell them apart.
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginBottom: 8, lineHeight: 1.45 } },
+              pool === 0
+                ? 'Nothing to audit. Every lead with a website has been done \u2014 tick re-audit below to run them again.'
+                : (ready + ' of ' + pool + ' waiting will run' + (batchEmail ? ', each with an email written after it.' : '. Audit only \u2014 no emails.'))),
+            React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 6, cursor: 'pointer' } },
+              React.createElement('input', { type: 'checkbox', checked: batchEmail, disabled: batchRunning, onChange: e => setBatchEmail(e.target.checked), style: { marginTop: 2 } }),
+              React.createElement('span', null, 'Write the emails too')),
+            React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 9, cursor: 'pointer' } },
+              React.createElement('input', { type: 'checkbox', checked: batchIncludeDone, disabled: batchRunning, onChange: e => setBatchIncludeDone(e.target.checked), style: { marginTop: 2 } }),
+              React.createElement('span', null, 'Re-audit leads already done')),
+            React.createElement('button', {
+              className: 'btn btn-sm ' + (batchRunning ? 'btn-g' : 'btn-p'),
+              style: { width: '100%' },
+              disabled: !batchRunning && ready === 0,
+              onClick: startBatch,
+            }, batchRunning
+                ? ('Stop \u2014 ' + batchAt.finished + ' of ' + batchAt.total + ' done')
+                : (ready === 0 ? 'Nothing to audit' : ('Audit ' + ready + ' lead' + (ready === 1 ? '' : 's')))));
+        })(),
         // ── GETTING FIFTY AUDITS OUT ──────────────────────────────────────
         // Fifty audits on screen and no way to hand them to anybody. Exports
         // every lead that HAS an audit, in the order shown, as one self-contained
@@ -6268,26 +6434,22 @@ function ResearchView({
             },
           }, 'Export ' + done.length + ' audit' + (done.length === 1 ? '' : 's'));
         })(),
-        batchRunning && React.createElement('div', { style: { fontSize: 10, color: 'var(--m)', marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-          'now: ' + (batchAt.now || '\u2026')),
-        // What actually happened, per outcome. A count of "done" would hide the
-        // two outcomes that need a human: an audit that refused to become an
-        // email, and one the fact-checker blocked.
-        (!batchRunning && batchResults.length > 0) && (() => {
-          const tally = {};
-          for (const x of batchResults) tally[x.outcome] = (tally[x.outcome] || 0) + 1;
-          const LABEL = {
-            researched: 'audited', generated: 'audited + written',
-            audited_no_email: 'audited, no email', email_blocked: 'blocked by the fact-check',
-            brain_failed: 'audit failed', not_a_fit: 'not a fit', error: 'error',
-          };
-          return React.createElement('div', { style: { marginTop: 7, fontSize: 10, color: 'var(--m)', lineHeight: 1.5 } },
-            Object.keys(tally).map(k => React.createElement('div', { key: k },
-              tally[k] + ' \u00b7 ' + (LABEL[k] || k))),
-            batchResults.filter(x => x.note).slice(0, 3).map((x, n) => React.createElement('div', {
-              key: 'n' + n, style: { marginTop: 4, color: 'var(--m2)' },
-            }, x.name + ': ' + String(x.note).slice(0, 90))));
-        })()
+        // ══ "IT SAID EXPORT 4 AUDITS" AFTER A THREE-LEAD RUN ═══════════════
+        // It was right and it read as a miscount: the fourth lead was audited
+        // in an earlier session and is still in the pipeline. The button is not
+        // wrong, the label was silent about its own scope — and on a fifty-lead
+        // day that silence is a file handed to Mike with last week's leads
+        // mixed into it and no way to tell which is which. The run's OWN set is
+        // offered separately, in the progress bar, where the run is.
+        (() => {
+          const done = allLeads.filter(x => x && (x.problemList || x.brainAudit || x.theOneThing));
+          if (batchRunning || !done.length) return null;
+          return React.createElement('div', { style: { fontSize: 10, color: 'var(--m)', marginTop: 4, lineHeight: 1.45 } },
+            'Everything in the pipeline that has been audited, not only the last run.');
+        })(),
+        // Progress and outcomes live in batchBar at the bottom of the screen —
+        // ONE home each. Two copies of a status display is the same disease as
+        // two copies of a rule: the one nobody watches is the one that rots.
       )
     ),
     React.createElement('div', { style: { overflowY: 'auto', flex: 1 } },

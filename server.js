@@ -291,7 +291,22 @@ const FC_CONCURRENCY = Math.max(1, parseInt(process.env.FC_CONCURRENCY || '2', 1
 const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, onStart = null } = {}) => {
   let inFlight = 0;
   let lastStart = 0;
+  let pausedUntil = 0;
   const waiting = [];
+  // ══ A 429 HAS TO STOP THE GATE, NOT ONE REQUEST ═════════════════════════
+  // Live, the first 50-batch rehearsal: eleven "FIRECRAWL RATE LIMITED" lines
+  // and five pages of one lead lost outright — "this lead's audit is
+  // INCOMPLETE". The per-request backoff (4s, 8s, 12s) was working exactly as
+  // written and could not help, because while one request waited the gate
+  // started the NEXT one 350ms later into the same closed door. Backing off a
+  // single caller against a limit that is global is a thundering herd with
+  // politeness bolted to one of its members.
+  const holdFor = (ms) => {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n <= 0) return;
+    const until = Date.now() + Math.min(n, 60000);
+    if (until > pausedUntil) { pausedUntil = until; setTimeout(pump, until - Date.now() + 20); }
+  };
   // A FUNCTION is allowed here so the live gate can be resized once Firecrawl
   // tells us which plan we are on. Read on every pump rather than captured at
   // construction, or the number learned at minute two would apply to nothing.
@@ -299,9 +314,15 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
     const c = typeof concurrency === 'function' ? Number(concurrency()) : Number(concurrency);
     return Number.isFinite(c) && c >= 1 ? c : 1;
   };
+  const gapNow = () => {
+    const g = typeof minGapMs === 'function' ? Number(minGapMs()) : Number(minGapMs);
+    return Number.isFinite(g) && g >= 0 ? g : FC_MIN_GAP_MS;
+  };
   const pump = () => {
     while (inFlight < capNow() && waiting.length) {
-      const gap = minGapMs - (Date.now() - lastStart);
+      const held = pausedUntil - Date.now();
+      if (held > 0) { setTimeout(pump, held + 20); return; }
+      const gap = gapNow() - (Date.now() - lastStart);
       if (gap > 0) { setTimeout(pump, gap); return; }
       const job = waiting.shift();
       inFlight++;
@@ -318,10 +339,13 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
         .finally(() => { inFlight--; pump(); });
     }
   };
-  return (fn) => new Promise((resolve, reject) => {
+  const gate = (fn) => new Promise((resolve, reject) => {
     waiting.push({ fn, resolve, reject });
     pump();
   });
+  gate.hold = holdFor;
+  gate.stats = () => ({ inFlight, waiting: waiting.length, pausedFor: Math.max(0, pausedUntil - Date.now()) });
+  return gate;
 };
 // ══ THE GATE WAS PINNED TO THE SMALLEST PLAN FIRECRAWL SELLS ═══════════════
 // FC_CONCURRENCY defaults to 2 — the Free tier's concurrent-browser cap — and
@@ -365,6 +389,19 @@ const noteFirecrawlLimits = (r) => {
     if (!Number.isFinite(perMin) || perMin <= 0) return;
     if (FC_LIMIT_PER_MIN === perMin) return;
     FC_LIMIT_PER_MIN = perMin;
+    // The pacing half, which never happened before. A plan of 20/minute needs a
+    // 3.75-second gap; we were leaving 350ms.
+    const wantGap = fcGapForLimit(perMin);
+    // NOT gated on FC_CONCURRENCY_EXPLICIT. Those are two different settings
+    // and letting one govern the other is the disease this file is a record
+    // of: an operator who pinned the browser cap would silently have lost
+    // pacing entirely. FC_MIN_GAP_MS is a FLOOR by its own name, so raising
+    // past it is what that setting asks for.
+    if (wantGap && wantGap !== FC_GAP_LIVE) {
+      const beforeGap = FC_GAP_LIVE;
+      FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, wantGap);
+      console.log(`FIRECRAWL PACE: their header says ${perMin} request(s)/minute, so the gap between starts moves ${beforeGap}ms \u2192 ${FC_GAP_LIVE}ms (${FC_GAP_SAFETY}x headroom). This number was being read and stored and never used for pacing, which is why a run could take eleven rate-limit hits while the gate happily started something new every 350ms.`);
+    }
     const want = fcBrowsersForLimit(perMin);
     if (FC_CONCURRENCY_EXPLICIT) {
       console.log(`FIRECRAWL PLAN: their header says ${perMin} requests/minute. FC_CONCURRENCY is set explicitly to ${FC_CONCURRENCY}, so the gate is left exactly there \u2014 a setting somebody chose is never overridden by an inference.`);
@@ -376,7 +413,26 @@ const noteFirecrawlLimits = (r) => {
     console.log(`FIRECRAWL PLAN: ${perMin} requests/minute is MEASURED from their own x-ratelimit-limit header. The concurrent-browser cap is INFERRED from Firecrawl's published tiers, not measured \u2014 so the gate moves ${before} \u2192 ${want}, which is below the cap that tier publishes. Set FC_CONCURRENCY to pin it. The queue in front of this gate is the research wall clock: three leads sharing two browsers is what a 589-second lead looks like.`);
   } catch (e) { void e; }
 };
-const _fcGate = makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE });
+// ══ WE LEARNED THE LIMIT AND PACED AS IF WE HAD NOT ════════════════════════
+// FC_LIMIT_PER_MIN was read off their own x-ratelimit-limit header, stored, and
+// then used for exactly one thing: choosing a CONCURRENCY. The gap between
+// starts stayed at its 350ms default, which is 171 requests a minute, on every
+// plan. On a tier that allows fewer than that we walked into the limit on every
+// single run and the log filled with backoffs.
+//
+// Instance twenty-four of the disease this file is mostly a record of: a
+// measurement taken correctly and never delivered to the thing that acts on it.
+//
+// The gap is derived from the limit with a quarter of headroom, and never goes
+// below the configured floor — a fast plan should not be slowed by this.
+const FC_GAP_SAFETY = 1.25;
+let FC_GAP_LIVE = FC_MIN_GAP_MS;
+const fcGapForLimit = (perMin) => {
+  const n = Number(perMin);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.ceil((60000 / n) * FC_GAP_SAFETY);
+};
+const _fcGate = makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE, minGapMs: () => FC_GAP_LIVE });
 // One door, so the plan is read from every Firecrawl response in the process
 // rather than from the handful of call sites somebody remembered to wire.
 const fcSerial = (fn) => {
@@ -2854,8 +2910,40 @@ const meterAnthropic = (company, label, model, usage) => {
 // added later without being counted.
 //
 // If a future call bypasses this, the boot check below says so by name.
-const anthropicFetch = async (url, opts, timeoutMs, label) => {
-  const r = await fetchT(url, opts, timeoutMs);
+// ══ A TIMEOUT IS NOT AN ANSWER, AND NOTHING HERE ASKED TWICE ═══════════════
+// On the first live 50-batch rehearsal the fact-checker DID NOT RUN on two of
+// four audits — "the critique call failed (timeout)". That call is the last gate
+// between a composed email and a prospect, and one slow answer removed it for
+// the whole lead. There is no third state: an audit either had its claims
+// checked or it did not, and the run reported the second as though it were a
+// weather condition.
+//
+// Opt-in rather than default. A blind retry on every one of the twenty-three
+// Anthropic calls in this file would double the bill on the failures that will
+// fail identically the second time — a refusal, a 4xx, a bad key. ONLY the word
+// "timeout" is retried, which is the one failure where asking again is a
+// different question, and only where losing the answer costs the lead.
+//
+// The timed-out request was already billed by Anthropic: they processed it and
+// we gave up waiting. So the retry's real cost is one extra call on a call that
+// is a fraction of a cent, against an audit that ships with nothing verified.
+const anthropicFetch = async (url, opts, timeoutMs, label, o = {}) => {
+  const tries = o && o.retryOnTimeout ? 2 : 1;
+  // The transport is a PARAMETER so this loop can be EXECUTED at boot rather
+  // than read. CLAUDE.md records why that matters twice over: a check that does
+  // not assert its call site is half a check, and the ask-arm assertions could
+  // not fire in any configuration because their settings were globals, so the
+  // check only ever exercised the case where nothing can go wrong. Production
+  // passes nothing and gets fetchT.
+  const _send = (o && o.fetchImpl) || fetchT;
+  let r = null;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try { r = await _send(url, opts, timeoutMs); break; } catch (e) {
+      const isTimeout = /timeout/i.test(String((e && e.message) || e));
+      if (!isTimeout || attempt === tries) throw e;
+      console.log(`\u21bb ANTHROPIC RETRY [${label || 'anthropic'}]: no answer within ${Math.round(timeoutMs / 1000)}s. Asking once more \u2014 a timeout is the one failure where the same question can get a different answer. A refusal or an HTTP error is never retried.`);
+    }
+  }
   try {
     // Clone first: a Response body can only be read once, and the caller still
     // needs it. Reading the original here would break every existing call site.
@@ -7295,9 +7383,8 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
     // is the same class as reading a Firecrawl refusal as an empty page, with a
     // cache in front of it.
     if (isRateLimited(d, r.status)) {
-      FIRECRAWL_RATE_LIMIT_HITS++;
-      console.log(`\u23f3 FIRECRAWL RATE LIMITED (map) on ${_mk} — one 4s backoff, then a single retry. A throttled map must never be cached: it reads as "this site has no pages" to four other callers.`);
-      await new Promise(res => setTimeout(res, 4000));
+      const _mapWait = fcNoteRateLimited(r, 4000, _mk + ' (map)');
+      await new Promise(res => setTimeout(res, _mapWait));
       const r2 = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/map', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
@@ -7504,6 +7591,35 @@ const isCreditError = (d, status) =>
 // Their throttle surfaces in more than one shape: a 429, an error string, or the
 // literal marker `local_rate_limited` returned in the body — which is how a
 // homepage screenshot ended up rendering that text as if it were page content.
+// ══ A 429 IS INFORMATION ABOUT THE WHOLE GATE ══════════════════════════════
+// Both retry loops treated a 429 as a fact about ONE request and slept that
+// caller. Meanwhile the gate kept starting others 350ms apart into the same
+// closed door, so a backoff that was individually correct produced eleven
+// rate-limit lines and one lead with five of seven pages missing.
+//
+// Called from every rate-limit branch. Reads Firecrawl's own Retry-After when
+// it sends one and falls back to the attempt's own backoff, so the pause is
+// their number where they give one and ours where they do not.
+// The gate is a PARAMETER rather than a global read inside. CLAUDE.md records
+// why: the ask-arm safety assertions could not fire in any configuration
+// because the two settings were read as globals, so the check only ever
+// exercised the case where nothing can go wrong. Production passes nothing and
+// gets the live gate; the boot check passes its own and can prove the hold
+// really happens without stalling real work or printing a false alarm.
+const fcNoteRateLimited = (r, fallbackMs, where, gate = _fcGate) => {
+  FIRECRAWL_RATE_LIMIT_HITS++;
+  let waitMs = Number(fallbackMs) || 4000;
+  let src = 'our own backoff';
+  try {
+    const ra = r && r.headers && typeof r.headers.get === 'function'
+      ? (r.headers.get('retry-after') || r.headers.get('x-ratelimit-reset')) : null;
+    const secs = parseInt(String(ra || '').trim(), 10);
+    if (Number.isFinite(secs) && secs > 0 && secs <= 120) { waitMs = secs * 1000; src = 'their Retry-After'; }
+  } catch (e) { void e; }
+  try { if (gate && typeof gate.hold === 'function') gate.hold(waitMs); } catch (e) { void e; }
+  console.log(`⏳ FIRECRAWL RATE LIMITED${where ? ' on ' + String(where).slice(0, 70) : ''} — holding the WHOLE gate for ${Math.round(waitMs / 1000)}s (${src}). Backing off one request while the gate starts the next 350ms later is what turned a limit into eleven hits and an incomplete audit.`);
+  return waitMs;
+};
 const isRateLimited = (d, status) =>
   status === 429 ||
   /local_rate_limited|rate.?limit|too many requests|slow down/i.test(
@@ -7760,9 +7876,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       }, timeout));
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
-      FIRECRAWL_RATE_LIMIT_HITS++;
-      const waitMs = 4000 * (attempt + 1);   // 4s, then 8s
-      console.log(`\u23f3 FIRECRAWL RATE LIMITED on ${String(url).slice(0, 70)} — backing off ${waitMs / 1000}s (attempt ${attempt + 1}/3). This is throttling, NOT a missing owner.`);
+      const waitMs = fcNoteRateLimited(r, 4000 * (attempt + 1), url);
       if (attempt === 2) {
         console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED after 3 attempts — this lead's audit is INCOMPLETE. Any "no decision-maker found" result for it is untrustworthy; re-run it in a minute.`);
         return '';
@@ -30907,8 +31021,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           return { refused: true, status: r.status, body, reason: errText || 'out of credits', ms };
         }
         if (isRateLimited(body, r.status)) {
-          FIRECRAWL_RATE_LIMIT_HITS++;
-          console.log(`⏳ FIRECRAWL RATE LIMITED on the homepage [${kind}] ${target} — HTTP ${r.status} in ${ms}ms. This is throttling, NOT an empty page and NOT their site.`);
+          // A 429 here is information about the WHOLE gate, not about this one
+          // page. The homepage read is the front of a fan-out into six interior
+          // reads that are all about to walk into the same closed door, so this
+          // branch counted the hit and held nothing while the gate kept starting
+          // the next request 350ms later. Same holder as both retry loops.
+          fcNoteRateLimited(r, 4000, `the homepage [${kind}] ${target}`);
+          console.log(`   ↳ HTTP ${r.status} in ${ms}ms. Read that literally: this is throttling, NOT an empty page and NOT their site.`);
           return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
         }
         if (!r.ok || body?.success === false || (body && body.error)) {
@@ -37082,7 +37201,17 @@ Return ONLY valid JSON:
                 max_tokens: 1600,
                 messages: [{ role: 'user', content: critiquePrompt }]
               }),
-            }, 25000);
+            // ── 25 SECONDS WAS UNDER WHAT THIS CALL TAKES ──────────────────
+            // max_tokens is 1600 and Haiku writes roughly a hundred a second, so
+            // a full answer is about sixteen seconds of writing BEFORE the first
+            // token and before a long prompt is read. Under three concurrent
+            // leads each making eight model calls there was no room left in 25s,
+            // and it showed as two fact-checks of four not running.
+            //
+            // The number is inferred from the call's own shape, not measured, and
+            // the retry is what actually makes this reliable — a ceiling can
+            // always be one second short of the next slow afternoon.
+            }, 45000, 'critique', { retryOnTimeout: true });
 
             const cd = await critiqueRes.json();
             const cText = anthropicText(cd);
@@ -44224,10 +44353,22 @@ app.listen(PORT, () => {
       };
       const out = await Promise.race([
         Promise.all(Array.from({ length: 10 }, (_, i) => imgSerial(job(12, i === 3 || i === 7)).catch(() => 'threw'))),
-        new Promise(r => setTimeout(() => r('STRANDED'), 12000)),
+        // ══ THIS IS A LIVENESS BOUND, NOT A PERFORMANCE ONE ═══════════════
+        // Ten 12ms jobs is ~120ms of work, and this raced a 12s wall clock. It
+        // went RED on Render and green here — because boot runs every check at
+        // once and Render's box is far more contended: the Firecrawl gate check
+        // beside it measured 12,900ms there against 4,824ms here, the same test.
+        //
+        // The thing being detected is a LEAKED SLOT, and a leaked slot never
+        // resolves at all — so the bound only has to be long enough that a
+        // healthy run always finishes, and any budget catches the real failure
+        // equally well. Tuning it to the quiet machine made it a check that
+        // fails at random, which is the one this file warns gets switched off
+        // and takes the real assertions beside it.
+        new Promise(r => setTimeout(() => r('STRANDED'), 60000)),
       ]);
       if (out === 'STRANDED') {
-        _fails.push('ten decodes did not finish in 12s — a slot is leaking, and in production that wedges every page render in the process with no error anywhere');
+        _fails.push('ten decodes did not finish in 60s — a slot is leaking, and in production that wedges every page render in the process with no error anywhere');
       } else {
         if (out.filter(x => x === 'threw').length !== 2) _fails.push('a throwing decode did not reject its caller');
         if (peak > IMG_CONCURRENCY) _fails.push(`${peak} decodes ran at once against a cap of ${IMG_CONCURRENCY} — two full-page renders in the same instant is what puts this process over Render's ceiling`);
@@ -47678,6 +47819,197 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL PLAN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
+
+  // ══ THE LIMIT WAS MEASURED AND THE PACE IGNORED IT ════════════════════════
+  // Vin's first live 50-batch rehearsal: eleven "FIRECRAWL RATE LIMITED" lines
+  // and one lead — Gregory S. Young — losing five of its seven pages outright,
+  // with only THREE leads running. FC_LIMIT_PER_MIN was read off their own
+  // x-ratelimit-limit header, stored, and used for exactly one thing: choosing
+  // a concurrency. The gap between starts stayed at its 350ms default, which is
+  // 171 requests a minute, on every plan they sell. Instance twenty-four of the
+  // disease this file is mostly a record of — a measurement taken correctly and
+  // never delivered to the thing that acts on it.
+  //
+  // And both retry loops treated the 429 as a fact about ONE request. While one
+  // caller slept its 4s/8s/12s the gate started the next one 350ms later into
+  // the same closed door: a backoff that is individually correct and collectively
+  // a thundering herd with politeness bolted to one of its members.
+  //
+  // Three separate things, so three separate assertions. Each was falsified by
+  // reverting its own fix and each went red alone.
+  (async () => {
+  try {
+    const _fails = [];
+    // ONE — the arithmetic. A 10/minute plan needs six seconds between starts,
+    // plus headroom, or we spend the whole run walking into the limit.
+    if (fcGapForLimit(10) !== Math.ceil(6000 * FC_GAP_SAFETY)) _fails.push(`a 10/min plan derives a ${fcGapForLimit(10)}ms gap, which is not six seconds plus headroom`);
+    if (fcGapForLimit(100) !== Math.ceil(600 * FC_GAP_SAFETY)) _fails.push('a 100/min plan derives the wrong gap');
+    if (!(fcGapForLimit(10) > fcGapForLimit(100))) _fails.push('a slower plan does not get a longer gap, so the derivation is not doing anything');
+    if (!(fcGapForLimit(10) > FC_MIN_GAP_MS)) _fails.push(`the derived gap for the slowest plan is inside the ${FC_MIN_GAP_MS}ms default, so the default was never the problem it is claimed to be`);
+    if (fcGapForLimit(0) !== null || fcGapForLimit('nonsense') !== null || fcGapForLimit(-5) !== null) {
+      _fails.push('an unreadable limit produced a number instead of null, so a missing header would silently repace the gate');
+    }
+    // TWO — the DELIVERY. This is the half that was missing for the life of the
+    // feature, and it is invisible in every log, so it is asserted by running
+    // the real reader against a real response shape and watching the live pace
+    // move. Restored afterwards: this is the pace production will use.
+    const _gapBefore = FC_GAP_LIVE, _limBefore = FC_LIMIT_PER_MIN, _concBefore = FC_CONCURRENCY_LIVE;
+    try {
+      const _resp = (v) => ({ headers: { get: (k) => (String(k).toLowerCase() === 'x-ratelimit-limit' ? v : null) } });
+      FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = FC_MIN_GAP_MS;
+      noteFirecrawlLimits(_resp('10'));
+      if (FC_GAP_LIVE !== Math.max(FC_MIN_GAP_MS, fcGapForLimit(10))) {
+        _fails.push(`reading a 10/min header left the live gap at ${FC_GAP_LIVE}ms — the limit is measured and never delivered to the pacing, which is the whole defect`);
+      }
+      // A FAST plan must not be slowed below the configured floor.
+      FC_LIMIT_PER_MIN = null;
+      noteFirecrawlLimits(_resp('5000'));
+      if (FC_GAP_LIVE < FC_MIN_GAP_MS) _fails.push('a fast plan pushed the gap under its own floor');
+      // An unreadable header must change nothing at all.
+      FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = 1234;
+      noteFirecrawlLimits(_resp('not-a-number'));
+      if (FC_GAP_LIVE !== 1234) _fails.push('an unreadable header repaced the gate');
+    } finally {
+      FC_GAP_LIVE = _gapBefore; FC_LIMIT_PER_MIN = _limBefore; FC_CONCURRENCY_LIVE = _concBefore;
+    }
+    // THREE — the live gate must READ that pace on every pump rather than
+    // capture it at construction, or a plan learned at minute two applies to
+    // nothing. Same live-read property FIRECRAWL PLAN CHECK asserts for the cap.
+    let _gap = 0; const _starts = [];
+    const _g = makeFcGate({ concurrency: 1, minGapMs: () => _gap, onStart: (t) => _starts.push(t) });
+    const _quick = () => Promise.resolve('x');
+    await Promise.all([_g(_quick), _g(_quick)]);
+    _gap = 120;
+    const _t0 = Date.now();
+    await Promise.all([_g(_quick), _g(_quick)]);
+    const _spacedAfter = _starts.length >= 4 ? _starts[3] - _starts[2] : -1;
+    if (_spacedAfter < 120) _fails.push(`the gate started two calls ${_spacedAfter}ms apart after the pace was raised to 120ms, so it captured the gap at construction and a plan learned mid-run repaces nothing`);
+    // FOUR — a 429 must stop the WHOLE gate. Nothing may start while it is held.
+    const _hg = makeFcGate({ concurrency: 4, minGapMs: 0 });
+    let _startedDuringHold = 0;
+    _hg.hold(220);
+    const _held = [0, 1, 2].map(() => _hg(() => { _startedDuringHold++; return Promise.resolve('x'); }));
+    await new Promise(r => setTimeout(r, 120));
+    if (_startedDuringHold !== 0) _fails.push(`${_startedDuringHold} request(s) started while the gate was held after a 429 — backing off one caller while the gate opens the door for the next is exactly what turned one limit into eleven hits`);
+    await Promise.all(_held);
+    if (_startedDuringHold !== 3) _fails.push('the gate never released after the hold expired, which would strand every later request');
+    if (_hg.stats().pausedFor !== 0) _fails.push('the gate still reports itself paused after the hold expired');
+    // A nonsense hold must be ignored rather than freezing the gate forever, and
+    // a hold must be bounded — a bad Retry-After must not stop all Firecrawl.
+    const _bg = makeFcGate({ concurrency: 1, minGapMs: 0 });
+    _bg.hold('nonsense'); _bg.hold(-1); _bg.hold(0);
+    if (_bg.stats().pausedFor !== 0) _fails.push('an unreadable hold paused the gate');
+    _bg.hold(9999999);
+    if (_bg.stats().pausedFor > 61000) _fails.push(`a hold of ${Math.round(_bg.stats().pausedFor / 1000)}s was accepted — one bad Retry-After header would stop every Firecrawl call in the process`);
+    // FIVE — the reader. Their number when they give one, ours when they do not,
+    // and an absurd one refused rather than trusted.
+    const _ra = (v) => ({ headers: { get: (k) => (String(k).toLowerCase() === 'retry-after' ? v : null) } });
+    const _probe = makeFcGate({ concurrency: 1, minGapMs: 0 });
+    if (fcNoteRateLimited(_ra('7'), 4000, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 7000) _fails.push('their own Retry-After was ignored in favour of our guess');
+    if (fcNoteRateLimited(null, 4000, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 4000) _fails.push('a response with no Retry-After lost the caller-supplied backoff');
+    if (fcNoteRateLimited(_ra('99999'), 4000, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 4000) _fails.push('an absurd Retry-After was trusted, which would park every Firecrawl call for a day');
+    if (_probe.stats().pausedFor <= 0) _fails.push('the rate-limit handler returned a wait and never actually held the gate — the number is computed and not passed, which is the disease this whole check exists for');
+    // AND THE CALL SITES. A fixture supplies its own arguments and therefore
+    // cannot see a caller: all three 429 branches must go through the holder,
+    // and the live gate must be built to read the live pace. Needles assembled
+    // at runtime with comment lines stripped, because a literal needle finds
+    // itself in the check's own body and these comments quote the calls.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle('makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE,', ' minGapMs: () => FC_GAP_LIVE })'))) {
+      _fails.push('the live gate is no longer constructed to read the live pace, so a measured plan repaces nothing');
+    }
+    // Each of the three branches by its own needle rather than by COUNTING the
+    // calls: this check makes three of its own, so a count would be measuring
+    // itself — the sixth recorded instance of a needle finding its own body.
+    const _sites = [
+      [_needle('const waitMs = fcNoteRateLimited(', 'r, 4000 * (attempt + 1), url)'), 'the inner-page scrape retry'],
+      [_needle('const _mapWait = fcNoteRateLimited(', "r, 4000, _mk + ' (map)')"), 'the sitemap read'],
+      [_needle('fcNoteRateLimited(r, 4000, `the homepage [', '${kind}] ${target}`)'), 'the homepage read (the front of a seven-page fan-out)'],
+    ];
+    for (const [_n, _what] of _sites) {
+      if (!_src.includes(_n)) _fails.push(`${_what} no longer holds the gate on a 429 — it counts the hit and the gate keeps opening the door 350ms later`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ FIRECRAWL PACING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIRECRAWL PACING CHECK: the per-minute limit they publish now sets the GAP between starts and not only the browser count, the live gate reads that pace on every pump so a plan learned mid-run applies, and a 429 holds the whole gate rather than one caller — bounded, ignoring a nonsense Retry-After, and released cleanly. Eleven throttle hits on a three-lead run cost one lead five of its seven pages; the pages were never missing from their site.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIRECRAWL PACING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  })();
+
+  // ══ THE LAST GATE BEFORE A PROSPECT DID NOT RUN ON HALF THE AUDITS ════════
+  // First live 50-batch rehearsal, two of four audits: "FACT CHECK DID NOT RUN
+  // — the critique call failed (timeout)". That call is the only thing standing
+  // between a composed email and somebody's inbox, and one slow answer removed
+  // it for the whole lead — with no retry anywhere in twenty-three Anthropic
+  // call sites. An audit either had its claims checked or it did not; the run
+  // was reporting the second as if it were weather.
+  //
+  // The transport is injected so this EXECUTES the retry loop rather than
+  // reading it. Only the word "timeout" may be retried: a refusal, a 4xx and a
+  // bad key all fail identically the second time and a blind retry doubles the
+  // bill for nothing.
+  (async () => {
+  try {
+    const _fails = [];
+    const _fakeRes = (body) => ({ clone: () => ({ json: async () => (body || {}) }), json: async () => (body || {}) });
+    // ONE — a timeout is asked again, once.
+    let _calls = 0;
+    const _flaky = async () => { _calls++; if (_calls === 1) throw new Error('timeout'); return _fakeRes({ ok: 1 }); };
+    // Caught HERE and named. With the retry removed this call THROWS, and an
+    // uncaught throw would print "COULD NOT RUN — timeout", which reads as an
+    // infrastructure problem at boot rather than as the missing retry. This file
+    // records that failure three separate times: a message naming the wrong cause
+    // costs exactly what one naming no cause costs.
+    let _r1 = null;
+    try {
+      _r1 = await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest', { retryOnTimeout: true, fetchImpl: _flaky });
+    } catch (e) {
+      _fails.push(`a call that timed out once and would have answered on the second attempt was given up on ("${(e && e.message) || e}") — the critique is the last gate before a prospect and one slow answer removes it for the whole lead`);
+    }
+    if (_calls !== 2) _fails.push(`a timeout was asked ${_calls} time(s), not twice`);
+    if (!_r1 && _calls === 2) _fails.push('the retry succeeded and returned nothing');
+    // TWO — it stops at two. A permanently slow endpoint must not be hammered.
+    _calls = 0;
+    const _dead = async () => { _calls++; throw new Error('timeout'); };
+    let _threw = false;
+    try { await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest', { retryOnTimeout: true, fetchImpl: _dead }); }
+    catch (e) { _threw = /timeout/i.test(String(e && e.message)); }
+    if (!_threw) _fails.push('a call that timed out twice did not surface as a failure, so the audit would report itself checked');
+    if (_calls !== 2) _fails.push(`a permanently timing-out endpoint was called ${_calls} times`);
+    // THREE — NOTHING ELSE is retried. This is the cost half of the rule.
+    for (const _msg of ['the request was refused by a safety classifier', 'ECONNREFUSED', 'invalid x-api-key']) {
+      _calls = 0;
+      const _hard = async () => { _calls++; throw new Error(_msg); };
+      try { await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest', { retryOnTimeout: true, fetchImpl: _hard }); } catch (e) { void e; }
+      if (_calls !== 1) _fails.push(`"${_msg}" was retried — it fails the same way twice and the second call is pure spend`);
+    }
+    // FOUR — opting out is the default. Twenty-two other call sites must be
+    // untouched by this, or one defect fix becomes twenty-two extra calls.
+    _calls = 0;
+    const _once = async () => { _calls++; throw new Error('timeout'); };
+    try { await anthropicFetch('https://example.invalid', { body: '{}' }, 1000, 'boot-selftest', { fetchImpl: _once }); } catch (e) { void e; }
+    if (_calls !== 1) _fails.push('a call that did not ask for the retry got one anyway, so every Anthropic call in the file now bills twice on a slow afternoon');
+    // AND THE CALL SITE. The loop being correct is worth nothing if the critique
+    // does not use it. Needle assembled at runtime, comment lines stripped: this
+    // check's own comments quote the call.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (!_src.includes(_needle("}, 45000, 'critique',", " { retryOnTimeout: true });"))) {
+      _fails.push('the critique call no longer asks for the retry, or its ceiling moved back under what a 1600-token answer takes');
+    }
+    if (_fails.length) {
+      console.log(`⛔ FACT CHECK RELIABILITY CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FACT CHECK RELIABILITY CHECK: the critique call is asked twice when the first attempt times out and exactly once when it fails for any other reason, it gives up at two, and every other Anthropic call in the file is unchanged. Two fact-checks of four did not run on the first bulk rehearsal, and an audit with nothing verified displays as an audit with nothing wrong.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FACT CHECK RELIABILITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   })();
 
