@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 182 boot checks at the bottom, each documenting the live failure that caused it
+- 185 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -1239,7 +1239,7 @@ audit and of the log i need eveyrhting running perfect because we are going to
 running bulk soon."*
 
 Fourteen falsification runs, one per fix, every one red with its fix reverted.
-182 boot checks green.
+185 boot checks green.
 
 **The two nobody had reported, because nothing said anything.**
 
@@ -2124,6 +2124,186 @@ recorded five times in one session.
 
 ---
 
+## 34. The clock, at last — and the honest limit on it — 2026-08-21
+
+PART 4 §1 has carried *"nothing has a clock on it"* as the largest gap in this
+pipeline for weeks. Every finding is an ongoing condition. The reason is not the
+ladder and it was never going to be fixed by writing better rungs:
+
+**One look at a business cannot see a change.** A rank, a review count, an
+advertising tag — each is a photograph. You cannot get *"he started running ads
+six weeks ago"* out of a photograph however good the photograph is. Exactly one
+rung in the file reads a date, `hiring_marketing_now`, and its inputs arrived
+only from TheirStack — so on the 92.5% of leads that come from Google Places, no
+rung in this file could say when anything happened.
+
+Two things were built, both costing nothing.
+
+### The hiring clock now works on a Places lead
+
+A business that wants its openings in Google Jobs must publish `JobPosting`
+structured data with a `datePosted`, and that markup is sitting in the page
+source we ALREADY buy and already read for advertising tags. Same page, same
+credit, no model, no prose parsing: **a machine-readable date the owner published
+himself.** Harvested in `harvestInteriorMarkup`, which every scraped page already
+passes through, so a posting on the homepage, the careers page or a services page
+all count.
+
+It refuses far more than it keeps, because a WRONG clock is worse than none —
+telling an owner he posted a role eight months after he filled it is the sort of
+checkable error that destroys every true sentence beside it. No `datePosted`, a
+date in the future, a passed `validThrough`, or no title, and there is no clock.
+An undated opening still reports "they are hiring right now" — present tense,
+true, and on the call sheet only.
+
+**And the date is paired to the MARKETING role specifically.** A dispatcher
+posted yesterday must never date a marketing manager posted eight months ago:
+true role, true date, false sentence. Which titles are marketing is decided by
+`signalsFromTitles`, the one function that owns that question, because a second
+copy of that rule here is the disease this file keeps recording.
+`HIRING CLOCK CHECK`.
+
+### The observation ledger — the only true event this system can ever measure
+
+Two looks CAN see a change. And this system has been taking a second look at the
+same businesses for weeks and throwing the comparison away every time: the bench
+re-serves 393 overflow businesses a run, the query memory rests exhausted ground
+so old ground comes back, and Vin re-audits leads by hand (*"ive ran an audit on
+ram jack like 6 times"*). Every one of those was a free observation against an
+earlier one, discarded.
+
+So: one small row written per research, one row read back. **No API costs a penny
+more.** Needs a table:
+
+```sql
+create table business_observations (
+  id bigserial primary key,
+  biz text not null, company text not null,
+  at timestamptz default now(), snap jsonb not null);
+create index business_observations_biz_at on business_observations (biz, at desc);
+```
+
+**HONEST SHAPE, STATED FIRST: on a business we have never seen before this
+produces nothing, and says so.** It is a recorder before it is a finder. The first
+audit of a lead is the price of the second one being able to speak. There is no
+way to buy this outcome without either paying for a data source (Vin: *"if
+anything it needs to get cheaper"*) or waiting — and waiting is free.
+
+What it may say, and what it may not:
+
+| | |
+|---|---|
+| `rank_slipped` | **sayable.** Their position on the same search dropped. |
+| `ads_started` | **sayable.** A Google Ads tag appeared that was not there before. |
+| review pace, `weaker_above_grew`, a tag that went away, two searches that cannot be compared | **internal.** On the call sheet, never in an email. |
+
+`rank_slipped` carries four gates, and every one of them exists because of a bug
+already in this file:
+
+- **the same search phrase both times.** §30 made the phrase depend on what their
+  own name says they sell, so two runs can legitimately measure DIFFERENT searches
+  on one business. Comparing "plastic surgeon" against "facial plastic surgeon"
+  would manufacture a collapse out of two correct readings. When the phrases
+  differ the log says the positions are not comparable rather than going quiet.
+- **two agreeing samples on BOTH dates.** §6: one business returned #3 and #12
+  minutes apart. A drop measured against a draw we already refused to state is
+  noise with a date on it. Passed through RAW so an unmeasured stability is null,
+  not "they agreed" — writing `!== false` here would have licensed the strongest
+  new claim in the file off a single service-page draw.
+- **a move bigger than that noise**, and at least a fortnight and at most a year
+  between looks.
+- **only a DROP.** Climbing is a compliment, not a finding.
+
+**It sits BELOW `outranked_by_weaker` on purpose.** It is the more surprising
+sentence and almost certainly the stronger one. It also has zero evidence behind
+it, and `outranked_by_weaker` is one of only two rungs with a real human reply.
+PART 6: do not trade a proven sentence for a better-looking one. Harm 88 against
+92, which with novel 96 against 72 lands the opener scores at 94.7 and 97.0 — the
+proven sentence keeps the lead on any business where both fire. That was reasoned
+out on paper first, and §29 says paper arithmetic is exactly what to distrust, so
+the check EXECUTES the real ranker and asserts the order. Raise it when a call
+outcome says to, and not before.
+
+**The isolation rule is the whole risk here.** §19 is the worst bug this system
+has had: a colliding cache key handed Donna Krummen John Peters Roofing's audit.
+This table is the same danger pointed at TIME — a snapshot read under the wrong
+key would state another business's search position as this one's, *with a date on
+it*, which is the most confident possible way to be wrong. So the row remembers
+which company it was written for and a read by a different company is refused by
+name. A legal suffix is not a different company: Google's `displayName` and our
+stored name disagree about "LLC" constantly, and refusing a business its own
+history over a suffix is the guard-too-tight failure §14 records. A practitioner
+credential (MD, DDS) is deliberately NOT stripped — §24 already turns on telling
+those apart.
+
+`OBSERVATION LEDGER CHECK`, thirteen guards, every one falsified individually.
+
+### What was deliberately NOT done
+
+- **`ads_started` is not a rung.** A tag appearing is an observation, not a
+  fault; the FAULT version is `paying_for_a_search_they_lose`, which already
+  exists at harm 94. Adding a second unproven rung to compound the first is how
+  two levers become one unreadable result. It reaches the audit and the call
+  sheet and stops there.
+- **No existing rung's sentence was changed** to carry a date. Every one of them
+  would read better with `ads_started` attached; each is also a working sentence,
+  and one of them has a reply behind it.
+- **Google Ads Transparency stays off.** It is dated and it is built, and it costs
+  a credit per lead and has never been run against a live advertiser from this
+  codebase. Shipping it on would report an unproven read as a measurement.
+
+**`index.html` changed, so this needs a Netlify deploy.** The ledger's server half
+is live on merge; the "What changed since we last looked" block on the call sheet
+and in the export is dark until the file is dragged in.
+
+---
+
+## 35. The first evidence this project will ever have — 2026-08-21
+
+Twelve emails, zero human replies, and every quality judgement in this file is
+the system grading its own homework. Fifty cold calls a day answers in thirty
+seconds with a reason attached — but only if somebody writes down WHICH FINDING
+opened the call, because the outcome without the finding is a diary.
+
+`POST /api/call-outcome` stores seven states against the finding id, the
+prospect-model prediction frozen at the time of the call, and — the most valuable
+field — **what he actually said.** The outcome says which findings work; only his
+own words say why one did not.
+
+Four rules, each because the opposite is how thin numbers get believed:
+
+- **Rates are over CONVERSATIONS, not dials.** A finding cannot be blamed for a
+  voicemail, and mixing the two is how you conclude the copy is broken when the
+  phone list is.
+- **Under twelve conversations is marked UNREADABLE**, out loud, on the report.
+- **The outcome is stored HERE before any CRM sees it**, and the webhook is
+  fire-and-forget: a CRM being down must never lose a call or block the person
+  logging one.
+- **A free-text status is refused.** A column you cannot group is a list.
+
+The CRM is a **webhook** rather than a native integration, deliberately: Mike has
+not picked one yet, and a HubSpot adapter written today is wasted if he buys
+Close. `CRM_WEBHOOK_URL` reaches HubSpot, Close, Pipedrive, GoHighLevel, Zapier,
+Make or a spreadsheet with no code from us. Needs a table:
+
+```sql
+create table call_outcomes (
+  id bigserial primary key, lead_id text, company text, outcome text not null,
+  finding_id text, finding_text text, said text, follow_up_at date,
+  next_step text, predicted text, at timestamptz default now());
+```
+
+`GET /api/call-outcomes` returns the report grouped by finding, `?format=csv` for
+a spreadsheet. `CALL OUTCOME CHECK`, seven guards, all falsified.
+
+**This is the lever, and it is the only one that is not inference.** PART 5 has
+two proven things and three replies behind them. Forty conversations logged
+against findings would be more evidence than this project has accumulated in its
+whole life, and it needs no code to produce — just somebody pressing a button
+after each call.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -2177,7 +2357,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 182 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 185 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -2251,7 +2431,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 182 boot checks and the comments above
+and caused none of this week's failures. The 185 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 

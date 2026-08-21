@@ -7052,6 +7052,68 @@ const findUnlinkedPages = ({ sitemap, navKeys, homepage } = {}) => {
 // rule is to measure RSS rather than assume; the derived facts are a few
 // booleans and a link list, so nothing large survives this function.
 const _INTERIOR_ADS = new Map();   // host -> { googleAds, metaPixel, tagManager, pages }
+// ══ THE ONLY CLOCK A GOOGLE PLACES LEAD CAN CARRY, AND IT IS FREE ══════════
+// PART 4 §1 has carried "nothing has a clock on it" as the largest gap in the
+// pipeline for weeks. hiring_marketing_now is harm 90 and it is the one rung
+// whose test() reads a DATE — and its inputs (discoverySignals.hiring_marketing,
+// marketingRoles, jobPostedAt) arrive only from TheirStack. 92.5% of discovery
+// is Google Places, so on nine leads in ten no rung in this file can say when
+// anything happened, and every one of them logs "no measured buying window".
+//
+// A business that wants its openings to appear in Google Jobs has to publish
+// JobPosting structured data with a datePosted, and that markup is sitting in
+// rawHtml we ALREADY buy and already read for advertising tags. Same page, same
+// credit, no model, no parsing of prose: a machine-readable date the owner
+// published himself.
+//
+// Kept per host exactly like _INTERIOR_ADS, because the posting may be on the
+// careers page, the homepage, or an interior page, and we do not know which one
+// we are reading when we read it.
+const _INTERIOR_JOBS = new Map();   // host -> [{ title, datePosted }]
+// Pure so the boot check can run it on real markup. Refuses more than it keeps:
+//   - a posting with no datePosted is not a clock
+//   - a datePosted in the FUTURE is an invented clock, which is the one class of
+//     error this system may not make
+//   - a posting whose validThrough has passed is CLOSED, and telling an owner he
+//     is hiring for a role he already filled ends the conversation in one line
+//   - a posting with no title cannot become a sentence, because the rung says
+//     which role
+const jobPostingsFromHtml = (html, now = Date.now()) => {
+  const h = String(html || '');
+  if (h.length < 200 || h.indexOf('JobPosting') < 0) return [];
+  const out = [];
+  const blocks = h.match(/<script[^>]+application\/ld\+json[^>]*>[\s\S]{0,60000}?<\/script>/gi) || [];
+  const visit = (node, depth) => {
+    if (!node || depth > 6 || out.length >= 25) return;
+    if (Array.isArray(node)) { for (const n of node) visit(n, depth + 1); return; }
+    if (typeof node !== 'object') return;
+    const t = node['@type'];
+    const isJob = t === 'JobPosting' || (Array.isArray(t) && t.indexOf('JobPosting') >= 0);
+    if (isJob) {
+      const title = String(node.title || node.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      const posted = Date.parse(String(node.datePosted || ''));
+      const through = Date.parse(String(node.validThrough || ''));
+      const expired = Number.isFinite(through) && through < now;
+      if (title && Number.isFinite(posted) && posted <= now && !expired) {
+        out.push({ title, datePosted: new Date(posted).toISOString() });
+      }
+    }
+    if (node['@graph']) visit(node['@graph'], depth + 1);
+    for (const k of ['itemListElement', 'mainEntity', 'hasPart']) if (node[k]) visit(node[k], depth + 1);
+  };
+  for (const b of blocks) {
+    const body = b.replace(/^<script[^>]*>/i, '').replace(/<\/script>$/i, '').trim();
+    let parsed = null;
+    try { parsed = JSON.parse(body); } catch (e) { void e; continue; }
+    visit(parsed, 0);
+  }
+  // Newest first, deduped by title so one role syndicated across three pages is
+  // one opening rather than three.
+  const seen = new Set();
+  return out
+    .sort((a, b) => Date.parse(b.datePosted) - Date.parse(a.datePosted))
+    .filter(j => { const k = j.title.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+};
 const harvestInteriorMarkup = (url, html, companyName) => {
   const h = String(html || '');
   if (h.length < 500) return false;
@@ -7071,10 +7133,25 @@ const harvestInteriorMarkup = (url, html, companyName) => {
     pages: prev.pages + 1,
   };
   _INTERIOR_ADS.set(host, next);
+  // Same page, same credit, no extra call. See jobPostingsFromHtml.
+  try {
+    const jobs = jobPostingsFromHtml(h);
+    if (jobs.length) {
+      const prevJobs = _INTERIOR_JOBS.get(host) || [];
+      const merged = [...prevJobs];
+      for (const j of jobs) if (!merged.some(p => p.title.toLowerCase() === j.title.toLowerCase())) merged.push(j);
+      _INTERIOR_JOBS.set(host, merged.slice(0, 25));
+      console.log(`\u{1F4C5} DATED JOB POSTING [${companyName || host}]: their own page publishes ${jobs.length} opening(s) with a real posted date \u2014 ${jobs.slice(0, 3).map(j => `${j.title} (${j.datePosted.slice(0, 10)})`).join(', ')}. This is the one thing on a Google Places lead that carries a clock, it came out of markup we had already paid for, and until now only a TheirStack lead could have it.`);
+    }
+  } catch (e) { void e; }
   if (companyName && next.pages === 1) {
     console.log(`⛓ INTERIOR MARKUP [${companyName}]: reading page SOURCE on the interior pages too, not just the homepage. Same credits — Firecrawl bills per page, not per format — and it is what lets a tracking tag or a booking widget on a services page be seen at all.`);
   }
   return true;
+};
+const interiorJobsFor = (website) => {
+  try { return _INTERIOR_JOBS.get(new URL(String(website).startsWith('http') ? website : 'https://' + website).hostname.replace(/^www\./, '').toLowerCase()) || null; }
+  catch (e) { void e; return null; }
 };
 const interiorAdsFor = (website) => {
   try { return _INTERIOR_ADS.get(new URL(String(website).startsWith('http') ? website : 'https://' + website).hostname.replace(/^www\./, '').toLowerCase()) || null; }
@@ -10886,25 +10963,221 @@ const paidLeakGapFrom = (m = {}) => {
 
 // The marketing hire, from what discovery already shipped. `now` is a parameter
 // so the boot check can pin a date instead of racing the clock.
-const marketingHireFrom = (body = {}, now = Date.now()) => {
+//
+// ══ AND FROM THEIR OWN SITE, WHICH IS WHERE THE OTHER 92.5% LIVE ═══════════
+// This read only discovery until 2026-08-20, so the single rung in this file
+// with a clock on it could only ever fire on a TheirStack lead. siteJobs is the
+// JobPosting markup harvested from pages we already bought (jobPostingsFromHtml)
+// and it costs nothing.
+//
+// PRECEDENCE IS DELIBERATE. A job board's date is the date the employer entered
+// on the board; their own JobPosting datePosted is the date the employer
+// published. Both are his. Discovery wins only because it is the narrower,
+// already-classified feed; when discovery gave no date, their own site is used
+// and the source is recorded so the log can say which one spoke.
+//
+// A posted date is REQUIRED for the clock. Without it there is no clock, and a
+// hire with no clock is just a fact about them that we would be repeating back —
+// so an undated opening still reports hiringMarketing (the call sheet and the
+// audit may say "they are hiring right now", which is present tense and true)
+// while jobPostedDaysAgo stays null and the rung refuses itself.
+const marketingHireFrom = (body = {}, now = Date.now(), siteJobs = null) => {
   const sig = body.discoverySignals || {};
   const roles = Array.isArray(body.marketingRoles) ? body.marketingRoles.filter(Boolean) : [];
-  const hiring = !!(sig.hiring_marketing || sig.hiring_marketing_multi);
-  // A posted date is REQUIRED. Without it there is no clock, and a hire with no
-  // clock is just a fact about them that we would be repeating back.
+  let hiring = !!(sig.hiring_marketing || sig.hiring_marketing_multi);
+  let title = hiring && roles.length ? String(roles[0]) : '';
   const t = body.jobPostedAt ? Date.parse(body.jobPostedAt) : NaN;
-  const days = Number.isFinite(t) ? Math.floor((now - t) / 86400000) : null;
+  let postedAt = Number.isFinite(t) ? t : NaN;
+  let source = hiring ? 'the job board we discovered them on' : '';
+  if (!Number.isFinite(postedAt) && Array.isArray(siteJobs) && siteJobs.length) {
+    // Which titles are MARKETING is decided by signalsFromTitles, the one
+    // function that owns that question — searchTheirStack calls it, the boot
+    // check calls it, and a second copy of that rule here is the exact disease
+    // the comment above it records.
+    const _cls = signalsFromTitles(siteJobs.map(j => j.title));
+    const _isMktg = new Set(_cls.marketing.map(x => x.toLowerCase()));
+    // The date must belong to the MARKETING role. A dispatcher posted yesterday
+    // must never date a marketing manager posted eight months ago.
+    const _dated = siteJobs
+      .filter(j => _isMktg.has(String(j.title).trim().toLowerCase()) && Number.isFinite(Date.parse(j.datePosted)))
+      .sort((a, b) => Date.parse(b.datePosted) - Date.parse(a.datePosted));
+    if (_dated.length) {
+      hiring = true; title = _dated[0].title;
+      postedAt = Date.parse(_dated[0].datePosted);
+      source = 'their own site';
+    } else if (_cls.marketing.length) {
+      hiring = true; title = title || _cls.marketing[0];
+      source = 'their own site (no posted date)';
+    }
+  }
+  const days = Number.isFinite(postedAt) ? Math.floor((now - postedAt) / 86400000) : null;
   return {
     hiringMarketing: hiring,
-    jobPostedDaysAgo: Number.isFinite(days) ? days : null,
+    // A future date is an invented clock. Refused here rather than left to the
+    // rung, so every consumer sees "not measured" and not a negative number.
+    jobPostedDaysAgo: Number.isFinite(days) && days >= 0 ? days : null,
+    clockSource: source,
     // Lower-cased so the sentence reads as prose, and truncated so a job board's
     // 90-character title cannot run away with the opening line.
-    marketingRoleName: hiring && roles.length
-      ? String(roles[0]).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 42).replace(/\s+\S{1,3}$/, '')
+    marketingRoleName: hiring && title
+      ? String(title).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 42).replace(/\s+\S{1,3}$/, '')
       : '',
   };
 };
 
+
+// ══ THE ONLY TRUE EVENT THIS SYSTEM CAN EVER MEASURE ═══════════════════════
+// PART 4 §1, the largest gap in the pipeline: "primary pain is the ongoing
+// condition (thin reviews, no pricing, slow growth); catalytic pain is the event
+// that puts a clock on it. Every finding here is primary."
+//
+// The reason every finding is primary is not the ladder. It is that ONE LOOK AT
+// A BUSINESS CANNOT SEE A CHANGE. A rank, a review count, an advertising tag —
+// each is a photograph. You cannot get "he started running ads six weeks ago"
+// out of a photograph, however good the photograph is, and no amount of prompt
+// work or rung-writing will produce it.
+//
+// Two looks can. And this system has been taking a second look at the same
+// businesses for weeks and throwing the comparison away every time: the bench
+// re-serves 393 overflow businesses a run, the query memory rests exhausted
+// ground so old ground comes back, and Vin re-audits leads by hand ("ive ran an
+// audit on ram jack like 6 times"). Every one of those was a free observation
+// against an earlier one, discarded.
+//
+// So this is the cheapest build in the file: one small row written per research,
+// one row read back. No API costs a penny more. What it buys is the first
+// measurement in this system with a DATE ON IT that did not come from a job
+// board — and the two facts it can produce, a search position that moved and
+// advertising that appeared, are both things the owner could not know without
+// having run the same check twice himself and written both down.
+//
+// HONEST SHAPE, STATED UP FRONT: on a business we have never seen before this
+// produces NOTHING, and says so. It is a recorder first and a finder second.
+// The first audit of a lead is the price of the second one being able to speak.
+const OBS_MIN_DAYS = 14;    // two looks a week apart are one look with noise
+const OBS_MAX_DAYS = 400;   // a year-old photograph is not "recently"
+const OBS_RANK_NOISE = 3;   // see checkLocalRankStable: #9/#13/#9/#12 minutes apart
+// The stable identity of a business across two runs. place_id is Google's own
+// key and never moves; a domain is next; a name in a city is the last resort and
+// is deliberately the weakest, because two roofers in one metro can share a name.
+const observationKeyFor = (o = {}) => {
+  const pid = String((o && o.placeId) || '').trim();
+  if (pid) return 'place:' + pid.slice(0, 120);
+  let host = '';
+  try {
+    const w = String((o && o.website) || '');
+    if (w) host = new URL(w.startsWith('http') ? w : 'https://' + w).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch (e) { void e; }
+  if (host && host.length > 3) return 'site:' + host.slice(0, 120);
+  const name = String((o && o.company) || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const city = String(cityState((o && o.location) || '') || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (name.length >= 4 && city.length >= 3) return `name:${name.slice(0, 80)}|${city.slice(0, 40)}`;
+  return null;
+};
+// What is worth remembering. Deliberately tiny: everything here must be a number
+// or a boolean that MEANS something when it changes, and every field may be null,
+// which means NOT MEASURED and never "measured as zero" — the PART 6 class of bug
+// that once stated "0 photos" on leads where photos were never counted.
+const observationSnapshot = (m = {}) => {
+  const num = (x) => (Number.isFinite(Number(x)) && x !== null && x !== '' ? Number(x) : null);
+  const bool = (x) => (x === true ? true : x === false ? false : null);
+  return {
+    v: 1,
+    reviewCount: num(m.reviewCount),
+    rating: num(m.rating),
+    // The PHRASE travels with the position, because §30 made the search we
+    // measure depend on what their own name says they sell. Two runs can
+    // legitimately measure DIFFERENT searches on one business, and comparing
+    // "#3 for plastic surgeon" against "#9 for facial plastic surgeon" would
+    // manufacture a collapse out of two correct measurements.
+    rankPhrase: String(m.rankPhrase || '').toLowerCase().trim().slice(0, 120) || null,
+    rank: num(m.rank),
+    rankScanned: num(m.rankScanned),
+    rankStable: bool(m.rankStable),
+    weakerAbove: num(m.weakerAbove),
+    adsReadable: bool(m.adsReadable),
+    googleAdsTag: bool(m.googleAdsTag),
+    metaPixel: bool(m.metaPixel),
+    tagManager: bool(m.tagManager),
+  };
+};
+// The comparison. Every branch REFUSES by default and speaks only when the
+// measurement on both sides is one we were allowed to state on its own.
+const compareObservations = (prev, cur, nowMs, prevAtMs) => {
+  const none = (why) => ({ days: null, changes: [], why });
+  if (!prev || !cur || typeof prev !== 'object' || typeof cur !== 'object') return none('no earlier observation of this business');
+  const t = Number(prevAtMs);
+  if (!Number.isFinite(t)) return none('the earlier observation carries no usable date');
+  const days = Math.floor((Number(nowMs) - t) / 86400000);
+  if (!Number.isFinite(days) || days < 0) return none('the earlier observation is dated in the future');
+  if (days < OBS_MIN_DAYS) return none(`only ${days} day(s) since the last look, which is noise rather than history`);
+  if (days > OBS_MAX_DAYS) return none(`the last look was ${days} days ago, too long ago to call anything recent`);
+  const changes = [];
+  // ── THE SEARCH POSITION MOVED ────────────────────────────────────────────
+  // Four gates, and every one of them exists because of a bug already in this
+  // file: the same phrase (§30), two stable samples on BOTH sides (§6, where one
+  // business returned #3 and #12 minutes apart), a move bigger than that noise,
+  // and only a DROP — climbing is not a finding, it is a compliment.
+  if (prev.rankPhrase && cur.rankPhrase && prev.rankPhrase === cur.rankPhrase
+      && prev.rankStable === true && cur.rankStable === true
+      && Number.isFinite(prev.rank) && Number.isFinite(cur.rank)
+      && cur.rank - prev.rank >= OBS_RANK_NOISE) {
+    changes.push({ id: 'rank_slipped', from: prev.rank, to: cur.rank, days, phrase: cur.rankPhrase, sayable: true });
+  } else if (prev.rankPhrase && cur.rankPhrase && prev.rankPhrase !== cur.rankPhrase
+      && Number.isFinite(prev.rank) && Number.isFinite(cur.rank)) {
+    changes.push({ id: 'rank_incomparable', sayable: false,
+      note: `the two looks measured different searches ("${prev.rankPhrase}" then "${cur.rankPhrase}"), so their positions are not comparable and no movement may be claimed` });
+  }
+  // ── ADVERTISING APPEARED, OR WENT ────────────────────────────────────────
+  // Both sides must have been READABLE. A refused fetch leaves the flag null,
+  // and null is not false — the absence-claim discipline this file applies
+  // everywhere else applies twice as hard across two dates.
+  if (prev.adsReadable === true && cur.adsReadable === true) {
+    if (prev.googleAdsTag === false && cur.googleAdsTag === true) {
+      changes.push({ id: 'ads_started', days, sayable: true });
+    } else if (prev.googleAdsTag === true && cur.googleAdsTag === false && cur.tagManager !== true) {
+      // A container can hold a tag we cannot see, so a GTM container on the
+      // later read removes our right to say the tag went away.
+      changes.push({ id: 'ads_stopped', days, sayable: false,
+        note: 'the Google Ads tag we read on their homepage is no longer there. Worth knowing on the call; not sayable, because a tag can move inside a container we cannot read' });
+    }
+  }
+  // ── INTELLIGENCE ONLY. Reviews are how we read the business, never the
+  //    sentence we send — INTERNAL_ONLY_RUNGS, PART 4 §2.
+  if (Number.isFinite(prev.reviewCount) && Number.isFinite(cur.reviewCount) && days >= 30) {
+    const perMonth = ((cur.reviewCount - prev.reviewCount) / days) * 30;
+    changes.push({ id: 'review_pace', sayable: false, days,
+      perMonth: Math.round(perMonth * 10) / 10, from: prev.reviewCount, to: cur.reviewCount });
+  }
+  if (Number.isFinite(prev.weakerAbove) && Number.isFinite(cur.weakerAbove)
+      && prev.rankPhrase === cur.rankPhrase && cur.weakerAbove > prev.weakerAbove) {
+    changes.push({ id: 'weaker_above_grew', sayable: false, days, from: prev.weakerAbove, to: cur.weakerAbove });
+  }
+  return { days, changes, why: changes.length ? '' : `nothing measurable changed in ${days} days` };
+};
+// "3rd", "9th", "11th". A position is a place in a queue and that is how a
+// person says one out loud.
+const ordinalOf = (n) => {
+  const x = Math.round(Number(n));
+  if (!Number.isFinite(x)) return '';
+  const r100 = ((x % 100) + 100) % 100, r10 = ((x % 10) + 10) % 10;
+  const suf = (r100 >= 11 && r100 <= 13) ? 'th' : r10 === 1 ? 'st' : r10 === 2 ? 'nd' : r10 === 3 ? 'rd' : 'th';
+  return `${x}${suf}`;
+};
+// What the ladder reads. Pure, so the boot check runs the shipping code.
+const observationHarmInputs = (cmp) => {
+  const ch = (cmp && Array.isArray(cmp.changes)) ? cmp.changes : [];
+  const slip = ch.find(c => c.id === 'rank_slipped' && c.sayable);
+  const ads = ch.find(c => c.id === 'ads_started' && c.sayable);
+  return {
+    obsDays: (cmp && Number.isFinite(cmp.days)) ? cmp.days : null,
+    rankSlippedFrom: slip ? slip.from : null,
+    rankSlippedTo: slip ? slip.to : null,
+    rankSlippedDays: slip ? slip.days : null,
+    rankSlippedPhrase: slip ? slip.phrase : null,
+    adsStartedDays: ads ? ads.days : null,
+  };
+};
 
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
@@ -11414,6 +11687,47 @@ const HARM_LADDER = [
       return `they are nowhere in the first twenty results for ${m.tradeWord || 'their trade'} in ${town(m.marketsAbsent[0])} \u2014 and that's ${m.marketsAbsent.length} of the ${m.marketsSearched.length} metros around them`;
     },
     costs: (m) => `a metro they do not come up in cannot send them a single ${audienceOf(m.tradeWord).job}` },
+
+  // ══ THE FIRST FINDING IN THIS FILE THAT IS AN EVENT ═══════════════════
+  // Everything else on this ladder is a photograph of a business: a missing
+  // price, a phone-only intake, a position. This one is the difference between
+  // two photographs taken months apart, which is the only way a system with no
+  // paid data source can ever say WHEN something happened. See the observation
+  // ledger above for why that matters and what it cost (nothing).
+  //
+  // ══ WHY IT SITS BELOW outranked_by_weaker AND NOT ABOVE IT ════════════
+  // It is the more surprising sentence and it is almost certainly the stronger
+  // one. It also has ZERO evidence behind it, and outranked_by_weaker is one of
+  // only two rungs in this file with a real human reply. PART 6: do not trade a
+  // proven sentence for a better-looking one. So harm 88 against 92, and with
+  // novel 96 against 72 the opener scores land at 94.7 and 97.0 — the proven
+  // sentence keeps the lead on any business where both fire, and this one takes
+  // it everywhere else. Raise it when a call outcome says to, and not before.
+  //
+  // Four gates live in compareObservations, not here, because they are about the
+  // MEASUREMENTS and not about the finding: the same search phrase both times
+  // (§30 made the phrase lead-specific, and comparing "plastic surgeon" against
+  // "facial plastic surgeon" would manufacture a collapse out of two correct
+  // readings), two agreeing samples on BOTH dates (§6: one business returned #3
+  // and #12 minutes apart), a move bigger than that noise, and at least a
+  // fortnight between looks.
+  { harm: 88, specific: 96, novel: 96, delegable: 15, weFix: 90, band: 'INVISIBLE', id: 'rank_slipped',
+    blind: 'nobody searches their own trade term twice, months apart, and writes down both positions, so a slide has no moment where anyone notices it',
+    // Deliberately says nothing about WHY. The fact-checker refuses ranking
+    // causation and it is right to: we measured two positions and we do not know
+    // what moved between them. The honest reframe is that the question itself is
+    // the thing worth answering.
+    reframe: 'a position that moved has a reason behind it, and the reason is worth more than the position',
+    test: (m) => Number.isFinite(m.rankSlippedFrom) && Number.isFinite(m.rankSlippedTo)
+      && Number.isFinite(m.rankSlippedDays) && m.rankSlippedTo > m.rankSlippedFrom
+      && !!m.rankSlippedPhrase,
+    say: (m) => {
+      const days = Number(m.rankSlippedDays);
+      const months = Math.round(days / 30);
+      const when = months >= 2 ? `${months} months ago` : `${days} days ago`;
+      return `We ran a Google search for "${m.rankSlippedPhrase}" ${when} and they came up ${ordinalOf(m.rankSlippedFrom)} in the list of local businesses. Today the same search puts them ${ordinalOf(m.rankSlippedTo)}`;
+    },
+    costs: 'every place they drop is a customer who picks somebody above them instead' },
 
   { harm: 92, specific: 92, novel: 72, delegable: 10, weFix: 90, band: 'INVISIBLE', id: 'outranked_by_weaker',
     blind: 'he searches his own name and comes up first. That is a different search from the one his customers type, and only one of the two is ever shown to him',
@@ -12784,6 +13098,7 @@ const AREA_OF = {
   wrong_gbp_category: 'Being found', no_google_listing: 'Being found',
   no_website_on_profile: 'Being found',
   duplicate_listing: 'Being found',
+  rank_slipped: 'Being found',
   listing_closed: 'Google listing', thin_profile: 'Google listing',
   no_hours_on_profile: 'Google listing', stale_reviews: 'Google listing',
   low_rating: 'Reputation', no_owner_replies: 'Reputation',
@@ -12879,6 +13194,8 @@ const SUBJECTS_FOR = {
   no_website_on_profile:['your listing has no site link', 'google has no site for you'],
   duplicate_listing: ['google has you listed twice', 'two google listings, one business',
                       'you are on google twice', 'your second google listing'],
+  rank_slipped:         ['you have moved down on google', 'your search position moved',
+                         'you are lower than you were', 'your google position slipped'],
   expired_certificate:  ['your site shows a warning', 'browsers are blocking you'],
   no_https:             ['your site says not secure', 'browsers are flagging you'],
   phone_mismatch:       ['google has your old number', 'your numbers do not match'],
@@ -13468,6 +13785,7 @@ const HARM_LADDER_LAYER = {
   // Two listings split the standing that decides who gets seen — a LEADS
   // problem in the same sense as the rank findings it explains.
   duplicate_listing: 'LEADS',
+  rank_slipped: 'LEADS',
   stale_reviews:         'LEADS',
   review_deficit:        'LEADS',
   review_velocity_drop:  'LEADS',
@@ -13554,6 +13872,8 @@ const SELLABLE = {
   // 5: merging listings wrong is how the reviews get lost, which is exactly
   // why an owner should not do it alone on a Saturday.
   duplicate_listing: 5,
+  // 5: a position that moved is a visibility engagement, not an afternoon.
+  rank_slipped: 5,
   // 5: invisible across a service line is a build, not an afternoon.
   service_invisibility: 5,
   // 5: pricing, an offer, a signup path, billing and a retention sequence.
@@ -17161,6 +17481,7 @@ const CTA_BY_FINDING = {
   // decides the whole conversation: an old rebrand, a move, or Google acting
   // alone are three different jobs.
   duplicate_listing: 'duplicate',
+  rank_slipped: 'duplicate',
   // Reputation. The ask is about their PROCESS after a job — a question no
   // employee can answer for him and the exact conversation the call needs to
   // start on.
@@ -18846,6 +19167,7 @@ const OWNER_KNOWS = {
   coverage_gap:                 ['cannot_know', 'requires searching a market he does not trade in to discover he is absent from it'],
   service_invisibility:         ['cannot_know', 'requires a separate search per service page to find the one he does not come up for'],
   duplicate_listing:            ['cannot_know', 'a second Google record he has no view of and Google never told him about'],
+  rank_slipped:                 ['cannot_know', 'a JOIN of two searches months apart; he would have had to run the same query twice and write both positions down'],
   phone_mismatch:               ['cannot_know', 'the number on his site against the number on his listing — two places he never opens side by side'],
   review_pain_pattern:          ['cannot_know', 'forty reviews tabulated for a repeating theme; he has read them one at a time and never counted'],
   paying_for_a_search_they_lose:['cannot_know', 'his ads account says one thing and an organic rank check says another; the two live in different places'],
@@ -26136,6 +26458,74 @@ const sbRest = async (path, options = {}) => {
 };
 
 
+// ── THE OBSERVATION LEDGER, PERSISTED ───────────────────────────────────────
+// See observationKeyFor for why this exists. Requires:
+//   create table business_observations (
+//     id bigserial primary key,
+//     biz text not null, company text not null,
+//     at timestamptz default now(), snap jsonb not null);
+//   create index business_observations_biz_at on business_observations (biz, at desc);
+//
+// Fails OPEN in both directions: no Supabase, no table, a bad response, and every
+// lead behaves exactly as it did before the ledger existed — one photograph, no
+// clock, and the run says so. A memory that can stop an audit is not a memory.
+//
+// ══ THE ISOLATION RULE, WHICH IS THE WHOLE RISK HERE ═══════════════════════
+// PART 4 §19 is the worst bug this system has had: a cache key that collided
+// handed Donna Krummen John Peters Roofing's audit, and the fabricated result
+// sat one click from Send. This table is the same shape of danger pointed at
+// time instead of at leads — a snapshot read under the wrong key would state
+// ANOTHER BUSINESS'S search position as this one's history, with a date on it,
+// which is the most confident possible way to be wrong.
+//
+// So the row remembers WHICH COMPANY it was written for, and a read by a
+// different company is refused by name, exactly as the audit cache now is. Even
+// a future key bug cannot cross two businesses.
+// A legal suffix is not a different business. Google's displayName and our
+// stored company name disagree about "LLC" constantly, and refusing a business
+// its own history over a suffix would make the ledger silently useless on a
+// large share of leads — the guard-too-tight failure the ICP filter section
+// records. Stripped BEFORE punctuation is collapsed, so the boundary is real.
+// A practitioner credential (MD, DDS, DO) is deliberately NOT here: that is part
+// of who the business is, and PART 4 §24 already turns on telling those apart.
+const _obsName = (x) => String(x || '').toLowerCase()
+  .replace(/\b(?:l\.?l\.?c|inc(?:orporated)?|co(?:rp(?:oration)?)?|ltd|limited|llp|pllc|p\.?c)\b/g, ' ')
+  .replace(/[^a-z0-9]+/g, '').slice(0, 40);
+// Pure, so the boot check runs the REAL refusal rather than a copy of it. Two
+// blanks cannot refuse each other — an old row written before the company column
+// existed is unknown, not wrong — but two different names always do.
+const observationIsMine = (company, storedCompany) => {
+  const mine = _obsName(company), theirs = _obsName(storedCompany);
+  if (!mine || !theirs) return true;
+  return mine === theirs;
+};
+const readPriorObservation = async (key, company) => {
+  if (!key) return null;
+  const rows = await sbRest(`/business_observations?biz=eq.${encodeURIComponent(key)}&select=company,at,snap&order=at.desc&limit=1`,
+    { method: 'GET', prefer: 'return=representation' });
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const r = rows[0] || {};
+  if (!observationIsMine(company, r.company)) {
+    console.log(`⛔ OBSERVATION REFUSED [${company}]: the stored history under this key was written for "${r.company}", not for them. Nothing from it is used. A snapshot read under the wrong key would state another business's search position as this one's, with a date attached, which is the most confident possible way to be wrong — the same failure as PART 4 §19, pointed at time instead of at leads.`);
+    return null;
+  }
+  const t = r.at ? Date.parse(r.at) : NaN;
+  if (!Number.isFinite(t)) return null;
+  return { at: t, snap: (r.snap && typeof r.snap === 'object') ? r.snap : null, company: r.company };
+};
+const writeObservation = async (key, company, snap) => {
+  if (!key || !snap) return false;
+  const wrote = await sbRest('/business_observations', {
+    method: 'POST',
+    body: JSON.stringify([{ biz: key, company: String(company || '').slice(0, 200), snap }]),
+  });
+  if (wrote === null) {
+    console.log(`⚠ OBSERVATION NOT STORED [${company}]: ${sbWhy('business_observations') || 'no reason reported'}. Today's audit is unaffected; what is lost is the ability for the NEXT look at this business to say what changed.`);
+    return false;
+  }
+  return true;
+};
+
 // ── THE QUERY MEMORY, PERSISTED ─────────────────────────────────────────────
 // Render restarts on every deploy and Find runs from two places (the button and
 // the cron), so this cannot live in process memory. Requires:
@@ -28423,6 +28813,9 @@ const checkBuiltWith = async (domain) => {
 //   reporting an unproven read as a measurement, which is the one thing this
 //   project's own rules forbid. ADS_TRANSPARENCY=on turns it on.
 const ADS_TRANSPARENCY_ON = String(process.env.ADS_TRANSPARENCY || 'off').toLowerCase() === 'on';
+// Any CRM, or Zapier/Make/n8n, or nothing. Unset means outcomes are stored here
+// and nowhere else, which is a complete and useful state rather than a broken one.
+const CRM_WEBHOOK_URL = String(process.env.CRM_WEBHOOK_URL || '').trim();
 const checkAdsTransparency = async (domain, fcKey, companyName) => {
   const host = String(domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim().toLowerCase();
   if (!ADS_TRANSPARENCY_ON || !host || !fcKey) return { checked: false, why: ADS_TRANSPARENCY_ON ? 'no domain or no Firecrawl key' : 'ADS_TRANSPARENCY is off' };
@@ -31610,6 +32003,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // so ranking depends on what is TRUE about the lead, not on which words
     // the model happened to choose on that run.
     let _harmInputs = {};
+    // Declared beside _harmInputs, not inside the block that fills it: the call
+    // sheet reads this from the RESPONSE, and a value scoped to where it was
+    // computed is the shape that has silently eaten measurements here before.
+    let _obsCmp = { days: null, changes: [], why: 'the ledger was not consulted on this lead' };
     try {
       const F = [];
       const push = (x) => { if (x) F.push('\u2022 ' + x); };
@@ -31724,7 +32121,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // through the client and into Supabase for weeks. They reached the audit
         // prompt as background and stopped there, so "22 of 25 hiring for
         // marketing" could never become a sentence in an email.
-        const _mktgHireInput = marketingHireFrom(req.body);
+        const _mktgHireInput = marketingHireFrom(req.body, Date.now(), interiorJobsFor(website));
     // localVisibility holds every rank row we bought on this lead. On a lead
     // where the rank check never ran it is null, and serviceVisibilityGap
     // returns zeros — which the rung reads as "no finding", never as "invisible
@@ -31737,10 +32134,63 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (_mktgHireInput.hiringMarketing) {
           console.log(`\u26a1 BUYING WINDOW [${company}]: hiring ${_mktgHireInput.marketingRoleName || '(role name not shipped)'}`
             + `${Number.isFinite(_mktgHireInput.jobPostedDaysAgo) ? `, posted ${_mktgHireInput.jobPostedDaysAgo} day(s) ago` : ', NO POSTED DATE — no clock, so this cannot become a finding'} `
-            + `\u2014 the only measurement on this lead with a clock on it.`);
+            + `\u2014 the only measurement on this lead with a clock on it${_mktgHireInput.clockSource ? `, read from ${_mktgHireInput.clockSource}` : ''}.`);
+        }
+        // ══ WHAT CHANGED SINCE LAST TIME ═══════════════════════════════════
+        // The only measurement in this file with a date on it that did not come
+        // from a job board. See the observation ledger for why this is the one
+        // build that can close PART 4 §1, and for the honest limit: on a business
+        // we have never seen before it produces nothing and says so.
+        const _obsKey = observationKeyFor({ placeId: effectivePlaceId, website, company, location });
+        const _obsNow = observationSnapshot({
+          reviewCount: _measured.reviewCount,
+          rating: _measured.rating,
+          // The phrase, the position and the AGREEMENT of the two samples all
+          // travel together. Comparing a position without its phrase, or without
+          // knowing both draws agreed, is how a correct measurement becomes a
+          // false collapse.
+          rankPhrase: localRank && localRank.query,
+          rank: localRank && localRank.rank,
+          rankScanned: localRank && localRank.scanned,
+          // Passed through RAW so observationSnapshot's own bool() maps an
+          // undefined to null. Writing `!== false` here would have recorded
+          // "the two samples agreed" on every service-page row, which never
+          // takes a second sample at all — unmeasured treated as measured, the
+          // PART 6 class, and it would have licensed the strongest new claim in
+          // the file off a single noisy draw.
+          rankStable: localRank && localRank.rankStable,
+          weakerAbove: localRank && localRank.weakerAbove,
+          adsReadable: !!(builtWith && builtWith.adsRead === true),
+          googleAdsTag: (builtWith && builtWith.confirmed === true && !builtWith.blocked) ? builtWith.hasGoogleAdsTag === true : null,
+          metaPixel: (builtWith && builtWith.confirmed === true && !builtWith.blocked) ? builtWith.hasMetaPixel === true : null,
+          tagManager: (builtWith && builtWith.confirmed === true && !builtWith.blocked) ? builtWith.hasTagManager === true : null,
+        });
+        if (_obsKey) {
+          const _prior = await readPriorObservation(_obsKey, company);
+          _obsCmp = _prior && _prior.snap
+            ? compareObservations(_prior.snap, _obsNow, Date.now(), _prior.at)
+            : { days: null, changes: [], why: 'this is the first time we have looked at this business, so there is nothing to compare it to' };
+          const _sayable = _obsCmp.changes.filter(c => c.sayable);
+          if (_sayable.length) {
+            console.log(`⏱ WHAT CHANGED [${company}]: ${_sayable.map(c => c.id === 'rank_slipped'
+              ? `they were ${ordinalOf(c.from)} for "${c.phrase}" ${c.days} days ago and they are ${ordinalOf(c.to)} today`
+              : c.id).join(' | ')}. This is the only kind of fact in the system with a date on it that did not come from a job board, and it cost nothing — it is the difference between two measurements we had already paid for.`);
+          } else {
+            console.log(`⏱ NO CLOCK FROM THE LEDGER [${company}]: ${_obsCmp.why}.${_obsCmp.changes.length ? ` Not sayable, but on the call sheet: ${_obsCmp.changes.map(c => c.id).join(', ')}.` : ''}`);
+          }
+          // Written AFTER the comparison, never before, or the first read of the
+          // next run would find today's row and compare the lead against itself.
+          await writeObservation(_obsKey, company, _obsNow);
+        } else {
+          console.log(`⏱ NO LEDGER KEY [${company}]: no place id, no usable domain and no city, so nothing about this business can be recognised on a second look.`);
         }
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
+          // The four fields the ledger produces. Delivered through
+          // observationHarmInputs so the boot check runs the shipping code
+          // rather than a hand-built copy of it — the delivery hop is what this
+          // file has lost twenty measurements to.
+          ...observationHarmInputs(_obsCmp),
           // ══ THE TWO BUSINESS-LEVEL SIGNALS, DELIVERED ═════════════════════
           // Both were measured and neither reached rankHarms, so neither could
           // ever be said. This is the last hop — the one that has silently
@@ -32408,6 +32858,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (careers && careers.totalOpenings) push(`He is hiring right now: ${(careers.roles || []).slice(0, 4).map(r => r.title).filter(Boolean).join(', ') || careers.totalOpenings + ' opening(s)'}. What a business hires for is what it is trying to become.`);
       if (sitePages && sitePages.unlinkedPages && sitePages.unlinkedPages.checked && sitePages.unlinkedPages.unlinkedCount) {
         push(`${sitePages.unlinkedPages.unlinkedCount} page(s) exist on their site that their own navigation does not link to${sitePages.unlinkedPages.campaignCount ? `, ${sitePages.unlinkedPages.campaignCount} of them shaped like campaign pages` : ''}. A page built for an ad is deliberately not in the menu. INTERNAL and POSITIVE ONLY: their absence proves nothing, because a campaign page is routinely kept out of the sitemap.`);
+      }
+      // ══ THE ONLY FACTS HERE WITH A DATE ON THEM ══════════════════════════
+      // Everything else in this list is a photograph of the business today. See
+      // the observation ledger: this is what MOVED between two looks, which is
+      // the difference between "their pricing page is missing" and "something
+      // changed". Fed as measurement, with the unsayable ones labelled, because
+      // the read is internal and the email has its own gate.
+      for (const c of ((_obsCmp && _obsCmp.changes) || [])) {
+        if (c.id === 'rank_slipped') push(`SINCE WE LAST LOOKED (${c.days} days ago): they were ${ordinalOf(c.from)} for "${c.phrase}" and they are ${ordinalOf(c.to)} now. We measured both, twice each. Do NOT say why — we do not know why.`);
+        else if (c.id === 'ads_started') push(`SINCE WE LAST LOOKED (${c.days} days ago): a Google Ads conversion tag appeared on their homepage that was not there before. They started spending on search in that window.`);
+        else if (c.id === 'review_pace') push(`INTERNAL ONLY, never in an email: reviews arrived at about ${c.perMonth} a month over the last ${c.days} days (${c.from} to ${c.to}). This is how the business is running, not something to say to him.`);
+        else if (c.id === 'weaker_above_grew') push(`INTERNAL ONLY: businesses above them with fewer reviews went from ${c.from} to ${c.to} in ${c.days} days.`);
+        else if (c.id === 'ads_stopped') push(`INTERNAL ONLY, NOT SAYABLE: ${c.note}`);
+        else if (c.id === 'rank_incomparable') push(`INTERNAL ONLY: ${c.note}`);
       }
       // readOfferStrength returns { guarantee, urgency, genericOnly } — the
       // hasGuarantee/hasUrgency/genericAskOnly names read here existed nowhere,
@@ -37131,6 +37595,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // Positive-only advertising evidence. See checkAdsTransparency: "not found"
       // is never returned as a negative, because only verified advertisers appear.
       adsTransparency: (adsTransparency && adsTransparency.checked) ? adsTransparency : null,
+      // ══ WHAT MOVED SINCE THE LAST TIME WE LOOKED ═════════════════════════
+      // The only facts in this system with a date on them that did not come from
+      // a job board. Most of what is here is NOT sayable — a review pace, a tag
+      // that went away, two searches that cannot be compared — and it is exactly
+      // what a person on a cold call wants in front of him. It travels whole so
+      // the call sheet can show it and a reload cannot destroy it.
+      whatChanged: (_obsCmp && (_obsCmp.changes || []).length) ? _obsCmp : null,
       // ══ WHEN THIS WAS MEASURED ═══════════════════════════════════════════
       // Nothing anywhere recorded it. On an email that is survivable — it goes
       // out the same day. On a COLD CALL it is not: a rank, a review count and a
@@ -38848,10 +39319,18 @@ app.listen(PORT, () => {
     // returns {} for anything under 400 characters, so passing '' made it look as
     // though it delivered nothing and reported four of its fields as dead.
     const _fixture = 'lorem ipsum dolor sit amet copyright 2019 posted 2021 '.repeat(30);
-    for (const fn of ['measureAbandonment', 'measureHistory']) {
+    // Each helper is called with the argument IT takes, not with one shared
+    // fixture. observationHarmInputs takes a comparison object; handing it a
+    // string would still have returned its keys, and a helper that returns the
+    // right keys for the wrong reason is how a gate stops meaning anything.
+    for (const [fn, arg] of [
+      ['measureAbandonment', _fixture],
+      ['measureHistory', _fixture],
+      ['observationHarmInputs', { days: 90, changes: [] }],
+    ]) {
       try {
         const f = eval(fn);
-        if (typeof f === 'function') for (const k of Object.keys(f(_fixture) || {})) _given.add(k);
+        if (typeof f === 'function') for (const k of Object.keys(f(arg) || {})) _given.add(k);
       } catch { /* not spreadable on this input — skip */ }
     }
 
@@ -43930,6 +44409,276 @@ app.listen(PORT, () => {
     console.log(`⛔ BUSINESS SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ THE CLOCK, ON THE 92.5% OF LEADS THAT COULD NEVER HAVE ONE ════════
+  // PART 4 §1: "Nothing has a clock on it... Every finding here is primary. An
+  // email about an ongoing condition competes with the whole inbox; an email
+  // about something that changed last week does not."
+  //
+  // hiring_marketing_now is the one rung whose test reads a date, and until now
+  // its inputs arrived only from TheirStack. Their own JobPosting markup is a
+  // date the owner published himself, sitting in rawHtml we already bought.
+  //
+  // Everything here is refusal-shaped, because a WRONG clock is worse than none:
+  // telling an owner he posted a role eight months after he filled it is the
+  // kind of checkable error that destroys every true sentence beside it.
+  try {
+    const _fails = [];
+    const _now = Date.parse('2026-08-20T12:00:00Z');
+    const _day = 86400000;
+    const ld = (obj) => `<html><head><script type="application/ld+json">${JSON.stringify(obj)}</script></head><body>${'x'.repeat(400)}</body></html>`;
+    const _iso = (d) => new Date(_now - d * _day).toISOString();
+
+    // 1. THE HAPPY PATH — a real posting, read with no model involved.
+    const _good = jobPostingsFromHtml(ld({ '@context': 'https://schema.org', '@type': 'JobPosting', title: 'Marketing Manager', datePosted: _iso(11) }), _now);
+    if (_good.length !== 1 || _good[0].title !== 'Marketing Manager') {
+      _fails.push(`a plain JobPosting was not read (${JSON.stringify(_good).slice(0, 120)}) — this is the only clock a Places lead can carry`);
+    }
+    // Both wrappers real sites actually emit.
+    if (jobPostingsFromHtml(ld({ '@graph': [{ '@type': 'WebSite' }, { '@type': 'JobPosting', title: 'SEO Specialist', datePosted: _iso(3) }] }), _now).length !== 1) {
+      _fails.push('a posting inside @graph is missed — that is how WordPress and Yoast emit it, which is most of these sites');
+    }
+    if (jobPostingsFromHtml(ld([{ '@type': 'JobPosting', title: 'Dispatcher', datePosted: _iso(5) }]), _now).length !== 1) {
+      _fails.push('a top-level ARRAY of JSON-LD is missed');
+    }
+
+    // 2. EVERY REFUSAL. Each one is a sentence we would otherwise have said.
+    if (jobPostingsFromHtml(ld({ '@type': 'JobPosting', title: 'Marketing Manager' }), _now).length !== 0) {
+      _fails.push('a posting with NO datePosted is being kept — there is no clock on it and the rung would state one');
+    }
+    if (jobPostingsFromHtml(ld({ '@type': 'JobPosting', title: 'Marketing Manager', datePosted: _iso(-30) }), _now).length !== 0) {
+      _fails.push('a posting dated in the FUTURE is being kept — that is an invented clock');
+    }
+    if (jobPostingsFromHtml(ld({ '@type': 'JobPosting', title: 'Marketing Manager', datePosted: _iso(120), validThrough: _iso(30) }), _now).length !== 0) {
+      _fails.push('an EXPIRED posting is being kept — telling an owner he is hiring for a role he already filled ends the call in one line');
+    }
+    if (jobPostingsFromHtml(ld({ '@type': 'JobPosting', datePosted: _iso(4) }), _now).length !== 0) {
+      _fails.push('a posting with no TITLE is being kept, and the rung names the role');
+    }
+    if (jobPostingsFromHtml('<html><script type="application/ld+json">{ broken json</script>JobPosting</html>' + 'y'.repeat(400), _now).length !== 0) {
+      _fails.push('malformed JSON-LD is not being survived cleanly');
+    }
+    if (jobPostingsFromHtml('<html><body>' + 'z'.repeat(4000) + '</body></html>', _now).length !== 0) {
+      _fails.push('markup with no JobPosting at all returned something');
+    }
+
+    // 3. THE PAIRING TRAP. A dispatcher posted yesterday must never date a
+    //    marketing role posted eight months ago — that would be a true role, a
+    //    true date, and a false sentence.
+    const _mixed = marketingHireFrom({}, _now, [
+      { title: 'Dispatcher', datePosted: _iso(1) },
+      { title: 'Marketing Coordinator', datePosted: _iso(240) },
+    ]);
+    if (_mixed.jobPostedDaysAgo !== 240) {
+      _fails.push(`the marketing role took the wrong posting's date (${_mixed.jobPostedDaysAgo}, should be 240) — a dispatcher posted yesterday cannot date a marketing hire`);
+    }
+    // 240 days is outside the rung's 120-day window, so this lead correctly
+    // produces NO finding. That is the point: the date is honest and the rung
+    // refuses itself.
+    const _opsOnly = marketingHireFrom({}, _now, [{ title: 'Dispatcher', datePosted: _iso(2) }]);
+    if (_opsOnly.hiringMarketing !== false || _opsOnly.jobPostedDaysAgo !== null) {
+      _fails.push('an OPS posting is being reported as a marketing hire — that pitches a $10-35k/mo retainer at a business hiring a dispatcher');
+    }
+    const _site = marketingHireFrom({}, _now, [{ title: 'Marketing Manager', datePosted: _iso(9) }]);
+    if (_site.hiringMarketing !== true || _site.jobPostedDaysAgo !== 9 || !_site.marketingRoleName) {
+      _fails.push(`their own site did not produce a clock (${JSON.stringify(_site)})`);
+    }
+    if (!/own site/.test(String(_site.clockSource || ''))) _fails.push('the clock does not record WHICH source it came from, so a log cannot say');
+    // Discovery still wins when it has a date of its own.
+    const _both = marketingHireFrom(
+      { discoverySignals: { hiring_marketing: true }, marketingRoles: ['Demand Generation Lead'], jobPostedAt: _iso(30) },
+      _now, [{ title: 'Marketing Manager', datePosted: _iso(9) }]);
+    if (_both.jobPostedDaysAgo !== 30 || !/job board/.test(String(_both.clockSource || ''))) {
+      _fails.push(`the job-board date lost to the site date (${_both.jobPostedDaysAgo}/${_both.clockSource})`);
+    }
+    // An UNDATED marketing opening is a present-tense fact for the call sheet and
+    // must NOT become a clock.
+    const _undatedSite = marketingHireFrom({}, _now, [{ title: 'Marketing Manager', datePosted: 'not a date' }]);
+    if (_undatedSite.jobPostedDaysAgo !== null) _fails.push('an undated opening produced a number of days');
+
+    // 4. AND THE TWO WIRES. A check that does not assert its call site is half a
+    //    check — this file records four separate fixes that passed on a build
+    //    with the fix reverted for exactly this reason. Needles assembled at
+    //    runtime and comment lines stripped, because a literal needle finds
+    //    itself and these comments quote the calls verbatim.
+    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (_src.indexOf('jobPostings' + 'FromHtml(h)') < 0) {
+      _fails.push('nothing harvests JobPosting markup from the pages we already read, so the parser above runs on nothing in production');
+    }
+    if (_src.indexOf('marketingHireFrom(req.body, Date.now(), interiorJobs' + 'For(website))') < 0) {
+      _fails.push('the research route no longer hands their own postings to the hire read — the parser would run, the map would fill, and the ladder would never see it. That is the delivery hop this file has lost twenty measurements to');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ HIRING CLOCK CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ HIRING CLOCK CHECK: a lead found through Google Places can now carry a DATE. Their own JobPosting markup is read out of page source we already paid for — no extra call, no model, nothing to fabricate — and it refuses more than it keeps: no date, a future date, an expired posting or a missing title all produce no clock at all. The date is paired to the MARKETING role specifically, so a dispatcher posted yesterday cannot date a marketing hire posted eight months ago. Until now hiring_marketing_now was harm 90 on a rung that could only fire on the 7.5% of leads TheirStack found.`.replace('✓', '✓'));
+    }
+  } catch (e) {
+    console.log(`⛔ HIRING CLOCK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE LEDGER: THE ONLY TRUE EVENT THIS SYSTEM CAN MEASURE ═════════════
+  // One look at a business is a photograph. Two looks are the only way to say
+  // WHEN. Every assertion below is a sentence we would otherwise have put in
+  // front of an owner, and most of them are refusals — because the failure mode
+  // here is not silence, it is a confident false claim with a date attached,
+  // which is the most expensive kind this system can make.
+  try {
+    const _fails = [];
+    const _now = Date.parse('2026-08-20T12:00:00Z');
+    const _day = 86400000;
+    const _ago = (d) => _now - d * _day;
+
+    // ── 1. IDENTITY. Getting this wrong is PART 4 §19 pointed at time.
+    if (observationKeyFor({ placeId: 'ChIJabc', website: 'http://x.com', company: 'X' }) !== 'place:ChIJabc') {
+      _fails.push('the Google place id is not the primary key, so a business that changes domain becomes a stranger');
+    }
+    const _k1 = observationKeyFor({ website: 'https://www.JohnPeters.com/', company: 'John Peters Roofing' });
+    const _k2 = observationKeyFor({ website: 'http://johnpeters.com', company: 'John Peters Roofing' });
+    if (!_k1 || _k1 !== _k2) _fails.push(`www and the scheme are making one business look like two (${_k1} vs ${_k2}) — the same defect as the nav/sitemap key mismatch in PART 4 §26`);
+    if (!/^name:/.test(String(observationKeyFor({ company: 'Big Bens Tree Service', location: '12 Main St, Louisville, KY, USA' }) || ''))) {
+      _fails.push('a business with no place id and no website gets no key at all, so the call-only leads can never be looked at twice');
+    }
+    if (observationKeyFor({ company: 'X' }) !== null) _fails.push('a lead with nothing identifying gets a key anyway, which is how two businesses share one history');
+    // The isolation refusal, run for real rather than asserted from source.
+    if (observationIsMine('Donna Krummen MD', 'John Peters Roofing') !== false) {
+      _fails.push('a stored history written for another company is NOT refused. This is the worst bug this system has had (PART 4 §19) pointed at time instead of at leads: it would state another business’s search position as this one’s, with a date on it');
+    }
+    if (observationIsMine('John Peters Roofing', 'John Peters Roofing, LLC') !== true) {
+      _fails.push('punctuation and a suffix are enough to disown a business’s own history');
+    }
+
+    // ── 2. UNMEASURED IS NULL, NEVER ZERO. The PART 6 class that once stated
+    //    "0 photos" on leads where photos were never counted.
+    const _blank = observationSnapshot({});
+    for (const f of ['rank', 'rankStable', 'reviewCount', 'googleAdsTag', 'adsReadable']) {
+      if (_blank[f] !== null) _fails.push(`an unmeasured ${f} is being stored as ${JSON.stringify(_blank[f])} instead of null, and next month it becomes a change that never happened`);
+    }
+
+    // ── 3. THE COMPARISON. One thing it may say; six it may not.
+    const _base = { rankPhrase: 'roofing contractor in indianapolis', rankStable: true, adsReadable: true, googleAdsTag: false };
+    const _slip = compareObservations({ ..._base, rank: 3 }, { ..._base, rank: 9 }, _now, _ago(91));
+    const _got = _slip.changes.find(c => c.id === 'rank_slipped');
+    if (!_got || !_got.sayable || _got.from !== 3 || _got.to !== 9 || _got.days !== 91) {
+      _fails.push(`a real six-place drop over three months is not being reported (${JSON.stringify(_slip).slice(0, 150)})`);
+    }
+    const REFUSALS = [
+      ['the two looks measured DIFFERENT searches',
+        compareObservations({ ..._base, rank: 3, rankPhrase: 'plastic surgeon in san antonio' }, { ..._base, rank: 9, rankPhrase: 'facial plastic surgeon in san antonio' }, _now, _ago(91)),
+        'comparing two different searches manufactures a collapse out of two correct readings — and §6 made the phrase lead-specific, so this WILL happen'],
+      ['the EARLIER position came from samples that disagreed',
+        compareObservations({ ..._base, rank: 3, rankStable: false }, { ..._base, rank: 9 }, _now, _ago(91)),
+        'one business returned #3 and #12 minutes apart; a drop measured against a draw we already refused to state is noise with a date on it'],
+      ['the LATER position came from samples that disagreed',
+        compareObservations({ ..._base, rank: 3 }, { ..._base, rank: 9, rankStable: false }, _now, _ago(91)), ''],
+      ['a move smaller than the sampling noise',
+        compareObservations({ ..._base, rank: 3 }, { ..._base, rank: 5 }, _now, _ago(91)), ''],
+      ['two looks a fortnight apart or less',
+        compareObservations({ ..._base, rank: 3 }, { ..._base, rank: 15 }, _now, _ago(6)), 'that is one look with noise, not history'],
+      ['a look from more than a year ago',
+        compareObservations({ ..._base, rank: 3 }, { ..._base, rank: 15 }, _now, _ago(500)), 'nothing that old may be called recent'],
+      ['a position that IMPROVED',
+        compareObservations({ ..._base, rank: 9 }, { ..._base, rank: 3 }, _now, _ago(91)), 'climbing is a compliment, not a finding'],
+      ['a stability we never measured',
+        compareObservations({ ..._base, rank: 3, rankStable: null }, { ..._base, rank: 9, rankStable: null }, _now, _ago(91)),
+        'a service-page row never takes a second sample, so its stability is unknown — and unknown is not "they agreed"'],
+    ];
+    for (const [what, res, why] of REFUSALS) {
+      if ((res.changes || []).some(c => c.id === 'rank_slipped')) {
+        _fails.push(`a slide is claimed when ${what}${why ? ' — ' + why : ''}`);
+      }
+    }
+    // The different-phrase case must SAY it could not compare, not go quiet.
+    const _diff = compareObservations({ ..._base, rank: 3, rankPhrase: 'a' }, { ..._base, rank: 9, rankPhrase: 'b' }, _now, _ago(91));
+    if (!(_diff.changes || []).some(c => c.id === 'rank_incomparable')) {
+      _fails.push('two looks at different searches go quiet instead of saying the positions are not comparable, so nobody reading the log can tell a stable business from an unmeasurable one');
+    }
+
+    // ── 4. ADVERTISING APPEARING, AND EVERY REASON IT MAY NOT BE SAID.
+    const _ads = compareObservations(
+      { ..._base, googleAdsTag: false }, { ..._base, googleAdsTag: true }, _now, _ago(45));
+    if (!(_ads.changes || []).some(c => c.id === 'ads_started' && c.sayable)) {
+      _fails.push('a Google Ads tag appearing between two reads is not being noticed — that is money starting to move, with a date on it');
+    }
+    const _adsUnread = compareObservations(
+      { ..._base, adsReadable: false, googleAdsTag: null }, { ..._base, googleAdsTag: true }, _now, _ago(45));
+    if ((_adsUnread.changes || []).some(c => c.id === 'ads_started')) {
+      _fails.push('a tag is called NEW when the earlier read was refused by the site. null is not false, and this file has shipped that confusion before');
+    }
+    const _adsGtm = compareObservations(
+      { ..._base, googleAdsTag: true }, { ..._base, googleAdsTag: false, tagManager: true }, _now, _ago(45));
+    if ((_adsGtm.changes || []).some(c => c.id === 'ads_stopped')) {
+      _fails.push('the tag is called GONE on a page carrying a Tag Manager container, which can hold the tag where we cannot read it');
+    }
+    // Reviews are intelligence and never copy.
+    const _rev = compareObservations(
+      { ..._base, rank: 3, reviewCount: 176 }, { ..._base, rank: 3, reviewCount: 179 }, _now, _ago(90));
+    const _pace = (_rev.changes || []).find(c => c.id === 'review_pace');
+    if (!_pace) _fails.push('the review pace between two looks is not computed, and it is the cheapest read we get on whether a business is still growing');
+    if (_pace && _pace.sayable) _fails.push('the review pace is marked sayable — review METRICS are internal intelligence, never email copy (PART 4 §2)');
+
+    // ── 5. THE RUNG. Fires on the delivered shape, silent on every partial one.
+    const _inp = observationHarmInputs(_slip);
+    if (_inp.rankSlippedFrom !== 3 || _inp.rankSlippedTo !== 9 || _inp.rankSlippedDays !== 91 || !_inp.rankSlippedPhrase) {
+      _fails.push(`the comparison is not reaching the ladder in the shape the rung reads (${JSON.stringify(_inp)})`);
+    }
+    const _lead = { ..._inp, rankChecked: true, rankFound: true, rank: 9, rankQuery: 'roofing contractor in indianapolis',
+      tradeWord: 'roofer', reviewCount: 176, city: 'Indianapolis' };
+    if (!((rankHarms(_lead).all || []).some(h => h.id === 'rank_slipped'))) {
+      _fails.push('the rung does not fire on a fully delivered slide — measured, compared, delivered and silent');
+    }
+    for (const [what, patch] of [
+      ['no earlier position', { rankSlippedFrom: null }],
+      ['no age', { rankSlippedDays: null }],
+      ['no search phrase', { rankSlippedPhrase: null }],
+      ['a position that went UP', { rankSlippedFrom: 9, rankSlippedTo: 3 }],
+    ]) {
+      if ((rankHarms({ ..._lead, ...patch }).all || []).some(h => h.id === 'rank_slipped')) {
+        _fails.push(`the rung fires with ${what}, so its sentence would carry a hole where its evidence goes`);
+      }
+    }
+
+    // ── 6. THE PROVEN SENTENCE KEEPS THE OPENER.
+    // rank_slipped is the more surprising finding and it has ZERO evidence
+    // behind it. outranked_by_weaker is one of only two rungs in this file with
+    // a real human reply. PART 6: do not trade a proven sentence for a
+    // better-looking one. This was reasoned out on paper first and paper
+    // arithmetic is exactly what §29 says to distrust, so it is executed.
+    const _both = { ..._lead, weakerAbove: 3, ourReviews: 176,
+      weakerNames: [{ name: 'Acme Roofing', reviews: 41 }, { name: 'B Roofing', reviews: 60 }, { name: 'C Roofing', reviews: 77 }] };
+    const _order = (rankHarms(_both).byOpener || []).map(h => h.id);
+    const _iSlip = _order.indexOf('rank_slipped'), _iOut = _order.indexOf('outranked_by_weaker');
+    if (_iSlip < 0 || _iOut < 0) {
+      _fails.push(`both findings should be present on a lead carrying both (slip ${_iSlip}, outranked ${_iOut})`);
+    } else if (_iSlip < _iOut) {
+      _fails.push('an unproven new finding is taking the opener from the one with a real reply behind it. Raise its harm when a call outcome says to, not before');
+    }
+
+    // ── 7. AND THE WIRES. A check that does not assert its call site is half a
+    //    check. Needles assembled at runtime, comment lines stripped.
+    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    if (_src.indexOf('...observationHarm' + 'Inputs(_obsCmp)') < 0) {
+      _fails.push('the comparison is computed and never spread into _harmInputs — instance twenty-two of measured, correct, and dropped one line before the thing that reads it');
+    }
+    if (_src.indexOf('await writeObser' + 'vation(_obsKey') < 0) {
+      _fails.push('nothing writes today’s observation, so there is never a second look to compare against and the whole ledger is a read of an empty table forever');
+    }
+    {
+      const _w = _src.indexOf('await writeObser' + 'vation(_obsKey');
+      const _r = _src.indexOf('await readPriorObser' + 'vation(_obsKey');
+      if (_r < 0) _fails.push('nothing reads the earlier observation');
+      else if (_w >= 0 && _w < _r) _fails.push('today’s row is written BEFORE the earlier one is read, so every lead would be compared against itself and nothing could ever change');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ OBSERVATION LEDGER CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ OBSERVATION LEDGER CHECK: the first finding in this file that is an EVENT rather than a photograph. One small row per research, no API costs a penny more, and the second look at a business can say what moved. It refuses far more than it says: a different search phrase, a sample that disagreed on either date, a move inside the noise band, less than a fortnight or more than a year between looks, and any improvement. A stored history written for another company is refused by name, because this is PART 4 §19 pointed at time. Review pace is computed and marked internal. And on a business carrying both, the finding with a real human reply behind it still opens the email.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OBSERVATION LEDGER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ HIS REVIEWS ARE OUR READ ON HIM, NOT OUR SENTENCE TO HIM ════════════
   // Vin, 2026-08-18, after four runs whose emails all read as being about
   // reviews: "reviews are important but they are more of an internal sign for us
@@ -44563,6 +45312,68 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ SEND CAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FIRST EVIDENCE THIS PROJECT WILL EVER HAVE ════════════════════
+  // Twelve emails, zero human replies, and every quality judgement here is the
+  // system grading its own homework. A cold call answers in thirty seconds with a
+  // reason attached. The pairing is the whole point — WHICH FINDING opened the
+  // call, and what happened — because one without the other is a diary.
+  try {
+    const _fails = [];
+    // 1. An unknown outcome is refused rather than stored. A free-text status
+    //    column cannot be grouped, and a report that cannot group is a list.
+    if (typeof recordCallOutcome !== 'function') _fails.push('call outcomes can no longer be recorded');
+    if (Object.keys(CALL_OUTCOMES).length < 5) _fails.push('the outcome vocabulary has collapsed to fewer than five states, so the report cannot separate a booking from a voicemail');
+    if (!CALL_OUTCOMES.no_answer || !CALL_OUTCOMES.gatekeeper) {
+      _fails.push('there is no way to record a call that never reached the owner — and mixing those into the denominator is how you conclude the copy is broken when the phone list is');
+    }
+    if (OUTCOME_LANDED.no_answer || OUTCOME_LANDED.gatekeeper || OUTCOME_LANDED.not_a_fit) {
+      _fails.push('a call that never reached the owner is being counted as the finding having worked');
+    }
+    // 2. THE REPORT. Rates over conversations, never over dials.
+    const R = callOutcomeReport([
+      { finding_id: 'paying_for_a_search_they_lose', outcome: 'booked', said: 'that is money leaking' },
+      { finding_id: 'paying_for_a_search_they_lose', outcome: 'interested' },
+      { finding_id: 'paying_for_a_search_they_lose', outcome: 'no_answer' },
+      { finding_id: 'no_published_pricing', outcome: 'not_a_fit', said: 'that is not how I get customers' },
+      { finding_id: 'no_published_pricing', outcome: 'not_now' },
+      { finding_id: 'no_published_pricing', outcome: 'gatekeeper' },
+    ]);
+    const _ads = R.findings.find(f => f.finding === 'paying_for_a_search_they_lose');
+    const _price = R.findings.find(f => f.finding === 'no_published_pricing');
+    if (!_ads || !_price) _fails.push('the report is not grouping by the finding that opened the call, which is the only question it exists to answer');
+    else {
+      if (_ads.reached !== 2) _fails.push(`a voicemail is being counted as a conversation (reached ${_ads.reached}, should be 2)`);
+      if (_ads.landedRate !== 100) _fails.push(`the landed rate is computed over dials rather than conversations (${_ads.landedRate}%, should be 100)`);
+      if (_price.landedRate !== 0) _fails.push('a finding that landed nothing is not reporting zero');
+      if (_ads.readable) _fails.push('two conversations are being marked readable — at these numbers the difference between findings is noise, and this project\'s history is people believing thin numbers');
+      if (!_price.said.length) _fails.push('what the owner actually said is being dropped, and it is the only thing that says WHY a finding failed');
+    }
+    if (!/Keep calling|noise/i.test(String(R.verdict || ''))) {
+      _fails.push('the report does not say out loud that six calls prove nothing');
+    }
+    // 3. A CRM being down must never lose the outcome, which is already stored.
+    {
+      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _post = _src.indexOf("sbRest('/call_" + "outcomes'");
+      const _hook = _src.indexOf('if (CRM_WEBHOOK_' + 'URL)');
+      if (_post < 0) _fails.push('outcomes are no longer written to our own table');
+      if (_hook < 0) _fails.push('the CRM webhook is gone');
+      if (_post >= 0 && _hook >= 0 && _hook < _post) {
+        _fails.push('the CRM webhook fires BEFORE the outcome is stored here, so a CRM being down would lose the call');
+      }
+      if (_src.indexOf('await ' + 'fetchT(CRM_WEBHOOK_' + 'URL') >= 0) {
+        _fails.push('the CRM webhook is awaited, so a slow or dead CRM blocks the person trying to log a call and move to the next one');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ CALL OUTCOME CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ CALL OUTCOME CHECK: outcomes are recorded against the FINDING that opened the call, which is the pairing this project has never had — twelve emails, zero human replies, and every judgement so far made by the system about itself. Rates are computed over conversations rather than dials, a voicemail cannot be blamed on the copy, anything under twelve conversations is marked unreadable, and the outcome is stored here BEFORE any CRM sees it so a webhook failure cannot lose a call.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CALL OUTCOME CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE PART OF DELIVERABILITY THAT NEEDS NO REPLIES ═══════════════════
@@ -49253,6 +50064,121 @@ app.get('/p/:token', async (req, res) => {
   }
 });
 
+// ══ THE EVIDENCE THIS PROJECT HAS NEVER HAD ════════════════════════════════
+// Twelve emails sent, zero human replies, and every quality judgement in this
+// system is the system grading its own homework. PART 4 §4 says so plainly, and
+// PART 7 says the next real gain comes from sending rather than from editing.
+//
+// Fifty cold calls a day changes that, and not by a little. A call produces an
+// answer in thirty seconds where an email produces one in never, and the answer
+// comes with a REASON attached — the owner says why. Two weeks of calling is
+// more evidence than this project has accumulated in its entire life.
+//
+// The pairing is the whole point: WHICH FINDING opened the call, and WHAT
+// HAPPENED. One without the other is a diary. Together they are the first thing
+// that could tune the ladder against reality instead of against a simulator that
+// has returned opposite verdicts on the same lead one build apart.
+const CALL_OUTCOMES = {
+  booked:     'a meeting is in the calendar',
+  interested: 'wants more, no date yet',
+  callback:   'asked to be called back later',
+  not_now:    'not the right time, no objection to us',
+  not_a_fit:  'wrong business for what we sell',
+  no_answer:  'nobody picked up',
+  gatekeeper: 'never reached the owner',
+};
+// Which outcomes count as the finding having WORKED. Declared rather than
+// inferred, because "interested" is a judgement and somebody should be able to
+// argue with where the line sits.
+const OUTCOME_LANDED = { booked: true, interested: true, callback: true };
+
+const recordCallOutcome = async (row) => {
+  const r = row && typeof row === 'object' ? row : {};
+  const outcome = String(r.outcome || '').toLowerCase();
+  if (!CALL_OUTCOMES[outcome]) {
+    return { ok: false, why: `"${r.outcome}" is not one of: ${Object.keys(CALL_OUTCOMES).join(', ')}` };
+  }
+  if (!r.leadId) return { ok: false, why: 'no lead id, so the outcome could never be paired with the finding that opened the call' };
+  const rec = {
+    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2),
+    lead_id: String(r.leadId).slice(0, 120),
+    company: String(r.company || '').slice(0, 200),
+    outcome,
+    // The finding the call OPENED on. Without this the whole exercise is a diary.
+    finding_id: String(r.findingId || '').slice(0, 80),
+    finding_text: String(r.findingText || '').slice(0, 400),
+    // His own words. Optional, and the most valuable field here: the outcome says
+    // WHICH findings work, and only this says WHY one did not.
+    said: String(r.said || '').slice(0, 1000),
+    follow_up_at: r.followUpAt ? String(r.followUpAt).slice(0, 10) : null,
+    next_step: String(r.nextStep || '').slice(0, 300),
+    // What our own prospect model predicted, frozen at the time of the call, so
+    // the simulator can finally be scored against something real.
+    predicted: String(r.predicted || '').slice(0, 400),
+    at: new Date().toISOString(),
+  };
+  const wrote = await sbRest('/call_outcomes', { method: 'POST', body: JSON.stringify([rec]) });
+  if (wrote === null) {
+    console.log(`⛔ CALL OUTCOME [${rec.company}]: could not be stored — ${sbWhy('call_outcomes') || 'no reason reported'}. The call happened and the record did not, which is the one thing this table exists to prevent.`);
+    return { ok: false, why: sbWhy('call_outcomes') || 'the write failed and Supabase gave no reason', record: rec };
+  }
+  console.log(`☎ CALL OUTCOME [${rec.company}]: ${outcome}${rec.finding_id ? ` after opening on ${rec.finding_id}` : ''}${rec.said ? ` — he said: "${rec.said.slice(0, 90)}"` : ''}`);
+  // ══ AND OUT TO WHATEVER CRM EXISTS ═══════════════════════════════════════
+  // Deliberately a webhook rather than a native integration. Mike has not picked
+  // a CRM yet, and a HubSpot adapter written today is wasted if he buys Close.
+  // A webhook reaches HubSpot, Close, Pipedrive, GoHighLevel, Zapier, Make or a
+  // spreadsheet with no code from us, and a native adapter is a small add later.
+  //
+  // Fire-and-forget on purpose: a CRM being down must never lose the outcome,
+  // which is already safely in our own table by this point.
+  if (CRM_WEBHOOK_URL) {
+    fetchT(CRM_WEBHOOK_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'crojungle', type: 'call_outcome', ...rec }),
+    }, 8000).then(() => console.log(`→ CRM [${rec.company}]: outcome posted`))
+      .catch(e => console.log(`CRM webhook failed for ${rec.company} (${e && e.message}) — the outcome is still stored here, so nothing is lost`));
+  }
+  return { ok: true, record: rec };
+};
+
+// ══ WHICH FINDINGS ACTUALLY EARN A CONVERSATION ════════════════════════════
+// The report this whole system has been waiting for. Grouped by the finding the
+// call OPENED on, because that is the decision the ladder makes.
+const callOutcomeReport = (rows) => {
+  const byFinding = new Map();
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const id = String((r && r.finding_id) || '(none recorded)');
+    const cur = byFinding.get(id) || { finding: id, calls: 0, landed: 0, reached: 0, outcomes: {}, said: [] };
+    cur.calls++;
+    cur.outcomes[r.outcome] = (cur.outcomes[r.outcome] || 0) + 1;
+    if (OUTCOME_LANDED[r.outcome]) cur.landed++;
+    // Reached = we actually spoke to the owner. A finding cannot be blamed for a
+    // voicemail, and mixing the two is how you conclude the copy is broken when
+    // the phone list is.
+    if (r.outcome !== 'no_answer' && r.outcome !== 'gatekeeper') cur.reached++;
+    if (r.said) cur.said.push(String(r.said).slice(0, 200));
+    byFinding.set(id, cur);
+  }
+  const out = [...byFinding.values()].map(x => ({
+    ...x,
+    // Rate over CONVERSATIONS, not dials.
+    landedRate: x.reached ? Math.round((x.landed / x.reached) * 100) : null,
+    // Below this, a percentage is theatre. Stated rather than hidden, because
+    // this project's whole history is people believing thin numbers.
+    readable: x.reached >= 12,
+  })).sort((a, b) => (b.reached - a.reached) || (b.landed - a.landed));
+  const totalReached = out.reduce((n, x) => n + x.reached, 0);
+  return {
+    findings: out,
+    totalCalls: (Array.isArray(rows) ? rows.length : 0),
+    totalReached,
+    // One honest sentence about whether any of this can be read yet.
+    verdict: totalReached < 30
+      ? `${totalReached} conversation(s) so far. Nothing here is readable yet — at these numbers the differences between findings are noise, and this project's own history is people believing thin numbers. Keep calling.`
+      : `${totalReached} conversations. Findings with 12 or more are marked readable; the rest are still noise.`,
+  };
+};
+
 // ══ THE ONE PART OF DELIVERABILITY THAT NEEDS NO REPLIES TO MEASURE ═════════
 // PART 4 §3 has carried "deliverability is unproven" for weeks — one mailbox, two
 // hard bounces in twelve sends — and treated it as something only sending can
@@ -49342,6 +50268,30 @@ const checkSendingDomain = async (domain) => {
 app.get('/api/sending-domain', async (req, res) => {
   try { res.json(await checkSendingDomain(req.query.domain || '')); }
   catch (e) { res.json({ checked: false, why: `the check itself failed: ${(e && e.message) || e}` }); }
+});
+
+app.post('/api/call-outcome', async (req, res) => {
+  try { res.json(await recordCallOutcome(req.body || {})); }
+  catch (e) { res.status(500).json({ ok: false, why: (e && e.message) || String(e) }); }
+});
+
+app.get('/api/call-outcomes', async (req, res) => {
+  const rows = await sbRest('/call_outcomes?order=at.desc&limit=2000', { method: 'GET', prefer: 'return=representation' });
+  if (rows === null) {
+    return res.json({ ok: false, why: sbWhy('call_outcomes') || 'the read failed and Supabase gave no reason', findings: [], totalCalls: 0, totalReached: 0 });
+  }
+  const rep = callOutcomeReport(rows);
+  // CSV on request. Every CRM on earth imports a CSV, and it costs nothing to
+  // offer while Mike is still deciding which one to buy.
+  if (String(req.query.format || '').toLowerCase() === 'csv') {
+    const cols = ['at', 'company', 'outcome', 'finding_id', 'finding_text', 'said', 'follow_up_at', 'next_step', 'lead_id'];
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const csv = [cols.join(',')].concat(rows.map(r => cols.map(c => esc(r[c])).join(','))).join('\r\n');
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', 'attachment; filename="crojungle-call-outcomes.csv"');
+    return res.send(csv);
+  }
+  res.json({ ok: true, ...rep, rows: rows.slice(0, 200) });
 });
 
 app.get('/api/find-options', (req, res) => {

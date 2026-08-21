@@ -375,6 +375,7 @@ const leadToRow = (l) => ({
         // above: computed, rendered once, and gone on the round trip.
         rateLimited: l.rateLimited ?? null,
         duplicateListing: l.duplicateListing ?? null,
+        whatChanged: l.whatChanged ?? null,
         // A refusal is terminal — the server refused to research a non-owner
         // and the lead must not render as an ordinary un-researched lead after
         // a refresh, inviting the exact re-run that can only refuse again.
@@ -462,6 +463,105 @@ const leadToRow = (l) => ({
 // it isn't" is the one rule of this system. Approval now requires re-running
 // Research (which rebuilds the copy from fresh measurements) — the same remedy
 // the wrong-company banner already uses.
+// ══ THE FIRST EVIDENCE THIS PROJECT WILL EVER HAVE ═════════════════════════
+// Twelve emails, zero human replies, and every quality judgement in this system
+// is the system grading its own homework. A cold call answers in thirty seconds
+// and the answer comes with a reason attached.
+//
+// The pairing is the whole point: WHICH FINDING opened the call, and what
+// happened. One without the other is a diary.
+const CALL_OUTCOME_LABELS = [
+  ['booked', 'Booked'], ['interested', 'Interested'], ['callback', 'Call back'],
+  ['not_now', 'Not now'], ['not_a_fit', 'Not a fit'],
+  ['no_answer', 'No answer'], ['gatekeeper', 'Gatekeeper'],
+];
+const recordOutcome = async (lead, outcome, extra) => {
+  const x = extra || {};
+  const ba = (lead && lead.brainAudit) || {};
+  // The finding the call opened on, read from the same place the email reads it,
+  // so the two can never disagree about what was said.
+  const spine = ba.factualSpine || (ba._persisted && ba._persisted.factualSpine) || null;
+  const sim = (lead.generatedResult && lead.generatedResult.prospectSim) || lead.prospectSim || null;
+  const body = {
+    leadId: lead.id, company: lead.name,
+    outcome,
+    findingId: (spine && (spine.claimId || spine.id)) || '',
+    findingText: (spine && spine.claim) || '',
+    said: x.said || '',
+    followUpAt: x.followUpAt || '',
+    nextStep: x.nextStep || '',
+    predicted: String((sim && (sim.reason || sim.why || sim.reaction)) || '').slice(0, 400),
+  };
+  const r = await fetch(BACKEND + '/api/call-outcome', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }).then(x2 => x2.json()).catch(e => ({ ok: false, why: e.message }));
+  return r;
+};
+
+function CallOutcomeBar({ lead }) {
+  const [done, setDone] = React.useState(lead.callOutcome || '');
+  const [busy, setBusy] = React.useState('');
+  const [said, setSaid] = React.useState('');
+  const [when, setWhen] = React.useState('');
+  const [next, setNext] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const save = async (outcome, extra) => {
+    setBusy(outcome); setErr('');
+    const r = await recordOutcome(lead, outcome, extra || { said });
+    setBusy('');
+    if (r && r.ok) {
+      setDone(outcome);
+      // Kept on the lead too, so a reload shows what already happened and the
+      // same call is not logged twice.
+      try {
+        const all = getLeads(); const i = all.findIndex(x => x.id === lead.id);
+        if (i >= 0) { all[i].callOutcome = outcome; all[i].callOutcomeAt = new Date().toISOString(); saveLeads(all, all[i]); }
+      } catch (e) { console.log('could not stamp the lead:', e.message); }
+    } else {
+      setErr((r && r.why) || 'the outcome could not be stored');
+    }
+  };
+  const needsFollowUp = done === 'callback';
+  return React.createElement('div', {
+    style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--b)' },
+  },
+    React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 6 } },
+      done ? 'Logged \u2014 ' + done.replace(/_/g, ' ') : 'After the call'),
+    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+      CALL_OUTCOME_LABELS.map(([k, label]) => React.createElement('button', {
+        key: k,
+        disabled: !!busy,
+        onClick: () => save(k),
+        style: {
+          fontSize: 11, padding: '5px 10px', borderRadius: 99, cursor: busy ? 'wait' : 'pointer',
+          border: '1px solid ' + (done === k ? 'var(--a)' : 'var(--b)'),
+          background: done === k ? 'var(--a)' : 'transparent',
+          color: done === k ? '#0b0d10' : 'var(--m2)',
+          fontWeight: done === k ? 700 : 500,
+        },
+      }, busy === k ? '...' : label))),
+    // Optional, and the most valuable field here: the outcome says WHICH
+    // findings work, and only his own words say why one did not.
+    React.createElement('input', {
+      value: said, placeholder: 'What he actually said (optional, and the most useful thing you can capture)',
+      onChange: e => setSaid(e.target.value),
+      onBlur: () => { if (done && said.trim()) save(done, { said, followUpAt: when, nextStep: next }); },
+      style: { marginTop: 7, width: '100%', fontSize: 12, padding: '6px 9px', borderRadius: 6, border: '1px solid var(--b)', background: 'transparent', color: 'var(--t)' },
+    }),
+    needsFollowUp ? React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+      React.createElement('input', {
+        type: 'date', value: when, onChange: e => setWhen(e.target.value),
+        style: { fontSize: 12, padding: '6px 9px', borderRadius: 6, border: '1px solid var(--b)', background: 'transparent', color: 'var(--t)' },
+      }),
+      React.createElement('input', {
+        value: next, placeholder: 'Next step', onChange: e => setNext(e.target.value),
+        onBlur: () => { if (when || next) save('callback', { said, followUpAt: when, nextStep: next }); },
+        style: { flex: 1, fontSize: 12, padding: '6px 9px', borderRadius: 6, border: '1px solid var(--b)', background: 'transparent', color: 'var(--t)' },
+      })) : null,
+    err ? React.createElement('div', { style: { fontSize: 11, color: 'var(--r)', marginTop: 5 } },
+      'Not stored \u2014 ' + err + '. The call happened and the record did not, so write it down somewhere before you move on.') : null);
+}
+
 const criticalClaimsOf = (lead) => {
   const risks = ((lead && lead.brainAudit && lead.brainAudit._claimRisks) || (lead && lead._claimRisks) || []);
   return risks.filter(x => /\bCRITICAL\b/.test(String(x)));
@@ -562,6 +662,7 @@ const rowToLead = (r) => ({
   // saved and never seen, which is the shape of every dead field in this file.
   rateLimited: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rateLimited) ?? null,
   duplicateListing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.duplicateListing) ?? null,
+  whatChanged: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.whatChanged) ?? null,
   notAFit: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.notAFit) ?? null,
   rejectedReason: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rejectedReason) ?? null,
   rejectedAt: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.rejectedAt) ?? null,
@@ -1142,6 +1243,11 @@ const applyResearchResult = (prev, data, ctx) => {
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
+        // What moved between two looks at this business. The only facts in the
+        // system with a date on them that did not come from a job board, and
+        // most of them are internal-only, which is exactly what a person on a
+        // cold call wants in front of him.
+        L.whatChanged = data.whatChanged ?? L.whatChanged ?? null;
         L.researchedAt = data.researchedAt ?? L.researchedAt ?? null;
         L.callWindow = data.callWindow ?? L.callWindow ?? null;
         // Only overwrite when the incoming one actually has results. A merge that
@@ -1219,6 +1325,11 @@ const applyResearchResult = (prev, data, ctx) => {
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
+        // What moved between two looks at this business. The only facts in the
+        // system with a date on them that did not come from a job board, and
+        // most of them are internal-only, which is exactly what a person on a
+        // cold call wants in front of him.
+        L.whatChanged = data.whatChanged ?? L.whatChanged ?? null;
         L.researchedAt = data.researchedAt ?? L.researchedAt ?? null;
         L.callWindow = data.callWindow ?? L.callWindow ?? null;
         L.marketClarity = data.marketClarity ?? L.marketClarity ?? null;
@@ -1806,6 +1917,37 @@ const auditRecordFor = (lead) => {
     signals: arr(buildAuditRows(l)).map(r => ({ label: r.label, val: r.val, ok: r.ok, proof: r.proof })),
     // THE CONVERSATION
     whatHeCaresAbout: (sr && sr.whatHeCaresAbout) || '',
+    // ══ THE THREE THINGS A CALL NEEDS, ON THE SHEET SOMEBODY HOLDS ═════════
+    // These went to the Call tab and not to the EXPORT, which is the artefact
+    // that actually gets printed for a batch of fifty. The tab is for one lead
+    // you are looking at; the export is for the fifty you are dialling.
+    researchedAt: l.researchedAt || '',
+    ageDays: l.researchedAt ? Math.floor((Date.now() - new Date(l.researchedAt).getTime()) / 86400000) : null,
+    // ══ THE ONLY FACTS ON THIS SHEET WITH A DATE ═══════════════════════════
+    // Everything else here is a photograph of the business as it is today. This
+    // is what MOVED between two looks, and the server has already decided which
+    // of them may be said out loud to the owner and which are ours to know. The
+    // sentence is assembled here, where the lead is, so the renderer never has
+    // to know what a lead is.
+    changes: (() => {
+      const wc = l.whatChanged || null;
+      const ord = (n) => { const x = Math.round(Number(n)); if (!Number.isFinite(x)) return ''; const a = ((x % 100) + 100) % 100, b = ((x % 10) + 10) % 10; return x + ((a >= 11 && a <= 13) ? 'th' : b === 1 ? 'st' : b === 2 ? 'nd' : b === 3 ? 'rd' : 'th'); };
+      return arr(wc && wc.changes).map(c => {
+        if (c.id === 'rank_slipped') return { say: `${c.days} days ago they came up ${ord(c.from)} for "${c.phrase}". The same search today puts them ${ord(c.to)}.`, sayable: true };
+        if (c.id === 'ads_started') return { say: `A Google Ads conversion tag appeared on their homepage in the last ${c.days} days. It was not there when we looked before.`, sayable: true };
+        if (c.id === 'review_pace') return { say: `Reviews arrived at about ${c.perMonth} a month over the last ${c.days} days (${c.from} to ${c.to}).`, sayable: false };
+        if (c.id === 'weaker_above_grew') return { say: `Businesses above them with fewer reviews went from ${c.from} to ${c.to} in ${c.days} days.`, sayable: false };
+        if (c.id === 'ads_stopped') return { say: String(c.note || ''), sayable: false };
+        if (c.id === 'rank_incomparable') return { say: String(c.note || ''), sayable: false };
+        return null;
+      }).filter(Boolean);
+    })(),
+    callWindow: (l.callWindow && l.callWindow.checked && l.callWindow.say) ? l.callWindow.say : '',
+    expectObjection: (() => {
+      const sim = (l.generatedResult && l.generatedResult.prospectSim) || l.prospectSim || null;
+      const said = String((sim && (sim.reason || sim.why || sim.reaction)) || '').trim();
+      return said.length >= 25 ? said.slice(0, 300) : '';
+    })(),
     whatHeNeeds: (sr && sr.whatHeNeeds) || '',
     // Positive-only advertising evidence, and the pages the site links nowhere.
     // Both INTERNAL: the negative form of either is barred, so neither is ever
@@ -1866,6 +2008,18 @@ const auditExportHtml = (records, meta) => {
           (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to. A page built for an ad is not in the menu by design. Their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li>' + e(x) + '</li>') : '')
           + (r.adsVerified ? '<p>Listed as a verified advertiser in Google\'s Ads Transparency Center.</p>' : ''))
       + sec('What he clearly cares about', r.whatHeCaresAbout ? '<p>' + p(r.whatHeCaresAbout) + '</p>' : '')
+      + sec('What changed since we last looked',
+          (r.changes || []).length
+            ? '<ul>' + (r.changes || []).map(c => '<li>' + p(c.say) + (c.sayable ? '' : ' <span class="dim">(ours to know, not his to hear)</span>') + '</li>').join('') + '</ul>'
+              + '<p class="dim">These are the only facts on this sheet with a date attached. Everything else is how the business looks today.</p>'
+            : '')
+      + sec('Before you dial',
+          (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
+          + (r.expectObjection ? '<p><b>Expect to hear:</b> <q>' + p(r.expectObjection) + '</q> That is our own prospect model reading this as the owner. Have an answer ready.</p>' : '')
+          + (r.ageDays === null ? ''
+             : r.ageDays <= 1
+             ? '<p class="dim">Measured today. Everything above is current.</p>'
+             : '<p class="dim"><b>Measured ' + r.ageDays + ' days ago.</b> Re-check the search position and the review count before saying either out loud. Both move, and being wrong about one ends the call.</p>'))
       + sec('What is actually worth selling them',
           (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
           + (r.askOnTheCall ? '<p class="ask"><b>Ask before pitching:</b> ' + p(r.askOnTheCall) + '</p>' : ''))
@@ -1907,7 +2061,38 @@ const auditExportHtml = (records, meta) => {
 // The download itself. A blob rather than a data: URI because fifty audits run
 // to megabytes and a data: URI of that size is refused by some browsers.
 const downloadAudits = (leads, title) => {
-  const records = (leads || []).map(auditRecordFor);
+  // ══ ONE BAD LEAD MUST NOT COST YOU FORTY-NINE GOOD ONES ══════════════════
+  // This was a bare .map, so a single lead with an unexpected shape threw and
+  // the whole export produced nothing — no file, and no indication which lead
+  // was responsible. At one audit that is a visible error. At fifty, after two
+  // hours of research and real money, it is the entire batch.
+  //
+  // Found by running the real export over a lead whose localVisibility came from
+  // an older build: buildAuditRows read lv.results[0] with no guard and threw.
+  // That guard is fixed, and this is the answer to the NEXT one.
+  //
+  // The failure is not swallowed. It becomes a row in the file naming the lead
+  // and the error, so the batch survives and the defect is still visible.
+  const records = [];
+  const _broken = [];
+  for (const l of (leads || [])) {
+    try { records.push(auditRecordFor(l)); }
+    catch (err) {
+      _broken.push({ name: (l && l.name) || '(unnamed lead)', why: (err && err.message) || String(err) });
+      console.log('audit export: skipped ' + ((l && l.name) || 'a lead') + ' — ' + ((err && err.message) || err));
+    }
+  }
+  if (_broken.length) {
+    records.push({
+      company: _broken.length + ' audit(s) could not be rendered',
+      headline: 'These leads are in the batch but their stored audit has a shape this export could not read.',
+      background: _broken.map(b => b.name + ': ' + b.why).join(' | '),
+      rows: [], problems: [], originalFindings: [], signals: [], claimRisks: [], criticalFactCheck: [],
+      renders: [], unlinkedPages: [], read: '', whatHeNeeds: '', whatHeCaresAbout: '', askOnTheCall: '',
+      callWindow: '', expectObjection: '', researchedAt: '', ageDays: null, adsVerified: false,
+      unlinkedCount: 0, pitch: '', subject: '',
+    });
+  }
   if (!records.length) return 0;
   const at = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
   const html = auditExportHtml(records, { title: title || 'CROJungle audits', at });
@@ -4686,7 +4871,7 @@ function buildAuditRows(lead) {
       return {
         label: 'Local search rank', confidence: 'mechanical',
         val, ok: invis === 0 && !!best && best.rank <= 3,
-        proof: 'Searched Google local results for each phrase a customer in ' + ((lv.results[0] && lv.results[0].city) || 'their city') + ' would actually type, and read the position back. Service keywords come from their OWN sitemap — every one is a page they publish.'
+        proof: 'Searched Google local results for each phrase a customer in ' + (((lv.results || [])[0] || {}).city || 'their city') + ' would actually type, and read the position back. Service keywords come from their OWN sitemap — every one is a page they publish.'
           + (svcInvis.length ? ' They do not appear at all for: ' + svcInvis.map(r => '"' + r.phrase + '"').join(', ') + '.' : '')
           + (best && best.weakerAbove ? ' ' + best.weakerAbove + ' business(es) ranking above them have FEWER reviews — the reputation is there, the visibility is not.' : '')
           + ' Position only — no claim about their traffic, ad spend, or why they rank where they do.',
@@ -10065,6 +10250,26 @@ function callDataFor(lead, result) {
           ? 'Measured today. Everything below is current.'
           : `Measured ${days} days ago. Re-check the search position and the review count before you say either out loud \u2014 both move, and being wrong about one is how this call ends.`;
       })(),
+      // ══ WHAT MOVED. THE ONLY DATED FACTS ON THIS SHEET ══════════════════
+      // Every other line here describes the business as it is today. These come
+      // from comparing this look against an earlier one, and they are the only
+      // thing on the sheet that answers "why now". The server has already split
+      // what may be said to the owner from what is ours to know, so the label
+      // travels with the sentence and nobody has to remember the rule.
+      (() => {
+        const cs = ((lead.whatChanged && lead.whatChanged.changes) || []);
+        if (!cs.length) return '';
+        const ord = (n) => { const x = Math.round(Number(n)); if (!Number.isFinite(x)) return ''; const a = ((x % 100) + 100) % 100, b = ((x % 10) + 10) % 10; return x + ((a >= 11 && a <= 13) ? 'th' : b === 1 ? 'st' : b === 2 ? 'nd' : b === 3 ? 'rd' : 'th'); };
+        const lines = cs.map(c => {
+          if (c.id === 'rank_slipped') return `\u2022 ${c.days} days ago they came up ${ord(c.from)} for "${c.phrase}". The same search today puts them ${ord(c.to)}.`;
+          if (c.id === 'ads_started') return `\u2022 A Google Ads conversion tag appeared on their homepage in the last ${c.days} days. It was not there before.`;
+          if (c.id === 'review_pace') return `\u2022 OURS TO KNOW: reviews arrived at about ${c.perMonth} a month over the last ${c.days} days (${c.from} to ${c.to}).`;
+          if (c.id === 'weaker_above_grew') return `\u2022 OURS TO KNOW: businesses above them with fewer reviews went from ${c.from} to ${c.to} in ${c.days} days.`;
+          if (c.id === 'ads_stopped' || c.id === 'rank_incomparable') return `\u2022 OURS TO KNOW: ${String(c.note || '')}`;
+          return '';
+        }).filter(Boolean);
+        return lines.length ? `What changed since we last looked\n${lines.join('\n')}` : '';
+      })(),
       // WHEN TO DIAL, read from their own published hours and their trade.
       (lead.callWindow && lead.callWindow.checked && lead.callWindow.say)
         ? `When to call \u2014 ${lead.callWindow.say}` : '',
@@ -10329,6 +10534,11 @@ function CallView({ settings }) {
               sr && sr.askOnTheCall ? React.createElement('div', {
                 style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.5, marginTop: 5 }
               }, 'Ask before pitching \u2014 ' + sr.askOnTheCall) : null,
+              // ══ AFTER THE CALL, IN ONE TAP ═══════════════════════════════
+              // Two rows and one optional line. Anything longer does not get
+              // filled in on call thirty-one of fifty, and a log nobody fills in
+              // is worse than none because it looks like evidence.
+              React.createElement(CallOutcomeBar, { key: 'oc-' + l.id, lead: l }),
               // Say WHICH of the two reasons put this lead here. A caller opening
               // "no mailbox exists" on a business that has one looks careless, and
               // the two situations want completely different opening lines.
