@@ -33387,8 +33387,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       companyName: company,
     });
     try {
+      // ---- THE MARKUP TOO, OR A tel: LINK READS AS AN ABSENCE ------------
+      // This was markdown only, and the finding is an ABSENCE: "the number on
+      // their Google listing appears nowhere on their own website". A number
+      // published as <a href="tel:+15125550134"><i class="icon"></i></a> - an
+      // icon link with no visible text, which is how most trade sites put the
+      // number in the header - exists in the source and NOT in the markdown. So
+      // we told owners their site never mentions a number that is on every page
+      // of it, and they disprove it in one click. homepageHtml is already
+      // fetched, and on a lead Firecrawl could not read it now carries the copy
+      // we fetched ourselves.
       phoneConsistency = measurePhoneConsistency(phoneResult && phoneResult.phone,
-        String(content || '') + ' ' + String((sitePages && sitePages.corpus) || ''));
+        String(content || '') + ' ' + String((sitePages && sitePages.corpus) || '')
+        + ' ' + String(homepageHtml || ''));
       if (phoneConsistency.checked && phoneConsistency.finding) {
         console.log(`\u26a0 PHONE MISMATCH [${company}]: ${phoneConsistency.finding}. Anyone who finds them on Google dials a number their own site never mentions \u2014 measured, checkable in ten seconds, and almost certainly unknown to the owner.`);
       } else if (phoneConsistency.checked && phoneConsistency.found > 1) {
@@ -42447,6 +42458,23 @@ app.listen(PORT, () => {
       }
       if (!_s.includes(_n('const _claimsKnowledge = hedgeCannot', 'Buy(sent, clocked);'))) {
         _fails.push('the post-contact gate has its own copy of the rule again, which is how the two came to disagree');
+      }
+      // 10. THE ARM RECORDED IS THE ARM THAT SHIPPED. _ctaMode became 'page'
+      //     the moment the page saved, and the model path rewrites the closing
+      //     sentence - which is the one carrying the URL. A page arm recorded on
+      //     an email with no link in it makes the comparison unreadable in the
+      //     direction that looks like failure.
+      if (!_s.includes(_n('_bodies.every(b => b.includes(_page', 'Url))'))) {
+        _fails.push('the ask arm is recorded from what we intended rather than from what the email actually carries, so sends with no link count as a page arm nobody visited');
+      }
+      // 11. AN ABSENCE ABOUT A PHONE NUMBER READS THE MARKUP. The finding is
+      //     "the number on their Google listing appears nowhere on their own
+      //     website", and it was measured against markdown only - so a number
+      //     published as an icon-only tel: link, which is how most trade sites
+      //     put it in the header, read as absent. The owner disproves it in one
+      //     click.
+      if (!_s.includes(_n("+ ' ' + String(homepage", "Html || ''));"))) {
+        _fails.push('the phone-mismatch claim is back on markdown alone, so an icon-only tel: link reads as a number that appears nowhere on their site');
       }
       // 9. THE DUPLICATE-RUN GUARD KEYS ON THE BUSINESS. Two different
       //    businesses share a display name constantly, and the client polls by
@@ -56282,6 +56310,29 @@ app.post('/api/compose-email', async (req, res) => {
       // written or code-composed.
       sessionAttachEmail(company, composed.variantA.subject, composed.variantA.body, '');
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words. ${_byBrain ? 'The brain connected the verified pieces into prose; every figure was traced back to a measurement before it was accepted.' : 'Assembled from measurements \u2014 no model call, no tokens.'}`);
+    }
+    // ---- THE ARM IS WHAT SHIPPED, NOT WHAT WE INTENDED --------------------
+    // _ctaMode became 'page' the moment the page SAVED, and nothing checked that
+    // the link survived into the body. The model path rewrites the closing
+    // sentence, so the one sentence carrying the URL is exactly the one it is
+    // asked to reword - and this arm exists to be READ. Reporting a page arm on
+    // an email with no link in it makes the result worse than no test: those
+    // sends look like a page arm nobody visited.
+    //
+    // Every variant that could ship must carry it, because the subject A/B picks
+    // between them at send time. A missing link downgrades the RECORD to what
+    // actually went out; the page itself is left in place, since a lead may be
+    // recomposed and the token is derived from the lead id.
+    if (_ctaMode === 'page' && _pageUrl && composed) {
+      const _bodies = ['variantA', 'variantB']
+        .map(k => composed[k] && composed[k].body)
+        .filter(b => typeof b === 'string' && b.trim());
+      const _carries = _bodies.length > 0 && _bodies.every(b => b.includes(_pageUrl));
+      if (!_carries) {
+        console.log(`\u2696 ASK ARM CORRECTED [${company}]: the page was built but the link is not in ${_bodies.length ? 'every version of' : ''} the email that ships, so this send is recorded as the QUESTION arm. An arm recorded on an email that does not carry it makes the comparison unreadable in the direction that looks like failure.`);
+        _ctaMode = 'question';
+        _pageUrl = '';
+      }
     }
     // The arm travels with the email. Without this the test is unreadable: a
     // reply arrives and nothing anywhere says which ask produced it, which is
