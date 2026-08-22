@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 199 boot checks at the bottom, each documenting the live failure that caused it
+- 207 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -3343,6 +3343,594 @@ caught up. It says **"in their own words"** now, which is true of both.
 **`index.html` changed, so this needs a Netlify deploy.**
 ---
 
+## 46. The verify-at-send gate had never once executed — 2026-08-21
+
+Vin, on the free Firecrawl tier: *"make sure other than that that's the only
+issue... I want you to work extremely hard to identify issues we are close to the
+finish line."* A ten-dimension adversarial sweep found the biggest defect this
+send path has ever had, and it was hiding behind a green check.
+
+### The gate reads a field that does not exist
+
+```js
+const _tier = Number(lead.emailTier || (lead.emailMeta && lead.emailMeta.tier) || 0);
+let _verified = lead.smtpVerified === true || _tier === 1 || _tier === 2;
+if (_tier > 2 && !_verified) {   // ← never true
+```
+
+`emailTier` and `emailMeta` appear **nowhere else in this system**. The tier lives
+on `emailResult.tier` — `EMAIL_TIERS` declares it (1 published on their site,
+2 SMTP-verified, 3 pattern-learned, 4 pattern-inferred, 5 none) and index.html
+reads `L.emailResult.tier` when it builds a research request. So `_tier` was 0 on
+every lead, `_tier > 2` was false on every lead, and **the SMTP check at the send
+boundary has never run.**
+
+PART 4 §3 has carried *"there is now a verify-at-send gate but it is untested at
+volume"* for weeks. It is not untested. It is inert, and it has been since the day
+it shipped.
+
+The cost is precisely the failure it was built to prevent. Both hard bounces this
+project has had came from addresses the system itself *"labelled 'pattern-built,
+not confirmed' and marked sendable"* — tier 3 — and a hard bounce is charged to
+the sending **domain**, the one asset here that cannot be rebuilt in an afternoon.
+
+**And `SEND VERIFICATION CHECK` was green the entire time**, because it declared
+its own `_ok` reading its own `emailTier` fixtures and tested THAT. Two
+implementations of one operation, with the second copy inside the guard — and
+both copies read the same non-existent field, so they agreed perfectly and were
+both wrong. The check now runs the real functions against the real lead shape,
+and restoring the shipped expression verbatim turns it red on the first
+assertion: *"the tier is not being read from emailResult.tier."* It would have
+caught this the day it shipped.
+
+**An unknown tier now verifies rather than waving through.** The old rule read
+`if (!t || ...) return true` — no measurement meant no check. "We did not measure
+it" has never meant "it is fine" anywhere else in this file.
+
+### The concurrency default assumed the smallest plan and the pace assumed the largest
+
+`FC_CONCURRENCY`'s own comment says *"Default 2 — the Free tier's concurrent-browser
+cap, so this is safe on the smallest plan Vin could be on."* The gap between
+starts defaulted to 350ms, which dispatches **171 requests a minute against a free
+tier that allows ten**. Two settings describing one plan, one conservative and one
+maximally aggressive.
+
+And the limit can only be **learned from a response**. A lead's first fan-out is
+seven page reads dispatched inside two and a half seconds, long before any answer
+comes back to teach us anything. So on a small plan the burst is refused, the
+retries are spent, and the audit runs blind — while Places, Apify and the model
+have already been paid for that same lead. Live 2026-08-21: three of five leads
+read ZERO pages, each with `FIRECRAWL THROTTLED 3x` and one second of gate wait,
+which is the 350ms default having applied throughout.
+
+Assume the smallest plan they sell until their header proves otherwise, and let
+the measurement RELAX it. Wrong the safe way costs one gap interval, once per
+process. Wrong the fast way costs a blind audit plus every other API already spent
+on that lead. `FC_GAP_AT_START` is captured before anything can move it, because
+the boot fixtures set the live pace by hand and the starting value would otherwise
+be unobservable — and the starting value is the whole point.
+
+**The measured price of a lead, from that run's own log:** 16 Firecrawl credits,
+4 Places calls, $0.095 of Anthropic. At fifty a day that is **800 Firecrawl
+credits a day, 24,000 a month**. The free tier is 500 credits ONE TIME, which is
+31 complete leads, ever — not one fifty-lead day.
+
+### A judgement about a page we never opened
+
+`positioningScore` reads `content` and `visualAnalysis` in every one of its terms.
+On a lead Firecrawl refused, content is empty and visualAnalysis is null, so the
+scorer runs over nothing and returns 0-2 out of 10 — and **0 is not "we did not
+look", it is "we looked and it is terrible"**. Three consumers then acted on it: a
+`weak_positioning` flaw was pushed, the audit prompt was told *"Dunford
+positioning: 0/10"*, and the rule-based product fallback declared `isBroken` and
+recommended a rebuild because *"Homepage has critical conversion failures"*.
+
+Three of five leads on 2026-08-21 were in exactly that state. It is the recorded
+unmeasured-as-zero class pointed at the softest, least defensible judgement in the
+system — and the bucket text for `weak_positioning` already says it is *"our
+opinion, not a measured fact, and the owner cannot verify it"*.
+
+null, not zero, and every consumer asks `Number.isFinite` first. The product
+fallback's catch-all also stopped naming a homepage it may never have opened: the
+product does not change, because a business with no readable site is still a
+rebuild candidate — the REASON stops claiming we saw something.
+
+### A product no model chose, shown exactly like one that was
+
+Two branches stamp `fromBrain: true`. Nothing in server.js or index.html has ever
+read it, so a product the AUDIT chose and a product a five-line rule guessed are
+indistinguishable everywhere they are shown — including the handoff brief's
+`BRAND + OFFERING FIT`, which is what Mike walks into the call with. Live: Thrive
+Dental's audit returned no product at all (`Brain audit complete: null`), the rule
+picked Website Rebuild, and the sheet showed it like a choice.
+
+### The boot was eleven megabytes from Render's crash ceiling
+
+`selfSource()` is memoised to ONE copy for the reason `BOOT HEAP CHECK` records:
+47 checks each grew a private `readFileSync`, boot settled ~140MB over, and a
+build that was green locally crash-looped on Render.
+
+The comment-stripped view never got the same treatment. **Fourteen checks each
+wrote `selfSource().split('\n').filter(...).join('\n')`** — a 55,000-element array
+AND a fresh multi-megabyte string, every time. Adding five more this session
+pushed the settled heap from 184MB to 211MB and `BOOT HEAP CHECK` went red, which
+is the check doing exactly its job on the same disease one level down. One
+memoised copy: **211MB → 171MB**.
+
+The blanket rewrite of the fifteen call sites caught the new function's own body
+too, and every check died on *"Maximum call stack size exceeded"*. The boot found
+it in one run.
+
+### What the falsification runs found in the checks themselves
+
+- **A falsification that went red by CRASHING.** Poisoning the property access
+  instead of restoring the shipped expression made the check die on a TypeError.
+  That proves the check runs the real function; it does not prove the assertion
+  fires. Redone with the original expression verbatim, which trips the assertion
+  cleanly — the difference between "it broke" and "it caught it".
+
+**200 boot checks green.** Every fix falsified individually and every one red
+alone; the full gate list green, 20,000 cases per in-process gate, and 2,035
+emails composed over HTTP with every invariant holding.
+---
+
+## 47. Twenty-six from a ten-lens adversarial sweep — 2026-08-22
+
+Vin: *"make sure nothing else is broken analyze meticulously work hard scoarer
+everything I want you to work extremely hard to identify issues we are close to
+the finish line brother."* Ten hunters read the code behind ten separate failure
+modes; every finding was then verified against the live source before anything
+was touched, and every fix was falsified individually — 43 reverts, each red
+alone. 203 boot checks green.
+
+The whole sweep sorts into four sentences, and each of them is a rule this file
+already had.
+
+### One: a gate cannot judge our own facts
+
+- **The throttle test read the page we had just bought.** `isRateLimited` matched
+  `rate.?limit|slow down|concurren\w*|browser limit` against the SCRAPED
+  MARKDOWN as well as the error field. Every one of those is ordinary English on
+  the sites this system audits — a builder listing "concurrent projects", a
+  clinic saying "we limit the rate of". A homepage carrying one was refused as a
+  throttle, `FIRECRAWL RATE LIMITED` printed for a request nobody throttled, the
+  WHOLE gate was held four seconds on it, and the audit ran blind on a page
+  already paid for. Whether we were throttled is a fact about THEIR answer, never
+  about the document they handed us.
+- **`permittedFigures` admitted every digit in the ASSERT block** under the
+  comment *"Everything in it is measured by construction; that is what the A list
+  IS"*. One line of that block is the audit model's own sentence, and
+  `verifyOriginalFinding` checks only that its QUOTE appears on a page we read —
+  never the numbers around it. The writer still sees that line; it no longer
+  licenses a figure.
+- **`SHARPER CLAIM` licensed its own digits.** The comment above it promised
+  *"this can sharpen the claim; it cannot introduce a number"* while
+  `permittedFigures` read `opts.spine` — the sentence it had just been replaced
+  with. And it mutated the wrong object: `parsed.factualSpine` is a SPREAD COPY
+  whenever a LOCAL_ONLY rung forced the swap, so on those leads the log said
+  "Using X instead of Y" and X reached nothing.
+- **The gate stopping the model raising his reviews was a no-op on every lead.**
+  It consulted `evidenceAssert`, and `buildEmailEvidence` writes *"214 Google
+  reviews at 4.6 stars"* into that block on every lead with a review count. So
+  the word was always present. It reads what CODE wrote into the email now — the
+  spine, the recognition line, the count, the money — which is exactly what the
+  writer's own brief already said: *"Do not mention his reviews… unless the FACT
+  above already does."* **The boot fixture omitted the field entirely**, which is
+  the recorded trap of a check that only exercises the shape where nothing can go
+  wrong; it is built by the real function now.
+
+### Two: an absence claim needs a look, and a look is not a draw
+
+- **`no_offer` and `no_lead_magnet` claimed a whole site off 200 characters.**
+  `readRecurringOffer` forty lines away demands 3,000 characters AND two pages
+  before it will say a business does not offer something, and its own comment
+  says why. These two made the identical class of claim with no page count at
+  all. On a starved Firecrawl run 200 characters is a nav bar and a tagline.
+- **`absent_from_search` (harm 96) was claimed off ONE Places draw.**
+  `pickRankRow` PROMOTES an absent service-page row over every found row, on
+  purpose — and those rows come from the raw checker. The head term has bought a
+  second sample since one business returned #3 and #12 minutes apart, and the
+  comment that bought it says absence *"is the one finding that cannot be
+  softened into a band if it turns out to be wrong"*. One extra search now, only
+  on the row that can be promoted, and the rung requires two misses. When the
+  second look FAILS the note already said the absence was unconfirmed and nothing
+  read it.
+- **The phone-mismatch finding was measured against markdown alone.** A number
+  published as an icon-only `tel:` link — how most trade sites put it in the
+  header — exists in the source and not in the markdown, so we told owners their
+  site never mentions a number that is on every page of it.
+- **A hedge bought a finished event.** Two gates apply the opinion-marker rule
+  and only one implemented the half that matters: a marker can never buy a
+  COMPLETED EVENT or a CLOCK, because both say we were watching. The other had
+  that rule written in its own comment four lines above the code it was missing
+  from, and its OPINABLE list is full of completed events. *"My read is they've
+  already gone with somebody else"* shipped.
+
+### Three: the door between the app and its data had never been run
+
+`leadToRow`/`rowToLead` have produced nine duplicate-key collisions and nothing
+in this repo had ever executed them. `clientcheck.js` runs the pair on five real
+lead shapes now and sweeps permanently for the write-only class. Five defects at
+once:
+
+- **A lead added from Find lost every Find-time measurement on save.** The
+  `brain_audit` ternary had a hundred-and-eleven-field branch and a five-field
+  branch, and a lead with no audit yet took the short one — so `placeId`,
+  `industry`, `reviewCount`, `rating`, `marketsSeen`, `buyingLane`,
+  `reachPredict` were dropped on exactly the leads about to be researched, and
+  `placeId` is what locates their Google reviews. Add fifty from Find, reload the
+  tab, run the batch, and every one is researched without its own place id.
+- **`problemList` was written back unconditionally as `[]`, which is truthy**, and
+  six places asked "is this audited?" as a bare truthiness test on it. After one
+  reload EVERY lead read as audited: filed under Audited in the sidebar,
+  pre-ticked in the export, counted in "Export N audits", and handed to Mike as a
+  call sheet with nothing on it.
+- **The research-time template outranked the model-written draft** on every
+  reload, and pressing Generate afterwards recomposed from the template.
+- **`callOutcome` had no key at all** — the bar's own comment says it exists "so
+  the same call is not logged twice", and the server stamps a fresh id per POST
+  with no dedupe.
+- **Six fields were written to Supabase and never read back** — `marketsSeen`,
+  `marketsAbsent`, `marketCount`, `noWebsite`, `builderSite`, `leadChannel`. All
+  six are read by the research request builder. The coverage-gap finding could
+  not exist on a re-run at all.
+
+**And an unreadable cloud was treated as an empty one.** `sbLoadLeads` returned
+null for both, and boot answers null by pushing the entire local cache up as a
+first seed. On a genuinely empty table that is right; on a read that FAILED it
+writes this browser's stale copy over every row the cloud actually has, last
+write wins. It is the one failure in this file that cannot be undone from the
+browser. `sbFetch` already told the two apart.
+
+### Four: the bulk path spent on things it had not counted
+
+- **Moving fifty companies to the pipeline saved ONE.** `saveLeads` pushes only
+  what it is told changed, and it was handed `added[added.length - 1]`.
+- **`batchCandidates` refused any lead with an in-flight record and never asked
+  how old it was.** A tab closed mid-run leaves up to three behind, and the resume
+  path collects only records from its OWN tab — so those leads were excluded from
+  every future batch permanently, and nothing said why.
+- **The bulk panel counted `allLeads`**, which the Search box directly above it
+  REPLACES with a filtered subset, while `startBatch` spends on the whole
+  pipeline. Typing three letters made the button read "3 ready" and audit fifty.
+- **The homepage read was the only Firecrawl door with no retry on a throttle**,
+  and it is the FRONT of a seven-page fan-out — so one 429 threw away the whole
+  website half of an audit while Places, Apify and every model call were paid in
+  full.
+- **The salvage path recovered `htmlSignals` and the navigation and left
+  `homepageHtml` empty.** Same markup, and it is the variable the advertising
+  tags, the phone read and `bookingSourceFor` all take. PART 4 §25 is a whole
+  entry about the last one — a scheduler embed is an `<iframe>`, which markdown
+  deletes — and `bookingMeasured` is stamped true regardless.
+- **The per-lead "pages were refused, re-run this lead" banner was a delta over a
+  process-global counter**, and three leads research at once. On a small plan
+  that flagged every lead in a batch.
+- **`paid_traffic_leaks` (harm 93) was handed an object without `booking`**, so
+  two of its three sentences could not be produced on any lead.
+- **The audit lost its findings whenever no EMAIL could be written.**
+  `problemList`, `subjectOptions` and `harmsRanked` were attached inside the spine
+  block, so a lead whose every finding is INTERNAL_ONLY got none of them — while
+  `rankHarms` had just logged *"the audit and the call sheet still carry every one
+  of them"*. That is the case the internal-only rule exists for. The spine decides
+  what the EMAIL may say; it has never decided what the AUDIT knows.
+
+### And four on the send path
+
+- **A send could go out with nowhere to put the email.**
+  `ensureHunterAttribute` returns null when Hunter's API is down, and every use of
+  the result was guarded with `if (slug)` — so a null one was silently skipped,
+  the lead was pushed anyway, reported in `results.sent`, and the sequence step
+  delivered its own static text to the prospect. No first-email attribute, no
+  send, for the whole batch.
+- **The rotation and the subject A/B were one experiment wearing two names.**
+  Both hashed the same lead id with the same construction and took it mod 2, so
+  with two sequences every variant-A email went out on domain 1 and every
+  variant-B on domain 2. The first fix salted the hash and the boot check caught
+  it at exactly 0% agreement — perfect ANTI-correlation, just as confounded. The
+  reason is arithmetic: each step is `a * 31 + c`, 31 is odd, so the low bit is
+  the parity of the character sum and a fixed prefix can only leave the split
+  alone or invert it. **A split has to come from a different function, not the
+  same one with more input.**
+- **The ask arm recorded what we intended, not what shipped.** `_ctaMode` became
+  `'page'` the moment the page saved, and the model path rewrites the closing
+  sentence — the one carrying the URL. A page arm recorded on an email with no
+  link makes the comparison unreadable in the direction that looks like failure.
+- **The "Send again" button could not finish the job its own dialog describes.**
+  The already-emailed block is right and stays absolute for every automatic path,
+  but the operator's deliberate re-send after clearing Hunter by hand had no door.
+  One door now, opened only by that confirmation and closed the moment the push
+  succeeds.
+
+**And two log lines naming the wrong cause**, which this file already records
+twice (the SMTP timeout, the Supabase table that existed). *"Re-run Generate on
+this lead and push again"* was the wrong advice for a lead whose next findings
+sit under the harm floor — the composer DECLINES those deliberately, and it is
+deterministic, so the operator loops forever. And the duplicate-run guard keyed
+on the lowercased company NAME: two different businesses share a name constantly,
+and the client polls by job id, so the second request was handed the first one's
+audit. That is PART 4 §19 through a different door; it keys on the place ID now,
+then the domain, then the name, and the deduped response says which company it
+handed back so the client can refuse it.
+
+### What the falsification runs found in the checks themselves
+
+- **Ninth instance of "a check that does not assert its call site is half a
+  check."** The hedge fixtures ran the PREDICATE and not the gate, so reverting
+  the gate left all three green.
+- **A check that reported a green line ahead of a failure it did not know about
+  yet.** The Supabase-read assertions need an `await`, and `clientcheck.js`
+  printed its ✓ lines synchronously first. The report waits for them now.
+- **A falsification harness that could not detect.** Four "reverts" earlier in the
+  session reported GREEN because the port was invalid and the process died before
+  a single boot check ran — a harness that cannot see a failure proves the
+  opposite of what it appears to prove.
+- **An executed fixture that proved a premise rather than the fix.** The per-lead
+  throttle test exercises `AsyncLocalStorage`'s isolation, not our write to it.
+  It says so at the assertion, and the write has its own guard.
+
+**`index.html` changed, so this needs a Netlify deploy.** The server half is live
+on merge; the persistence fixes, the bulk-path fixes and the deduped-job refusal
+are dark until the file is dragged in.
+
+---
+
+## 48. The three tiers: money that can say stop, a build that cannot ship red, and the seams finally walked — 2026-08-22
+
+Vin: *"build 1 2 and 3 at the highest level diagnose at the root and build from
+the groundup... Make sure the bill is perfectly flawlessly a 10 out of 10."*
+Tier 1 is money, Tier 2 is bugs, Tier 3 is results. Everything below was
+falsified individually — 30 reverts this session, each red alone — and the
+build ends at **207 boot checks green** plus two whole new gates.
+
+### Tier 1 — never waste money
+
+**Nothing anywhere could say STOP.** A loop, a mistake, or one bad afternoon
+ran the accounts to zero with every individual line item correctly logged. Now:
+
+- **One UTC-day ledger, fed by the same four doors the per-lead meters already
+  use** — `fcNote`, `notePlacesCall`, `meterAnthropic`, the Apify dispatch — so
+  nothing can reach one meter and miss another. Ceilings per service
+  (`FC_DAILY_BUDGET` 1500 credits, `PLACES_DAILY_BUDGET` 600 calls,
+  `ANTHROPIC_DAILY_BUDGET_USD` $20, `APIFY_DAILY_BUDGET` 150 pulls), enforced
+  at ADMISSION — research queue, Find, compose — and never mid-lead, because a
+  half-lead is everything spent for an audit nobody gets. A refusal names the
+  exact setting that raises it. 0 turns a ceiling off, loudly at boot. HONEST
+  SHAPE: this is a safety net, not accounting — the day is UTC, a restart
+  resets it, the invoice is the authority.
+- **`/api/spend`** answers "what has today cost" with the ceilings beside it
+  and a per-operation-kind split — which settles `FC_SCREENSHOT_CREDITS` at
+  last: run one lead, read `byKind.screenshot`, compare the dashboard.
+- **`leadSpend` rides every research response**, the client merge carries it
+  (the executable contract check demanded that the moment the server returned
+  it), the pure batch reducer sums it, and the batch bar prints *"this run:
+  ~800 Firecrawl credits · 200 Places calls · $5.00 model"*.
+- **The preflight gate.** The Apify-403 day is the shape it exists for: fifty
+  leads burning at full price around one dead Settings field. Refused before a
+  penny moves: a website that cannot be a URL, a missing Anthropic key, a
+  missing Firecrawl key on a lead that has a site, a server with no Places key
+  (eleven of forty-one signals dark, including both reply-earning findings —
+  the §11 silent state). A missing Apify token WARNS once an hour instead of
+  refusing or going silent. Deliberately NOT refused: a dead domain —
+  `siteConfirmedDown` is a real lead and the pipeline already fails cheap on
+  it; and an unreachable-but-existing site — refusing on reachability deletes
+  bot-hardened leads, the §14 guard-too-tight failure.
+- **The re-run doors carry the price.** The re-run confirm names the audit's
+  age and what a cycle costs; the batch's re-audit tick box says what fifty
+  re-runs multiply to.
+
+### Tier 2 — a build that cannot ship red
+
+- **`BOOT VERDICT` — one machine-readable fact for "did the checks pass"**,
+  instead of three greps that could disagree. A console recorder brackets the
+  boot window, counts the same two glyphs boot.sh always counted, allowlists
+  the one expected decline BY NAME, settles on the recorded last check plus
+  five quiet seconds (180s cap that makes a hanging check LOUD — a check that
+  hangs is quieter than one that fails), then uninstalls itself so a lead's own
+  ⛔ lines can never flip the build's health. A GREEN verdict counting almost
+  nothing reads as broken, never as healthy.
+- **`/healthz` serves that verdict**: 503 while checking or red, 200 on green.
+  Point Render's health check at it (PART 8) and a red boot stops being a log
+  line nobody reads and becomes a deploy that visibly did not land, with the
+  previous build still serving.
+- **CI: every gate on every push.** `ci-gates.sh` is the gate list made
+  executable — ONE copy; PART 6 documents it, this runs it, and
+  `.github/workflows/gates.yml` runs it on every push and PR. It keys on EXIT
+  CODES only (the recorded harness failure grepped for one glyph while the
+  tool printed another), runs every gate even after one fails, and judges the
+  boot by the BOOT VERDICT line — the same fact /healthz serves.
+- **`netlify.toml` ends the hand-deploy** the day the repo is connected (PART
+  8). It publishes `dist/` and never the repo root, because the root would
+  serve server.js and every check as public files. Inert until connected; the
+  drag-in keeps working meanwhile.
+- **`servercheck.js` — the research route DRIVEN, not read.** The server had
+  200+ boot checks, every one exercising a FUNCTION, and nothing that ever
+  drove a request start to finish — and the seams BETWEEN functions are where
+  every computed-but-not-passed has ever lived. fetchT — already the one door
+  for every outbound call — gained a test seam: `FAKE_UPSTREAM` rewrites
+  non-local hosts to a local fixture server, provably inert without the env
+  var (fetchtest asserts both directions). The harness boots the real
+  server.js, waits for /healthz to go green (asserting the recorder over real
+  HTTP on every run), and drives six scenarios: the golden lead (ladder alive,
+  spine built, Place-Details review count, composed email, spend counted), a
+  preflight refusal with ZERO network calls, a dead Apify token that thins the
+  audit instead of deleting it, a brain husk that 422s, a 402 day (latch, no
+  further Firecrawl spend, corpusRead at zero, the cause named in the log),
+  and — on a second boot with `FC_DAILY_BUDGET=5` — the lead that crosses the
+  ceiling FINISHING while the next one is refused naming the setting.
+
+  **What its first runs caught, in order:** my own invocation masking its exit
+  code behind a pipe; FIRECRAWL PACING CHECK correctly refusing the harness
+  for configuring a pace faster than the free tier — the guard was right and
+  the harness was wrong, so the fake now teaches the gate through its own
+  x-ratelimit header instead of overriding it, which means the harness proves
+  the pacing relaxation too; and its own assertions aimed at the response's
+  top level while the client reads those fields off `brainAudit` — an aim
+  error found by the trace it prints for exactly that case.
+
+### Tier 3 — top tier results
+
+- **A real quote no longer dies on an ampersand or an accent.** Two truth
+  gates held two identical local copies of the quote normaliser — the
+  two-hand-kept-copies disease inside the gates themselves. One module-scope
+  canonicaliser now, and it decodes HTML entities (markdown holds "Smith &amp;
+  Sons", the model quotes the rendered "Smith & Sons", and the old norm made
+  the entity a WORD that split the match) and folds accents (José became
+  "jos", Jose became "jose", one letter, whole drop). The rule has not moved:
+  the span must exist in what we read, a fabricated sentence still matches
+  nothing, and the falsification proves the loosening direction on every boot.
+  The sliding window already healed one-word breaks in LONG quotes — the first
+  falsification proved my fixtures worthless at that length — so the fixtures
+  are the SHORT shape, which is where the recorded live drops were ("BOOK MY
+  STRATEGY CALL", four of five words).
+- **Every dropped quote names its nearest miss.** "Does not appear on any page
+  we read" is true and unactionable; "0 of its 9 words run consecutively in
+  the corpus" is the fabrication shape, "8 of 9" is a boundary problem, and
+  the difference is the next tuning decision made on evidence.
+- **The call-outcome report is finally reachable.** `/api/call-outcomes` has
+  grouped every logged call by the finding that opened it since §35, with a
+  CSV mode — and nothing in the client could open it, so the one report the
+  entire quality question waits on was invisible. A button now, beside Export.
+  PART 5 still stands: forty logged conversations is more evidence than this
+  project has accumulated in its life, and no code produces it — the button
+  after each call does.
+
+### Two doors the refuters would have found, closed first
+
+Found by asking what the new gates do NOT cover, before any independent
+verification ran:
+
+- **The synchronous `/api/research` route bypassed both admission gates.** It
+  is the same worker with no job wrapper, kept because the client falls back
+  to it when `-async` 404s on an old server — and a lead posted there started
+  spending with no preflight and no day ceiling. It now clears the SAME gates
+  with the same refusal sentences. servercheck drives it live in scenario B:
+  refused by name, zero network calls.
+- **A lead worked during the ~20-second boot window could flip the verdict.**
+  The recorder counts every check glyph the process prints, and a lead's own
+  refusal lines (a fact-check refusal, a credit latch) are the same glyphs. The
+  root fix is not a cleverer filter: a server that has not settled its own
+  checks is not ready to take work. Every POST under `/api/` answers 503 until
+  the verdict settles; GETs (healthz, spend, job polls) stay open; a settled
+  build — green or RED — takes work exactly as before, because refusing work on
+  red would brick a build one flaky check turned red. With Render's health
+  check on /healthz, production traffic never sees the window at all.
+  `BOOT WINDOW GATE CHECK`, and fuzz.js now waits for the green verdict
+  instead of sleeping nine seconds at a door that is deliberately closed.
+
+### What was deliberately NOT built
+
+- **No spend persistence to Supabase.** A safety net pretending to be a ledger
+  adds a failure mode to every request; the invoice is the authority.
+- **No DNS preflight.** NXDOMAIN is a real lead (`siteConfirmedDown`), and the
+  pipeline already fails cheap on it — the map returns empty, so the interior
+  reads are never bought.
+- **No ranking or copy changes.** PART 6's rule holds: no tuning until real
+  replies exist to tune against. Tier 3 here raises the SUPPLY of unique
+  material and the visibility of evidence; it does not touch the ladder.
+
+---
+
+## 49. What the refuters found — 2026-08-22, the round after the tier build
+
+Seven adversarial agents were pointed at the tier build's own mechanisms with
+instructions to break them, and a completeness critic at everything they were
+not pointed at. Twenty-nine findings survived into code changes; every fix was
+falsified individually (twenty reverts this round, each red alone), and the
+whole sweep held to one discipline: verify the refuter's claim against the live
+source before touching anything.
+
+**The truth gate had four ways to verify a fabrication, all executed.** The
+quote canonicaliser's catch-all DELETED any `&Word;` entity, so
+"Insured&Bonded; crews" normalised to "insured crews" — two never-adjacent
+words made consecutive, and a quote of a page that does not exist verified. The
+corpus was one soup, so a word run could START on a page and FINISH inside a
+review theme ("Call us today, no one ever calls back" assembled itself across
+the join). The short-quote floor accepted any generic 4-gram, so an invented
+"Claim your free estimate today" rode "your free estimate today" — trade-site
+filler — into a verified quote. And matching was bare substring, so
+"rate the craftsmanship" verified inside "celebRATE THE CRAFTSMANSHIP". Fixed
+at the root: unknown entities pass through (deletion can join, a space cannot),
+the corpus is SEGMENTS and a match must live inside one, the short path may
+shed filler words but never content words, and every match is word-aligned.
+Two tightenings against real quotes were paired with two loosenings the same
+sweep found: a letter entity now DECODES (`Jos&eacute;` was still becoming
+"jos" — the José bug through a second door), and the mining model's PARAPHRASE
+left the verify corpus (only the verbatim review snippet remains — "the words
+are theirs" must not verify against another model's words).
+
+**The business-model filter licensed evidence that merely existed.** A
+hallucinated B2B claim carrying the real quote "for Dallas homeowners. Family
+owned since 1998" verified — evidence stating the OPPOSITE of the model it
+licensed — and silenced twelve rungs including reply-proven
+`outranked_by_weaker`. The quote must now contain a term from a small declared
+vocabulary for the claimed model; a real institutional quote behind a model
+preamble also now verifies (the window slides instead of anchoring at the
+front).
+
+**The boot gate had three doors around it.** Express routes are
+case-insensitive and the gate was not, so `POST /Api/research` walked past it
+(verified against the installed Express); the gate and /healthz answer before
+the CORS middleware, so the browser saw an opaque "Failed to fetch" instead of
+the retry JSON; and an async check's late red — BATCH MEMORY's leaked-slot
+branch fires at 60s, ~40s AFTER the verdict settles — was invisible: GREEN,
+/healthz 200, CI green, failure on screen. The path is lowercased, the gate
+carries its own CORS headers, and every async check holds the verdict open
+(bootHold/bootRelease) until it has reported, with the 180s cap still the loud
+backstop. The client retries a 503 {booting:true} submit for up to a minute —
+a restarting server is a delay, not a failure — and the cron route no longer
+reports a boot-window refusal as a successful empty discovery.
+
+**Three spending doors had no gate.** `/api/scrape` spent Firecrawl through no
+meter and no ceiling (a live client path); `/api/claude` and
+`/api/linkedin-drafts` were metered but never gated, so a spent model budget
+kept spending a nickel a press; and Find's for-sale lane spends Firecrawl and
+a Haiku call that its Places-only admission gate never checked. All four now
+refuse (or skip, with the reason logged) at the same ceilings, the sync
+research route also fails fast on the credit latch via the READ-ONLY predicate
+(refusing must not consume the recovery probe), and two boot checks that
+charged phantom probe spend to the real day ledger now restore what they
+touched.
+
+**The harness lied in three small ways.** servercheck's review-count fixture
+used the same number in the search row and Place Details, so the authority
+assertion could not detect the regression its message names (the search row
+now says 999 against the authority's 4); scenario C's "a dead token reports
+null" was vacuously true because reviewsRead was never in the response at all
+— instance twenty-one of computed-but-not-passed, found by asserting the
+OPPOSITE on the golden lead, and `ownerReplyCount` was dark the same way; and
+the fake ignored every request header, so the one header whose absence
+silently deletes measurements (X-Goog-FieldMask) is now asserted present.
+FAKE_UPSTREAM — which redirects every API call, keys included — now refuses to
+boot when Render's own environment is visible, mechanically, because
+"never set it in production" is an instruction and instructional guards do not
+hold.
+
+**And the send path keeps a durable record.** A 25-lead send is one
+synchronous HTTP request whose response is the only copy of "what went" the
+client gets, and the in-memory dedupe maps die with the process. One
+fire-and-forget row per ACCEPTED recipient now lands in `send_log`, so a lost
+response or a restart no longer erases who was sent what. Needs a table:
+
+```sql
+create table send_log (
+  id bigserial primary key, lead_id text, company text, email text,
+  sequence_id text, at timestamptz default now());
+```
+
+A schema probe runs once after the verdict settles and names every expected
+table or column that does not answer, with sbRest's own per-table diagnosis
+above it — so a missing table is discovered at boot, not at its moment of
+first use.
+
+**Known and deliberately NOT rebuilt tonight** (the launch-sweep rule: no new
+features the night before calling starts): the send route still wants the job
+queue research got — the cap holds it to 25 and the send_log makes a lost
+response recoverable, and that is the mitigation, not the fix. The batch
+client's 30-minute job TTL and the operations-vs-pacing tension on the kill
+clock are documented open items, not silent ones.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -3389,6 +3977,12 @@ node batchcheck.js                      # runs 50 leads through the bulk audit w
 #   collisions, seventeen disagreeing request fields and eleven dropped server
 #   measurements all reached live at once.
 node fetchtest.js                       # the one helper all 60 outbound calls use
+node servercheck.js                     # the research route DRIVEN over a fake network
+#   Two real boots, six scenarios: the golden lead, a preflight refusal, a dead
+#   Apify token, a brain husk, a 402 day, the day ceiling. The seams BETWEEN
+#   functions are where every computed-but-not-passed has lived, and until
+#   2026-08-22 nothing walked them. bash ci-gates.sh runs this whole list —
+#   ONE executable copy, and CI runs it on every push.
 node fuzzcore.js 20000                  # 11 gates, in-process
 node fuzz.js 500                        # composes emails over HTTP
 node pngscale.js --selftest             # 21 assertions on the screenshot scaler
@@ -3396,7 +3990,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 199 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 207 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -3470,7 +4064,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 199 boot checks and the comments above
+and caused none of this week's failures. The 207 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
@@ -3541,3 +4135,87 @@ says an email is flat, it is flat, and the cause has been upstream every time.
 
 He does not read code. Explain findings in terms of what the system does to a
 lead, not in terms of which line changed.
+
+---
+
+# PART 8 — DEPLOYING WITHOUT HANDS
+
+Three one-time account actions turn the 2026-08-22 build into a pipeline where
+a merge to main IS the deploy, and a build that cannot pass its own checks
+cannot land. None of them is a code change; until each is done, everything
+keeps working exactly as before.
+
+## 1. Render: point the health check at /healthz
+
+Render dashboard → the service → Settings → Health Check Path → `/healthz`.
+
+The endpoint answers 503 until the BOOT VERDICT settles green and 503 forever
+if any boot check failed — so with the health check set, Render holds a deploy
+on a red build and keeps the PREVIOUS build serving. A red boot stops being a
+grey log line and becomes a deploy that visibly did not land. Nothing to
+configure in code; the endpoint is already live.
+
+**The honest trade-off.** Render uses the same path for deploy gating AND for
+runtime monitoring. Deploy gating is pure upside: a red build never starts
+serving. Runtime is the edge case: if a LIVE service crash-restarts and a
+flaky check happens to go red on that one boot, the service stays 503 until
+the next restart — there is no previous build to fall back to at runtime.
+That trade is accepted deliberately: every check in the file exists because
+its failure shipped something false, and serving with a failed truth gate is
+the worse outcome. A crash restart also re-runs the checks with POSTs held
+(the boot-window gate), so the ~20-second window costs retries, not leads.
+
+## 1b. GitHub: make the gates a merge BLOCKER, not a report
+
+CI runs on every PR and every push to main — but GitHub only refuses a red
+merge once branch protection requires it. One-time: repo Settings → Branches
+→ Add branch protection rule → branch `main` → tick "Require status checks to
+pass before merging" → select `gates`. Until this is done the gates are
+visibility, not enforcement, and a red PR can still be merged by hand.
+
+## 2. Netlify: connect the repo (ends the hand-deploy)
+
+Netlify dashboard → the site → Site configuration → Build & deploy → Link
+repository → `Vinnyvinny2/crojungle-outreach-backend`, branch `main`. The
+committed `netlify.toml` does the rest: it copies index.html into `dist/` and
+publishes that — never the repo root, which would serve server.js and every
+check as public files.
+
+After this, the client half of every merge deploys in the same motion as the
+server half — which removes the single biggest structural bug source this
+repo has: the server half of a fix going live on merge while the client half
+sits on a desktop, the shape that makes a bug look intermittent. Until it is
+done, the drag-in keeps working; the toml is inert.
+
+## 3. Staging: a second pair, same repo, one env var
+
+A second Render service and a second Netlify site pointed at the same repo,
+branch `staging`. Set `RENDER_ENV=staging` on the Render side — /healthz
+reports it, so a screen and a log always say which world they are. Merge to
+`staging`, click through the app against real APIs with small budgets
+(`FC_DAILY_BUDGET=50` etc.), then merge `staging` → `main`. A bad build costs
+nothing and touches no lead Vin is calling.
+
+## The knobs this build added
+
+| setting | default | meaning |
+|---|---|---|
+| `FC_DAILY_BUDGET` | 1500 | Firecrawl credits per UTC day; 0 = off (loud) |
+| `PLACES_DAILY_BUDGET` | 600 | Places calls per UTC day |
+| `ANTHROPIC_DAILY_BUDGET_USD` | 20 | model dollars per UTC day |
+| `APIFY_DAILY_BUDGET` | 150 | review pulls per UTC day |
+| `FAKE_UPSTREAM` | unset | servercheck's test seam — NEVER set in production; fetchtest proves it inert when absent |
+| `RENDER_ENV` | unset | shown by /healthz so staging and production cannot be confused |
+
+**Set the budgets to the PLAN, not the default.** The defaults (1500 Firecrawl
+credits, 600 Places calls, $20 of model) are a runaway-day safety net sized for
+paid tiers. On the free Firecrawl tier (500 credits ONE TIME) or inside the
+Places free allowance (1,000 Enterprise calls a month), the default ceiling sits
+ABOVE what the account can afford — the ledger will happily meter the account to
+zero before the ceiling speaks. When the plan is small, set the ceiling small.
+
+**The client handshake.** `CONTRACT_VERSION` (server.js) and `CLIENT_CONTRACT`
+(index.html) are one number in two files, asserted EQUAL by clientcheck. Bump
+both when a change needs the new client live; a stale Netlify page then shows a
+banner naming both numbers instead of silently reintroducing fixed bugs.
+

@@ -194,7 +194,25 @@ const INVARIANTS = [
 (async () => {
   const { spawn } = require('child_process');
   const srv = spawn('node', ['server.js'], { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
-  await new Promise(r => setTimeout(r, 9000));
+  // Wait for the BOOT VERDICT to settle, not a fixed sleep: the boot-window
+  // gate answers 503 to every POST under /api/ until the verdict is green, so
+  // a sleep tuned to one machine's boot speed would fuzz a door that is
+  // deliberately closed. /healthz is the same fact CI and Render read.
+  {
+    let up = false;
+    for (let i = 0; i < 120; i++) {
+      try {
+        const h = await fetch(`http://localhost:${PORT}/healthz`);
+        if (h.status === 200) { up = true; break; }
+      } catch (e) { void e; }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    if (!up) {
+      console.log('✗ the server never reached a green BOOT VERDICT within 120s — cannot fuzz a door the boot gate is holding closed');
+      srv.kill();
+      process.exit(1);
+    }
+  }
 
   const fails = new Map();
   let composed = 0, blocked = 0, threw = 0;

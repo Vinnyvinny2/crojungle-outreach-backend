@@ -92,6 +92,282 @@ const fitPngToBudget = async (buf, longEdge, maxEdge, budget = PNG_BYTE_BUDGET, 
 
 const app = express();
 
+// ════════════════════════ THE BOOT VERDICT, AS ONE MACHINE-READABLE FACT ════════
+// Three different things need to know whether the boot checks passed — the CI
+// gate, the Render health check, and a person reading the log — and until now
+// each answered it with its own grep. Three hand-kept copies of one question is
+// the recorded disease, and the live cost is recorded too: Render boots, prints
+// \u26d4, and serves anyway. The check found the problem and nobody was told.
+//
+// One recorder now. It wraps console.log for the boot window only, counts the
+// same two glyphs boot.sh has always counted, and uninstalls itself the moment
+// the verdict settles — so runtime logging is untouched and a lead's own
+// \u26d4 lines (a fact-check refusal is a lead event, not a build event) can
+// never flip the health of the build.
+//
+// SETTLING. The boot block is synchronous except for a few timer-driven checks,
+// and the slowest of those — the Firecrawl gate check — prints ~13s in on
+// Render. So the verdict settles when the recorded LAST check has printed and
+// five quiet seconds have passed, with a hard cap: if the sentinel never prints
+// at all, the verdict is RED with that as the reason, because a check that
+// hangs is quieter than one that fails and this makes the hang loud. The
+// sentinel is one hardcoded name on purpose: if that check is ever renamed the
+// build goes visibly unhealthy until this line is updated, which is a loud
+// failure instead of a silent one.
+//
+// EXPECTED RED. Exactly one \u26d4 is part of a healthy boot — the
+// MODEL DECLINED [selftest] demo line, which exists so a real declined response
+// is recognisable. It is allowlisted by name and reported separately, so the
+// allowlist can never quietly absorb a real failure.
+const BOOT_STATUS = {
+  phase: 'checking',          // 'checking' -> 'green' | 'red'
+  green: 0, red: 0, expectedRed: 0,
+  redLines: [],               // first few unexpected failures, truncated
+  startedAt: Date.now(), settledAt: null,
+  sentinelSeen: false, why: '',
+  pending: 0,                 // async checks still in flight — settle waits for 0
+};
+// The async checks run as concurrent fire-and-forget blocks, and one of them
+// (BATCH MEMORY CHECK) can legitimately report a failure up to 60 seconds in —
+// ~40s AFTER a quiet-window settle. A red printed after settle was invisible:
+// verdict GREEN, /healthz 200, CI green, with the exact failure the check
+// exists to catch on the screen and counted by nothing. So every async check
+// holds the verdict open until it has reported, and the 180s cap stays the
+// loud backstop for a check that hangs outright.
+const bootHold = () => { BOOT_STATUS.pending += 1; };
+const bootRelease = () => { BOOT_STATUS.pending = Math.max(0, BOOT_STATUS.pending - 1); };
+// ══ THE CONTRACT NUMBER THE CLIENT SHAKES HANDS ON ══════════════════════════
+// index.html deploys to Netlify by hand while this file deploys on merge, and
+// a stale page silently reintroduces every client bug the server half already
+// fixed. This number rides every research response; the client compares it to
+// its own copy and says out loud when it is behind. clientcheck.js asserts the
+// two constants are EQUAL in the repo, so they can only differ between a merge
+// and the Netlify drag-in — exactly the window the client's warning exists for.
+// Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
+// new client to be live.
+const CONTRACT_VERSION = 20260822;
+const BOOT_EXPECTED_RED = [
+  /^\u26d4 MODEL DECLINED \[selftest\]/,
+];
+// Assembled at runtime: several boot checks grep this file's own source for
+// check names, and a literal here would be the ninth self-matching needle.
+const BOOT_SENTINEL = ['FIRECRAWL', 'GATE', 'CHECK'].join(' ');
+// A GREEN verdict counting almost nothing means the recorder is not seeing the
+// boot block at all — which must read as broken, never as healthy. 150 is far
+// under the real count and far over noise.
+const BOOT_MIN_CHECKS = 150;
+
+const installBootRecorder = () => {
+  const orig = console.log.bind(console);
+  let quietTimer = null;
+  const settle = (why) => {
+    if (BOOT_STATUS.phase !== 'checking') return;
+    if (!why && BOOT_STATUS.pending > 0) {
+      // Quiet, but an async check is still in flight — its red would land
+      // after the verdict and be invisible. Re-arm and wait; the 180s cap is
+      // the loud way out if it never reports.
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => settle(''), 5000);
+      return;
+    }
+    console.log = orig;                       // uninstall first, whatever else happens
+    if (quietTimer) clearTimeout(quietTimer);
+    clearTimeout(capTimer);
+    BOOT_STATUS.settledAt = Date.now();
+    const total = BOOT_STATUS.green + BOOT_STATUS.red + BOOT_STATUS.expectedRed;
+    if (why) {
+      BOOT_STATUS.phase = 'red'; BOOT_STATUS.why = why;
+    } else if (BOOT_STATUS.red > 0) {
+      BOOT_STATUS.phase = 'red'; BOOT_STATUS.why = `${BOOT_STATUS.red} boot check(s) failed`;
+    } else if (total < BOOT_MIN_CHECKS) {
+      BOOT_STATUS.phase = 'red';
+      BOOT_STATUS.why = `only ${total} check lines were counted `+String.fromCharCode(0x2014)+` the recorder is not seeing the boot block, and a verdict built on almost nothing must read as broken rather than as healthy`;
+    } else {
+      BOOT_STATUS.phase = 'green';
+    }
+    const secs = Math.round((BOOT_STATUS.settledAt - BOOT_STATUS.startedAt) / 1000);
+    orig(BOOT_STATUS.phase === 'green'
+      ? `BOOT VERDICT: GREEN `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.green} checks passed, ${BOOT_STATUS.expectedRed} expected decline(s), 0 failures, settled in ${secs}s. /healthz now answers 200.`
+      : `BOOT VERDICT: RED `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.why}. ${BOOT_STATUS.green} passed, ${BOOT_STATUS.red} failed. /healthz answers 503 so a gated deploy keeps the previous build serving.${BOOT_STATUS.redLines.length ? ' First failure: ' + BOOT_STATUS.redLines[0] : ''}`);
+  };
+  const capTimer = setTimeout(() => settle(`the boot checks never finished `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.pending} async check(s) still pending and/or the last check (${BOOT_SENTINEL}) did not print within 180s. A check that hangs is quieter than one that fails; this is the hang, made loud`), 180000);
+  const bump = () => {
+    if (BOOT_STATUS.sentinelSeen) {
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => settle(''), 5000);
+    }
+  };
+  console.log = (...args) => {
+    try {
+      const s = typeof args[0] === 'string' ? args[0] : '';
+      if (s.startsWith('\u2713')) { BOOT_STATUS.green++; bump(); }
+      else if (s.startsWith('\u26d4')) {
+        if (BOOT_EXPECTED_RED.some(re => re.test(s))) BOOT_STATUS.expectedRed++;
+        else { BOOT_STATUS.red++; if (BOOT_STATUS.redLines.length < 5) BOOT_STATUS.redLines.push(s.slice(0, 220)); }
+        bump();
+      }
+      if (!BOOT_STATUS.sentinelSeen && s.includes(BOOT_SENTINEL)) { BOOT_STATUS.sentinelSeen = true; bump(); }
+    } catch (e) { void e; }
+    return orig(...args);
+  };
+};
+
+// Registered before every middleware on purpose: the health of the build must
+// be readable with no body parsing, no log capture and no auth in the way.
+// 200 only when the verdict is GREEN. 503 while checking, so a Render health
+// check pointed here holds the deploy until the checks have actually passed
+// and keeps the PREVIOUS build serving if they never do — which turns a red
+// boot from a log line nobody reads into a deploy that visibly did not land.
+app.get('/healthz', (req, res) => {
+  const ok = BOOT_STATUS.phase === 'green';
+  res.header('Access-Control-Allow-Origin', '*');
+  res.status(ok ? 200 : 503).json({
+    status: BOOT_STATUS.phase,
+    contract: CONTRACT_VERSION,
+    env: process.env.RENDER_ENV || process.env.NODE_ENV || 'production',
+    checks: { green: BOOT_STATUS.green, red: BOOT_STATUS.red, expectedRed: BOOT_STATUS.expectedRed },
+    why: BOOT_STATUS.phase === 'red' ? BOOT_STATUS.why : undefined,
+    failures: BOOT_STATUS.redLines.length ? BOOT_STATUS.redLines : undefined,
+    uptimeSec: Math.round(process.uptime()),
+  });
+});
+
+// ── NOT READY IS NOT A STATE THAT TAKES WORK ───────────────────────────────────
+// While the checks are still running, the verdict recorder counts every check
+// glyph this process prints — and a LEAD worked during that window prints its
+// own refusal lines (a fact-check refusal, a credit latch), which would be
+// counted as failed BOOT checks and flip a healthy build's verdict red. The
+// root fix is not a cleverer filter over the glyphs: a server that has not
+// settled its own checks is not ready to take work. Every POST under /api/
+// answers 503 until the verdict settles (~19 seconds, once per deploy); GETs
+// stay open, because reading health, spend or a job's status spends nothing
+// and prints nothing. A settled build — green or RED — takes work exactly as
+// before: /healthz already reports red to a gated deploy, and refusing work
+// on red would brick a build that one flaky check turned red. With Render's
+// health check on /healthz (PART 8) no traffic reaches the new process before
+// green, so in production this window closes itself.
+const bootGateRefuses = (method, path, phase) =>
+  method === 'POST' && String(path || '').toLowerCase().startsWith('/api/') && phase === 'checking';
+const bootWindowGate = (req, res, next) => {
+  if (bootGateRefuses(req.method, req.path, BOOT_STATUS.phase)) {
+    // This runs BEFORE the CORS middleware, so the headers must be set here or
+    // the Netlify-hosted client sees an opaque "Failed to fetch" instead of
+    // the retry message this JSON exists to carry.
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.status(503).json({
+      booting: true,
+      error: 'The server is still running its own boot checks and is not ready to take work yet. Retry in a few seconds; /healthz answers 200 the moment it is.',
+    });
+  }
+  return next();
+};
+app.use(bootWindowGate);
+
+// ════════════════════════ WHAT TODAY HAS COST, AND WHERE IT STOPS ════════════
+// "What does 50 audits a day cost" could only ever be answered per lead or with
+// arithmetic from outside the system, and NOTHING could say stop — a loop, a
+// mistake, or one bad afternoon ran the accounts to zero with every individual
+// line item correctly logged. So: one day-ledger, fed by the SAME four doors
+// the per-lead meters already use (fcNote, notePlacesCall, meterAnthropic, the
+// Apify dispatch), and a ceiling per service enforced at ADMISSION only —
+// never mid-lead, because killing a lead half-way wastes the spend already
+// made, which is the recorded lesson from the kill-clock.
+//
+// HONEST SHAPE, STATED FIRST: this is a safety net, not accounting. The day is
+// the UTC calendar day, and a process restart (every Render deploy) resets it.
+// Persisting spend to Supabase would add a failure mode to every request to
+// make a safety net pretend to be a ledger; the authoritative number is the
+// invoice, which is this file's own standing rule.
+const RUN_SPEND = { day: '', fc: 0, places: 0, anthropicUsd: 0, apify: 0, byKind: {} };
+const _spendDayNow = () => new Date().toISOString().slice(0, 10);
+// Pure on purpose: the check hands it a synthetic ledger and a synthetic day.
+const rollSpendDay = (r, day) => {
+  if (r.day !== day) { r.day = day; r.fc = 0; r.places = 0; r.anthropicUsd = 0; r.apify = 0; r.byKind = {}; }
+  return r;
+};
+const runSpendToday = () => rollSpendDay(RUN_SPEND, _spendDayNow());
+const noteRunSpend = (service, amount, kind) => {
+  try {
+    const r = runSpendToday();
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return;
+    r[service] += n;
+    if (kind) r.byKind[kind] = (r.byKind[kind] || 0) + n;
+  } catch (e) { void e; }
+};
+// A value of 0 or less turns a ceiling OFF — deliberately, and the boot says
+// so out loud below, because a ceiling silently absent is the state this whole
+// block exists to end. Defaults are sized to a 50-lead day with headroom:
+// 50 leads x 16 Firecrawl credits = 800; 50 x 4 Places calls plus one Find run
+// of ~180 = ~380; 50 x ~$0.10 of Anthropic plus compose = ~$6.
+const _budgetEnvParse = (raw, def) => {
+  if (raw === undefined || raw === '') return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return n <= 0 ? Infinity : n;
+};
+const _budgetEnv = (name, def) => _budgetEnvParse(process.env[name], def);
+// The boot check drives the PARSER with its own values; a probe that read
+// process.env would only ever exercise the configuration this dyno happens to
+// have, which is the recorded half-a-check.
+const _budgetEnvProbe = (raw, def) => _budgetEnvParse(raw, def);
+const SPEND_BUDGETS = {
+  fc: _budgetEnv('FC_DAILY_BUDGET', 1500),
+  places: _budgetEnv('PLACES_DAILY_BUDGET', 600),
+  anthropicUsd: _budgetEnv('ANTHROPIC_DAILY_BUDGET_USD', 20),
+  apify: _budgetEnv('APIFY_DAILY_BUDGET', 150),
+};
+const SPEND_NAMES = {
+  fc: ['Firecrawl credits', 'FC_DAILY_BUDGET'],
+  places: ['Google Places calls', 'PLACES_DAILY_BUDGET'],
+  anthropicUsd: ['Anthropic dollars', 'ANTHROPIC_DAILY_BUDGET_USD'],
+  apify: ['Apify review pulls', 'APIFY_DAILY_BUDGET'],
+};
+// Spend and budgets are PARAMETERS with live defaults, because the recorded
+// trap is a check that can only exercise the configuration where nothing can
+// go wrong. `>=` on purpose: the ceiling stops the NEXT lead; a lead already
+// running finishes whatever it costs, because a half-lead is pure waste.
+const budgetRefusal = (needs, spend, budgets) => {
+  const s = spend || runSpendToday();
+  const b = budgets || SPEND_BUDGETS;
+  const list = (Array.isArray(needs) && needs.length) ? needs : Object.keys(SPEND_NAMES);
+  for (const k of list) {
+    if (!(k in SPEND_NAMES)) continue;
+    if (Number(s[k]) >= Number(b[k])) {
+      const _fmt = k === 'anthropicUsd' ? '$' + Number(s[k]).toFixed(2) + ' of $' + b[k] : Math.round(s[k]) + ' of ' + b[k];
+      return { service: k, spent: s[k], budget: b[k],
+        message: `today's ${SPEND_NAMES[k][0]} ceiling is reached `+String.fromCharCode(0x2014)+` ${_fmt} since UTC midnight (a restart also resets this; the invoice is the authority). NOTHING was spent on this request. Raise ${SPEND_NAMES[k][1]} if today is deliberately bigger, set it to 0 to remove the ceiling, or wait for the day to roll over.` };
+    }
+  }
+  return null;
+};
+const daySpendLine = () => {
+  const r = runSpendToday();
+  if (!r.fc && !r.places && !r.anthropicUsd && !r.apify) return '';
+  const cap = (k) => (SPEND_BUDGETS[k] === Infinity ? 'no ceiling' : 'of ' + SPEND_BUDGETS[k]);
+  return `\u{1F4B0} DAY SPEND (UTC ${r.day}): Firecrawl ${Math.round(r.fc)} ${cap('fc')} credits | Places ${r.places} ${cap('places')} calls | Anthropic $${r.anthropicUsd.toFixed(2)} ${cap('anthropicUsd')} | Apify ${r.apify} ${cap('apify')} pulls. Resets at UTC midnight and on restart; ceilings are the *_DAILY_BUDGET settings.`;
+};
+for (const _k of Object.keys(SPEND_BUDGETS)) {
+  if (SPEND_BUDGETS[_k] === Infinity) console.log(`\u26a0 SPEND CEILING OFF: ${SPEND_NAMES[_k][1]} is set to 0, so nothing stops a runaway ${SPEND_NAMES[_k][0]} day. Deliberate is fine; forgotten is how an account empties with every line item correctly logged.`);
+}
+// The day so far, the ceilings, and per-operation-kind detail — the byKind
+// split is what settles FC_SCREENSHOT_CREDITS against the dashboard: run one
+// lead, read byKind.screenshot here, compare what the dashboard moved by.
+app.get('/api/spend', (req, res) => {
+  const r = runSpendToday();
+  res.json({
+    day: r.day,
+    spend: { fc: r.fc, places: r.places, anthropicUsd: Number(r.anthropicUsd.toFixed(4)), apify: r.apify },
+    budgets: { fc: SPEND_BUDGETS.fc === Infinity ? null : SPEND_BUDGETS.fc,
+               places: SPEND_BUDGETS.places === Infinity ? null : SPEND_BUDGETS.places,
+               anthropicUsd: SPEND_BUDGETS.anthropicUsd === Infinity ? null : SPEND_BUDGETS.anthropicUsd,
+               apify: SPEND_BUDGETS.apify === Infinity ? null : SPEND_BUDGETS.apify },
+    byKind: r.byKind,
+    notes: 'UTC calendar day; a process restart resets it. A null budget means that ceiling is off. The invoice is the authority.',
+  });
+});
+
 // ══ ONE PLACE TO READ EVERYTHING THAT HAPPENED ═══════════════════════════════
 // Reviewing a batch currently means pasting the Render log, then each audit,
 // then each email, from six different screens — and the interesting lines are
@@ -397,8 +673,10 @@ const noteFirecrawlLimits = (r) => {
     // of: an operator who pinned the browser cap would silently have lost
     // pacing entirely. FC_MIN_GAP_MS is a FLOOR by its own name, so raising
     // past it is what that setting asks for.
-    if (wantGap && wantGap !== FC_GAP_LIVE) {
+    if (wantGap && Math.max(FC_MIN_GAP_MS, wantGap) !== FC_GAP_LIVE) {
       const beforeGap = FC_GAP_LIVE;
+      // May move DOWN as well as up: until this line runs we are pacing for the
+      // smallest plan they sell, and a measurement outranks that assumption.
       FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, wantGap);
       console.log(`FIRECRAWL PACE: their header says ${perMin} request(s)/minute, so the gap between starts moves ${beforeGap}ms \u2192 ${FC_GAP_LIVE}ms (${FC_GAP_SAFETY}x headroom). This number was being read and stored and never used for pacing, which is why a run could take eleven rate-limit hits while the gate happily started something new every 350ms.`);
     }
@@ -426,7 +704,36 @@ const noteFirecrawlLimits = (r) => {
 // The gap is derived from the limit with a quarter of headroom, and never goes
 // below the configured floor — a fast plan should not be slowed by this.
 const FC_GAP_SAFETY = 1.25;
-let FC_GAP_LIVE = FC_MIN_GAP_MS;
+// ══ THE CONCURRENCY DEFAULT WAS CONSERVATIVE AND THE PACE DEFAULT WAS NOT ══
+// Six lines up, FC_CONCURRENCY's own comment says "Default 2 — the Free tier's
+// concurrent-browser cap, so this is safe on the smallest plan Vin could be on."
+// The GAP defaulted to 350ms, which dispatches 171 requests a minute. The free
+// tier allows ten. Two settings describing one plan, one assuming the smallest
+// and one assuming the largest.
+//
+// And the limit can only be LEARNED FROM A RESPONSE. A lead's first fan-out is
+// seven page reads; at 350ms apart all seven are dispatched inside two and a
+// half seconds, long before the first answer comes back to teach us anything.
+// So on a small plan the burst is refused, the retries are spent, and the audit
+// runs blind — while Places, Apify and the model have already been paid for that
+// same lead. Live, 2026-08-21: three of five leads read ZERO pages, each with
+// "FIRECRAWL THROTTLED 3x" and one second of gate wait, which is the 350ms
+// default having applied throughout.
+//
+// The asymmetry is now resolved in the safe direction: assume the SMALLEST plan
+// until their own header proves otherwise, and let the measurement RELAX it.
+// Being wrong the safe way costs one gap interval, once per process, because the
+// first response teaches us the truth. Being wrong the fast way costs a blind
+// audit plus every other API already spent on that lead.
+const FC_FREE_TIER_PER_MIN = 10;
+const FC_GAP_UNKNOWN_MS = Math.max(0, parseInt(process.env.FC_GAP_UNKNOWN_MS || '', 10) || Math.ceil((60000 / FC_FREE_TIER_PER_MIN) * FC_GAP_SAFETY));
+let FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, FC_GAP_UNKNOWN_MS);
+// The pace this PROCESS actually started at, captured before anything can move
+// it. The boot check runs after fixtures have set FC_GAP_LIVE by hand, so the
+// starting value would otherwise be unobservable — and the starting value is
+// the whole point: it is the pace the first fan-out of the first lead uses,
+// before any response exists to teach us better.
+const FC_GAP_AT_START = FC_GAP_LIVE;
 const fcGapForLimit = (perMin) => {
   const n = Number(perMin);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -541,7 +848,36 @@ const netReport = () => {
     + (led.gateWaitMs ? ` | ${(led.gateWaitMs / 1000).toFixed(0)}s of that was spent WAITING for a free Firecrawl browser before the request was sent \u2014 if this is large, the throttle is ours and FC_CONCURRENCY is the dial` : ' | no time was spent waiting for a Firecrawl slot');
 };
 
+// ════════ THE ONE DOOR IS ALSO THE ONE TEST SEAM ════════
+// servercheck.js drives the REAL research route over a fake network. Every
+// outbound call already goes through this function — that is fetchT's whole
+// point — so the seam lives here and nowhere else: when FAKE_UPSTREAM is set,
+// a non-local URL is rewritten to <FAKE_UPSTREAM>/<original-host><path>, and
+// the fake server routes on that first path segment. INERT in production: the
+// env var is absent, the rewrite never runs, and fetchtest.js falsifies both
+// directions so this cannot silently start rewriting live traffic.
+// ══ THE SEAM CANNOT BE ARMED ON RENDER ══════════════════════════════════════
+// FAKE_UPSTREAM redirects every outbound call — API keys in the headers ride
+// with it. On a developer's machine that is the whole point of the test seam;
+// on Render it would silently hand every credential to whatever URL the env
+// var names. "Never set it in production" is an instruction, and instructional
+// guards do not hold — so the guard is mechanical: a process that sees both
+// FAKE_UPSTREAM and Render's own environment refuses to boot, loudly, before
+// a single request can move.
+if (process.env.FAKE_UPSTREAM && (process.env.RENDER || process.env.RENDER_ENV)) {
+  console.error('FAKE_UPSTREAM is set on a Render environment. This test seam redirects every API call (keys included) to that URL and must NEVER be armed in production. Remove the env var. Refusing to boot.');
+  process.exit(1);
+}
+const fakeUpstreamUrl = (url, base) => {
+  if (!base) return url;
+  try {
+    const u = new URL(String(url));
+    if (u.hostname === '127.0.0.1' || u.hostname === 'localhost') return url;
+    return String(base).replace(/\/+$/, '') + '/' + u.hostname + u.pathname + u.search;
+  } catch (e) { void e; return url; }
+};
 const fetchT = (url, opts={}, ms=10000) => {
+  url = fakeUpstreamUrl(url, process.env.FAKE_UPSTREAM);
   const _t0 = Date.now();
   const ac = new AbortController();
   let timer;
@@ -658,7 +994,10 @@ const detectPostContactClaims = (prose) => {
   // exempts sentences that merely describe what the form contains, so this only
   // reaches sentences about AFTERMATH.
   const OWNED = /\b(your|yours|his|her|their|they'?ve|he'?s|she'?s)\b|\b(the|those|these) (contact )?(form|submissions?|enquir\w*|inquir\w*|messages?|leads?)\b/i;
-  const CLOCKED = /\b(\d{1,2}\s?(am|pm)|9pm|5pm|saturday|sunday|monday|tuesday|wednesday|thursday|friday|overnight|by morning)\b/i;
+  // CLOCK_WORDS is at module scope: the second marker gate needs the identical
+  // rule, and two hand-kept copies of one regex is the disease this file is
+  // mostly a record of.
+  const CLOCKED = CLOCK_WORDS;
 
   // ── OUR SOLUTION IS NOT A CLAIM ABOUT THEIR BACKEND ──────────────────────
   // Live false positive: "The AI Brain is exactly the automated intake and
@@ -720,7 +1059,7 @@ const detectPostContactClaims = (prose) => {
     // knowledge rather than judgement: a COMPLETED event ("already signed"), and
     // a CLOCK. Both say we were watching, and no hedge makes that true.
     const _marked = OPINION_MARKERS.test(sent);
-    const _claimsKnowledge = /\balready (signed|hired|booked|chosen|heard)\b/i.test(sent) || clocked;
+    const _claimsKnowledge = hedgeCannotBuy(sent, clocked);
     if (_marked && !_claimsKnowledge) continue;
     out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people, and legal marked as your own read; illegal stated as a report${clocked ? ' (a specific time implies we watched it, and a marker does not change that)' : ''} \u2014 "${sent.slice(0, 95)}"`);
   }
@@ -2894,6 +3233,12 @@ const meterAnthropic = (company, label, model, usage) => {
     const rec = _leadSpend.get(key);
     rec.calls.push({ label, model, fresh, cRead, cWrite, out, cost });
     rec.total += cost;
+    // Same door, two more meters: the UTC-day ledger the ceilings read, and the
+    // per-request ledger the response reports. An unpriced model already
+    // returned 0 above and shouted; it stays uncounted here too, which the
+    // UNPRICED line says in as many words.
+    noteRunSpend('anthropicUsd', cost, 'anthropic');
+    try { const _l = FC_LEDGER.getStore(); if (_l) _l.anthropicUsd = (_l.anthropicUsd || 0) + cost; } catch (e) { void e; }
     return cost;
   } catch (e) { return 0; }
 };
@@ -3069,6 +3414,9 @@ app.post('/api/claude', async (req, res) => {
   try {
     const { system, user, apiKey } = req.body;
     if (!apiKey) return res.status(400).json({ error: 'API key required' });
+    // Metered but never gated: once the day's model budget was gone, compose
+    // and research refused while Generate kept spending $0.06 a press all day.
+    { const _c = budgetRefusal(['anthropicUsd']); if (_c) return res.status(429).json({ error: _c.message, budgetStopped: true }); }
     setCurrentLead(String(req.body.company || 'generate'));
     const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -3305,12 +3653,21 @@ app.post('/api/scrape', async (req, res) => {
   try {
     const { url, firecrawlKey } = req.body;
     if (!url || !firecrawlKey) return res.status(400).json({ error: 'URL and key required' });
+    // This was the one Firecrawl door with no meter and no ceiling — a credit
+    // per call invisible to /api/spend, to leadSpend, and to FC_DAILY_BUDGET,
+    // which falsified the ledger's own "fed by the same doors" promise. Same
+    // treatment as every other door: fail fast on the credit latch, refuse at
+    // the day ceiling, count at dispatch, latch on a 402.
+    if (fcCreditsBlocked()) return res.status(503).json({ markdown: '', error: 'Firecrawl reports the account out of credits — the breaker re-tests shortly; top up and retry.' });
+    { const _c = budgetRefusal(['fc']); if (_c) return res.status(429).json({ markdown: '', error: _c.message, budgetStopped: true }); }
+    fcNote(true, 'scrape', String(url));
     const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
     }, 15000));
     const d = await safeJson(r);
+    if (r && r.status === 402) { FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); }
     res.json({ markdown: (d.data?.markdown || '').slice(0, 5000) });
   } catch(e) { res.json({ markdown: '' }); }
 });
@@ -5203,6 +5560,10 @@ const GP_FREE_DETAILS = Math.max(0, parseInt(process.env.GP_FREE_DETAILS || '100
 const _gpCalls = { search: 0, details: 0 };
 const notePlacesCall = (kind) => {
   if (kind === 'details') _gpCalls.details++; else _gpCalls.search++;
+  // Counted at DISPATCH, like everything through this door: Google bills a
+  // request it received even when we give up waiting for the answer.
+  noteRunSpend('places', 1, kind === 'details' ? 'places-details' : 'places-search');
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.places = (_l.places || 0) + 1; } catch (e) { void e; }
 };
 // What this process has spent since it started. Render restarts on deploy, so
 // this is "since the last deploy", not a month — and it says so, because a
@@ -6457,7 +6818,30 @@ const selfSource = () => {
   if (_selfSourceCache === null) _selfSourceCache = require('fs').readFileSync(__filename, 'utf8');
   return _selfSourceCache;
 };
-const releaseSelfSource = () => { _selfSourceCache = null; };
+// ══ FOURTEEN CHECKS, FOURTEEN COPIES OF THE SAME 3MB STRING ═══════════════
+// selfSource() is memoised to ONE copy for the reason BOOT HEAP CHECK records:
+// 47 checks each grew a private readFileSync of this file, boot settled near
+// 140MB over, and a build that was green here crash-looped on Render.
+//
+// The comment-stripped view was never given the same treatment. Every check that
+// asserts a call site writes `selfSource().split('\n').filter(...).join('\n')`,
+// and each one of those builds a 55,000-element array AND a fresh multi-megabyte
+// string. Fourteen of them. Adding five more today pushed the settled heap from
+// 184MB to 211MB and BOOT HEAP CHECK went red — which is the check doing exactly
+// its job, on the same disease one level down.
+//
+// One copy, released with the other.
+let _selfSourceNoCommentsCache = null;
+const selfSourceNoComments = () => {
+  if (_selfSourceNoCommentsCache === null) {
+    // NOT selfSourceNoComments() — the blanket rewrite of the fifteen call
+    // sites caught this one too and every check died on "Maximum call stack
+    // size exceeded". The boot found it in one run.
+    _selfSourceNoCommentsCache = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  }
+  return _selfSourceNoCommentsCache;
+};
+const releaseSelfSource = () => { _selfSourceCache = null; _selfSourceNoCommentsCache = null; };
 const AUDIT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const _auditCache = new Map();   // hash -> { at, company, payload }
 
@@ -6933,6 +7317,58 @@ const namesConflict = (a, b) => {
   return ![...x].some(w => y.has(w));
 };
 
+// ══ DID WE ACTUALLY SEE THEIR SITE ════════════════════════════════════════
+// One predicate, because "we looked" is the gate on every judgement about their
+// pages and this codebase's most expensive failures are absence claims made from
+// a read that never happened. 300 characters is the same floor corpusWarningFor
+// uses for a blind homepage, so the banner on the sheet and the judgements
+// inside it agree about the same lead. PURE, so the boot check runs it.
+// ══ THE VERIFY-AT-SEND GATE HAS NEVER ONCE EXECUTED ═══════════════════════
+// PART 4 §3 has carried "there is now a verify-at-send gate but it is untested
+// at volume" for weeks. It is not untested. It is INERT, and it has been since
+// the day it shipped.
+//
+// The gate reads `lead.emailTier || lead.emailMeta.tier`. Neither field exists
+// anywhere in this system. The tier lives on `emailResult.tier` — EMAIL_TIERS
+// declares it (1 published on their site, 2 SMTP-verified, 3 pattern-learned,
+// 4 pattern-inferred, 5 none) and index.html reads `L.emailResult.tier` when it
+// builds a research request. So `_tier` was 0 on every lead, `if (_tier > 2)`
+// was false on every lead, and the SMTP check never ran.
+//
+// The cost is exactly the failure it was built to prevent. Both hard bounces
+// this project has had came from addresses it "labelled 'pattern-built, not
+// confirmed' and marked sendable" — tier 3 — and a hard bounce is charged to the
+// sending DOMAIN, which is the one asset here that cannot be rebuilt in an
+// afternoon.
+//
+// And SEND VERIFICATION CHECK is green, because it builds its OWN `_ok` with its
+// own `emailTier` fixtures and tests that. A check that exercises a
+// re-implementation cannot see the shipped rule at all — the recorded
+// "two implementations of one operation", with one copy inside the guard.
+//
+// PURE, and the route calls these. An unknown tier now VERIFIES rather than
+// waving through: we do not know where that address came from, and "we did not
+// measure it" has never meant "it is fine" anywhere else in this file.
+const emailTierOf = (lead) => {
+  const l = lead || {};
+  const raw = (l.emailResult && l.emailResult.tier) != null ? l.emailResult.tier
+    : (l.emailTier != null ? l.emailTier
+      : (l.emailMeta && l.emailMeta.tier != null ? l.emailMeta.tier : 0));
+  const t = Number(raw);
+  return Number.isFinite(t) && t > 0 ? t : 0;
+};
+const sendAlreadyProven = (lead) => {
+  const l = lead || {};
+  if (l.smtpVerified === true) return true;
+  const t = emailTierOf(l);
+  if (t === 1 || t === 2) return true;
+  return /SMTP-verified/i.test(String((l.emailResult && l.emailResult.label) || ''));
+};
+const sendNeedsVerify = (lead) => !sendAlreadyProven(lead);
+
+const siteWasRead = (content, visualAnalysis) =>
+  !!visualAnalysis || String(content == null ? '' : content).trim().length >= 300;
+
 const parseLLMJSON = (raw) => {
   if (raw == null) return null;
   let t = String(raw).replace(/```json|```/g, '').trim();
@@ -7130,6 +7566,12 @@ const fcNote = (paid, kind, what) => {
     }
     const _cost = fcCreditCost(kind);
     FC_CREDITS_SPENT += _cost;
+    // The day ledger and the per-kind split ride the same door as the process
+    // counter, so nothing can reach one meter and miss another. byKind is what
+    // settles FC_SCREENSHOT_CREDITS against the dashboard: the rate is a dial
+    // this file refuses to guess, and one lead's byKind.screenshot against what
+    // the dashboard actually moved by is the measurement.
+    noteRunSpend('fc', _cost, String(kind || 'scrape').replace(/[^a-z-]+.*$/i, '') || 'scrape');
     if (_led) { _led.spent += _cost; _led.ops += 1; }
     // MIDDLE-ellipsis, not a head slice. A flat .slice(0,110) truncated six
     // different mangled URLs down to the same visible prefix, so a log that was
@@ -7809,6 +8251,17 @@ const isCreditError = (d, status) => {
 // really happens without stalling real work or printing a false alarm.
 const fcNoteRateLimited = (r, fallbackMs, where, gate = _fcGate) => {
   FIRECRAWL_RATE_LIMIT_HITS++;
+  // ---- AND ON THE LEAD THAT WAS ACTUALLY REFUSED ----------------------
+  // The per-lead flag was a DELTA over this process-global counter, snapshotted
+  // when the lead started. Three leads research at once, so a throttle on lead
+  // B moved lead A's delta and lead A came back banner-flagged "pages were
+  // refused, not empty - re-run this lead" with every one of its own pages read
+  // cleanly. On a small plan that is every lead in a batch, and a warning that
+  // appears on every sheet is one nobody reads - which is the same cost this
+  // file already records at the CTA precaution and the audit-integrity strip.
+  // FC_LEDGER is per request and survives every await; it already carries the
+  // credit figures for exactly this reason.
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.throttled = (_l.throttled || 0) + 1; } catch (e) { void e; }
   let waitMs = Number(fallbackMs) || 4000;
   let src = 'our own backoff';
   try {
@@ -7825,10 +8278,20 @@ const fcNoteRateLimited = (r, fallbackMs, where, gate = _fcGate) => {
 // the one that carries "upgrade your plan", so it has to be recognised HERE or
 // isCreditError claims it. Stems written without a trailing word boundary on
 // purpose \u2014 CLAUDE.md records \\bplumb\\b failing to match "plumbing" three times.
+//
+// AND IT READS THE ENVELOPE, NEVER THE PAGE. It used to also test
+// `d?.data?.markdown || d?.markdown` \u2014 which is the page we just successfully
+// scraped. Every one of these words is ordinary English on a home-services or
+// medical site: "don't let a slow drain slow you down", "concurrent projects",
+// "we limit the rate of". A homepage carrying one of them was thrown away as a
+// throttle, FIRECRAWL RATE LIMITED printed for a request nobody throttled, the
+// WHOLE gate was held for four seconds on a lie, and the audit ran blind on a
+// page we had already paid for. Whether we were throttled is a fact about
+// THEIR answer, not about the words in the document they handed us.
 const isRateLimited = (d, status) =>
   status === 429 ||
   /local_rate_limited|rate.?limit|too many requests|slow down|concurren\w*|browser limit/i.test(
-    String(d?.error || d?.message || d?.data?.markdown || d?.markdown || '')
+    String((d && (d.error || d.message)) || '')
   );
 
 // Process-wide flag so a throttled run can say so plainly instead of reporting a
@@ -10510,6 +10973,34 @@ const checkHttpsSupport = async (website) => {
 // after it and keeps the punctuation, and any unpaired quote characters left in
 // the span are removed so a fragment of their quotation marks cannot survive
 // inside ours.
+// ---- OUR FEE, OR THE VALUE OF HIS JOB ------------------------------------
+// These four lived inside the compose route, so nothing could execute them.
+// scopecheck.js refused the boot check that tried, which is the gate doing its
+// job: a check that cannot reach the code cannot guard it.
+const _PRICE_TAGS = /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i;
+// Our offer vocabulary. A price is only OUR price when it sits beside one of
+// these; beside "a kitchen remodel" it is his revenue and it stays.
+const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|the build|the project would|investment|package|scope of work|per month|monthly|advisory|valuation|website (?:rebuild|project))\b/i;
+// The sentence around the figure, not the whole email. A price 400 characters
+// from the word "retainer" is not that retainer's price, and widening this to
+// the whole body would put the flag back on every lead that mentions monthly
+// anything.
+const priceWindow = (text, at, len) => {
+  const s = String(text == null ? '' : text);
+  const i = Number.isFinite(Number(at)) ? Number(at) : 0;
+  const n = Number.isFinite(Number(len)) ? Number(len) : 0;
+  return s.slice(Math.max(0, i - 120), Math.min(s.length, i + n + 120));
+};
+// ONE DECISION, so the boot check cannot run a copy of it. Five checks passed
+// this session while their bug was live, every one because the check ran a
+// copy of the code instead of the code.
+const quotesOurPrice = (text) => {
+  const t = String(text == null ? '' : text);
+  const m = t.match(_PRICE_TAGS);
+  if (!m) return '';
+  return _OUR_OFFER_NEARBY.test(priceWindow(t, m.index, m[0].length)) ? m[0] : '';
+};
+
 const phraseAround = (t, hit) => {
   t = String(t || '');
   const at = t.toLowerCase().indexOf(String(hit).toLowerCase());
@@ -10614,9 +11105,26 @@ const readRecurringOffer = ({ text, trade, pagesRead } = {}) => {
 };
 
 
-const readOfferStrength = (text) => {
+const readOfferStrength = (text, pagesRead) => {
   const t = String(text || '').toLowerCase();
-  if (t.length < 200) return { checked: false };
+  // ---- THE SAME FLOOR AS ITS SIBLING ---------------------------------
+  // readRecurringOffer forty lines away demands 3,000 characters AND two
+  // pages before it will claim a business does not offer something, and its
+  // own comment says why: that is "enough of their site to be entitled to an
+  // absence claim". This made the identical class of claim - nothing
+  // anywhere on their site names an offer - off 200 characters and no page
+  // count at all, which on a starved Firecrawl run is a nav bar and a
+  // tagline. PART 3: absence claims require that we actually looked, and
+  // EXISTS BUT UNREAD is in this file because a live email told an attorney
+  // with a Reviews page that he had no reviews on his site.
+  //
+  // pagesRead is optional so nothing that already calls this breaks; when it
+  // is absent the character floor alone applies, and the ONE production call
+  // site passes it.
+  const _pages = Number(pagesRead);
+  if (t.length < 3000 || (Number.isFinite(_pages) && _pages < 2)) {
+    return { checked: false, why: `only ${Number.isFinite(_pages) ? _pages : '?'} page(s) and ${t.length} characters were read \u2014 not enough of their site to claim there is no offer on it` };
+  }
   // WIDENED after a live check found this reporting "no guarantee" on copy that
   // plainly had one. The old pattern required a trailing \b immediately after
   // "guarantee", so "satisfaction GUARANTEED" \u2014 the single most common phrasing on
@@ -11891,7 +12399,13 @@ const HARM_LADDER = [
     // Higher checkability than a rank position, too: "search this and you are
     // not on the page" is binary. He either appears or he does not, and no
     // amount of personalisation changes an absence.
-    test: (m) => m.rankChecked === true && m.rankFound === false,
+    // TWO searches, never one. See the note at checkLocalRankStable: this rung
+    // is harm 96, it produces the most alarming sentence in the file, and a
+    // business sitting near the edge of the twenty-result page is found on one
+    // draw and absent on the next. The head term has bought a second sample
+    // for weeks; the service-page rows pickRankRow PROMOTES over every found
+    // row were still single-draw, and this test could not tell the two apart.
+    test: (m) => m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true,
     // ══ IT IS THE MAP PACK, SO SAY THE MAP PACK ═══════════════════════════
     // This rank comes from the Google Places API — the map results, the box of
     // three businesses at the top of a phone screen. We described it as "the
@@ -13340,9 +13854,33 @@ const resolveMeasurements = ({
 
     // Search position. rankFound is a GATE, not a figure: without it a rank of
     // null reads as position zero.
-    rankFound: !!(localRank && localRank.found),
-    rank: (localRank && localRank.found) ? num(localRank.rank) : null,
-    scanned: localRank ? num(localRank.scanned) : null,
+    // ══ HALF-FIXING THIS WAS WORSE THAN NOT FIXING IT ═══════════════════════
+    // The wrong-row guard below nulls every REVIEW number when the matched row
+    // turns out not to be this business, and left the POSITION alone. But
+    // localRank.rank is that row's index in the result list — if the row is
+    // somebody else, so is the position, and eight conversion rungs scale their
+    // harm by it while the spine can assert "#N of M" to the owner.
+    //
+    // Nor can it simply become "not found": absent_from_search is harm 96 and
+    // tests `rankChecked === true && rankFound === false`, so reporting a
+    // failed MATCH as a failed SEARCH would tell an owner he does not appear in
+    // his own search when the truth is that we could not identify his row. That
+    // is a worse false claim than the one being repaired.
+    //
+    // The honest state is neither: we ran the search and cannot say what it
+    // means for them. rankChecked goes false with everything else, so no rung
+    // on either side of the question can fire.
+    rankChecked: !!(localRank && localRank.checked) && !_rowMismatch,
+    // Whether a SECOND independent search also failed to find them. Set by
+    // checkLocalRankStable on the head term and by the service loop on the one
+    // row that can be promoted. absent_from_search is harm 96 and cannot be
+    // softened into a band if it is wrong, so it speaks only on two misses -
+    // and when the second look FAILED, the note already said the absence was
+    // unconfirmed while nothing read it.
+    rankAbsenceConfirmed: !_rowMismatch && !!(localRank && localRank.absenceConfirmed),
+    rankFound: !_rowMismatch && !!(localRank && localRank.found),
+    rank: (!_rowMismatch && localRank && localRank.found) ? num(localRank.rank) : null,
+    scanned: (localRank && !_rowMismatch) ? num(localRank.scanned) : null,
     // Counted with `ours` as the yardstick, so if the row is not us the count is
     // not about us either. Both halves move together or the named sentence and
     // the number behind it disagree.
@@ -14501,6 +15039,53 @@ const URGENCY_ADJUST = {
 //
 // And it defaults to LOCAL_CONSUMER whenever the evidence does not hold up,
 // because that is the ICP and the ladder is built for it.
+// ════════ ONE QUOTE CANONICALISER — CANONICALISE, NEVER LOOSEN ════
+// Two verifiers held two identical local copies of this normaliser — the
+// business-model evidence check and verifyOriginalFinding — which is the
+// two-hand-kept-copies disease with the copies inside the truth gates. One
+// function now, and it fixes two classes of REAL quote that were still dying,
+// both charged to the ~11% survival rate this file carries as the reason
+// audits read alike:
+//   an HTML entity in the corpus becomes a WORD: markdown holds
+//   "Smith &amp; Sons", the old norm made that "smith amp sons", the model
+//   quotes the rendered "Smith & Sons" = "smith sons", and a verbatim quote
+//   was refused over an ampersand. And an accented letter was DELETED: their
+//   page says Jose with an accent, the old norm made it "jos", the model
+//   writes Jose = "jose". One letter, whole drop.
+// Canonicalisation on BOTH sides; the rule has not moved: the span must still
+// exist in what we read, and a fabricated sentence still matches nothing —
+// QUOTE CANON CHECK proves that direction on every boot.
+const _quoteDeEntity = (t) => String(t || '')
+  .replace(/&amp;/gi, '&').replace(/&nbsp;/gi, ' ').replace(/&#39;|&apos;|&rsquo;|&lsquo;/gi, "'")
+  .replace(/&quot;|&ldquo;|&rdquo;/gi, '"').replace(/&lt;/gi, ' ').replace(/&gt;/gi, ' ')
+  // A letter-rendering entity DECODES to its letter so the accent fold below
+  // can see it. The old catch-all DELETED &eacute; instead, so the Jose bug
+  // this canonicaliser was built to fix survived through the entity door:
+  // normQuote('Jos&eacute;') was 'jos' while the model wrote 'jose'.
+  .replace(/&([a-zA-Z])(?:acute|grave|circ|uml|tilde|cedil|ring|slash|elig);/g, '$1')
+  .replace(/&#(\d+);/g, (m, d) => {
+    const c = Number(d);
+    if (!Number.isFinite(c) || c < 32 || c > 0x2ffff) return ' ';
+    try { const s = String.fromCodePoint(c); return /[\p{L}\p{N}' ]/u.test(s) ? s : ' '; } catch (e) { void e; return ' '; }
+  })
+  // Only entities KNOWN to render as punctuation or whitespace become a space.
+  // The old /&[a-z]{2,8};/i catch-all deleted any '&Word;' — including plain
+  // text that is not an entity at all — and deletion makes two never-adjacent
+  // words consecutive: 'Insured&Bonded; crews' became 'insured crews', a page
+  // that does not exist. An unknown '&Word;' is left alone now; browsers
+  // render it literally, and the punctuation strip below turns the ampersand
+  // into a space while keeping every word in rendering order.
+  .replace(/&(?:mdash|ndash|hellip|bull|middot|laquo|raquo|times|divide|copy|reg|trade|deg|sect|para|dagger|shy|ensp|emsp|thinsp|zwnj|zwj|lrm|rlm|prime|minus|plusmn|sup\d|frac\d\d);/gi, ' ');
+const _quoteDeAccent = (t) => { try { return String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { void e; return String(t || ''); } };
+const normQuote = (t) => _quoteDeAccent(_quoteDeEntity(String(t || ''))).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+// The model labels its quotes (Homepage: '...') and the label never appears
+// in the corpus. One stripper at module scope: it lived inside
+// verifyOriginalFinding while resolveBusinessModel had none, which is why a
+// real institutional quote behind a three-word preamble was refused there.
+const stripQuoteLabel = (t) => String(t || '')
+  .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:—-]\s*/i, '')
+  .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
+  .trim();
 const BUSINESS_MODELS = new Set(['LOCAL_CONSUMER', 'B2B_INSTITUTIONAL', 'REFERRAL_PROFESSIONAL', 'NATIONAL_REMOTE']);
 const resolveBusinessModel = (raw, corpus) => {
   const fallback = { model: 'LOCAL_CONSUMER', why: 'default — no verified evidence of another model', verified: false };
@@ -14511,18 +15096,42 @@ const resolveBusinessModel = (raw, corpus) => {
   if (model === 'LOCAL_CONSUMER') return { model, why: String(raw.why || '').trim(), verified: true };
   const ev = String(raw.evidence || '').trim();
   if (!ev) return { ...fallback, why: `claimed ${model} with no quoted evidence — falling back` };
-  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  const hay = norm(corpus);
-  const needle = norm(ev);
-  if (!hay || needle.length < 12) return { ...fallback, why: `evidence too short or no corpus to check it against — falling back` };
-  let found = hay.includes(needle);
+  const norm = normQuote;
+  const segs = (Array.isArray(corpus) ? corpus : String(corpus || '').split(/\n\s*\n/)).map(norm).filter(Boolean);
+  const needle = norm(stripQuoteLabel(ev));
+  if (!segs.length || needle.length < 12) return { ...fallback, why: `evidence too short or no corpus to check it against — falling back` };
+  const _has = (seg, span) => (' ' + seg + ' ').includes(' ' + span + ' ');
+  let found = segs.some(s => _has(s, needle));
   if (!found) {
+    // The same slide verifyOriginalFinding earned: this one only ever tried
+    // PREFIXES, so a real quote behind a three-word model preamble ("The site
+    // says: ...") was refused entirely. That direction fails safe — but it
+    // meant the Property Masters class kept receiving the map-pack findings
+    // this mechanism exists to withhold.
     const w = needle.split(' ');
     for (let n = Math.min(10, w.length); n >= 6 && !found; n--) {
-      if (hay.includes(w.slice(0, n).join(' '))) found = true;
+      for (let i = 0; i + n <= w.length && !found; i++) {
+        if (segs.some(s => _has(s, w.slice(i, i + n).join(' ')))) found = true;
+      }
     }
   }
   if (!found) return { ...fallback, why: `the quoted evidence does not appear on any page we read — falling back` };
+  // ══ THE EVIDENCE MUST EVIDENCE THE MODEL ════════════════════════════════
+  // Executed refutation: a hallucinated B2B_INSTITUTIONAL claim carrying the
+  // real quote "for Dallas homeowners. Family owned since 1998" VERIFIED —
+  // evidence stating the OPPOSITE of the model it licensed — and then
+  // silenced twelve rungs including outranked_by_weaker, one of only two
+  // findings with a human reply behind them. Existing is not evidencing: the
+  // quote must contain at least one term from a small DECLARED vocabulary for
+  // the claimed model — the same declared-list shape URGENCY_ADJUST uses.
+  const _MODEL_TERMS = {
+    B2B_INSTITUTIONAL: /\b(b2b|funds?|reo|institution(s|al)?|commercial|contractors?|wholesale|investors?|portfolios?|property (managers?|management)|builders|developers|municipal|corporate)\b/i,
+    NATIONAL_REMOTE: /\b(nationwide|nationally|all (50|fifty) states|\d+ states|remote(ly)?|online|virtual|ship(ping)?|coast to coast|across the (country|us|usa|united states))\b/i,
+    REFERRAL_PROFESSIONAL: /\b(referrals?|referred|attorneys?|physicians?|dentists?|realtors?|agents?|brokers?|partners?|professionals?|by invitation|word of mouth)\b/i,
+  };
+  if (_MODEL_TERMS[model] && !_MODEL_TERMS[model].test(ev)) {
+    return { ...fallback, why: `the quoted evidence is real but contains nothing that evidences a ${model} model — a quote must evidence the claim it licenses, not merely exist. Falling back` };
+  }
   return { model, evidence: ev, why: String(raw.why || '').trim(), verified: true };
 };
 
@@ -14640,16 +15249,26 @@ const verifyOriginalFinding = (item, corpus) => {
   // Rejecting a true finding because of a prefix the model added is the
   // over-blocking failure — it silently returns every audit to the same list
   // every lead gets, which is the exact thing this field exists to escape.
-  const stripLabel = (t) => String(t || '')
-    .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:\u2014-]\s*/i, '')
-    .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
-    .trim();
-  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  const hay = norm(corpus);
-  if (!hay) return { ok: false, why: 'no page corpus to verify the quote against' };
+  const stripLabel = stripQuoteLabel;
+  const norm = normQuote;
+  // ══ SEGMENTS, NOT ONE SOUP ══════════════════════════════════════════════
+  // The corpus arrives as pages and review snippets joined with blank lines,
+  // and the old norm collapsed every seam to one space — so a word run could
+  // START on one block and FINISH inside the next, and a sentence that exists
+  // nowhere assembled itself across the join. Executed proof: "Call us today,
+  // no one ever calls back" verified against a corpus whose page ends at
+  // "Call us today" and whose next block begins "no one ever calls back".
+  // A match must live inside ONE block; the join can never speak.
+  const segs = (Array.isArray(corpus) ? corpus : String(corpus || '').split(/\n\s*\n/)).map(norm).filter(Boolean);
+  if (!segs.length) return { ok: false, why: 'no page corpus to verify the quote against' };
   const needle = norm(stripLabel(evidence));
   if (needle.length < 12) return { ok: false, why: 'quoted fragment too short to verify' };
-  if (hay.includes(needle)) return { ok: true, finding: _finding, evidence };
+  // Word-aligned on purpose: a bare substring test let "rate the craftsmanship"
+  // verify inside "celebRATE THE CRAFTSMANSHIP", mutating a word at the edge
+  // of an otherwise-real span. Both sides padded once, so every match starts
+  // and ends on a word boundary.
+  const _has = (seg, span) => (' ' + seg + ' ').includes(' ' + span + ' ');
+  if (segs.some(s => _has(s, needle))) return { ok: true, finding: _finding, evidence };
   // ══ A REAL QUOTE MUST NOT FAIL ON WHERE IT WAS TRIMMED ══════════════════
   // This only tried windows from the START of the quote, so a model that opened
   // with a word we did not capture — an ellipsis, a heading, a line break the
@@ -14687,12 +15306,37 @@ const verifyOriginalFinding = (item, corpus) => {
   // when nothing survives, every lead gets the same list.
   const words = needle.split(' ');
   const _floor = words.length >= 6 ? 6 : 4;
+  // ══ THE SHORT PATH MAY SHED FILLER, NEVER CONTENT ═══════════════════════
+  // Floor-4 exists for the Fit Money class: 'BOOK MY STRATEGY CALL HERE'
+  // against a nav reading BOOK MY STRATEGY CALL — one added filler word, four
+  // real ones. But trade-site corpora are saturated with generic 4-grams
+  // ('your free estimate today', 'give us a call'), so an invented five-word
+  // CTA could ride one: 'Claim your free estimate today' VERIFIED against a
+  // page that never says Claim. Executed, not theorised. On the short path
+  // the words DROPPED from the quote must all be filler — shedding a content
+  // word means the distinctive part is exactly what we could not find.
+  const _FILLER = new Set(['the', 'a', 'an', 'my', 'your', 'our', 'his', 'her', 'their', 'here', 'now', 'today', 'to', 'for', 'of', 'and', 'or', 'in', 'on', 'at', 'with', 'us', 'we', 'you', 'it', 'is', 'are', 'this', 'that', 'please']);
   for (let n = Math.min(12, words.length); n >= _floor; n--) {
     for (let i = 0; i + n <= words.length; i++) {
-      if (hay.includes(words.slice(i, i + n).join(' '))) return { ok: true, finding: _finding, evidence };
+      if (!segs.some(s => _has(s, words.slice(i, i + n).join(' ')))) continue;
+      if (words.length < 6 && n < words.length) {
+        const _dropped = words.filter((w, k) => k < i || k >= i + n);
+        if (!_dropped.every(w => _FILLER.has(w))) continue;
+      }
+      return { ok: true, finding: _finding, evidence };
     }
   }
-  return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}"` };
+  // A drop names its NEAREST MISS: "does not appear" is true and unactionable,
+  // because nobody can tell a fabricated sentence from a real one that died two
+  // words short. A 0-word best is the fabrication shape; an (n-1)-word best is
+  // a boundary problem, and the difference is the next tuning decision.
+  let _best = 0;
+  for (let n = Math.min(12, words.length) - 1; n >= 2 && !_best; n--) {
+    for (let i = 0; i + n <= words.length; i++) {
+      if (segs.some(s => _has(s, words.slice(i, i + n).join(' ')))) { _best = n; break; }
+    }
+  }
+  return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}" (nearest miss: ${_best} of its ${words.length} words run consecutively in the corpus${_best === 0 ? ', which is the fabrication shape' : ''})` };
 };
 
 // ══ THE PATTERN LINE — WHAT AN EXPERT KNOWS THAT A SCANNER DOES NOT ═════════
@@ -15173,6 +15817,21 @@ const exemplarLeak = (body) => {
 // marker — the reader has to recognise it instantly as the sender stepping out
 // from behind the evidence, and that only works with the plain forms people
 // actually use out loud.
+// ---- WHAT AN OPINION MARKER CAN NEVER BUY -------------------------------
+// Two gates apply the marker rule and only one implemented this half.
+// postContactClaims tests it; verifyBrainEmail's OPINABLE branch had the rule
+// written in its own comment four lines above the code - "a COMPLETED EVENT ...
+// is an assertion wearing a hedge" - and simply continued on any marked clause.
+// So "my read is they've already gone with somebody else" shipped, and its
+// OPINABLE list is full of completed events: states which business the customer
+// chose, states what the customer ended up doing, states the outcome of a visit.
+//
+// A finished event and a clock both say we were WATCHING, and no hedge makes
+// that true. One predicate now, used by both.
+const CLAIMS_KNOWLEDGE = /\balready (signed|hired|booked|chosen|heard|gone|went|called|switched)\b/i;
+const CLOCK_WORDS = /\b(\d{1,2}\s?(am|pm)|9pm|5pm|saturday|sunday|monday|tuesday|wednesday|thursday|friday|overnight|by morning)\b/i;
+const hedgeCannotBuy = (sentence, clocked) =>
+  CLAIMS_KNOWLEDGE.test(String(sentence == null ? '' : sentence)) || !!clocked;
 const OPINION_MARKERS = /\b(?:my (?:read|guess|hunch|sense) (?:is|here is)|what it looks like from (?:outside|the outside)|from (?:outside|the outside) it looks like|I'?d guess|I would guess|I think|I suspect|I could be wrong,? but|I might be wrong,? but|if I had to guess|reading it from outside|my honest read)\b/i;
 
 // A body is split on sentence terminators AND on the connectives that start a new
@@ -15207,6 +15866,9 @@ const buildEmailEvidence = (ev = {}) => {
   const R = [];   // may be stated AS AN OPINION, marked as ours
   const C = [];   // context only
   const line = (arr, t) => { if (t) arr.push(t); };
+  // The subset of A that is MODEL prose rather than a measurement. See the note
+  // at the one line that fills it.
+  const AM = [];
   const n = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
 
   // ── WHO HE IS ────────────────────────────────────────────────────────────
@@ -15234,7 +15896,20 @@ const buildEmailEvidence = (ev = {}) => {
   // ── WHAT ONLY READING THEIR PAGES COULD FIND ─────────────────────────────
   // Verified against the corpus before they get here, so they are assertable.
   for (const o of (Array.isArray(ev.originalFindings) ? ev.originalFindings : []).slice(0, 3)) {
-    line(A, `FROM THEIR OWN PAGES: ${o.finding}${o.evidence ? ` — their words: "${String(o.evidence).slice(0, 110)}"` : ''}`);
+    // ---- THE ONE ASSERT LINE THAT IS MODEL PROSE ------------------------
+    // Everything else in A is assembled from a measurement. This is the audit
+    // model's own sentence, and verifyOriginalFinding checks only that its
+    // QUOTE appears on a page we read — the sentence around the quote is never
+    // checked against any number. permittedFigures then admitted every digit in
+    // the whole A block under the comment "Everything in it is measured by
+    // construction; that is what the A list IS", so a figure the model invented
+    // licensed itself and could be asserted to the prospect.
+    //
+    // The line stays — it is the only thing in the block that is unique to this
+    // business — and it is recorded here so the licensing can leave it out.
+    const _fromPages = `FROM THEIR OWN PAGES: ${o.finding}${o.evidence ? ` — their words: "${String(o.evidence).slice(0, 110)}"` : ''}`;
+    line(A, _fromPages);
+    AM.push(_fromPages);
   }
 
   // ── WHERE THEY SIT IN SEARCH ─────────────────────────────────────────────
@@ -15322,6 +15997,10 @@ const buildEmailEvidence = (ev = {}) => {
 
   return {
     assertable: A,
+    // What the WRITER may assert is the whole of A. What may LICENSE A FIGURE is
+    // only the part of it we assembled ourselves. Those are different questions
+    // and one list was answering both.
+    assertableMeasured: A.filter(x => !AM.includes(x)),
     myRead: R,
     context: C,
     block: [
@@ -15918,6 +16597,14 @@ const permittedFigures = (opts = {}) => {
   NUMBER_TOKENS(String(opts.count == null ? '' : opts.count)).forEach(n => permitted.add(n));
   return permitted;
 };
+// ---- A MODEL SENTENCE MAY SHARPEN A CLAIM; IT MAY NEVER ADD A NUMBER -----
+// Returns the first digit in a model-written sentence that our own measured
+// figure list does not contain, or '' when every number in it traces. Lifted to
+// module scope so the boot check executes this and not a copy of it.
+const unlicensedFigureIn = (text, figures) => {
+  const ok = permittedFigures({ figures: Array.isArray(figures) ? figures : [] });
+  return NUMBER_TOKENS(String(text == null ? '' : text)).find(t => !ok.has(t)) || '';
+};
 const verifyBrainEmail = (body, opts = {}) => {
   const text = String(body || '').trim();
   if (!text) return { ok: false, why: 'empty' };
@@ -16013,7 +16700,23 @@ const verifyBrainEmail = (body, opts = {}) => {
     // review word in a subject cannot be a different kind of word in a body.
     const _revWord = text.match(/\b(reviews?|reviewers?|ratings?|stars?|star line)\b/i);
     if (_revWord) {
-      const _ours = [opts.spine, opts.earned, opts.evidenceAssert, opts.count, opts.money]
+      // ---- THE MENU IS NOT THE COPY ------------------------------------
+      // This used to include opts.evidenceAssert, and buildEmailEvidence puts
+      // "214 Google reviews at 4.6 stars" into that block on EVERY lead with a
+      // review count. So the word "reviews" was always present and this gate
+      // could never fire on any lead it was written for - and the boot fixture
+      // omitted the field entirely, which is the recorded trap of a check that
+      // only exercises the configuration where nothing can go wrong.
+      //
+      // What is consulted now is what CODE actually wrote into the email: the
+      // spine, the recognition line, the count line, the money line. That is
+      // also exactly what the writer's own brief says - "Do not mention his
+      // reviews, his ratings or his stars unless the FACT above already does" -
+      // so the gate and the instruction finally ask the same question. The one
+      // sentence built on review counts on purpose ("a business with fewer
+      // reviews than yours is ranking above you") is in the spine and still
+      // passes.
+      const _ours = [opts.spine, opts.earned, opts.count, opts.money]
         .map(x => String(x || '')).join(' ').toLowerCase();
       if (!_ours.includes(String(_revWord[0]).toLowerCase())) {
         return { ok: false, why: `says "${_revWord[0]}" and nothing we assembled did — his reviews are how we read the business, not what we say to him. The model raised it on its own, which is the one route the internal-only rule cannot close upstream` };
@@ -16477,7 +17180,7 @@ const verifyBrainEmail = (body, opts = {}) => {
       // Which clause did it fire in? Only that clause needs the marker — a marked
       // read elsewhere in the email cannot license an unmarked assumption here.
       const _hit = _clauses.find(c => re.test(c));
-      if (_hit && OPINION_MARKERS.test(_hit)) continue;
+      if (_hit && OPINION_MARKERS.test(_hit) && !hedgeCannotBuy(_hit, CLOCK_WORDS.test(_hit))) continue;
     }
     return { ok: false, why: `${why} — "${m[0].slice(0, 40)}"` };
   }
@@ -21473,9 +22176,26 @@ const readMarketClarity = (text, { trade, city } = {}) => {
 // exactly the play CROJungle runs on them (the free audit IS the lead magnet).
 //
 // Measured from their own page copy. Three states as always.
-const readLeadMagnet = (text) => {
+const readLeadMagnet = (text, pagesRead) => {
   const t = String(text || '').toLowerCase();
-  if (t.length < 200) return { checked: false };
+  // ---- THE SAME FLOOR AS ITS SIBLING ---------------------------------
+  // readRecurringOffer forty lines away demands 3,000 characters AND two
+  // pages before it will claim a business does not offer something, and its
+  // own comment says why: that is "enough of their site to be entitled to an
+  // absence claim". This made the identical class of claim - nothing
+  // anywhere on their site names an offer - off 200 characters and no page
+  // count at all, which on a starved Firecrawl run is a nav bar and a
+  // tagline. PART 3: absence claims require that we actually looked, and
+  // EXISTS BUT UNREAD is in this file because a live email told an attorney
+  // with a Reviews page that he had no reviews on his site.
+  //
+  // pagesRead is optional so nothing that already calls this breaks; when it
+  // is absent the character floor alone applies, and the ONE production call
+  // site passes it.
+  const _pages = Number(pagesRead);
+  if (t.length < 3000 || (Number.isFinite(_pages) && _pages < 2)) {
+    return { checked: false, why: `only ${Number.isFinite(_pages) ? _pages : '?'} page(s) and ${t.length} characters were read \u2014 not enough of their site to claim there is nothing on it a stranger can take` };
+  }
 
   // Something a stranger can take away without speaking to anyone.
   const hasFreeAsset = /\b(free (guide|checklist|report|ebook|e-book|template|toolkit|worksheet|calculator|quiz|assessment|inspection report|buyers? guide|planning guide)|download (our|the|your|this|a) (free )?\w+|get (the|our|your) free \w+)\b/.test(t);
@@ -23174,6 +23894,10 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
   if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}`;
+  // Counted at DISPATCH, before the await, same rule as Places: an actor run
+  // that starts is billed whether or not we wait for the dataset.
+  noteRunSpend('apify', 1, 'apify-reviews');
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.apify = (_l.apify || 0) + 1; } catch (e) { void e; }
   const body = { placeIds: [placeId], maxReviews, reviewsSort: 'newest',
                  reviewsOrigin: 'google', language: 'en', personalData: false };
   let res;
@@ -27609,6 +28333,36 @@ const sbRest = async (path, options = {}) => {
 // lead behaves exactly as it did before the ledger existed — one photograph, no
 // clock, and the run says so. A memory that can stop an audit is not a memory.
 //
+// ══ THE SCHEMA, PROBED INSTEAD OF DISCOVERED AT FIRST USE ═══════════════════
+// Six tables and two columns exist as SQL blocks in CLAUDE.md, and nothing ever
+// verified any of them — so each miss surfaced at its moment of first use, as a
+// feature that silently recorded nothing (the query memory, the bench, the
+// observation ledger, call outcomes, ask pages, the send log). One probe after
+// the boot verdict settles, one line naming every missing piece, nothing fatal:
+// a server without Supabase runs exactly as before, and sbRest's own per-table
+// diagnosis prints the specific reason above the summary.
+const SB_EXPECTED_SCHEMA = [
+  ['places_query_state', 'q'], ['lead_bench', 'id'], ['business_observations', 'biz'],
+  ['call_outcomes', 'outcome'], ['lead_pages', 'token'], ['send_log', 'email'],
+  ['leads', 'held_back_contact'], ['leads', 'corpus_read'],
+];
+const probeSupabaseSchema = async () => {
+  if (!SB_URL || !SB_KEY) {
+    console.log('SCHEMA PROBE: Supabase is not configured on this server, so nothing that persists (query memory, bench, observations, call outcomes, ask pages, send log) will record anything. Set SUPABASE_URL and SUPABASE_KEY on Render.');
+    return;
+  }
+  const missing = [];
+  for (const [t, c] of SB_EXPECTED_SCHEMA) {
+    const rows = await sbRest(`/${t}?select=${c}&limit=1`, { prefer: 'return=representation' });
+    if (rows === null) missing.push(`${t}.${c}`);
+  }
+  if (missing.length) {
+    console.log(`SCHEMA PROBE: ${missing.length} expected table(s)/column(s) did not answer — ${missing.join(', ')}. Each has its exact CREATE/ALTER statement in CLAUDE.md; until it runs, the feature writing there records nothing. The per-table reason is printed above this line by the request itself.`);
+  } else {
+    console.log(`SCHEMA PROBE: all ${SB_EXPECTED_SCHEMA.length} expected tables and columns answered.`);
+  }
+};
+
 // ══ THE ISOLATION RULE, WHICH IS THE WHOLE RISK HERE ═══════════════════════
 // PART 4 §19 is the worst bug this system has had: a cache key that collided
 // handed Donna Krummen John Peters Roofing's audit, and the fabricated result
@@ -28270,6 +29024,14 @@ app.get('/api/cron/discover', async (req, res) => {
     return res.status(500).json({ error: 'discover call failed: ' + e.message });
   }
 
+  // A refused internal call is NOT an empty discovery. The boot-window gate
+  // answers the internal POST with 503 {booting:true} during the ~19s after a
+  // restart, and reporting that as "no companies returned" is the log line
+  // naming the wrong cause, again. Say what happened; the next firing succeeds.
+  if (data && (data.booting || data.error)) {
+    console.log(`Cron discover was refused, not empty: ${data.error || 'boot checks not settled'}`);
+    return res.status(503).json({ ok: false, refused: data.error || 'the boot checks had not settled — retry shortly' });
+  }
   const companies = (data && data.companies) || [];
   if (companies.length === 0) {
     return res.json({ ok: true, added: 0, note: 'no companies returned', breakdown: data && data.breakdown });
@@ -28297,6 +29059,18 @@ app.get('/api/cron/discover', async (req, res) => {
 });
 
 app.post('/api/discover', async (req, res) => {
+  // A Find run is the expensive half — one press costs about what sixty
+  // audits cost — so the Places ceiling is checked before a single query is
+  // dealt. Same rule as research admission: refuse whole, never truncate,
+  // because a partial run that reports success is how half a batch goes
+  // missing quietly.
+  {
+    const _ceiling = budgetRefusal(['places']);
+    if (_ceiling) {
+      console.log(`\u{1F6D1} FIND REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+      return res.status(429).json({ error: _ceiling.message, budgetStopped: true, service: _ceiling.service });
+    }
+  }
   // ══ FILTERS AT THE PULL, NOT JUST THE DISPLAY ════════════════════════════
   // Filtering after the fact still spends the Places call. Passing the filter
   // down means the run only buys leads that match, which matters because a
@@ -28422,7 +29196,14 @@ app.post('/api/discover', async (req, res) => {
       // deadline, he's already thinking about the business as an asset to improve,
       // and the seller IS the owner — so he's directly reachable by definition.
       // The listing also hands us revenue, cash flow, and headcount for free.
-      findBusinessesForSale(firecrawlKey, apiKey),
+      // The lane spends Firecrawl AND a Haiku call, and the route's admission
+      // gate checks Places only — so on a day where either ceiling is reached
+      // the lane is SKIPPED with its reason logged, not run past the ceiling.
+      (() => {
+        const _c = budgetRefusal(['fc', 'anthropicUsd']);
+        if (_c) { console.log(`\u{1F6D1} FOR-SALE LANE SKIPPED — ${_c.message}`); return Promise.resolve({ leads: [] }); }
+        return findBusinessesForSale(firecrawlKey, apiKey);
+      })(),
 
       // ═══ FOUNDER VENTING — OFF ════════════════════════════════════════════
       // 4 credits a run (2 Reddit searches) and it has never produced a single
@@ -30985,7 +31766,46 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
     const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
     for (const svc of services) {
       const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng });
-      if (r.checked) results.push({ ...r, kind: 'their own service page' });
+      if (r.checked) results.push({ ...r, kind: 'their own service page', svc });
+    }
+    // ---- AND AN ABSENCE HERE BUYS A SECOND LOOK TOO -----------------------
+    // pickRankRow PROMOTES an absent service row over every found row, on
+    // purpose: "they publish a page for this and do not appear in the top
+    // twenty for it" is the sharpest SEO fact we can hand an owner, and it is
+    // harm 96, the top of the ladder. But these rows come from checkLocalRank,
+    // the RAW checker - one draw. The head term has bought a second sample
+    // since the day one business returned #3 and #12 minutes apart, and the
+    // comment that bought it says why in as many words: absence "is the one
+    // finding that cannot be softened into a band if it turns out to be wrong".
+    // The service rows were the same claim on the same noisy data with none of
+    // the discipline.
+    //
+    // Only the FIRST absent row is confirmed, because that is the only one
+    // pickRankRow can promote. One extra Places search, on the leads that were
+    // about to make the strongest claim in the system, and none at all on a
+    // lead where every service came back found.
+    const _absent1 = results.find(r => !r.found && r.kind === 'their own service page'
+      && Number.isFinite(Number(r.scanned)) && Number(r.scanned) > 0);
+    if (_absent1) {
+      await new Promise(r => setTimeout(r, 1200));
+      let _again = null;
+      try {
+        _again = await checkLocalRank({ companyName, placeId, website, industry: _absent1.svc, location, placesKey, bizLat, bizLng });
+      } catch (e) { void e; }
+      const _i = results.indexOf(_absent1);
+      if (!_again || !_again.checked) {
+        console.log(`LOCAL RANK [${companyName}]: the second look at "${_absent1.query}" failed, so that absence rests on ONE sample and stays unsayable. It is still on the call sheet as a visibility gap.`);
+      } else if (!_again.found) {
+        results[_i] = { ..._absent1, absenceConfirmed: true,
+          rankNote: 'two independent searches both failed to find them for this service, so the absence is real and sayable' };
+      } else {
+        console.log(`\u21ba SERVICE RANK DISAGREED ON ABSENCE [${companyName}]: the first search did not find them for "${_absent1.query}" and the second returned #${_again.rank}. The absence claim is DROPPED \u2014 it is the highest-harm sentence in the system and it is not true.`);
+        const { rank: _r3, scanned: _sc3, ...durable3 } = _again;
+        void _r3; void _sc3;
+        results[_i] = { ...durable3, kind: 'their own service page', svc: _absent1.svc,
+          found: true, rankStable: false, rankSuppressed: true, rankForScoring: _again.rank,
+          rankNote: `one search did not find them for this service and a second returned #${_again.rank}. No absence claim is permitted \u2014 they ARE in the results \u2014 and no position may be stated either.` };
+      }
     }
   }
 
@@ -31558,7 +32378,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // nothing about it is evidence about their website. A refusal is announced
       // with the status and Firecrawl's own words, and is NOT charged to the
       // credit ledger. The next payload mistake costs one log line, not a month.
-      const fcAsk = async (target, formats, waitFor, timeout, kind) => {
+      // ---- ONE RETRY, AND ONLY ON A THROTTLE ------------------------------
+      // The inner-page scrape retries a 429 and so does the sitemap read. This
+      // one - the HOMEPAGE reader, the front of a seven-page fan-out - did not.
+      // A single throttle therefore cost the whole website half of an audit
+      // while Places, Apify and every model call were paid in full, and the
+      // branch below it says in as many words "Fix the payload; do not add a
+      // retry", which is correct for a REFUSED PAYLOAD and wrong for a throttle:
+      // one is deterministic and the other is a queue.
+      //
+      // Bounded at one extra attempt by a parameter, so there is no loop to get
+      // wrong. fcNoteRateLimited has already held the WHOLE gate by the time we
+      // get here, and the retry goes through fcSerial like every other call, so
+      // it cannot start before the hold expires and needs no sleep of its own.
+      const fcAsk = async (target, formats, waitFor, timeout, kind, _retried = false) => {
         // The other four Firecrawl entry points fail fast on an empty balance;
         // this one, the HOMEPAGE reader, did not. Stanley Schultze fired both of
         // his requests 52 seconds after the balance ran out, got 402 twice, and
@@ -31601,6 +32434,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // the next request 350ms later. Same holder as both retry loops.
           fcNoteRateLimited(r, 4000, `the homepage [${kind}] ${target}`);
           console.log(`   ↳ HTTP ${r.status} in ${ms}ms. Read that literally: this is throttling, NOT an empty page and NOT their site.`);
+          if (!_retried) {
+            console.log(`   ↳ asking once more after the gate hold \u2014 losing the homepage to a queue costs the whole website half of this audit, and everything else on this lead is already paid for.`);
+            return fcAsk(target, formats, waitFor, timeout, kind, true);
+          }
           return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
         }
         if (!r.ok || body?.success === false || (body && body.error)) {
@@ -31921,6 +32758,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               }
             } catch (e) {
               console.log(`SIGNALS [${company}]: could not parse the page we fetched (${e && e.message}) \u2014 the website rungs stay unmeasured and will claim nothing.`);
+            }
+          }
+          // ---- AND THE MARKUP ITSELF, WHICH THREE READS NEED --------------
+          // htmlSignals and the navigation were both recovered here and
+          // homepageHtml was not, though it is the same markup and it is the
+          // variable three other reads take:
+          //
+          //   mergeAdSignals   the Google Ads tag and the Meta pixel, which
+          //                    gate BOTH spending rungs
+          //   auditSitePages   bookingSourceFor, and PART 4 section 25 is a
+          //                    whole entry about this: a scheduler embed is an
+          //                    <iframe>, which markdown deletes entirely, so
+          //                    without the source a site with online booking
+          //                    reads as phone_only - and bookingMeasured is
+          //                    still stamped true, so no_after_hours (SELLABLE
+          //                    5, the maximum) tells an owner with a booking
+          //                    button that the only way to reach him is a call
+          //   findPhoneNumber  the number on their own page
+          //
+          // Same guard as htmlSignals above: only when Firecrawl gave us
+          // nothing, never over a real scrape. A plain GET executes no
+          // JavaScript, so this is a floor rather than a ceiling - it can only
+          // add evidence a stripped-to-text copy could not carry.
+          if (!homepageHtml) {
+            homepageHtml = String(_siteDownVerdict.html || '');
+            if (homepageHtml) {
+              console.log(`\u26d3 SOURCE RECOVERED [${company}]: the homepage markup Firecrawl could not return is the copy we fetched ourselves, so the booking read, the advertising tags and the phone number are read from real source instead of from tag-stripped text.`);
             }
           }
           // Read the navigation out of the markup BEFORE the tags are stripped.
@@ -32983,12 +33847,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const trustedContent = scrapeTrustworthy ? content : '';
     // Measure offer strength from every page we read, not just the homepage —
     // a guarantee usually lives on a services or about page.
+    const _pagesForAbsence = (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead.length : 0;
     offerStrength = readOfferStrength(
-      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'), _pagesForAbsence);
     // Hormozi's LEADS layer: is there anything a stranger can take without
     // talking to a salesperson? Measured from the same full-site text.
     leadMagnet = readLeadMagnet(
-      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'), _pagesForAbsence);
     // Abraham's frequency lever — the only one of his three this file has never
     // measured, and usually the only gap left on a business with nothing wrong.
     // pagesRead is passed so the absence gate is about what we ACTUALLY opened,
@@ -33012,13 +33877,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // the "they made it clickable on purpose" source was dead at this call
       // site while rawHtml sat unused in the same scope, reproducing the
       // NO-NUMBER-ON-FILE failure the function was written to end.
-      pageHtml: (typeof rawHtml === 'string' && rawHtml) ? rawHtml : content,
+      // homepageHtml, not rawHtml: it is the one variable that means "the
+      // homepage markup", it is assigned from rawHtml on the normal path, and
+      // on the salvage path it now carries the copy we fetched ourselves.
+      // Reading rawHtml here meant the phone read fell back to stripped text on
+      // every lead Firecrawl could not fetch.
+      pageHtml: homepageHtml || content,
       pageText: [content, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
       companyName: company,
     });
     try {
+      // ---- THE MARKUP TOO, OR A tel: LINK READS AS AN ABSENCE ------------
+      // This was markdown only, and the finding is an ABSENCE: "the number on
+      // their Google listing appears nowhere on their own website". A number
+      // published as <a href="tel:+15125550134"><i class="icon"></i></a> - an
+      // icon link with no visible text, which is how most trade sites put the
+      // number in the header - exists in the source and NOT in the markdown. So
+      // we told owners their site never mentions a number that is on every page
+      // of it, and they disprove it in one click. homepageHtml is already
+      // fetched, and on a lead Firecrawl could not read it now carries the copy
+      // we fetched ourselves.
       phoneConsistency = measurePhoneConsistency(phoneResult && phoneResult.phone,
-        String(content || '') + ' ' + String((sitePages && sitePages.corpus) || ''));
+        String(content || '') + ' ' + String((sitePages && sitePages.corpus) || '')
+        + ' ' + String(homepageHtml || ''));
       if (phoneConsistency.checked && phoneConsistency.finding) {
         console.log(`\u26a0 PHONE MISMATCH [${company}]: ${phoneConsistency.finding}. Anyone who finds them on Google dials a number their own site never mentions \u2014 measured, checkable in ten seconds, and almost certainly unknown to the owner.`);
       } else if (phoneConsistency.checked && phoneConsistency.found > 1) {
@@ -33438,6 +34319,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         } else {
           console.log(`⏱ NO LEDGER KEY [${company}]: no place id, no usable domain and no city, so nothing about this business can be recognised on a second look.`);
         }
+        // How a stranger can act on the page, read once and used twice: the
+        // paid-click rung needs it to say what the click lands on, and three
+        // other rungs read it directly. resolveMeasurements does not carry it,
+        // so before this existed the rung was handed an object without it and
+        // silently took its last branch on every lead.
+        const _bookingRead = {
+          booking: sitePages && sitePages.booking,
+          bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+        };
         _harmInputs = {
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           // The four fields the ledger produces. Delivered through
@@ -33457,7 +34347,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // is true.
           adsTagConfirmed: !!(builtWith && builtWith.confirmed === true && !builtWith.blocked
             && (builtWith.hasGoogleAdsTag === true || builtWith.hasMetaPixel === true)),
-          paidLeakGap: paidLeakGapFrom(_measured),
+          // ONE DERIVATION. paidLeakGapFrom reads booking and bookingMeasured
+          // and resolveMeasurements returns neither \u2014 they are assembled from
+          // sitePages sixty lines below, in this same literal. So two of the
+          // rung's three sentences ("the only published way to reach them is a
+          // phone line", "the only way to act on it is a form and a wait")
+          // could not be produced on any lead, and harm 93 spoke only when a
+          // single form on the page asked for seven fields.
+          paidLeakGap: paidLeakGapFrom({ ..._measured, ..._bookingRead }),
           // ══ ONE FLAG FOR TWO DIFFERENT ADVERTISERS ════════════════════════
           // adsTagConfirmed above is true for a Google Ads tag OR a Facebook
           // pixel, which is exactly right for paid_traffic_leaks — a paid click
@@ -33521,8 +34418,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           phoneMismatch: !!(phoneConsistency && phoneConsistency.finding),
           googlePhone: phoneConsistency && phoneConsistency.googlePhone,
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
-          booking: sitePages && sitePages.booking,
-          bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          booking: _bookingRead.booking,
+          bookingMeasured: _bookingRead.bookingMeasured,
           // ══ THE COVERAGE TABLE, WHICH HAS NEVER BEEN A FINDING ═══════════
           // Find measures these for free on every run and they have only ever
           // been logged and handed to the writer as background. RUNG INPUT CHECK
@@ -33591,7 +34488,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Distinguish "we looked and they were absent" from "we never looked".
           // Without this the absence entry could fire on a lead where the rank
           // check was skipped, which would be a fabricated finding.
-          rankChecked: !!(localRank && localRank.checked),
+          // Both halves move together: see the wrong-row note in
+          // resolveMeasurements. A row that is not us leaves us with no sayable
+          // position AND no sayable absence.
+          rankChecked: _measured.rankChecked,
+          rankAbsenceConfirmed: _measured.rankAbsenceConfirmed,
           // The position when it was measured but is NOT sayable, so the eight
           // conversion-side rungs keep their traffic damper on a lead whose two
           // rank samples disagreed. Delivered explicitly, because "computed but
@@ -36278,19 +37179,23 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
 // The two are told apart by what the sentence is ABOUT, not by the shape of the
 // number \u2014 so the pattern below matches a price, and the check that uses it
 // requires our own product language nearby before flagging.
-const _PRICE_TAGS = /\$\s?\d{1,3}\s?k\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{1,3}\s?k|\$\d{2,3},\d{3}|\$\d{1,3}k\+/i;
-// Our offer vocabulary. A price is only OUR price when it sits beside one of
-// these; beside "a kitchen remodel" it is his revenue and it stays.
-const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|the build|the project would|investment|package|scope of work|per month|monthly|advisory|valuation|website (?:rebuild|project))\b/i;
             const _pm = _facing.match(_PRODUCT_NAMES);
             if (_pm) {
               const _msg = `NAMES OUR PRODUCT IN PROSPECT-FACING COPY \u2014 "${_pm[0]}". Mike's rule is absolute: the email never names what we sell. It turns a colleague who found a problem into a vendor with something to move, and that is the switch that kills the reply. Diagnose the problem the product fixes; do not name the product.`;
               console.log(`\u26a0 PRODUCT NAME [${company}]: ${_msg}`);
               _claimRisks.push(_msg);
             }
-            const _pp = _facing.match(_PRICE_TAGS);
+            // _OUR_OFFER_NEARBY was written for exactly this and then never
+            // called, so the false positive the comment above it describes went
+            // on firing: "$30k\u2013$80k" for a kitchen remodel is HIS revenue and
+            // read as our fee. The window is the sentence around the figure, so
+            // a price quoted three paragraphs from the word "retainer" is still
+            // his. Executed by CLAIM RISK PRECISION CHECK in both directions,
+            // because a flag that fires on every lead is one nobody reads and a
+            // flag that fires on none is not a flag.
+            const _pp = quotesOurPrice(_facing);
             if (_pp) {
-              const _msg2 = `QUOTES OUR PRICE IN PROSPECT-FACING COPY \u2014 "${_pp[0]}". Price belongs on the call, never in email 1. It converts a free audit into a sales pitch before he has agreed to anything.`;
+              const _msg2 = `QUOTES OUR PRICE IN PROSPECT-FACING COPY \u2014 "${_pp}". Price belongs on the call, never in email 1. It converts a free audit into a sales pitch before he has agreed to anything.`;
               console.log(`\u26a0 PRODUCT PRICE [${company}]: ${_msg2}`);
               _claimRisks.push(_msg2);
             }
@@ -36609,7 +37514,14 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
         const _corpusBase = [
           trustedContent,
           sitePages && sitePages.rawText,
-          (Array.isArray(publicPainSignals) ? publicPainSignals.join('\n') : ''),
+          // Only the VERBATIM review snippet enters the verify corpus. The
+          // entry's first half is the review-mining MODEL's paraphrase, and a
+          // gate whose guarantee is "the words are theirs" was verifying
+          // quotes against another model's words. Each snippet is its own
+          // block, so a quote cannot assemble across two reviews either.
+          (Array.isArray(publicPainSignals)
+            ? publicPainSignals.map(s => ((String(s).match(/evidence: "(.+)" \(/) || [])[1] || '')).filter(Boolean).join('\n\n')
+            : ''),
         ].filter(Boolean).join('\n\n');
         // ══ THEIR WORDS AND OUR WORDS ANSWER DIFFERENT QUESTIONS ═══════════
         // One rule — "we hold the words you are quoting" — asked of two
@@ -36695,6 +37607,22 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
           // The ladder already knows what is worth leading on and it is measured.
           // Overwrite the Brain's choice with it, and say so in the log so the
           // disagreement is visible rather than silent.
+          // ---- THE AUDIT GETS THE FINDINGS WHETHER OR NOT AN EMAIL CAN ----
+          // problemList, subjectOptions and harmsRanked were attached INSIDE the
+          // spine block below, so a lead with no sayable finding got none of
+          // them - while rankHarms had just logged "the audit and the call sheet
+          // still carry every one of them". That is the case the INTERNAL_ONLY
+          // rule exists for: seven review rungs measured, ranked, and
+          // deliberately kept out of the email precisely so they can be on the
+          // sheet Mike dials from. On those leads the sheet was empty and the
+          // business read as clean.
+          //
+          // This file's own TWO LADDERS rule: the spine decides what the EMAIL
+          // may say; it has never decided what the AUDIT knows. The block below
+          // still refines all three.
+          parsed.problemList = _harmsForResponse.problemList || [];
+          parsed.subjectOptions = _harmsForResponse.subjectOptions || [];
+          parsed.harmsRanked = _harmsForResponse.harmsRanked || [];
           if (_harmsForResponse.factualSpine && _harmsForResponse.factualSpine.claim) {
             const _ladderLead = _harmsForResponse.factualSpine.claim;
             const _brainLead = String(parsed.pitchAngle || '').slice(0, 90);
@@ -37111,7 +38039,13 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
             // the composed email falls back exactly as it does today. This can
             // sharpen the claim; it cannot introduce a number.
             try {
-              const _sp = _harmsForResponse && _harmsForResponse.factualSpine;
+              // parsed.factualSpine FIRST. This read _harmsForResponse's copy,
+              // and when a LOCAL_ONLY rung forces the swap forty lines above,
+              // parsed.factualSpine is a SPREAD COPY of it - so the sharpened
+              // claim was logged as "Using X instead of Y" and X reached
+              // nothing. A log that announces a change which did not happen is
+              // the same cost as one that names the wrong cause.
+              const _sp = (parsed && parsed.factualSpine) || (_harmsForResponse && _harmsForResponse.factualSpine);
               if (_sp && _sp.claim && _origOk.length) {
                 const _lw = String(_sp.claim).toLowerCase().split(/\s+/)
                   .filter(w => w.length > 5 && !/^(their|there|business|company|website|reviews?)$/.test(w));
@@ -37129,7 +38063,23 @@ const _OUR_OFFER_NEARBY = /\b(?:rebuild|retainer|engagement|our fee|we charge|th
                 //
                 // So the arithmetic came back in the FIRST sentence, by a route
                 // that bypassed the only place the strip was applied.
-                if (_sharp && containsReviewRatio(_sharp.finding)) {
+                // ---- IT MAY SHARPEN A CLAIM; IT MAY NOT INTRODUCE A NUMBER --
+                // The comment twenty lines above promises exactly this: "if the
+                // audit says seven and we measured two, 'seven' is not in
+                // permittedFigures and the composed email falls back exactly as
+                // it does today." It was not true. permittedFigures reads
+                // opts.spine, and this line REPLACES the spine - so the swapped
+                // sentence licensed its own digits and a number the audit model
+                // invented could be asserted to the prospect in the FIRST
+                // sentence of the email.
+                //
+                // Checked against the spine's own measured figure list, which is
+                // the same list the verifier uses. A finding with no digits at
+                // all is unaffected, which is most of them.
+                const _sharpBad = _sharp ? unlicensedFigureIn(_sharp.finding, _sp.figures) : '';
+                if (_sharp && _sharpBad) {
+                  console.log(`\u{1F50E} SHARPER CLAIM REFUSED [${company}]: the audit's finding states "${_sharpBad}" and we did not measure it. Keeping the ladder sentence, every figure of which traces. A model sentence may sharpen a claim; it may never introduce a number.`);
+                } else if (_sharp && containsReviewRatio(_sharp.finding)) {
                   console.log(`\u{1F50E} SHARPER CLAIM REFUSED [${company}]: the audit's finding is sharper but states the review arithmetic — "${String(_sharp.finding).slice(0, 70)}". That number is for the call sheet, not the opening line. Keeping the ladder sentence, which is the floor we would have sent anyway.`);
                 } else if (_sharp) {
                   console.log(`\u{1F50E} SHARPER CLAIM [${company}]: the audit's own finding covers the same ground as the ladder rung and quotes their pages. Using "${String(_sharp.finding).slice(0, 76)}" instead of "${String(_sp.claim).slice(0, 46)}". Every figure in it is still checked against what we measured.`);
@@ -38447,7 +39397,25 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     const conversionRating = visualAnalysis?.overallConversionReadiness || 'unknown';
 
     // Dunford positioning score
-    const positioningScore = (() => {
+    // ══ A SCORE ABOUT A PAGE WE NEVER OPENED ══════════════════════════════
+    // Every term below reads `content` or `visualAnalysis`. On a lead where
+    // Firecrawl was refused, content is empty and visualAnalysis is null, so the
+    // scorer runs over nothing and returns 0-2 out of 10 — and 0 is not "we did
+    // not look", it is "we looked and it is terrible". Three consumers then act
+    // on it: a `weak_positioning` flaw is pushed, the audit prompt is told
+    // "Dunford positioning: 0/10", and the rule-based product fallback declares
+    // `isBroken` and recommends a rebuild because "Homepage has critical
+    // conversion failures".
+    //
+    // Live 2026-08-21: three of five leads read ZERO pages and every one of them
+    // got that treatment. It is the recorded "unmeasured treated as zero" class
+    // pointed at the softest, least defensible judgement in the system — and
+    // CLAUDE.md's own bucket text for weak_positioning already says it is "our
+    // opinion, not a measured fact, and the owner cannot verify it".
+    //
+    // null, not zero. Every consumer below asks whether it is a number first.
+    const _positioningMeasurable = siteWasRead(content, visualAnalysis);
+    const positioningScore = !_positioningMeasurable ? null : (() => {
       let s = 0;
       if (visualAnalysis) {
         // Every term here named a field the vision model stopped returning, so
@@ -38522,7 +39490,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           ? `${pageSpeed.mobileScore}/100 mobile score${pageSpeed.mobileScoreSource === 'lab' ? ' (Google lab test)' : ''}${pageSpeed.fieldSaysFine ? ' — real-visitor data says the site performs fine, so this is not a finding' : ''}`
           : 'Mobile score unavailable',
         lcp: pageSpeed.lcp ? `Load time: ${pageSpeed.lcp}` : '',
-        positioningScore: `Dunford positioning: ${positioningScore}/10`,
+        positioningScore: Number.isFinite(positioningScore)
+          ? `Dunford positioning: ${positioningScore}/10`
+          : 'Dunford positioning: NOT MEASURED — we did not read enough of their site to judge it, so say nothing about their positioning',
         designQuality: visualAnalysis ? `Design: ${designQuality}` : '',
         conversionRating: visualAnalysis ? `Overall conversion: ${conversionRating}` : '',
         // biggestVisualIssue was never a field on anything. designObservation is
@@ -38635,7 +39605,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // Google's real-visitor data says the site performs fine: the lab score is
     // a simulation, and the record beats the simulation every time they argue.
     if (pageSpeed.mobileScore && pageSpeed.mobileScore < 50 && !pageSpeed.fieldSaysFine) flaws.push('slow_mobile');
-    if (positioningScore < 4) flaws.push('weak_positioning');
+    if (Number.isFinite(positioningScore) && positioningScore < 4) flaws.push('weak_positioning');
 
     // OPERATIONS — AI-replacement signals (from discovery, high confidence)
     if (manualRoleCount >= 5) flaws.push('heavy_manual_labor');
@@ -38698,12 +39668,28 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       const hasAdSpend = !!builtWith.hasGoogleAdsTag || !!fbAds.hasAds;
       const hasInfra = builtWith.hasCRM || builtWith.hasPixel;
       const isAIOpportunity = !builtWith.hasCRM && !builtWith.hasEmailMarketing && !builtWith.hasChat;
-      const isBroken = flaws.includes('no_cta') || positioningScore < 4 || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40 && !pageSpeed.fieldSaysFine);
+      const isBroken = flaws.includes('no_cta') || (Number.isFinite(positioningScore) && positioningScore < 4) || (pageSpeed.mobileScore && pageSpeed.mobileScore < 40 && !pageSpeed.fieldSaysFine);
       const isMediaOrAgency = /media|agency|creative|PR|communications|marketing firm|studio/i.test(content.slice(0,500));
       if (isAIOpportunity && isMediaOrAgency) return { product:'Software Build / AI Integration', price:'$40k–$100k+', reason:'Merged or growing operation with no unified tech stack', flag:'' };
       if (hasAdSpend && !hasInfra) return { product:'Growth Retainer', price:'$10k–$35k/mo', reason:'Confirmed ad spend but no infrastructure to convert — revenue leaking', flag:'' };
       if (isAIOpportunity && content.length > 2000) return { product:'AI Brain', price:'$40k–$70k', reason:'No connected analytics or automation tags detected on-page', flag:'' };
       if (isBroken) return { product:'Website Rebuild', price:'$50k+', reason:'Homepage has critical conversion failures', flag:'' };
+      // ══ THE CATCH-ALL ASSERTED A PAGE WE MAY NEVER HAVE OPENED ══════════
+      // Every branch above rests on something measured — an ads tag, a CRM, the
+      // trade words in their copy. This one rests on nothing, and it names the
+      // homepage. On a lead Firecrawl refused, that sentence goes onto the sheet
+      // Mike reads: "Homepage conversion gaps identified", about a page that
+      // returned zero characters. Three of five leads on 2026-08-21 were in
+      // exactly that state.
+      //
+      // The product does not change — a business with no readable site is still
+      // a rebuild candidate, and that is the honest reason. What changes is that
+      // the reason stops claiming we saw something.
+      if (!_positioningMeasurable) {
+        return { product:'Website Rebuild', price:'$50k+',
+                 reason:'We could not read their site on this run, so nothing here is a judgement about their pages. Re-run before pitching from it.',
+                 flag:'site-not-read' };
+      }
       return { product:'Website Rebuild', price:'$50k+', reason:'Homepage conversion gaps identified', flag:'' };
     };
 
@@ -38720,8 +39706,19 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           fromBrain: true,
         };
       }
-      // Fallback to rule-based if Brain didn't run (no API key or no content)
-      return getRecommendedProduct();
+      // ══ fromBrain WAS SET AND NOBODY EVER READ IT ═══════════════════════
+      // Two branches above stamp fromBrain:true. Nothing in server.js or
+      // index.html has ever read it, so a product the AUDIT chose and a product
+      // a five-line rule guessed are indistinguishable everywhere they are
+      // shown — including the handoff brief's "BRAND + OFFERING FIT", which is
+      // what Mike walks into the call with. Instance N of computed-but-not-
+      // passed, on the field that decides what we try to sell.
+      //
+      // Live 2026-08-21: Thrive Dental's audit returned no product at all
+      // ("Brain audit complete: null"), so the rule chose Website Rebuild and
+      // the sheet showed it exactly like a chosen one.
+      const _ruled = getRecommendedProduct();
+      return { ..._ruled, fromBrain: false };
     })();
 
     // Post-research score — adds up to 15 points on top of discovery score
@@ -39062,17 +40059,45 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // same question from opposite sides: what a lead COST and what it TOOK.
     { const _t = netReport(); if (_t) console.log(`\u23f1 TIME [${company}]: ${_t}`); }
     { const _sp = placesSpendLine(company); if (_sp) console.log(_sp); }
+    // The day so far, beside the per-lead figures, so "what has this morning
+    // cost" is one line in the log instead of arithmetic across fifty.
+    { const _d = daySpendLine(); if (_d) console.log(_d); }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
-    const _throttled = FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled;
+    // This lead's own refusals when we have a ledger; the process-wide delta
+    // only as a fallback for a path that runs outside one, and it says so.
+    const _throttled = _led ? (_led.throttled || 0) : (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled);
     if (_throttled > 0) {
       console.log(`\u26a0 FIRECRAWL THROTTLED ${_throttled}x during [${company}] — pages were refused, not empty. Treat any "no decision-maker found" here as UNKNOWN and re-run this lead.`);
     }
 
     res.json({
       reachability: reach.score,
+      // What THIS lead cost, in the response, so the screen can sum a run
+      // without anyone reading the Render log. From the same per-request
+      // ledger the log lines read; null on any path outside one. Second
+      // property, not first: clientcheck anchors its contract reader on the
+      // line above, and moving it broke that check loudly on first run -
+      // which is the anchor doing its job.
+      leadSpend: (() => {
+        try {
+          const _l = FC_LEDGER.getStore();
+          return _l ? { fcCredits: Number((_l.spent || 0).toFixed(1)), fcOps: _l.ops || 0, fcSaved: _l.saved || 0,
+                        places: _l.places || 0, anthropicUsd: Number((_l.anthropicUsd || 0).toFixed(4)), apify: _l.apify || 0 } : null;
+        } catch (e) { return null; }
+      })(),
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
+      // ══ INSTANCE TWENTY-ONE OF COMPUTED-BUT-NOT-PASSED ═══════════════════
+      // The client merge has read data.reviewsRead and data.ownerReplyCount
+      // since the engagement work landed, and this response never carried
+      // either — so both round-tripped as null through every save and reload,
+      // and servercheck's "a dead Apify token reports reviewsRead as null"
+      // assertion was vacuously true on every build. Found by giving the
+      // golden lead the OPPOSITE assertion: populated when the mine answered.
+      reviewsRead: Number.isFinite(Number(reviewsRead)) ? Number(reviewsRead) : null,
+      ownerReplyCount: Number.isFinite(Number(ownerReplyCount)) ? Number(ownerReplyCount) : null,
+      serverContract: CONTRACT_VERSION,
       outreachChannel: reach.outreachChannel,
       // The EARLY route, decided before the paid audit. reach.outreachChannel above
       // is the FINAL verdict after the mailbox lookup actually ran; this one records
@@ -39246,7 +40271,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       earlyChannelReason: channelReason,
       auditSkippedForChannel: channelRoute === 'call',
       lsa,   // { eligible, badgeFound, evidence, marker, status }
-      rateLimited: (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0,
+      // This lead's own refusals. See the note in fcNoteRateLimited: a delta
+      // over the process counter flagged clean leads because a neighbour was
+      // throttled, and this banner is what tells an operator to re-run a lead.
+      rateLimited: (() => {
+        const _l = FC_LEDGER.getStore();
+        return _l ? (_l.throttled || 0) > 0 : (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0;
+      })(),
       ownerEmailMatch,
       ownerEmailMatchReason,
       // Gated like the sibling emit above: the resolver's explicit refusal wins
@@ -39366,12 +40397,113 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 //
 // It nearly cost a correct decision \u2014 the merged total made the Haiku switch
 // look like a regression when it had actually halved the bill.
+// ════════════════════════ WHAT A LEAD NEEDS BEFORE A PENNY MOVES ════════════
+// The Apify-403 day is the shape this exists for: fifty leads can burn at full
+// price around one dead Settings field, each one individually logged, none of
+// them stopped. The only things refused here are CONFIGURATION certainties —
+// a key that is absent is absent for every lead in the batch, and the audit
+// it buys is not the audit anyone thinks they are buying:
+//   no Anthropic key   no audit can be written at all
+//   no Firecrawl key   the whole website half is dark, on a lead that HAS one
+//   no Places key      eleven of forty-one signals dark, including BOTH
+//                      findings that have ever earned a reply (PART 4 sec 11
+//                      records this exact silent state)
+//   website not a URL  we would spend a full cycle auditing a typo
+//
+// What is deliberately NOT here, each with its reason:
+//   a dead domain      NXDOMAIN is a REAL lead — siteConfirmedDown is a rung,
+//                      "your website is gone" is sellable, and the pipeline
+//                      already fails cheap on it (the map returns empty, so
+//                      the interior reads are never bought)
+//   a missing Apify    the audit is thinner, not false — it becomes a warning,
+//   token              rate-limited to once an hour because a warning printed
+//                      fifty times per batch is one nobody reads
+//   an unreachable     a 403 or a timeout is a site that EXISTS — refusing on
+//   site               reachability would delete bot-hardened leads, which is
+//                      the guard-too-tight failure sec 14 records
+//
+// Pure, so the boot check drives every branch with its own bodies.
+const preflightResearch = (body, env) => {
+  const b = body || {};
+  const e = env || process.env;
+  const keys = b.keys || {};
+  const warnings = [];
+  const website = String(b.website || '').trim();
+  if (website) {
+    const _candidate = /^https?:\/\//i.test(website) ? website : 'https://' + website;
+    let _bad = false;
+    try {
+      const _u = new URL(_candidate);
+      if (!/\./.test(_u.hostname)) _bad = true;
+    } catch (err) { void err; _bad = true; }
+    if (_bad) {
+      return { refuse: `the website on this lead is "${website.slice(0, 80)}", which is not a URL and cannot become one. Nothing was spent. Fix the website field (a bare domain like acme.com is fine) or clear it so the lead routes to the phone channel.` };
+    }
+  }
+  if (!String(b.apiKey || '').trim()) {
+    return { refuse: 'no Anthropic API key came with this request, so no audit could be written at all while Places, Firecrawl and Apify were still paid in full. Nothing was spent. Add the key in Settings and re-run.' };
+  }
+  if (website && !String(keys.firecrawlKey || '').trim()) {
+    return { refuse: 'this lead has a website and no Firecrawl key came with the request, so the entire website half of the audit would be dark while everything else still gets paid for. Nothing was spent. Add the Firecrawl key in Settings and re-run.' };
+  }
+  if (!String(e.GOOGLE_PLACES_KEY || '').trim()) {
+    return { refuse: 'GOOGLE_PLACES_KEY is not set on the server, so the rank check and the profile read would both return "not checked" '+String.fromCharCode(0x2014)+' eleven of the forty-one measured signals, including both findings that have ever earned a reply. Nothing was spent. Set the environment variable on the server and re-run.' };
+  }
+  if (!String((keys.apifyToken || b.apifyToken || '')).trim()) {
+    warnings.push('no Apify token: the review mine is dark, so review_pain_pattern '+String.fromCharCode(0x2014)+' one of only two findings with a real reply behind it '+String.fromCharCode(0x2014)+' cannot fire on any lead in this state. The audit still runs; add the token in Settings to get the best finding back.');
+  }
+  return { ok: true, warnings };
+};
+// A warning per LEAD is a warning per BATCH times fifty, and a line printed
+// fifty times is one nobody reads — the recorded cost at the CTA precaution.
+// Once an hour per distinct message, with the scope stated in the message.
+const _preflightWarnedAt = new Map();
+const preflightWarnOnce = (company, msg, now) => {
+  const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const last = _preflightWarnedAt.get(msg) || 0;
+  if (t - last < 60 * 60 * 1000) return false;
+  _preflightWarnedAt.set(msg, t);
+  console.log(`\u26a0 PREFLIGHT [${company}]: ${msg} (This applies to every lead until Settings change; saying it once an hour, not once a lead.)`);
+  return true;
+};
 const runResearch = (req, res) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
-  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 },
+  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
     () => NET_LEDGER.run({ by: new Map(), gateWaitMs: 0 }, () => _runResearchInner(req, res))));
 
-app.post('/api/research', runResearch);
+// The synchronous route is the same worker with no job wrapper, kept because
+// the client falls back to it when /api/research-async answers 404 (an old
+// server). Until 2026-08-22 it was also a door AROUND the admission gates: a
+// lead posted here started spending with no preflight and no day ceiling.
+// Same gates, same refusal sentences as the queue's, so the screen renders
+// both the same way.
+const syncResearchGuard = (req, res) => {
+  const _who = (req.body && (req.body.company || req.body.name)) || 'lead';
+  const _pf = preflightResearch(req.body);
+  if (_pf.refuse) {
+    console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED AT PREFLIGHT \u2014 ${_pf.refuse}`);
+    return res.status(422).json({ error: _pf.refuse, preflightStopped: true });
+  }
+  for (const _w of (_pf.warnings || [])) preflightWarnOnce(_who, _w);
+  const _ceiling = budgetRefusal();
+  if (_ceiling) {
+    console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+    return res.status(429).json({ error: _ceiling.message, budgetStopped: true });
+  }
+  // The queue HOLDS on the credit latch because a top-up is usually minutes
+  // away; a synchronous request cannot politely hold, so it refuses by name.
+  // fcCreditsCoolingDown is the READ-ONLY predicate: refusing here must not
+  // consume the one probe that discovers a topped-up account. This route is
+  // the client's fallback for OLD servers; the queue remains the real
+  // admission path, with the concurrency and RSS gates a synchronous request
+  // cannot replicate without becoming a second copy of the queue.
+  if (req.body && req.body.website && fcCreditsCoolingDown()) {
+    console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED \u2014 the Firecrawl credit latch is set`);
+    return res.status(503).json({ error: 'Firecrawl reports the account out of credits \u2014 top up and retry; the breaker re-tests shortly.', outOfCredits: true });
+  }
+  return runResearch(req, res);
+};
+app.post('/api/research', syncResearchGuard);
 
 // ═══ JOB QUEUE ═════════════════════════════════════════════════════════════
 // THE PROBLEM: research takes 60-360 seconds. Sending that down one HTTP request
@@ -39547,12 +40679,28 @@ app.post('/api/research-async', (req, res) => {
   // worth of information. A double-click or a retried request is enough to cause
   // it. If the same company is already mid-flight, hand back the running job
   // instead of starting a second one — the client polls by id either way.
-  const _co = String(req.body?.company || '').trim().toLowerCase();
-  if (_co) {
+  // ---- AND IT KEYS ON THE BUSINESS, NOT ON A DISPLAY NAME ---------------
+  // Two different businesses share a name constantly - "Smith Plumbing" in two
+  // metros is two place IDs and two websites. Keyed on the lowercased name, the
+  // second request was handed the FIRST one's job id, and the client polls by
+  // id: it would have merged another business's audit onto this lead. PART 4
+  // section 19 is the worst bug this system has had and it is that exact shape,
+  // through a different door. The place ID is an identity; the domain is nearly
+  // one; the name is a guess, so it is the last resort.
+  const _jobKey = (b) => {
+    const pid = String((b && b.placeId) || '').trim();
+    if (pid) return 'pid:' + pid;
+    const site = String((b && b.website) || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+    if (site) return 'site:' + site;
+    return 'name:' + String((b && b.company) || '').trim().toLowerCase();
+  };
+  const _co = _jobKey(req.body || {});
+  if (_co && _co !== 'name:') {
     for (const [, j] of _jobs) {
-      if (j.status === 'running' && String(j.company || '').trim().toLowerCase() === _co) {
+      if (j.status === 'running' && j.dedupeKey === _co) {
         console.log(`JOB [${j.company}]: duplicate request ignored \u2014 job ${j.id} is already running (started ${Math.round((Date.now() - j.startedAt) / 1000)}s ago). Returning the in-flight job instead of paying for a second full run.`);
-        return res.json({ jobId: j.id, status: 'running', deduped: true });
+        return res.json({ jobId: j.id, status: 'running', deduped: true, company: j.company });
       }
     }
   }
@@ -39578,6 +40726,8 @@ app.post('/api/research-async', (req, res) => {
     // contract does not change at all.
     phase: 'queued',
     company: req.body?.company || 'unknown',
+    // What makes this job about THIS business. See the duplicate-run guard.
+    dedupeKey: _co,
     startedAt: Date.now(),
     startedWorkAt: null,
     finishedAt: null,
@@ -39729,6 +40879,25 @@ app.post('/api/research-async', (req, res) => {
   };
 
   Promise.resolve()
+    .then(() => {
+      // ══════ CONFIGURATION FIRST, BEFORE THE QUEUE ════════════
+      // A missing key is not going to appear while the lead waits for a slot,
+      // so this refuses instantly — same job-error plumbing as the credit and
+      // ceiling refusals, which the screen already knows how to show.
+      const _pf = preflightResearch(req.body);
+      if (_pf.refuse) {
+        job.status = 'error';
+        job.phase = 'dead';
+        job.workDone = true;
+        job.finishedAt = Date.now();
+        job.error = _pf.refuse;
+        job.preflightStopped = true;
+        console.log(`\u{1F6D1} JOB ${id} [${job.company}]: REFUSED AT PREFLIGHT \u2014 ${_pf.refuse}`);
+        return Promise.reject({ _preflightHandled: true });
+      }
+      for (const _w of (_pf.warnings || [])) preflightWarnOnce(job.company, _w);
+      return null;
+    })
     .then(() => _waitForSlot())
     .then(async () => {
       // Checked AFTER the wait, not before it: a lead can queue for ninety
@@ -39746,6 +40915,23 @@ app.post('/api/research-async', (req, res) => {
         console.log(`\u{1F534} JOB ${id} [${job.company}]: REFUSED BEFORE SPENDING \u2014 ${_broke}`);
         return null;
       }
+      // ══════ AND THE DAY'S CEILING, AT THE SAME SEAM ══════════
+      // Enforced at admission and never mid-lead: a lead already working
+      // finishes whatever it costs, because a half-lead is Firecrawl, Places,
+      // Apify and the model all spent for an audit nobody gets. Refused, not
+      // held — a budget does not top itself up the way a credit balance does,
+      // and a queue silently holding until midnight reads as a hang.
+      const _ceiling = budgetRefusal();
+      if (_ceiling) {
+        job.status = 'error';
+        job.phase = 'dead';
+        job.workDone = true;
+        job.finishedAt = Date.now();
+        job.error = _ceiling.message;
+        job.budgetStopped = true;
+        console.log(`\u{1F6D1} JOB ${id} [${job.company}]: REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+        return null;
+      }
       // The work begins HERE, so the timeout begins here too.
       job.phase = 'running';
       job.startedWorkAt = Date.now();
@@ -39754,6 +40940,9 @@ app.post('/api/research-async', (req, res) => {
     })
     .finally(() => { job.workDone = true; clearTimeout(_jobTimer); })
     .catch((e) => {
+      // A preflight refusal already wrote the job's error in full; the generic
+      // handler would overwrite that sentence with "[object Object]".
+      if (e && e._preflightHandled) return;
       job.status = 'error';
       job.error = e && e.message ? e.message : String(e);
       job.finishedAt = Date.now();
@@ -39875,6 +41064,19 @@ app.get('/api/session-report', (req, res) => {
 });
 
 app.listen(PORT, () => {
+  installBootRecorder();
+  // The schema probe waits for the verdict to settle: it prints plain lines,
+  // but a network probe during the counting window has no business there, and
+  // on a machine with no Supabase the "not configured" line should not sit in
+  // the middle of the check block.
+  {
+    const _schemaTimer = setInterval(() => {
+      if (BOOT_STATUS.phase === 'checking') return;
+      clearInterval(_schemaTimer);
+      probeSupabaseSchema().catch(() => {});
+    }, 5000);
+    if (_schemaTimer.unref) _schemaTimer.unref();
+  }
   const has = (ok) => (ok ? '\u2713' : '\u2717 MISSING');
   console.log(`CROJungle v6 — port ${PORT}`);
   // The list is the point. A marker that checks five hand-typed names goes stale
@@ -40876,8 +42078,16 @@ app.listen(PORT, () => {
   // reads like a data problem rather than a typo. So this check calls the
   // resolver the way the pipeline does and asserts the ladder survives.
   try {
+    // FOUND IN THE SEARCH, which is the ordinary lead. This fixture used to say
+    // found:false while asserting that the review complaint leads, and it only
+    // passed because resolveMeasurements did not yet return rankChecked — so the
+    // ladder here ran without the "did we look?" flag that every live lead
+    // carries, and absent_from_search (harm 96) could not fire. That is the
+    // recorded half-a-call-site shape: the check used the resolver's output and
+    // then hand-added what the route adds. The absent case is asserted below on
+    // its own, where it is the subject rather than an accident.
     const _m = resolveMeasurements({
-      localRank: { checked: true, found: false, scanned: 20, unstable: true },
+      localRank: { checked: true, found: true, rank: 6, scanned: 20 },
       gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
       history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
       reviewsRead: 116, ownerReplyCount: 4,
@@ -40889,6 +42099,50 @@ app.listen(PORT, () => {
     const _r = rankHarms({ ..._m, reviewPainCount: 2,
       reviewPainTop: 'poor communication during and after surgery',
       reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    // ---- AND THE SAME BUSINESS, MISSING FROM ITS OWN SEARCH ----
+    // Identical measurements, one field moved: they were not in the results.
+    // absent_from_search is harm 96, above every review rung, and it is the most
+    // checkable sentence in the file - he either appears or he does not.
+    // Asserted because the fixture above WAS this shape until 2026-08-21 and
+    // asserted the opposite, and passed: the resolver did not yet report whether
+    // the search had been run, so the rung could not fire here at all. Both
+    // halves of the question are now pinned, on one measurement set.
+    const _mGone = resolveMeasurements({
+      // absenceConfirmed is what a SECOND independent search sets. Without it
+      // this is one noisy Places draw, and the rung must stay silent.
+      localRank: { checked: true, found: false, scanned: 20, absenceConfirmed: true },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
+      reviewsRead: 116, ownerReplyCount: 4,
+      sitePagesArg: { booking: 'none_found', bookingMeasured: true, prices: [] },
+      tradeWordArg: 'plastic surgeon',
+      reviewPainArg: { pattern: 'poor communication during and after surgery' },
+      growthConstraintArg: { checked: true, layer: 'THROUGHPUT', condition: 'x' },
+    });
+    const _rGone = rankHarms({ ..._mGone, reviewPainCount: 2,
+      reviewPainTop: 'poor communication during and after surgery',
+      reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    const _goneLead = (_rGone && Array.isArray(_rGone.byHarm) && _rGone.byHarm[0]) ? _rGone.byHarm[0].id : '';
+    // AND ONE DRAW IS NOT AN ABSENCE. Live, this function's own history: one
+    // business returned #3 and #12 minutes apart. Harm 96 on a single sample
+    // tells an owner he is invisible in his own city on the strength of a
+    // measurement the file already refuses to state as a position.
+    const _mOnce = resolveMeasurements({
+      localRank: { checked: true, found: false, scanned: 20 },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
+      reviewsRead: 116, ownerReplyCount: 4,
+      sitePagesArg: { booking: 'none_found', bookingMeasured: true, prices: [] },
+      tradeWordArg: 'plastic surgeon',
+      reviewPainArg: { pattern: 'poor communication during and after surgery' },
+      growthConstraintArg: { checked: true, layer: 'THROUGHPUT', condition: 'x' },
+    });
+    const _rOnce = rankHarms({ ..._mOnce, reviewPainCount: 2,
+      reviewPainTop: 'poor communication during and after surgery',
+      reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    const _onceHasAbsence = !!(_rOnce && Array.isArray(_rOnce.byHarm)
+      && _rOnce.byHarm.some(x => x && x.id === 'absent_from_search'));
+
     // ══ AND THE REAL CALL SITES, NOT JUST A LITERAL ════════════════════════
     // The check above passes a hand-built object, which is exactly how the
     // fuzzers missed both crashes. What broke twice was the ARGUMENT LIST at the
@@ -40921,10 +42175,14 @@ app.listen(PORT, () => {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the harm ladder produced nothing on a lead with a repeating review complaint. When it throws, the whole email falls back to the model writing unassisted and the log says only "harm ladder failed".`);
     } else if (_lead !== 'review_pain_pattern') {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: a lead whose own customers repeat a complaint opened on ${_lead} instead. The strongest finding this system produces is not leading.`);
+    } else if (_onceHasAbsence) {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: a single Places draw that missed produced absent_from_search anyway. That is harm 96 and the most alarming sentence in the file, built on the one measurement this system already refuses to state as a position \u2014 one business returned #3 and #12 minutes apart.`);
+    } else if (_goneLead !== 'absent_from_search') {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: the same business, absent from its own search, opened on ${_goneLead || 'nothing'} instead of absent_from_search. Harm 96 and binary \u2014 he either appears or he does not \u2014 and it can only fire if the resolver reports that the search was actually run.`);
     } else if (!_m.painTheme) {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the mined complaint did not reach the resolver as painTheme, so the subject line falls back to the generic set on exactly the leads with the best finding.`);
     } else {
-      console.log(`\u2713 LADDER SURVIVAL CHECK: a realistic measurement set runs through resolveMeasurements and rankHarms, a repeating review complaint reaches the ladder, leads it, and carries into the subject line \u2014 and the two argument-list names that killed the ladder before are still absent from the reviewPainArg slot. HONEST LIMIT: this check builds its own arguments, so it cannot see a bad name at the live call site; scopecheck.js's runtime-split globals list is the guard for that class, and LADDER CRASH VISIBILITY CHECK is the guard for the consequence.`);
+      console.log(`\u2713 LADDER SURVIVAL CHECK: a realistic measurement set runs through resolveMeasurements and rankHarms, a repeating review complaint reaches the ladder, leads it, and carries into the subject line; the same business absent from that search opens on absent_from_search instead \u2014 and the two argument-list names that killed the ladder before are still absent from the reviewPainArg slot. HONEST LIMIT: this check builds its own arguments, so it cannot see a bad name at the live call site; scopecheck.js's runtime-split globals list is the guard for that class, and LADDER CRASH VISIBILITY CHECK is the guard for the consequence.`);
     }
   } catch (e) {
     console.log(`\u26d4 LADDER SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}. That is the shape of the live failure: one undefined name takes the entire ladder with it.`);
@@ -40951,7 +42209,7 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
 
     // ONE — the catch must REMEMBER, not only log. A console line is not state.
     if (!_src.includes(_needle('_ladderFailure = (e && e.message)', ' || String(e);'))) {
@@ -41036,7 +42294,7 @@ app.listen(PORT, () => {
     // assembled at runtime with comment lines stripped, because a literal needle
     // finds itself and these comments quote the code.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _conflict = diagnosisConflict(', 'growthConstraint && growthConstraint.layer, bottleneck);'))) {
       _fails.push('the cascade no longer reconciles against the binding layer, so the two blocks can contradict each other on the sheet again');
     }
@@ -41165,7 +42423,7 @@ app.listen(PORT, () => {
     // with nothing under it. The last gate before Mike's phone call was absent
     // on the leads that needed it most. Asserted by POSITION in the source.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     const _qCall = _src.indexOf(_needle('stripUnverifiedQuotesDeep(parsed[k],', ' _corpus, _q, 1);'));
     const _mCall = _src.indexOf(_needle('stripUnmeasuredMoneyDeep(parsed[k],', ' _corpus, _m, 1, k);'));
     const _ladderGuard = _src.indexOf(_needle('if (_harmsForResponse', ' && parsed) {'));
@@ -41272,7 +42530,7 @@ app.listen(PORT, () => {
     // see a caller: this file records four checks that passed on a build with
     // their own fix reverted for exactly that reason.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _auditFilled = auditFilledness(', 'brainAudit);'))) {
       _fails.push('the BRAIN GATE no longer uses the shared test, so the rule the fixtures above prove is not the rule that runs on a lead');
     }
@@ -41333,6 +42591,22 @@ app.listen(PORT, () => {
     if (_bva.weakerAbove !== null) _fails.push('weakerAbove survived a row that is not us — it is counted against that row, so both halves must move together');
     if (_bva.weakerNames !== null) _fails.push('a named competitor survived a row that is not us — that is the finding with a real reply behind it, built on somebody else\'s numbers');
     if (_bva.rankRowNotUs !== true) _fails.push('the mismatch was not reported, so nothing downstream can say why the finding is missing');
+    // ══ THE POSITION IS THAT ROW'S TOO ════════════════════════════════════
+    // The first version of this guard nulled every review number and left rank
+    // and scanned alone — but localRank.rank IS that row's index, so another
+    // business's position went to eight conversion rungs that scale harm by it
+    // and to a spine that can assert "#N of M" to the owner.
+    if (_bva.rank !== null) _fails.push(`the position ${_bva.rank} survived a row we just decided is a different business — eight rungs scale their harm by it and the spine can say it out loud`);
+    if (_bva.scanned !== null) _fails.push('the size of the result list survived a row that is not us, so a band can still be derived from it');
+    // AND IT MUST NOT BECOME AN ABSENCE. absent_from_search is harm 96 and fires
+    // on rankChecked && !rankFound, so reporting a failed MATCH as a failed
+    // SEARCH tells an owner he does not appear in his own search. Neither side
+    // of the question may fire.
+    if (_bva.rankFound !== false) _fails.push('rankFound was left true on a row that is not us');
+    if (_bva.rankChecked !== false) {
+      _fails.push('rankChecked stayed true while rankFound went false, so absent_from_search (harm 96) now tells the owner he is invisible when the truth is that we could not identify his row — a worse false claim than the one being repaired');
+    }
+
 
     // AN IDENTITY MATCH IS NEVER QUESTIONED. A stale search index is not a
     // different business, and the comparison inside one search is still valid.
@@ -41342,6 +42616,10 @@ app.listen(PORT, () => {
                    weakerRows: [{ name: 'Rival A', reviews: 5 }] },
       gbpHealth: { checked: true, reviewCount: 150, rating: 4.9 },
     });
+    // AND A GOOD LEAD KEEPS ITS POSITION, or the guard has deleted the finding.
+    if (_byId.rank !== 4 || _byId.rankFound !== true) {
+      _fails.push(`an exact place-ID match lost its measured position (rank=${_byId.rank}, found=${_byId.rankFound}) — the guard is deleting the rank finding on healthy leads`);
+    }
     if (_byId.ourReviews !== 8) _fails.push('a row matched on the exact place ID was refused — that is an identity, not a guess, and refusing it deletes the outranked finding on every lead');
 
     // AND THE FIGURE COMES FROM GOOGLE'S RECORD EVEN WHEN THE ROW IS US. The
@@ -41417,7 +42695,7 @@ app.listen(PORT, () => {
     // AND THE THREE PLACES IT HAS TO BE WIRED. Needles assembled at runtime with
     // comment lines stripped: the comments above quote these.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _note = apifyAccount', 'Problem(code);'))) {
       _fails.push('the review mine no longer classifies its own failure, so a dead token is a per-lead mystery again');
     }
@@ -41521,7 +42799,7 @@ app.listen(PORT, () => {
     // prove a rule that never runs. This file records four checks that passed on
     // a reverted build for exactly this reason.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     const _wired = (_src.match(new RegExp(_needle('opsPain: readOperational', 'Pain\\('), 'g')) || []).length;
     if (_wired < 2) _fails.push(`${_wired} of the 2 constraint call sites pass the measured reading \u2014 the other one still decides on a raw count of themes`);
     // POSITIVE, AND SPLIT SO IT CANNOT FIND ITSELF. The first version searched
@@ -41561,7 +42839,7 @@ app.listen(PORT, () => {
     // AND THE CALL SITES: three scanners read mailto links and all three took the
     // href verbatim. A helper nothing calls fixes nothing.
     const _needle2 = (...parts) => parts.join('');
-    const _src2 = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src2 = selfSourceNoComments();
     // EACH SCANNER BY NAME. Counting call sites was wrong twice over: the
     // definition does not contain "addressFromMailto(" at all, and one scanner
     // passes the function by REFERENCE inside a .map, so a count of parenthesised
@@ -41611,7 +42889,7 @@ app.listen(PORT, () => {
     }
     // AND THE CALL SITE, or the pattern is right and unused.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && ', '!(_CORRECT_BUT.test(f)'))) {
       _fails.push('the fact-check flag list no longer separates confirmed-correct wording notes, so "Do not say" fills with true sentences again');
     }
@@ -41646,6 +42924,45 @@ app.listen(PORT, () => {
     console.log(`⛔ SHEET TRUTHFULNESS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ NO JUDGEMENT ABOUT A PAGE WE NEVER OPENED ═════════════════════════════
+  // Three of five leads on 2026-08-21 read ZERO pages. Every one of them was
+  // still scored on positioning — a scorer whose every term reads `content` or
+  // `visualAnalysis`, returning 0-2 out of 10 from nothing — and 0 is not "we did
+  // not look", it is "we looked and it is terrible". That number then pushed a
+  // weak_positioning flaw, told the audit prompt "Dunford positioning: 0/10", and
+  // drove the rule-based product fallback to recommend a rebuild because
+  // "Homepage has critical conversion failures". The recorded unmeasured-as-zero
+  // class, pointed at the softest judgement in the system.
+  try {
+    const _fails = [];
+    if (siteWasRead('', null)) _fails.push('a lead with no content and no screenshot reads as a site we looked at');
+    if (siteWasRead(null, null) || siteWasRead(undefined, null)) _fails.push('a missing content field reads as a site we looked at');
+    if (siteWasRead('   \n  ', null)) _fails.push('whitespace reads as a page');
+    if (siteWasRead('x'.repeat(120), null)) _fails.push('120 characters reads as a page we can judge positioning from');
+    if (!siteWasRead('x'.repeat(600), null)) _fails.push('600 characters of their copy did NOT read as a page, so every judgement is suppressed on healthy leads');
+    if (!siteWasRead('', { hasHeadline: true })) _fails.push('a captured screenshot did not count as having seen the site — the vision read is the other way we look');
+    // AND EVERY CONSUMER. A predicate nothing consults changes nothing, and this
+    // file records four checks that passed on a reverted build because they
+    // exercised a function and never its call site.
+    const _needle = (...parts) => parts.join('');
+    const _src = selfSourceNoComments();
+    const _wired = [
+      [_needle('const _positioningMeasurable = siteWas', 'Read(content, visualAnalysis);'), 'the positioning scorer'],
+      [_needle('const positioningScore = !_positioningMeasurable ? null', ' :'), 'positioning returning NULL rather than a low score when blind'],
+      [_needle('if (Number.isFinite(positioningScore) && positioningScore < 4) flaws.push(', "'weak_positioning');"), 'the weak_positioning flaw'],
+      [_needle('const isBroken = flaws.includes(', "'no_cta') || (Number.isFinite(positioningScore)"), 'the rule-based product fallback'],
+      [_needle('if (!_positioningMeasurable) {', ''), 'the catch-all product reason'],
+      [_needle('return { ..._ruled, fromBrain: ', 'false };'), 'marking a rule-guessed product as not the audit\'s choice'],
+    ];
+    for (const [n, what] of _wired) {
+      if (!_src.includes(n)) _fails.push(`${what} no longer asks whether we read their site — a judgement about a page nobody opened goes back onto the sheet Mike dials from`);
+    }
+    if (_fails.length) console.log(`⛔ BLIND JUDGEMENT CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ BLIND JUDGEMENT CHECK: on a lead whose site we could not read, positioning is NOT MEASURED rather than zero, no weak-positioning flaw is raised, the audit prompt is told to say nothing about it, and the product recommendation stops claiming we saw a homepage. A rule-guessed product is also marked as one, so the handoff brief can tell it from a choice the audit actually made.`);
+  } catch (e) {
+    console.log(`⛔ BLIND JUDGEMENT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ THE CREDIT LATCH HAD NO WAY BACK ══════════════════════════════════════
   // Live, 2026-08-21: a five-lead batch came back "4 audit failed: FIRECRAWL IS
   // OUT OF CREDITS" on an account with credits in it. The latch is cleared only
@@ -41660,6 +42977,11 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _saveLatch = FIRECRAWL_OUT_OF_CREDITS, _saveAt = FIRECRAWL_CREDITS_EMPTY_AT, _saveProbe = _fcProbeAt;
+    // The probe below runs the REAL fcNote, which feeds the REAL day ledger,
+    // and the spend check's own rule is that boot must not charge fake spend
+    // to it. Snapshot and restore, mirroring the _gpCalls rollback next door.
+    const _saveSpent = FC_CREDITS_SPENT;
+    const _saveRunFc = runSpendToday().fc, _saveKindScrape = runSpendToday().byKind['scrape'] || 0;
     try {
       // Healthy: nothing is blocked and nothing is cooling down.
       FIRECRAWL_OUT_OF_CREDITS = false; FIRECRAWL_CREDITS_EMPTY_AT = 0; _fcProbeAt = 0;
@@ -41694,6 +43016,9 @@ app.listen(PORT, () => {
       if (!fcCreditsBlocked()) _fails.push('a re-trip does not re-close the breaker');
     } finally {
       FIRECRAWL_OUT_OF_CREDITS = _saveLatch; FIRECRAWL_CREDITS_EMPTY_AT = _saveAt; _fcProbeAt = _saveProbe;
+      FC_CREDITS_SPENT = _saveSpent;
+      { const _r = runSpendToday(); _r.fc = _saveRunFc;
+        if (_saveKindScrape > 0) _r.byKind['scrape'] = _saveKindScrape; else delete _r.byKind['scrape']; }
     }
 
     // ── WHAT IS ALLOWED TO TRIP IT IN THE FIRST PLACE ─────────────────────
@@ -41732,7 +43057,7 @@ app.listen(PORT, () => {
     // AND THE CALL SITES. A door that reads the raw latch instead of the breaker
     // is a door that can never reopen — which is what all five were.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     // A DOOR gates work on the latch; the CLEAR inside fcNote also reads it and
     // is the one place that SHOULD. The first version of this counted the clear
     // as a door and failed a correct build — and a check that cries wolf is one
@@ -41756,6 +43081,578 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- FIFTY LEADS CANNOT BURN AROUND ONE DEAD SETTINGS FIELD -----------
+  // The preflight gate, driven with its own bodies and its own env - the
+  // recorded trap is a check that can only exercise the configuration this
+  // dyno happens to have.
+  try {
+    const _fails = [];
+    const _envOk = { GOOGLE_PLACES_KEY: 'gp_x' };
+    const _ok = { website: 'acme-plumbing.com', apiKey: 'sk-x', keys: { firecrawlKey: 'fc-x', apifyToken: 'ap-x' } };
+
+    const _r0 = preflightResearch(_ok, _envOk);
+    if (!_r0.ok || (_r0.warnings || []).length) _fails.push('a fully-configured lead does not pass clean, so every real lead is refused or nagged and the gate gets switched off');
+
+    if (!/not a URL/.test((preflightResearch({ ..._ok, website: 'N/A' }, _envOk).refuse || ''))) {
+      _fails.push('a website of "N/A" is spent on - a full cycle auditing a typo');
+    }
+    if (preflightResearch({ ..._ok, website: 'https://www.acme.com/contact' }, _envOk).refuse) {
+      _fails.push('a full URL with a path is refused, and most stored websites carry one');
+    }
+    if (preflightResearch({ ..._ok, website: '' }, _envOk).refuse) {
+      _fails.push('a lead with NO website is refused - the phone-channel route exists for exactly that lead and this gate just deleted it');
+    }
+    if (!/Anthropic/.test((preflightResearch({ ..._ok, apiKey: '' }, _envOk).refuse || ''))) {
+      _fails.push('a missing Anthropic key is spent on - Places, Firecrawl and Apify all paid for an audit that can never be written');
+    }
+    if (!/Firecrawl key/.test((preflightResearch({ ..._ok, keys: { apifyToken: 'x' } }, _envOk).refuse || ''))) {
+      _fails.push('a lead WITH a website and no Firecrawl key is spent on, and the entire website half of the audit is dark');
+    }
+    if (preflightResearch({ ..._ok, website: '', keys: {} }, { ..._envOk }).refuse) {
+      _fails.push('a no-website lead is refused for the missing Firecrawl key it does not need');
+    }
+    if (!/GOOGLE_PLACES_KEY/.test((preflightResearch(_ok, {}).refuse || ''))) {
+      _fails.push('a server with no Places key is spent on - eleven of forty-one signals dark including both reply-earning findings, which PART 4 sec 11 records as the silent state');
+    }
+    {
+      const _warn = preflightResearch({ ..._ok, keys: { firecrawlKey: 'fc-x' } }, _envOk);
+      if (_warn.refuse) _fails.push('a missing Apify token REFUSES the lead - the audit is thinner without the mine, not false, and refusing deletes a run somebody chose to make');
+      else if (!(_warn.warnings || []).some(w => /Apify/.test(w))) _fails.push('a missing Apify token says nothing, so the best finding in the system goes dark with no word anywhere');
+    }
+    // The once-an-hour valve, driven with its own clock.
+    {
+      _preflightWarnedAt.clear();
+      const _t0 = 1_700_000_000_000;
+      const _orig = console.log; let _n = 0;
+      console.log = (...a) => { _n++; };
+      try {
+        preflightWarnOnce('A', 'warn-x', _t0);
+        preflightWarnOnce('B', 'warn-x', _t0 + 60_000);
+        preflightWarnOnce('C', 'warn-x', _t0 + 61 * 60_000);
+      } finally { console.log = _orig; }
+      _preflightWarnedAt.clear();
+      if (_n !== 2) _fails.push(`the warning valve printed ${_n} time(s) for three leads in an hour and one after - fifty identical lines per batch is a warning nobody reads, and zero is a warning nobody gets`);
+    }
+    // The call site: the gate must actually stand at the admission seam.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('const _pf = preflight', 'Research(req.body);'))) {
+        _fails.push('nothing at admission consults the preflight, so fifty leads burn at full price around one dead Settings field again');
+      }
+      if (!_s.includes(_n('if (e && e._preflight', 'Handled) return;'))) {
+        _fails.push('the refusal reason is overwritten by the generic catch, so the operator reads "[object Object]" instead of which Settings field to fix');
+      }
+      if (!_s.includes(_n("app.post('/api/research', syncResearch", 'Guard);'))) {
+        _fails.push('the synchronous research route no longer goes through its guard, so the fallback path is a door around every admission gate again');
+      }
+      if (!String(syncResearchGuard).includes(_n('preflightResearch(req', '.body)'))) {
+        _fails.push('the sync-route guard stopped consulting the preflight, so a lead posted there starts spending around a dead Settings field');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 PREFLIGHT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 PREFLIGHT CHECK: a lead is refused before a penny moves when its website cannot be a URL, when the Anthropic key is missing, when it has a site and no Firecrawl key, or when the server has no Places key - each refusal naming the exact field. A missing Apify token warns once an hour instead of refusing or going silent. A dead domain is deliberately NOT refused: siteConfirmedDown is a real lead, and the pipeline already fails cheap on it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PREFLIGHT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
+  // A lead worked during the boot window prints its own refusal glyphs, and
+  // the verdict recorder cannot tell a lead's refusal from a failed boot
+  // check - so one early POST could flip a healthy build's verdict red. The
+  // gate refuses POSTs under /api/ until the verdict settles. This check runs
+  // WHILE the phase is 'checking', which is exactly the state under test.
+  try {
+    const _fails = [];
+    if (!bootGateRefuses('POST', '/api/research', 'checking')) _fails.push('a lead POSTed during the boot window is admitted, so its own refusal lines can flip the boot verdict red');
+    if (!bootGateRefuses('POST', '/api/compose-email', 'checking')) _fails.push('the compose route is open during the boot window');
+    if (bootGateRefuses('GET', '/healthz', 'checking')) _fails.push('the gate refuses GETs, so Render cannot even read the health it is waiting on');
+    if (bootGateRefuses('GET', '/api/spend', 'checking')) _fails.push('reading the day ledger is refused during boot, and a read spends nothing and prints nothing');
+    if (bootGateRefuses('POST', '/api/research', 'green')) _fails.push('a settled green build still refuses work, which is an outage wearing a safety feature');
+    if (bootGateRefuses('POST', '/api/research', 'red')) _fails.push('a settled red build refuses work outright - /healthz already reports red to a gated deploy, and refusing here would brick a build one flaky check turned red');
+    if (bootGateRefuses('POST', '/p/token', 'checking')) _fails.push('a prospect opening their audit page during the boot window is refused');
+    if (!bootGateRefuses('POST', '/Api/Research', 'checking')) _fails.push('a mixed-case path walks around the gate - Express routes are case-insensitive by default, so /Api/research reaches the handler while the gate reads the path case-sensitively');
+    {
+      const _p0 = BOOT_STATUS.pending;
+      bootHold();
+      if (BOOT_STATUS.pending !== _p0 + 1) _fails.push('bootHold does not hold, so an async check cannot keep the verdict open and its late red is invisible again');
+      bootRelease();
+      if (BOOT_STATUS.pending !== _p0) _fails.push('bootRelease does not release, so the verdict never settles and every boot dies at the 180s cap');
+    }
+    {
+      const _n = (...p) => p.join('');
+      if (!String(bootWindowGate).includes(_n('bootGateRefuses(req.method, req.path, BOOT_', 'STATUS.phase)'))) {
+        _fails.push('the middleware stopped consulting the predicate, so the fixtures above test a function nothing calls');
+      }
+      if (!selfSourceNoComments().includes(_n('app.use(bootWindow', 'Gate);'))) {
+        _fails.push('the gate is not registered on the app, so every POST route is reachable during the boot window');
+      }
+      if (!String(bootWindowGate).includes('Access-Control-Allow-Origin')) {
+        _fails.push('the 503 carries no CORS header - it runs BEFORE the CORS middleware, so the Netlify client sees an opaque network error instead of the retry message this JSON exists to carry');
+      }
+      {
+        const _s2 = selfSourceNoComments();
+        if (!_s2.includes(_n('BOOT_STATUS.pend', 'ing > 0'))) {
+          _fails.push('settle no longer waits for pending async checks, so a red printed after the quiet window is invisible again - verdict GREEN with the failure it exists to catch on the screen');
+        }
+        const _holds = _s2.split(_n('boot', 'Hold();\r\n  (async () => {')).length - 1;
+        const _rels = _s2.split(_n('finally { boot', 'Release(); }')).length - 1;
+        if (_holds < 6 || _holds !== _rels) {
+          _fails.push(`the async-check hold/release pairing is broken (${_holds} holds wired to checks, ${_rels} releases) - an unheld check can report after settle invisibly, an unreleased one holds every boot to the 180s cap`);
+        }
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 BOOT WINDOW GATE CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 BOOT WINDOW GATE CHECK: while the boot checks are settling, every POST under /api/ answers 503 rather than starting work whose own refusal lines would be counted as failed boot checks; GETs (healthz, spend, job polls) stay open, and a settled build - green or red - takes work exactly as before.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BOOT WINDOW GATE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- A REAL QUOTE MUST NOT DIE ON AN AMPERSAND ------------------------
+  // The quote canonicaliser, both directions. The loosening direction is the
+  // one that matters most: a fabricated sentence must STILL match nothing, or
+  // this stopped being a truth gate the day it learned about entities.
+  try {
+    const _fails = [];
+    const _corpusEnt = 'Welcome to Smith &amp; Sons Roofing. We have served Dallas since the eighties and we answer our own phone.';
+    // SHORT quotes on purpose: the sliding window already heals a one-word
+    // break inside a LONG quote, so a long fixture here proves nothing - the
+    // first falsification run showed exactly that. The quotes that die on an
+    // entity or an accent are the short ones (nav text, button text, names),
+    // which is also where the recorded live drops were ('BOOK MY STRATEGY
+    // CALL', four of five words).
+    const _r1 = verifyOriginalFinding(
+      { finding: 'The homepage leads with the family name.', evidence: 'Smith & Sons Roofing serves' },
+      'Our promise: Smith &amp; Sons Roofing serves this town like family.');
+    if (!_r1.ok) _fails.push(`a short verbatim quote spanning an HTML entity is still refused (${_r1.why}) - the same words on both sides, split by an ampersand`);
+    const _corpusAcc = 'Dr. Jos\u00e9 Herrera has treated families here for twenty years and reads every message himself.';
+    const _r2 = verifyOriginalFinding(
+      { finding: 'The about page names the doctor.', evidence: 'Jose Herrera has treated' },
+      _corpusAcc);
+    if (!_r2.ok) _fails.push(`a short quote differing only by an accent is still refused (${_r2.why}) - one accent must not delete a real finding`);
+    const _r3 = verifyOriginalFinding(
+      { finding: 'The homepage promises a concierge tier.', evidence: 'our white-glove concierge membership guarantees a same-day slot' },
+      _corpusEnt + ' ' + _corpusAcc);
+    if (_r3.ok) _fails.push('a fabricated sentence now verifies - the canonicaliser loosened the rule instead of the spelling, and the truth gate is gone');
+    if (!_r3.ok && !/nearest miss: 0 /.test(String(_r3.why))) {
+      _fails.push(`a fabrication's drop line does not name its 0-word nearest miss (${String(_r3.why).slice(0, 90)}) - the one number that tells a fabricated quote from a boundary problem`);
+    }
+    // THE SHORT PATH MAY SHED FILLER, NEVER CONTENT. Both directions: the
+    // Fit Money class (one added filler word) must verify, and an invented
+    // five-word CTA riding a generic trade-site 4-gram must not.
+    const _r4 = verifyOriginalFinding(
+      { finding: 'The nav sells a strategy call.', evidence: 'BOOK MY STRATEGY CALL HERE' },
+      'Services. About us. BOOK MY STRATEGY CALL. Reviews.');
+    if (!_r4.ok) _fails.push(`the Fit Money class is refused again (${_r4.why}) - one added filler word must not delete a real four-word quote`);
+    const _r5 = verifyOriginalFinding(
+      { finding: 'The homepage leads with a giveaway offer.', evidence: 'Claim your free estimate today' },
+      'About our company. Schedule your free estimate today with our friendly office team.');
+    if (_r5.ok) _fails.push('an invented five-word CTA verifies off a generic 4-gram - the page never says Claim, and the short path is licensing fabrications on trade-site filler');
+    // A QUOTE CANNOT ASSEMBLE ACROSS A SEAM. The blank line between two
+    // corpus blocks is a wall, not a space.
+    const _r6 = verifyOriginalFinding(
+      { finding: 'Their homepage admits follow-up fails.', evidence: 'Call us today, no one ever calls back' },
+      'Trusted roofing for 20 years. Family owned. Call us today\n\nno one ever calls back after the estimate visit');
+    if (_r6.ok) _fails.push('a sentence that exists nowhere assembled itself across a corpus seam - the join between a page and a review block must never speak');
+    // AN ACCENT ARRIVING AS AN HTML ENTITY. Firecrawl markdown is where
+    // accented names arrive entity-encoded, and deleting the entity was the
+    // Jose bug through a second door.
+    const _r7 = verifyOriginalFinding(
+      { finding: 'The about page names the doctor.', evidence: 'Jose offers free consults' },
+      'Meet the team. Jos&eacute; offers free consults every Friday.');
+    if (!_r7.ok) _fails.push(`a verbatim quote whose accent arrives as an HTML entity is refused (${_r7.why}) - the Jose bug through the entity door`);
+    // WORD BOUNDARIES. celebRATE is not rate.
+    const _r8 = verifyOriginalFinding(
+      { finding: 'The site rates its own craftsmanship.', evidence: 'rate the craftsmanship of' },
+      'We celebrate the craftsmanship of every crew member.');
+    if (_r8.ok) _fails.push('a needle completing the tail of a longer corpus word verifies - a match must start on a word boundary');
+    // AN UNKNOWN &Word; MUST NOT VANISH AND JOIN ITS NEIGHBOURS. The rendered
+    // page says Insured&Bonded;, so a quote skipping Bonded is of a page that
+    // does not exist.
+    const _r9 = verifyOriginalFinding(
+      { finding: 'The homepage claims insured crews on every job.', evidence: 'Insured crews on every job since' },
+      'Insured&Bonded; crews on every job since 2004.');
+    if (_r9.ok) _fails.push('deleting an unrecognised &Word; joined two never-adjacent words - the quote is of a page that does not exist');
+    // THE CORPUS HOLDS THEIR WORDS, NOT THE MINER'S. The pain entries are
+    // "<model paraphrase> - evidence: \"<verbatim snippet>\" (source)", and the
+    // verify corpus must extract the snippet alone: a truth gate whose
+    // guarantee is "the words are theirs" must not verify a quote against
+    // another model's paraphrase. Call-site needle, assembled at runtime.
+    {
+      const _n = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_n('publicPainSignals.map(s => ((String(s).match(/evidence: ', '"(.+)" \\(/)'))) {
+        _fails.push('the verify corpus is back to holding the whole pain entry, so a quote of the review-mining model\'s own paraphrase verifies as the prospect\'s words');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 QUOTE CANON CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 QUOTE CANON CHECK: a verbatim quote no longer dies on an HTML entity or an accent - both sides are canonicalised by ONE module-scope normaliser (two truth gates each held their own identical copy, which is the two-hand-kept-copies disease inside the gates themselves). A fabricated sentence still matches nothing, and every drop now names its nearest miss so a fabrication (0 words line up) reads differently from a boundary problem (all but one word lines up).`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 QUOTE CANON CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- NOTHING COULD SAY STOP -------------------------------------------
+  // The day ledger and its ceilings. Executed against synthetic spend, because
+  // running the real noteRunSpend at boot would charge fake spend to the real
+  // day; the wiring is asserted at the call sites instead, which is where four
+  // separate fixes in this file have gone dead before.
+  try {
+    const _fails = [];
+
+    // The rollover: a new day zeroes everything, the same day preserves it.
+    const _r = { day: '2026-08-21', fc: 700, places: 40, anthropicUsd: 4.2, apify: 9, byKind: { screenshot: 250 } };
+    rollSpendDay(_r, '2026-08-21');
+    if (_r.fc !== 700 || _r.byKind.screenshot !== 250) _fails.push('the same day wiped the ledger, so the ceiling can never be reached and every ceiling is decorative');
+    rollSpendDay(_r, '2026-08-22');
+    if (_r.fc !== 0 || _r.places !== 0 || _r.anthropicUsd !== 0 || _r.apify !== 0 || Object.keys(_r.byKind).length) {
+      _fails.push('a new day did not zero the ledger, so yesterday counts against today and the first lead of the morning is refused');
+    }
+
+    // The refusal: over refuses naming the setting, under passes, and the
+    // check hands in its own spend and budgets - the recorded trap is a check
+    // that can only exercise the configuration where nothing can go wrong.
+    const _spend = { fc: 1500, places: 10, anthropicUsd: 1, apify: 0 };
+    const _budgets = { fc: 1500, places: 600, anthropicUsd: 20, apify: 150 };
+    const _over = budgetRefusal(null, _spend, _budgets);
+    if (!_over || _over.service !== 'fc') _fails.push('spend equal to the ceiling does not refuse, so the ceiling is off by one lead forever');
+    else if (!/FC_DAILY_BUDGET/.test(_over.message)) _fails.push('the refusal does not name the setting that raises it, which is the log-line-naming-the-wrong-cause class');
+    if (budgetRefusal(null, { fc: 10, places: 10, anthropicUsd: 0.5, apify: 1 }, _budgets)) {
+      _fails.push('an ordinary morning is refused, and a ceiling that fires on the normal case is one somebody turns off');
+    }
+    const _usd = budgetRefusal(['anthropicUsd'], { fc: 0, places: 0, anthropicUsd: 25, apify: 0 }, _budgets);
+    if (!_usd || !/\$25\.00 of \$20/.test(_usd.message)) _fails.push('the dollar ceiling does not read as dollars');
+    if (budgetRefusal(['places'], _spend, _budgets)) _fails.push('a needs list scoped to one service is still refusing on another - the needs list exists so a route is refused only on the services that seam itself spends; lanes that spend elsewhere carry their own gate');
+
+    // The OFF convention: 0 or less disables, loudly at boot; junk and empty
+    // fall back to the default rather than to anything surprising.
+    if (_budgetEnvProbe('', 5) !== 5) _fails.push('an unset ceiling is not the default');
+    if (_budgetEnvProbe('0', 5) !== Infinity) _fails.push('0 does not turn a ceiling off, and the boot warning about it is lying');
+    if (_budgetEnvProbe('junk', 5) !== 5) _fails.push('a junk value became a ceiling');
+    if (_budgetEnvProbe('250', 5) !== 250) _fails.push('a set value is ignored');
+
+    // The wiring. Needles assembled at runtime, comment lines stripped.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      for (const [needle, what] of [
+        [_n("noteRunSpend('fc', _co", 'st,'), 'the Firecrawl door stopped feeding the day ledger, so Firecrawl spend is invisible to its own ceiling'],
+        [_n("noteRunSpend('places'", ', 1,'), 'the Places door stopped feeding the day ledger'],
+        [_n("noteRunSpend('anthropicUsd'", ', cost,'), 'the Anthropic door stopped feeding the day ledger'],
+        [_n("noteRunSpend('apify'", ', 1,'), 'the Apify door stopped feeding the day ledger'],
+        [_n('const _ceiling = budget', 'Refusal();'), 'research admission no longer consults the ceiling, so the one place built to say stop says nothing'],
+        [_n("budgetRefusal(['pla", "ces'])"), 'a Find run no longer consults the Places ceiling, and one press of Find costs what sixty audits cost'],
+        [_n("budgetRefusal(['anthropic", "Usd'])"), 'the compose route no longer consults the model ceiling'],
+        [_n('leadSpend: (()', ' => {'), 'the response stopped carrying what the lead cost, so the screen is back to arithmetic over the Render log'],
+      ]) {
+        if (!_s.includes(needle)) _fails.push(what);
+      }
+      if (!String(syncResearchGuard).includes(_n('budget', 'Refusal();'))) {
+        _fails.push('the synchronous research route stopped consulting the day ceiling, so the fallback path spends past every ceiling');
+      }
+      if (!String(syncResearchGuard).includes(_n('fcCreditsCooling', 'Down()'))) {
+        _fails.push('the synchronous research route stopped consulting the credit latch, so the fallback path spends into a known-empty account');
+      }
+      {
+        const _gate429 = _n("budgetRefusal(['anthropic", "Usd']); if (_c) return res.status(429)");
+        if (_s.split(_gate429).length - 1 < 2) {
+          _fails.push('the Generate or LinkedIn route stopped consulting the model ceiling - metered but never gated is how a spent budget keeps spending a nickel a press all day');
+        }
+      }
+      if (!_s.includes(_n("fcNote(true, 'scrape', String(", 'url));'))) {
+        _fails.push('the client scrape route stopped counting its credit, so a whole Firecrawl door is invisible to the ledger and its ceiling again');
+      }
+      if (!_s.includes(_n("budgetRefusal(['fc', 'anthropic", "Usd'])"))) {
+        _fails.push('the for-sale lane stopped consulting the two ceilings it spends against');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 SPEND CEILING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SPEND CEILING CHECK: one UTC-day ledger fed by the same four doors as the per-lead meters, a ceiling per service enforced at admission and never mid-lead, refusals that name the exact setting to raise, 0 as the loud off-switch, and the response carrying what each lead cost. Before this, nothing anywhere could say stop, and a runaway day would have emptied the accounts with every line item correctly logged.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SPEND CEILING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- FOUR PLACES A MODEL SENTENCE OR A BLANK VARIABLE COULD SPEAK -------
+  // Each of these was live on 2026-08-22 and none of them had a guard.
+  try {
+    const _fails = [];
+
+    // 1. A MODEL SENTENCE MAY NOT INTRODUCE A NUMBER. SHARPER CLAIM replaces
+    //    the ladder's spine with the audit's own finding, and the comment above
+    //    it promised "this can sharpen the claim; it cannot introduce a number"
+    //    while permittedFigures read opts.spine - the sentence it had just been
+    //    replaced with. It licensed its own digits.
+    if (unlicensedFigureIn('their booking page has been down for 47 days', ['reviews: 214']) !== '47') {
+      _fails.push('a digit nothing measured passes as licensed, so the audit model can put an invented number in the FIRST sentence of a cold email');
+    }
+    if (unlicensedFigureIn('214 people have reviewed them', ['reviews: 214'])) {
+      _fails.push('a figure we DID measure reads as invented, which would refuse every true claim and drop the lead to the flat template');
+    }
+    if (unlicensedFigureIn('their contact page asks for information before anyone can call', [])) {
+      _fails.push('a sentence with no numbers in it at all is being refused');
+    }
+
+    // 8. A HEDGE CANNOT BUY A FINISHED EVENT OR A CLOCK. Two gates apply the
+    //    opinion-marker rule; only one implemented this half, and the other had
+    //    the rule written in its own comment four lines above the code it was
+    //    missing from. Its OPINABLE list is full of completed events - "states
+    //    which business the customer chose", "states what the customer ended up
+    //    doing" - so "my read is they've already gone with somebody else"
+    //    passed. A finished event and a clock both say we were watching, and no
+    //    hedge makes that true.
+    if (!hedgeCannotBuy("my read is they've already signed with somebody else", false)) {
+      _fails.push('an opinion marker still licenses a COMPLETED event, so a sentence claiming we watched a customer leave ships hedged');
+    }
+    if (!hedgeCannotBuy('my read is most of them give up by 9pm', true)) {
+      _fails.push('an opinion marker still licenses a CLOCK, and a specific hour says we were watching');
+    }
+    if (hedgeCannotBuy('my read is a lot of them give up and phone somebody else', false)) {
+      _fails.push('a genuine read about habitual behaviour is being refused - that is the sentence an owner argues with, and an owner who argues has replied');
+    }
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('_sharpBad = _sharp ? unlicensed', 'FigureIn(_sharp.finding, _sp.figures)'))) {
+        _fails.push('the sharper-claim swap no longer checks the finding against our measured figures, so the promise written above it is false again');
+      }
+      // 2. THE FIGURE LICENCE READS THE MEASURED HALF OF THE ASSERT BLOCK.
+      if (!_s.includes(_n('buildEmailEvidence(_evidence).assertable', 'Measured'))) {
+        _fails.push('the verifier is handed the whole ASSERT block for figure licensing again, and one line of it is the audit model\'s own prose');
+      }
+      // 3. THE SALVAGED HOMEPAGE MARKUP REACHES THE THREE READS THAT NEED IT.
+      //    htmlSignals and the navigation were both recovered from the copy we
+      //    fetched ourselves and homepageHtml was not - so on every lead
+      //    Firecrawl could not fetch, the booking read ran on tag-stripped text
+      //    with bookingMeasured still stamped true, and no_after_hours (SELLABLE
+      //    5) told owners with a booking button that the only way in is a call.
+      if (!_s.includes(_n('homepageHtml = String(_siteDown', 'Verdict.html || \'\');'))) {
+        _fails.push('the homepage markup we fetched ourselves is no longer kept, so the booking read, the advertising tags and the phone number all run on tag-stripped text whenever Firecrawl comes back empty');
+      }
+      if (!_s.includes(_n('pageHtml: homepage', 'Html || content,'))) {
+        _fails.push('the phone read is back on a variable that only exists on the Firecrawl path');
+      }
+      // AND THE PREDICATE IS ACTUALLY CONSULTED. The three fixtures above run
+      // hedgeCannotBuy directly, which is a check of the RULE and not of the
+      // gate: reverting the OPINABLE branch to a bare marker test left all three
+      // green. Ninth recorded instance of "a check that does not assert its call
+      // site is half a check".
+      if (!_s.includes(_n('OPINION_MARKERS.test(_hit) && !hedgeCannot', 'Buy(_hit, CLOCK_WORDS.test(_hit))'))) {
+        _fails.push('the email gate takes any opinion marker at face value again, so "my read is they have already gone with somebody else" ships - and the rule it is missing is written in its own comment four lines above');
+      }
+      if (!_s.includes(_n('const _claimsKnowledge = hedgeCannot', 'Buy(sent, clocked);'))) {
+        _fails.push('the post-contact gate has its own copy of the rule again, which is how the two came to disagree');
+      }
+      // 12. THE ALREADY-EMAILED BLOCK HAS EXACTLY ONE DOOR, AND A HUMAN
+      //     OPENS IT. The block is right - a second sequence to an owner who
+      //     already had one is the most expensive mistake here - but the client
+      //     has a documented "Send again" button whose dialog says to delete the
+      //     contact in Hunter first, and there was no way through, so that
+      //     workflow could not complete at all. Both halves are asserted: the
+      //     door exists, and it is opened only by that flag.
+      if (!_s.includes(_n('SENT_RECIPIENTS.has(_norm) && lead.resend', 'Approved === true'))) {
+        _fails.push('the deliberate re-send has no way past the already-emailed block, so the button that tells an operator to clear Hunter first cannot finish the job it describes');
+      }
+      if (!_s.includes(_n('} else if (_norm && SENT_RECIPIENTS.has', '(_norm)) {'))) {
+        _fails.push('the already-emailed block no longer refuses an unconfirmed repeat, which is the most expensive mistake this send path can make');
+      }
+      // 10. THE ARM RECORDED IS THE ARM THAT SHIPPED. _ctaMode became 'page'
+      //     the moment the page saved, and the model path rewrites the closing
+      //     sentence - which is the one carrying the URL. A page arm recorded on
+      //     an email with no link in it makes the comparison unreadable in the
+      //     direction that looks like failure.
+      if (!_s.includes(_n('_bodies.every(b => b.includes(_page', 'Url))'))) {
+        _fails.push('the ask arm is recorded from what we intended rather than from what the email actually carries, so sends with no link count as a page arm nobody visited');
+      }
+      // 11. AN ABSENCE ABOUT A PHONE NUMBER READS THE MARKUP. The finding is
+      //     "the number on their Google listing appears nowhere on their own
+      //     website", and it was measured against markdown only - so a number
+      //     published as an icon-only tel: link, which is how most trade sites
+      //     put it in the header, read as absent. The owner disproves it in one
+      //     click.
+      if (!_s.includes(_n("+ ' ' + String(homepage", "Html || ''));"))) {
+        _fails.push('the phone-mismatch claim is back on markdown alone, so an icon-only tel: link reads as a number that appears nowhere on their site');
+      }
+      // 9. THE DUPLICATE-RUN GUARD KEYS ON THE BUSINESS. Two different
+      //    businesses share a display name constantly, and the client polls by
+      //    job id - so a name-keyed dedupe handed one lead another company's
+      //    audit, which is PART 4 section 19 through a different door.
+      if (!_s.includes(_n('j.status === \'running\' && j.dedupe', 'Key === _co'))) {
+        _fails.push('the duplicate-run guard matches on a display name again, so two businesses called the same thing share one audit');
+      }
+      if (!_s.includes(_n("if (pid) return 'pid:'", ' + pid;'))) {
+        _fails.push('the job key no longer prefers the place ID, which is the only identity in the request');
+      }
+      // 5. NO SLUG, NO SEND. ensureHunterAttribute returns null when Hunter's
+      //    API is down or the key is wrong, and every use of the result is
+      //    guarded with `if (slug)` - so a null one was silently skipped, the
+      //    lead was pushed anyway, reported in results.sent, and the sequence
+      //    step delivered its own static text to the prospect.
+      if (!_s.includes(_n('if (!pitchSlug || !subject', 'Slug) {'))) {
+        _fails.push('a send can go out with nowhere to put the written email, so every lead in the batch receives whatever static text sits in step 1 and is reported as sent');
+      }
+      if (!_s.includes(_n('if (!fu1.body || !fu1Body', 'Slug) missingFu.push'))) {
+        _fails.push('a follow-up with copy but no attribute to carry it is no longer refused, and the step goes out generic');
+      }
+      // 6. THE SHARPER CLAIM REACHES THE OBJECT THAT SHIPS. parsed.factualSpine
+      //    is a SPREAD COPY of the ladder's whenever a LOCAL_ONLY rung forced
+      //    the swap, so mutating the ladder's copy logged a change that reached
+      //    nothing.
+      if (!_s.includes(_n('const _sp = (parsed && parsed.factualSpine) ||', ' (_harmsForResponse && _harmsForResponse.factualSpine);'))) {
+        _fails.push('the sharper claim is written onto a copy of the spine that no longer ships, so the log announces a change nothing downstream can see');
+      }
+      // 7. THE AUDIT GETS ITS FINDINGS WHETHER OR NOT AN EMAIL CAN BE WRITTEN.
+      //    These three were attached inside the spine block, so a lead whose
+      //    every finding is INTERNAL_ONLY got none of them - while rankHarms
+      //    had just logged that the call sheet still carries every one.
+      if (!_s.includes(_n('parsed.problemList = _harmsForResponse.problemList |', '| [];'))) {
+        _fails.push('the findings reach the audit only when an EMAIL could be written, so a lead whose findings are all internal-only reaches Mike as a clean business - and the log tells him the sheet carries them');
+      }
+      // 4. AN ABSENT SERVICE ROW BUYS A SECOND SEARCH. pickRankRow PROMOTES
+      //    that row over every found row and it produces harm 96 - the head
+      //    term has bought a second sample for weeks and this one had not.
+      if (!_s.includes(_n('results[_i] = { ..._absent1, absence', 'Confirmed: true,'))) {
+        _fails.push('an absent service-page row no longer buys a second search, so the highest-harm sentence in the system rests on one noisy Places draw again');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 MODEL PROSE AND BLANK INPUT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 MODEL PROSE AND BLANK INPUT CHECK: a sentence the audit model wrote can sharpen the opening claim and can never add a number to it; the figure licence reads only the half of the ASSERT block we assembled ourselves; the homepage markup we fetch when Firecrawl fails reaches the booking, advertising and phone reads instead of leaving them on tag-stripped text; and an absent service-page row buys the second search the head term has bought for weeks before it can claim harm 96.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MODEL PROSE AND BLANK INPUT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- HIS REVENUE IS NOT OUR FEE -----------------------------------------
+  // "QUOTES OUR PRICE IN PROSPECT-FACING COPY" fired on "$30k-$80k" in a live
+  // email. That was the cost of a kitchen remodel, in the prospect's own trade,
+  // which the brief explicitly permits as the money move. _OUR_OFFER_NEARBY was
+  // written to tell the two apart, its comment says the check "requires our own
+  // product language nearby before flagging", and it was referenced by nothing
+  // for the life of the file.
+  //
+  // The cost is on the sheet Mike dials from: a "Do not say" list carrying a
+  // sentence that is correct is how a reader stops believing the entries that
+  // are not. This file records the same disease at the CTA note and at the
+  // integrity strip.
+  //
+  // Both directions, because a flag that fires on every lead and a flag that
+  // fires on none are equally useless.
+  try {
+    const _fails = [];
+    const _his = [
+      'A full kitchen remodel runs $30k-$80k depending on finishes and layout.',
+      'Most roof replacements in this market land between $12k to $25k.',
+      'A single case at this practice is worth $8k-$40k over its life.',
+    ];
+    _his.forEach((s, n) => {
+      const hit = quotesOurPrice(s);
+      if (hit) _fails.push(`the prospect's own job value (#${n + 1}) is flagged as our fee \u2014 "${hit}" \u2014 and the money move the brief permits reads as a pitch`);
+    });
+    const _ours = [
+      'The rebuild is $50k+ and we could start in March.',
+      'Our fee for that engagement is $10k-$35k per month.',
+      'That scope of work would be $25,000 up front.',
+    ];
+    _ours.forEach((s, n) => {
+      if (!quotesOurPrice(s)) _fails.push(`our own price (#${n + 1}) reached prospect-facing copy unflagged \u2014 price belongs on the call, never in email 1`);
+    });
+    // PROXIMITY, not presence. A price and an offer word in the same long body
+    // are not the same claim; widening the window to the whole email puts the
+    // flag back on every lead that mentions anything monthly.
+    const _far = 'We charge for that work. ' + 'x'.repeat(400) + ' A kitchen remodel runs $30k-$80k.';
+    if (quotesOurPrice(_far)) _fails.push('an offer word four hundred characters from the figure still flags it, so the window is not a window');
+    // AND THE CALL SITE USES THE SHARED DECISION. Needle assembled at runtime
+    // with comment lines stripped: the comment beside the call quotes it.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('const _pp = quotesOur', 'Price(_facing);'))) {
+        _fails.push('the prospect-facing price flag no longer goes through the shared decision, so the proximity rule can be true here and false where it runs');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 CLAIM RISK PRECISION CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 CLAIM RISK PRECISION CHECK: a five-figure number in an email is flagged as OUR price only when our own offer vocabulary sits in the sentence around it. Three real prospect job values are left alone, three of our own prices are still caught, and an offer word four hundred characters away does not count. _OUR_OFFER_NEARBY was written for this and referenced by nothing, so the false positive its own comment describes went on reaching the call sheet.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 CLAIM RISK PRECISION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- A PAGE WE READ IS NOT A THROTTLE MESSAGE ----------------------------
+  // isRateLimited used to test the scraped page's own markdown alongside the
+  // response's error field. Every word in that pattern is ordinary English on
+  // the sites this system audits: a plumber writing "don't let a slow drain
+  // slow you down", a builder listing "concurrent projects", a clinic saying
+  // "we limit the rate of". A homepage carrying one of them was refused as a
+  // throttle, FIRECRAWL RATE LIMITED printed for a request nobody throttled,
+  // fcNoteRateLimited held the WHOLE gate for four seconds on the strength of
+  // it, and the audit ran blind on a page already paid for. On the 2026-08-21
+  // run eleven of those lines printed on three leads.
+  //
+  // Both directions are asserted. A predicate loosened until it catches nothing
+  // costs a page per retry; one tightened until it catches everything costs the
+  // website half of an audit, plus the gate, plus a log line that sends the
+  // next reader after the wrong cause.
+  try {
+    const _fails = [];
+    // THEIR REAL MESSAGES. Both carry "upgrade your plan", which is why the
+    // credit test may not key on that phrase (see CREDIT BREAKER CHECK).
+    const _throttles = [
+      [{ error: 'Rate limit exceeded. Consumed (req/min): 10, Remaining (req/min): 0. Upgrade your plan to increase the rate limit.' }, 429],
+      [{ error: 'This request has been rate limited: local_rate_limited' }, 200],
+      [{ success: false, error: "You've exceeded the concurrent browsers limit for your plan. Upgrade your plan to increase the concurrent browser limit." }, 200],
+      [{ message: 'Too Many Requests' }, 200],
+      [{}, 429],
+    ];
+    _throttles.forEach((t, n) => {
+      if (!isRateLimited(t[0], t[1])) _fails.push(`a real Firecrawl throttle (#${n + 1}) reads as a normal answer, so the retry loop gives up and the gate is never held`);
+    });
+    // PAGES WE SUCCESSFULLY BOUGHT. Written the way these trades write.
+    const _pages = [
+      "Don't let a slow drain slow you down. Call us today for same-day service.",
+      'We run several concurrent projects across the metro and never subcontract.',
+      'Our team can concurrently manage your roof, siding and gutters.',
+      'We limit the rate of new bookings each week so every job gets our full attention.',
+      'Too many requests for quotes go unanswered in this industry. Not here.',
+      'Browser limit reached? Our site works on any device.',
+    ];
+    _pages.forEach((md, n) => {
+      if (isRateLimited({ data: { markdown: md }, markdown: md }, 200)) {
+        _fails.push(`a homepage we read successfully (#${n + 1}) is being thrown away as a throttle, and the whole Firecrawl gate held with it`);
+      }
+    });
+    // AND THE SOURCE CANNOT GO BACK TO READING THE BODY. Needle assembled at
+    // runtime with comment lines stripped: the comment above the function
+    // quotes the broken expression verbatim, and a literal needle finds itself.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      const _fn = _s.slice(_s.indexOf(_n('const isRate', 'Limited = (d, status)')));
+      if (_fn.slice(0, 400).includes(_n('d?.data?.mark', 'down'))) {
+        _fails.push('the throttle test reads the scraped page again, so an ordinary phrase in their own copy discards the page and holds the gate');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 THROTTLE READING CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 THROTTLE READING CHECK: whether Firecrawl throttled us is read from THEIR answer \u2014 the status and the error field \u2014 and never from the document they handed us. Five real throttle bodies are still caught; six homepages written the way plumbers, builders and clinics actually write are left alone. Reading the page for these words discarded pages we had already paid for and held the whole gate for four seconds each time.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 THROTTLE READING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ EVERY FIELD A RUNG READS MUST ACTUALLY ARRIVE ════════════════════════
@@ -42018,28 +43915,58 @@ app.listen(PORT, () => {
     // invalid blocks, and unknown sends — because a catch-all domain cannot be
     // verified at all and refusing every one would delete a large slice of the
     // pipeline on no evidence.
+    // ══ THIS CHECK USED TO TEST ITS OWN COPY OF THE RULE ══════════════════
+    // It declared a local `_ok` reading `lead.emailTier` and ran fixtures
+    // through THAT. The shipped gate read the same non-existent field, so both
+    // agreed perfectly and both were wrong — the tier lives on
+    // `emailResult.tier`. Two implementations of one operation, with the second
+    // copy inside the guard, which is the disease this file is mostly a record
+    // of. It now runs the REAL functions the route calls.
+    const _fails = [];
     const _ok = (lead, verdict) => {
-      const t = Number(lead.emailTier || 0);
-      if (!t || lead.smtpVerified === true || t === 1 || t === 2) return true;
-      if (verdict === 'invalid') return false;
-      return true;   // valid, unknown, catch-all, or no verifier configured
+      if (!sendNeedsVerify(lead)) return true;   // proven already, no call made
+      return verdict !== 'invalid';              // only a refusal blocks
     };
-    // Only a mailbox the server has REFUSED is blocked.
+    // THE SHAPE A LEAD ACTUALLY HAS. This is the regression that shipped: every
+    // one of these carries its tier where the system really puts it, and the old
+    // gate read 0 from all of them.
     const _mustBlock = [
-      ['mail server says it does not exist', { emailTier: 3, email: 'joseph@jbarnthousemd.com' }, 'invalid'],
+      ['mail server says it does not exist', { emailResult: { tier: 3, email: 'joseph@jbarnthousemd.com' }, email: 'joseph@jbarnthousemd.com' }, 'invalid'],
+      ['an address with no tier at all, refused by the server', { email: 'x@example.com' }, 'invalid'],
     ];
-    // Everything else sends. These three are the live cases: two tier-3
-    // addresses that delivered fine, and a catch-all that cannot be proven.
     const _mustSend = [
-      ['published on their site', { emailTier: 1, email: 'info@example.com' }, null],
-      ['SMTP-verified mailbox', { emailTier: 2, email: 'brandon@example.com' }, 'valid'],
-      ['tier 3, server confirms it', { emailTier: 3, email: 'grantrenne@grantrenne.com' }, 'valid'],
-      ['tier 3, catch-all so unprovable', { emailTier: 3, email: 'bchong@anthonysylvan.com' }, 'unknown'],
-      ['tier 3, no verifier configured', { emailTier: 3, email: 'x@example.com' }, null],
+      ['published on their site', { emailResult: { tier: 1, email: 'info@example.com' } }, null],
+      ['SMTP-verified mailbox', { emailResult: { tier: 2, email: 'brandon@example.com' } }, 'valid'],
+      ['SMTP-verified by label alone', { emailResult: { tier: 3, label: 'SMTP-verified (mailbox exists)' } }, null],
+      ['tier 3, server confirms it', { emailResult: { tier: 3, email: 'grantrenne@grantrenne.com' } }, 'valid'],
+      ['tier 3, catch-all so unprovable', { emailResult: { tier: 3, email: 'bchong@anthonysylvan.com' } }, 'unknown'],
+      ['tier 3, no verifier configured', { emailResult: { tier: 3, email: 'x@example.com' } }, null],
     ];
+    // THE FIELD ITSELF. These are the assertions that would have caught it.
+    if (emailTierOf({ emailResult: { tier: 3 } }) !== 3) {
+      _fails.push('the tier is not being read from emailResult.tier, which is the only place this system has ever put it — the send-time verification silently does not run on any lead');
+    }
+    if (emailTierOf({}) !== 0) _fails.push('a lead with no tier did not read as unknown');
+    if (!sendNeedsVerify({ emailResult: { tier: 3, email: 'a@b.com' } })) {
+      _fails.push('a pattern-built tier-3 address is not verified before sending — that is the exact class both of this project\'s hard bounces came from, and a bounce is charged to the sending DOMAIN');
+    }
+    if (!sendNeedsVerify({ email: 'a@b.com' })) {
+      _fails.push('an address whose provenance we do not know is waved through unverified — "we did not measure it" has never meant "it is fine" anywhere else in this file');
+    }
+    if (sendNeedsVerify({ emailResult: { tier: 1 } }) || sendNeedsVerify({ emailResult: { tier: 2 } })) {
+      _fails.push('an address already published on their site or already SMTP-verified is being re-verified, which spends a call and 30 seconds of a synchronous send route for nothing');
+    }
+    // AND THE CALL SITE, because a correct rule the route does not call is not a gate.
+    const _needleS = (...parts) => parts.join('');
+    const _srcS = selfSourceNoComments();
+    if (!_srcS.includes(_needleS('if (sendNeedsVerify(', 'lead)) {'))) {
+      _fails.push('the Hunter push no longer asks whether this address needs verifying, so the gate is inert again');
+    }
     const _leaked = _mustBlock.filter(([, l, v]) => _ok(l, v)).map(([n]) => n);
     const _blocked = _mustSend.filter(([, l, v]) => !_ok(l, v)).map(([n]) => n);
-    if (_leaked.length) {
+    if (_fails.length) {
+      console.log(`\u26d4 SEND VERIFICATION CHECK: ${_fails.join(' | ')}.`);
+    } else if (_leaked.length) {
       console.log(`\u26d4 SEND VERIFICATION CHECK: ${_leaked.join(', ')} would still enter the sequence. That is the joseph@jbarnthousemd.com case \u2014 the server told us the mailbox does not exist and we sent anyway.`);
     } else if (_blocked.length) {
       console.log(`\u26d4 SEND VERIFICATION CHECK: ${_blocked.join(', ')} would be blocked. Two tier-3 addresses delivered fine \u2014 refusing everything uncertain deletes real leads from a queue already paid for.`);
@@ -42587,6 +44514,7 @@ app.listen(PORT, () => {
   // LOCAL_CONSUMER unless the brain quotes words we can find in their own pages,
   // so it can silence a rung and never invent one.
   try {
+    let _fails_pre = false;
     const _corp = 'Property Masters delivers turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states.';
     const _real = resolveBusinessModel({ model: 'B2B_INSTITUTIONAL', evidence: 'turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states', why: 'buyers are funds' }, _corp);
     const _fakes = [
@@ -42594,15 +44522,28 @@ app.listen(PORT, () => {
       ['no evidence at all', { model: 'B2B_INSTITUTIONAL', evidence: '' }],
       ['unknown model', { model: 'ENTERPRISE_SAAS', evidence: 'turn-key renovations for REO funds' }],
       ['nothing returned', null],
+      // Executed refutation, 2026-08-22: a REAL quote that says nothing about
+      // the claimed model licensed it anyway — evidence that EXISTS standing
+      // in for evidence that EVIDENCES — and silenced twelve local rungs
+      // including the reply-proven outranked_by_weaker. The quote below is
+      // verbatim from the corpus and contains no institutional term.
+      ['real but irrelevant evidence', { model: 'B2B_INSTITUTIONAL', evidence: 'Property Masters delivers turn-key renovations' }],
     ];
     const _leaked = _fakes.filter(([, x]) => resolveBusinessModel(x, _corp).model !== 'LOCAL_CONSUMER').map(([l]) => l);
     const _localFree = resolveBusinessModel({ model: 'LOCAL_CONSUMER', why: 'homeowners searching' }, _corp);
+    // A real quote behind a three-word model preamble must still verify — the
+    // old prefix-anchored window refused it, which failed safe but sent
+    // map-pack findings to the exact class this mechanism exists to spare.
+    const _pre = resolveBusinessModel({ model: 'B2B_INSTITUTIONAL', evidence: 'The site says: turn-key renovations for REO funds, PE firms and institutional portfolios', why: 'buyers are funds' }, _corp);
+    if (_pre.model !== 'B2B_INSTITUTIONAL') _fails_pre = true;
     if (_real.model !== 'B2B_INSTITUTIONAL') {
       console.log(`\u26d4 BUSINESS MODEL CHECK: a model quoted straight from their own homepage was rejected (${_real.why}), so every lead is treated as a local business and the map-pack findings go to companies that do not sell locally.`);
     } else if (_leaked.length) {
       console.log(`\u26d4 BUSINESS MODEL CHECK: ${_leaked.join(', ')} would silence real findings on evidence we cannot verify. Suppressing a true finding on a fabricated quote is the one way this can do damage.`);
     } else if (!_localFree.verified) {
       console.log(`\u26d4 BUSINESS MODEL CHECK: LOCAL_CONSUMER now requires evidence. It is the default and the fallback \u2014 requiring proof of it breaks every ordinary lead.`);
+    } else if (_fails_pre) {
+      console.log(`\u26d4 BUSINESS MODEL CHECK: a real institutional quote behind a three-word preamble is refused \u2014 the window is prefix-anchored again, and the Property Masters class goes back to receiving map-pack findings.`);
     } else {
       console.log(`\u2713 BUSINESS MODEL CHECK: a model quoted from their own pages withholds the local-search findings, and ${_fakes.length} unverifiable claims fall back to LOCAL_CONSUMER. Findings can be silenced by evidence, never by assertion.`);
     }
@@ -45284,6 +47225,14 @@ app.listen(PORT, () => {
         _fails.push('the spend line presents its rate as a measurement — it is a setting, and the only authoritative rate is on the invoice');
       }
       _gpCalls.search -= 1; _gpCalls.details -= 1;
+      // ...and the day ledger the same. The probe is not real spend, and every
+      // boot was otherwise starting the UTC day at places=2 with byKind
+      // carrying two phantom entries.
+      { const _r = runSpendToday(); _r.places = Math.max(0, _r.places - 2);
+        for (const _k of ['places-search', 'places-details']) {
+          _r.byKind[_k] = (_r.byKind[_k] || 0) - 1;
+          if (_r.byKind[_k] <= 0) delete _r.byKind[_k];
+        } }
     }
 
     if (_fails.length) {
@@ -46084,6 +48033,7 @@ app.listen(PORT, () => {
   // and a key that would fail, so a regression makes the network call and the
   // check sees it. A source regex would pass on the day the memo stopped being
   // populated, which is the failure this is guarding.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -46174,7 +48124,7 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ PLACE DETAILS REUSE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
   // ══ WHAT ACTUALLY STOPS FIFTY LEADS AT ONCE ═══════════════════════════════
   // Not the queue — that was built for it and a boot check already proves a
@@ -46190,6 +48140,7 @@ app.listen(PORT, () => {
   //
   // So the bound is on the DECODE, not on the leads, and research concurrency
   // can then be raised for throughput without touching the memory ceiling.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -46347,7 +48298,7 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ BATCH MEMORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
   // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
   // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
@@ -46769,6 +48720,24 @@ app.listen(PORT, () => {
     // A refused fetch must not read as "we measured the destination".
     if (paidLeakGapFrom({}) !== '') _fails.push('paidLeakGapFrom invents a gap from nothing measured');
     if (!paidLeakGapFrom({ bookingMeasured: true, booking: 'phone_only' })) _fails.push('a measured phone-only route produces no gap sentence');
+    // AND THE CALL SITE HANDS IT THE BOOKING READ. The two fixtures above pass
+    // their own arguments, so they cannot see what the route passes \u2014 the
+    // recorded half-a-call-site shape. The route used to hand it _measured
+    // alone, and resolveMeasurements returns neither booking nor
+    // bookingMeasured, so on every real lead only the form-field branch could
+    // fire and harm 93's two best sentences were unreachable. Needle assembled
+    // at runtime with comment lines stripped: a literal needle finds itself,
+    // and the comment at the call site quotes the broken call.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('paidLeakGapFrom({ ..._meas', 'ured, ..._bookingRead })'))) {
+        _fails.push('the paid-click rung is no longer handed how a stranger can actually contact them, so two of its three sentences cannot be produced on any lead');
+      }
+      if (!_s.includes(_n('booking: _booking', 'Read.booking,'))) {
+        _fails.push('the booking read stopped reaching the ladder as a named field, so three more rungs lose it too');
+      }
+    }
 
     // ── 2. THE FIELDS ARRIVE AT THE LADDER ─────────────────────────────
     // Source scan, because "computed but not passed" is the bug class that has
@@ -47496,7 +49465,23 @@ app.listen(PORT, () => {
     // refusal here costs a draft and nothing else.
     {
       const _spine = 'they do not come up in the map results for plumber in dallas';
-      const _opts = { spine: _spine, figures: ['9'], trade: 'plumber', earned: '', count: '', money: '' };
+      // ---- THE FIXTURE MUST BE THE PRODUCTION CONFIGURATION ---------------
+      // This used to omit evidenceAssert entirely, which is the ONE
+      // configuration in which the gate could fire. In production the compose
+      // route always passes that block, and buildEmailEvidence writes
+      // "214 Google reviews at 4.6 stars" into it on every lead with a review
+      // count - so the word was always present, the gate never fired on any
+      // lead it was written for, and this check went green on every boot.
+      // Built by the real function, not hand-written, so it cannot drift.
+      const _evReal = buildEmailEvidence({
+        measured: { reviewCount: 214, rating: 4.6, ownerReplies: 30, reviewsRead: 120 },
+        trade: 'plumber',
+      });
+      const _evAssertReal = (_evReal.assertableMeasured || []).join(' ');
+      if (!/review/i.test(_evAssertReal)) {
+        _fails.push('the ASSERT block no longer mentions reviews at all, so this fixture is not the production configuration any more and the gate below is being tested in the one shape where it cannot fail');
+      }
+      const _opts = { spine: _spine, figures: ['9'], trade: 'plumber', earned: '', count: '', money: '', evidenceAssert: _evAssertReal };
       // Paragraph breaks are not decoration here: verifyBrainEmail refuses more
       // than two sentences in one block, because on a phone that is a grey
       // rectangle. The fixture has to be a shape the gate accepts, or it fails
@@ -47507,6 +49492,33 @@ app.listen(PORT, () => {
       const _dirty = verifyBrainEmail(_mk('Your reviews are strong, which makes it stranger.'), _opts);
       if (_dirty.ok) _fails.push('the model introduced his reviews on its own and the body passed — the audit is full of reviews and this is the only gate between it and the inbox');
       // And when WE put the word there on purpose, it must be allowed through.
+      // ---- AND MODEL PROSE IN THE ASSERT BLOCK MAY NOT LICENSE A FIGURE ---
+      // One line of that block is the audit model's own sentence, and
+      // verifyOriginalFinding checks only that its QUOTE is on a page we read -
+      // never the numbers in the sentence around it. permittedFigures admitted
+      // the whole block under "Everything in it is measured by construction",
+      // so an invented digit licensed itself into an email.
+      {
+        const _withProse = buildEmailEvidence({
+          measured: { reviewCount: 214, rating: 4.6 },
+          trade: 'plumber',
+          originalFindings: [{ finding: 'their booking page has been down for 47 days', evidence: 'book online' }],
+        });
+        const _all = (_withProse.assertable || []).join(' ');
+        const _meas = (_withProse.assertableMeasured || []).join(' ');
+        if (!/47/.test(_all)) {
+          _fails.push('the audit\'s own finding is no longer shown to the writer at all - that is the only line in the block unique to this business');
+        }
+        if (/47/.test(_meas)) {
+          _fails.push('a number that exists only in the audit model\'s own sentence is still licensing itself as a permitted figure, so a digit nothing measured can be asserted to the prospect');
+        }
+        if (!permittedFigures({ evidenceAssert: _meas }).has('214')) {
+          _fails.push('the measured half of the ASSERT block stopped licensing its own measured figures, which would refuse true numbers and drop every lead to the flat template');
+        }
+        if (permittedFigures({ evidenceAssert: _meas }).has('47')) {
+          _fails.push('the invented figure is permitted through the measured block');
+        }
+      }
       const _ourSpine = { ..._opts, spine: 'a business with fewer reviews than theirs is ranking above them for plumber in dallas' };
       const _allowed = verifyBrainEmail(
         'Dave, a business with fewer reviews than yours is ranking above you for plumber in dallas.'
@@ -48027,6 +50039,11 @@ app.listen(PORT, () => {
     }
     const _cap = Math.max(1, Number(process.env.SEND_MAX_PER_REQUEST || 25));
     if (_cap > 50) _fails.push(`the send cap is ${_cap} — above what one mailbox is rated for, and above what this request shape survives`);
+    // The durable per-lead record: a lost HTTP response or a restart must not
+    // erase who was sent what. Needle assembled at runtime.
+    if (_src.indexOf("sbRest('/send_" + "log'") < 0) {
+      _fails.push('the per-lead send record is gone, so a send whose response is lost to a proxy timeout leaves no durable record of who received a sequence');
+    }
     if (_fails.length) {
       console.log(`⛔ SEND CAP CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
     } else {
@@ -48781,8 +50798,12 @@ app.listen(PORT, () => {
   // Run against the real function, not a re-implementation.
   try {
     const _fails = [];
-    const PAD = ' We have served this town for thirty years and we answer the phone ourselves. '.repeat(4);
-    const _offer = (copy) => readOfferStrength(copy + PAD);
+    // Long enough to clear the ABSENCE floor, which is the sibling rule: 3,000
+    // characters and two pages before a site-wide "there is no offer here" is
+    // allowed. This fixture is about the offer PATTERNS, so it supplies a real
+    // read; the floor itself is asserted separately below.
+    const PAD = ' We have served this town for thirty years and we answer the phone ourselves. '.repeat(45);
+    const _offer = (copy) => readOfferStrength(copy + PAD, 3);
     const _cases = [
       ['a named seasonal promotion behind a generic ask', 'Get a quote today. $500 off our fall special this month only.', true],
       ['a free inspection', 'Contact us for a free inspection of your roof, no obligation.', true],
@@ -48823,6 +50844,27 @@ app.listen(PORT, () => {
       }
       if (_src.indexOf('namedOffer: offerStrength && offerStrength.checked ? !offerStrength.' + 'genericOnly') >= 0) {
         _fails.push('the inverted derivation is still wired to the rung');
+      }
+    }
+    // ---- AND AN ABSENCE NEEDS ENOUGH OF THE SITE TO BE ENTITLED TO IT ----
+    // readRecurringOffer demands 3,000 characters and two pages before it will
+    // say a business does not offer something. These two make the identical
+    // class of claim - nothing anywhere on their site names an offer, there is
+    // nothing a stranger can take - and asked for 200 characters and no page
+    // count, which on a starved Firecrawl run is a nav bar and a tagline.
+    {
+      const _thin = 'Acme Plumbing. Call us today. ' + 'x'.repeat(400);
+      if (readOfferStrength(_thin, 1).checked !== false) {
+        _fails.push('a 430-character read of ONE page is enough to claim there is no offer anywhere on their site - that is the absence claim PART 3 exists to stop, and the owner disproves it at a glance');
+      }
+      if (readLeadMagnet(_thin, 1).checked !== false) {
+        _fails.push('a 430-character read of ONE page is enough to claim there is nothing on their site a stranger can take away');
+      }
+      if (readOfferStrength(PAD + ' free inspection ', 4).checked !== true) {
+        _fails.push('a genuine multi-page read is being refused, which deletes the offer findings on every healthy lead');
+      }
+      if (readOfferStrength('short', 9).checked !== false) {
+        _fails.push('a page count alone licenses the claim - the characters have to be there too, or six empty pages read as a site with no offer on it');
       }
     }
     if (_fails.length) {
@@ -49653,6 +51695,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // An async IIFE, the same shape RENDER BYTE BUDGET CHECK uses below: the gate
   // is a real asynchronous thing and the only honest way to test it is to run
   // work through it. A synchronous assertion here could only read the source.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -49702,7 +51745,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL PLAN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ THE LIMIT WAS MEASURED AND THE PACE IGNORED IT ════════════════════════
@@ -49722,6 +51765,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   //
   // Three separate things, so three separate assertions. Each was falsified by
   // reverting its own fix and each went red alone.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -49754,6 +51798,28 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = 1234;
       noteFirecrawlLimits(_resp('not-a-number'));
       if (FC_GAP_LIVE !== 1234) _fails.push('an unreadable header repaced the gate');
+      // ── AND THE PLAN WE ASSUME BEFORE WE HAVE MEASURED ONE ──────────────
+      // The limit can only be learned from a RESPONSE, and a lead's first
+      // fan-out is seven page reads dispatched before any answer comes back.
+      // So the pace we start at IS the pace that decides whether the first
+      // lead reads anything. It used to be 350ms — 171 requests a minute,
+      // against a free tier that allows ten — while the concurrency default
+      // six lines above it assumed the smallest plan they sell.
+      if (FC_GAP_AT_START < fcGapForLimit(FC_FREE_TIER_PER_MIN)) {
+        _fails.push(`this process STARTED at ${FC_GAP_AT_START}ms between Firecrawl starts, which is ${Math.round(60000 / FC_GAP_AT_START)} requests a minute against a free tier that allows ${FC_FREE_TIER_PER_MIN} — and the limit can only be learned from a response, so the first fan-out is refused before anything can teach us better`);
+      }
+      if (FC_GAP_UNKNOWN_MS < fcGapForLimit(FC_FREE_TIER_PER_MIN)) {
+        _fails.push(`before any plan is measured the gate paces at ${FC_GAP_UNKNOWN_MS}ms, which is faster than the smallest plan Firecrawl sells allows — the first fan-out of every cold process is refused and the lead audits blind with Places, Apify and the model already paid for`);
+      }
+      // AND A MEASUREMENT MUST BE ABLE TO RELAX IT, or a paid plan is paced
+      // like a free one forever.
+      FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, FC_GAP_UNKNOWN_MS);
+      const _slowStart = FC_GAP_LIVE;
+      noteFirecrawlLimits(_resp('500'));
+      if (!(FC_GAP_LIVE < _slowStart)) {
+        _fails.push(`a measured 500/min plan left the gap at ${FC_GAP_LIVE}ms — the conservative assumption outranks their own header, so every paid plan runs at free-tier pace`);
+      }
+      if (FC_GAP_LIVE < FC_MIN_GAP_MS) _fails.push('relaxing went under the operator-configured floor');
     } finally {
       FC_GAP_LIVE = _gapBefore; FC_LIMIT_PER_MIN = _limBefore; FC_CONCURRENCY_LIVE = _concBefore;
     }
@@ -49800,7 +51866,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // at runtime with comment lines stripped, because a literal needle finds
     // itself in the check's own body and these comments quote the calls.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle('makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE,', ' minGapMs: () => FC_GAP_LIVE })'))) {
       _fails.push('the live gate is no longer constructed to read the live pace, so a measured plan repaces nothing');
     }
@@ -49815,6 +51881,46 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     for (const [_n, _what] of _sites) {
       if (!_src.includes(_n)) _fails.push(`${_what} no longer holds the gate on a 429 — it counts the hit and the gate keeps opening the door 350ms later`);
     }
+    // ---- AND THE HOMEPAGE ASKS AGAIN --------------------------------------
+    // The inner-page scrape retries a throttle and so does the sitemap read.
+    // The homepage reader did not, and it is the FRONT of a seven-page fan-out:
+    // one 429 there cost the whole website half of an audit while Places, Apify
+    // and every model call were paid in full. Bounded at one extra attempt.
+    if (!_src.includes(_needle('return fcAsk(target, formats, waitFor,', ' timeout, kind, true);'))) {
+      _fails.push('the homepage read no longer asks again after a throttle, so one 429 on the first of seven pages throws away the whole website half of a lead that is already paid for everywhere else');
+    }
+    // ---- AND A THROTTLE IS COUNTED AGAINST THE LEAD THAT WAS REFUSED ------
+    // The per-lead banner was a delta over a process-global counter, and three
+    // leads research at once: a throttle on lead B flagged lead A as incomplete
+    // with every one of A's own pages read cleanly. Executed on the real
+    // ledger, with two stores live at the same time, because that is the
+    // condition the defect needs and a single-store fixture cannot see it.
+    {
+      const _seen = [];
+      FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0 }, () => {
+        const _a = FC_LEDGER.getStore();
+        FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0 }, () => {
+          const _b = FC_LEDGER.getStore();
+          _b.throttled += 1; _b.throttled += 1;
+          _seen.push(_b.throttled);
+        });
+        _seen.push(_a.throttled);
+      });
+      // HONEST LIMIT: this proves the LEDGER isolates two live stores - that it
+      // is still an AsyncLocalStorage and not a shared object somebody swapped
+      // in. It cannot see whether fcNoteRateLimited writes to it, because
+      // calling that for real would print a rate-limit line at boot that reads
+      // like a live event. The needle below is the guard for the write.
+      if (_seen[0] !== 2 || _seen[1] !== 0) {
+        _fails.push(`two ledgers live at the same time share one throttle count (${_seen.join(' and ')}) — the per-lead figures are process-wide again, so a lead whose own pages all read cleanly is flagged "pages were refused, re-run this lead"`);
+      }
+      if (!_src.includes(_needle('_l.throttled = (_l.throttled', ' || 0) + 1;'))) {
+        _fails.push('a throttle is no longer recorded on the lead it happened to, so the per-lead banner is a process-wide delta again');
+      }
+      if (!_src.includes(_needle('return _l ? (_l.throttled || 0) > 0 :', ' (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0;'))) {
+        _fails.push('the response flag is not reading this lead\'s own ledger');
+      }
+    }
     if (_fails.length) {
       console.log(`⛔ FIRECRAWL PACING CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -49822,7 +51928,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL PACING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ THE LAST GATE BEFORE A PROSPECT DID NOT RUN ON HALF THE AUDITS ════════
@@ -49837,6 +51943,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // reading it. Only the word "timeout" may be retried: a refusal, a 4xx and a
   // bad key all fail identically the second time and a blind retry doubles the
   // bill for nothing.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -49926,7 +52033,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // does not use it. Needle assembled at runtime, comment lines stripped: this
     // check's own comments quote the call.
     const _needle = (...parts) => parts.join('');
-    const _src = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoComments();
     if (!_src.includes(_needle("}, 45000, 'critique',", " { retryOnTimeout: true });"))) {
       _fails.push('the critique call no longer asks for the retry, or its ceiling moved back under what a 1600-token answer takes');
     }
@@ -49940,7 +52047,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ ANTHROPIC RETRY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ A DEMOTION LOG THAT INVENTED ITS OWN REASON ═══════════════════════════
@@ -50104,6 +52211,24 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (pickSequenceForLead('lead_x', ['859908', '859908']) !== '859908') _fails.push('a duplicated sequence id is treated as two lanes');
     if (pickSequenceForLead('lead_x', []) !== null) _fails.push('an empty sequence list picks something from nothing');
     // The route must actually route by the pick — needles assembled.
+    // ---- AND IT MUST NOT BE THE SAME SPLIT AS THE SUBJECT TEST ----------
+    // index.html assigns the subject A/B arm with the SAME hash construction on
+    // the SAME lead id and takes Math.abs(h) % 2. Unsalted, that made every
+    // variant-A email go out on domain 1 and every variant-B on domain 2: two
+    // experiments perfectly confounded, and these are the only two this project
+    // has. The A/B side is reproduced here exactly as the client computes it, so
+    // this fails the day either construction changes to match the other.
+    {
+      const _abLane = (id) => {
+        const h = String(id || '').split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+        return Math.abs(h) % 2 === 1 ? 'B' : 'A';
+      };
+      const _agree = _ids.filter(id => (pickSequenceForLead(id, SEQS) === SEQS[1]) === (_abLane(id) === 'B')).length;
+      const _pct = Math.round((_agree / _ids.length) * 100);
+      if (_pct > 70 || _pct < 30) {
+        _fails.push(`the sequence a lead lands in and the subject variant it gets agree ${_pct}% of the time — that is one experiment wearing two names, and a difference in reply rate could never be attributed to the subject rather than to the sending domain`);
+      }
+    }
     {
       const _src = selfSource();
       if (_src.indexOf('campaigns/${' + '_seqForLead}/recipients') < 0) _fails.push('the send loop no longer adds each lead to ITS picked sequence — everything lands in one campaign and the rotation is decorative');
@@ -50315,6 +52440,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // Run, not read: a real PNG goes through fitPngToBudget against a budget set
   // just below what its first fit produces, so the loop must take a second,
   // smaller pass to succeed — the exact move the live failure never made.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -50345,7 +52471,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // The old skip sentence must be gone from CODE (comments may quote it — they
     // are how the bug is explained). Needle assembled; comments stripped first.
     {
-      const _code = selfSource().split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _code = selfSourceNoComments();
       if (_code.indexOf('skipping image, ' + 'auditing from text') >= 0) {
         _fails.push('the "skip the homepage render on bytes" branch is back — the byte ceiling deletes the picture again instead of shrinking it');
       }
@@ -50357,7 +52483,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ RENDER BYTE BUDGET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ THE SAME BUSINESS MUST NOT MEASURE AS TWO DIFFERENT BUSINESSES ══════
@@ -53577,8 +55703,28 @@ const pickSequenceForLead = (leadId, sequenceIds) => {
   const list = [...new Set((Array.isArray(sequenceIds) ? sequenceIds : []).filter(Boolean).map(String))];
   if (!list.length) return null;
   if (list.length === 1) return list[0];
-  const h = String(leadId || '').split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
-  return list[Math.abs(h) % list.length];
+  // ---- SALTED, OR THE TWO EXPERIMENTS ARE ONE EXPERIMENT --------------
+  // The subject A/B arm in index.html hashes the SAME lead id with the SAME
+  // construction and takes Math.abs(h) % 2. With two sequences configured that
+  // made every variant-A email go out on domain 1 and every variant-B email on
+  // domain 2 - perfectly confounded, so any difference in reply rate between
+  // the subjects would be indistinguishable from a difference between the two
+  // sending domains, and this project has exactly two planned experiments.
+  //
+  // Salting the SEQUENCE side rather than the subject side on purpose: rotation
+  // is not in use yet (one sequence is configured, and one sequence returns
+  // early above), so this changes no assignment that exists today.
+  //
+  // A PREFIX SALT ON THAT HASH CANNOT DECORRELATE IT, and the boot check caught
+  // the first attempt at exactly 0% agreement - which is perfect ANTI-
+  // correlation and just as confounded as perfect agreement. The reason is
+  // arithmetic: each step is (a * 31 + c), 31 is odd, so the low bit of the
+  // result is simply the parity of the character sum. A fixed prefix adds a
+  // fixed parity, so it can only ever leave the split alone or invert it. The
+  // split has to come from a different function, not the same one with more
+  // input.
+  const h = crypto.createHash('sha256').update('crojungle-sequence:' + String(leadId || '')).digest();
+  return list[h[0] % list.length];
 };
 
 app.post('/api/send-to-hunter', async (req, res) => {
@@ -53634,6 +55780,27 @@ app.post('/api/send-to-hunter', async (req, res) => {
   // every lead and this route dropped them on the floor — steps 2 and 3 would have
   // gone out generic, or not at all. Roughly a third of replies live in those two
   // emails, so this was the largest silent loss in the send path.
+  // ---- NO SLUG, NO SEND ------------------------------------------------
+  // ensureHunterAttribute returns null when Hunter's API is down, the key is
+  // wrong, or the create call fails - and every use of these is guarded with
+  // `if (slug)`, so a null one was silently skipped. The lead was still pushed
+  // and still reported in results.sent, and the sequence step then delivered
+  // its own fallback text to the prospect: the "MISSING - DO NOT SEND"
+  // placeholder, or worse, a generic template with none of the measured work in
+  // it. Exactly the failure the follow-up copy guard was written to stop, one
+  // step earlier and on the email that decides everything.
+  //
+  // Batch-level, because it is a fact about the ACCOUNT rather than about a
+  // lead: if the attribute cannot be created, no lead in this request can be
+  // personalised, and sending them generically is unrecoverable.
+  if (!pitchSlug || !subjectSlug) {
+    const _missingAttr = [!pitchSlug && 'Pitch Body', !subjectSlug && 'Pitch Subject'].filter(Boolean);
+    console.log(`\u26d4 SEND REFUSED: Hunter would not give us ${_missingAttr.join(' or ')}, so the personalised email has nowhere to go and every lead in this batch would receive whatever static text sits in step 1. NOTHING was sent.`);
+    return res.status(502).json({
+      error: `Hunter did not return the custom attribute${_missingAttr.length > 1 ? 's' : ''} ${_missingAttr.join(' and ')}, which ${_missingAttr.length > 1 ? 'are' : 'is'} where the written email is placed. Every lead would have been sent the sequence's own placeholder text instead. Nothing was sent \u2014 check the Hunter API key and try again.`,
+      sent: 0, offered: leads.length,
+    });
+  }
   const fu1SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Subject');
   const fu1BodySlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Body');
   const fu2SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 2 Subject');
@@ -53674,11 +55841,22 @@ app.post('/api/send-to-hunter', async (req, res) => {
       console.log(`⛔ DUPLICATE IN BATCH [${lead.name}]: ${lead.email} appears more than once in this send. Pushed once. Two records for one business is what the find-time name matching lets through — "Bob's Plumbing" and "Bobs Plumbing" normalise differently.`);
       continue;
     }
-    if (_norm && SENT_RECIPIENTS.has(_norm)) {
+    // ---- ONE DOOR, AND A HUMAN HAS TO OPEN IT ---------------------------
+    // The block below is right and stays absolute for every automatic path. But
+    // the client has a documented "Send again" button whose own dialog says
+    // "delete this contact in Hunter first" - a deliberate re-send after the
+    // operator has cleared the other side - and there was no way through, so
+    // that workflow could not complete at all. The flag is set only by that
+    // confirmation dialog and cleared the moment the push succeeds, so it can
+    // never license a second one.
+    if (_norm && SENT_RECIPIENTS.has(_norm) && lead.resendApproved === true) {
+      const _priorSend = SENT_RECIPIENTS.get(_norm);
+      console.log(`\u21ba RE-SEND CONFIRMED [${lead.name}]: ${lead.email} was pushed earlier in this session as "${_priorSend.name}", and a human confirmed the contact was removed in Hunter first. Going ahead. If it was NOT removed, this person receives the sequence twice and the complaint is charged to the sending domain.`);
+    } else if (_norm && SENT_RECIPIENTS.has(_norm)) {
       const prior = SENT_RECIPIENTS.get(_norm);
       results.failed.push({
         name: lead.name, email: lead.email,
-        reason: `already emailed — this address was pushed to Hunter earlier as "${prior.name}". Blocked so the owner does not receive a second sequence.`,
+        reason: `already emailed — this address was pushed to Hunter earlier as "${prior.name}". Blocked so the owner does not receive a second sequence. If you have removed the contact in Hunter and mean to send again, use that lead's own "Send again" button, which records that you did.`,
       });
       console.log(`⛔ ALREADY EMAILED [${lead.name}]: ${lead.email} was pushed earlier in this session as "${prior.name}". BLOCKED. A second sequence to an owner who already had one is the most expensive mistake here — he sees a machine, and the complaint is charged to the sending domain, not to the lead.`);
       continue;
@@ -53787,10 +55965,33 @@ app.post('/api/send-to-hunter', async (req, res) => {
       // unrecoverable — you cannot unsend it, and it is the last thing that
       // prospect will ever read from us.
       const missingFu = [];
-      if (!fu1.body) missingFu.push('follow-up 1');
-      if (!fu2.body) missingFu.push('follow-up 2');
+      // The COPY and the SLUG are two different ways for a step to go out
+      // generic and both end at the same prospect. The copy check has been here
+      // since the placeholder incident; the slug was assumed.
+      if (!fu1.body || !fu1BodySlug) missingFu.push('follow-up 1');
+      if (!fu2.body || !fu2BodySlug) missingFu.push('follow-up 2');
+      // ---- AND THE REASON MUST BE THE REAL ONE ---------------------------
+      // "Re-run Generate on this lead and push again" is the right advice for
+      // exactly one of the two causes, and the wrong advice for the other.
+      //
+      // composeFullEmail DECLINES a follow-up whose finding sits under
+      // LADDER_HARM_FLOOR, deliberately: "a follow-up on a weak point costs
+      // more than it earns". On a thin lead that is not a failure, it is the
+      // design - and it is DETERMINISTIC, so pressing Generate again produces
+      // the identical nulls and the operator loops forever on advice that
+      // cannot work. Nothing said which case they were in.
+      //
+      // This file records the same shape twice already: the SMTP line that
+      // overstated its own severity, and the Supabase line that printed "check
+      // that the table exists" while the table existed and a policy was
+      // refusing the write. A message naming the wrong cause costs exactly what
+      // one naming no cause costs.
+      const _wasGenerated = !!(lead.generatedResult || lead.composedEmail || lead.pitch);
+      const _fix = _wasGenerated
+        ? `This lead was written and the composer DECLINED ${missingFu.length > 1 ? 'those steps' : 'that step'}: the next findings on it sit under the harm floor, and a follow-up on a weak point costs more than it earns. Pressing Generate again is deterministic and will produce the same gap. Re-run RESEARCH if you think there is more to find, or send this one outside the sequence.`
+        : 'Nothing has been written for this lead yet. Run Generate on it, then push again.';
       if (missingFu.length) {
-        console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 ${missingFu.join(' and ')} ${missingFu.length > 1 ? 'have' : 'has'} no copy, and the sequence step would send its "MISSING \u2026 DO NOT SEND" placeholder to ${lead.email} as a real email. Re-run Generate on this lead and push again.`);
+        console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 ${missingFu.join(' and ')} ${missingFu.length > 1 ? 'have' : 'has'} no copy, and the sequence step would send its "MISSING \u2026 DO NOT SEND" placeholder to ${lead.email} as a real email. ${_fix}`);
         // `continue`, NOT `return` — this sits inside `for (const lead of leads)`
         // within the Express handler. A return here would exit the whole handler:
         // no response sent, the request hanging until timeout, and every
@@ -53798,7 +55999,7 @@ app.post('/api/send-to-hunter', async (req, res) => {
         // the failure and move to the next lead, which is what this does.
         results.failed.push({
           name: lead.name, email: lead.email,
-          reason: `no copy for ${missingFu.join(' and ')} — the sequence step would have sent its "DO NOT SEND" placeholder as a real email. Re-run Generate and push again.`,
+          reason: `no copy for ${missingFu.join(' and ')} — the sequence step would have sent its "DO NOT SEND" placeholder as a real email. ${_fix}`,
         });
         continue;
       }
@@ -53929,9 +56130,9 @@ app.post('/api/send-to-hunter', async (req, res) => {
       //
       // If no verifier key is configured the lead sends as it did before — the
       // gate is an improvement on the default, never a new way to lose leads.
-      const _tier = Number(lead.emailTier || (lead.emailMeta && lead.emailMeta.tier) || 0);
-      let _verified = lead.smtpVerified === true || _tier === 1 || _tier === 2;
-      if (_tier > 2 && !_verified) {
+      const _tier = emailTierOf(lead);
+      let _verified = sendAlreadyProven(lead);
+      if (sendNeedsVerify(lead)) {
         const _vKey = req.body.verifierKey || process.env.MYEMAILVERIFIER_KEY || '';
         if (_vKey) {
           try {
@@ -54005,6 +56206,19 @@ app.post('/api/send-to-hunter', async (req, res) => {
           SENT_RECIPIENTS.set(_norm, { at: Date.now(), name: lead.name });
           if (_dom) SENT_DOMAINS.set(_dom, { at: Date.now(), name: lead.name, email: _norm });
         }
+        // ══ DURABLE, PER LEAD, AT THE MOMENT OF ACCEPTANCE ═════════════════
+        // A 25-lead send is one synchronous HTTP request that can outlive the
+        // proxy's patience, and the response is the only copy of "what went"
+        // the client ever gets; the maps above die with the process. One
+        // fire-and-forget row per ACCEPTED recipient means a lost response or
+        // a restart can no longer erase the record of who was sent what.
+        // Supabase down loses the row, never the send — and the maps still
+        // guard the running process either way. Needs the send_log table
+        // (CLAUDE.md carries the CREATE).
+        Promise.resolve(sbRest('/send_log', {
+          method: 'POST',
+          body: JSON.stringify({ lead_id: String(lead.id || ''), company: lead.name || '', email: lead.email, sequence_id: String(_seqForLead || '') }),
+        })).catch(() => {});
       } else {
         const errText = await safeText(addRes);
         results.failed.push({ name: lead.name, email: lead.email, reason: `Sequence add failed: HTTP ${addRes.status}: ${errText.slice(0,200)}` });
@@ -54031,6 +56245,7 @@ app.post('/api/linkedin-drafts', async (req, res) => {
     return res.status(400).json({ error: 'leads array required — pass already-researched leads from the pipeline' });
   }
   if (!apiKey) return res.status(400).json({ error: 'Anthropic apiKey required' });
+  { const _c = budgetRefusal(['anthropicUsd']); if (_c) return res.status(429).json({ error: _c.message, budgetStopped: true }); }
 
   try {
     // ── Build the real aggregate from actual researched leads (no fabrication) ──
@@ -54471,6 +56686,15 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
 // synchronous and the composer remains the fallback, so an await here cannot
 // change what gets sent when the model is unavailable — only how it reads.
 app.post('/api/compose-email', async (req, res) => {
+  // The compose path can call the writer, the rewrite and the fact-checker.
+  // Small money, same rule: the ceiling is checked before the first token.
+  {
+    const _ceiling = budgetRefusal(['anthropicUsd']);
+    if (_ceiling) {
+      console.log(`\u{1F6D1} COMPOSE REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+      return res.status(429).json({ error: _ceiling.message, budgetStopped: true, service: _ceiling.service });
+    }
+  }
   try {
     const audit = req.body && req.body.brainAudit;
     const company = (req.body && req.body.company) || 'lead';
@@ -54939,8 +57163,13 @@ app.post('/api/compose-email', async (req, res) => {
           // The exact assertable lines the writer's brief contained — derived
           // from the same evidence object, so the brief and the allowlist are
           // one list read twice rather than two lists maintained apart.
+          // assertableMeasured, not assertable. This value's only job in the
+          // verifier is to license figures, and the full A block carries one
+          // line of MODEL prose whose digits nothing has ever checked. The
+          // writer still SEES the whole block - it reaches the prompt through
+          // .block, not through here.
           _evAssert = (() => {
-            try { return (buildEmailEvidence(_evidence).assertable || []).join(' '); }
+            try { return (buildEmailEvidence(_evidence).assertableMeasured || []).join(' '); }
             catch (e) { return ''; }
           })();
           const _v = _written ? verifyBrainEmail(_written, {
@@ -55156,6 +57385,29 @@ app.post('/api/compose-email', async (req, res) => {
       // written or code-composed.
       sessionAttachEmail(company, composed.variantA.subject, composed.variantA.body, '');
       console.log(`\u2709 COMPOSED ON DEMAND [${company}]: "${composed.variantA.subject}" \u2014 ${composed.variantA.body.split(/\s+/).length} words. ${_byBrain ? 'The brain connected the verified pieces into prose; every figure was traced back to a measurement before it was accepted.' : 'Assembled from measurements \u2014 no model call, no tokens.'}`);
+    }
+    // ---- THE ARM IS WHAT SHIPPED, NOT WHAT WE INTENDED --------------------
+    // _ctaMode became 'page' the moment the page SAVED, and nothing checked that
+    // the link survived into the body. The model path rewrites the closing
+    // sentence, so the one sentence carrying the URL is exactly the one it is
+    // asked to reword - and this arm exists to be READ. Reporting a page arm on
+    // an email with no link in it makes the result worse than no test: those
+    // sends look like a page arm nobody visited.
+    //
+    // Every variant that could ship must carry it, because the subject A/B picks
+    // between them at send time. A missing link downgrades the RECORD to what
+    // actually went out; the page itself is left in place, since a lead may be
+    // recomposed and the token is derived from the lead id.
+    if (_ctaMode === 'page' && _pageUrl && composed) {
+      const _bodies = ['variantA', 'variantB']
+        .map(k => composed[k] && composed[k].body)
+        .filter(b => typeof b === 'string' && b.trim());
+      const _carries = _bodies.length > 0 && _bodies.every(b => b.includes(_pageUrl));
+      if (!_carries) {
+        console.log(`\u2696 ASK ARM CORRECTED [${company}]: the page was built but the link is not in ${_bodies.length ? 'every version of' : ''} the email that ships, so this send is recorded as the QUESTION arm. An arm recorded on an email that does not carry it makes the comparison unreadable in the direction that looks like failure.`);
+        _ctaMode = 'question';
+        _pageUrl = '';
+      }
     }
     // The arm travels with the email. Without this the test is unreadable: a
     // reply arrives and nothing anywhere says which ask produced it, which is
