@@ -1961,8 +1961,23 @@ const researchViaQueue = async (body, opts) => {
     }
     return submit;
   }
-  const { jobId } = await submit.json();
+  const _sub = await submit.json();
+  const jobId = _sub && _sub.jobId;
   if (!jobId) return { ok: false, status: 500, json: async () => ({ error: 'Server accepted the job but returned no job id.' }) };
+  // ---- A DEDUPED JOB MUST BE ABOUT THIS BUSINESS ------------------------
+  // The server hands back an in-flight job rather than paying for a second run
+  // of the same business, which is right. It keys that on the business identity
+  // now, but the client polls by ID either way, and merging another company's
+  // audit onto this lead is the worst bug this system has had. Two cheap
+  // sentences rather than trusting one key: if the server names a different
+  // company, refuse the job instead of collecting it.
+  if (_sub.deduped && _sub.company && body && body.company
+      && String(_sub.company).trim().toLowerCase() !== String(body.company).trim().toLowerCase()) {
+    return { ok: false, status: 409, json: async () => ({
+      error: 'The server handed back a research job that is running for "' + _sub.company
+        + '", not for ' + body.company + '. Nothing was collected \u2014 that would have put another business\'s audit on this lead. Wait for the other run to finish and try again.',
+    }) };
+  }
   if (typeof o.onJobId === 'function') o.onJobId(jobId);
   return pollResearchJob(jobId, o);
 };

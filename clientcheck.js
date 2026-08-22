@@ -836,6 +836,19 @@ const PENDING = [];
   }
 }
 
+// ══ A DEDUPED JOB MUST BE ABOUT THIS BUSINESS ════════════════════════════
+// The server hands back an in-flight job rather than paying for a second run of
+// the same business. The client polls by ID either way, so if that dedupe ever
+// matches the wrong business this lead receives another company's audit — the
+// worst bug this system has had, through a different door.
+{
+  const N = (...p) => p.join('');
+  const bare = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  if (bare.indexOf(N('if (_sub.deduped && _sub.company && body', ' && body.company')) < 0) {
+    fails.push('a deduped research job is collected without checking which business it is running for, so another company\'s audit can land on this lead');
+  }
+}
+
 // ══ WHAT THE BULK CONTROLS SPEND ON ═══════════════════════════════════════
 // Two defects on the path Vin uses every morning, both invisible to any test
 // that does not read the call site. Needles assembled at runtime with comment

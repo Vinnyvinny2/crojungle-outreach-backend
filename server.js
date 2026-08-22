@@ -689,7 +689,10 @@ const detectPostContactClaims = (prose) => {
   // exempts sentences that merely describe what the form contains, so this only
   // reaches sentences about AFTERMATH.
   const OWNED = /\b(your|yours|his|her|their|they'?ve|he'?s|she'?s)\b|\b(the|those|these) (contact )?(form|submissions?|enquir\w*|inquir\w*|messages?|leads?)\b/i;
-  const CLOCKED = /\b(\d{1,2}\s?(am|pm)|9pm|5pm|saturday|sunday|monday|tuesday|wednesday|thursday|friday|overnight|by morning)\b/i;
+  // CLOCK_WORDS is at module scope: the second marker gate needs the identical
+  // rule, and two hand-kept copies of one regex is the disease this file is
+  // mostly a record of.
+  const CLOCKED = CLOCK_WORDS;
 
   // ── OUR SOLUTION IS NOT A CLAIM ABOUT THEIR BACKEND ──────────────────────
   // Live false positive: "The AI Brain is exactly the automated intake and
@@ -751,7 +754,7 @@ const detectPostContactClaims = (prose) => {
     // knowledge rather than judgement: a COMPLETED event ("already signed"), and
     // a CLOCK. Both say we were watching, and no hedge makes that true.
     const _marked = OPINION_MARKERS.test(sent);
-    const _claimsKnowledge = /\balready (signed|hired|booked|chosen|heard)\b/i.test(sent) || clocked;
+    const _claimsKnowledge = hedgeCannotBuy(sent, clocked);
     if (_marked && !_claimsKnowledge) continue;
     out.push(`POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people, and legal marked as your own read; illegal stated as a report${clocked ? ' (a specific time implies we watched it, and a marker does not change that)' : ''} \u2014 "${sent.slice(0, 95)}"`);
   }
@@ -15375,6 +15378,21 @@ const exemplarLeak = (body) => {
 // marker — the reader has to recognise it instantly as the sender stepping out
 // from behind the evidence, and that only works with the plain forms people
 // actually use out loud.
+// ---- WHAT AN OPINION MARKER CAN NEVER BUY -------------------------------
+// Two gates apply the marker rule and only one implemented this half.
+// postContactClaims tests it; verifyBrainEmail's OPINABLE branch had the rule
+// written in its own comment four lines above the code - "a COMPLETED EVENT ...
+// is an assertion wearing a hedge" - and simply continued on any marked clause.
+// So "my read is they've already gone with somebody else" shipped, and its
+// OPINABLE list is full of completed events: states which business the customer
+// chose, states what the customer ended up doing, states the outcome of a visit.
+//
+// A finished event and a clock both say we were WATCHING, and no hedge makes
+// that true. One predicate now, used by both.
+const CLAIMS_KNOWLEDGE = /\balready (signed|hired|booked|chosen|heard|gone|went|called|switched)\b/i;
+const CLOCK_WORDS = /\b(\d{1,2}\s?(am|pm)|9pm|5pm|saturday|sunday|monday|tuesday|wednesday|thursday|friday|overnight|by morning)\b/i;
+const hedgeCannotBuy = (sentence, clocked) =>
+  CLAIMS_KNOWLEDGE.test(String(sentence == null ? '' : sentence)) || !!clocked;
 const OPINION_MARKERS = /\b(?:my (?:read|guess|hunch|sense) (?:is|here is)|what it looks like from (?:outside|the outside)|from (?:outside|the outside) it looks like|I'?d guess|I would guess|I think|I suspect|I could be wrong,? but|I might be wrong,? but|if I had to guess|reading it from outside|my honest read)\b/i;
 
 // A body is split on sentence terminators AND on the connectives that start a new
@@ -16723,7 +16741,7 @@ const verifyBrainEmail = (body, opts = {}) => {
       // Which clause did it fire in? Only that clause needs the marker — a marked
       // read elsewhere in the email cannot license an unmarked assumption here.
       const _hit = _clauses.find(c => re.test(c));
-      if (_hit && OPINION_MARKERS.test(_hit)) continue;
+      if (_hit && OPINION_MARKERS.test(_hit) && !hedgeCannotBuy(_hit, CLOCK_WORDS.test(_hit))) continue;
     }
     return { ok: false, why: `${why} — "${m[0].slice(0, 40)}"` };
   }
@@ -40016,12 +40034,28 @@ app.post('/api/research-async', (req, res) => {
   // worth of information. A double-click or a retried request is enough to cause
   // it. If the same company is already mid-flight, hand back the running job
   // instead of starting a second one — the client polls by id either way.
-  const _co = String(req.body?.company || '').trim().toLowerCase();
-  if (_co) {
+  // ---- AND IT KEYS ON THE BUSINESS, NOT ON A DISPLAY NAME ---------------
+  // Two different businesses share a name constantly - "Smith Plumbing" in two
+  // metros is two place IDs and two websites. Keyed on the lowercased name, the
+  // second request was handed the FIRST one's job id, and the client polls by
+  // id: it would have merged another business's audit onto this lead. PART 4
+  // section 19 is the worst bug this system has had and it is that exact shape,
+  // through a different door. The place ID is an identity; the domain is nearly
+  // one; the name is a guess, so it is the last resort.
+  const _jobKey = (b) => {
+    const pid = String((b && b.placeId) || '').trim();
+    if (pid) return 'pid:' + pid;
+    const site = String((b && b.website) || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+    if (site) return 'site:' + site;
+    return 'name:' + String((b && b.company) || '').trim().toLowerCase();
+  };
+  const _co = _jobKey(req.body || {});
+  if (_co && _co !== 'name:') {
     for (const [, j] of _jobs) {
-      if (j.status === 'running' && String(j.company || '').trim().toLowerCase() === _co) {
+      if (j.status === 'running' && j.dedupeKey === _co) {
         console.log(`JOB [${j.company}]: duplicate request ignored \u2014 job ${j.id} is already running (started ${Math.round((Date.now() - j.startedAt) / 1000)}s ago). Returning the in-flight job instead of paying for a second full run.`);
-        return res.json({ jobId: j.id, status: 'running', deduped: true });
+        return res.json({ jobId: j.id, status: 'running', deduped: true, company: j.company });
       }
     }
   }
@@ -40047,6 +40081,8 @@ app.post('/api/research-async', (req, res) => {
     // contract does not change at all.
     phase: 'queued',
     company: req.body?.company || 'unknown',
+    // What makes this job about THIS business. See the duplicate-run guard.
+    dedupeKey: _co,
     startedAt: Date.now(),
     startedWorkAt: null,
     finishedAt: null,
@@ -42361,6 +42397,24 @@ app.listen(PORT, () => {
     if (unlicensedFigureIn('their contact page asks for information before anyone can call', [])) {
       _fails.push('a sentence with no numbers in it at all is being refused');
     }
+
+    // 8. A HEDGE CANNOT BUY A FINISHED EVENT OR A CLOCK. Two gates apply the
+    //    opinion-marker rule; only one implemented this half, and the other had
+    //    the rule written in its own comment four lines above the code it was
+    //    missing from. Its OPINABLE list is full of completed events - "states
+    //    which business the customer chose", "states what the customer ended up
+    //    doing" - so "my read is they've already gone with somebody else"
+    //    passed. A finished event and a clock both say we were watching, and no
+    //    hedge makes that true.
+    if (!hedgeCannotBuy("my read is they've already signed with somebody else", false)) {
+      _fails.push('an opinion marker still licenses a COMPLETED event, so a sentence claiming we watched a customer leave ships hedged');
+    }
+    if (!hedgeCannotBuy('my read is most of them give up by 9pm', true)) {
+      _fails.push('an opinion marker still licenses a CLOCK, and a specific hour says we were watching');
+    }
+    if (hedgeCannotBuy('my read is a lot of them give up and phone somebody else', false)) {
+      _fails.push('a genuine read about habitual behaviour is being refused - that is the sentence an owner argues with, and an owner who argues has replied');
+    }
     {
       const _n = (...p) => p.join('');
       const _s = selfSourceNoComments();
@@ -42382,6 +42436,27 @@ app.listen(PORT, () => {
       }
       if (!_s.includes(_n('pageHtml: homepage', 'Html || content,'))) {
         _fails.push('the phone read is back on a variable that only exists on the Firecrawl path');
+      }
+      // AND THE PREDICATE IS ACTUALLY CONSULTED. The three fixtures above run
+      // hedgeCannotBuy directly, which is a check of the RULE and not of the
+      // gate: reverting the OPINABLE branch to a bare marker test left all three
+      // green. Ninth recorded instance of "a check that does not assert its call
+      // site is half a check".
+      if (!_s.includes(_n('OPINION_MARKERS.test(_hit) && !hedgeCannot', 'Buy(_hit, CLOCK_WORDS.test(_hit))'))) {
+        _fails.push('the email gate takes any opinion marker at face value again, so "my read is they have already gone with somebody else" ships - and the rule it is missing is written in its own comment four lines above');
+      }
+      if (!_s.includes(_n('const _claimsKnowledge = hedgeCannot', 'Buy(sent, clocked);'))) {
+        _fails.push('the post-contact gate has its own copy of the rule again, which is how the two came to disagree');
+      }
+      // 9. THE DUPLICATE-RUN GUARD KEYS ON THE BUSINESS. Two different
+      //    businesses share a display name constantly, and the client polls by
+      //    job id - so a name-keyed dedupe handed one lead another company's
+      //    audit, which is PART 4 section 19 through a different door.
+      if (!_s.includes(_n('j.status === \'running\' && j.dedupe', 'Key === _co'))) {
+        _fails.push('the duplicate-run guard matches on a display name again, so two businesses called the same thing share one audit');
+      }
+      if (!_s.includes(_n("if (pid) return 'pid:'", ' + pid;'))) {
+        _fails.push('the job key no longer prefers the place ID, which is the only identity in the request');
       }
       // 5. NO SLUG, NO SEND. ensureHunterAttribute returns null when Hunter's
       //    API is down or the key is wrong, and every use of the result is
