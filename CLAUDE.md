@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 209 boot checks at the bottom, each documenting the live failure that caused it
+- 210 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -4015,6 +4015,100 @@ evidence in this project that is not the system grading itself.
 
 **`index.html` changed, so this needs a Netlify deploy.**
 
+### What the same run's call sheets carried — fixed 2026-08-22
+
+Two leads of the five were killed at the eight-minute WORK clock with every
+API already paid for, and the log proves the cause was the pacing above: seven
+to fifteen seconds between every paid Firecrawl call, and Factory Surplus's own
+line reading *"138s of that was spent WAITING for a free Firecrawl browser"* —
+a third of that lead's entire working time. The three that survived exported
+correctly; "Export 3" after a five-lead run was the button being right about a
+run in which two leads died.
+
+**The kill message named the wrong cause.** It said *"the usual cause is
+several leads researched at once on a single free-tier instance — run them one
+at a time and this will not happen."* That was a guess, it was wrong, and
+acting on it makes a fifty-lead day take all day. It now points at the run's
+own `⏱ TIME` line and says how to read it: mostly gate wait means the throttle
+is ours, mostly inside their calls means the site is slow. Third recorded
+instance of a message naming the wrong cause.
+
+**"Do not say" was carrying true sentences again.** Platinum Series Homes:
+*"The email states '…19 reviews against their 26' — this is measured and
+correct."* No objection in it at all, sitting in the section that exists to
+stop a FALSE sentence being read down a phone. §45's rule required the word
+"but", so the confirm-BUT-wording case was cleared correctly while the entry
+with nothing wrong survived — the clearer case was the one that leaked. Factory
+Surplus carried two `VOICE FAILURE:` notes as well: critiques of the pitch's
+register, which are reasoning for the screen and not warnings for the sheet.
+
+The filter existed as two hand-written copies, one in production and one inside
+its own guard, which is why they agreed with each other and were both missing
+the same two shapes. One `factCheckNoteKind` now, classifying real / wording /
+style / clean, with anything `CRITICAL_FACT_RE` matches never cleared — so "the
+claim is correct but the number is wrong" is still a warning. The live Platinum
+sentence is the fixture, and reverting the widening turns it red.
+
+**JLWinter arrived with no city**, so `LOCAL RANK: skipped — no city could be
+parsed` cost it four rungs: a data gap on the lead, not a defect in the read.
+
+### A brief describes a business MODEL and was matched on a trade WORD
+
+Factory Surplus and Akin Bros. Floor Stores are flooring RETAILERS, and both
+received the crew-trades brief — *"the unit of business is one job from the
+phone ringing to the invoice"*, *"an idle truck costs the same as a working
+one"*, and on the call sheet, for a warehouse showroom: **"when somebody calls
+and you are up on a roof, who picks up?"**
+
+Vin: *"why are flooring companies getting a roofers brief we need to make sure
+we never run into this problem again... prevent this from happening with any
+niche in the future."*
+
+The cause is structural rather than a missing word. Each brief matched on a stem
+list — `floor\w*` here — while the brief itself asserts a MODEL. "Floor" belongs
+to an installer AND to a shop, and so do pool, window, kitchen, sign and garage
+door. A stem can never tell those apart, so no amount of adding stems fixes it.
+That is exactly why the per-brief `notWhen` list, which already held supply,
+wholesale, manufacturer, distributor and franchise, still let "store" through: a
+denylist somebody remembered is the disease this file records most often.
+
+Two mechanisms, because they fail on different days:
+
+- **One shared disqualifier**, applied to every brief in the library instead of
+  kept per brief: words that name a DIFFERENT model — store, shop, showroom,
+  retail, outlet, warehouse, surplus, gallery, dealer, supply, wholesale,
+  manufacturer, distributor, franchise, rental, school, academy, association,
+  marketplace. A brief written FOR one of those models declares `claimsModel`
+  and is exempt; none is today. Deliberately model-naming ONLY: "center",
+  "clinic", "practice" and "group" are not in it and the check asserts they
+  never will be, because §14 records a size gate that refused a dermatology
+  practice for containing "cancer center". A filter widened until it catches
+  the ICP is the more expensive failure.
+- **Every searched category declares its brief.** `NICHE_BRIEF_EXPECT` maps all
+  46 `GP_CATEGORIES` queries to the brief they must receive, or null, and
+  `NICHE BRIEF COVERAGE CHECK` runs the REAL matcher over every row — failing
+  the boot on a disagreement, on a declaration for a category we no longer
+  search, and on any category with no declaration at all. So a target added
+  tomorrow cannot silently inherit somebody else's vocabulary: the build refuses
+  until a human writes down which brief it gets. Same shape as
+  `STEM_COMPLETE_WORDS` in §15, and for the same reason — a rule nobody has to
+  declare is a rule nobody maintains. Twenty-six live trade strings are fixtured
+  alongside, because the text a lead arrives with is Google's own category or a
+  phrase read off their homepage, never our query.
+
+Falsified three ways, each red alone: removing the disqualifier puts the
+flooring stores back on crew trades, adding a category without declaring it
+fails the boot by name, and widening the disqualifier to "center" goes red on
+the dermatology and LASIK rows.
+
+**A retailer now gets NO brief, and that is the deliberate answer.** The
+matcher's own comment already stated the trade: a business we cannot place costs
+a paragraph on a call sheet, while a business placed in the wrong bucket gets a
+page of confident vocabulary about somebody else's trade. Writing a retail brief
+from memory is what the library's DECLARED/SOURCED discipline exists to prevent
+— it is 2-4 hours of research, and it is the honest next step if flooring stores
+are a segment worth keeping.
+
 ---
 
 # PART 5 — WHAT IS PROVEN
@@ -4076,7 +4170,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 209 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 210 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -4150,7 +4244,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 209 boot checks and the comments above
+and caused none of this week's failures. The 210 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 

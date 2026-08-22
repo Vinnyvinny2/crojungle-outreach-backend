@@ -15156,6 +15156,43 @@ const stripQuoteLabel = (t) => String(t || '')
   .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:—-]\s*/i, '')
   .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
   .trim();
+// == WHAT BELONGS IN "DO NOT SAY", AND WHAT DOES NOT ========================
+// That section exists to stop a FALSE sentence being read down a phone. Every
+// true sentence in it teaches the operator to skip the section, and this file
+// records that cost four times. Live on 2026-08-22 two shapes were still
+// getting through, both of them on real call sheets:
+//
+//   1. A PURE confirmation. Platinum Series Homes carried: "The email states
+//      '...19 reviews against their 26' - this is measured and correct." There
+//      is no objection in it at all. The old rule required the word "but", so
+//      the entry with NOTHING wrong survived while the confirm-but-wording one
+//      was correctly cleared. The clearer case was the one that leaked.
+//   2. A STYLE critique. Factory Surplus carried "VOICE FAILURE: the pitch
+//      angle reads as a generic audit finding" - a note about register, not a
+//      claim a prospect could disprove. Section 41 already moved engineering
+//      rationale off the sheet and onto the screen; this is the same rule.
+//
+// ONE function, because the production filter and its boot check each held an
+// identical copy of the regex - the two-hand-kept-copies disease inside the
+// gate. Bounded hard in the expensive direction: anything CRITICAL_FACT_RE
+// matches is never cleared, so "the claim is correct but the number is wrong"
+// is still a warning.
+const _FACT_CONFIRMS = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|is measured and correct|measured and correct|matches the measured|supported by the measured)\b/i;
+const _FACT_OBJECTS = /\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
+const _FACT_STYLE = /^\s*(VOICE FAILURE|TONE|REGISTER|STYLE)\b|\bvoice failure\b/i;
+const _FACT_DOUBT = /\b(but|however|though|although|not measured|never measured|wrong|incorrect|overstat\w*|understat\w*|contradict\w*|invent\w*|unverif\w*|inflat\w*|backwards|inverts?)\b/i;
+// 'wording'  a confirmed claim whose only objection is how it is phrased
+// 'style'    a note about register, which is reasoning and not a warning
+// 'clean'    a confirmation carrying no objection of any kind
+// 'real'     everything else: a claim a prospect could disprove
+const factCheckNoteKind = (flag) => {
+  const f = String(flag || '');
+  if (CRITICAL_FACT_RE.test(f)) return 'real';
+  if (_FACT_STYLE.test(f)) return 'style';
+  if (_FACT_CONFIRMS.test(f) && !_FACT_DOUBT.test(f)) return 'clean';
+  if (_FACT_CONFIRMS.test(f) && _FACT_OBJECTS.test(f)) return 'wording';
+  return 'real';
+};
 const BUSINESS_MODELS = new Set(['LOCAL_CONSUMER', 'B2B_INSTITUTIONAL', 'REFERRAL_PROFESSIONAL', 'NATIONAL_REMOTE']);
 const resolveBusinessModel = (raw, corpus) => {
   const fallback = { model: 'LOCAL_CONSUMER', why: 'default — no verified evidence of another model', verified: false };
@@ -20120,6 +20157,146 @@ const NICHE_BRIEFS = [
   },
 ];
 
+// == A BRIEF DESCRIBES A BUSINESS MODEL, NOT A TRADE WORD ===================
+// Live 2026-08-22: Factory Surplus and Akin Bros. Floor Stores are flooring
+// RETAILERS, and both received the crew-trades brief - "the unit of business is
+// one job from the phone ringing to the invoice", "an idle truck costs the same
+// as a working one", and the question "when somebody calls and you are up on a
+// roof, who picks up?" on a call sheet for a warehouse showroom.
+//
+// The cause is structural, not a missing word. Each brief matched on a stem
+// list (floor\w* here) while the brief itself asserts a MODEL. "Floor" belongs
+// to an installer AND to a shop; so does pool, window, kitchen, sign, garage
+// door. A stem can never tell those apart, so no amount of adding stems fixes
+// it - which is why the per-brief notWhen list, which already held supply,
+// wholesale, manufacturer, distributor and franchise, still let "store"
+// through. A denylist somebody remembered is the disease this file records
+// most often.
+//
+// So: ONE shared disqualifier of words that name a DIFFERENT model, applied to
+// every brief in the library rather than kept per brief. A trade text carrying
+// one of these gets NO brief unless a brief is written for that model and says
+// so. The words are deliberately model-naming only - "center", "clinic",
+// "practice" and "group" are NOT here, because section 14 records a size gate
+// that refused a dermatology practice for containing "cancer center".
+//
+// Wrong brief and no brief are not the same mistake and only one is
+// recoverable: no brief costs a paragraph on a call sheet, the wrong brief puts
+// a page of confident vocabulary about somebody else's trade in front of an
+// owner who knows his own business.
+const BRIEF_MODEL_DISQUALIFIERS = /\b(stores?|shops?|showrooms?|retail\w*|outlets?|warehouses?|surplus|galler(?:y|ies)|dealers?|dealerships?|supplier?s?|supplies|wholesal\w*|manufactur\w*|distribut\w*|franchis\w*|rentals?|schools?|academ(?:y|ies)|training|associations?|museums?|magazines?|marketplaces?|director(?:y|ies)|e-?commerce)\b/i;
+
+// == EVERY CATEGORY WE SEARCH DECLARES ITS BRIEF, OR THE BUILD FAILS ========
+// The disqualifier above fixes the shapes we have SEEN. This is the mechanism
+// that catches the ones we have not: every query in GP_CATEGORIES must appear
+// here with the brief it is supposed to receive, or null for none. NICHE BRIEF
+// COVERAGE CHECK runs the real matcher over every row and fails the boot on any
+// disagreement AND on any category missing from this table.
+//
+// So adding a target category tomorrow cannot silently inherit somebody else's
+// vocabulary: the build refuses until a human writes down which brief it gets.
+// That is the same shape as STEM_COMPLETE_WORDS in section 15, and for the same
+// reason - a rule nobody has to declare is a rule nobody maintains.
+//
+// null is a legitimate, deliberate answer. A business we cannot place gets no
+// brief, which costs a paragraph on a call sheet; a business placed in the
+// wrong bucket gets a page about somebody else's trade.
+const NICHE_BRIEF_EXPECT = {
+  'HVAC contractor': 'crew_trades',
+  'roofing company': 'crew_trades',
+  'water damage restoration company': 'crew_trades',
+  'foundation repair company': 'crew_trades',
+  'solar installation company': 'crew_trades',
+  'kitchen remodeling company': 'crew_trades',
+  'bathroom remodeling company': 'crew_trades',
+  'window and door replacement company': 'crew_trades',
+  'paving contractor': 'crew_trades',
+  'concrete contractor': 'crew_trades',
+  'pool construction company': 'crew_trades',
+  'custom home builder': 'crew_trades',
+  'general contractor': 'crew_trades',
+  'fire protection sprinkler company': 'crew_trades',
+  'excavation and grading contractor': 'crew_trades',
+  'masonry contractor': 'crew_trades',
+  'hardscaping and landscape design company': 'crew_trades',
+  'commercial landscaping company': 'crew_trades',
+  'tree service company': 'crew_trades',
+  'insulation and spray foam company': 'crew_trades',
+  'electrical contractor': 'crew_trades',
+  'plumbing company': 'crew_trades',
+  // We SEARCH for flooring companies meaning installers, and Google answers
+  // with retailers as well - which is how Factory Surplus and Akin Bros. Floor
+  // Stores got the roofer's questions. The query itself is a contractor query.
+  'flooring company': 'crew_trades',
+  'garage door company': 'crew_trades',
+  'deck and patio builder': 'crew_trades',
+  'sign and signage company': 'crew_trades',
+  'well drilling and septic company': 'crew_trades',
+  'pest control company': 'recurring_services',
+  'lawn care and treatment company': 'recurring_services',
+  'med spa': 'aesthetic_practices',
+  'plastic surgery practice': 'aesthetic_practices',
+  'dermatology practice': 'aesthetic_practices',
+  'cosmetic dentistry practice': 'aesthetic_practices',
+  'LASIK eye center': 'aesthetic_practices',
+  'orthodontist office': 'clinical_practices',
+  'oral surgery practice': 'clinical_practices',
+  'fertility clinic': 'clinical_practices',
+  'chiropractic clinic': 'clinical_practices',
+  'physical therapy clinic': 'clinical_practices',
+  'veterinary hospital': 'clinical_practices',
+  'dental practice': 'clinical_practices',
+  'personal injury law firm': 'law_firms',
+  'estate planning law firm': 'law_firms',
+  'accounting and CPA firm': 'accounting_firms',
+  'independent insurance agency': 'insurance_agencies',
+  'assisted living facility': 'senior_care',
+};
+// The OTHER half of the same question: the trade text a lead actually arrives
+// with is Google's own category or a phrase read off their homepage, not our
+// query. These are real strings from live runs, with the answer each must give.
+const NICHE_BRIEF_LIVE_CASES = [
+  // The two that broke on 2026-08-22. A retailer is not a crew.
+  ['flooring store', null],
+  ['Flooring store, Carpet store, Tile store', null],
+  // ...while a flooring CONTRACTOR still gets the brief written for it.
+  ['flooring contractor', 'crew_trades'],
+  ['Flooring contractor, General contractor', 'crew_trades'],
+  // Real trade phrases the homepage read produced on live leads.
+  ['well drilling and pump repair', 'crew_trades'],
+  ['hardscaping contractor', 'crew_trades'],
+  ['pool builder', 'crew_trades'],
+  ['custom home builder', 'crew_trades'],
+  ['pest control', 'recurring_services'],
+  ['Chiropractor', 'clinical_practices'],
+  ['Plumber', 'crew_trades'],
+  // The same word on both sides of the retail line, everywhere it occurs.
+  ['pool supply store', null],
+  ['kitchen and bath showroom', null],
+  ['window manufacturer', null],
+  ['garage door dealer', null],
+  ['sign shop', null],
+  ['plumbing supply wholesale', null],
+  ['landscape supply yard', null],
+  ['tile gallery', null],
+  ['lighting showroom', null],
+  ['HVAC equipment rental', null],
+  // A trade school teaches the trade; it does not run one.
+  ['electrical training academy', null],
+  ['roofing contractors association', null],
+  // And the section 14 trap, which must NOT be disqualified: "center" is in
+  // real practice names, and refusing it is how a dermatology practice was
+  // once blocked for containing "skin cancer center". The string here is the
+  // FULL one a lead actually carries - the first version of this fixture
+  // asserted the bare phrase and this check failed on its own first boot,
+  // correctly: "skin cancer center" alone contains no word that places it in
+  // any brief, and inventing a placement for it would have been the fixture
+  // teaching the matcher to guess.
+  ['Dermatology & Skin Cancer Center', 'aesthetic_practices'],
+  ['LASIK eye center', 'aesthetic_practices'],
+  ['fertility center', 'clinical_practices'],
+];
+
 // Which brief, if any. Pure, so the boot check runs the shipping decision.
 //
 // A brief attaches only on a positive match with NO disqualifier. There is no
@@ -20132,7 +20309,10 @@ const matchNicheBrief = (tradeText) => {
   if (t.length < 3) return null;
   for (const b of NICHE_BRIEFS) {
     if (!b.match.test(t)) continue;
+    // The brief's own exceptions, then the shared model test. A brief written
+    // FOR one of these models declares it and is exempt; none is today.
     if (b.notWhen && b.notWhen.test(t)) return null;
+    if (!b.claimsModel && BRIEF_MODEL_DISQUALIFIERS.test(t)) return null;
     return b;
   }
   return null;
@@ -39243,12 +39423,11 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
             // object only to wording, and anything the critical pattern matches
             // is never cleared here. "The claim is correct but the number is
             // wrong" is not a wording note.
-            const _CORRECT_BUT = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|matches the measured|supported by the measured)\b[\s\S]{0,120}\bbut\b[\s\S]{0,160}\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
-            const _wordingOnly = _rawFlags.filter(f => !_CLEARED.test(f) && _CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f));
+            const _wordingOnly = _rawFlags.filter(f => !_CLEARED.test(f) && factCheckNoteKind(f) !== 'real');
             if (_wordingOnly.length) {
-              console.log(`\u{1F50E} WORDING NOTE [${company}]: ${_wordingOnly.length} fact-check entr(y/ies) confirmed the claim is CORRECT and objected only to how it is phrased. Kept out of "Do not say", which exists to stop a FALSE sentence being said out loud \u2014 a section full of true sentences is one nobody reads. First: "${String(_wordingOnly[0]).slice(0, 150)}"`);
+              console.log(`\u{1F50E} WORDING NOTE [${company}]: ${_wordingOnly.length} fact-check entr(y/ies) did not describe a claim a prospect could disprove \u2014 ${_wordingOnly.map(f => factCheckNoteKind(f)).join(', ')}. Kept out of "Do not say", which exists to stop a FALSE sentence being said out loud \u2014 a section full of true sentences is one nobody reads. First: "${String(_wordingOnly[0]).slice(0, 150)}"`);
             }
-            const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && !(_CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f)));
+            const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && factCheckNoteKind(f) === 'real');
             // NOW the merge — real flags only, cleared entries never reach the sheet.
             if (_realFlags.length) {
               brainAudit._claimRisks = (brainAudit._claimRisks || []).concat(
@@ -40878,7 +41057,14 @@ app.post('/api/research-async', (req, res) => {
     _jobTimer = setTimeout(() => {
     if (job.status === 'running') {
       job.status = 'error';
-      job.error = 'This run passed 8 minutes without finishing and was stopped. Everything already measured was still paid for. The usual cause is several leads researched at once on a single free-tier instance \u2014 run them one at a time and this will not happen.';
+      // The old sentence here blamed running several leads at once and told the
+      // operator to run them one at a time. That was a guess, it was wrong, and
+      // acting on it makes a fifty-lead day take all day. On 2026-08-22 the real
+      // cause was Firecrawl pacing: one endpoint's rate limit was spacing every
+      // call in the process 7.5 seconds apart, so two leads ran out of clock
+      // with their pages still arriving. A message naming the wrong cause costs
+      // exactly what one naming no cause costs, which this file records twice.
+      job.error = 'This run passed 8 minutes of WORK without finishing and was stopped. Everything already measured was still paid for. Check the run\'s \u23f1 TIME line: if most of it was spent waiting for a Firecrawl browser, the throttle is ours and FC_CONCURRENCY is the dial; if it was spent inside their calls, the site itself is slow. Re-running this one lead is safe.';
       job.finishedAt = Date.now();
       console.log(`\u26d4 JOB ${id} [${job.company}]: TIMED OUT after 8 minutes and was closed so the client stops polling. Credits already spent are not recoverable.`);
     }
@@ -42977,7 +43163,10 @@ app.listen(PORT, () => {
   // times. Both directions asserted, using the real flags from that run.
   try {
     const _fails = [];
-    const _CORRECT_BUT = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|matches the measured|supported by the measured)\b[\s\S]{0,120}\bbut\b[\s\S]{0,160}\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
+    // The check used to hold its own copy of this regex, which is the disease
+    // this file is mostly a record of: the production filter and the guard
+    // agreed with each other and were both missing the same two shapes. It
+    // runs the REAL classifier now.
     const _wording = [
       `Pitch angle states 'Isaacs & Isaacs Law Firm shows up above them on Google for "personal injury lawyer in Cincinnati, OH", with 337 reviews against their 379' \u2014 this is correct per measured evidence, but the phrasing 'shows up above them' could imply recency or activity comparison, which is not measured.`,
       `Pitch angle states 'Abacus Accounting Center, LLC - CPA Firm shows up above them' \u2014 this is correct per measured facts, but the phrasing and the comparative framing could be read as implying search dominance, which are NOT measured.`,
@@ -42988,20 +43177,25 @@ app.listen(PORT, () => {
       `'5 of the 6 practices ahead of you have more reviews' \u2014 the evidence shows 1 of 6. The claim inverts the actual ratio and it is backwards.`,
       `WEBSITE STATUS CONTRADICTION \u2014 the copy says the site is down. EVIDENCE CONTRADICTS THIS.`,
     ];
+    // LIVE, 2026-08-22. A PURE confirmation with no objection at all, and a
+    // style critique about register. Both reached real call sheets while the
+    // harder confirm-but-wording case was correctly cleared.
+    _wording.push(`The email states 'Dallas Custom Home Builders shows up above them on Google for "custom home builder in Dallas, TX", with 19 reviews against their 26' \u2014 this is measured and correct.`);
+    _wording.push(`VOICE FAILURE: The pitch angle reads as a generic audit finding, not a diagnosis that makes this owner feel seen.`);
     for (const f of _wording) {
-      if (!(_CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f))) {
-        _fails.push(`a flag that CONFIRMS the claim and objects only to phrasing is still going into "Do not say" \u2014 "${f.slice(0, 90)}"`);
+      if (factCheckNoteKind(f) === 'real') {
+        _fails.push(`a flag that is not a claim a prospect could disprove is still going into "Do not say" \u2014 "${f.slice(0, 90)}"`);
       }
     }
     for (const f of _realErrors) {
-      if (_CORRECT_BUT.test(f) && !CRITICAL_FACT_RE.test(f)) {
+      if (factCheckNoteKind(f) !== 'real') {
         _fails.push(`a REAL error was cleared as a wording note, which is the expensive direction \u2014 "${f.slice(0, 90)}"`);
       }
     }
     // AND THE CALL SITE, or the pattern is right and unused.
     const _needle = (...parts) => parts.join('');
     const _src = selfSourceNoComments();
-    if (!_src.includes(_needle('const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && ', '!(_CORRECT_BUT.test(f)'))) {
+    if (!_src.includes(_needle('const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && ', "factCheckNoteKind(f) === 'real');"))) {
       _fails.push('the fact-check flag list no longer separates confirmed-correct wording notes, so "Do not say" fills with true sentences again');
     }
 
@@ -49589,6 +49783,72 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ NICHE BRIEF CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+
+  // ---- NO CATEGORY MAY QUIETLY INHERIT SOMEBODY ELSE'S TRADE --------------
+  // Two flooring RETAILERS received the crew-trades brief on 2026-08-22 and
+  // Mike's call sheet asked a warehouse owner who picks up when he is up on a
+  // roof. A brief describes a business MODEL and was being matched on a trade
+  // WORD, and "floor" belongs to an installer and to a shop equally.
+  //
+  // The disqualifier fixes the shapes we have seen. THIS is what catches the
+  // ones we have not: every category we search must be declared, so a new
+  // target added tomorrow fails the build until a human says which brief it
+  // gets. Same shape as STEM_COMPLETE_WORDS, and for the same reason.
+  try {
+    const _fails = [];
+    const _ids = new Set(NICHE_BRIEFS.map(b => b.id));
+    for (const c of GP_CATEGORIES) {
+      const q = String(c.q || '');
+      if (!Object.prototype.hasOwnProperty.call(NICHE_BRIEF_EXPECT, q)) {
+        _fails.push(`the category "${q}" is searched but declares no brief - add it to NICHE_BRIEF_EXPECT with the brief it should get, or null. Until then it inherits whichever brief's stem list happens to match its words`);
+        continue;
+      }
+      const want = NICHE_BRIEF_EXPECT[q];
+      if (want !== null && !_ids.has(want)) {
+        _fails.push(`"${q}" is declared to get "${want}", which is not a brief in the library`);
+        continue;
+      }
+      const got = matchNicheBrief(q);
+      const gotId = got ? got.id : null;
+      if (gotId !== want) _fails.push(`"${q}" resolves to ${gotId || 'NOTHING'} but is declared as ${want || 'NOTHING'}`);
+    }
+    {
+      const searched = new Set(GP_CATEGORIES.map(c => String(c.q || '')));
+      for (const q of Object.keys(NICHE_BRIEF_EXPECT)) {
+        if (!searched.has(q)) _fails.push(`NICHE_BRIEF_EXPECT declares "${q}", which is not a category we search any more`);
+      }
+    }
+    for (const [trade, want] of NICHE_BRIEF_LIVE_CASES) {
+      const got = matchNicheBrief(trade);
+      const gotId = got ? got.id : null;
+      if (gotId !== want) _fails.push(`"${trade}" resolves to ${gotId || 'NOTHING'}, expected ${want || 'NOTHING'}`);
+    }
+    {
+      const _n = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_n('!b.claimsModel && BRIEF_MODEL_DISQUALIFIERS', '.test(t)'))) {
+        _fails.push('the shared model disqualifier is no longer consulted by the matcher, so every brief is back to its own hand-kept exceptions');
+      }
+      const _probe = matchNicheBrief('wholesale supply warehouse');
+      if (_probe) _fails.push(`a wholesale warehouse still matched ${_probe.id}`);
+      // The disqualifier must stay MODEL words only. Section 14 records a size
+      // gate that refused a dermatology practice for containing "cancer
+      // center", and a filter widened until it catches the ICP is the more
+      // expensive failure.
+      for (const _safe of ['center', 'centre', 'clinic', 'practice', 'group', 'company', 'services', 'studio']) {
+        if (BRIEF_MODEL_DISQUALIFIERS.test(_safe)) {
+          _fails.push(`"${_safe}" now disqualifies a brief - that word is in ordinary practice and trade names, and refusing it is the section 14 failure where a dermatology practice was blocked for containing "cancer center"`);
+        }
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 NICHE BRIEF COVERAGE CHECK: ${_fails.slice(0, 5).join(' | ')}${_fails.length > 5 ? ` | +${_fails.length - 5} more` : ''}.`);
+    } else {
+      console.log(`\u2713 NICHE BRIEF COVERAGE CHECK: all ${GP_CATEGORIES.length} searched categories declare which brief they get, every declaration resolves through the REAL matcher, and ${NICHE_BRIEF_LIVE_CASES.length} live trade strings land where they should - a flooring STORE now gets no brief while a flooring CONTRACTOR still gets one. A brief describes a business model and was being matched on a trade word, so two retailers were handed a crew's vocabulary and asked who picks up when the owner is on a roof. Adding a target category cannot inherit somebody else's trade any more: the build fails until a human declares its brief.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 NICHE BRIEF COVERAGE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
 
   // ══ HIS REVIEWS ARE OUR READ ON HIM, NOT OUR SENTENCE TO HIM ════════════
   // Vin, 2026-08-18, after four runs whose emails all read as being about
