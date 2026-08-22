@@ -6854,7 +6854,23 @@ function ResearchView({
     style: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }
   }, React.createElement('div', { style: { background: 'var(--s)', borderRadius: 12, padding: '24px 28px', maxWidth: 360, border: '1px solid var(--b)' } },
     React.createElement('div', { style: { fontSize: 15, fontWeight: 700, color: 'var(--t)', marginBottom: 8 } }, 'Re-run Research?'),
-    React.createElement('div', { style: { fontSize: 13, color: 'var(--m2)', marginBottom: 18, lineHeight: 1.55 } }, 'This will overwrite the existing audit for this lead.'),
+    // The age and the price, because "overwrite the existing audit" answers
+    // the wrong question. A re-run three days after the last one costs a full
+    // cycle to measure numbers that have barely moved; three weeks after, the
+    // numbers have moved and the re-run is the honest choice before a call.
+    // The figures are the measured per-lead cost from the live log.
+    React.createElement('div', { style: { fontSize: 13, color: 'var(--m2)', marginBottom: 18, lineHeight: 1.55 } },
+      (() => {
+        const at = lead && lead.researchedAt ? new Date(lead.researchedAt) : null;
+        const days = at && !isNaN(at) ? Math.floor((Date.now() - at.getTime()) / 86400000) : null;
+        const age = days == null ? 'This lead already has an audit'
+          : days === 0 ? 'This lead was audited TODAY'
+          : 'This lead was audited ' + days + ' day' + (days === 1 ? '' : 's') + ' ago';
+        const advice = days == null ? '' : (days <= 3
+          ? ' The measurements have barely had time to move.'
+          : ' Ranks, reviews and hours drift; before a call, fresh figures are the honest choice.');
+        return age + '. A re-run costs a full cycle (~16 Firecrawl credits, 4 Places calls, ~$0.10 of model) and overwrites the existing audit.' + advice;
+      })()),
     React.createElement('div', { style: { display: 'flex', gap: 8 } },
       React.createElement('button', { className: 'btn', style: { flex: 1 }, onClick: () => setRerunConfirm(false) }, 'Cancel'),
       React.createElement('button', { className: 'btn', style: { flex: 1, background: 'var(--t)', color: 'var(--bg)', border: 'none', fontWeight: 600 }, onClick: () => { setRerunConfirm(false); handleRunResearch(); } }, 'Re-run')
@@ -6935,7 +6951,10 @@ function ResearchView({
               React.createElement('span', null, 'Write the emails too')),
             React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 9, cursor: 'pointer' } },
               React.createElement('input', { type: 'checkbox', checked: batchIncludeDone, disabled: batchRunning, onChange: e => setBatchIncludeDone(e.target.checked), style: { marginTop: 2 } }),
-              React.createElement('span', null, 'Re-audit leads already done')),
+              // The price is on the tick box because this is the box that
+              // multiplies it: fifty re-runs is fifty full cycles measuring
+              // numbers that may not have moved.
+              React.createElement('span', null, 'Re-audit leads already done (each re-run costs a full cycle: ~16 credits + 4 Places calls)')),
             React.createElement('button', {
               className: 'btn btn-sm ' + (batchRunning ? 'btn-g' : 'btn-p'),
               style: { width: '100%' },
@@ -6961,6 +6980,19 @@ function ResearchView({
             onClick: () => { setExportPick(new Set(done.map(x => x.id))); setExportOpen({ scope: 'all' }); },
           }, 'Export audits\u2026');
         })(),
+        // ── THE ONLY EVIDENCE THAT IS NOT INFERENCE ────────────────────────
+        // /api/call-outcomes has grouped every logged call by the finding that
+        // opened it since section 35 shipped, with a CSV mode - and nothing in
+        // this file could reach it, so the one report the whole quality
+        // question waits on was invisible. Forty logged conversations is more
+        // evidence than this project has accumulated in its life; a report
+        // nobody can open produces none of it.
+        React.createElement('button', {
+          className: 'btn btn-sm btn-g',
+          style: { marginTop: 6, width: '100%' },
+          title: 'Every logged call, grouped by the finding that opened it. Rates are over conversations, not dials; under twelve conversations it says UNREADABLE out loud.',
+          onClick: () => { try { window.open(BACKEND + '/api/call-outcomes?format=csv', '_blank'); } catch (e) { console.warn(e); } },
+        }, 'Call outcomes \u2014 report (CSV)'),
         // ══ "IT SAID EXPORT 4 AUDITS" AFTER A THREE-LEAD RUN ═══════════════
         // It was right and it read as a miscount: the fourth lead was audited
         // in an earlier session and is still in the pipeline. The button is not

@@ -46,7 +46,34 @@ const fetch = require('node-fetch');
 // answer the only question that matters for a fifty-lead batch.
 const noted = [];
 const netNote = (url, ms, ok2) => { noted.push({ url, ms, ok: ok2 }); };
+// fakeUpstreamUrl is fetchT's test seam and a free binding in the lifted
+// source, so it is lifted TOO and tested below in both directions — the seam
+// that lets servercheck.js fake the network must be provably inert without
+// its env var, or the door built for a test could quietly redirect live
+// traffic.
+const fuStart = src.indexOf('const fakeUpstreamUrl = ');
+const fuEnd = src.indexOf('const fetchT = ', fuStart);
+if (fuStart < 0 || fuEnd < 0) { console.log('  \u2717 fakeUpstreamUrl not found beside fetchT'); process.exit(1); }
+const fakeUpstreamUrl = eval('(' + src.slice(fuStart, fuEnd).replace(/^const fakeUpstreamUrl = /, '').trim().replace(/;\s*$/, '') + ')');
 const fetchT = eval('(' + src.slice(start, end).replace(/^const fetchT = /, '').replace(/;\s*$/, '') + ')');
+
+// ── the test seam is inert without its env var, and exact with it ────────
+{
+  const live = 'https://api.firecrawl.dev/v1/scrape?x=1';
+  if (fakeUpstreamUrl(live, '') !== live || fakeUpstreamUrl(live, undefined) !== live) {
+    console.log('  \u2717 fakeUpstreamUrl rewrites with NO base set — production traffic would be redirected');
+    process.exit(1);
+  }
+  if (fakeUpstreamUrl(live, 'http://127.0.0.1:9') !== 'http://127.0.0.1:9/api.firecrawl.dev/v1/scrape?x=1') {
+    console.log('  \u2717 fakeUpstreamUrl does not rewrite to base/host/path — servercheck cannot route on the host');
+    process.exit(1);
+  }
+  if (fakeUpstreamUrl('http://127.0.0.1:4000/x', 'http://127.0.0.1:9') !== 'http://127.0.0.1:4000/x') {
+    console.log('  \u2717 fakeUpstreamUrl rewrites LOCAL urls — the fake server would call itself forever');
+    process.exit(1);
+  }
+  console.log('  \u2713 the FAKE_UPSTREAM seam is inert without its env var and exact with it');
+}
 
 let accepted = 0, closed = 0;
 const hang = http.createServer((req) => { accepted++; req.socket.on('close', () => closed++); });

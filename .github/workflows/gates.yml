@@ -1,0 +1,27 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# EVERY GATE, ON EVERY PUSH.
+#
+# Until 2026-08-22 the gates only ran when somebody remembered to run them,
+# which for the life of this project meant one person's terminal. This runs
+# ci-gates.sh — the same single script a human runs — on every push and every
+# PR, so a build that cannot pass its own 200+ boot checks can never be merged
+# green. The workflow adds NOTHING of its own: the gate list lives in
+# ci-gates.sh, one copy, and this file only invokes it.
+# ═══════════════════════════════════════════════════════════════════════════
+name: gates
+on:
+  push:
+  pull_request:
+    branches: [main]
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: bash ci-gates.sh

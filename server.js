@@ -202,6 +202,33 @@ app.get('/healthz', (req, res) => {
   });
 });
 
+// ── NOT READY IS NOT A STATE THAT TAKES WORK ───────────────────────────────────
+// While the checks are still running, the verdict recorder counts every check
+// glyph this process prints — and a LEAD worked during that window prints its
+// own refusal lines (a fact-check refusal, a credit latch), which would be
+// counted as failed BOOT checks and flip a healthy build's verdict red. The
+// root fix is not a cleverer filter over the glyphs: a server that has not
+// settled its own checks is not ready to take work. Every POST under /api/
+// answers 503 until the verdict settles (~19 seconds, once per deploy); GETs
+// stay open, because reading health, spend or a job's status spends nothing
+// and prints nothing. A settled build — green or RED — takes work exactly as
+// before: /healthz already reports red to a gated deploy, and refusing work
+// on red would brick a build that one flaky check turned red. With Render's
+// health check on /healthz (PART 8) no traffic reaches the new process before
+// green, so in production this window closes itself.
+const bootGateRefuses = (method, path, phase) =>
+  method === 'POST' && String(path || '').startsWith('/api/') && phase === 'checking';
+const bootWindowGate = (req, res, next) => {
+  if (bootGateRefuses(req.method, req.path, BOOT_STATUS.phase)) {
+    return res.status(503).json({
+      booting: true,
+      error: 'The server is still running its own boot checks and is not ready to take work yet. Retry in a few seconds; /healthz answers 200 the moment it is.',
+    });
+  }
+  return next();
+};
+app.use(bootWindowGate);
+
 // ════════════════════════ WHAT TODAY HAS COST, AND WHERE IT STOPS ════════════
 // "What does 50 audits a day cost" could only ever be answered per lead or with
 // arithmetic from outside the system, and NOTHING could say stop — a loop, a
@@ -786,7 +813,24 @@ const netReport = () => {
     + (led.gateWaitMs ? ` | ${(led.gateWaitMs / 1000).toFixed(0)}s of that was spent WAITING for a free Firecrawl browser before the request was sent \u2014 if this is large, the throttle is ours and FC_CONCURRENCY is the dial` : ' | no time was spent waiting for a Firecrawl slot');
 };
 
+// ════════ THE ONE DOOR IS ALSO THE ONE TEST SEAM ════════
+// servercheck.js drives the REAL research route over a fake network. Every
+// outbound call already goes through this function — that is fetchT's whole
+// point — so the seam lives here and nowhere else: when FAKE_UPSTREAM is set,
+// a non-local URL is rewritten to <FAKE_UPSTREAM>/<original-host><path>, and
+// the fake server routes on that first path segment. INERT in production: the
+// env var is absent, the rewrite never runs, and fetchtest.js falsifies both
+// directions so this cannot silently start rewriting live traffic.
+const fakeUpstreamUrl = (url, base) => {
+  if (!base) return url;
+  try {
+    const u = new URL(String(url));
+    if (u.hostname === '127.0.0.1' || u.hostname === 'localhost') return url;
+    return String(base).replace(/\/+$/, '') + '/' + u.hostname + u.pathname + u.search;
+  } catch (e) { void e; return url; }
+};
 const fetchT = (url, opts={}, ms=10000) => {
+  url = fakeUpstreamUrl(url, process.env.FAKE_UPSTREAM);
   const _t0 = Date.now();
   const ac = new AbortController();
   let timer;
@@ -14936,6 +14980,28 @@ const URGENCY_ADJUST = {
 //
 // And it defaults to LOCAL_CONSUMER whenever the evidence does not hold up,
 // because that is the ICP and the ladder is built for it.
+// ════════ ONE QUOTE CANONICALISER — CANONICALISE, NEVER LOOSEN ════
+// Two verifiers held two identical local copies of this normaliser — the
+// business-model evidence check and verifyOriginalFinding — which is the
+// two-hand-kept-copies disease with the copies inside the truth gates. One
+// function now, and it fixes two classes of REAL quote that were still dying,
+// both charged to the ~11% survival rate this file carries as the reason
+// audits read alike:
+//   an HTML entity in the corpus becomes a WORD: markdown holds
+//   "Smith &amp; Sons", the old norm made that "smith amp sons", the model
+//   quotes the rendered "Smith & Sons" = "smith sons", and a verbatim quote
+//   was refused over an ampersand. And an accented letter was DELETED: their
+//   page says Jose with an accent, the old norm made it "jos", the model
+//   writes Jose = "jose". One letter, whole drop.
+// Canonicalisation on BOTH sides; the rule has not moved: the span must still
+// exist in what we read, and a fabricated sentence still matches nothing —
+// QUOTE CANON CHECK proves that direction on every boot.
+const _quoteDeEntity = (t) => String(t || '')
+  .replace(/&amp;/gi, '&').replace(/&nbsp;/gi, ' ').replace(/&#39;|&apos;|&rsquo;|&lsquo;/gi, "'")
+  .replace(/&quot;|&ldquo;|&rdquo;/gi, '"').replace(/&lt;/gi, ' ').replace(/&gt;/gi, ' ')
+  .replace(/&#\d+;/g, ' ').replace(/&[a-z]{2,8};/gi, ' ');
+const _quoteDeAccent = (t) => { try { return String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { void e; return String(t || ''); } };
+const normQuote = (t) => _quoteDeAccent(_quoteDeEntity(String(t || ''))).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 const BUSINESS_MODELS = new Set(['LOCAL_CONSUMER', 'B2B_INSTITUTIONAL', 'REFERRAL_PROFESSIONAL', 'NATIONAL_REMOTE']);
 const resolveBusinessModel = (raw, corpus) => {
   const fallback = { model: 'LOCAL_CONSUMER', why: 'default — no verified evidence of another model', verified: false };
@@ -14946,7 +15012,7 @@ const resolveBusinessModel = (raw, corpus) => {
   if (model === 'LOCAL_CONSUMER') return { model, why: String(raw.why || '').trim(), verified: true };
   const ev = String(raw.evidence || '').trim();
   if (!ev) return { ...fallback, why: `claimed ${model} with no quoted evidence — falling back` };
-  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const norm = normQuote;
   const hay = norm(corpus);
   const needle = norm(ev);
   if (!hay || needle.length < 12) return { ...fallback, why: `evidence too short or no corpus to check it against — falling back` };
@@ -15079,7 +15145,7 @@ const verifyOriginalFinding = (item, corpus) => {
     .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:\u2014-]\s*/i, '')
     .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
     .trim();
-  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const norm = normQuote;
   const hay = norm(corpus);
   if (!hay) return { ok: false, why: 'no page corpus to verify the quote against' };
   const needle = norm(stripLabel(evidence));
@@ -15127,7 +15193,17 @@ const verifyOriginalFinding = (item, corpus) => {
       if (hay.includes(words.slice(i, i + n).join(' '))) return { ok: true, finding: _finding, evidence };
     }
   }
-  return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}"` };
+  // A drop names its NEAREST MISS: "does not appear" is true and unactionable,
+  // because nobody can tell a fabricated sentence from a real one that died two
+  // words short. A 0-word best is the fabrication shape; an (n-1)-word best is
+  // a boundary problem, and the difference is the next tuning decision.
+  let _best = 0;
+  for (let n = Math.min(12, words.length) - 1; n >= 2 && !_best; n--) {
+    for (let i = 0; i + n <= words.length; i++) {
+      if (hay.includes(words.slice(i, i + n).join(' '))) { _best = n; break; }
+    }
+  }
+  return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}" (nearest miss: ${_best} of its ${words.length} words run consecutively in the corpus${_best === 0 ? ', which is the fabrication shape' : ''})` };
 };
 
 // ══ THE PATTERN LINE — WHAT AN EXPERT KNOWS THAT A SCANNER DOES NOT ═════════
@@ -40126,12 +40202,102 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 //
 // It nearly cost a correct decision \u2014 the merged total made the Haiku switch
 // look like a regression when it had actually halved the bill.
+// ════════════════════════ WHAT A LEAD NEEDS BEFORE A PENNY MOVES ════════════
+// The Apify-403 day is the shape this exists for: fifty leads can burn at full
+// price around one dead Settings field, each one individually logged, none of
+// them stopped. The only things refused here are CONFIGURATION certainties —
+// a key that is absent is absent for every lead in the batch, and the audit
+// it buys is not the audit anyone thinks they are buying:
+//   no Anthropic key   no audit can be written at all
+//   no Firecrawl key   the whole website half is dark, on a lead that HAS one
+//   no Places key      eleven of forty-one signals dark, including BOTH
+//                      findings that have ever earned a reply (PART 4 sec 11
+//                      records this exact silent state)
+//   website not a URL  we would spend a full cycle auditing a typo
+//
+// What is deliberately NOT here, each with its reason:
+//   a dead domain      NXDOMAIN is a REAL lead — siteConfirmedDown is a rung,
+//                      "your website is gone" is sellable, and the pipeline
+//                      already fails cheap on it (the map returns empty, so
+//                      the interior reads are never bought)
+//   a missing Apify    the audit is thinner, not false — it becomes a warning,
+//   token              rate-limited to once an hour because a warning printed
+//                      fifty times per batch is one nobody reads
+//   an unreachable     a 403 or a timeout is a site that EXISTS — refusing on
+//   site               reachability would delete bot-hardened leads, which is
+//                      the guard-too-tight failure sec 14 records
+//
+// Pure, so the boot check drives every branch with its own bodies.
+const preflightResearch = (body, env) => {
+  const b = body || {};
+  const e = env || process.env;
+  const keys = b.keys || {};
+  const warnings = [];
+  const website = String(b.website || '').trim();
+  if (website) {
+    const _candidate = /^https?:\/\//i.test(website) ? website : 'https://' + website;
+    let _bad = false;
+    try {
+      const _u = new URL(_candidate);
+      if (!/\./.test(_u.hostname)) _bad = true;
+    } catch (err) { void err; _bad = true; }
+    if (_bad) {
+      return { refuse: `the website on this lead is "${website.slice(0, 80)}", which is not a URL and cannot become one. Nothing was spent. Fix the website field (a bare domain like acme.com is fine) or clear it so the lead routes to the phone channel.` };
+    }
+  }
+  if (!String(b.apiKey || '').trim()) {
+    return { refuse: 'no Anthropic API key came with this request, so no audit could be written at all while Places, Firecrawl and Apify were still paid in full. Nothing was spent. Add the key in Settings and re-run.' };
+  }
+  if (website && !String(keys.firecrawlKey || '').trim()) {
+    return { refuse: 'this lead has a website and no Firecrawl key came with the request, so the entire website half of the audit would be dark while everything else still gets paid for. Nothing was spent. Add the Firecrawl key in Settings and re-run.' };
+  }
+  if (!String(e.GOOGLE_PLACES_KEY || '').trim()) {
+    return { refuse: 'GOOGLE_PLACES_KEY is not set on the server, so the rank check and the profile read would both return "not checked" '+String.fromCharCode(0x2014)+' eleven of the forty-one measured signals, including both findings that have ever earned a reply. Nothing was spent. Set the environment variable on the server and re-run.' };
+  }
+  if (!String((keys.apifyToken || b.apifyToken || '')).trim()) {
+    warnings.push('no Apify token: the review mine is dark, so review_pain_pattern '+String.fromCharCode(0x2014)+' one of only two findings with a real reply behind it '+String.fromCharCode(0x2014)+' cannot fire on any lead in this state. The audit still runs; add the token in Settings to get the best finding back.');
+  }
+  return { ok: true, warnings };
+};
+// A warning per LEAD is a warning per BATCH times fifty, and a line printed
+// fifty times is one nobody reads — the recorded cost at the CTA precaution.
+// Once an hour per distinct message, with the scope stated in the message.
+const _preflightWarnedAt = new Map();
+const preflightWarnOnce = (company, msg, now) => {
+  const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const last = _preflightWarnedAt.get(msg) || 0;
+  if (t - last < 60 * 60 * 1000) return false;
+  _preflightWarnedAt.set(msg, t);
+  console.log(`\u26a0 PREFLIGHT [${company}]: ${msg} (This applies to every lead until Settings change; saying it once an hour, not once a lead.)`);
+  return true;
+};
 const runResearch = (req, res) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
   () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
     () => NET_LEDGER.run({ by: new Map(), gateWaitMs: 0 }, () => _runResearchInner(req, res))));
 
-app.post('/api/research', runResearch);
+// The synchronous route is the same worker with no job wrapper, kept because
+// the client falls back to it when /api/research-async answers 404 (an old
+// server). Until 2026-08-22 it was also a door AROUND the admission gates: a
+// lead posted here started spending with no preflight and no day ceiling.
+// Same gates, same refusal sentences as the queue's, so the screen renders
+// both the same way.
+const syncResearchGuard = (req, res) => {
+  const _who = (req.body && (req.body.company || req.body.name)) || 'lead';
+  const _pf = preflightResearch(req.body);
+  if (_pf.refuse) {
+    console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED AT PREFLIGHT \u2014 ${_pf.refuse}`);
+    return res.status(422).json({ error: _pf.refuse, preflightStopped: true });
+  }
+  for (const _w of (_pf.warnings || [])) preflightWarnOnce(_who, _w);
+  const _ceiling = budgetRefusal();
+  if (_ceiling) {
+    console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+    return res.status(429).json({ error: _ceiling.message, budgetStopped: true });
+  }
+  return runResearch(req, res);
+};
+app.post('/api/research', syncResearchGuard);
 
 // ═══ JOB QUEUE ═════════════════════════════════════════════════════════════
 // THE PROBLEM: research takes 60-360 seconds. Sending that down one HTTP request
@@ -40507,6 +40673,25 @@ app.post('/api/research-async', (req, res) => {
   };
 
   Promise.resolve()
+    .then(() => {
+      // ══════ CONFIGURATION FIRST, BEFORE THE QUEUE ════════════
+      // A missing key is not going to appear while the lead waits for a slot,
+      // so this refuses instantly — same job-error plumbing as the credit and
+      // ceiling refusals, which the screen already knows how to show.
+      const _pf = preflightResearch(req.body);
+      if (_pf.refuse) {
+        job.status = 'error';
+        job.phase = 'dead';
+        job.workDone = true;
+        job.finishedAt = Date.now();
+        job.error = _pf.refuse;
+        job.preflightStopped = true;
+        console.log(`\u{1F6D1} JOB ${id} [${job.company}]: REFUSED AT PREFLIGHT \u2014 ${_pf.refuse}`);
+        return Promise.reject({ _preflightHandled: true });
+      }
+      for (const _w of (_pf.warnings || [])) preflightWarnOnce(job.company, _w);
+      return null;
+    })
     .then(() => _waitForSlot())
     .then(async () => {
       // Checked AFTER the wait, not before it: a lead can queue for ninety
@@ -40549,6 +40734,9 @@ app.post('/api/research-async', (req, res) => {
     })
     .finally(() => { job.workDone = true; clearTimeout(_jobTimer); })
     .catch((e) => {
+      // A preflight refusal already wrote the job's error in full; the generic
+      // handler would overwrite that sentence with "[object Object]".
+      if (e && e._preflightHandled) return;
       job.status = 'error';
       job.error = e && e.message ? e.message : String(e);
       job.finishedAt = Date.now();
@@ -42669,6 +42857,155 @@ app.listen(PORT, () => {
     console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- FIFTY LEADS CANNOT BURN AROUND ONE DEAD SETTINGS FIELD -----------
+  // The preflight gate, driven with its own bodies and its own env - the
+  // recorded trap is a check that can only exercise the configuration this
+  // dyno happens to have.
+  try {
+    const _fails = [];
+    const _envOk = { GOOGLE_PLACES_KEY: 'gp_x' };
+    const _ok = { website: 'acme-plumbing.com', apiKey: 'sk-x', keys: { firecrawlKey: 'fc-x', apifyToken: 'ap-x' } };
+
+    const _r0 = preflightResearch(_ok, _envOk);
+    if (!_r0.ok || (_r0.warnings || []).length) _fails.push('a fully-configured lead does not pass clean, so every real lead is refused or nagged and the gate gets switched off');
+
+    if (!/not a URL/.test((preflightResearch({ ..._ok, website: 'N/A' }, _envOk).refuse || ''))) {
+      _fails.push('a website of "N/A" is spent on - a full cycle auditing a typo');
+    }
+    if (preflightResearch({ ..._ok, website: 'https://www.acme.com/contact' }, _envOk).refuse) {
+      _fails.push('a full URL with a path is refused, and most stored websites carry one');
+    }
+    if (preflightResearch({ ..._ok, website: '' }, _envOk).refuse) {
+      _fails.push('a lead with NO website is refused - the phone-channel route exists for exactly that lead and this gate just deleted it');
+    }
+    if (!/Anthropic/.test((preflightResearch({ ..._ok, apiKey: '' }, _envOk).refuse || ''))) {
+      _fails.push('a missing Anthropic key is spent on - Places, Firecrawl and Apify all paid for an audit that can never be written');
+    }
+    if (!/Firecrawl key/.test((preflightResearch({ ..._ok, keys: { apifyToken: 'x' } }, _envOk).refuse || ''))) {
+      _fails.push('a lead WITH a website and no Firecrawl key is spent on, and the entire website half of the audit is dark');
+    }
+    if (preflightResearch({ ..._ok, website: '', keys: {} }, { ..._envOk }).refuse) {
+      _fails.push('a no-website lead is refused for the missing Firecrawl key it does not need');
+    }
+    if (!/GOOGLE_PLACES_KEY/.test((preflightResearch(_ok, {}).refuse || ''))) {
+      _fails.push('a server with no Places key is spent on - eleven of forty-one signals dark including both reply-earning findings, which PART 4 sec 11 records as the silent state');
+    }
+    {
+      const _warn = preflightResearch({ ..._ok, keys: { firecrawlKey: 'fc-x' } }, _envOk);
+      if (_warn.refuse) _fails.push('a missing Apify token REFUSES the lead - the audit is thinner without the mine, not false, and refusing deletes a run somebody chose to make');
+      else if (!(_warn.warnings || []).some(w => /Apify/.test(w))) _fails.push('a missing Apify token says nothing, so the best finding in the system goes dark with no word anywhere');
+    }
+    // The once-an-hour valve, driven with its own clock.
+    {
+      _preflightWarnedAt.clear();
+      const _t0 = 1_700_000_000_000;
+      const _orig = console.log; let _n = 0;
+      console.log = (...a) => { _n++; };
+      try {
+        preflightWarnOnce('A', 'warn-x', _t0);
+        preflightWarnOnce('B', 'warn-x', _t0 + 60_000);
+        preflightWarnOnce('C', 'warn-x', _t0 + 61 * 60_000);
+      } finally { console.log = _orig; }
+      _preflightWarnedAt.clear();
+      if (_n !== 2) _fails.push(`the warning valve printed ${_n} time(s) for three leads in an hour and one after - fifty identical lines per batch is a warning nobody reads, and zero is a warning nobody gets`);
+    }
+    // The call site: the gate must actually stand at the admission seam.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('const _pf = preflight', 'Research(req.body);'))) {
+        _fails.push('nothing at admission consults the preflight, so fifty leads burn at full price around one dead Settings field again');
+      }
+      if (!_s.includes(_n('if (e && e._preflight', 'Handled) return;'))) {
+        _fails.push('the refusal reason is overwritten by the generic catch, so the operator reads "[object Object]" instead of which Settings field to fix');
+      }
+      if (!_s.includes(_n("app.post('/api/research', syncResearch", 'Guard);'))) {
+        _fails.push('the synchronous research route no longer goes through its guard, so the fallback path is a door around every admission gate again');
+      }
+      if (!String(syncResearchGuard).includes(_n('preflightResearch(req', '.body)'))) {
+        _fails.push('the sync-route guard stopped consulting the preflight, so a lead posted there starts spending around a dead Settings field');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 PREFLIGHT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 PREFLIGHT CHECK: a lead is refused before a penny moves when its website cannot be a URL, when the Anthropic key is missing, when it has a site and no Firecrawl key, or when the server has no Places key - each refusal naming the exact field. A missing Apify token warns once an hour instead of refusing or going silent. A dead domain is deliberately NOT refused: siteConfirmedDown is a real lead, and the pipeline already fails cheap on it.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 PREFLIGHT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
+  // A lead worked during the boot window prints its own refusal glyphs, and
+  // the verdict recorder cannot tell a lead's refusal from a failed boot
+  // check - so one early POST could flip a healthy build's verdict red. The
+  // gate refuses POSTs under /api/ until the verdict settles. This check runs
+  // WHILE the phase is 'checking', which is exactly the state under test.
+  try {
+    const _fails = [];
+    if (!bootGateRefuses('POST', '/api/research', 'checking')) _fails.push('a lead POSTed during the boot window is admitted, so its own refusal lines can flip the boot verdict red');
+    if (!bootGateRefuses('POST', '/api/compose-email', 'checking')) _fails.push('the compose route is open during the boot window');
+    if (bootGateRefuses('GET', '/healthz', 'checking')) _fails.push('the gate refuses GETs, so Render cannot even read the health it is waiting on');
+    if (bootGateRefuses('GET', '/api/spend', 'checking')) _fails.push('reading the day ledger is refused during boot, and a read spends nothing and prints nothing');
+    if (bootGateRefuses('POST', '/api/research', 'green')) _fails.push('a settled green build still refuses work, which is an outage wearing a safety feature');
+    if (bootGateRefuses('POST', '/api/research', 'red')) _fails.push('a settled red build refuses work outright - /healthz already reports red to a gated deploy, and refusing here would brick a build one flaky check turned red');
+    if (bootGateRefuses('POST', '/p/token', 'checking')) _fails.push('a prospect opening their audit page during the boot window is refused');
+    {
+      const _n = (...p) => p.join('');
+      if (!String(bootWindowGate).includes(_n('bootGateRefuses(req.method, req.path, BOOT_', 'STATUS.phase)'))) {
+        _fails.push('the middleware stopped consulting the predicate, so the fixtures above test a function nothing calls');
+      }
+      if (!selfSourceNoComments().includes(_n('app.use(bootWindow', 'Gate);'))) {
+        _fails.push('the gate is not registered on the app, so every POST route is reachable during the boot window');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 BOOT WINDOW GATE CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 BOOT WINDOW GATE CHECK: while the boot checks are settling, every POST under /api/ answers 503 rather than starting work whose own refusal lines would be counted as failed boot checks; GETs (healthz, spend, job polls) stay open, and a settled build - green or red - takes work exactly as before.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 BOOT WINDOW GATE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- A REAL QUOTE MUST NOT DIE ON AN AMPERSAND ------------------------
+  // The quote canonicaliser, both directions. The loosening direction is the
+  // one that matters most: a fabricated sentence must STILL match nothing, or
+  // this stopped being a truth gate the day it learned about entities.
+  try {
+    const _fails = [];
+    const _corpusEnt = 'Welcome to Smith &amp; Sons Roofing. We have served Dallas since the eighties and we answer our own phone.';
+    // SHORT quotes on purpose: the sliding window already heals a one-word
+    // break inside a LONG quote, so a long fixture here proves nothing - the
+    // first falsification run showed exactly that. The quotes that die on an
+    // entity or an accent are the short ones (nav text, button text, names),
+    // which is also where the recorded live drops were ('BOOK MY STRATEGY
+    // CALL', four of five words).
+    const _r1 = verifyOriginalFinding(
+      { finding: 'The homepage leads with the family name.', evidence: 'Smith & Sons Roofing serves' },
+      'Our promise: Smith &amp; Sons Roofing serves this town like family.');
+    if (!_r1.ok) _fails.push(`a short verbatim quote spanning an HTML entity is still refused (${_r1.why}) - the same words on both sides, split by an ampersand`);
+    const _corpusAcc = 'Dr. Jos\u00e9 Herrera has treated families here for twenty years and reads every message himself.';
+    const _r2 = verifyOriginalFinding(
+      { finding: 'The about page names the doctor.', evidence: 'Jose Herrera has treated' },
+      _corpusAcc);
+    if (!_r2.ok) _fails.push(`a short quote differing only by an accent is still refused (${_r2.why}) - one accent must not delete a real finding`);
+    const _r3 = verifyOriginalFinding(
+      { finding: 'The homepage promises a concierge tier.', evidence: 'our white-glove concierge membership guarantees a same-day slot' },
+      _corpusEnt + ' ' + _corpusAcc);
+    if (_r3.ok) _fails.push('a fabricated sentence now verifies - the canonicaliser loosened the rule instead of the spelling, and the truth gate is gone');
+    if (!_r3.ok && !/nearest miss: 0 /.test(String(_r3.why))) {
+      _fails.push(`a fabrication's drop line does not name its 0-word nearest miss (${String(_r3.why).slice(0, 90)}) - the one number that tells a fabricated quote from a boundary problem`);
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 QUOTE CANON CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 QUOTE CANON CHECK: a verbatim quote no longer dies on an HTML entity or an accent - both sides are canonicalised by ONE module-scope normaliser (two truth gates each held their own identical copy, which is the two-hand-kept-copies disease inside the gates themselves). A fabricated sentence still matches nothing, and every drop now names its nearest miss so a fabrication (0 words line up) reads differently from a boundary problem (all but one word lines up).`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 QUOTE CANON CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ---- NOTHING COULD SAY STOP -------------------------------------------
   // The day ledger and its ceilings. Executed against synthetic spend, because
   // running the real noteRunSpend at boot would charge fake spend to the real
@@ -42723,6 +43060,9 @@ app.listen(PORT, () => {
         [_n('leadSpend: (()', ' => {'), 'the response stopped carrying what the lead cost, so the screen is back to arithmetic over the Render log'],
       ]) {
         if (!_s.includes(needle)) _fails.push(what);
+      }
+      if (!String(syncResearchGuard).includes(_n('budget', 'Refusal();'))) {
+        _fails.push('the synchronous research route stopped consulting the day ceiling, so the fallback path spends past every ceiling');
       }
     }
     if (_fails.length) {

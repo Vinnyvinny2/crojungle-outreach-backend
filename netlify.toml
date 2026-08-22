@@ -1,0 +1,30 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# NETLIFY, FROM THE REPO — the end of the hand-deploy.
+#
+# index.html has deployed by dragging the file into Netlify since the project
+# began, and it is the single biggest structural bug source this repo has: the
+# server half of a fix goes live on merge while the client half sits on a
+# desktop until somebody remembers — which is exactly the shape that makes a
+# bug look intermittent, and has cost multiple sessions (CLAUDE.md records it
+# at PART 6 and again at sections 25, 27, 34...).
+#
+# This file is INERT until the repo is connected in the Netlify UI (one-time,
+# see PART 8 of CLAUDE.md). Until then the hand-drag keeps working exactly as
+# before; after, every merge to main deploys the client automatically, in the
+# same motion that deploys the server.
+#
+# WHY dist/ AND NOT THE REPO ROOT: publishing the root would serve server.js,
+# CLAUDE.md and every check as public static files. server.js holds no keys,
+# but the whole system's mechanics do not belong on a public URL. The build
+# step copies exactly one file into a clean directory and publishes that.
+# ═══════════════════════════════════════════════════════════════════════════
+
+[build]
+  command = "mkdir -p dist && cp index.html dist/index.html"
+  publish = "dist"
+
+# The app is a single page; anything else that gets requested is the page.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
