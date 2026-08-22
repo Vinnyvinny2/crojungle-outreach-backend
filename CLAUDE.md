@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 207 boot checks at the bottom, each documenting the live failure that caused it
+- 209 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -3931,6 +3931,92 @@ clock are documented open items, not silent ones.
 
 ---
 
+## 50. Why a five-lead run took an hour — 2026-08-22
+
+Vin ran five leads on the freshly-merged build: *"these 5 leads took way way too
+long... it also seems like the audit for each company is taking longer than
+usual."* He also asked whether three-at-a-time is a design decision or a
+Firecrawl limit.
+
+Neither. Two mechanisms were taxing every lead, both of them numbers that were
+correct when they were written and had quietly stopped being true. The slot
+count was never the constraint, which is why raising it earlier would have
+bought nothing.
+
+### One endpoint's rate limit was pacing every other endpoint
+
+Three lines from that run's own log, minutes apart:
+
+```
+FIRECRAWL PACE: their header says 10 request(s)/minute   ... 350ms  → 7500ms
+FIRECRAWL PACE: their header says 5000 request(s)/minute ... 7500ms → 350ms
+FIRECRAWL PACE: their header says 500 request(s)/minute  ... 7500ms → 350ms
+```
+
+Firecrawl publishes a **different limit for each endpoint** and reports it in
+that endpoint's own response header. §39 correctly made the measured limit set
+the pace — and set ONE pace, globally, from whichever endpoint answered last.
+So a 10/minute endpoint spaced every **scrape** 7.5 seconds apart on a plan
+allowing five thousand a minute, and the two numbers thrashed against each
+other all run. One lead makes about fourteen Firecrawl calls.
+
+The pace is per endpoint now, which is the thing Firecrawl actually limits. The
+BROWSER cap still takes the most restrictive endpoint we have been told about,
+because browsers are an account-wide resource and that one should be
+conservative — the two rules point in opposite directions on purpose, and the
+log says which is which. A 429 still holds the whole gate: that is a real
+account-wide signal. The endpoint is read off the request URL, so a new call
+site is paced correctly without anyone remembering to label it.
+
+### The memory ceiling was below the process's own weight
+
+`RESEARCH_RSS_CEILING_MB` is 205, written from a boot that settled at ~145MB.
+The live process reports `BOOT MEMORY: ... rss 320MB` — the 209 boot checks
+allocate, and resident memory does not hand itself back. So the admission test
+`rss > 205` was true on **every lead forever**: each one printed HOLDING, slept
+the full 90-second bound, and started anyway with a warning. Three slots means
+a flat ninety seconds per wave — about twenty-five minutes of pure sleep in a
+fifty-lead run, buying nothing, while the guard it was supposed to be protected
+nothing either.
+
+The rule was never wrong, only the constant. What it wants to say is "do not
+start another lead when this process has grown well past its own settled size",
+so the baseline is now MEASURED once the boot verdict settles and the ceiling is
+that baseline plus room for a page render. A boot that really does settle at
+145MB keeps the configured 205 and behaves exactly as before.
+
+**And it corrects something this file has assumed throughout:** the process runs
+steadily at 320MB without Render restarting it, so this container's limit is NOT
+the ~256MB stated all over these comments. That is one observation, not a
+measurement of the plan, so nothing was raised on the strength of it — but stop
+treating 256 as known.
+
+### Only then, the slot count
+
+`RESEARCH_CONCURRENCY` 3 → 6, and the client's `BATCH_CONCURRENCY` 3 → 6 with
+it. Those two must move together: the client pool decides how many leads are
+ever in flight, so a server raised on its own changes nothing for a batch. Six
+rather than more because each lead holds page buffers — and because the memory
+gate is now calibrated well enough to hold leads at the door if that genuinely
+climbs, which is the honest way to find the ceiling rather than guessing it in
+a constant.
+
+`ENDPOINT PACING CHECK` and `MEMORY CEILING CHECK`, four falsifications, each
+red alone. `FIRECRAWL PACING CHECK` was RE-AIMED rather than deleted: it went
+red on the new build because it asserted the global gap moves, which is the
+behaviour that was removed. Its underlying rule — a limit we measured must
+actually reach the pacing — is unchanged and now tested per endpoint.
+
+**The call-outcome CSV button is gone from the sidebar** at the owner's request.
+The route stays: `/api/call-outcome` still records an outcome against the
+finding that opened the call and `/api/call-outcomes` still serves the grouped
+report to anyone who opens the URL, because that pairing is still the only
+evidence in this project that is not the system grading itself.
+
+**`index.html` changed, so this needs a Netlify deploy.**
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -3990,7 +4076,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 207 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 209 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -4064,7 +4150,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 207 boot checks and the comments above
+and caused none of this week's failures. The 209 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
