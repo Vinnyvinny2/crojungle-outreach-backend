@@ -17,7 +17,7 @@
 # All gates run even after one fails, so a red CI names every problem at once
 # instead of one per push.
 #
-# GATES=static|checks|fuzz|boot|http runs one stage group (default: all).
+# GATES=static|checks|fuzz|e2e|boot|http runs one stage group (default: all).
 # CI_BOOT_PORT picks the boot port (default 4590).
 # ═══════════════════════════════════════════════════════════════════════════
 set -u

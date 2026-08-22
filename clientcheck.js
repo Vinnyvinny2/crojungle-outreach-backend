@@ -876,6 +876,26 @@ const PENDING = [];
   if (!merges) fails.push('nothing calls applyResearchResult — the merge exists but the research path is applying results some other way');
 }
 
+// ══ THE HANDSHAKE CONSTANTS MUST BE EQUAL IN THE REPO ═══════════════════════
+// The server sends CONTRACT_VERSION in every research response and the client
+// compares it against CLIENT_CONTRACT to warn about a stale Netlify deploy.
+// In the repo the two must be EQUAL — they may only differ in the wild,
+// between a merge and the drag-in, which is the window the warning exists
+// for. A pair that drifts inside the repo makes the warning fire forever (or
+// never), and either way it becomes a banner nobody believes.
+{
+  const _srv = (server.match(/const CONTRACT_VERSION = (\d+);/) || [])[1];
+  const _cli = (src.match(/const CLIENT_CONTRACT = (\d+);/) || [])[1];
+  if (!_srv) fails.push('server.js no longer declares CONTRACT_VERSION, so the client can never learn it is stale');
+  else if (!_cli) fails.push('index.html no longer declares CLIENT_CONTRACT, so the stale-page warning can never fire');
+  else if (_srv !== _cli) fails.push(`the handshake constants differ in the repo (server ${_srv}, client ${_cli}) — bump BOTH together, or the stale-page banner fires on a page that is not stale`);
+  // Two CALL sites (the declaration is an arrow assignment, not a call). The
+  // calls are typeof-guarded so batchcheck's lifted sandbox — which does not
+  // carry the helper — can still execute the batch runner.
+  const _warnCalls = (src.match(/warnIfStaleClient\(data/g) || []).length;
+  if (_cli && _warnCalls < 2) fails.push('warnIfStaleClient is not called at both merge call sites, so the server can be newer and the page never says so');
+}
+
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);

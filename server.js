@@ -125,7 +125,27 @@ const BOOT_STATUS = {
   redLines: [],               // first few unexpected failures, truncated
   startedAt: Date.now(), settledAt: null,
   sentinelSeen: false, why: '',
+  pending: 0,                 // async checks still in flight — settle waits for 0
 };
+// The async checks run as concurrent fire-and-forget blocks, and one of them
+// (BATCH MEMORY CHECK) can legitimately report a failure up to 60 seconds in —
+// ~40s AFTER a quiet-window settle. A red printed after settle was invisible:
+// verdict GREEN, /healthz 200, CI green, with the exact failure the check
+// exists to catch on the screen and counted by nothing. So every async check
+// holds the verdict open until it has reported, and the 180s cap stays the
+// loud backstop for a check that hangs outright.
+const bootHold = () => { BOOT_STATUS.pending += 1; };
+const bootRelease = () => { BOOT_STATUS.pending = Math.max(0, BOOT_STATUS.pending - 1); };
+// ══ THE CONTRACT NUMBER THE CLIENT SHAKES HANDS ON ══════════════════════════
+// index.html deploys to Netlify by hand while this file deploys on merge, and
+// a stale page silently reintroduces every client bug the server half already
+// fixed. This number rides every research response; the client compares it to
+// its own copy and says out loud when it is behind. clientcheck.js asserts the
+// two constants are EQUAL in the repo, so they can only differ between a merge
+// and the Netlify drag-in — exactly the window the client's warning exists for.
+// Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
+// new client to be live.
+const CONTRACT_VERSION = 20260822;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -142,6 +162,14 @@ const installBootRecorder = () => {
   let quietTimer = null;
   const settle = (why) => {
     if (BOOT_STATUS.phase !== 'checking') return;
+    if (!why && BOOT_STATUS.pending > 0) {
+      // Quiet, but an async check is still in flight — its red would land
+      // after the verdict and be invisible. Re-arm and wait; the 180s cap is
+      // the loud way out if it never reports.
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => settle(''), 5000);
+      return;
+    }
     console.log = orig;                       // uninstall first, whatever else happens
     if (quietTimer) clearTimeout(quietTimer);
     clearTimeout(capTimer);
@@ -162,7 +190,7 @@ const installBootRecorder = () => {
       ? `BOOT VERDICT: GREEN `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.green} checks passed, ${BOOT_STATUS.expectedRed} expected decline(s), 0 failures, settled in ${secs}s. /healthz now answers 200.`
       : `BOOT VERDICT: RED `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.why}. ${BOOT_STATUS.green} passed, ${BOOT_STATUS.red} failed. /healthz answers 503 so a gated deploy keeps the previous build serving.${BOOT_STATUS.redLines.length ? ' First failure: ' + BOOT_STATUS.redLines[0] : ''}`);
   };
-  const capTimer = setTimeout(() => settle(`the boot checks never finished `+String.fromCharCode(0x2014)+` the last check (${BOOT_SENTINEL}) did not print within 180s. A check that hangs is quieter than one that fails; this is the hang, made loud`), 180000);
+  const capTimer = setTimeout(() => settle(`the boot checks never finished `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.pending} async check(s) still pending and/or the last check (${BOOT_SENTINEL}) did not print within 180s. A check that hangs is quieter than one that fails; this is the hang, made loud`), 180000);
   const bump = () => {
     if (BOOT_STATUS.sentinelSeen) {
       if (quietTimer) clearTimeout(quietTimer);
@@ -192,8 +220,10 @@ const installBootRecorder = () => {
 // boot from a log line nobody reads into a deploy that visibly did not land.
 app.get('/healthz', (req, res) => {
   const ok = BOOT_STATUS.phase === 'green';
+  res.header('Access-Control-Allow-Origin', '*');
   res.status(ok ? 200 : 503).json({
     status: BOOT_STATUS.phase,
+    contract: CONTRACT_VERSION,
     env: process.env.RENDER_ENV || process.env.NODE_ENV || 'production',
     checks: { green: BOOT_STATUS.green, red: BOOT_STATUS.red, expectedRed: BOOT_STATUS.expectedRed },
     why: BOOT_STATUS.phase === 'red' ? BOOT_STATUS.why : undefined,
@@ -217,9 +247,14 @@ app.get('/healthz', (req, res) => {
 // health check on /healthz (PART 8) no traffic reaches the new process before
 // green, so in production this window closes itself.
 const bootGateRefuses = (method, path, phase) =>
-  method === 'POST' && String(path || '').startsWith('/api/') && phase === 'checking';
+  method === 'POST' && String(path || '').toLowerCase().startsWith('/api/') && phase === 'checking';
 const bootWindowGate = (req, res, next) => {
   if (bootGateRefuses(req.method, req.path, BOOT_STATUS.phase)) {
+    // This runs BEFORE the CORS middleware, so the headers must be set here or
+    // the Netlify-hosted client sees an opaque "Failed to fetch" instead of
+    // the retry message this JSON exists to carry.
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     return res.status(503).json({
       booting: true,
       error: 'The server is still running its own boot checks and is not ready to take work yet. Retry in a few seconds; /healthz answers 200 the moment it is.',
@@ -821,6 +856,18 @@ const netReport = () => {
 // the fake server routes on that first path segment. INERT in production: the
 // env var is absent, the rewrite never runs, and fetchtest.js falsifies both
 // directions so this cannot silently start rewriting live traffic.
+// ══ THE SEAM CANNOT BE ARMED ON RENDER ══════════════════════════════════════
+// FAKE_UPSTREAM redirects every outbound call — API keys in the headers ride
+// with it. On a developer's machine that is the whole point of the test seam;
+// on Render it would silently hand every credential to whatever URL the env
+// var names. "Never set it in production" is an instruction, and instructional
+// guards do not hold — so the guard is mechanical: a process that sees both
+// FAKE_UPSTREAM and Render's own environment refuses to boot, loudly, before
+// a single request can move.
+if (process.env.FAKE_UPSTREAM && (process.env.RENDER || process.env.RENDER_ENV)) {
+  console.error('FAKE_UPSTREAM is set on a Render environment. This test seam redirects every API call (keys included) to that URL and must NEVER be armed in production. Remove the env var. Refusing to boot.');
+  process.exit(1);
+}
 const fakeUpstreamUrl = (url, base) => {
   if (!base) return url;
   try {
@@ -3367,6 +3414,9 @@ app.post('/api/claude', async (req, res) => {
   try {
     const { system, user, apiKey } = req.body;
     if (!apiKey) return res.status(400).json({ error: 'API key required' });
+    // Metered but never gated: once the day's model budget was gone, compose
+    // and research refused while Generate kept spending $0.06 a press all day.
+    { const _c = budgetRefusal(['anthropicUsd']); if (_c) return res.status(429).json({ error: _c.message, budgetStopped: true }); }
     setCurrentLead(String(req.body.company || 'generate'));
     const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -3603,12 +3653,21 @@ app.post('/api/scrape', async (req, res) => {
   try {
     const { url, firecrawlKey } = req.body;
     if (!url || !firecrawlKey) return res.status(400).json({ error: 'URL and key required' });
+    // This was the one Firecrawl door with no meter and no ceiling — a credit
+    // per call invisible to /api/spend, to leadSpend, and to FC_DAILY_BUDGET,
+    // which falsified the ledger's own "fed by the same doors" promise. Same
+    // treatment as every other door: fail fast on the credit latch, refuse at
+    // the day ceiling, count at dispatch, latch on a 402.
+    if (fcCreditsBlocked()) return res.status(503).json({ markdown: '', error: 'Firecrawl reports the account out of credits — the breaker re-tests shortly; top up and retry.' });
+    { const _c = budgetRefusal(['fc']); if (_c) return res.status(429).json({ markdown: '', error: _c.message, budgetStopped: true }); }
+    fcNote(true, 'scrape', String(url));
     const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
     }, 15000));
     const d = await safeJson(r);
+    if (r && r.status === 402) { FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); }
     res.json({ markdown: (d.data?.markdown || '').slice(0, 5000) });
   } catch(e) { res.json({ markdown: '' }); }
 });
@@ -14999,9 +15058,34 @@ const URGENCY_ADJUST = {
 const _quoteDeEntity = (t) => String(t || '')
   .replace(/&amp;/gi, '&').replace(/&nbsp;/gi, ' ').replace(/&#39;|&apos;|&rsquo;|&lsquo;/gi, "'")
   .replace(/&quot;|&ldquo;|&rdquo;/gi, '"').replace(/&lt;/gi, ' ').replace(/&gt;/gi, ' ')
-  .replace(/&#\d+;/g, ' ').replace(/&[a-z]{2,8};/gi, ' ');
+  // A letter-rendering entity DECODES to its letter so the accent fold below
+  // can see it. The old catch-all DELETED &eacute; instead, so the Jose bug
+  // this canonicaliser was built to fix survived through the entity door:
+  // normQuote('Jos&eacute;') was 'jos' while the model wrote 'jose'.
+  .replace(/&([a-zA-Z])(?:acute|grave|circ|uml|tilde|cedil|ring|slash|elig);/g, '$1')
+  .replace(/&#(\d+);/g, (m, d) => {
+    const c = Number(d);
+    if (!Number.isFinite(c) || c < 32 || c > 0x2ffff) return ' ';
+    try { const s = String.fromCodePoint(c); return /[\p{L}\p{N}' ]/u.test(s) ? s : ' '; } catch (e) { void e; return ' '; }
+  })
+  // Only entities KNOWN to render as punctuation or whitespace become a space.
+  // The old /&[a-z]{2,8};/i catch-all deleted any '&Word;' — including plain
+  // text that is not an entity at all — and deletion makes two never-adjacent
+  // words consecutive: 'Insured&Bonded; crews' became 'insured crews', a page
+  // that does not exist. An unknown '&Word;' is left alone now; browsers
+  // render it literally, and the punctuation strip below turns the ampersand
+  // into a space while keeping every word in rendering order.
+  .replace(/&(?:mdash|ndash|hellip|bull|middot|laquo|raquo|times|divide|copy|reg|trade|deg|sect|para|dagger|shy|ensp|emsp|thinsp|zwnj|zwj|lrm|rlm|prime|minus|plusmn|sup\d|frac\d\d);/gi, ' ');
 const _quoteDeAccent = (t) => { try { return String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { void e; return String(t || ''); } };
 const normQuote = (t) => _quoteDeAccent(_quoteDeEntity(String(t || ''))).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+// The model labels its quotes (Homepage: '...') and the label never appears
+// in the corpus. One stripper at module scope: it lived inside
+// verifyOriginalFinding while resolveBusinessModel had none, which is why a
+// real institutional quote behind a three-word preamble was refused there.
+const stripQuoteLabel = (t) => String(t || '')
+  .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:—-]\s*/i, '')
+  .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
+  .trim();
 const BUSINESS_MODELS = new Set(['LOCAL_CONSUMER', 'B2B_INSTITUTIONAL', 'REFERRAL_PROFESSIONAL', 'NATIONAL_REMOTE']);
 const resolveBusinessModel = (raw, corpus) => {
   const fallback = { model: 'LOCAL_CONSUMER', why: 'default — no verified evidence of another model', verified: false };
@@ -15013,17 +15097,41 @@ const resolveBusinessModel = (raw, corpus) => {
   const ev = String(raw.evidence || '').trim();
   if (!ev) return { ...fallback, why: `claimed ${model} with no quoted evidence — falling back` };
   const norm = normQuote;
-  const hay = norm(corpus);
-  const needle = norm(ev);
-  if (!hay || needle.length < 12) return { ...fallback, why: `evidence too short or no corpus to check it against — falling back` };
-  let found = hay.includes(needle);
+  const segs = (Array.isArray(corpus) ? corpus : String(corpus || '').split(/\n\s*\n/)).map(norm).filter(Boolean);
+  const needle = norm(stripQuoteLabel(ev));
+  if (!segs.length || needle.length < 12) return { ...fallback, why: `evidence too short or no corpus to check it against — falling back` };
+  const _has = (seg, span) => (' ' + seg + ' ').includes(' ' + span + ' ');
+  let found = segs.some(s => _has(s, needle));
   if (!found) {
+    // The same slide verifyOriginalFinding earned: this one only ever tried
+    // PREFIXES, so a real quote behind a three-word model preamble ("The site
+    // says: ...") was refused entirely. That direction fails safe — but it
+    // meant the Property Masters class kept receiving the map-pack findings
+    // this mechanism exists to withhold.
     const w = needle.split(' ');
     for (let n = Math.min(10, w.length); n >= 6 && !found; n--) {
-      if (hay.includes(w.slice(0, n).join(' '))) found = true;
+      for (let i = 0; i + n <= w.length && !found; i++) {
+        if (segs.some(s => _has(s, w.slice(i, i + n).join(' ')))) found = true;
+      }
     }
   }
   if (!found) return { ...fallback, why: `the quoted evidence does not appear on any page we read — falling back` };
+  // ══ THE EVIDENCE MUST EVIDENCE THE MODEL ════════════════════════════════
+  // Executed refutation: a hallucinated B2B_INSTITUTIONAL claim carrying the
+  // real quote "for Dallas homeowners. Family owned since 1998" VERIFIED —
+  // evidence stating the OPPOSITE of the model it licensed — and then
+  // silenced twelve rungs including outranked_by_weaker, one of only two
+  // findings with a human reply behind them. Existing is not evidencing: the
+  // quote must contain at least one term from a small DECLARED vocabulary for
+  // the claimed model — the same declared-list shape URGENCY_ADJUST uses.
+  const _MODEL_TERMS = {
+    B2B_INSTITUTIONAL: /\b(b2b|funds?|reo|institution(s|al)?|commercial|contractors?|wholesale|investors?|portfolios?|property (managers?|management)|builders|developers|municipal|corporate)\b/i,
+    NATIONAL_REMOTE: /\b(nationwide|nationally|all (50|fifty) states|\d+ states|remote(ly)?|online|virtual|ship(ping)?|coast to coast|across the (country|us|usa|united states))\b/i,
+    REFERRAL_PROFESSIONAL: /\b(referrals?|referred|attorneys?|physicians?|dentists?|realtors?|agents?|brokers?|partners?|professionals?|by invitation|word of mouth)\b/i,
+  };
+  if (_MODEL_TERMS[model] && !_MODEL_TERMS[model].test(ev)) {
+    return { ...fallback, why: `the quoted evidence is real but contains nothing that evidences a ${model} model — a quote must evidence the claim it licenses, not merely exist. Falling back` };
+  }
   return { model, evidence: ev, why: String(raw.why || '').trim(), verified: true };
 };
 
@@ -15141,16 +15249,26 @@ const verifyOriginalFinding = (item, corpus) => {
   // Rejecting a true finding because of a prefix the model added is the
   // over-blocking failure — it silently returns every audit to the same list
   // every lead gets, which is the exact thing this field exists to escape.
-  const stripLabel = (t) => String(t || '')
-    .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:\u2014-]\s*/i, '')
-    .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
-    .trim();
+  const stripLabel = stripQuoteLabel;
   const norm = normQuote;
-  const hay = norm(corpus);
-  if (!hay) return { ok: false, why: 'no page corpus to verify the quote against' };
+  // ══ SEGMENTS, NOT ONE SOUP ══════════════════════════════════════════════
+  // The corpus arrives as pages and review snippets joined with blank lines,
+  // and the old norm collapsed every seam to one space — so a word run could
+  // START on one block and FINISH inside the next, and a sentence that exists
+  // nowhere assembled itself across the join. Executed proof: "Call us today,
+  // no one ever calls back" verified against a corpus whose page ends at
+  // "Call us today" and whose next block begins "no one ever calls back".
+  // A match must live inside ONE block; the join can never speak.
+  const segs = (Array.isArray(corpus) ? corpus : String(corpus || '').split(/\n\s*\n/)).map(norm).filter(Boolean);
+  if (!segs.length) return { ok: false, why: 'no page corpus to verify the quote against' };
   const needle = norm(stripLabel(evidence));
   if (needle.length < 12) return { ok: false, why: 'quoted fragment too short to verify' };
-  if (hay.includes(needle)) return { ok: true, finding: _finding, evidence };
+  // Word-aligned on purpose: a bare substring test let "rate the craftsmanship"
+  // verify inside "celebRATE THE CRAFTSMANSHIP", mutating a word at the edge
+  // of an otherwise-real span. Both sides padded once, so every match starts
+  // and ends on a word boundary.
+  const _has = (seg, span) => (' ' + seg + ' ').includes(' ' + span + ' ');
+  if (segs.some(s => _has(s, needle))) return { ok: true, finding: _finding, evidence };
   // ══ A REAL QUOTE MUST NOT FAIL ON WHERE IT WAS TRIMMED ══════════════════
   // This only tried windows from the START of the quote, so a model that opened
   // with a word we did not capture — an ellipsis, a heading, a line break the
@@ -15188,9 +15306,24 @@ const verifyOriginalFinding = (item, corpus) => {
   // when nothing survives, every lead gets the same list.
   const words = needle.split(' ');
   const _floor = words.length >= 6 ? 6 : 4;
+  // ══ THE SHORT PATH MAY SHED FILLER, NEVER CONTENT ═══════════════════════
+  // Floor-4 exists for the Fit Money class: 'BOOK MY STRATEGY CALL HERE'
+  // against a nav reading BOOK MY STRATEGY CALL — one added filler word, four
+  // real ones. But trade-site corpora are saturated with generic 4-grams
+  // ('your free estimate today', 'give us a call'), so an invented five-word
+  // CTA could ride one: 'Claim your free estimate today' VERIFIED against a
+  // page that never says Claim. Executed, not theorised. On the short path
+  // the words DROPPED from the quote must all be filler — shedding a content
+  // word means the distinctive part is exactly what we could not find.
+  const _FILLER = new Set(['the', 'a', 'an', 'my', 'your', 'our', 'his', 'her', 'their', 'here', 'now', 'today', 'to', 'for', 'of', 'and', 'or', 'in', 'on', 'at', 'with', 'us', 'we', 'you', 'it', 'is', 'are', 'this', 'that', 'please']);
   for (let n = Math.min(12, words.length); n >= _floor; n--) {
     for (let i = 0; i + n <= words.length; i++) {
-      if (hay.includes(words.slice(i, i + n).join(' '))) return { ok: true, finding: _finding, evidence };
+      if (!segs.some(s => _has(s, words.slice(i, i + n).join(' ')))) continue;
+      if (words.length < 6 && n < words.length) {
+        const _dropped = words.filter((w, k) => k < i || k >= i + n);
+        if (!_dropped.every(w => _FILLER.has(w))) continue;
+      }
+      return { ok: true, finding: _finding, evidence };
     }
   }
   // A drop names its NEAREST MISS: "does not appear" is true and unactionable,
@@ -15200,7 +15333,7 @@ const verifyOriginalFinding = (item, corpus) => {
   let _best = 0;
   for (let n = Math.min(12, words.length) - 1; n >= 2 && !_best; n--) {
     for (let i = 0; i + n <= words.length; i++) {
-      if (hay.includes(words.slice(i, i + n).join(' '))) { _best = n; break; }
+      if (segs.some(s => _has(s, words.slice(i, i + n).join(' ')))) { _best = n; break; }
     }
   }
   return { ok: false, why: `the quoted text does not appear on any page we read — "${evidence.slice(0, 50)}" (nearest miss: ${_best} of its ${words.length} words run consecutively in the corpus${_best === 0 ? ', which is the fabrication shape' : ''})` };
@@ -28200,6 +28333,36 @@ const sbRest = async (path, options = {}) => {
 // lead behaves exactly as it did before the ledger existed — one photograph, no
 // clock, and the run says so. A memory that can stop an audit is not a memory.
 //
+// ══ THE SCHEMA, PROBED INSTEAD OF DISCOVERED AT FIRST USE ═══════════════════
+// Six tables and two columns exist as SQL blocks in CLAUDE.md, and nothing ever
+// verified any of them — so each miss surfaced at its moment of first use, as a
+// feature that silently recorded nothing (the query memory, the bench, the
+// observation ledger, call outcomes, ask pages, the send log). One probe after
+// the boot verdict settles, one line naming every missing piece, nothing fatal:
+// a server without Supabase runs exactly as before, and sbRest's own per-table
+// diagnosis prints the specific reason above the summary.
+const SB_EXPECTED_SCHEMA = [
+  ['places_query_state', 'q'], ['lead_bench', 'id'], ['business_observations', 'biz'],
+  ['call_outcomes', 'outcome'], ['lead_pages', 'token'], ['send_log', 'email'],
+  ['leads', 'held_back_contact'], ['leads', 'corpus_read'],
+];
+const probeSupabaseSchema = async () => {
+  if (!SB_URL || !SB_KEY) {
+    console.log('SCHEMA PROBE: Supabase is not configured on this server, so nothing that persists (query memory, bench, observations, call outcomes, ask pages, send log) will record anything. Set SUPABASE_URL and SUPABASE_KEY on Render.');
+    return;
+  }
+  const missing = [];
+  for (const [t, c] of SB_EXPECTED_SCHEMA) {
+    const rows = await sbRest(`/${t}?select=${c}&limit=1`, { prefer: 'return=representation' });
+    if (rows === null) missing.push(`${t}.${c}`);
+  }
+  if (missing.length) {
+    console.log(`SCHEMA PROBE: ${missing.length} expected table(s)/column(s) did not answer — ${missing.join(', ')}. Each has its exact CREATE/ALTER statement in CLAUDE.md; until it runs, the feature writing there records nothing. The per-table reason is printed above this line by the request itself.`);
+  } else {
+    console.log(`SCHEMA PROBE: all ${SB_EXPECTED_SCHEMA.length} expected tables and columns answered.`);
+  }
+};
+
 // ══ THE ISOLATION RULE, WHICH IS THE WHOLE RISK HERE ═══════════════════════
 // PART 4 §19 is the worst bug this system has had: a cache key that collided
 // handed Donna Krummen John Peters Roofing's audit, and the fabricated result
@@ -28861,6 +29024,14 @@ app.get('/api/cron/discover', async (req, res) => {
     return res.status(500).json({ error: 'discover call failed: ' + e.message });
   }
 
+  // A refused internal call is NOT an empty discovery. The boot-window gate
+  // answers the internal POST with 503 {booting:true} during the ~19s after a
+  // restart, and reporting that as "no companies returned" is the log line
+  // naming the wrong cause, again. Say what happened; the next firing succeeds.
+  if (data && (data.booting || data.error)) {
+    console.log(`Cron discover was refused, not empty: ${data.error || 'boot checks not settled'}`);
+    return res.status(503).json({ ok: false, refused: data.error || 'the boot checks had not settled — retry shortly' });
+  }
   const companies = (data && data.companies) || [];
   if (companies.length === 0) {
     return res.json({ ok: true, added: 0, note: 'no companies returned', breakdown: data && data.breakdown });
@@ -29025,7 +29196,14 @@ app.post('/api/discover', async (req, res) => {
       // deadline, he's already thinking about the business as an asset to improve,
       // and the seller IS the owner — so he's directly reachable by definition.
       // The listing also hands us revenue, cash flow, and headcount for free.
-      findBusinessesForSale(firecrawlKey, apiKey),
+      // The lane spends Firecrawl AND a Haiku call, and the route's admission
+      // gate checks Places only — so on a day where either ceiling is reached
+      // the lane is SKIPPED with its reason logged, not run past the ceiling.
+      (() => {
+        const _c = budgetRefusal(['fc', 'anthropicUsd']);
+        if (_c) { console.log(`\u{1F6D1} FOR-SALE LANE SKIPPED — ${_c.message}`); return Promise.resolve({ leads: [] }); }
+        return findBusinessesForSale(firecrawlKey, apiKey);
+      })(),
 
       // ═══ FOUNDER VENTING — OFF ════════════════════════════════════════════
       // 4 credits a run (2 Reddit searches) and it has never produced a single
@@ -37336,7 +37514,14 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         const _corpusBase = [
           trustedContent,
           sitePages && sitePages.rawText,
-          (Array.isArray(publicPainSignals) ? publicPainSignals.join('\n') : ''),
+          // Only the VERBATIM review snippet enters the verify corpus. The
+          // entry's first half is the review-mining MODEL's paraphrase, and a
+          // gate whose guarantee is "the words are theirs" was verifying
+          // quotes against another model's words. Each snippet is its own
+          // block, so a quote cannot assemble across two reviews either.
+          (Array.isArray(publicPainSignals)
+            ? publicPainSignals.map(s => ((String(s).match(/evidence: "(.+)" \(/) || [])[1] || '')).filter(Boolean).join('\n\n')
+            : ''),
         ].filter(Boolean).join('\n\n');
         // ══ THEIR WORDS AND OUR WORDS ANSWER DIFFERENT QUESTIONS ═══════════
         // One rule — "we hold the words you are quoting" — asked of two
@@ -39903,6 +40088,16 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       })(),
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
+      // ══ INSTANCE TWENTY-ONE OF COMPUTED-BUT-NOT-PASSED ═══════════════════
+      // The client merge has read data.reviewsRead and data.ownerReplyCount
+      // since the engagement work landed, and this response never carried
+      // either — so both round-tripped as null through every save and reload,
+      // and servercheck's "a dead Apify token reports reviewsRead as null"
+      // assertion was vacuously true on every build. Found by giving the
+      // golden lead the OPPOSITE assertion: populated when the mine answered.
+      reviewsRead: Number.isFinite(Number(reviewsRead)) ? Number(reviewsRead) : null,
+      ownerReplyCount: Number.isFinite(Number(ownerReplyCount)) ? Number(ownerReplyCount) : null,
+      serverContract: CONTRACT_VERSION,
       outreachChannel: reach.outreachChannel,
       // The EARLY route, decided before the paid audit. reach.outreachChannel above
       // is the FINAL verdict after the mailbox lookup actually ran; this one records
@@ -40294,6 +40489,17 @@ const syncResearchGuard = (req, res) => {
   if (_ceiling) {
     console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
     return res.status(429).json({ error: _ceiling.message, budgetStopped: true });
+  }
+  // The queue HOLDS on the credit latch because a top-up is usually minutes
+  // away; a synchronous request cannot politely hold, so it refuses by name.
+  // fcCreditsCoolingDown is the READ-ONLY predicate: refusing here must not
+  // consume the one probe that discovers a topped-up account. This route is
+  // the client's fallback for OLD servers; the queue remains the real
+  // admission path, with the concurrency and RSS gates a synchronous request
+  // cannot replicate without becoming a second copy of the queue.
+  if (req.body && req.body.website && fcCreditsCoolingDown()) {
+    console.log(`\u{1F6D1} SYNC RESEARCH [${_who}]: REFUSED \u2014 the Firecrawl credit latch is set`);
+    return res.status(503).json({ error: 'Firecrawl reports the account out of credits \u2014 top up and retry; the breaker re-tests shortly.', outOfCredits: true });
   }
   return runResearch(req, res);
 };
@@ -40859,6 +41065,18 @@ app.get('/api/session-report', (req, res) => {
 
 app.listen(PORT, () => {
   installBootRecorder();
+  // The schema probe waits for the verdict to settle: it prints plain lines,
+  // but a network probe during the counting window has no business there, and
+  // on a machine with no Supabase the "not configured" line should not sit in
+  // the middle of the check block.
+  {
+    const _schemaTimer = setInterval(() => {
+      if (BOOT_STATUS.phase === 'checking') return;
+      clearInterval(_schemaTimer);
+      probeSupabaseSchema().catch(() => {});
+    }, 5000);
+    if (_schemaTimer.unref) _schemaTimer.unref();
+  }
   const has = (ok) => (ok ? '\u2713' : '\u2717 MISSING');
   console.log(`CROJungle v6 — port ${PORT}`);
   // The list is the point. A marker that checks five hand-typed names goes stale
@@ -42759,6 +42977,11 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _saveLatch = FIRECRAWL_OUT_OF_CREDITS, _saveAt = FIRECRAWL_CREDITS_EMPTY_AT, _saveProbe = _fcProbeAt;
+    // The probe below runs the REAL fcNote, which feeds the REAL day ledger,
+    // and the spend check's own rule is that boot must not charge fake spend
+    // to it. Snapshot and restore, mirroring the _gpCalls rollback next door.
+    const _saveSpent = FC_CREDITS_SPENT;
+    const _saveRunFc = runSpendToday().fc, _saveKindScrape = runSpendToday().byKind['scrape'] || 0;
     try {
       // Healthy: nothing is blocked and nothing is cooling down.
       FIRECRAWL_OUT_OF_CREDITS = false; FIRECRAWL_CREDITS_EMPTY_AT = 0; _fcProbeAt = 0;
@@ -42793,6 +43016,9 @@ app.listen(PORT, () => {
       if (!fcCreditsBlocked()) _fails.push('a re-trip does not re-close the breaker');
     } finally {
       FIRECRAWL_OUT_OF_CREDITS = _saveLatch; FIRECRAWL_CREDITS_EMPTY_AT = _saveAt; _fcProbeAt = _saveProbe;
+      FC_CREDITS_SPENT = _saveSpent;
+      { const _r = runSpendToday(); _r.fc = _saveRunFc;
+        if (_saveKindScrape > 0) _r.byKind['scrape'] = _saveKindScrape; else delete _r.byKind['scrape']; }
     }
 
     // ── WHAT IS ALLOWED TO TRIP IT IN THE FIRST PLACE ─────────────────────
@@ -42950,6 +43176,14 @@ app.listen(PORT, () => {
     if (bootGateRefuses('POST', '/api/research', 'green')) _fails.push('a settled green build still refuses work, which is an outage wearing a safety feature');
     if (bootGateRefuses('POST', '/api/research', 'red')) _fails.push('a settled red build refuses work outright - /healthz already reports red to a gated deploy, and refusing here would brick a build one flaky check turned red');
     if (bootGateRefuses('POST', '/p/token', 'checking')) _fails.push('a prospect opening their audit page during the boot window is refused');
+    if (!bootGateRefuses('POST', '/Api/Research', 'checking')) _fails.push('a mixed-case path walks around the gate - Express routes are case-insensitive by default, so /Api/research reaches the handler while the gate reads the path case-sensitively');
+    {
+      const _p0 = BOOT_STATUS.pending;
+      bootHold();
+      if (BOOT_STATUS.pending !== _p0 + 1) _fails.push('bootHold does not hold, so an async check cannot keep the verdict open and its late red is invisible again');
+      bootRelease();
+      if (BOOT_STATUS.pending !== _p0) _fails.push('bootRelease does not release, so the verdict never settles and every boot dies at the 180s cap');
+    }
     {
       const _n = (...p) => p.join('');
       if (!String(bootWindowGate).includes(_n('bootGateRefuses(req.method, req.path, BOOT_', 'STATUS.phase)'))) {
@@ -42957,6 +43191,20 @@ app.listen(PORT, () => {
       }
       if (!selfSourceNoComments().includes(_n('app.use(bootWindow', 'Gate);'))) {
         _fails.push('the gate is not registered on the app, so every POST route is reachable during the boot window');
+      }
+      if (!String(bootWindowGate).includes('Access-Control-Allow-Origin')) {
+        _fails.push('the 503 carries no CORS header - it runs BEFORE the CORS middleware, so the Netlify client sees an opaque network error instead of the retry message this JSON exists to carry');
+      }
+      {
+        const _s2 = selfSourceNoComments();
+        if (!_s2.includes(_n('BOOT_STATUS.pend', 'ing > 0'))) {
+          _fails.push('settle no longer waits for pending async checks, so a red printed after the quiet window is invisible again - verdict GREEN with the failure it exists to catch on the screen');
+        }
+        const _holds = _s2.split(_n('boot', 'Hold();\r\n  (async () => {')).length - 1;
+        const _rels = _s2.split(_n('finally { boot', 'Release(); }')).length - 1;
+        if (_holds < 6 || _holds !== _rels) {
+          _fails.push(`the async-check hold/release pairing is broken (${_holds} holds wired to checks, ${_rels} releases) - an unheld check can report after settle invisibly, an unreleased one holds every boot to the 180s cap`);
+        }
       }
     }
     if (_fails.length) {
@@ -42997,6 +43245,53 @@ app.listen(PORT, () => {
     if (!_r3.ok && !/nearest miss: 0 /.test(String(_r3.why))) {
       _fails.push(`a fabrication's drop line does not name its 0-word nearest miss (${String(_r3.why).slice(0, 90)}) - the one number that tells a fabricated quote from a boundary problem`);
     }
+    // THE SHORT PATH MAY SHED FILLER, NEVER CONTENT. Both directions: the
+    // Fit Money class (one added filler word) must verify, and an invented
+    // five-word CTA riding a generic trade-site 4-gram must not.
+    const _r4 = verifyOriginalFinding(
+      { finding: 'The nav sells a strategy call.', evidence: 'BOOK MY STRATEGY CALL HERE' },
+      'Services. About us. BOOK MY STRATEGY CALL. Reviews.');
+    if (!_r4.ok) _fails.push(`the Fit Money class is refused again (${_r4.why}) - one added filler word must not delete a real four-word quote`);
+    const _r5 = verifyOriginalFinding(
+      { finding: 'The homepage leads with a giveaway offer.', evidence: 'Claim your free estimate today' },
+      'About our company. Schedule your free estimate today with our friendly office team.');
+    if (_r5.ok) _fails.push('an invented five-word CTA verifies off a generic 4-gram - the page never says Claim, and the short path is licensing fabrications on trade-site filler');
+    // A QUOTE CANNOT ASSEMBLE ACROSS A SEAM. The blank line between two
+    // corpus blocks is a wall, not a space.
+    const _r6 = verifyOriginalFinding(
+      { finding: 'Their homepage admits follow-up fails.', evidence: 'Call us today, no one ever calls back' },
+      'Trusted roofing for 20 years. Family owned. Call us today\n\nno one ever calls back after the estimate visit');
+    if (_r6.ok) _fails.push('a sentence that exists nowhere assembled itself across a corpus seam - the join between a page and a review block must never speak');
+    // AN ACCENT ARRIVING AS AN HTML ENTITY. Firecrawl markdown is where
+    // accented names arrive entity-encoded, and deleting the entity was the
+    // Jose bug through a second door.
+    const _r7 = verifyOriginalFinding(
+      { finding: 'The about page names the doctor.', evidence: 'Jose offers free consults' },
+      'Meet the team. Jos&eacute; offers free consults every Friday.');
+    if (!_r7.ok) _fails.push(`a verbatim quote whose accent arrives as an HTML entity is refused (${_r7.why}) - the Jose bug through the entity door`);
+    // WORD BOUNDARIES. celebRATE is not rate.
+    const _r8 = verifyOriginalFinding(
+      { finding: 'The site rates its own craftsmanship.', evidence: 'rate the craftsmanship of' },
+      'We celebrate the craftsmanship of every crew member.');
+    if (_r8.ok) _fails.push('a needle completing the tail of a longer corpus word verifies - a match must start on a word boundary');
+    // AN UNKNOWN &Word; MUST NOT VANISH AND JOIN ITS NEIGHBOURS. The rendered
+    // page says Insured&Bonded;, so a quote skipping Bonded is of a page that
+    // does not exist.
+    const _r9 = verifyOriginalFinding(
+      { finding: 'The homepage claims insured crews on every job.', evidence: 'Insured crews on every job since' },
+      'Insured&Bonded; crews on every job since 2004.');
+    if (_r9.ok) _fails.push('deleting an unrecognised &Word; joined two never-adjacent words - the quote is of a page that does not exist');
+    // THE CORPUS HOLDS THEIR WORDS, NOT THE MINER'S. The pain entries are
+    // "<model paraphrase> - evidence: \"<verbatim snippet>\" (source)", and the
+    // verify corpus must extract the snippet alone: a truth gate whose
+    // guarantee is "the words are theirs" must not verify a quote against
+    // another model's paraphrase. Call-site needle, assembled at runtime.
+    {
+      const _n = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_n('publicPainSignals.map(s => ((String(s).match(/evidence: ', '"(.+)" \\(/)'))) {
+        _fails.push('the verify corpus is back to holding the whole pain entry, so a quote of the review-mining model\'s own paraphrase verifies as the prospect\'s words');
+      }
+    }
     if (_fails.length) {
       console.log(`\u26d4 QUOTE CANON CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -43036,7 +43331,7 @@ app.listen(PORT, () => {
     }
     const _usd = budgetRefusal(['anthropicUsd'], { fc: 0, places: 0, anthropicUsd: 25, apify: 0 }, _budgets);
     if (!_usd || !/\$25\.00 of \$20/.test(_usd.message)) _fails.push('the dollar ceiling does not read as dollars');
-    if (budgetRefusal(['places'], _spend, _budgets)) _fails.push('a needs list scoped to one service is still refusing on another, so a Find run is blocked by a Firecrawl ceiling it does not spend against');
+    if (budgetRefusal(['places'], _spend, _budgets)) _fails.push('a needs list scoped to one service is still refusing on another - the needs list exists so a route is refused only on the services that seam itself spends; lanes that spend elsewhere carry their own gate');
 
     // The OFF convention: 0 or less disables, loudly at boot; junk and empty
     // fall back to the default rather than to anything surprising.
@@ -43063,6 +43358,21 @@ app.listen(PORT, () => {
       }
       if (!String(syncResearchGuard).includes(_n('budget', 'Refusal();'))) {
         _fails.push('the synchronous research route stopped consulting the day ceiling, so the fallback path spends past every ceiling');
+      }
+      if (!String(syncResearchGuard).includes(_n('fcCreditsCooling', 'Down()'))) {
+        _fails.push('the synchronous research route stopped consulting the credit latch, so the fallback path spends into a known-empty account');
+      }
+      {
+        const _gate429 = _n("budgetRefusal(['anthropic", "Usd']); if (_c) return res.status(429)");
+        if (_s.split(_gate429).length - 1 < 2) {
+          _fails.push('the Generate or LinkedIn route stopped consulting the model ceiling - metered but never gated is how a spent budget keeps spending a nickel a press all day');
+        }
+      }
+      if (!_s.includes(_n("fcNote(true, 'scrape', String(", 'url));'))) {
+        _fails.push('the client scrape route stopped counting its credit, so a whole Firecrawl door is invisible to the ledger and its ceiling again');
+      }
+      if (!_s.includes(_n("budgetRefusal(['fc', 'anthropic", "Usd'])"))) {
+        _fails.push('the for-sale lane stopped consulting the two ceilings it spends against');
       }
     }
     if (_fails.length) {
@@ -44204,6 +44514,7 @@ app.listen(PORT, () => {
   // LOCAL_CONSUMER unless the brain quotes words we can find in their own pages,
   // so it can silence a rung and never invent one.
   try {
+    let _fails_pre = false;
     const _corp = 'Property Masters delivers turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states.';
     const _real = resolveBusinessModel({ model: 'B2B_INSTITUTIONAL', evidence: 'turn-key renovations for REO funds, PE firms and institutional portfolios in 24 states', why: 'buyers are funds' }, _corp);
     const _fakes = [
@@ -44211,15 +44522,28 @@ app.listen(PORT, () => {
       ['no evidence at all', { model: 'B2B_INSTITUTIONAL', evidence: '' }],
       ['unknown model', { model: 'ENTERPRISE_SAAS', evidence: 'turn-key renovations for REO funds' }],
       ['nothing returned', null],
+      // Executed refutation, 2026-08-22: a REAL quote that says nothing about
+      // the claimed model licensed it anyway — evidence that EXISTS standing
+      // in for evidence that EVIDENCES — and silenced twelve local rungs
+      // including the reply-proven outranked_by_weaker. The quote below is
+      // verbatim from the corpus and contains no institutional term.
+      ['real but irrelevant evidence', { model: 'B2B_INSTITUTIONAL', evidence: 'Property Masters delivers turn-key renovations' }],
     ];
     const _leaked = _fakes.filter(([, x]) => resolveBusinessModel(x, _corp).model !== 'LOCAL_CONSUMER').map(([l]) => l);
     const _localFree = resolveBusinessModel({ model: 'LOCAL_CONSUMER', why: 'homeowners searching' }, _corp);
+    // A real quote behind a three-word model preamble must still verify — the
+    // old prefix-anchored window refused it, which failed safe but sent
+    // map-pack findings to the exact class this mechanism exists to spare.
+    const _pre = resolveBusinessModel({ model: 'B2B_INSTITUTIONAL', evidence: 'The site says: turn-key renovations for REO funds, PE firms and institutional portfolios', why: 'buyers are funds' }, _corp);
+    if (_pre.model !== 'B2B_INSTITUTIONAL') _fails_pre = true;
     if (_real.model !== 'B2B_INSTITUTIONAL') {
       console.log(`\u26d4 BUSINESS MODEL CHECK: a model quoted straight from their own homepage was rejected (${_real.why}), so every lead is treated as a local business and the map-pack findings go to companies that do not sell locally.`);
     } else if (_leaked.length) {
       console.log(`\u26d4 BUSINESS MODEL CHECK: ${_leaked.join(', ')} would silence real findings on evidence we cannot verify. Suppressing a true finding on a fabricated quote is the one way this can do damage.`);
     } else if (!_localFree.verified) {
       console.log(`\u26d4 BUSINESS MODEL CHECK: LOCAL_CONSUMER now requires evidence. It is the default and the fallback \u2014 requiring proof of it breaks every ordinary lead.`);
+    } else if (_fails_pre) {
+      console.log(`\u26d4 BUSINESS MODEL CHECK: a real institutional quote behind a three-word preamble is refused \u2014 the window is prefix-anchored again, and the Property Masters class goes back to receiving map-pack findings.`);
     } else {
       console.log(`\u2713 BUSINESS MODEL CHECK: a model quoted from their own pages withholds the local-search findings, and ${_fakes.length} unverifiable claims fall back to LOCAL_CONSUMER. Findings can be silenced by evidence, never by assertion.`);
     }
@@ -46901,6 +47225,14 @@ app.listen(PORT, () => {
         _fails.push('the spend line presents its rate as a measurement — it is a setting, and the only authoritative rate is on the invoice');
       }
       _gpCalls.search -= 1; _gpCalls.details -= 1;
+      // ...and the day ledger the same. The probe is not real spend, and every
+      // boot was otherwise starting the UTC day at places=2 with byKind
+      // carrying two phantom entries.
+      { const _r = runSpendToday(); _r.places = Math.max(0, _r.places - 2);
+        for (const _k of ['places-search', 'places-details']) {
+          _r.byKind[_k] = (_r.byKind[_k] || 0) - 1;
+          if (_r.byKind[_k] <= 0) delete _r.byKind[_k];
+        } }
     }
 
     if (_fails.length) {
@@ -47701,6 +48033,7 @@ app.listen(PORT, () => {
   // and a key that would fail, so a regression makes the network call and the
   // check sees it. A source regex would pass on the day the memo stopped being
   // populated, which is the failure this is guarding.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -47791,7 +48124,7 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ PLACE DETAILS REUSE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
   // ══ WHAT ACTUALLY STOPS FIFTY LEADS AT ONCE ═══════════════════════════════
   // Not the queue — that was built for it and a boot check already proves a
@@ -47807,6 +48140,7 @@ app.listen(PORT, () => {
   //
   // So the bound is on the DECODE, not on the leads, and research concurrency
   // can then be raised for throughput without touching the memory ceiling.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -47964,7 +48298,7 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ BATCH MEMORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
   // ══ THE LEAD THAT FELL THROUGH TO THE RAW MODEL PATH ═══════════════════
   // Live, 2026-08-14, Dr. Shaun Parson Plastic Surgery: "no factual spine and no
@@ -49705,6 +50039,11 @@ app.listen(PORT, () => {
     }
     const _cap = Math.max(1, Number(process.env.SEND_MAX_PER_REQUEST || 25));
     if (_cap > 50) _fails.push(`the send cap is ${_cap} — above what one mailbox is rated for, and above what this request shape survives`);
+    // The durable per-lead record: a lost HTTP response or a restart must not
+    // erase who was sent what. Needle assembled at runtime.
+    if (_src.indexOf("sbRest('/send_" + "log'") < 0) {
+      _fails.push('the per-lead send record is gone, so a send whose response is lost to a proxy timeout leaves no durable record of who received a sequence');
+    }
     if (_fails.length) {
       console.log(`⛔ SEND CAP CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
     } else {
@@ -51356,6 +51695,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // An async IIFE, the same shape RENDER BYTE BUDGET CHECK uses below: the gate
   // is a real asynchronous thing and the only honest way to test it is to run
   // work through it. A synchronous assertion here could only read the source.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -51405,7 +51745,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL PLAN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ THE LIMIT WAS MEASURED AND THE PACE IGNORED IT ════════════════════════
@@ -51425,6 +51765,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   //
   // Three separate things, so three separate assertions. Each was falsified by
   // reverting its own fix and each went red alone.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -51587,7 +51928,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL PACING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ THE LAST GATE BEFORE A PROSPECT DID NOT RUN ON HALF THE AUDITS ════════
@@ -51602,6 +51943,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // reading it. Only the word "timeout" may be retried: a refusal, a 4xx and a
   // bad key all fail identically the second time and a blind retry doubles the
   // bill for nothing.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -51705,7 +52047,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ ANTHROPIC RETRY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ A DEMOTION LOG THAT INVENTED ITS OWN REASON ═══════════════════════════
@@ -52098,6 +52440,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // Run, not read: a real PNG goes through fitPngToBudget against a budget set
   // just below what its first fit produces, so the loop must take a second,
   // smaller pass to succeed — the exact move the live failure never made.
+  bootHold();
   (async () => {
   try {
     const _fails = [];
@@ -52140,7 +52483,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ RENDER BYTE BUDGET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
   })();
 
   // ══ THE SAME BUSINESS MUST NOT MEASURE AS TWO DIFFERENT BUSINESSES ══════
@@ -55863,6 +56206,19 @@ app.post('/api/send-to-hunter', async (req, res) => {
           SENT_RECIPIENTS.set(_norm, { at: Date.now(), name: lead.name });
           if (_dom) SENT_DOMAINS.set(_dom, { at: Date.now(), name: lead.name, email: _norm });
         }
+        // ══ DURABLE, PER LEAD, AT THE MOMENT OF ACCEPTANCE ═════════════════
+        // A 25-lead send is one synchronous HTTP request that can outlive the
+        // proxy's patience, and the response is the only copy of "what went"
+        // the client ever gets; the maps above die with the process. One
+        // fire-and-forget row per ACCEPTED recipient means a lost response or
+        // a restart can no longer erase the record of who was sent what.
+        // Supabase down loses the row, never the send — and the maps still
+        // guard the running process either way. Needs the send_log table
+        // (CLAUDE.md carries the CREATE).
+        Promise.resolve(sbRest('/send_log', {
+          method: 'POST',
+          body: JSON.stringify({ lead_id: String(lead.id || ''), company: lead.name || '', email: lead.email, sequence_id: String(_seqForLead || '') }),
+        })).catch(() => {});
       } else {
         const errText = await safeText(addRes);
         results.failed.push({ name: lead.name, email: lead.email, reason: `Sequence add failed: HTTP ${addRes.status}: ${errText.slice(0,200)}` });
@@ -55889,6 +56245,7 @@ app.post('/api/linkedin-drafts', async (req, res) => {
     return res.status(400).json({ error: 'leads array required — pass already-researched leads from the pipeline' });
   }
   if (!apiKey) return res.status(400).json({ error: 'Anthropic apiKey required' });
+  { const _c = budgetRefusal(['anthropicUsd']); if (_c) return res.status(429).json({ error: _c.message, budgetStopped: true }); }
 
   try {
     // ── Build the real aggregate from actual researched leads (no fabrication) ──

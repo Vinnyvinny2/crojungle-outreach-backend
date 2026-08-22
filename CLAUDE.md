@@ -3830,6 +3830,107 @@ verification ran:
 
 ---
 
+## 49. What the refuters found — 2026-08-22, the round after the tier build
+
+Seven adversarial agents were pointed at the tier build's own mechanisms with
+instructions to break them, and a completeness critic at everything they were
+not pointed at. Twenty-nine findings survived into code changes; every fix was
+falsified individually (twenty reverts this round, each red alone), and the
+whole sweep held to one discipline: verify the refuter's claim against the live
+source before touching anything.
+
+**The truth gate had four ways to verify a fabrication, all executed.** The
+quote canonicaliser's catch-all DELETED any `&Word;` entity, so
+"Insured&Bonded; crews" normalised to "insured crews" — two never-adjacent
+words made consecutive, and a quote of a page that does not exist verified. The
+corpus was one soup, so a word run could START on a page and FINISH inside a
+review theme ("Call us today, no one ever calls back" assembled itself across
+the join). The short-quote floor accepted any generic 4-gram, so an invented
+"Claim your free estimate today" rode "your free estimate today" — trade-site
+filler — into a verified quote. And matching was bare substring, so
+"rate the craftsmanship" verified inside "celebRATE THE CRAFTSMANSHIP". Fixed
+at the root: unknown entities pass through (deletion can join, a space cannot),
+the corpus is SEGMENTS and a match must live inside one, the short path may
+shed filler words but never content words, and every match is word-aligned.
+Two tightenings against real quotes were paired with two loosenings the same
+sweep found: a letter entity now DECODES (`Jos&eacute;` was still becoming
+"jos" — the José bug through a second door), and the mining model's PARAPHRASE
+left the verify corpus (only the verbatim review snippet remains — "the words
+are theirs" must not verify against another model's words).
+
+**The business-model filter licensed evidence that merely existed.** A
+hallucinated B2B claim carrying the real quote "for Dallas homeowners. Family
+owned since 1998" verified — evidence stating the OPPOSITE of the model it
+licensed — and silenced twelve rungs including reply-proven
+`outranked_by_weaker`. The quote must now contain a term from a small declared
+vocabulary for the claimed model; a real institutional quote behind a model
+preamble also now verifies (the window slides instead of anchoring at the
+front).
+
+**The boot gate had three doors around it.** Express routes are
+case-insensitive and the gate was not, so `POST /Api/research` walked past it
+(verified against the installed Express); the gate and /healthz answer before
+the CORS middleware, so the browser saw an opaque "Failed to fetch" instead of
+the retry JSON; and an async check's late red — BATCH MEMORY's leaked-slot
+branch fires at 60s, ~40s AFTER the verdict settles — was invisible: GREEN,
+/healthz 200, CI green, failure on screen. The path is lowercased, the gate
+carries its own CORS headers, and every async check holds the verdict open
+(bootHold/bootRelease) until it has reported, with the 180s cap still the loud
+backstop. The client retries a 503 {booting:true} submit for up to a minute —
+a restarting server is a delay, not a failure — and the cron route no longer
+reports a boot-window refusal as a successful empty discovery.
+
+**Three spending doors had no gate.** `/api/scrape` spent Firecrawl through no
+meter and no ceiling (a live client path); `/api/claude` and
+`/api/linkedin-drafts` were metered but never gated, so a spent model budget
+kept spending a nickel a press; and Find's for-sale lane spends Firecrawl and
+a Haiku call that its Places-only admission gate never checked. All four now
+refuse (or skip, with the reason logged) at the same ceilings, the sync
+research route also fails fast on the credit latch via the READ-ONLY predicate
+(refusing must not consume the recovery probe), and two boot checks that
+charged phantom probe spend to the real day ledger now restore what they
+touched.
+
+**The harness lied in three small ways.** servercheck's review-count fixture
+used the same number in the search row and Place Details, so the authority
+assertion could not detect the regression its message names (the search row
+now says 999 against the authority's 4); scenario C's "a dead token reports
+null" was vacuously true because reviewsRead was never in the response at all
+— instance twenty-one of computed-but-not-passed, found by asserting the
+OPPOSITE on the golden lead, and `ownerReplyCount` was dark the same way; and
+the fake ignored every request header, so the one header whose absence
+silently deletes measurements (X-Goog-FieldMask) is now asserted present.
+FAKE_UPSTREAM — which redirects every API call, keys included — now refuses to
+boot when Render's own environment is visible, mechanically, because
+"never set it in production" is an instruction and instructional guards do not
+hold.
+
+**And the send path keeps a durable record.** A 25-lead send is one
+synchronous HTTP request whose response is the only copy of "what went" the
+client gets, and the in-memory dedupe maps die with the process. One
+fire-and-forget row per ACCEPTED recipient now lands in `send_log`, so a lost
+response or a restart no longer erases who was sent what. Needs a table:
+
+```sql
+create table send_log (
+  id bigserial primary key, lead_id text, company text, email text,
+  sequence_id text, at timestamptz default now());
+```
+
+A schema probe runs once after the verdict settles and names every expected
+table or column that does not answer, with sbRest's own per-table diagnosis
+above it — so a missing table is discovered at boot, not at its moment of
+first use.
+
+**Known and deliberately NOT rebuilt tonight** (the launch-sweep rule: no new
+features the night before calling starts): the send route still wants the job
+queue research got — the cap holds it to 25 and the send_log makes a lost
+response recoverable, and that is the mitigation, not the fix. The batch
+client's 30-minute job TTL and the operations-vs-pacing tension on the kill
+clock are documented open items, not silent ones.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -4054,6 +4155,24 @@ on a red build and keeps the PREVIOUS build serving. A red boot stops being a
 grey log line and becomes a deploy that visibly did not land. Nothing to
 configure in code; the endpoint is already live.
 
+**The honest trade-off.** Render uses the same path for deploy gating AND for
+runtime monitoring. Deploy gating is pure upside: a red build never starts
+serving. Runtime is the edge case: if a LIVE service crash-restarts and a
+flaky check happens to go red on that one boot, the service stays 503 until
+the next restart — there is no previous build to fall back to at runtime.
+That trade is accepted deliberately: every check in the file exists because
+its failure shipped something false, and serving with a failed truth gate is
+the worse outcome. A crash restart also re-runs the checks with POSTs held
+(the boot-window gate), so the ~20-second window costs retries, not leads.
+
+## 1b. GitHub: make the gates a merge BLOCKER, not a report
+
+CI runs on every PR and every push to main — but GitHub only refuses a red
+merge once branch protection requires it. One-time: repo Settings → Branches
+→ Add branch protection rule → branch `main` → tick "Require status checks to
+pass before merging" → select `gates`. Until this is done the gates are
+visibility, not enforcement, and a red PR can still be merged by hand.
+
 ## 2. Netlify: connect the repo (ends the hand-deploy)
 
 Netlify dashboard → the site → Site configuration → Build & deploy → Link
@@ -4087,4 +4206,16 @@ nothing and touches no lead Vin is calling.
 | `APIFY_DAILY_BUDGET` | 150 | review pulls per UTC day |
 | `FAKE_UPSTREAM` | unset | servercheck's test seam — NEVER set in production; fetchtest proves it inert when absent |
 | `RENDER_ENV` | unset | shown by /healthz so staging and production cannot be confused |
+
+**Set the budgets to the PLAN, not the default.** The defaults (1500 Firecrawl
+credits, 600 Places calls, $20 of model) are a runaway-day safety net sized for
+paid tiers. On the free Firecrawl tier (500 credits ONE TIME) or inside the
+Places free allowance (1,000 Enterprise calls a month), the default ceiling sits
+ABOVE what the account can afford — the ledger will happily meter the account to
+zero before the ceiling speaks. When the plan is small, set the ceiling small.
+
+**The client handshake.** `CONTRACT_VERSION` (server.js) and `CLIENT_CONTRACT`
+(index.html) are one number in two files, asserted EQUAL by clientcheck. Bump
+both when a change needs the new client live; a stale Netlify page then shows a
+banner naming both numbers instead of silently reintroducing fixed bugs.
 

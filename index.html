@@ -1053,6 +1053,29 @@ const {
   useEffect
 } = React;
 const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
+// ══ THE HANDSHAKE WITH THE SERVER ══════════════════════════════════════════
+// This file deploys to Netlify by hand while the server deploys on merge, and
+// a stale page silently reintroduces every client bug the server half already
+// fixed — the shape that makes a bug look intermittent. The server sends its
+// own contract number in every research response; when it is newer than this
+// one, the page says so instead of letting the drift stay invisible.
+// clientcheck.js asserts this constant EQUALS the server's, so the pair can
+// only drift between a merge and the Netlify drag-in — exactly the window the
+// warning exists for.
+const CLIENT_CONTRACT = 20260822;
+let _staleClientWarned = false;
+const warnIfStaleClient = (serverContract) => {
+  const s = Number(serverContract);
+  if (!Number.isFinite(s) || s <= CLIENT_CONTRACT || _staleClientWarned) return;
+  _staleClientWarned = true;
+  console.warn('[contract] this page (' + CLIENT_CONTRACT + ') is OLDER than the server (' + s + ') — drag the new index.html into Netlify. Client-side fixes in the newer build are dark until then.');
+  try {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#7a4b00;color:#fff;padding:8px 14px;font:13px system-ui;text-align:center';
+    el.textContent = 'This page is older than the server (page ' + CLIENT_CONTRACT + ', server ' + s + '). Drag the new index.html into Netlify — newer fixes are dark until you do.';
+    document.body.appendChild(el);
+  } catch (e) { void e; }
+};
 const CF_PROXY = 'https://silent-credit-94eb.vindesil2.workers.dev/?url=';
 
 // ═══ RESEARCH VIA THE JOB QUEUE ═══════════════════════════════════════════
@@ -1515,6 +1538,7 @@ const applyResearchResult = (prev, data, ctx) => {
         // authoritative record is the invoice - the server says the same at
         // its /api/spend endpoint.
         L.leadSpend = data.leadSpend ?? null;
+        L.serverContract = data.serverContract ?? null;
         L.phoneSource = data.phoneSource || L.phoneSource || '';
         L.realSpeed = data.realSpeed ?? L.realSpeed ?? null;
         // Two-listings measurement: the call sheet's mechanical explanation for
@@ -1950,12 +1974,26 @@ const researchViaQueue = async (body, opts) => {
     console.error('[research] REFUSED TO SPEND', err.message, new Error('stack').stack);
     throw err;
   }
-  const submit = await fetch(BACKEND + '/api/research-async', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: o.signal,
-  });
+  // ══ A RESTARTING SERVER IS A DELAY, NOT A FAILURE ═══════════════════════
+  // The server answers 503 {booting:true} for the ~20 seconds its boot checks
+  // take after a deploy or a crash restart. Failing the lead on that reads as
+  // "research is broken", and in a batch it marks real leads as errors for a
+  // window that closes on its own. Retry the SUBMIT only — nothing has been
+  // spent yet — for up to a minute, then let the real answer through.
+  let submit;
+  for (let _try = 0; ; _try++) {
+    submit = await fetch(BACKEND + '/api/research-async', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: o.signal,
+    });
+    if (submit.status !== 503 || _try >= 12) break;
+    let _b = null; try { _b = await submit.clone().json(); } catch (e) { void e; }
+    if (!_b || !_b.booting) break;
+    console.log('[research] the server is still running its boot checks — retrying the submit in 5s (' + (_try + 1) + '/12)');
+    await new Promise(r => setTimeout(r, 5000));
+  }
   if (!submit.ok) {
     // Older backend that predates the queue — fall back to the synchronous route
     // so a stale deploy degrades instead of breaking.
@@ -2128,6 +2166,7 @@ const runBatchAudit = async (opts) => {
       const data = await r.json();
       // The row as it stands NOW, not as it stood when the batch was assembled.
       const cur = getLeads().find(x => x.id === lead.id) || { ...lead };
+      if (typeof warnIfStaleClient === 'function') warnIfStaleClient(data && data.serverContract);
       const merged = applyResearchResult(cur, data, {
         website: lead.website || '', emailData: {}, companyData: {}, pageSpeed: {}, httpStatus: r.status,
       });
@@ -6579,6 +6618,7 @@ function ResearchView({
       // identical merge rather than a second copy of it. What stays here is the
       // part that is about THIS screen: persist, sort, re-render, say what
       // happened.
+      if (typeof warnIfStaleClient === 'function') warnIfStaleClient(data && data.serverContract);
       const merged = applyResearchResult(leads[idx], data, {
         website, emailData, companyData, pageSpeed, httpStatus: r.status,
       });

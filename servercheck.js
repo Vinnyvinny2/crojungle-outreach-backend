@@ -74,6 +74,7 @@ const REVIEW_TOTAL = 4;   // small profile: under the 25-review floor, so the
 const state = {
   mode: 'golden',           // 'golden' | 'apify403' | 'husk' | 'fc402'
   requests: [],             // every hit: {host, path}
+  contract: [],             // request-contract violations (e.g. a missing field mask)
   unknown: [],
 };
 const readBody = (req) => new Promise((resolve) => {
@@ -95,7 +96,12 @@ const placesList = (b) => {
     displayName: { text: i === 3 ? b.company : `Rival Roofing ${i}` },
     formattedAddress: `${100 + i} Main St, Dallas, TX 75201, USA`,
     websiteUri: i === 3 ? `https://${b.host}` : `https://rival${i}.example`,
-    rating: 4.5, userRatingCount: i === 3 ? REVIEW_TOTAL : (i < 3 ? 2 + i : 30 + i),
+    // Our own row in the SEARCH result deliberately carries a count that
+    // CONTRADICTS Place Details (REVIEW_TOTAL): the response's reviewCount
+    // must come from the details call (the authority), and when both sources
+    // said the same number the assertion could not detect the precedence
+    // regressing — an assertion that cannot fail is not an assertion.
+    rating: 4.5, userRatingCount: i === 3 ? 999 : (i < 3 ? 2 + i : 30 + i),
     businessStatus: 'OPERATIONAL',
     internationalPhoneNumber: '+1 214-555-01' + String(10 + i),
     location: { latitude: 32.78 + i * 0.001, longitude: -96.8 },
@@ -186,6 +192,11 @@ const fake = http.createServer(async (req, res) => {
   if (host === 'api.anthropic.com') return send(res, 200, anthropicAnswer(body, b));
 
   if (host === 'places.googleapis.com') {
+    // Light request-contract check: the fake ignores most headers, which makes
+    // request drift invisible — but the field mask is the one header that
+    // silently deletes measurements server-side when it goes missing, so its
+    // absence is recorded and asserted after the golden lead.
+    if (!req.headers['x-goog-fieldmask']) state.contract.push('places call without X-Goog-FieldMask: ' + path);
     if (/searchText/.test(path)) return send(res, 200, placesList(b));
     return send(res, 200, placeDetails(b));   // details by place id
   }
@@ -252,7 +263,9 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
   const wait = async () => {
     for (;;) {
       if (child.dead) return reject(new Error('server died during boot:\n' + log.split('\n').slice(-12).join('\n')));
-      if (Date.now() - t0 > 120000) return reject(new Error('healthz never went green in 120s'));
+      // Kill the child on the timeout path — an orphan wedges SRV_PORT for
+      // every later run, which reads as EADDRINUSE on a harness that is fine.
+      if (Date.now() - t0 > 120000) { try { child.kill(); } catch (e) { void e; } return reject(new Error('healthz never went green in 120s')); }
       try {
         const r = await httpGet(`http://127.0.0.1:${SRV_PORT}/healthz`);
         if (r.code === 200 && r.json && r.json.status === 'green') return resolve({ child, log: () => log });
@@ -349,6 +362,9 @@ const runLead = async (b, over, capMs) => {
     const spend1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/spend`);
     ok(spend1.json && spend1.json.spend && spend1.json.spend.fc > 0, '/api/spend does not reflect the day');
     ok(spend1.json && spend1.json.byKind && Object.keys(spend1.json.byKind).length > 0, '/api/spend has no per-kind split, so FC_SCREENSHOT_CREDITS can never be reconciled');
+    ok(R.reviewsRead >= 1, `reviewsRead is ${R.reviewsRead} on a lead whose review mine answered — scenario C's null assertion is vacuous unless the golden path populates it`);
+    ok(!/FACT CHECK DID NOT RUN/.test(srv.log()), 'the fact-check — the last gate before a prospect — did not run on the golden lead, and the marker-keyed fake fails soft exactly there');
+    ok(state.contract.length === 0, `request-contract violations: ${state.contract.join(' | ')}`);
 
     // ── B: PREFLIGHT, ZERO NETWORK ──────────────────────────────────────
     console.log('── scenario B: preflight refusal, zero spend');
