@@ -387,8 +387,36 @@ const runBatch = async (opts) => {
       if (res.ok || !body.brainFailed) {
         fails.push('a job that works forever is never given up on, so it holds a slot in the pool and a fifty-lead batch stops after three leads');
       }
-      if (!/ten minutes/.test(body.reason || '')) {
+      // Names the WORK clock, not a number. The number now comes from the
+      // server on every poll (workBudgetMs), because the browser holding its
+      // own copy is how the two clocks disagreed on 2026-08-22.
+      if (!/worked on this lead/.test(body.reason || '')) {
         fails.push(`the give-up message does not say which clock ran out: "${body.reason}"`);
+      }
+    }
+    // ══ AND THE BROWSER TAKES ITS BUDGET FROM THE SERVER ══════════════════
+    // The server's budget learned to exclude the lead's wait in our own
+    // Firecrawl gate; the browser's did not, and four leads of five died at
+    // that boundary with every credit already spent. Two hand-kept copies of
+    // one rule, on different machines. So: a server that says its budget is
+    // twenty minutes must be believed past the browser's own fallback of ten.
+    {
+      const { api } = mk({ pollAnswer: (n) => (n * 3000 < 15 * 60 * 1000
+        ? { status: 'running', phase: 'running', elapsedMs: n * 3000, workedMs: n * 3000, workBudgetMs: 20 * 60 * 1000 }
+        : { status: 'done', httpStatus: 200, result: { brainAudit: { factualSpine: 's' } } }) });
+      const res = await api.pollResearchJob('job1', {});
+      const body = await res.json();
+      if (!res.ok || body.brainFailed) {
+        fails.push('a lead the SERVER said it was still within budget on was abandoned by the browser at its own fallback of ten minutes - the two clocks disagree again and the paid audit is thrown away');
+      }
+    }
+    // And the fallback still holds against a server too old to send one.
+    {
+      const { api } = mk({ pollAnswer: (n) => ({ status: 'running', phase: 'running', elapsedMs: n * 3000, workedMs: n * 3000 }) });
+      const res = await api.pollResearchJob('job1', {});
+      const body = await res.json();
+      if (res.ok || !body.brainFailed) {
+        fails.push('with no budget sent by the server the browser now waits forever - the fallback was deleted rather than kept');
       }
     }
   }

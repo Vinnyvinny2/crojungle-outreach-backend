@@ -136,6 +136,20 @@ const BOOT_STATUS = {
 // loud backstop for a check that hangs outright.
 const bootHold = () => { BOOT_STATUS.pending += 1; };
 const bootRelease = () => { BOOT_STATUS.pending = Math.max(0, BOOT_STATUS.pending - 1); };
+// ══ A BOOT CHECK IS NOT A LEAD ══════════════════════════════════════════════
+// The ladder's own diagnostics — which findings were held back, why nothing was
+// sayable, which quote bought a promotion — are written for somebody reading a
+// LEAD. The boot checks run that same ladder dozens of times over fixtures, so
+// a clean boot printed fifteen copies of "INTERNAL ONLY: partial_owner_replies"
+// about businesses that do not exist. Vin's words for the result were "the logs
+// look horrible", and he was reading real diagnostics about imaginary leads.
+//
+// This is not a filter over the text: a filter is a list somebody has to keep.
+// It is the one question that separates the two cases — is a lead being worked
+// on at all — and the answer is no while the process is still checking itself.
+// Deliberately NOT tied to the recorder's glyph counting: these lines carry
+// neither glyph, so nothing about the verdict changes either way.
+const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; console.log(...a); };
 // ══ THE CONTRACT NUMBER THE CLIENT SHAKES HANDS ON ══════════════════════════
 // index.html deploys to Netlify by hand while this file deploys on merge, and
 // a stale page silently reintroduces every client bug the server half already
@@ -808,15 +822,30 @@ const _fcGate = makeFcGate({
 // rather than from the handful of call sites somebody remembered to wire.
 const fcSerial = (fn, kind) => {
   const _q0 = Date.now();
+  // Captured HERE, in the caller's own context, and handed to the notes by
+  // reference. See netGateEnter: the gate dispatches from another lead's
+  // continuation, so the ambient store at dispatch time is not ours.
+  let _led = null;
+  try { _led = NET_LEDGER.getStore() || null; } catch (e) { void e; }
+  netGateEnter(_led);
   let _noted = false;
-  const _wrapped = () => { if (!_noted) { _noted = true; netNoteGateWait(Date.now() - _q0); } return fn(); };
+  const _release = () => {
+    if (_noted) return;
+    _noted = true;
+    netNoteGateWait(Date.now() - _q0, _led);
+    netGateLeave(_led);
+  };
+  const _wrapped = () => { _release(); return fn(); };
   // The endpoint is read off the response's own URL when the caller does not
   // name it, so no call site has to be remembered - the disease this file is
   // mostly a record of. A caller may still pass one explicitly.
+  // The release is idempotent and also runs on the failure path: a request the
+  // gate never dispatches (a throw, an abort) must still close its wait, or the
+  // lead reads as permanently blocked and the kill clock can never fire again.
   return _fcGate(_wrapped, kind).then((r) => {
     noteFirecrawlLimits(r, kind || fcKindOf((r && r.url) || ''));
     return r;
-  });
+  }).finally(_release);
 };
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
@@ -901,11 +930,58 @@ const netNote = (url, ms, ok) => {
     led.by.set(k, e);
   } catch (e) { void e; }
 };
-const netNoteGateWait = (ms) => {
+const netNoteGateWait = (ms, ledger) => {
   try {
-    const led = NET_LEDGER.getStore();
+    const led = ledger || NET_LEDGER.getStore();
     if (led) led.gateWaitMs = (led.gateWaitMs || 0) + Math.max(0, ms);
   } catch (e) { void e; }
+};
+// == WAITING IS NOT WORKING, AND OVERLAPPING WAITS ARE ONE WAIT =============
+// gateWaitMs above SUMS every request's queue time, and one lead's fan-out puts
+// seven requests in the gate at once - so seven concurrent 60-second waits
+// report as 420 seconds against 60 seconds of wall clock. That number is right
+// for "is our own throttle hurting" and it is the WRONG number to subtract from
+// a clock: subtracting it would make the work budget unreachable and the kill
+// would never fire at all.
+//
+// What a clock needs is the UNION - the wall time during which this lead had at
+// least one request stuck in our gate and could not proceed. A counter with a
+// start stamp gives exactly that: the interval opens when the first request
+// queues and closes when the last one is dispatched.
+//
+// The ledger is passed EXPLICITLY rather than read from the async store,
+// because the gate calls a queued job from whichever lead's continuation
+// happened to free the slot. Reading the ambient store there charges one lead's
+// wait to another - the cross-lead attribution failure this file records at the
+// audit cache, pointed at time instead of evidence.
+const netGateEnter = (led) => {
+  try {
+    if (!led) return;
+    led.waiting = (led.waiting || 0) + 1;
+    if (led.waiting === 1) led.waitingSince = Date.now();
+  } catch (e) { void e; }
+};
+const netGateLeave = (led) => {
+  try {
+    if (!led || !led.waiting) return;
+    led.waiting -= 1;
+    if (led.waiting === 0) {
+      if (led.waitingSince) led.blockedMs = (led.blockedMs || 0) + Math.max(0, Date.now() - led.waitingSince);
+      led.waitingSince = null;
+    }
+  } catch (e) { void e; }
+};
+// Live, so a lead stuck in the gate RIGHT NOW reads as blocked rather than only
+// after it is released - which is the case that matters, because a lead that is
+// still waiting is exactly the one a naive clock is about to kill. Pure given a
+// ledger and a clock, so the boot check runs the real arithmetic.
+const netBlockedMs = (led, now) => {
+  if (!led) return 0;
+  const closed = Number(led.blockedMs) || 0;
+  const open = (led.waiting > 0 && led.waitingSince)
+    ? Math.max(0, (Number(now) || Date.now()) - led.waitingSince)
+    : 0;
+  return closed + open;
 };
 // Reported next to FIRECRAWL SPEND, per lead, from the per-lead store.
 const netReport = () => {
@@ -915,7 +991,9 @@ const netReport = () => {
   const total = rows.reduce((s, [, e]) => s + e.ms, 0);
   return `${(total / 1000).toFixed(0)}s inside outbound calls (these OVERLAP \u2014 they do not add up to the wall clock): `
     + rows.map(([k, e]) => `${k} ${(e.ms / 1000).toFixed(0)}s/${e.n} call(s)${e.failed ? ` (${e.failed} failed or timed out)` : ''}`).join(', ')
-    + (led.gateWaitMs ? ` | ${(led.gateWaitMs / 1000).toFixed(0)}s of that was spent WAITING for a free Firecrawl browser before the request was sent \u2014 if this is large, the throttle is ours and FC_CONCURRENCY is the dial` : ' | no time was spent waiting for a Firecrawl slot');
+    + (led.gateWaitMs
+      ? ` | WAITING for a free Firecrawl browser: ${(netBlockedMs(led, Date.now()) / 1000).toFixed(0)}s of wall clock (${(led.gateWaitMs / 1000).toFixed(0)}s summed across requests, which OVERLAP). The wall figure is the one the kill clock excludes; if it is large, the throttle is ours and FC_CONCURRENCY is the dial`
+      : ' | no time was spent waiting for a Firecrawl slot');
 };
 
 // ════════ THE ONE DOOR IS ALSO THE ONE TEST SEAM ════════
@@ -1157,8 +1235,41 @@ const openingConditionFor = (signal, ctx = {}) => {
   const trade = ctx.trade || 'what they sell';
   const n     = Number(ctx.formFieldCount) || null;
   switch (String(signal || '')) {
-    case 'search_absence':
-      return `Someone in ${city} looking for ${trade} right now is choosing from a list, and their name sits near the bottom of it.`;
+    case 'search_absence': {
+      // ══ THE ALTITUDE LINE ASSERTED A POSITION IT HAD NEVER READ ═════════
+      // This returned "their name sits near the bottom of it" for EVERY lead
+      // whose binding layer was LEADS, and the layer says nothing whatever
+      // about where they rank — LEADS also binds on a thin Google profile, on
+      // no proof reaching anybody, on a service page nobody finds. CTR, live
+      // 2026-08-22: measured #4 of 20, audit opened on "near the bottom".
+      //
+      // This string is handed to the model under the words "THE FIRST SENTENCE
+      // STARTS HERE — THIS EXACT ALTITUDE", so a false altitude line is a false
+      // first sentence, every time, by design. It reads the measurement now.
+      //
+      // And it returns NOTHING rather than something vaguer when the
+      // measurement does not support a sentence: the caller already treats an
+      // empty condition as "no altitude hint", and a hint we cannot stand
+      // behind is worse than none. A softer sentence that still implies a low
+      // position is the same false claim with the evidence hidden, which is the
+      // move this file forbids by name.
+      const pos = Number(ctx.rank);
+      const of  = Number(ctx.rankOutOf);
+      if (ctx.rankAbsent === true) {
+        return `Someone in ${city} looking for ${trade} right now is choosing from a list their name is not on.`;
+      }
+      // A position we deliberately suppressed (two draws disagreed) is not a
+      // position we may imply, however carefully.
+      if (ctx.rankUnstable === true) return '';
+      if (!Number.isFinite(pos) || pos < 1) return '';
+      // Below six results it is arithmetic, not a finding — the same floor the
+      // rank read itself carries.
+      if (Number.isFinite(of) && of < 6) return '';
+      // Top three is the thing he was hoping for. There is no honest LEADS
+      // sentence to build out of it, so this says nothing about his position.
+      if (pos <= 3) return '';
+      return `Someone in ${city} looking for ${trade} right now sees ${pos - 1} other name${pos - 1 === 1 ? '' : 's'} before theirs.`;
+    }
     case 'gbp_gap':
       return `The profile Google reads to decide who shows up for ${trade} in ${city} is missing the parts that decide it.`;
     case 'conversion_leak':
@@ -20438,6 +20549,93 @@ const stripUnmeasuredMoney = (text, corpus, opts) => {
 // anything we assembled, because those are already gated and re-checking them
 // here would be a second copy of a rule.
 
+// ══ A NUMBER WRITTEN IN WORDS IS STILL A NUMBER ═════════════════════════════
+// Every figure gate in this system reads DIGITS. permittedFigures matches on
+// digits, the unsourced-number check matches on digits, the money gate matches
+// on a dollar sign followed by digits. So a quantity spelled out walks past all
+// of them, and on 2026-08-22 one did: CTR's call sheet said "forty-six dozen
+// reviews" about a business with 461. Five hundred and fifty-two against four
+// hundred and sixty-one, on the sheet Mike reads down a phone, past eleven
+// gates, because it contained no digit.
+//
+// DELIBERATELY NARROW, and the narrowness is the point. It refuses exactly two
+// shapes, both of which are fabricated scale by construction:
+//
+//   1. a vague plural quantifier - "dozens of", "hundreds of", "scores of".
+//      We never measure a vague scale, so one of these is always invented.
+//      The audit prompt has banned "dozens" in words for weeks and the audits
+//      kept producing it, which is this file's own rule about instructional
+//      guards.
+//   2. a spelled number multiplied by a scale word - "forty-six dozen", "three
+//      hundred", "two thousand". Nobody states a measured count that way; a
+//      measurement arrives as a digit.
+//
+// It does NOT touch a bare spelled number ("twenty-five years"), because that
+// IS how a real fact gets written and refusing it would need a corpus of every
+// measurement rather than of every page - a wider gate for a smaller failure.
+// A scale phrase whose value is genuinely in what we read is permitted, and so
+// is the one idiom that looks like this and is not a count: "one hundred
+// percent".
+const _SPELLED_SMALL = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+  ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+};
+const _SPELLED_TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const _SPELLED_SCALE = { dozen: 12, hundred: 100, thousand: 1000, million: 1000000 };
+const _SPELLED_WORD = Object.keys(_SPELLED_SMALL).concat(Object.keys(_SPELLED_TENS)).join('|');
+const _SCALE_WORD = Object.keys(_SPELLED_SCALE).join('|');
+const SPELLED_SCALE_RE = new RegExp(
+  `\\b(?:(${_SPELLED_WORD})(?:[-\\s](${Object.keys(_SPELLED_SMALL).join('|')}))?)[-\\s](${_SCALE_WORD})\\b`, 'gi');
+const VAGUE_SCALE_RE = /\b(?:dozens|hundreds|thousands|scores|a few dozen|a few hundred|several dozen|several hundred)\s+of\b/gi;
+const spelledScaleValue = (a, b, scale) => {
+  const lead = (_SPELLED_TENS[String(a).toLowerCase()] || _SPELLED_SMALL[String(a).toLowerCase()] || 0)
+    + (b ? (_SPELLED_SMALL[String(b).toLowerCase()] || 0) : 0);
+  return (lead || 1) * (_SPELLED_SCALE[String(scale).toLowerCase()] || 1);
+};
+const stripSpelledQuantities = (text, corpus) => {
+  const src = String(text || '');
+  if (!src) return { text: src, cut: [], phrases: [] };
+  const flat = String(corpus || '').replace(/[,\s]/g, '');
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [], phrases = [];
+  for (const sn of sentences) {
+    const bad = [];
+    let m;
+    VAGUE_SCALE_RE.lastIndex = 0;
+    while ((m = VAGUE_SCALE_RE.exec(sn))) bad.push(m[0].trim());
+    SPELLED_SCALE_RE.lastIndex = 0;
+    while ((m = SPELLED_SCALE_RE.exec(sn))) {
+      const after = sn.slice(m.index + m[0].length, m.index + m[0].length + 10).toLowerCase();
+      if (/^\s*(percent|%)/.test(after)) continue;          // "one hundred percent" is not a count
+      const v = spelledScaleValue(m[1], m[2], m[3]);
+      if (v && flat.includes(String(v))) continue;           // the value really is in what we read
+      bad.push(m[0].trim());
+    }
+    if (bad.length) { cut.push(sn.trim()); phrases.push(...bad); }
+    else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut, phrases };
+};
+const stripSpelledQuantitiesDeep = (node, corpus, out, depth) => {
+  const d = Number(depth) || 0;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripSpelledQuantities(node, corpus);
+    if (r.cut.length) { out.cut.push(...r.cut); out.phrases.push(...r.phrases); return r.text; }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(x => stripSpelledQuantitiesDeep(x, corpus, out, d + 1));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripSpelledQuantitiesDeep(node[k], corpus, out, d + 1);
+    }
+    return node;
+  }
+  return node;
+};
+
 // ══ A QUOTE IS THE MOST CHECKABLE CLAIM WE MAKE, AND NOTHING CHECKED IT ═════
 // SOURCE VERIFY guards exactly two fields — heroHeadline and ctaText — and
 // verifyOriginalFinding guards originalFindings. Every other prose field the
@@ -21620,7 +21818,7 @@ const rankHarms = (m = {}) => {
       : weFixThis < 30 ? 'not ours to fix'
       : null;
     if (_specificEff !== h.specific) {
-      console.log(`\u{1F5E3} QUOTED POSITIONING [${h.id}]: the sentence quotes their own copy, so it scores as checkable (${h.specific} \u2192 ${_specificEff}) and may lead. A characterisation of the same finding still cannot \u2014 "${String(sentence).slice(0, 80)}"`);
+      leadDiag(`\u{1F5E3} QUOTED POSITIONING [${h.id}]: the sentence quotes their own copy, so it scores as checkable (${h.specific} \u2192 ${_specificEff}) and may lead. A characterisation of the same finding still cannot \u2014 "${String(sentence).slice(0, 80)}"`);
     }
     // Novel survives as a TIEBREAK only: among findings within 8 harm points of
     // each other, the one he is least likely to know already goes first.
@@ -22072,7 +22270,7 @@ const rankHarms = (m = {}) => {
   const lead = _openable[0] || _halfGate || eligible[0] || _sayable[0] || null;
   const _internalHits = hits.filter(h => h.emailBlocked);
   if (_internalHits.length) {
-    console.log(`\u{1F512} INTERNAL ONLY [${_internalHits.length} finding(s)]: ${_internalHits.map(h => h.id).join(', ')} \u2014 measured, ranked and written into the audit and the call sheet, and deliberately kept out of the email. ${_internalHits[0].emailBlockedWhy}.`);
+    leadDiag(`\u{1F512} INTERNAL ONLY [${_internalHits.length} finding(s)]: ${_internalHits.map(h => h.id).join(', ')} \u2014 measured, ranked and written into the audit and the call sheet, and deliberately kept out of the email. ${_internalHits[0].emailBlockedWhy}.`);
   }
   if (!lead && hits.length) {
     // \u26d4 is reserved for a build that is WRONG. This is a build that is
@@ -22081,7 +22279,7 @@ const rankHarms = (m = {}) => {
     // deliverability at the top of that file as a blocker for weeks on a
     // routine per-domain condition. A neutral marker, and the sentence says
     // plainly that nothing is broken.
-    console.log(`\u25cb NOTHING SAYABLE [${hits.length} finding(s)]: every measured finding on this lead is internal-only intelligence about their reviews. There is no sentence here we can send that is both true and worth buying, so no email is composed \u2014 nothing is broken, this lead is simply thin for cold email. The audit and the call sheet still carry every one of them.`);
+    leadDiag(`\u25cb NOTHING SAYABLE [${hits.length} finding(s)]: every measured finding on this lead is internal-only intelligence about their reviews. There is no sentence here we can send that is both true and worth buying, so no email is composed \u2014 nothing is broken, this lead is simply thin for cold email. The audit and the call sheet still carry every one of them.`);
   }
   if (lead && lead.leadBlocked) {
     console.log(`\u26a0 BLOCKED RUNG LEADS ANYWAY [${lead.id}]: ${lead.leadBlockedWhy || 'blocked from leading'} — but nothing else on this lead clears even half the opener gate, so it leads as the last resort. This lead is weak for email and the operator should read it before approving.`);
@@ -35031,7 +35229,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // the real one, is how a reader stops trusting both.
           const _selfFixed = selfFixableDemotions(_harms.byHarm, top);
           if (_selfFixed.length) {
-            console.log(`\u{1F381} SELF-FIXABLE, NOT LEADING [${company}]: ${_selfFixed.length} finding(s) scored higher on harm than the opener (${top.harm}) but he can resolve them without us, so the email does not open there \u2014 ${_selfFixed.slice(0, 2).map(h => `"${String(h.finding).slice(0, 44)}" (harm ${h.harm}, ${h.selfFixWhy})`).join(' | ')}. They stay in the audit and on the call sheet, where agreement is the point.`);
+            leadDiag(`\u{1F381} SELF-FIXABLE, NOT LEADING [${company}]: ${_selfFixed.length} finding(s) scored higher on harm than the opener (${top.harm}) but he can resolve them without us, so the email does not open there \u2014 ${_selfFixed.slice(0, 2).map(h => `"${String(h.finding).slice(0, 44)}" (harm ${h.harm}, ${h.selfFixWhy})`).join(' | ')}. They stay in the audit and on the call sheet, where agreement is the point.`);
           }
           if (top.forwardable) console.log(`\u26a0 FORWARDABLE [${company}]: he can hand this to whoever runs his site and consider it handled. The email MUST carry the count (${_harms.all.length}) and the accountability question, or the likely outcome is that it gets fixed and we never hear back.`);
           if (_harms.worst && _harms.worst.id !== top.id) {
@@ -36596,6 +36794,12 @@ ${(() => {
       city: (localRank && localRank.city) || '',
       trade: customerTrade || verifiedIndustry || req.body.industry || '',
       formFieldCount: (htmlSignals && htmlSignals.checked) ? htmlSignals.formFieldCount : null,
+      // The measured position, so the LEADS opening cannot assert one it has
+      // not read. All four come straight off the rank read; none is inferred.
+      rank: (localRank && localRank.found && !localRank.rankSuppressed) ? Number(localRank.rank) : null,
+      rankOutOf: (localRank && Number.isFinite(Number(localRank.scanned))) ? Number(localRank.scanned) : null,
+      rankAbsent: !!(localRank && localRank.checked && !localRank.found && localRank.absenceConfirmed),
+      rankUnstable: !!(localRank && localRank.rankSuppressed),
     }
   );
   return _open ? `
@@ -37831,6 +38035,16 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           if (_m.cut.length) {
             parsed._moneyRemoved = _m.cut.slice(0, 4);
             console.log(`⛔ INVENTED MONEY [${company}]: removed ${_m.cut.length} sentence(s) carrying ${_m.figures.length} figure(s) that appear nowhere in what we read, are not our own prices, and are not the trade table's job value — ${_m.figures.slice(0, 4).join(', ')}. First one: "${String(_m.cut[0]).slice(0, 140)}". The email has traced every figure to a measurement for weeks; the audit is what Mike repeats on the call and it had no such rule. A price an owner knows is wrong discredits every measured fact next to it.`);
+          }
+          // ══ AND NO INVENTED SCALE, WHICH CARRIES NO DIGIT TO CATCH ══════
+          const _sq = { cut: [], phrases: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripSpelledQuantitiesDeep(parsed[k], _corpus, _sq, 1);
+          }
+          if (_sq.cut.length) {
+            parsed._spelledRemoved = _sq.cut.slice(0, 4);
+            console.log(`⛔ INVENTED SCALE [${company}]: removed ${_sq.cut.length} sentence(s) carrying a quantity written in WORDS that traces to nothing — ${_sq.phrases.slice(0, 4).join(', ')}. First one: "${String(_sq.cut[0]).slice(0, 140)}". Every figure gate in this system reads digits, so "forty-six dozen reviews" (CTR, live, against a measured 461) walked past all of them onto the call sheet.`);
           }
           const _emptied = Object.keys(_was).filter(k => String(_was[k]).trim() && !String(parsed[k] || '').trim());
           if (_emptied.length) {
@@ -40445,6 +40659,18 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // is needed. Same shape as the ladder crash flag two hundred lines up.
       corpusRead: {
         homepageChars: String(trustedContent || '').length,
+        // ══ TEXT AND MARKUP ARE TWO READS, AND ONLY ONE WAS COUNTED ═══════
+        // "We never read a single page of their website" was decided on the
+        // TEXT alone. The homepage SOURCE is a separate read and it is where
+        // the advertising tags, the booking route, the form fields and the
+        // phone link are all measured from — so on CTR, live 2026-08-22, that
+        // sentence sat directly above a confident description of the site's
+        // conversion path, and both were true of different reads.
+        //
+        // A reader cannot act on a contradiction, so the sheet must be able to
+        // say which half we hold. This is the measurement; the sentence is in
+        // corpusWarningFor, which now has something to be precise with.
+        homepageMarkupChars: String(homepageHtml || '').length,
         interiorPages: (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead.length : 0,
         trustworthy: !!scrapeTrustworthy,
       },
@@ -40715,10 +40941,20 @@ const preflightWarnOnce = (company, msg, now) => {
   console.log(`\u26a0 PREFLIGHT [${company}]: ${msg} (This applies to every lead until Settings change; saying it once an hour, not once a lead.)`);
   return true;
 };
-const runResearch = (req, res) => runWithLead(
+// The third argument is a SINK, not a parameter the worker reads: the caller
+// hands in an object and gets back a live reference to this lead's own network
+// ledger. The job needs it because the kill clock must be able to tell WORKING
+// from QUEUEING, and only the ledger knows how long this lead sat in the
+// Firecrawl gate. Without it the clock counts our own politeness as the lead
+// hanging - which is what killed four of five leads on 2026-08-22.
+const runResearch = (req, res, sink) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
-  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
-    () => NET_LEDGER.run({ by: new Map(), gateWaitMs: 0 }, () => _runResearchInner(req, res))));
+  () => {
+    const _net = { by: new Map(), gateWaitMs: 0 };
+    if (sink && typeof sink === 'object') sink.net = _net;
+    return FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
+      () => NET_LEDGER.run(_net, () => _runResearchInner(req, res)));
+  });
 
 // The synchronous route is the same worker with no job wrapper, kept because
 // the client falls back to it when /api/research-async answers 404 (an old
@@ -40837,12 +41073,66 @@ const RESEARCH_RSS_MAX_WAIT_MS = Math.max(5000, parseInt(process.env.RESEARCH_RS
 // Pure, so the boot check can execute the exact decision the poller makes.
 // A job's 8 minutes are 8 minutes of WORK: a job still queued has spent none of
 // them, however long ago it was submitted.
+// == QUEUEING IS NOT HANGING ================================================
+// This clock exists to stop a lead that is STUCK. It was measuring elapsed
+// time since work began, and a lead's own wait in the Firecrawl gate is inside
+// that - so the budget shrank every time another lead was admitted.
+//
+// The arithmetic, from our own TIME line on 2026-08-22 at 3 concurrent:
+//   409s of WORK, of which 138s was gate wait. Real work: 271s.
+// Double the concurrency and the gate wait roughly doubles: 271 + 276 = 547s,
+// past the 480s budget. Four of five leads died at exactly that boundary, and
+// the cause was not the leads or the sites - it was raising RESEARCH_CONCURRENCY
+// while the clock still charged them for waiting their turn.
+//
+// So the budget is WORK NET OF GATE WAIT, and a separate wall ceiling catches
+// anything genuinely stuck. Two numbers because they answer two questions: "is
+// this lead still doing something?" and "has this lead been alive too long
+// whatever the reason?".
+const RESEARCH_WORK_BUDGET_MS = Math.max(60000, parseInt(process.env.RESEARCH_WORK_BUDGET_MS || '', 10) || 8 * 60 * 1000);
+// Thirty minutes, and deliberately generous. The WORK budget above is the real
+// guard against a hung lead; this only catches one whose ledger is broken or
+// whose queueing has gone pathological. A lead legitimately held behind our own
+// Firecrawl gate on a small plan can be alive a long time and still be working,
+// and killing it costs the whole research cycle - Places, Apify and every model
+// call already paid for. A slot held too long costs one slot.
+const RESEARCH_WALL_CEILING_MS = Math.max(RESEARCH_WORK_BUDGET_MS * 2, parseInt(process.env.RESEARCH_WALL_CEILING_MS || '', 10) || 30 * 60 * 1000);
+// How often the job timer re-asks the verdict. Not a budget - the budgets are
+// above - so it is deliberately short.
+const RESEARCH_KILL_TICK_MS = 15000;
+// How long THIS lead has been unable to proceed because of our own gate - wall
+// time, not the sum across its seven concurrent requests (see netBlockedMs).
+// Pure and defensive: a job with no ledger yet reads zero, which is the old
+// behaviour exactly, so an old job shape cannot become immortal.
+const jobGateWaitMs = (job, now) => {
+  const n = netBlockedMs(job && job.net, now);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+// The number the poller shows and the clock judges - ONE definition, because
+// the client's own budget is read against it and two definitions of "worked"
+// is how the browser came to abandon leads the server was still working on.
+const jobWorkedMs = (job, now) => {
+  if (!job || job.phase !== 'running') return 0;
+  const started = job.startedWorkAt || job.startedAt;
+  if (!started) return 0;
+  return Math.max(0, (now - started) - jobGateWaitMs(job, now));
+};
 const researchKillVerdict = (job, now) => {
   if (!job || job.status !== 'running') return false;
   if (job.phase !== 'running') return false;
-  return (now - (job.startedWorkAt || job.startedAt)) > 8 * 60 * 1000;
+  const started = job.startedWorkAt || job.startedAt;
+  const wall = now - started;
+  if (wall > RESEARCH_WALL_CEILING_MS) return true;
+  return jobWorkedMs(job, now) > RESEARCH_WORK_BUDGET_MS;
 };
-const JOB_TTL_MS = 30 * 60 * 1000;
+// Said in minutes wherever an operator reads it, so the sentence can never
+// disagree with the setting - the two-hand-kept-copies disease, in prose.
+const _mins = (ms) => Math.round(ms / 60000);
+// The backstop for a timer that never fired. Past the wall ceiling by a clear
+// margin so it can only ever catch a job the clock itself has already given up
+// on — never one the clock is deliberately still running.
+const JOB_STALE_AFTER_MS = RESEARCH_WALL_CEILING_MS + 5 * 60 * 1000;
+const JOB_TTL_MS = Math.max(30 * 60 * 1000, JOB_STALE_AFTER_MS + 5 * 60 * 1000);
 const JOB_MAX = 200;
 
 const _sweepJobs = () => {
@@ -40856,17 +41146,22 @@ const _sweepJobs = () => {
     // a slot that never frees, which is exactly the "one lead, nothing else
     // running, still failed" case.
     //
-    // Ten minutes is past the 8-minute timeout, so this only ever catches jobs
-    // whose timer did not fire — a dyno pause, a swallowed error, a timer lost
-    // to unref. It frees the slot and says so rather than failing in silence.
+    // This only ever catches jobs whose own timer did not fire — a dyno pause, a
+    // swallowed error, a timer lost to unref. It frees the slot and says so
+    // rather than failing in silence.
+    //
+    // It is DERIVED from the wall ceiling, never written as its own number: it
+    // was 10 minutes against an 8-minute timeout, and the day the timeout
+    // learned to exclude gate wait, a hardcoded 10 would have swept live leads
+    // out from under the clock that was deliberately still letting them run.
     if (j.status === 'running' && j.phase === 'running') {
       const workAge = now - (j.startedWorkAt || j.startedAt || now);
-      if (workAge > 10 * 60 * 1000) {
+      if (workAge > JOB_STALE_AFTER_MS) {
         j.status = 'error';
         j.phase = 'dead';
         j.workDone = true;
         j.finishedAt = now;
-        j.error = 'This run stopped reporting and was cleared after 10 minutes so it would stop holding a slot. Re-run this lead.';
+        j.error = `This run stopped reporting and was cleared after ${_mins(JOB_STALE_AFTER_MS)} minutes so it would stop holding a slot. Re-run this lead.`;
         console.log(`\u26d4 JOB ${id} [${j.company}]: STALE \u2014 still marked running after ${Math.round(workAge / 60000)} minutes with no result. Cleared so the next lead can start. This is the fault that made single leads fail with nothing else running.`);
       }
     }
@@ -41052,10 +41347,22 @@ app.post('/api/research-async', (req, res) => {
   // Eight minutes is well past the slowest legitimate run observed (266s) and
   // guarantees the client always gets an answer, even when the answer is that we
   // gave up.
+  // ══ THE TIMER ASKS THE CLOCK; IT DOES NOT KEEP ITS OWN ═══════════════════
+  // This was ONE setTimeout for a fixed eight minutes, armed at work start. The
+  // poller beside it asked researchKillVerdict. Two hand-kept copies of one
+  // rule, and the day the rule learned to exclude gate wait, only one of them
+  // learned it - so a lead the poller was deliberately still running would have
+  // been killed by a timer that had never heard of the change.
+  //
+  // It re-arms and asks the shared verdict instead, so there is exactly one
+  // definition of "this lead has had long enough" in the process and the timer
+  // cannot drift from it. The tick is short enough that the kill is prompt and
+  // long enough that it costs nothing on a fifty-lead day.
   let _jobTimer = null;
   const _armTimeout = () => {
-    _jobTimer = setTimeout(() => {
-    if (job.status === 'running') {
+    const _tick = () => {
+      if (job.status !== 'running' || job.workDone) return;
+      if (!researchKillVerdict(job, Date.now())) { _rearm(); return; }
       job.status = 'error';
       // The old sentence here blamed running several leads at once and told the
       // operator to run them one at a time. That was a guess, it was wrong, and
@@ -41064,12 +41371,16 @@ app.post('/api/research-async', (req, res) => {
       // call in the process 7.5 seconds apart, so two leads ran out of clock
       // with their pages still arriving. A message naming the wrong cause costs
       // exactly what one naming no cause costs, which this file records twice.
-      job.error = 'This run passed 8 minutes of WORK without finishing and was stopped. Everything already measured was still paid for. Check the run\'s \u23f1 TIME line: if most of it was spent waiting for a Firecrawl browser, the throttle is ours and FC_CONCURRENCY is the dial; if it was spent inside their calls, the site itself is slow. Re-running this one lead is safe.';
+      const _blocked = Math.round(jobGateWaitMs(job, Date.now()) / 1000);
+      job.error = `This run passed ${_mins(RESEARCH_WORK_BUDGET_MS)} minutes of WORK without finishing and was stopped. Everything already measured was still paid for. Waiting for a free Firecrawl browser is NOT counted against that budget, so this is the site or the calls themselves being slow, not our own queue. Re-running this one lead is safe.`;
       job.finishedAt = Date.now();
-      console.log(`\u26d4 JOB ${id} [${job.company}]: TIMED OUT after 8 minutes and was closed so the client stops polling. Credits already spent are not recoverable.`);
-    }
-    }, 8 * 60 * 1000);
-    if (_jobTimer && _jobTimer.unref) _jobTimer.unref();
+      console.log(`\u26d4 JOB ${id} [${job.company}]: TIMED OUT after ${_mins(RESEARCH_WORK_BUDGET_MS)} minutes of WORK (${_blocked}s of waiting for a Firecrawl browser was excluded) and was closed so the client stops polling. Credits already spent are not recoverable.`);
+    };
+    const _rearm = () => {
+      _jobTimer = setTimeout(_tick, RESEARCH_KILL_TICK_MS);
+      if (_jobTimer && _jobTimer.unref) _jobTimer.unref();
+    };
+    _rearm();
   };
 
   // Wait for a slot before starting. Polling keeps the client contract identical.
@@ -41228,7 +41539,10 @@ app.post('/api/research-async', (req, res) => {
       job.phase = 'running';
       job.startedWorkAt = Date.now();
       _armTimeout();
-      return runResearch(req, _captureRes(job));
+      // The job is the sink: runResearch hands back a live reference to this
+      // lead's own network ledger, which is what lets the clock below tell
+      // WORKING from QUEUEING.
+      return runResearch(req, _captureRes(job), job);
     })
     .finally(() => { job.workDone = true; clearTimeout(_jobTimer); })
     .catch((e) => {
@@ -41265,13 +41579,24 @@ app.get('/api/research-job/:id', (req, res) => {
     // continent. A queued job is never killed here; a working job is killed on
     // time actually WORKED. Under a 40-lead batch the queue wait is the COMMON
     // case, so before this fix batch mode would have killed lead 3 through 40.
-    const workedMs = job.phase === 'running' ? (Date.now() - (job.startedWorkAt || job.startedAt)) : 0;
-    if (researchKillVerdict(job, Date.now())) {
+    // ══ ONE DEFINITION OF "WORKED", SERVED TO BOTH CLOCKS ═══════════════════
+    // The browser has its own budget and reads THIS number against it. It used
+    // to be raw elapsed-since-work-start, which includes the lead's wait in our
+    // own Firecrawl gate - so raising RESEARCH_CONCURRENCY from 3 to 6 doubled
+    // the wait, and on 2026-08-22 four leads of five were declared dead at
+    // exactly that boundary with every credit already spent. Queueing is not
+    // hanging, here and in the browser both, because both read one number.
+    const _now = Date.now();
+    const workedMs = jobWorkedMs(job, _now);
+    const gateWaitMs = jobGateWaitMs(job, _now);
+    if (researchKillVerdict(job, _now)) {
       job.status = 'error';
-      job.error = 'Research worked for 8 minutes without finishing and was stopped. Everything already measured was still paid for and is cached, so a re-run is cheap. The usual cause is a site that never responds or Firecrawl rate-limiting mid-run.';
-      job.finishedAt = Date.now();
+      job.error = `Research worked for ${_mins(RESEARCH_WORK_BUDGET_MS)} minutes without finishing and was stopped. Everything already measured was still paid for and is cached, so a re-run is cheap. Time spent waiting for a free Firecrawl browser is NOT counted against that budget, so the usual cause is a site that never responds or a call that hangs mid-run.`;
+      job.finishedAt = _now;
     }
-    return res.json({ status: job.status, phase: job.phase || 'running', elapsedMs, workedMs, error: job.error || null });
+    // workBudgetMs travels so the browser never has to hold its own copy of the
+    // server's number - the two-hand-kept-copies disease, across a network.
+    return res.json({ status: job.status, phase: job.phase || 'running', elapsedMs, workedMs, gateWaitMs, workBudgetMs: RESEARCH_WORK_BUDGET_MS, error: job.error || null });
   }
   return res.json({
     status: job.status,
@@ -51612,7 +51937,22 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // "A check that cannot fail is not a check" — applied to the component that
   // decides whether the audit can see. This one BUILDS a palette PNG of the
   // shape Firecrawl actually sent us and pushes it through the real function.
+  // ══ AND IT MUST NOT FREEZE THE PROCESS WHILE IT DOES IT ══════════════════
+  // This is the single longest thing that happens at boot: eight 9000x300 PNGs
+  // built, deflated, decoded, scaled and decoded again, and every millisecond
+  // of it blocks the event loop. Measured at 8.0s here and Render boots about
+  // 2.7x slower, so it is roughly twenty seconds during which this process
+  // cannot answer a single HTTP request - which is exactly what Render's
+  // "No open HTTP ports detected" line was reporting. The check was right and
+  // the shape was wrong.
+  //
+  // It yields between shapes now. bootHold keeps the verdict open until it has
+  // reported, so a late failure is still counted and /healthz still refuses to
+  // go green early - the same contract as the other async checks.
+  bootHold();
+  (async () => {
   try {
+    const _breathe = () => new Promise((r) => setImmediate(r));
     const _fails = [];
     if (!_pngscale) {
       _fails.push('pngscale.js is not loaded at all, so every over-tall screenshot is dropped and the audit runs blind');
@@ -51659,6 +51999,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
         ['RGBA 8-bit', { w: 9000, h: 300, ct: 6, bd: 8 }],
       ];
       for (const [_name, _spec] of _cases) {
+        await _breathe();
         const _r = _pngscale.fitWithin(_png(_spec), 7800);
         if (_r.skip) { _fails.push(`${_name} was refused — ${_r.skip}`); continue; }
         if (!_r.buffer || !_r.buffer.subarray(0, 8).equals(_SIG)) { _fails.push(`${_name} produced something that is not a PNG`); continue; }
@@ -51670,6 +52011,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       }
       // Interlaced and 16-bit are refused ON PURPOSE and must stay refused —
       // a silent wrong answer here is worse than no image.
+      await _breathe();
       const _il = _png({ w: 9000, h: 300, ct: 2, bd: 8 });
       _il[28] = 1;                                   // IHDR interlace byte
       if (!_pngscale.fitWithin(_il, 7800).skip) _fails.push('an interlaced PNG was accepted — Adam7 is seven sub-images and decoding it as one produces confident nonsense');
@@ -51689,7 +52031,8 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`\u26d4 SCREENSHOT SCALER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
-  }
+  } finally { bootRelease(); }
+  })();
   // ══ SIX RESPONSES FROM FIRECRAWL IS NOT SIX PAGES ═════════════════════════
   // Vin, on the audit screen: "the screenshots were 4 screenshots of the same
   // page — the homepage." The honest answer was that NOTHING in this system
@@ -51994,6 +52337,101 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ AUDIT MONEY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ AND A NUMBER SPELLED OUT WALKED PAST EVERY ONE OF THOSE GATES ════════
+  // CTR, live 2026-08-22: "forty-six dozen reviews" on the call sheet of a
+  // business with 461. Five hundred and fifty-two, said out loud to the owner,
+  // past eleven gates, because the sentence contained no digit at all.
+  try {
+    const _fails = [];
+    const _cut = (t, corpus) => stripSpelledQuantities(t, corpus || '').cut.length > 0;
+    // The live failure.
+    if (!_cut('Forty-six dozen reviews sit on that profile.')) {
+      _fails.push('"forty-six dozen" survives — the exact sentence that reached CTR\'s call sheet');
+    }
+    // Invented scale with no number attached at all.
+    if (!_cut('They have hundreds of five-star reviews.')) {
+      _fails.push('"hundreds of" survives — we never measure a vague scale, so one of these is always invented');
+    }
+    if (!_cut('Dozens of homeowners describe the same thing.')) {
+      _fails.push('"dozens of" survives, and the audit prompt has banned that word in writing for weeks');
+    }
+    // ── AND THE OTHER DIRECTION, WHICH IS THE MORE EXPENSIVE FAILURE ──────
+    // A gate that eats true sentences is one somebody switches off, and it
+    // takes the real assertions beside it. Four shapes that must survive.
+    if (_cut('Twenty-five years in business and still no pricing page.')) {
+      _fails.push('a bare spelled number is being cut — this gate refuses SCALE words, not counting');
+    }
+    if (_cut('We guarantee one hundred percent satisfaction.')) {
+      _fails.push('"one hundred percent" is being cut — it is an idiom, not a count');
+    }
+    if (_cut('Open twenty-four seven for emergencies.')) {
+      _fails.push('"twenty-four seven" is being cut — emergency availability is the ICP\'s normal case');
+    }
+    if (_cut('They list three hundred locations.', 'we counted 300 locations on their own site')) {
+      _fails.push('a scale phrase whose value IS in what we read is still cut — the corpus exemption is gone');
+    }
+    // Only the offending sentence goes, exactly as the money gate behaves.
+    const _r = stripSpelledQuantities('The homepage promises same-day service. Dozens of homeowners agree.', '');
+    if (_r.text !== 'The homepage promises same-day service.') {
+      _fails.push(`the whole field is destroyed rather than the one sentence — got "${_r.text}"`);
+    }
+    // ── THE CALL SITE, because a fixture supplies its own arguments ────────
+    const _n = (...p) => p.join('');
+    const _ssrc = selfSourceNoComments();
+    if (!_ssrc.includes(_n('stripSpelledQuantitiesDeep(parsed[k]', ', _corpus, _sq, 1)'))) {
+      _fails.push('nothing runs this over the audit — the gate exists and no lead passes through it');
+    }
+    if (_fails.length) {
+      console.log(`⛔ SPELLED SCALE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SPELLED SCALE CHECK: a quantity written in WORDS is now a figure like any other. "forty-six dozen", "hundreds of", "dozens of" take their sentence with them; a bare spelled number, "one hundred percent", "twenty-four seven" and a scale we genuinely read are all left standing; and only the offending sentence is removed. Every other figure gate in this file matches digits, which is why 552 reached a call sheet about a business with 461.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SPELLED SCALE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ALTITUDE LINE ASSERTED A RANK IT HAD NEVER READ ══════════════════
+  // The audit prompt hands the model one sentence under the words "THE FIRST
+  // SENTENCE STARTS HERE — THIS EXACT ALTITUDE", chosen by the binding LAYER.
+  // For LEADS it always said "their name sits near the bottom of it", and the
+  // layer says nothing about where they rank: LEADS also binds on a thin Google
+  // profile and on a service page nobody finds. CTR, 2026-08-22: measured #4 of
+  // 20, audit opened on "near the bottom".
+  try {
+    const _fails = [];
+    const _cond = (ctx) => openingConditionFor('search_absence', Object.assign({ city: 'Dallas', trade: 'roofing' }, ctx));
+    const _low = /bottom|last|nowhere|invisible/i;
+    // #4 of 20 — a real position, and not a low one.
+    const _four = _cond({ rank: 4, rankOutOf: 20 });
+    if (_low.test(_four)) _fails.push(`#4 of 20 still opens on a low-position claim — "${_four}"`);
+    if (!/3 other names/.test(_four)) _fails.push(`#4 of 20 does not state the measured gap — "${_four}"`);
+    if (/1 other names/.test(_cond({ rank: 2, rankOutOf: 20 }))) _fails.push('the count is not agreeing with its own noun');
+    // Top three: there is no honest LEADS sentence here, so it says nothing.
+    if (_cond({ rank: 2, rankOutOf: 20 })) _fails.push('a business ranking #2 is still handed a visibility opening');
+    if (_cond({ rank: 1, rankOutOf: 20 })) _fails.push('a business ranking #1 is still handed a visibility opening');
+    // A measured, confirmed absence is the one case that may say it plainly.
+    if (!/not on/i.test(_cond({ rankAbsent: true }))) _fails.push('a CONFIRMED absence no longer opens on absence — the gate was widened until it says nothing');
+    // A position we deliberately suppressed may not be implied.
+    if (_cond({ rank: 12, rankOutOf: 20, rankUnstable: true })) _fails.push('a suppressed position is still stated — two draws disagreed and we said so');
+    // Never measured at all: silence, not a guess.
+    if (_cond({})) _fails.push('a lead with no rank measurement is still handed a position claim');
+    // Below six results it is arithmetic, not a finding.
+    if (_cond({ rank: 4, rankOutOf: 5 })) _fails.push('a five-result field still produces a ranking sentence');
+    // ── THE CALL SITE ─────────────────────────────────────────────────────
+    const _an = (...p) => p.join('');
+    const _asrc = selfSourceNoComments();
+    if (!_asrc.includes(_an('rankAbsent: !!(localRank && localRank.checked', ' && !localRank.found && localRank.absenceConfirmed)'))) {
+      _fails.push('the prompt no longer hands the measured rank to the opening line — every LEADS lead gets the same sentence again');
+    }
+    if (_fails.length) {
+      console.log(`⛔ ALTITUDE RANK CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ ALTITUDE RANK CHECK: the first-sentence altitude for a LEADS lead is built from the measured position, not from the layer. #4 of 20 states the three names above them; #1 and #2 are handed nothing rather than something false; a confirmed absence still says so plainly; and a suppressed, unmeasured or five-result rank produces silence. This line is given to the model as the sentence to open on, so a false altitude line is a false first sentence by design.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ALTITUDE RANK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A LIMIT OF OUR READ IS NOT AN ASSERTION IN THE COPY ═══════════════════
@@ -54214,10 +54652,83 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     const _busySites = (_qsrc.match(/_jobs\.values\(\)\]\.filter\(j => j\.phase === 'running' && j\.workDone !== true/g) || []).length;
     if (_busySites < 2) _fails.push(`only ${_busySites} of 2 slot-count sites key on pending WORK — a poller-killed job frees its slot while still making paid calls`);
     if (!/\.finally\(\(\) => \{ job\.workDone = true;/.test(_qsrc)) _fails.push('nothing sets workDone when the work ends — every slot would leak permanently');
+    // ══ AND WAITING IN OUR OWN GATE IS NOT WORKING EITHER ═════════════════
+    // 2026-08-22, live: RESEARCH_CONCURRENCY went 3 → 6 and four leads of five
+    // died at "passed 8 minutes of WORK". Their own ⏱ TIME line said why — at
+    // 3 concurrent one lead measured 409s of work of which 138s was queued in
+    // OUR Firecrawl gate; double the slots and the queueing roughly doubles,
+    // 271 + 276 = 547s, past a 480s budget. The leads were fine, the sites were
+    // fine, and the clock was charging them for our own politeness. Same shape
+    // as the Doc Tony failure one level down: the queue in front of the gate
+    // rather than the queue in front of the worker.
+    const _blockedJob = (workedMin, blockedMin) => ({
+      status: 'running', phase: 'running',
+      startedAt: _now - workedMin * _min, startedWorkAt: _now - workedMin * _min,
+      net: { blockedMs: blockedMin * _min, waiting: 0, waitingSince: null },
+    });
+    // Nine minutes alive, four of them stuck behind our own throttle: five
+    // minutes of real work, so it lives. This is the 2026-08-22 lead exactly.
+    if (researchKillVerdict(_blockedJob(9, 4), _now)) {
+      _fails.push('a lead that spent 4 of its 9 minutes waiting for OUR Firecrawl gate is still killed — raising concurrency kills leads again');
+    }
+    // Nine minutes alive with nothing blocked: still killed. The guard guards.
+    if (!researchKillVerdict(_blockedJob(9, 0), _now)) {
+      _fails.push('a lead working 9 unblocked minutes is no longer killed — the hang guard was deleted, not corrected');
+    }
+    // Alive past the wall ceiling with ALL of it blocked: still killed. Gate
+    // wait can excuse a budget; it can never make a lead immortal.
+    const _wallMin = Math.ceil(RESEARCH_WALL_CEILING_MS / _min) + 5;
+    if (!researchKillVerdict(_blockedJob(_wallMin, _wallMin), _now)) {
+      _fails.push('a lead alive past the wall ceiling survives because it was blocked the whole time — gate wait must excuse the WORK budget, never the wall');
+    }
+    // A lead blocked RIGHT NOW reads as blocked now, not only once released.
+    // Without this the clock kills exactly the lead that is still waiting.
+    const _liveLed = { blockedMs: 0, waiting: 1, waitingSince: _now - 4 * _min };
+    if (netBlockedMs(_liveLed, _now) < 4 * _min - 1) {
+      _fails.push('a lead currently stuck in the gate reads as zero blocked time — the kill fires on the one lead that is still waiting');
+    }
+    // Overlapping waits are ONE wait. Seven concurrent requests waiting a
+    // minute is a minute of wall clock, not seven; subtracting the SUM would
+    // make the budget unreachable and the hang guard would never fire.
+    const _ovl = {};
+    netGateEnter(_ovl); netGateEnter(_ovl); netGateEnter(_ovl);
+    netGateLeave(_ovl); netGateLeave(_ovl); netGateLeave(_ovl);
+    if (!(netBlockedMs(_ovl, Date.now()) < 1000)) {
+      _fails.push('three overlapping waits report as three separate waits — the union is being summed');
+    }
+    if (_ovl.waiting !== 0 || _ovl.waitingSince) {
+      _fails.push('the gate counter does not return to zero after the last release — every later lead would read as permanently blocked');
+    }
+    // ══ AND THE CALL SITES, BECAUSE A FIXTURE SUPPLIES ITS OWN ARGUMENTS ═══
+    // A check that does not assert its call site is half a check: all of the
+    // above passes on a build where the job is never handed its ledger, where
+    // the timer keeps its own number, or where the browser never learns the
+    // budget. Needles assembled at runtime, comments stripped, because this
+    // file records seven separate times a literal needle found itself.
+    const _n = (...p) => p.join('');
+    const _csrc = selfSourceNoComments();
+    if (!_csrc.includes(_n('runResearch(req, _captureRes(job)', ', job)'))) {
+      _fails.push('the job is never handed its own network ledger — jobGateWaitMs reads zero forever and the exclusion is a no-op');
+    }
+    if (!_csrc.includes(_n('setTimeout(_tick', ', RESEARCH_KILL_TICK_MS)'))) {
+      _fails.push('the job timer no longer re-arms against the shared verdict — it is keeping a second, private copy of the budget');
+    }
+    if (/setTimeout\([^)]*,\s*8 \* 60 \* 1000\)/.test(_csrc)) {
+      _fails.push('a hardcoded eight-minute timer is back beside the shared verdict — two clocks again');
+    }
+    if (!_csrc.includes(_n('workBudgetMs: RESEARCH', '_WORK_BUDGET_MS'))) {
+      _fails.push('the poller no longer sends its budget to the browser — the browser falls back to its own copy and abandons leads the server is still working on');
+    }
+    if (!_csrc.includes(_n('netGateEnter(_led', ')'))) {
+      _fails.push('fcSerial no longer opens a blocked interval — nothing measures the wait the clock is meant to exclude');
+    }
+    if (!(JOB_STALE_AFTER_MS > RESEARCH_WALL_CEILING_MS)) {
+      _fails.push('the stale sweep fires at or before the wall ceiling — it would clear live leads out from under their own clock');
+    }
     if (_fails.length) {
       console.log(`⛔ QUEUE CLOCK CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ QUEUE CLOCK CHECK: the 8-minute research budget is 8 minutes of WORK — a queued lead is never killed for waiting, a working lead is measured from its first call, and a genuinely hung run is still stopped. The batch path depends on this: with 40 leads and ${RESEARCH_CONCURRENCY} working slot(s), queue wait is the common case and the old clock would have killed every lead from the third onward.`);
+      console.log(`✓ QUEUE CLOCK CHECK: the ${_mins(RESEARCH_WORK_BUDGET_MS)}-minute research budget is ${_mins(RESEARCH_WORK_BUDGET_MS)} minutes of WORK — a queued lead is never killed for waiting, a lead stuck behind our own Firecrawl gate is not charged for it (live and after release, and overlapping waits count once), a genuinely hung run is still stopped, and nothing survives the ${_mins(RESEARCH_WALL_CEILING_MS)}-minute wall. One verdict serves the timer, the poller and the browser: the job is handed its own ledger, the timer re-arms against the shared rule instead of keeping a private eight minutes, and the budget travels to the browser so it cannot hold a stale copy. With 40 leads and ${RESEARCH_CONCURRENCY} working slot(s), queue wait is the common case.`);
     }
   } catch (e) {
     console.log(`⛔ QUEUE CLOCK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -57132,7 +57643,7 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
   // that does not drift, which is why the table is keyed that way.
   const _sayable = hits.filter(h => h && !INTERNAL_ONLY_RUNGS[h.id]);
   if (_sayable.length !== hits.length) {
-    console.log(`\u25cb INTERNAL ONLY [compose-on-demand]: ${hits.length - _sayable.length} of ${hits.length} stored finding(s) are review metrics \u2014 kept for the audit and the call sheet, and not available to this email.`);
+    leadDiag(`\u25cb INTERNAL ONLY [compose-on-demand]: ${hits.length - _sayable.length} of ${hits.length} stored finding(s) are review metrics \u2014 kept for the audit and the call sheet, and not available to this email.`);
   }
   let lead = null;
   let gated = false;

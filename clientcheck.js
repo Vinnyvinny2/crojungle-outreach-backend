@@ -896,6 +896,41 @@ const PENDING = [];
   if (_cli && _warnCalls < 2) fails.push('warnIfStaleClient is not called at both merge call sites, so the server can be newer and the page never says so');
 }
 
+// ══ THE TWO CLOCKS MUST NOT DISAGREE ACROSS THE NETWORK ═════════════════════
+// The browser abandons a lead on its own budget. On 2026-08-22 the server's
+// budget learned to exclude the lead's wait in our own Firecrawl gate and the
+// browser's did not, which is the two-hand-kept-copies disease with the copies
+// on different machines. The server now SENDS its budget; this asserts the
+// browser reads it, and that the outer abort cannot fire before the server's
+// own wall ceiling has had its say.
+{
+  if (!/Number\(st\.workBudgetMs\)/.test(src)) {
+    fails.push('the poller no longer reads workBudgetMs off the server, so the browser is back to its own private copy of the research budget and abandons leads the server is still working on');
+  }
+  const _wallM = (server.match(/RESEARCH_WALL_CEILING_MS[^\n]*?\|\|\s*(\d+) \* 60 \* 1000/) || [])[1];
+  const _abortM = (src.match(/setTimeout\(\(\) => _ac\.abort\(\), (\d+) \* 60 \* 1000\)/) || [])[1];
+  if (!_wallM) fails.push('server.js no longer declares a wall ceiling in minutes, so nothing can check the browser against it');
+  else if (!_abortM) fails.push('index.html no longer has a single outer abort timeout, so it cannot be checked against the server wall ceiling');
+  // +5 is the stale sweep, which also has to have run before the browser gives up.
+  else if (Number(_abortM) <= Number(_wallM) + 5) {
+    fails.push(`the browser aborts after ${_abortM} minutes and the server works a lead for up to ${_wallM} (swept at ${Number(_wallM) + 5}) — the browser gives up first and throws away a whole paid research cycle`);
+  }
+}
+
+// ══ AND THE BLIND BANNER MUST KNOW WHICH READ IT IS TALKING ABOUT ═══════════
+// "We never read a single page of their website" sat above a confident
+// description of the site's conversion path on CTR, live 2026-08-22. Both were
+// true, of different reads: the page TEXT was empty and the page SOURCE was
+// not. A reader handed a flat contradiction stops believing the whole sheet.
+{
+  if (!/homepageMarkupChars/.test(server)) {
+    fails.push('the server no longer reports how much page SOURCE it read, so the blind banner is back to deciding from the text alone');
+  }
+  if (!/homepageMarkupChars/.test(src)) {
+    fails.push('the blind banner no longer reads the markup measurement, so it says we read nothing on a lead whose forms, tags and booking route were all measured from the source');
+  }
+}
+
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);

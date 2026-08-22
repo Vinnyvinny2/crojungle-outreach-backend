@@ -625,9 +625,21 @@ const corpusWarningFor = (lead) => {
   const thin = c ? (!blind && (Number(c.interiorPages) || 0) === 0) : false;
   if (!c && !l.firecrawlOutOfCredits) return null;
   if (blind) {
-    return 'We never read a single page of their website on this run'
+    // ══ TWO READS, AND SAYING "NONE" WHEN WE HOLD ONE IS ITS OWN FALSEHOOD ══
+    // CTR, live 2026-08-22: this banner said we had read nothing, and the
+    // section beneath it described the site's conversion path in detail. Both
+    // were true — of different reads. The page TEXT was empty and the page
+    // SOURCE was not, and the source is where the tags, the forms, the phone
+    // link and the booking route are all measured. A reader handed a flat
+    // contradiction stops believing the whole sheet, which costs exactly what
+    // the missing warning cost.
+    const markup = (Number((c && c.homepageMarkupChars) || 0) > 500);
+    return (markup
+      ? 'We could not read the WORDS on their site this run — the page came back empty of text — but we did read its SOURCE. So anything below about their copy, their headline or their offer is not a measurement; anything about their forms, tags, phone link or booking route is.'
+      : 'We never read a single page of their website on this run')
       + (l.firecrawlOutOfCredits ? ' (Firecrawl ran out of credits mid-run)' : '')
-      + '. Nothing below about their site is a measurement. Re-run this lead before saying any of it out loud.';
+      + (markup ? ' Re-run this lead before repeating anything about their wording.'
+                : '. Nothing below about their site is a measurement. Re-run this lead before saying any of it out loud.');
   }
   if (l.firecrawlOutOfCredits) {
     return 'Firecrawl ran out of credits during this run, so this audit was built from '
@@ -2664,7 +2676,16 @@ const pollResearchJob = async (jobId, o) => {
   // fire if the server has stopped answering), and a wall-clock backstop for a
   // server that never replies at all. An older server that does not report
   // workedMs falls back to the previous behaviour exactly.
-  const WORK_STOP = 10 * 60 * 1000;
+  // ══ AND THE BROWSER MUST NOT HOLD ITS OWN COPY OF THE SERVER'S BUDGET ════
+  // Ten minutes was written against a server that gave up at eight. On
+  // 2026-08-22 the server's budget learned to exclude the lead's wait in our
+  // own Firecrawl gate and this number did not, so the two disagreed again in
+  // the other direction. The server now SENDS its budget on every poll
+  // (workBudgetMs) and this is only the fallback for an older server, plus a
+  // margin so the browser is always the second to give up, never the first.
+  const WORK_STOP_FALLBACK = 10 * 60 * 1000;
+  const WORK_STOP_MARGIN = 2 * 60 * 1000;
+  let WORK_STOP = WORK_STOP_FALLBACK;
   const TOTAL_STOP = 90 * 60 * 1000;
   let workedMs = 0;
   while (Date.now() - started < TOTAL_STOP && workedMs < WORK_STOP) {
@@ -2683,6 +2704,11 @@ const pollResearchJob = async (jobId, o) => {
     }
     if (st.status === 'running') {
       // A queued job has done no work yet, so it burns none of the work clock.
+      // Neither does time spent waiting for a free Firecrawl browser: the
+      // server excludes that from workedMs before it sends it.
+      if (Number.isFinite(Number(st.workBudgetMs)) && Number(st.workBudgetMs) > 0) {
+        WORK_STOP = Number(st.workBudgetMs) + WORK_STOP_MARGIN;
+      }
       workedMs = Number.isFinite(Number(st.workedMs))
         ? Number(st.workedMs)
         : (st.phase === 'queued' ? 0 : (Date.now() - started));
@@ -2698,7 +2724,7 @@ const pollResearchJob = async (jobId, o) => {
     return { ok: status >= 200 && status < 300, status, json: async () => st.result || {} };
   }
   return { ok: false, status: 504, json: async () => ({ brainFailed: true, reason: workedMs >= WORK_STOP
-    ? 'The server worked on this lead for over ten minutes without finishing, which is past its own abandon point. Re-run this lead.'
+    ? 'The server worked on this lead for longer than its own abandon point and never reported a result. Re-run this lead.'
     : 'This lead was waiting in the queue for an hour and a half and never started. Something is holding the server\u2019s research slots. Re-run this lead.' }) };
 };
 
@@ -6564,7 +6590,14 @@ function ResearchView({
       // one for a polled job. The server abandons a run past 8 minutes and reports
       // it as a real error, and the poll loop hard-stops at 10 — so this only needs
       // to be the outer backstop, not the thing that decides a lead has failed.
-      const _to = setTimeout(() => _ac.abort(), 11 * 60 * 1000);
+      // This must stay ABOVE the server's own wall ceiling (RESEARCH_WALL_CEILING_MS,
+      // 30 minutes by default) AND above its stale sweep (wall + 5), or the
+      // browser cancels a lead the server is still legitimately working on and
+      // throws away everything already paid for. It is a backstop for a server
+      // that has stopped answering at all, which the poll loop's own TOTAL_STOP
+      // also covers - so being generous here costs nothing and being tight
+      // costs a whole research cycle.
+      const _to = setTimeout(() => _ac.abort(), 45 * 60 * 1000);
       // Job queue instead of one long request. The AbortController still works —
       // it now cancels the polling loop rather than a socket the browser may have
       // throttled in a background tab.
