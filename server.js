@@ -12035,7 +12035,13 @@ const HARM_LADDER = [
     // Higher checkability than a rank position, too: "search this and you are
     // not on the page" is binary. He either appears or he does not, and no
     // amount of personalisation changes an absence.
-    test: (m) => m.rankChecked === true && m.rankFound === false,
+    // TWO searches, never one. See the note at checkLocalRankStable: this rung
+    // is harm 96, it produces the most alarming sentence in the file, and a
+    // business sitting near the edge of the twenty-result page is found on one
+    // draw and absent on the next. The head term has bought a second sample
+    // for weeks; the service-page rows pickRankRow PROMOTES over every found
+    // row were still single-draw, and this test could not tell the two apart.
+    test: (m) => m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true,
     // ══ IT IS THE MAP PACK, SO SAY THE MAP PACK ═══════════════════════════
     // This rank comes from the Google Places API — the map results, the box of
     // three businesses at the top of a phone screen. We described it as "the
@@ -13501,6 +13507,13 @@ const resolveMeasurements = ({
     // means for them. rankChecked goes false with everything else, so no rung
     // on either side of the question can fire.
     rankChecked: !!(localRank && localRank.checked) && !_rowMismatch,
+    // Whether a SECOND independent search also failed to find them. Set by
+    // checkLocalRankStable on the head term and by the service loop on the one
+    // row that can be promoted. absent_from_search is harm 96 and cannot be
+    // softened into a band if it is wrong, so it speaks only on two misses -
+    // and when the second look FAILED, the note already said the absence was
+    // unconfirmed while nothing read it.
+    rankAbsenceConfirmed: !_rowMismatch && !!(localRank && localRank.absenceConfirmed),
     rankFound: !_rowMismatch && !!(localRank && localRank.found),
     rank: (!_rowMismatch && localRank && localRank.found) ? num(localRank.rank) : null,
     scanned: (localRank && !_rowMismatch) ? num(localRank.scanned) : null,
@@ -15368,6 +15381,9 @@ const buildEmailEvidence = (ev = {}) => {
   const R = [];   // may be stated AS AN OPINION, marked as ours
   const C = [];   // context only
   const line = (arr, t) => { if (t) arr.push(t); };
+  // The subset of A that is MODEL prose rather than a measurement. See the note
+  // at the one line that fills it.
+  const AM = [];
   const n = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
 
   // ── WHO HE IS ────────────────────────────────────────────────────────────
@@ -15395,7 +15411,20 @@ const buildEmailEvidence = (ev = {}) => {
   // ── WHAT ONLY READING THEIR PAGES COULD FIND ─────────────────────────────
   // Verified against the corpus before they get here, so they are assertable.
   for (const o of (Array.isArray(ev.originalFindings) ? ev.originalFindings : []).slice(0, 3)) {
-    line(A, `FROM THEIR OWN PAGES: ${o.finding}${o.evidence ? ` — their words: "${String(o.evidence).slice(0, 110)}"` : ''}`);
+    // ---- THE ONE ASSERT LINE THAT IS MODEL PROSE ------------------------
+    // Everything else in A is assembled from a measurement. This is the audit
+    // model's own sentence, and verifyOriginalFinding checks only that its
+    // QUOTE appears on a page we read — the sentence around the quote is never
+    // checked against any number. permittedFigures then admitted every digit in
+    // the whole A block under the comment "Everything in it is measured by
+    // construction; that is what the A list IS", so a figure the model invented
+    // licensed itself and could be asserted to the prospect.
+    //
+    // The line stays — it is the only thing in the block that is unique to this
+    // business — and it is recorded here so the licensing can leave it out.
+    const _fromPages = `FROM THEIR OWN PAGES: ${o.finding}${o.evidence ? ` — their words: "${String(o.evidence).slice(0, 110)}"` : ''}`;
+    line(A, _fromPages);
+    AM.push(_fromPages);
   }
 
   // ── WHERE THEY SIT IN SEARCH ─────────────────────────────────────────────
@@ -15483,6 +15512,10 @@ const buildEmailEvidence = (ev = {}) => {
 
   return {
     assertable: A,
+    // What the WRITER may assert is the whole of A. What may LICENSE A FIGURE is
+    // only the part of it we assembled ourselves. Those are different questions
+    // and one list was answering both.
+    assertableMeasured: A.filter(x => !AM.includes(x)),
     myRead: R,
     context: C,
     block: [
@@ -16079,6 +16112,14 @@ const permittedFigures = (opts = {}) => {
   NUMBER_TOKENS(String(opts.count == null ? '' : opts.count)).forEach(n => permitted.add(n));
   return permitted;
 };
+// ---- A MODEL SENTENCE MAY SHARPEN A CLAIM; IT MAY NEVER ADD A NUMBER -----
+// Returns the first digit in a model-written sentence that our own measured
+// figure list does not contain, or '' when every number in it traces. Lifted to
+// module scope so the boot check executes this and not a copy of it.
+const unlicensedFigureIn = (text, figures) => {
+  const ok = permittedFigures({ figures: Array.isArray(figures) ? figures : [] });
+  return NUMBER_TOKENS(String(text == null ? '' : text)).find(t => !ok.has(t)) || '';
+};
 const verifyBrainEmail = (body, opts = {}) => {
   const text = String(body || '').trim();
   if (!text) return { ok: false, why: 'empty' };
@@ -16174,7 +16215,23 @@ const verifyBrainEmail = (body, opts = {}) => {
     // review word in a subject cannot be a different kind of word in a body.
     const _revWord = text.match(/\b(reviews?|reviewers?|ratings?|stars?|star line)\b/i);
     if (_revWord) {
-      const _ours = [opts.spine, opts.earned, opts.evidenceAssert, opts.count, opts.money]
+      // ---- THE MENU IS NOT THE COPY ------------------------------------
+      // This used to include opts.evidenceAssert, and buildEmailEvidence puts
+      // "214 Google reviews at 4.6 stars" into that block on EVERY lead with a
+      // review count. So the word "reviews" was always present and this gate
+      // could never fire on any lead it was written for - and the boot fixture
+      // omitted the field entirely, which is the recorded trap of a check that
+      // only exercises the configuration where nothing can go wrong.
+      //
+      // What is consulted now is what CODE actually wrote into the email: the
+      // spine, the recognition line, the count line, the money line. That is
+      // also exactly what the writer's own brief says - "Do not mention his
+      // reviews, his ratings or his stars unless the FACT above already does" -
+      // so the gate and the instruction finally ask the same question. The one
+      // sentence built on review counts on purpose ("a business with fewer
+      // reviews than yours is ranking above you") is in the spine and still
+      // passes.
+      const _ours = [opts.spine, opts.earned, opts.count, opts.money]
         .map(x => String(x || '')).join(' ').toLowerCase();
       if (!_ours.includes(String(_revWord[0]).toLowerCase())) {
         return { ok: false, why: `says "${_revWord[0]}" and nothing we assembled did — his reviews are how we read the business, not what we say to him. The model raised it on its own, which is the one route the internal-only rule cannot close upstream` };
@@ -31146,7 +31203,46 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
     const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
     for (const svc of services) {
       const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng });
-      if (r.checked) results.push({ ...r, kind: 'their own service page' });
+      if (r.checked) results.push({ ...r, kind: 'their own service page', svc });
+    }
+    // ---- AND AN ABSENCE HERE BUYS A SECOND LOOK TOO -----------------------
+    // pickRankRow PROMOTES an absent service row over every found row, on
+    // purpose: "they publish a page for this and do not appear in the top
+    // twenty for it" is the sharpest SEO fact we can hand an owner, and it is
+    // harm 96, the top of the ladder. But these rows come from checkLocalRank,
+    // the RAW checker - one draw. The head term has bought a second sample
+    // since the day one business returned #3 and #12 minutes apart, and the
+    // comment that bought it says why in as many words: absence "is the one
+    // finding that cannot be softened into a band if it turns out to be wrong".
+    // The service rows were the same claim on the same noisy data with none of
+    // the discipline.
+    //
+    // Only the FIRST absent row is confirmed, because that is the only one
+    // pickRankRow can promote. One extra Places search, on the leads that were
+    // about to make the strongest claim in the system, and none at all on a
+    // lead where every service came back found.
+    const _absent1 = results.find(r => !r.found && r.kind === 'their own service page'
+      && Number.isFinite(Number(r.scanned)) && Number(r.scanned) > 0);
+    if (_absent1) {
+      await new Promise(r => setTimeout(r, 1200));
+      let _again = null;
+      try {
+        _again = await checkLocalRank({ companyName, placeId, website, industry: _absent1.svc, location, placesKey, bizLat, bizLng });
+      } catch (e) { void e; }
+      const _i = results.indexOf(_absent1);
+      if (!_again || !_again.checked) {
+        console.log(`LOCAL RANK [${companyName}]: the second look at "${_absent1.query}" failed, so that absence rests on ONE sample and stays unsayable. It is still on the call sheet as a visibility gap.`);
+      } else if (!_again.found) {
+        results[_i] = { ..._absent1, absenceConfirmed: true,
+          rankNote: 'two independent searches both failed to find them for this service, so the absence is real and sayable' };
+      } else {
+        console.log(`\u21ba SERVICE RANK DISAGREED ON ABSENCE [${companyName}]: the first search did not find them for "${_absent1.query}" and the second returned #${_again.rank}. The absence claim is DROPPED \u2014 it is the highest-harm sentence in the system and it is not true.`);
+        const { rank: _r3, scanned: _sc3, ...durable3 } = _again;
+        void _r3; void _sc3;
+        results[_i] = { ...durable3, kind: 'their own service page', svc: _absent1.svc,
+          found: true, rankStable: false, rankSuppressed: true, rankForScoring: _again.rank,
+          rankNote: `one search did not find them for this service and a second returned #${_again.rank}. No absence claim is permitted \u2014 they ARE in the results \u2014 and no position may be stated either.` };
+      }
     }
   }
 
@@ -32082,6 +32178,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               }
             } catch (e) {
               console.log(`SIGNALS [${company}]: could not parse the page we fetched (${e && e.message}) \u2014 the website rungs stay unmeasured and will claim nothing.`);
+            }
+          }
+          // ---- AND THE MARKUP ITSELF, WHICH THREE READS NEED --------------
+          // htmlSignals and the navigation were both recovered here and
+          // homepageHtml was not, though it is the same markup and it is the
+          // variable three other reads take:
+          //
+          //   mergeAdSignals   the Google Ads tag and the Meta pixel, which
+          //                    gate BOTH spending rungs
+          //   auditSitePages   bookingSourceFor, and PART 4 section 25 is a
+          //                    whole entry about this: a scheduler embed is an
+          //                    <iframe>, which markdown deletes entirely, so
+          //                    without the source a site with online booking
+          //                    reads as phone_only - and bookingMeasured is
+          //                    still stamped true, so no_after_hours (SELLABLE
+          //                    5, the maximum) tells an owner with a booking
+          //                    button that the only way to reach him is a call
+          //   findPhoneNumber  the number on their own page
+          //
+          // Same guard as htmlSignals above: only when Firecrawl gave us
+          // nothing, never over a real scrape. A plain GET executes no
+          // JavaScript, so this is a floor rather than a ceiling - it can only
+          // add evidence a stripped-to-text copy could not carry.
+          if (!homepageHtml) {
+            homepageHtml = String(_siteDownVerdict.html || '');
+            if (homepageHtml) {
+              console.log(`\u26d3 SOURCE RECOVERED [${company}]: the homepage markup Firecrawl could not return is the copy we fetched ourselves, so the booking read, the advertising tags and the phone number are read from real source instead of from tag-stripped text.`);
             }
           }
           // Read the navigation out of the markup BEFORE the tags are stripped.
@@ -33173,7 +33296,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // the "they made it clickable on purpose" source was dead at this call
       // site while rawHtml sat unused in the same scope, reproducing the
       // NO-NUMBER-ON-FILE failure the function was written to end.
-      pageHtml: (typeof rawHtml === 'string' && rawHtml) ? rawHtml : content,
+      // homepageHtml, not rawHtml: it is the one variable that means "the
+      // homepage markup", it is assigned from rawHtml on the normal path, and
+      // on the salvage path it now carries the copy we fetched ourselves.
+      // Reading rawHtml here meant the phone read fell back to stripped text on
+      // every lead Firecrawl could not fetch.
+      pageHtml: homepageHtml || content,
       pageText: [content, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
       companyName: company,
     });
@@ -33772,6 +33900,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // resolveMeasurements. A row that is not us leaves us with no sayable
           // position AND no sayable absence.
           rankChecked: _measured.rankChecked,
+          rankAbsenceConfirmed: _measured.rankAbsenceConfirmed,
           // The position when it was measured but is NOT sayable, so the eight
           // conversion-side rungs keep their traffic damper on a lead whose two
           // rank samples disagreed. Delivered explicitly, because "computed but
@@ -37313,7 +37442,23 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 //
                 // So the arithmetic came back in the FIRST sentence, by a route
                 // that bypassed the only place the strip was applied.
-                if (_sharp && containsReviewRatio(_sharp.finding)) {
+                // ---- IT MAY SHARPEN A CLAIM; IT MAY NOT INTRODUCE A NUMBER --
+                // The comment twenty lines above promises exactly this: "if the
+                // audit says seven and we measured two, 'seven' is not in
+                // permittedFigures and the composed email falls back exactly as
+                // it does today." It was not true. permittedFigures reads
+                // opts.spine, and this line REPLACES the spine - so the swapped
+                // sentence licensed its own digits and a number the audit model
+                // invented could be asserted to the prospect in the FIRST
+                // sentence of the email.
+                //
+                // Checked against the spine's own measured figure list, which is
+                // the same list the verifier uses. A finding with no digits at
+                // all is unaffected, which is most of them.
+                const _sharpBad = _sharp ? unlicensedFigureIn(_sharp.finding, _sp.figures) : '';
+                if (_sharp && _sharpBad) {
+                  console.log(`\u{1F50E} SHARPER CLAIM REFUSED [${company}]: the audit's finding states "${_sharpBad}" and we did not measure it. Keeping the ladder sentence, every figure of which traces. A model sentence may sharpen a claim; it may never introduce a number.`);
+                } else if (_sharp && containsReviewRatio(_sharp.finding)) {
                   console.log(`\u{1F50E} SHARPER CLAIM REFUSED [${company}]: the audit's finding is sharper but states the review arithmetic — "${String(_sharp.finding).slice(0, 70)}". That number is for the call sheet, not the opening line. Keeping the ladder sentence, which is the floor we would have sent anyway.`);
                 } else if (_sharp) {
                   console.log(`\u{1F50E} SHARPER CLAIM [${company}]: the audit's own finding covers the same ground as the ladder rung and quotes their pages. Using "${String(_sharp.finding).slice(0, 76)}" instead of "${String(_sp.claim).slice(0, 46)}". Every figure in it is still checked against what we measured.`);
@@ -41137,7 +41282,9 @@ app.listen(PORT, () => {
     // the search had been run, so the rung could not fire here at all. Both
     // halves of the question are now pinned, on one measurement set.
     const _mGone = resolveMeasurements({
-      localRank: { checked: true, found: false, scanned: 20 },
+      // absenceConfirmed is what a SECOND independent search sets. Without it
+      // this is one noisy Places draw, and the rung must stay silent.
+      localRank: { checked: true, found: false, scanned: 20, absenceConfirmed: true },
       gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
       history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
       reviewsRead: 116, ownerReplyCount: 4,
@@ -41150,6 +41297,25 @@ app.listen(PORT, () => {
       reviewPainTop: 'poor communication during and after surgery',
       reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
     const _goneLead = (_rGone && Array.isArray(_rGone.byHarm) && _rGone.byHarm[0]) ? _rGone.byHarm[0].id : '';
+    // AND ONE DRAW IS NOT AN ABSENCE. Live, this function's own history: one
+    // business returned #3 and #12 minutes apart. Harm 96 on a single sample
+    // tells an owner he is invisible in his own city on the strength of a
+    // measurement the file already refuses to state as a position.
+    const _mOnce = resolveMeasurements({
+      localRank: { checked: true, found: false, scanned: 20 },
+      gbpHealth: { photoCount: 10, reviewRecencyDays: 49 },
+      history: {}, htmlSignals: { checked: true, hasForm: true, formFieldCount: 6 },
+      reviewsRead: 116, ownerReplyCount: 4,
+      sitePagesArg: { booking: 'none_found', bookingMeasured: true, prices: [] },
+      tradeWordArg: 'plastic surgeon',
+      reviewPainArg: { pattern: 'poor communication during and after surgery' },
+      growthConstraintArg: { checked: true, layer: 'THROUGHPUT', condition: 'x' },
+    });
+    const _rOnce = rankHarms({ ..._mOnce, reviewPainCount: 2,
+      reviewPainTop: 'poor communication during and after surgery',
+      reviewCount: 116, rating: 4.4, formFieldCount: 6, bookingMeasured: true, booking: 'none_found' });
+    const _onceHasAbsence = !!(_rOnce && Array.isArray(_rOnce.byHarm)
+      && _rOnce.byHarm.some(x => x && x.id === 'absent_from_search'));
 
     // ══ AND THE REAL CALL SITES, NOT JUST A LITERAL ════════════════════════
     // The check above passes a hand-built object, which is exactly how the
@@ -41183,6 +41349,8 @@ app.listen(PORT, () => {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the harm ladder produced nothing on a lead with a repeating review complaint. When it throws, the whole email falls back to the model writing unassisted and the log says only "harm ladder failed".`);
     } else if (_lead !== 'review_pain_pattern') {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: a lead whose own customers repeat a complaint opened on ${_lead} instead. The strongest finding this system produces is not leading.`);
+    } else if (_onceHasAbsence) {
+      console.log(`\u26d4 LADDER SURVIVAL CHECK: a single Places draw that missed produced absent_from_search anyway. That is harm 96 and the most alarming sentence in the file, built on the one measurement this system already refuses to state as a position \u2014 one business returned #3 and #12 minutes apart.`);
     } else if (_goneLead !== 'absent_from_search') {
       console.log(`\u26d4 LADDER SURVIVAL CHECK: the same business, absent from its own search, opened on ${_goneLead || 'nothing'} instead of absent_from_search. Harm 96 and binary \u2014 he either appears or he does not \u2014 and it can only fire if the resolver reports that the search was actually run.`);
     } else if (!_m.painTheme) {
@@ -42079,6 +42247,63 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- FOUR PLACES A MODEL SENTENCE OR A BLANK VARIABLE COULD SPEAK -------
+  // Each of these was live on 2026-08-22 and none of them had a guard.
+  try {
+    const _fails = [];
+
+    // 1. A MODEL SENTENCE MAY NOT INTRODUCE A NUMBER. SHARPER CLAIM replaces
+    //    the ladder's spine with the audit's own finding, and the comment above
+    //    it promised "this can sharpen the claim; it cannot introduce a number"
+    //    while permittedFigures read opts.spine - the sentence it had just been
+    //    replaced with. It licensed its own digits.
+    if (unlicensedFigureIn('their booking page has been down for 47 days', ['reviews: 214']) !== '47') {
+      _fails.push('a digit nothing measured passes as licensed, so the audit model can put an invented number in the FIRST sentence of a cold email');
+    }
+    if (unlicensedFigureIn('214 people have reviewed them', ['reviews: 214'])) {
+      _fails.push('a figure we DID measure reads as invented, which would refuse every true claim and drop the lead to the flat template');
+    }
+    if (unlicensedFigureIn('their contact page asks for information before anyone can call', [])) {
+      _fails.push('a sentence with no numbers in it at all is being refused');
+    }
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('_sharpBad = _sharp ? unlicensed', 'FigureIn(_sharp.finding, _sp.figures)'))) {
+        _fails.push('the sharper-claim swap no longer checks the finding against our measured figures, so the promise written above it is false again');
+      }
+      // 2. THE FIGURE LICENCE READS THE MEASURED HALF OF THE ASSERT BLOCK.
+      if (!_s.includes(_n('buildEmailEvidence(_evidence).assertable', 'Measured'))) {
+        _fails.push('the verifier is handed the whole ASSERT block for figure licensing again, and one line of it is the audit model\'s own prose');
+      }
+      // 3. THE SALVAGED HOMEPAGE MARKUP REACHES THE THREE READS THAT NEED IT.
+      //    htmlSignals and the navigation were both recovered from the copy we
+      //    fetched ourselves and homepageHtml was not - so on every lead
+      //    Firecrawl could not fetch, the booking read ran on tag-stripped text
+      //    with bookingMeasured still stamped true, and no_after_hours (SELLABLE
+      //    5) told owners with a booking button that the only way in is a call.
+      if (!_s.includes(_n('homepageHtml = String(_siteDown', 'Verdict.html || \'\');'))) {
+        _fails.push('the homepage markup we fetched ourselves is no longer kept, so the booking read, the advertising tags and the phone number all run on tag-stripped text whenever Firecrawl comes back empty');
+      }
+      if (!_s.includes(_n('pageHtml: homepage', 'Html || content,'))) {
+        _fails.push('the phone read is back on a variable that only exists on the Firecrawl path');
+      }
+      // 4. AN ABSENT SERVICE ROW BUYS A SECOND SEARCH. pickRankRow PROMOTES
+      //    that row over every found row and it produces harm 96 - the head
+      //    term has bought a second sample for weeks and this one had not.
+      if (!_s.includes(_n('results[_i] = { ..._absent1, absence', 'Confirmed: true,'))) {
+        _fails.push('an absent service-page row no longer buys a second search, so the highest-harm sentence in the system rests on one noisy Places draw again');
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 MODEL PROSE AND BLANK INPUT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`\u2713 MODEL PROSE AND BLANK INPUT CHECK: a sentence the audit model wrote can sharpen the opening claim and can never add a number to it; the figure licence reads only the half of the ASSERT block we assembled ourselves; the homepage markup we fetch when Firecrawl fails reaches the booking, advertising and phone reads instead of leaving them on tag-stripped text; and an absent service-page row buys the second search the head term has bought for weeks before it can claim harm 96.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 MODEL PROSE AND BLANK INPUT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ---- HIS REVENUE IS NOT OUR FEE -----------------------------------------
@@ -47987,7 +48212,23 @@ app.listen(PORT, () => {
     // refusal here costs a draft and nothing else.
     {
       const _spine = 'they do not come up in the map results for plumber in dallas';
-      const _opts = { spine: _spine, figures: ['9'], trade: 'plumber', earned: '', count: '', money: '' };
+      // ---- THE FIXTURE MUST BE THE PRODUCTION CONFIGURATION ---------------
+      // This used to omit evidenceAssert entirely, which is the ONE
+      // configuration in which the gate could fire. In production the compose
+      // route always passes that block, and buildEmailEvidence writes
+      // "214 Google reviews at 4.6 stars" into it on every lead with a review
+      // count - so the word was always present, the gate never fired on any
+      // lead it was written for, and this check went green on every boot.
+      // Built by the real function, not hand-written, so it cannot drift.
+      const _evReal = buildEmailEvidence({
+        measured: { reviewCount: 214, rating: 4.6, ownerReplies: 30, reviewsRead: 120 },
+        trade: 'plumber',
+      });
+      const _evAssertReal = (_evReal.assertableMeasured || []).join(' ');
+      if (!/review/i.test(_evAssertReal)) {
+        _fails.push('the ASSERT block no longer mentions reviews at all, so this fixture is not the production configuration any more and the gate below is being tested in the one shape where it cannot fail');
+      }
+      const _opts = { spine: _spine, figures: ['9'], trade: 'plumber', earned: '', count: '', money: '', evidenceAssert: _evAssertReal };
       // Paragraph breaks are not decoration here: verifyBrainEmail refuses more
       // than two sentences in one block, because on a phone that is a grey
       // rectangle. The fixture has to be a shape the gate accepts, or it fails
@@ -47998,6 +48239,33 @@ app.listen(PORT, () => {
       const _dirty = verifyBrainEmail(_mk('Your reviews are strong, which makes it stranger.'), _opts);
       if (_dirty.ok) _fails.push('the model introduced his reviews on its own and the body passed — the audit is full of reviews and this is the only gate between it and the inbox');
       // And when WE put the word there on purpose, it must be allowed through.
+      // ---- AND MODEL PROSE IN THE ASSERT BLOCK MAY NOT LICENSE A FIGURE ---
+      // One line of that block is the audit model's own sentence, and
+      // verifyOriginalFinding checks only that its QUOTE is on a page we read -
+      // never the numbers in the sentence around it. permittedFigures admitted
+      // the whole block under "Everything in it is measured by construction",
+      // so an invented digit licensed itself into an email.
+      {
+        const _withProse = buildEmailEvidence({
+          measured: { reviewCount: 214, rating: 4.6 },
+          trade: 'plumber',
+          originalFindings: [{ finding: 'their booking page has been down for 47 days', evidence: 'book online' }],
+        });
+        const _all = (_withProse.assertable || []).join(' ');
+        const _meas = (_withProse.assertableMeasured || []).join(' ');
+        if (!/47/.test(_all)) {
+          _fails.push('the audit\'s own finding is no longer shown to the writer at all - that is the only line in the block unique to this business');
+        }
+        if (/47/.test(_meas)) {
+          _fails.push('a number that exists only in the audit model\'s own sentence is still licensing itself as a permitted figure, so a digit nothing measured can be asserted to the prospect');
+        }
+        if (!permittedFigures({ evidenceAssert: _meas }).has('214')) {
+          _fails.push('the measured half of the ASSERT block stopped licensing its own measured figures, which would refuse true numbers and drop every lead to the flat template');
+        }
+        if (permittedFigures({ evidenceAssert: _meas }).has('47')) {
+          _fails.push('the invented figure is permitted through the measured block');
+        }
+      }
       const _ourSpine = { ..._opts, spine: 'a business with fewer reviews than theirs is ranking above them for plumber in dallas' };
       const _allowed = verifyBrainEmail(
         'Dave, a business with fewer reviews than yours is ranking above you for plumber in dallas.'
@@ -55452,8 +55720,13 @@ app.post('/api/compose-email', async (req, res) => {
           // The exact assertable lines the writer's brief contained — derived
           // from the same evidence object, so the brief and the allowlist are
           // one list read twice rather than two lists maintained apart.
+          // assertableMeasured, not assertable. This value's only job in the
+          // verifier is to license figures, and the full A block carries one
+          // line of MODEL prose whose digits nothing has ever checked. The
+          // writer still SEES the whole block - it reaches the prompt through
+          // .block, not through here.
           _evAssert = (() => {
-            try { return (buildEmailEvidence(_evidence).assertable || []).join(' '); }
+            try { return (buildEmailEvidence(_evidence).assertableMeasured || []).join(' '); }
             catch (e) { return ''; }
           })();
           const _v = _written ? verifyBrainEmail(_written, {
