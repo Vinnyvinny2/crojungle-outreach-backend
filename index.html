@@ -2057,7 +2057,10 @@ const researchViaQueue = async (body, opts) => {
 // they are on, a lead whose audit contradicts its own measurements is reported
 // as BLOCKED rather than quietly left with its previous draft standing.
 const BATCH_DEFAULT_SIZE = 50;
-const BATCH_CONCURRENCY = 3;
+// RAISED 3 -> 6 alongside RESEARCH_CONCURRENCY on the server, 2026-08-22.
+// These two must move together: the client pool decides how many leads are
+// ever in flight, so a server raised on its own changes nothing for a batch.
+const BATCH_CONCURRENCY = 6;
 
 // ══ WHERE THE RUN ACTUALLY IS ══════════════════════════════════════════════
 // The panel used to hold ONE name while the runner runs three leads at once, so
@@ -7020,19 +7023,13 @@ function ResearchView({
             onClick: () => { setExportPick(new Set(done.map(x => x.id))); setExportOpen({ scope: 'all' }); },
           }, 'Export audits\u2026');
         })(),
-        // ── THE ONLY EVIDENCE THAT IS NOT INFERENCE ────────────────────────
-        // /api/call-outcomes has grouped every logged call by the finding that
-        // opened it since section 35 shipped, with a CSV mode - and nothing in
-        // this file could reach it, so the one report the whole quality
-        // question waits on was invisible. Forty logged conversations is more
-        // evidence than this project has accumulated in its life; a report
-        // nobody can open produces none of it.
-        React.createElement('button', {
-          className: 'btn btn-sm btn-g',
-          style: { marginTop: 6, width: '100%' },
-          title: 'Every logged call, grouped by the finding that opened it. Rates are over conversations, not dials; under twelve conversations it says UNREADABLE out loud.',
-          onClick: () => { try { window.open(BACKEND + '/api/call-outcomes?format=csv', '_blank'); } catch (e) { console.warn(e); } },
-        }, 'Call outcomes \u2014 report (CSV)'),
+        // The call-outcome CSV button was removed on 2026-08-22 at the owner's
+        // request: he will not use it. The ROUTE stays - /api/call-outcome
+        // still records an outcome against the finding that opened the call,
+        // and /api/call-outcomes still serves the grouped report to anyone who
+        // opens the URL - because that pairing is the only evidence in this
+        // project that is not the system grading itself. Only the sidebar
+        // button is gone.
         // ══ "IT SAID EXPORT 4 AUDITS" AFTER A THREE-LEAD RUN ═══════════════
         // It was right and it read as a miscount: the fourth lead was audited
         // in an earlier session and is still in the pipeline. The button is not

@@ -568,6 +568,23 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
   let inFlight = 0;
   let lastStart = 0;
   let pausedUntil = 0;
+  // ══ ONE ENDPOINT'S LIMIT IS NOT THE ACCOUNT'S LIMIT ═══════════════════════
+  // Firecrawl publishes a DIFFERENT per-minute limit for each endpoint, and
+  // says which in the header of that endpoint's own response. Live on the
+  // 2026-08-22 five-lead run, one run reported three of them:
+  //   "their header says 10 request(s)/minute"    -> gap 350ms to 7500ms
+  //   "their header says 5000 request(s)/minute"  -> gap 7500ms to 350ms
+  //   "their header says 500 request(s)/minute"
+  // The gap was global, so whichever answered last set the pace for everything.
+  // A 10/minute endpoint therefore spaced every SCRAPE 7.5 seconds apart on a
+  // plan that allows 5000 of them a minute — and one lead makes about fourteen
+  // Firecrawl calls. That is minutes of pure waiting per lead, and it is the
+  // largest single cause of "the audits are taking way too long".
+  // So the pace is per endpoint, which is the thing Firecrawl actually limits.
+  // The BROWSER cap stays global, because that is an account-wide resource,
+  // and a 429 still holds the WHOLE gate, because that is a real account-wide
+  // signal that we are pushing too hard.
+  const lastStartByKind = new Map();
   const waiting = [];
   // ══ A 429 HAS TO STOP THE GATE, NOT ONE REQUEST ═════════════════════════
   // Live, the first 50-batch rehearsal: eleven "FIRECRAWL RATE LIMITED" lines
@@ -590,19 +607,40 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
     const c = typeof concurrency === 'function' ? Number(concurrency()) : Number(concurrency);
     return Number.isFinite(c) && c >= 1 ? c : 1;
   };
-  const gapNow = () => {
-    const g = typeof minGapMs === 'function' ? Number(minGapMs()) : Number(minGapMs);
+  const gapNow = (kind) => {
+    const g = typeof minGapMs === 'function' ? Number(minGapMs(kind)) : Number(minGapMs);
     return Number.isFinite(g) && g >= 0 ? g : FC_MIN_GAP_MS;
+  };
+  // The first job whose OWN endpoint is ready starts. Scanning rather than
+  // taking the head: with one queue and per-endpoint pacing, a scrape waiting
+  // on a slow /search's clock would be the same defect wearing a queue.
+  const readyIndex = (now) => {
+    for (let i = 0; i < waiting.length; i++) {
+      const k = waiting[i].kind || 'other';
+      if (now - (lastStartByKind.get(k) || 0) >= gapNow(k)) return i;
+    }
+    return -1;
+  };
+  const nextWakeMs = (now) => {
+    let soonest = Infinity;
+    for (const job of waiting) {
+      const k = job.kind || 'other';
+      const due = (lastStartByKind.get(k) || 0) + gapNow(k) - now;
+      if (due < soonest) soonest = due;
+    }
+    return Number.isFinite(soonest) ? Math.max(5, soonest) : 5;
   };
   const pump = () => {
     while (inFlight < capNow() && waiting.length) {
       const held = pausedUntil - Date.now();
       if (held > 0) { setTimeout(pump, held + 20); return; }
-      const gap = gapNow() - (Date.now() - lastStart);
-      if (gap > 0) { setTimeout(pump, gap); return; }
-      const job = waiting.shift();
+      const now = Date.now();
+      const idx = readyIndex(now);
+      if (idx < 0) { setTimeout(pump, nextWakeMs(now)); return; }
+      const job = waiting.splice(idx, 1)[0];
       inFlight++;
       lastStart = Date.now();
+      lastStartByKind.set(job.kind || 'other', lastStart);
       // The spacing this gate promises is between THESE moments. Anything that
       // measures later than this is measuring the event loop as well.
       if (onStart) { try { onStart(lastStart); } catch (e) { void e; } }
@@ -615,8 +653,8 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
         .finally(() => { inFlight--; pump(); });
     }
   };
-  const gate = (fn) => new Promise((resolve, reject) => {
-    waiting.push({ fn, resolve, reject });
+  const gate = (fn, kind) => new Promise((resolve, reject) => {
+    waiting.push({ fn, resolve, reject, kind: kind || 'other' });
     pump();
   });
   gate.hold = holdFor;
@@ -647,6 +685,21 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
 //             headroom for whatever else the account is running.
 // An explicit FC_CONCURRENCY setting wins outright, in both directions.
 let FC_LIMIT_PER_MIN = null;
+// Per ENDPOINT, because that is what Firecrawl limits and reports. The global
+// one above is kept as "the most restrictive thing we have been told", used
+// only to size the browser cap, which IS account-wide.
+const FC_LIMIT_BY_KIND = new Map();
+const FC_GAP_BY_KIND = new Map();
+// Read off the URL, so a new call site is paced correctly without anybody
+// remembering to label it. The kinds are Firecrawl's own endpoint names.
+const fcKindOf = (url) => {
+  const u = String(url || '');
+  if (/\/v1\/batch\/scrape/.test(u)) return 'batch';
+  if (/\/v1\/scrape/.test(u)) return 'scrape';
+  if (/\/v1\/map/.test(u)) return 'map';
+  if (/\/v1\/search/.test(u)) return 'search';
+  return 'other';
+};
 let FC_CONCURRENCY_LIVE = FC_CONCURRENCY;
 const FC_CONCURRENCY_EXPLICIT = !!(process.env.FC_CONCURRENCY || '').trim();
 const fcBrowsersForLimit = (perMin) => {
@@ -657,38 +710,41 @@ const fcBrowsersForLimit = (perMin) => {
   if (n >= 50) return 3;
   return 2;
 };
-const noteFirecrawlLimits = (r) => {
+const noteFirecrawlLimits = (r, kind) => {
   try {
     if (!r || !r.headers || typeof r.headers.get !== 'function') return;
     const raw = r.headers.get('x-ratelimit-limit');
     const perMin = parseInt(String(raw || '').trim(), 10);
     if (!Number.isFinite(perMin) || perMin <= 0) return;
-    if (FC_LIMIT_PER_MIN === perMin) return;
-    FC_LIMIT_PER_MIN = perMin;
-    // The pacing half, which never happened before. A plan of 20/minute needs a
-    // 3.75-second gap; we were leaving 350ms.
-    const wantGap = fcGapForLimit(perMin);
-    // NOT gated on FC_CONCURRENCY_EXPLICIT. Those are two different settings
-    // and letting one govern the other is the disease this file is a record
-    // of: an operator who pinned the browser cap would silently have lost
-    // pacing entirely. FC_MIN_GAP_MS is a FLOOR by its own name, so raising
-    // past it is what that setting asks for.
-    if (wantGap && Math.max(FC_MIN_GAP_MS, wantGap) !== FC_GAP_LIVE) {
-      const beforeGap = FC_GAP_LIVE;
-      // May move DOWN as well as up: until this line runs we are pacing for the
-      // smallest plan they sell, and a measurement outranks that assumption.
-      FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, wantGap);
-      console.log(`FIRECRAWL PACE: their header says ${perMin} request(s)/minute, so the gap between starts moves ${beforeGap}ms \u2192 ${FC_GAP_LIVE}ms (${FC_GAP_SAFETY}x headroom). This number was being read and stored and never used for pacing, which is why a run could take eleven rate-limit hits while the gate happily started something new every 350ms.`);
+    // -- THE PACE IS THIS ENDPOINT'S, NOT THE ACCOUNT'S --------------------
+    const k = kind || 'other';
+    if (FC_LIMIT_BY_KIND.get(k) !== perMin) {
+      FC_LIMIT_BY_KIND.set(k, perMin);
+      const kindGap = Math.max(FC_MIN_GAP_MS, fcGapForLimit(perMin));
+      const beforeKind = FC_GAP_BY_KIND.get(k);
+      FC_GAP_BY_KIND.set(k, kindGap);
+      if (beforeKind !== kindGap) {
+        console.log(`FIRECRAWL PACE [${k}]: their header says ${perMin} request(s)/minute for THIS endpoint, so /${k} calls are spaced ${beforeKind === undefined ? FC_GAP_LIVE : beforeKind}ms \u2192 ${kindGap}ms (${FC_GAP_SAFETY}x headroom). Firecrawl publishes a different limit per endpoint, and pacing every call at the most restrictive one spaced 5000/min scrapes 7.5 seconds apart on the 2026-08-22 run.`);
+      }
     }
-    const want = fcBrowsersForLimit(perMin);
+    // The account-wide view, used ONLY to size the browser cap below: the most
+    // restrictive endpoint we have been told about, because browsers are shared.
+    const perMinForCap = Math.min(...Array.from(FC_LIMIT_BY_KIND.values()));
+    if (FC_LIMIT_PER_MIN === perMinForCap) return;
+    FC_LIMIT_PER_MIN = perMinForCap;
+    // FC_GAP_LIVE remains the pace for an endpoint we have not been told about
+    // yet - the honest unknown-plan assumption, unchanged. An endpoint that HAS
+    // answered is paced by its own measurement above, which is why this no
+    // longer moves the global number.
+    const want = fcBrowsersForLimit(perMinForCap);
     if (FC_CONCURRENCY_EXPLICIT) {
-      console.log(`FIRECRAWL PLAN: their header says ${perMin} requests/minute. FC_CONCURRENCY is set explicitly to ${FC_CONCURRENCY}, so the gate is left exactly there \u2014 a setting somebody chose is never overridden by an inference.`);
+      console.log(`FIRECRAWL PLAN: the most restrictive endpoint we have been told about allows ${perMinForCap} requests/minute. FC_CONCURRENCY is set explicitly to ${FC_CONCURRENCY}, so the gate is left exactly there \u2014 a setting somebody chose is never overridden by an inference.`);
       return;
     }
     if (!want || want === FC_CONCURRENCY_LIVE) return;
     const before = FC_CONCURRENCY_LIVE;
     FC_CONCURRENCY_LIVE = want;
-    console.log(`FIRECRAWL PLAN: ${perMin} requests/minute is MEASURED from their own x-ratelimit-limit header. The concurrent-browser cap is INFERRED from Firecrawl's published tiers, not measured \u2014 so the gate moves ${before} \u2192 ${want}, which is below the cap that tier publishes. Set FC_CONCURRENCY to pin it. The queue in front of this gate is the research wall clock: three leads sharing two browsers is what a 589-second lead looks like.`);
+    console.log(`FIRECRAWL PLAN: ${perMinForCap} requests/minute is MEASURED from their own x-ratelimit-limit header (the most restrictive endpoint, because browsers are shared). The concurrent-browser cap is INFERRED from Firecrawl's published tiers, not measured \u2014 so the gate moves ${before} \u2192 ${want}, which is below the cap that tier publishes. Set FC_CONCURRENCY to pin it. The queue in front of this gate is the research wall clock: three leads sharing two browsers is what a 589-second lead looks like.`);
   } catch (e) { void e; }
 };
 // ══ WE LEARNED THE LIMIT AND PACED AS IF WE HAD NOT ════════════════════════
@@ -739,14 +795,28 @@ const fcGapForLimit = (perMin) => {
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.ceil((60000 / n) * FC_GAP_SAFETY);
 };
-const _fcGate = makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE, minGapMs: () => FC_GAP_LIVE });
+const _fcGate = makeFcGate({
+  concurrency: () => FC_CONCURRENCY_LIVE,
+  // An endpoint we have measured is paced by ITS OWN limit; one we have not
+  // heard from yet keeps the unknown-plan assumption.
+  minGapMs: (kind) => {
+    const k = FC_GAP_BY_KIND.get(kind || 'other');
+    return Number.isFinite(k) ? k : FC_GAP_LIVE;
+  },
+});
 // One door, so the plan is read from every Firecrawl response in the process
 // rather than from the handful of call sites somebody remembered to wire.
-const fcSerial = (fn) => {
+const fcSerial = (fn, kind) => {
   const _q0 = Date.now();
   let _noted = false;
   const _wrapped = () => { if (!_noted) { _noted = true; netNoteGateWait(Date.now() - _q0); } return fn(); };
-  return _fcGate(_wrapped).then((r) => { noteFirecrawlLimits(r); return r; });
+  // The endpoint is read off the response's own URL when the caller does not
+  // name it, so no call site has to be remembered - the disease this file is
+  // mostly a record of. A caller may still pass one explicitly.
+  return _fcGate(_wrapped, kind).then((r) => {
+    noteFirecrawlLimits(r, kind || fcKindOf((r && r.url) || ''));
+    return r;
+  });
 };
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
@@ -40542,12 +40612,47 @@ const _jobs = new Map();          // id -> { status, startedAt, finishedAt, comp
 // batch client's own pool of 3, so batch submissions map one-to-one onto slots.
 // Measured on the 2026-08-20 run: five leads took ~15 minutes at 2 slots; fifty
 // at that rate is over four hours, and at 3 it is under two.
-const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '3', 10) || 3);
+// RAISED 3 -> 6, 2026-08-22, once the two things actually holding the wall
+// clock were fixed rather than worked around: the memory gate was taxing every
+// lead 90 seconds against a ceiling below the process's own baseline, and one
+// endpoint's rate limit was pacing every Firecrawl call in the process. Neither
+// was the slot count, which is why raising it earlier would have bought noise.
+// Six, not more: each lead holds page buffers, and the memory gate above is now
+// calibrated well enough to hold leads at the door if that genuinely climbs -
+// which is the honest way to find the ceiling, rather than guessing it here.
+const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '6', 10) || 6);
 // The measured half of the same question. Render's container limit is near
 // 256MB; boot settles around 145MB and one page render can add tens of MB on top
 // of that. 205 leaves room for a decode to finish without the next lead being
 // admitted into the middle of it. Raise both together when the plan changes.
 const RESEARCH_RSS_CEILING_MB = Math.max(64, parseInt(process.env.RESEARCH_RSS_CEILING_MB || '205', 10) || 205);
+// == A CEILING BELOW THE FLOOR IS NOT A CEILING, IT IS A TAX =================
+// The 205 above was written from a measured boot of ~145MB. On Render the live
+// process settles at 320MB rss - its own BOOT MEMORY line says so - because the
+// 207 boot checks allocate and resident memory does not hand itself back. So
+// the admission test was true on EVERY lead forever: each one printed HOLDING,
+// slept the full 90-second bound, and started anyway with a warning. Three
+// slots means a flat 90 seconds per wave, about 25 minutes of pure sleep in a
+// fifty-lead run, buying nothing.
+//
+// The number was never wrong as a rule, only as a constant: what it wants to
+// express is "do not start another lead when this process has grown well past
+// its own settled size". So it is measured instead of assumed - the baseline is
+// captured once the boot checks are done, and the ceiling is that baseline plus
+// room for a page render. If a future boot really does settle at 145MB, the
+// configured 205 still wins and behaviour is exactly what it is today.
+//
+// It is also proof of something these comments had wrong: the process runs
+// steadily at 320MB without Render restarting it, so this container's limit is
+// NOT the ~256MB assumed throughout this file. Do not raise the headroom on the
+// strength of that - it is one observation - but stop treating 256 as measured.
+const RESEARCH_RSS_HEADROOM_MB = Math.max(32, parseInt(process.env.RESEARCH_RSS_HEADROOM_MB || '120', 10) || 120);
+let RSS_BASELINE_MB = null;
+const rssCeilingNow = () => (
+  Number.isFinite(RSS_BASELINE_MB)
+    ? Math.max(RESEARCH_RSS_CEILING_MB, RSS_BASELINE_MB + RESEARCH_RSS_HEADROOM_MB)
+    : RESEARCH_RSS_CEILING_MB
+);
 const RESEARCH_RSS_MAX_WAIT_MS = Math.max(5000, parseInt(process.env.RESEARCH_RSS_MAX_WAIT_MS || '90000', 10) || 90000);
 
 // Pure, so the boot check can execute the exact decision the poller makes.
@@ -40863,14 +40968,15 @@ app.post('/api/research-async', (req, res) => {
     // at least a restart is visible.
     {
       const _rssMb = () => Math.round(process.memoryUsage().rss / 1048576);
+      const _ceil = rssCeilingNow();
       let _held = 0;
-      while (_rssMb() > RESEARCH_RSS_CEILING_MB && _held < RESEARCH_RSS_MAX_WAIT_MS) {
-        if (_held === 0) console.log(`JOB ${id} [${job.company}]: HOLDING \u2014 the process is using ${_rssMb()}MB and the safe ceiling for starting another lead is ${RESEARCH_RSS_CEILING_MB}MB. Render restarts a dyno that goes over its limit rather than erroring, so this waits instead. Its 8-minute clock has not started.`);
+      while (_rssMb() > _ceil && _held < RESEARCH_RSS_MAX_WAIT_MS) {
+        if (_held === 0) console.log(`JOB ${id} [${job.company}]: HOLDING \u2014 the process is using ${_rssMb()}MB against a ceiling of ${_ceil}MB (this process settled at ${RSS_BASELINE_MB === null ? 'an unmeasured baseline' : RSS_BASELINE_MB + 'MB'} plus ${RESEARCH_RSS_HEADROOM_MB}MB of room for a page render). Render restarts a dyno that goes over its limit rather than erroring, so this waits instead. Its 8-minute clock has not started.`);
         await new Promise(r => setTimeout(r, 2000));
         _held += 2000;
       }
       if (_held >= RESEARCH_RSS_MAX_WAIT_MS) {
-        console.log(`\u26a0 JOB ${id} [${job.company}]: memory stayed above ${RESEARCH_RSS_CEILING_MB}MB for ${Math.round(_held / 1000)}s and the lead is starting anyway. Something is holding memory that should have been released \u2014 refusing to start leads forever is a worse failure than a restart, because a restart is at least visible.`);
+        console.log(`\u26a0 JOB ${id} [${job.company}]: memory stayed above ${_ceil}MB for ${Math.round(_held / 1000)}s and the lead is starting anyway. Something is holding memory that should have been released \u2014 refusing to start leads forever is a worse failure than a restart, because a restart is at least visible.`);
       } else if (_held) {
         console.log(`JOB ${id} [${job.company}]: memory back under the ceiling after ${Math.round(_held / 1000)}s (${_rssMb()}MB) \u2014 starting now.`);
       }
@@ -41073,6 +41179,11 @@ app.listen(PORT, () => {
     const _schemaTimer = setInterval(() => {
       if (BOOT_STATUS.phase === 'checking') return;
       clearInterval(_schemaTimer);
+      // The settled size of THIS process, measured after its own checks have
+      // finished allocating. Everything above this line is startup cost; what a
+      // lead adds is measured against it.
+      RSS_BASELINE_MB = Math.round(process.memoryUsage().rss / 1048576);
+      console.log(`\u{1F9E0} RSS BASELINE: this process settles at ${RSS_BASELINE_MB}MB resident, so a lead is admitted below ${rssCeilingNow()}MB (baseline + ${RESEARCH_RSS_HEADROOM_MB}MB for a page render). The old fixed ceiling of ${RESEARCH_RSS_CEILING_MB}MB was written from a 145MB boot, and every lead was tripping it, sleeping the full ${Math.round(RESEARCH_RSS_MAX_WAIT_MS / 1000)}s bound and starting anyway.`);
       probeSupabaseSchema().catch(() => {});
     }, 5000);
     if (_schemaTimer.unref) _schemaTimer.unref();
@@ -43159,6 +43270,115 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 PREFLIGHT CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ---- ONE ENDPOINT'S LIMIT IS NOT THE ACCOUNT'S LIMIT --------------------
+  // Live on the 2026-08-22 five-lead run: one run reported 10, 5000 and 500
+  // requests/minute from three different Firecrawl endpoints, and the gap was
+  // global - so the 10/min endpoint spaced every SCRAPE 7.5 seconds apart on a
+  // plan allowing 5000 of them a minute. One lead makes ~14 Firecrawl calls.
+  // This is the largest measurable cause of a slow bulk run.
+  try {
+    const _fails = [];
+    const _saveLim = new Map(FC_LIMIT_BY_KIND), _saveGap = new Map(FC_GAP_BY_KIND), _savePer = FC_LIMIT_PER_MIN;
+    try {
+      FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear();
+      const _resp = (v) => ({ headers: { get: (k) => (String(k).toLowerCase() === 'x-ratelimit-limit' ? v : null) } });
+      // The exact shape of the live run: a restrictive endpoint answers, then a
+      // fast one. The fast one must NOT inherit the restrictive one's pace.
+      noteFirecrawlLimits(_resp('10'), 'search');
+      noteFirecrawlLimits(_resp('5000'), 'scrape');
+      const _searchGap = FC_GAP_BY_KIND.get('search'), _scrapeGap = FC_GAP_BY_KIND.get('scrape');
+      if (_searchGap !== Math.max(FC_MIN_GAP_MS, fcGapForLimit(10))) {
+        _fails.push(`a 10/min endpoint is not paced at its own limit (${_searchGap}ms) - the restrictive endpoint must still be paced correctly`);
+      }
+      if (_scrapeGap !== Math.max(FC_MIN_GAP_MS, fcGapForLimit(5000))) {
+        _fails.push(`a 5000/min endpoint is paced at ${_scrapeGap}ms rather than its own limit - one endpoint's rate limit is pacing another's, which is the 7.5-seconds-per-scrape defect`);
+      }
+      if (_scrapeGap >= _searchGap) {
+        _fails.push('the fast endpoint is spaced at least as far apart as the slow one, so pacing is still effectively global');
+      }
+      // The browser cap is account-wide, so it takes the MOST RESTRICTIVE
+      // endpoint - the opposite rule, deliberately, and the log says which.
+      if (FC_LIMIT_PER_MIN !== 10) {
+        _fails.push(`the browser cap is being sized from ${FC_LIMIT_PER_MIN}/min rather than from the most restrictive endpoint - browsers are shared, so this one must be conservative`);
+      }
+      // An endpoint nobody has heard from keeps the unknown-plan assumption.
+      if (FC_GAP_BY_KIND.get('map') !== undefined) _fails.push('an endpoint that never answered was given a pace anyway');
+      // The kind is read off the URL, so a new call site cannot be missed.
+      for (const [u, want] of [
+        ['https://api.firecrawl.dev/v1/scrape', 'scrape'],
+        ['https://api.firecrawl.dev/v1/map', 'map'],
+        ['https://api.firecrawl.dev/v1/search', 'search'],
+        ['https://api.firecrawl.dev/v1/batch/scrape', 'batch'],
+        ['https://api.firecrawl.dev/v2/whatever', 'other'],
+      ]) {
+        if (fcKindOf(u) !== want) _fails.push(`${u} reads as "${fcKindOf(u)}" rather than "${want}", so it would be paced on somebody else's clock`);
+      }
+    } finally {
+      FC_LIMIT_BY_KIND.clear(); for (const [k, v] of _saveLim) FC_LIMIT_BY_KIND.set(k, v);
+      FC_GAP_BY_KIND.clear(); for (const [k, v] of _saveGap) FC_GAP_BY_KIND.set(k, v);
+      FC_LIMIT_PER_MIN = _savePer;
+    }
+    // And the gate must actually ask per kind, or the map above is decoration.
+    {
+      const _n = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_n('minGapMs: (kind)', ' => {'))) {
+        _fails.push('the gate no longer asks for a per-endpoint gap, so every call is back on one clock');
+      }
+      if (!selfSourceNoComments().includes(_n('lastStartByKind.set(job.kind', " || 'other', lastStart);"))) {
+        _fails.push('the gate no longer records a start per endpoint, so the per-endpoint gap is never satisfied');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ ENDPOINT PACING CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`✓ ENDPOINT PACING CHECK: each Firecrawl endpoint is paced by the limit IT reports, so a 10/min search cannot space a 5000/min scrape 7.5 seconds apart; the browser cap still takes the most restrictive endpoint because browsers are shared; an endpoint that has not answered keeps the smallest-plan assumption; and the endpoint is read off the URL so a new call site cannot be missed.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ENDPOINT PACING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- A CEILING BELOW THE PROCESS'S OWN BASELINE IS A TAX ----------------
+  // RESEARCH_RSS_CEILING_MB was 205 while the live process settles at 320MB,
+  // so every lead held for the full 90-second bound and started anyway.
+  try {
+    const _fails = [];
+    const _save = RSS_BASELINE_MB;
+    try {
+      // Unmeasured: the configured number, exactly as before this existed.
+      RSS_BASELINE_MB = null;
+      if (rssCeilingNow() !== RESEARCH_RSS_CEILING_MB) _fails.push('before the baseline is measured the ceiling is not the configured one, so behaviour changed on a path that should be untouched');
+      // A small boot keeps the configured ceiling: the constant still wins.
+      RSS_BASELINE_MB = 60;
+      if (rssCeilingNow() !== RESEARCH_RSS_CEILING_MB) _fails.push('a process that settles well under the configured ceiling no longer uses it');
+      // The live shape: a 320MB baseline must lift the ceiling above itself, or
+      // the gate is permanently tripped and every lead pays the full hold.
+      RSS_BASELINE_MB = 320;
+      const _c = rssCeilingNow();
+      if (_c <= 320) _fails.push(`with a 320MB baseline the admission ceiling is ${_c}MB - at or below the process's own settled size, so every lead trips the hold, sleeps the full ${Math.round(RESEARCH_RSS_MAX_WAIT_MS / 1000)}s and starts anyway. That is a flat tax per lead, not a memory guard`);
+      if (_c !== 320 + RESEARCH_RSS_HEADROOM_MB) _fails.push('the ceiling is not the baseline plus the declared headroom');
+      // It must still be able to FIRE: a process that has genuinely grown past
+      // its baseline plus the headroom is held, which is the whole point.
+      if (!(321 + RESEARCH_RSS_HEADROOM_MB > _c)) _fails.push('nothing can ever exceed the ceiling, so the memory guard has been deleted rather than calibrated');
+    } finally { RSS_BASELINE_MB = _save; }
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      if (!_s.includes(_n('const _ceil = rssCeiling', 'Now();'))) {
+        _fails.push('the admission gate no longer reads the calibrated ceiling, so the fixtures above test a function nothing calls');
+      }
+      if (!_s.includes(_n('RSS_BASELINE_MB = Math.round(process.memory', 'Usage().rss / 1048576);'))) {
+        _fails.push('the baseline is never measured, so the ceiling can only ever be the stale constant');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ MEMORY CEILING CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log(`✓ MEMORY CEILING CHECK: leads are admitted against this process's OWN settled size plus room for a page render, not against a constant written from a boot that no longer happens. A 320MB baseline lifts the ceiling above itself instead of taxing every lead 90 seconds; a small baseline keeps the configured number; and the guard can still fire when memory genuinely climbs past the headroom.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MEMORY CEILING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
@@ -51783,21 +52003,28 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // the real reader against a real response shape and watching the live pace
     // move. Restored afterwards: this is the pace production will use.
     const _gapBefore = FC_GAP_LIVE, _limBefore = FC_LIMIT_PER_MIN, _concBefore = FC_CONCURRENCY_LIVE;
+    const _kindLimBefore = new Map(FC_LIMIT_BY_KIND), _kindGapBefore = new Map(FC_GAP_BY_KIND);
     try {
       const _resp = (v) => ({ headers: { get: (k) => (String(k).toLowerCase() === 'x-ratelimit-limit' ? v : null) } });
+      // RE-AIMED 2026-08-22, per endpoint. The rule these assertions guard has
+      // not moved - a limit we measured must actually reach the pacing - but
+      // the pace is now the ENDPOINT'S, because Firecrawl publishes a different
+      // limit for each one and applying the most restrictive to all of them
+      // spaced 5000/min scrapes 7.5 seconds apart on the live run.
+      FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear();
       FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = FC_MIN_GAP_MS;
-      noteFirecrawlLimits(_resp('10'));
-      if (FC_GAP_LIVE !== Math.max(FC_MIN_GAP_MS, fcGapForLimit(10))) {
-        _fails.push(`reading a 10/min header left the live gap at ${FC_GAP_LIVE}ms — the limit is measured and never delivered to the pacing, which is the whole defect`);
+      noteFirecrawlLimits(_resp('10'), 'scrape');
+      if (FC_GAP_BY_KIND.get('scrape') !== Math.max(FC_MIN_GAP_MS, fcGapForLimit(10))) {
+        _fails.push(`reading a 10/min header left /scrape paced at ${FC_GAP_BY_KIND.get('scrape')}ms - the limit is measured and never delivered to the pacing, which is the whole defect`);
       }
       // A FAST plan must not be slowed below the configured floor.
-      FC_LIMIT_PER_MIN = null;
-      noteFirecrawlLimits(_resp('5000'));
-      if (FC_GAP_LIVE < FC_MIN_GAP_MS) _fails.push('a fast plan pushed the gap under its own floor');
+      FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear(); FC_LIMIT_PER_MIN = null;
+      noteFirecrawlLimits(_resp('5000'), 'scrape');
+      if (FC_GAP_BY_KIND.get('scrape') < FC_MIN_GAP_MS) _fails.push('a fast plan pushed the gap under its own floor');
       // An unreadable header must change nothing at all.
-      FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = 1234;
-      noteFirecrawlLimits(_resp('not-a-number'));
-      if (FC_GAP_LIVE !== 1234) _fails.push('an unreadable header repaced the gate');
+      FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear(); FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = 1234;
+      noteFirecrawlLimits(_resp('not-a-number'), 'scrape');
+      if (FC_GAP_LIVE !== 1234 || FC_GAP_BY_KIND.size) _fails.push('an unreadable header repaced the gate');
       // ── AND THE PLAN WE ASSUME BEFORE WE HAVE MEASURED ONE ──────────────
       // The limit can only be learned from a RESPONSE, and a lead's first
       // fan-out is seven page reads dispatched before any answer comes back.
@@ -51813,15 +52040,21 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       }
       // AND A MEASUREMENT MUST BE ABLE TO RELAX IT, or a paid plan is paced
       // like a free one forever.
+      FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear();
       FC_LIMIT_PER_MIN = null; FC_GAP_LIVE = Math.max(FC_MIN_GAP_MS, FC_GAP_UNKNOWN_MS);
       const _slowStart = FC_GAP_LIVE;
-      noteFirecrawlLimits(_resp('500'));
-      if (!(FC_GAP_LIVE < _slowStart)) {
-        _fails.push(`a measured 500/min plan left the gap at ${FC_GAP_LIVE}ms — the conservative assumption outranks their own header, so every paid plan runs at free-tier pace`);
+      noteFirecrawlLimits(_resp('500'), 'scrape');
+      if (!(FC_GAP_BY_KIND.get('scrape') < _slowStart)) {
+        _fails.push(`a measured 500/min plan left /scrape at ${FC_GAP_BY_KIND.get('scrape')}ms - the conservative assumption outranks their own header, so every paid plan runs at free-tier pace`);
       }
-      if (FC_GAP_LIVE < FC_MIN_GAP_MS) _fails.push('relaxing went under the operator-configured floor');
+      if (FC_GAP_BY_KIND.get('scrape') < FC_MIN_GAP_MS) _fails.push('relaxing went under the operator-configured floor');
+      // An endpoint that has NOT answered keeps the smallest-plan assumption:
+      // the relaxation is a measurement about one endpoint only.
+      if (FC_GAP_BY_KIND.get('map') !== undefined) _fails.push('measuring one endpoint relaxed another we have never heard from');
     } finally {
       FC_GAP_LIVE = _gapBefore; FC_LIMIT_PER_MIN = _limBefore; FC_CONCURRENCY_LIVE = _concBefore;
+      FC_LIMIT_BY_KIND.clear(); for (const [k, v] of _kindLimBefore) FC_LIMIT_BY_KIND.set(k, v);
+      FC_GAP_BY_KIND.clear(); for (const [k, v] of _kindGapBefore) FC_GAP_BY_KIND.set(k, v);
     }
     // THREE — the live gate must READ that pace on every pump rather than
     // capture it at construction, or a plan learned at minute two applies to
@@ -51867,8 +52100,8 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // itself in the check's own body and these comments quote the calls.
     const _needle = (...parts) => parts.join('');
     const _src = selfSourceNoComments();
-    if (!_src.includes(_needle('makeFcGate({ concurrency: () => FC_CONCURRENCY_LIVE,', ' minGapMs: () => FC_GAP_LIVE })'))) {
-      _fails.push('the live gate is no longer constructed to read the live pace, so a measured plan repaces nothing');
+    if (!_src.includes(_needle('minGapMs: (kind)', ' => {')) || !_src.includes(_needle('FC_GAP_BY_KIND.get(kind', " || 'other')"))) {
+      _fails.push('the live gate is no longer constructed to read the live PER-ENDPOINT pace, so a measured plan repaces nothing');
     }
     // Each of the three branches by its own needle rather than by COUNTING the
     // calls: this check makes three of its own, so a count would be measuring
