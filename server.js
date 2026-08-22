@@ -42459,6 +42459,19 @@ app.listen(PORT, () => {
       if (!_s.includes(_n('const _claimsKnowledge = hedgeCannot', 'Buy(sent, clocked);'))) {
         _fails.push('the post-contact gate has its own copy of the rule again, which is how the two came to disagree');
       }
+      // 12. THE ALREADY-EMAILED BLOCK HAS EXACTLY ONE DOOR, AND A HUMAN
+      //     OPENS IT. The block is right - a second sequence to an owner who
+      //     already had one is the most expensive mistake here - but the client
+      //     has a documented "Send again" button whose dialog says to delete the
+      //     contact in Hunter first, and there was no way through, so that
+      //     workflow could not complete at all. Both halves are asserted: the
+      //     door exists, and it is opened only by that flag.
+      if (!_s.includes(_n('SENT_RECIPIENTS.has(_norm) && lead.resend', 'Approved === true'))) {
+        _fails.push('the deliberate re-send has no way past the already-emailed block, so the button that tells an operator to clear Hunter first cannot finish the job it describes');
+      }
+      if (!_s.includes(_n('} else if (_norm && SENT_RECIPIENTS.has', '(_norm)) {'))) {
+        _fails.push('the already-emailed block no longer refuses an unconfirmed repeat, which is the most expensive mistake this send path can make');
+      }
       // 10. THE ARM RECORDED IS THE ARM THAT SHIPPED. _ctaMode became 'page'
       //     the moment the page saved, and the model path rewrites the closing
       //     sentence - which is the one carrying the URL. A page arm recorded on
@@ -54800,11 +54813,22 @@ app.post('/api/send-to-hunter', async (req, res) => {
       console.log(`⛔ DUPLICATE IN BATCH [${lead.name}]: ${lead.email} appears more than once in this send. Pushed once. Two records for one business is what the find-time name matching lets through — "Bob's Plumbing" and "Bobs Plumbing" normalise differently.`);
       continue;
     }
-    if (_norm && SENT_RECIPIENTS.has(_norm)) {
+    // ---- ONE DOOR, AND A HUMAN HAS TO OPEN IT ---------------------------
+    // The block below is right and stays absolute for every automatic path. But
+    // the client has a documented "Send again" button whose own dialog says
+    // "delete this contact in Hunter first" - a deliberate re-send after the
+    // operator has cleared the other side - and there was no way through, so
+    // that workflow could not complete at all. The flag is set only by that
+    // confirmation dialog and cleared the moment the push succeeds, so it can
+    // never license a second one.
+    if (_norm && SENT_RECIPIENTS.has(_norm) && lead.resendApproved === true) {
+      const _priorSend = SENT_RECIPIENTS.get(_norm);
+      console.log(`\u21ba RE-SEND CONFIRMED [${lead.name}]: ${lead.email} was pushed earlier in this session as "${_priorSend.name}", and a human confirmed the contact was removed in Hunter first. Going ahead. If it was NOT removed, this person receives the sequence twice and the complaint is charged to the sending domain.`);
+    } else if (_norm && SENT_RECIPIENTS.has(_norm)) {
       const prior = SENT_RECIPIENTS.get(_norm);
       results.failed.push({
         name: lead.name, email: lead.email,
-        reason: `already emailed — this address was pushed to Hunter earlier as "${prior.name}". Blocked so the owner does not receive a second sequence.`,
+        reason: `already emailed — this address was pushed to Hunter earlier as "${prior.name}". Blocked so the owner does not receive a second sequence. If you have removed the contact in Hunter and mean to send again, use that lead's own "Send again" button, which records that you did.`,
       });
       console.log(`⛔ ALREADY EMAILED [${lead.name}]: ${lead.email} was pushed earlier in this session as "${prior.name}". BLOCKED. A second sequence to an owner who already had one is the most expensive mistake here — he sees a machine, and the complaint is charged to the sending domain, not to the lead.`);
       continue;

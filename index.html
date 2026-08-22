@@ -11606,6 +11606,17 @@ function CallView({ settings }) {
                 if (idx < 0) return;
                 all[idx].status = 'generated';
                 all[idx].approved = false;
+                // ---- THE ONE DOOR THROUGH THE ALREADY-EMAILED BLOCK -------
+                // The server refuses any address it has already pushed this
+                // process, and it is right to: a second sequence to an owner who
+                // already had one is the most expensive mistake in this system.
+                // But this button IS the deliberate re-send, with the operator
+                // confirming they have removed the contact in Hunter - and the
+                // block had no door, so the workflow this dialog describes could
+                // not complete. The flag says a human confirmed it, and the send
+                // route clears it the moment the push succeeds, so it can never
+                // license a second one.
+                all[idx].resendApproved = true;
                 // Second argument, or this one click re-uploads every row in
                 // the pipeline — the exact anti-pattern the generate path's
                 // own comment warns about.
@@ -11715,6 +11726,8 @@ function SendView({ settings }) {
         if (idx >= 0) {
           all[idx].status = 'sent';
           all[idx].sentAt = today();
+          // One push per confirmation. See the note at the Send again button.
+          all[idx].resendApproved = false;
           // ── ATTRIBUTION SNAPSHOT ─────────────────────────────────────
           // Taken HERE, at the moment of sending, and never recomputed.
           // Re-running research on a lead changes its winning finding, its
