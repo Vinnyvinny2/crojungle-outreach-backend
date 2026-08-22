@@ -7915,6 +7915,17 @@ const isCreditError = (d, status) => {
 // really happens without stalling real work or printing a false alarm.
 const fcNoteRateLimited = (r, fallbackMs, where, gate = _fcGate) => {
   FIRECRAWL_RATE_LIMIT_HITS++;
+  // ---- AND ON THE LEAD THAT WAS ACTUALLY REFUSED ----------------------
+  // The per-lead flag was a DELTA over this process-global counter, snapshotted
+  // when the lead started. Three leads research at once, so a throttle on lead
+  // B moved lead A's delta and lead A came back banner-flagged "pages were
+  // refused, not empty - re-run this lead" with every one of its own pages read
+  // cleanly. On a small plan that is every lead in a batch, and a warning that
+  // appears on every sheet is one nobody reads - which is the same cost this
+  // file already records at the CTA precaution and the audit-integrity strip.
+  // FC_LEDGER is per request and survives every await; it already carries the
+  // credit figures for exactly this reason.
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.throttled = (_l.throttled || 0) + 1; } catch (e) { void e; }
   let waitMs = Number(fallbackMs) || 4000;
   let src = 'our own backoff';
   try {
@@ -31815,7 +31826,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // nothing about it is evidence about their website. A refusal is announced
       // with the status and Firecrawl's own words, and is NOT charged to the
       // credit ledger. The next payload mistake costs one log line, not a month.
-      const fcAsk = async (target, formats, waitFor, timeout, kind) => {
+      // ---- ONE RETRY, AND ONLY ON A THROTTLE ------------------------------
+      // The inner-page scrape retries a 429 and so does the sitemap read. This
+      // one - the HOMEPAGE reader, the front of a seven-page fan-out - did not.
+      // A single throttle therefore cost the whole website half of an audit
+      // while Places, Apify and every model call were paid in full, and the
+      // branch below it says in as many words "Fix the payload; do not add a
+      // retry", which is correct for a REFUSED PAYLOAD and wrong for a throttle:
+      // one is deterministic and the other is a queue.
+      //
+      // Bounded at one extra attempt by a parameter, so there is no loop to get
+      // wrong. fcNoteRateLimited has already held the WHOLE gate by the time we
+      // get here, and the retry goes through fcSerial like every other call, so
+      // it cannot start before the hold expires and needs no sleep of its own.
+      const fcAsk = async (target, formats, waitFor, timeout, kind, _retried = false) => {
         // The other four Firecrawl entry points fail fast on an empty balance;
         // this one, the HOMEPAGE reader, did not. Stanley Schultze fired both of
         // his requests 52 seconds after the balance ran out, got 402 twice, and
@@ -31858,6 +31882,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // the next request 350ms later. Same holder as both retry loops.
           fcNoteRateLimited(r, 4000, `the homepage [${kind}] ${target}`);
           console.log(`   ↳ HTTP ${r.status} in ${ms}ms. Read that literally: this is throttling, NOT an empty page and NOT their site.`);
+          if (!_retried) {
+            console.log(`   ↳ asking once more after the gate hold \u2014 losing the homepage to a queue costs the whole website half of this audit, and everything else on this lead is already paid for.`);
+            return fcAsk(target, formats, waitFor, timeout, kind, true);
+          }
           return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
         }
         if (!r.ok || body?.success === false || (body && body.error)) {
@@ -39440,7 +39468,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     { const _sp = placesSpendLine(company); if (_sp) console.log(_sp); }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
-    const _throttled = FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled;
+    // This lead's own refusals when we have a ledger; the process-wide delta
+    // only as a fallback for a path that runs outside one, and it says so.
+    const _throttled = _led ? (_led.throttled || 0) : (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled);
     if (_throttled > 0) {
       console.log(`\u26a0 FIRECRAWL THROTTLED ${_throttled}x during [${company}] — pages were refused, not empty. Treat any "no decision-maker found" here as UNKNOWN and re-run this lead.`);
     }
@@ -39622,7 +39652,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       earlyChannelReason: channelReason,
       auditSkippedForChannel: channelRoute === 'call',
       lsa,   // { eligible, badgeFound, evidence, marker, status }
-      rateLimited: (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0,
+      // This lead's own refusals. See the note in fcNoteRateLimited: a delta
+      // over the process counter flagged clean leads because a neighbour was
+      // throttled, and this banner is what tells an operator to re-run a lead.
+      rateLimited: (() => {
+        const _l = FC_LEDGER.getStore();
+        return _l ? (_l.throttled || 0) > 0 : (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0;
+      })(),
       ownerEmailMatch,
       ownerEmailMatchReason,
       // Gated like the sibling emit above: the resolver's explicit refusal wins
@@ -39744,7 +39780,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 // look like a regression when it had actually halved the bill.
 const runResearch = (req, res) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
-  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 },
+  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0 },
     () => NET_LEDGER.run({ by: new Map(), gateWaitMs: 0 }, () => _runResearchInner(req, res))));
 
 app.post('/api/research', runResearch);
@@ -50596,6 +50632,46 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     for (const [_n, _what] of _sites) {
       if (!_src.includes(_n)) _fails.push(`${_what} no longer holds the gate on a 429 — it counts the hit and the gate keeps opening the door 350ms later`);
     }
+    // ---- AND THE HOMEPAGE ASKS AGAIN --------------------------------------
+    // The inner-page scrape retries a throttle and so does the sitemap read.
+    // The homepage reader did not, and it is the FRONT of a seven-page fan-out:
+    // one 429 there cost the whole website half of an audit while Places, Apify
+    // and every model call were paid in full. Bounded at one extra attempt.
+    if (!_src.includes(_needle('return fcAsk(target, formats, waitFor,', ' timeout, kind, true);'))) {
+      _fails.push('the homepage read no longer asks again after a throttle, so one 429 on the first of seven pages throws away the whole website half of a lead that is already paid for everywhere else');
+    }
+    // ---- AND A THROTTLE IS COUNTED AGAINST THE LEAD THAT WAS REFUSED ------
+    // The per-lead banner was a delta over a process-global counter, and three
+    // leads research at once: a throttle on lead B flagged lead A as incomplete
+    // with every one of A's own pages read cleanly. Executed on the real
+    // ledger, with two stores live at the same time, because that is the
+    // condition the defect needs and a single-store fixture cannot see it.
+    {
+      const _seen = [];
+      FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0 }, () => {
+        const _a = FC_LEDGER.getStore();
+        FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0 }, () => {
+          const _b = FC_LEDGER.getStore();
+          _b.throttled += 1; _b.throttled += 1;
+          _seen.push(_b.throttled);
+        });
+        _seen.push(_a.throttled);
+      });
+      // HONEST LIMIT: this proves the LEDGER isolates two live stores - that it
+      // is still an AsyncLocalStorage and not a shared object somebody swapped
+      // in. It cannot see whether fcNoteRateLimited writes to it, because
+      // calling that for real would print a rate-limit line at boot that reads
+      // like a live event. The needle below is the guard for the write.
+      if (_seen[0] !== 2 || _seen[1] !== 0) {
+        _fails.push(`two ledgers live at the same time share one throttle count (${_seen.join(' and ')}) — the per-lead figures are process-wide again, so a lead whose own pages all read cleanly is flagged "pages were refused, re-run this lead"`);
+      }
+      if (!_src.includes(_needle('_l.throttled = (_l.throttled', ' || 0) + 1;'))) {
+        _fails.push('a throttle is no longer recorded on the lead it happened to, so the per-lead banner is a process-wide delta again');
+      }
+      if (!_src.includes(_needle('return _l ? (_l.throttled || 0) > 0 :', ' (FIRECRAWL_RATE_LIMIT_HITS - _fcAtStart.throttled) > 0;'))) {
+        _fails.push('the response flag is not reading this lead\'s own ledger');
+      }
+    }
     if (_fails.length) {
       console.log(`⛔ FIRECRAWL PACING CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -50885,6 +50961,24 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (pickSequenceForLead('lead_x', ['859908', '859908']) !== '859908') _fails.push('a duplicated sequence id is treated as two lanes');
     if (pickSequenceForLead('lead_x', []) !== null) _fails.push('an empty sequence list picks something from nothing');
     // The route must actually route by the pick — needles assembled.
+    // ---- AND IT MUST NOT BE THE SAME SPLIT AS THE SUBJECT TEST ----------
+    // index.html assigns the subject A/B arm with the SAME hash construction on
+    // the SAME lead id and takes Math.abs(h) % 2. Unsalted, that made every
+    // variant-A email go out on domain 1 and every variant-B on domain 2: two
+    // experiments perfectly confounded, and these are the only two this project
+    // has. The A/B side is reproduced here exactly as the client computes it, so
+    // this fails the day either construction changes to match the other.
+    {
+      const _abLane = (id) => {
+        const h = String(id || '').split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+        return Math.abs(h) % 2 === 1 ? 'B' : 'A';
+      };
+      const _agree = _ids.filter(id => (pickSequenceForLead(id, SEQS) === SEQS[1]) === (_abLane(id) === 'B')).length;
+      const _pct = Math.round((_agree / _ids.length) * 100);
+      if (_pct > 70 || _pct < 30) {
+        _fails.push(`the sequence a lead lands in and the subject variant it gets agree ${_pct}% of the time — that is one experiment wearing two names, and a difference in reply rate could never be attributed to the subject rather than to the sending domain`);
+      }
+    }
     {
       const _src = selfSource();
       if (_src.indexOf('campaigns/${' + '_seqForLead}/recipients') < 0) _fails.push('the send loop no longer adds each lead to ITS picked sequence — everything lands in one campaign and the rotation is decorative');
@@ -54358,8 +54452,28 @@ const pickSequenceForLead = (leadId, sequenceIds) => {
   const list = [...new Set((Array.isArray(sequenceIds) ? sequenceIds : []).filter(Boolean).map(String))];
   if (!list.length) return null;
   if (list.length === 1) return list[0];
-  const h = String(leadId || '').split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
-  return list[Math.abs(h) % list.length];
+  // ---- SALTED, OR THE TWO EXPERIMENTS ARE ONE EXPERIMENT --------------
+  // The subject A/B arm in index.html hashes the SAME lead id with the SAME
+  // construction and takes Math.abs(h) % 2. With two sequences configured that
+  // made every variant-A email go out on domain 1 and every variant-B email on
+  // domain 2 - perfectly confounded, so any difference in reply rate between
+  // the subjects would be indistinguishable from a difference between the two
+  // sending domains, and this project has exactly two planned experiments.
+  //
+  // Salting the SEQUENCE side rather than the subject side on purpose: rotation
+  // is not in use yet (one sequence is configured, and one sequence returns
+  // early above), so this changes no assignment that exists today.
+  //
+  // A PREFIX SALT ON THAT HASH CANNOT DECORRELATE IT, and the boot check caught
+  // the first attempt at exactly 0% agreement - which is perfect ANTI-
+  // correlation and just as confounded as perfect agreement. The reason is
+  // arithmetic: each step is (a * 31 + c), 31 is odd, so the low bit of the
+  // result is simply the parity of the character sum. A fixed prefix adds a
+  // fixed parity, so it can only ever leave the split alone or invert it. The
+  // split has to come from a different function, not the same one with more
+  // input.
+  const h = crypto.createHash('sha256').update('crojungle-sequence:' + String(leadId || '')).digest();
+  return list[h[0] % list.length];
 };
 
 app.post('/api/send-to-hunter', async (req, res) => {
@@ -54570,8 +54684,28 @@ app.post('/api/send-to-hunter', async (req, res) => {
       const missingFu = [];
       if (!fu1.body) missingFu.push('follow-up 1');
       if (!fu2.body) missingFu.push('follow-up 2');
+      // ---- AND THE REASON MUST BE THE REAL ONE ---------------------------
+      // "Re-run Generate on this lead and push again" is the right advice for
+      // exactly one of the two causes, and the wrong advice for the other.
+      //
+      // composeFullEmail DECLINES a follow-up whose finding sits under
+      // LADDER_HARM_FLOOR, deliberately: "a follow-up on a weak point costs
+      // more than it earns". On a thin lead that is not a failure, it is the
+      // design - and it is DETERMINISTIC, so pressing Generate again produces
+      // the identical nulls and the operator loops forever on advice that
+      // cannot work. Nothing said which case they were in.
+      //
+      // This file records the same shape twice already: the SMTP line that
+      // overstated its own severity, and the Supabase line that printed "check
+      // that the table exists" while the table existed and a policy was
+      // refusing the write. A message naming the wrong cause costs exactly what
+      // one naming no cause costs.
+      const _wasGenerated = !!(lead.generatedResult || lead.composedEmail || lead.pitch);
+      const _fix = _wasGenerated
+        ? `This lead was written and the composer DECLINED ${missingFu.length > 1 ? 'those steps' : 'that step'}: the next findings on it sit under the harm floor, and a follow-up on a weak point costs more than it earns. Pressing Generate again is deterministic and will produce the same gap. Re-run RESEARCH if you think there is more to find, or send this one outside the sequence.`
+        : 'Nothing has been written for this lead yet. Run Generate on it, then push again.';
       if (missingFu.length) {
-        console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 ${missingFu.join(' and ')} ${missingFu.length > 1 ? 'have' : 'has'} no copy, and the sequence step would send its "MISSING \u2026 DO NOT SEND" placeholder to ${lead.email} as a real email. Re-run Generate on this lead and push again.`);
+        console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 ${missingFu.join(' and ')} ${missingFu.length > 1 ? 'have' : 'has'} no copy, and the sequence step would send its "MISSING \u2026 DO NOT SEND" placeholder to ${lead.email} as a real email. ${_fix}`);
         // `continue`, NOT `return` — this sits inside `for (const lead of leads)`
         // within the Express handler. A return here would exit the whole handler:
         // no response sent, the request hanging until timeout, and every
@@ -54579,7 +54713,7 @@ app.post('/api/send-to-hunter', async (req, res) => {
         // the failure and move to the next lead, which is what this does.
         results.failed.push({
           name: lead.name, email: lead.email,
-          reason: `no copy for ${missingFu.join(' and ')} — the sequence step would have sent its "DO NOT SEND" placeholder as a real email. Re-run Generate and push again.`,
+          reason: `no copy for ${missingFu.join(' and ')} — the sequence step would have sent its "DO NOT SEND" placeholder as a real email. ${_fix}`,
         });
         continue;
       }
