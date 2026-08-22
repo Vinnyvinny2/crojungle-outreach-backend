@@ -92,6 +92,220 @@ const fitPngToBudget = async (buf, longEdge, maxEdge, budget = PNG_BYTE_BUDGET, 
 
 const app = express();
 
+// ════════════════════════ THE BOOT VERDICT, AS ONE MACHINE-READABLE FACT ════════
+// Three different things need to know whether the boot checks passed — the CI
+// gate, the Render health check, and a person reading the log — and until now
+// each answered it with its own grep. Three hand-kept copies of one question is
+// the recorded disease, and the live cost is recorded too: Render boots, prints
+// \u26d4, and serves anyway. The check found the problem and nobody was told.
+//
+// One recorder now. It wraps console.log for the boot window only, counts the
+// same two glyphs boot.sh has always counted, and uninstalls itself the moment
+// the verdict settles — so runtime logging is untouched and a lead's own
+// \u26d4 lines (a fact-check refusal is a lead event, not a build event) can
+// never flip the health of the build.
+//
+// SETTLING. The boot block is synchronous except for a few timer-driven checks,
+// and the slowest of those — the Firecrawl gate check — prints ~13s in on
+// Render. So the verdict settles when the recorded LAST check has printed and
+// five quiet seconds have passed, with a hard cap: if the sentinel never prints
+// at all, the verdict is RED with that as the reason, because a check that
+// hangs is quieter than one that fails and this makes the hang loud. The
+// sentinel is one hardcoded name on purpose: if that check is ever renamed the
+// build goes visibly unhealthy until this line is updated, which is a loud
+// failure instead of a silent one.
+//
+// EXPECTED RED. Exactly one \u26d4 is part of a healthy boot — the
+// MODEL DECLINED [selftest] demo line, which exists so a real declined response
+// is recognisable. It is allowlisted by name and reported separately, so the
+// allowlist can never quietly absorb a real failure.
+const BOOT_STATUS = {
+  phase: 'checking',          // 'checking' -> 'green' | 'red'
+  green: 0, red: 0, expectedRed: 0,
+  redLines: [],               // first few unexpected failures, truncated
+  startedAt: Date.now(), settledAt: null,
+  sentinelSeen: false, why: '',
+};
+const BOOT_EXPECTED_RED = [
+  /^\u26d4 MODEL DECLINED \[selftest\]/,
+];
+// Assembled at runtime: several boot checks grep this file's own source for
+// check names, and a literal here would be the ninth self-matching needle.
+const BOOT_SENTINEL = ['FIRECRAWL', 'GATE', 'CHECK'].join(' ');
+// A GREEN verdict counting almost nothing means the recorder is not seeing the
+// boot block at all — which must read as broken, never as healthy. 150 is far
+// under the real count and far over noise.
+const BOOT_MIN_CHECKS = 150;
+
+const installBootRecorder = () => {
+  const orig = console.log.bind(console);
+  let quietTimer = null;
+  const settle = (why) => {
+    if (BOOT_STATUS.phase !== 'checking') return;
+    console.log = orig;                       // uninstall first, whatever else happens
+    if (quietTimer) clearTimeout(quietTimer);
+    clearTimeout(capTimer);
+    BOOT_STATUS.settledAt = Date.now();
+    const total = BOOT_STATUS.green + BOOT_STATUS.red + BOOT_STATUS.expectedRed;
+    if (why) {
+      BOOT_STATUS.phase = 'red'; BOOT_STATUS.why = why;
+    } else if (BOOT_STATUS.red > 0) {
+      BOOT_STATUS.phase = 'red'; BOOT_STATUS.why = `${BOOT_STATUS.red} boot check(s) failed`;
+    } else if (total < BOOT_MIN_CHECKS) {
+      BOOT_STATUS.phase = 'red';
+      BOOT_STATUS.why = `only ${total} check lines were counted `+String.fromCharCode(0x2014)+` the recorder is not seeing the boot block, and a verdict built on almost nothing must read as broken rather than as healthy`;
+    } else {
+      BOOT_STATUS.phase = 'green';
+    }
+    const secs = Math.round((BOOT_STATUS.settledAt - BOOT_STATUS.startedAt) / 1000);
+    orig(BOOT_STATUS.phase === 'green'
+      ? `BOOT VERDICT: GREEN `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.green} checks passed, ${BOOT_STATUS.expectedRed} expected decline(s), 0 failures, settled in ${secs}s. /healthz now answers 200.`
+      : `BOOT VERDICT: RED `+String.fromCharCode(0x2014)+` ${BOOT_STATUS.why}. ${BOOT_STATUS.green} passed, ${BOOT_STATUS.red} failed. /healthz answers 503 so a gated deploy keeps the previous build serving.${BOOT_STATUS.redLines.length ? ' First failure: ' + BOOT_STATUS.redLines[0] : ''}`);
+  };
+  const capTimer = setTimeout(() => settle(`the boot checks never finished `+String.fromCharCode(0x2014)+` the last check (${BOOT_SENTINEL}) did not print within 180s. A check that hangs is quieter than one that fails; this is the hang, made loud`), 180000);
+  const bump = () => {
+    if (BOOT_STATUS.sentinelSeen) {
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => settle(''), 5000);
+    }
+  };
+  console.log = (...args) => {
+    try {
+      const s = typeof args[0] === 'string' ? args[0] : '';
+      if (s.startsWith('\u2713')) { BOOT_STATUS.green++; bump(); }
+      else if (s.startsWith('\u26d4')) {
+        if (BOOT_EXPECTED_RED.some(re => re.test(s))) BOOT_STATUS.expectedRed++;
+        else { BOOT_STATUS.red++; if (BOOT_STATUS.redLines.length < 5) BOOT_STATUS.redLines.push(s.slice(0, 220)); }
+        bump();
+      }
+      if (!BOOT_STATUS.sentinelSeen && s.includes(BOOT_SENTINEL)) { BOOT_STATUS.sentinelSeen = true; bump(); }
+    } catch (e) { void e; }
+    return orig(...args);
+  };
+};
+
+// Registered before every middleware on purpose: the health of the build must
+// be readable with no body parsing, no log capture and no auth in the way.
+// 200 only when the verdict is GREEN. 503 while checking, so a Render health
+// check pointed here holds the deploy until the checks have actually passed
+// and keeps the PREVIOUS build serving if they never do — which turns a red
+// boot from a log line nobody reads into a deploy that visibly did not land.
+app.get('/healthz', (req, res) => {
+  const ok = BOOT_STATUS.phase === 'green';
+  res.status(ok ? 200 : 503).json({
+    status: BOOT_STATUS.phase,
+    env: process.env.RENDER_ENV || process.env.NODE_ENV || 'production',
+    checks: { green: BOOT_STATUS.green, red: BOOT_STATUS.red, expectedRed: BOOT_STATUS.expectedRed },
+    why: BOOT_STATUS.phase === 'red' ? BOOT_STATUS.why : undefined,
+    failures: BOOT_STATUS.redLines.length ? BOOT_STATUS.redLines : undefined,
+    uptimeSec: Math.round(process.uptime()),
+  });
+});
+
+// ════════════════════════ WHAT TODAY HAS COST, AND WHERE IT STOPS ════════════
+// "What does 50 audits a day cost" could only ever be answered per lead or with
+// arithmetic from outside the system, and NOTHING could say stop — a loop, a
+// mistake, or one bad afternoon ran the accounts to zero with every individual
+// line item correctly logged. So: one day-ledger, fed by the SAME four doors
+// the per-lead meters already use (fcNote, notePlacesCall, meterAnthropic, the
+// Apify dispatch), and a ceiling per service enforced at ADMISSION only —
+// never mid-lead, because killing a lead half-way wastes the spend already
+// made, which is the recorded lesson from the kill-clock.
+//
+// HONEST SHAPE, STATED FIRST: this is a safety net, not accounting. The day is
+// the UTC calendar day, and a process restart (every Render deploy) resets it.
+// Persisting spend to Supabase would add a failure mode to every request to
+// make a safety net pretend to be a ledger; the authoritative number is the
+// invoice, which is this file's own standing rule.
+const RUN_SPEND = { day: '', fc: 0, places: 0, anthropicUsd: 0, apify: 0, byKind: {} };
+const _spendDayNow = () => new Date().toISOString().slice(0, 10);
+// Pure on purpose: the check hands it a synthetic ledger and a synthetic day.
+const rollSpendDay = (r, day) => {
+  if (r.day !== day) { r.day = day; r.fc = 0; r.places = 0; r.anthropicUsd = 0; r.apify = 0; r.byKind = {}; }
+  return r;
+};
+const runSpendToday = () => rollSpendDay(RUN_SPEND, _spendDayNow());
+const noteRunSpend = (service, amount, kind) => {
+  try {
+    const r = runSpendToday();
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return;
+    r[service] += n;
+    if (kind) r.byKind[kind] = (r.byKind[kind] || 0) + n;
+  } catch (e) { void e; }
+};
+// A value of 0 or less turns a ceiling OFF — deliberately, and the boot says
+// so out loud below, because a ceiling silently absent is the state this whole
+// block exists to end. Defaults are sized to a 50-lead day with headroom:
+// 50 leads x 16 Firecrawl credits = 800; 50 x 4 Places calls plus one Find run
+// of ~180 = ~380; 50 x ~$0.10 of Anthropic plus compose = ~$6.
+const _budgetEnvParse = (raw, def) => {
+  if (raw === undefined || raw === '') return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return n <= 0 ? Infinity : n;
+};
+const _budgetEnv = (name, def) => _budgetEnvParse(process.env[name], def);
+// The boot check drives the PARSER with its own values; a probe that read
+// process.env would only ever exercise the configuration this dyno happens to
+// have, which is the recorded half-a-check.
+const _budgetEnvProbe = (raw, def) => _budgetEnvParse(raw, def);
+const SPEND_BUDGETS = {
+  fc: _budgetEnv('FC_DAILY_BUDGET', 1500),
+  places: _budgetEnv('PLACES_DAILY_BUDGET', 600),
+  anthropicUsd: _budgetEnv('ANTHROPIC_DAILY_BUDGET_USD', 20),
+  apify: _budgetEnv('APIFY_DAILY_BUDGET', 150),
+};
+const SPEND_NAMES = {
+  fc: ['Firecrawl credits', 'FC_DAILY_BUDGET'],
+  places: ['Google Places calls', 'PLACES_DAILY_BUDGET'],
+  anthropicUsd: ['Anthropic dollars', 'ANTHROPIC_DAILY_BUDGET_USD'],
+  apify: ['Apify review pulls', 'APIFY_DAILY_BUDGET'],
+};
+// Spend and budgets are PARAMETERS with live defaults, because the recorded
+// trap is a check that can only exercise the configuration where nothing can
+// go wrong. `>=` on purpose: the ceiling stops the NEXT lead; a lead already
+// running finishes whatever it costs, because a half-lead is pure waste.
+const budgetRefusal = (needs, spend, budgets) => {
+  const s = spend || runSpendToday();
+  const b = budgets || SPEND_BUDGETS;
+  const list = (Array.isArray(needs) && needs.length) ? needs : Object.keys(SPEND_NAMES);
+  for (const k of list) {
+    if (!(k in SPEND_NAMES)) continue;
+    if (Number(s[k]) >= Number(b[k])) {
+      const _fmt = k === 'anthropicUsd' ? '$' + Number(s[k]).toFixed(2) + ' of $' + b[k] : Math.round(s[k]) + ' of ' + b[k];
+      return { service: k, spent: s[k], budget: b[k],
+        message: `today's ${SPEND_NAMES[k][0]} ceiling is reached `+String.fromCharCode(0x2014)+` ${_fmt} since UTC midnight (a restart also resets this; the invoice is the authority). NOTHING was spent on this request. Raise ${SPEND_NAMES[k][1]} if today is deliberately bigger, set it to 0 to remove the ceiling, or wait for the day to roll over.` };
+    }
+  }
+  return null;
+};
+const daySpendLine = () => {
+  const r = runSpendToday();
+  if (!r.fc && !r.places && !r.anthropicUsd && !r.apify) return '';
+  const cap = (k) => (SPEND_BUDGETS[k] === Infinity ? 'no ceiling' : 'of ' + SPEND_BUDGETS[k]);
+  return `\u{1F4B0} DAY SPEND (UTC ${r.day}): Firecrawl ${Math.round(r.fc)} ${cap('fc')} credits | Places ${r.places} ${cap('places')} calls | Anthropic $${r.anthropicUsd.toFixed(2)} ${cap('anthropicUsd')} | Apify ${r.apify} ${cap('apify')} pulls. Resets at UTC midnight and on restart; ceilings are the *_DAILY_BUDGET settings.`;
+};
+for (const _k of Object.keys(SPEND_BUDGETS)) {
+  if (SPEND_BUDGETS[_k] === Infinity) console.log(`\u26a0 SPEND CEILING OFF: ${SPEND_NAMES[_k][1]} is set to 0, so nothing stops a runaway ${SPEND_NAMES[_k][0]} day. Deliberate is fine; forgotten is how an account empties with every line item correctly logged.`);
+}
+// The day so far, the ceilings, and per-operation-kind detail — the byKind
+// split is what settles FC_SCREENSHOT_CREDITS against the dashboard: run one
+// lead, read byKind.screenshot here, compare what the dashboard moved by.
+app.get('/api/spend', (req, res) => {
+  const r = runSpendToday();
+  res.json({
+    day: r.day,
+    spend: { fc: r.fc, places: r.places, anthropicUsd: Number(r.anthropicUsd.toFixed(4)), apify: r.apify },
+    budgets: { fc: SPEND_BUDGETS.fc === Infinity ? null : SPEND_BUDGETS.fc,
+               places: SPEND_BUDGETS.places === Infinity ? null : SPEND_BUDGETS.places,
+               anthropicUsd: SPEND_BUDGETS.anthropicUsd === Infinity ? null : SPEND_BUDGETS.anthropicUsd,
+               apify: SPEND_BUDGETS.apify === Infinity ? null : SPEND_BUDGETS.apify },
+    byKind: r.byKind,
+    notes: 'UTC calendar day; a process restart resets it. A null budget means that ceiling is off. The invoice is the authority.',
+  });
+});
+
 // ══ ONE PLACE TO READ EVERYTHING THAT HAPPENED ═══════════════════════════════
 // Reviewing a batch currently means pasting the Render log, then each audit,
 // then each email, from six different screens — and the interesting lines are
@@ -2928,6 +3142,12 @@ const meterAnthropic = (company, label, model, usage) => {
     const rec = _leadSpend.get(key);
     rec.calls.push({ label, model, fresh, cRead, cWrite, out, cost });
     rec.total += cost;
+    // Same door, two more meters: the UTC-day ledger the ceilings read, and the
+    // per-request ledger the response reports. An unpriced model already
+    // returned 0 above and shouted; it stays uncounted here too, which the
+    // UNPRICED line says in as many words.
+    noteRunSpend('anthropicUsd', cost, 'anthropic');
+    try { const _l = FC_LEDGER.getStore(); if (_l) _l.anthropicUsd = (_l.anthropicUsd || 0) + cost; } catch (e) { void e; }
     return cost;
   } catch (e) { return 0; }
 };
@@ -5237,6 +5457,10 @@ const GP_FREE_DETAILS = Math.max(0, parseInt(process.env.GP_FREE_DETAILS || '100
 const _gpCalls = { search: 0, details: 0 };
 const notePlacesCall = (kind) => {
   if (kind === 'details') _gpCalls.details++; else _gpCalls.search++;
+  // Counted at DISPATCH, like everything through this door: Google bills a
+  // request it received even when we give up waiting for the answer.
+  noteRunSpend('places', 1, kind === 'details' ? 'places-details' : 'places-search');
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.places = (_l.places || 0) + 1; } catch (e) { void e; }
 };
 // What this process has spent since it started. Render restarts on deploy, so
 // this is "since the last deploy", not a month — and it says so, because a
@@ -7239,6 +7463,12 @@ const fcNote = (paid, kind, what) => {
     }
     const _cost = fcCreditCost(kind);
     FC_CREDITS_SPENT += _cost;
+    // The day ledger and the per-kind split ride the same door as the process
+    // counter, so nothing can reach one meter and miss another. byKind is what
+    // settles FC_SCREENSHOT_CREDITS against the dashboard: the rate is a dial
+    // this file refuses to guess, and one lead's byKind.screenshot against what
+    // the dashboard actually moved by is the measurement.
+    noteRunSpend('fc', _cost, String(kind || 'scrape').replace(/[^a-z-]+.*$/i, '') || 'scrape');
     if (_led) { _led.spent += _cost; _led.ops += 1; }
     // MIDDLE-ellipsis, not a head slice. A flat .slice(0,110) truncated six
     // different mangled URLs down to the same visible prefix, so a log that was
@@ -23455,6 +23685,10 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
   if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}`;
+  // Counted at DISPATCH, before the await, same rule as Places: an actor run
+  // that starts is billed whether or not we wait for the dataset.
+  noteRunSpend('apify', 1, 'apify-reviews');
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.apify = (_l.apify || 0) + 1; } catch (e) { void e; }
   const body = { placeIds: [placeId], maxReviews, reviewsSort: 'newest',
                  reviewsOrigin: 'google', language: 'en', personalData: false };
   let res;
@@ -28578,6 +28812,18 @@ app.get('/api/cron/discover', async (req, res) => {
 });
 
 app.post('/api/discover', async (req, res) => {
+  // A Find run is the expensive half — one press costs about what sixty
+  // audits cost — so the Places ceiling is checked before a single query is
+  // dealt. Same rule as research admission: refuse whole, never truncate,
+  // because a partial run that reports success is how half a batch goes
+  // missing quietly.
+  {
+    const _ceiling = budgetRefusal(['places']);
+    if (_ceiling) {
+      console.log(`\u{1F6D1} FIND REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+      return res.status(429).json({ error: _ceiling.message, budgetStopped: true, service: _ceiling.service });
+    }
+  }
   // ══ FILTERS AT THE PULL, NOT JUST THE DISPLAY ════════════════════════════
   // Filtering after the fact still spends the Places call. Passing the filter
   // down means the run only buys leads that match, which matters because a
@@ -39552,6 +39798,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // same question from opposite sides: what a lead COST and what it TOOK.
     { const _t = netReport(); if (_t) console.log(`\u23f1 TIME [${company}]: ${_t}`); }
     { const _sp = placesSpendLine(company); if (_sp) console.log(_sp); }
+    // The day so far, beside the per-lead figures, so "what has this morning
+    // cost" is one line in the log instead of arithmetic across fifty.
+    { const _d = daySpendLine(); if (_d) console.log(_d); }
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
     // This lead's own refusals when we have a ledger; the process-wide delta
@@ -39563,6 +39812,19 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 
     res.json({
       reachability: reach.score,
+      // What THIS lead cost, in the response, so the screen can sum a run
+      // without anyone reading the Render log. From the same per-request
+      // ledger the log lines read; null on any path outside one. Second
+      // property, not first: clientcheck anchors its contract reader on the
+      // line above, and moving it broke that check loudly on first run -
+      // which is the anchor doing its job.
+      leadSpend: (() => {
+        try {
+          const _l = FC_LEDGER.getStore();
+          return _l ? { fcCredits: Number((_l.spent || 0).toFixed(1)), fcOps: _l.ops || 0, fcSaved: _l.saved || 0,
+                        places: _l.places || 0, anthropicUsd: Number((_l.anthropicUsd || 0).toFixed(4)), apify: _l.apify || 0 } : null;
+        } catch (e) { return null; }
+      })(),
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
       outreachChannel: reach.outreachChannel,
@@ -39866,7 +40128,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
 // look like a regression when it had actually halved the bill.
 const runResearch = (req, res) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
-  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0 },
+  () => FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
     () => NET_LEDGER.run({ by: new Map(), gateWaitMs: 0 }, () => _runResearchInner(req, res))));
 
 app.post('/api/research', runResearch);
@@ -40262,6 +40524,23 @@ app.post('/api/research-async', (req, res) => {
         console.log(`\u{1F534} JOB ${id} [${job.company}]: REFUSED BEFORE SPENDING \u2014 ${_broke}`);
         return null;
       }
+      // ══════ AND THE DAY'S CEILING, AT THE SAME SEAM ══════════
+      // Enforced at admission and never mid-lead: a lead already working
+      // finishes whatever it costs, because a half-lead is Firecrawl, Places,
+      // Apify and the model all spent for an audit nobody gets. Refused, not
+      // held — a budget does not top itself up the way a credit balance does,
+      // and a queue silently holding until midnight reads as a hang.
+      const _ceiling = budgetRefusal();
+      if (_ceiling) {
+        job.status = 'error';
+        job.phase = 'dead';
+        job.workDone = true;
+        job.finishedAt = Date.now();
+        job.error = _ceiling.message;
+        job.budgetStopped = true;
+        console.log(`\u{1F6D1} JOB ${id} [${job.company}]: REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+        return null;
+      }
       // The work begins HERE, so the timeout begins here too.
       job.phase = 'running';
       job.startedWorkAt = Date.now();
@@ -40391,6 +40670,7 @@ app.get('/api/session-report', (req, res) => {
 });
 
 app.listen(PORT, () => {
+  installBootRecorder();
   const has = (ok) => (ok ? '\u2713' : '\u2717 MISSING');
   console.log(`CROJungle v6 — port ${PORT}`);
   // The list is the point. A marker that checks five hand-typed names goes stale
@@ -42387,6 +42667,71 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- NOTHING COULD SAY STOP -------------------------------------------
+  // The day ledger and its ceilings. Executed against synthetic spend, because
+  // running the real noteRunSpend at boot would charge fake spend to the real
+  // day; the wiring is asserted at the call sites instead, which is where four
+  // separate fixes in this file have gone dead before.
+  try {
+    const _fails = [];
+
+    // The rollover: a new day zeroes everything, the same day preserves it.
+    const _r = { day: '2026-08-21', fc: 700, places: 40, anthropicUsd: 4.2, apify: 9, byKind: { screenshot: 250 } };
+    rollSpendDay(_r, '2026-08-21');
+    if (_r.fc !== 700 || _r.byKind.screenshot !== 250) _fails.push('the same day wiped the ledger, so the ceiling can never be reached and every ceiling is decorative');
+    rollSpendDay(_r, '2026-08-22');
+    if (_r.fc !== 0 || _r.places !== 0 || _r.anthropicUsd !== 0 || _r.apify !== 0 || Object.keys(_r.byKind).length) {
+      _fails.push('a new day did not zero the ledger, so yesterday counts against today and the first lead of the morning is refused');
+    }
+
+    // The refusal: over refuses naming the setting, under passes, and the
+    // check hands in its own spend and budgets - the recorded trap is a check
+    // that can only exercise the configuration where nothing can go wrong.
+    const _spend = { fc: 1500, places: 10, anthropicUsd: 1, apify: 0 };
+    const _budgets = { fc: 1500, places: 600, anthropicUsd: 20, apify: 150 };
+    const _over = budgetRefusal(null, _spend, _budgets);
+    if (!_over || _over.service !== 'fc') _fails.push('spend equal to the ceiling does not refuse, so the ceiling is off by one lead forever');
+    else if (!/FC_DAILY_BUDGET/.test(_over.message)) _fails.push('the refusal does not name the setting that raises it, which is the log-line-naming-the-wrong-cause class');
+    if (budgetRefusal(null, { fc: 10, places: 10, anthropicUsd: 0.5, apify: 1 }, _budgets)) {
+      _fails.push('an ordinary morning is refused, and a ceiling that fires on the normal case is one somebody turns off');
+    }
+    const _usd = budgetRefusal(['anthropicUsd'], { fc: 0, places: 0, anthropicUsd: 25, apify: 0 }, _budgets);
+    if (!_usd || !/\$25\.00 of \$20/.test(_usd.message)) _fails.push('the dollar ceiling does not read as dollars');
+    if (budgetRefusal(['places'], _spend, _budgets)) _fails.push('a needs list scoped to one service is still refusing on another, so a Find run is blocked by a Firecrawl ceiling it does not spend against');
+
+    // The OFF convention: 0 or less disables, loudly at boot; junk and empty
+    // fall back to the default rather than to anything surprising.
+    if (_budgetEnvProbe('', 5) !== 5) _fails.push('an unset ceiling is not the default');
+    if (_budgetEnvProbe('0', 5) !== Infinity) _fails.push('0 does not turn a ceiling off, and the boot warning about it is lying');
+    if (_budgetEnvProbe('junk', 5) !== 5) _fails.push('a junk value became a ceiling');
+    if (_budgetEnvProbe('250', 5) !== 250) _fails.push('a set value is ignored');
+
+    // The wiring. Needles assembled at runtime, comment lines stripped.
+    {
+      const _n = (...p) => p.join('');
+      const _s = selfSourceNoComments();
+      for (const [needle, what] of [
+        [_n("noteRunSpend('fc', _co", 'st,'), 'the Firecrawl door stopped feeding the day ledger, so Firecrawl spend is invisible to its own ceiling'],
+        [_n("noteRunSpend('places'", ', 1,'), 'the Places door stopped feeding the day ledger'],
+        [_n("noteRunSpend('anthropicUsd'", ', cost,'), 'the Anthropic door stopped feeding the day ledger'],
+        [_n("noteRunSpend('apify'", ', 1,'), 'the Apify door stopped feeding the day ledger'],
+        [_n('const _ceiling = budget', 'Refusal();'), 'research admission no longer consults the ceiling, so the one place built to say stop says nothing'],
+        [_n("budgetRefusal(['pla", "ces'])"), 'a Find run no longer consults the Places ceiling, and one press of Find costs what sixty audits cost'],
+        [_n("budgetRefusal(['anthropic", "Usd'])"), 'the compose route no longer consults the model ceiling'],
+        [_n('leadSpend: (()', ' => {'), 'the response stopped carrying what the lead cost, so the screen is back to arithmetic over the Render log'],
+      ]) {
+        if (!_s.includes(needle)) _fails.push(what);
+      }
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 SPEND CEILING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 SPEND CEILING CHECK: one UTC-day ledger fed by the same four doors as the per-lead meters, a ceiling per service enforced at admission and never mid-lead, refusals that name the exact setting to raise, 0 as the loud off-switch, and the response carrying what each lead cost. Before this, nothing anywhere could say stop, and a runaway day would have emptied the accounts with every line item correctly logged.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 SPEND CEILING CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ---- FOUR PLACES A MODEL SENTENCE OR A BLANK VARIABLE COULD SPEAK -------
@@ -55644,6 +55989,15 @@ const spineFromStoredAudit = (audit, company, tradeWordFallback) => {
 // synchronous and the composer remains the fallback, so an await here cannot
 // change what gets sent when the model is unavailable — only how it reads.
 app.post('/api/compose-email', async (req, res) => {
+  // The compose path can call the writer, the rewrite and the fact-checker.
+  // Small money, same rule: the ceiling is checked before the first token.
+  {
+    const _ceiling = budgetRefusal(['anthropicUsd']);
+    if (_ceiling) {
+      console.log(`\u{1F6D1} COMPOSE REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+      return res.status(429).json({ error: _ceiling.message, budgetStopped: true, service: _ceiling.service });
+    }
+  }
   try {
     const audit = req.body && req.body.brainAudit;
     const company = (req.body && req.body.company) || 'lead';

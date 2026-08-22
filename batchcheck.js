@@ -156,6 +156,9 @@ const seed = (n) => Array.from({ length: n }, (_, i) => ({
 const RESEARCH_OK = {
   reachability: 70, researchBonus: 3, flaws: ['x'], brainAudit: { factualSpine: 's', problemList: [] },
   email: 'a@b.com', founderName: 'Ann', richData: {}, signals: {},
+  // The server's per-request ledger, riding the response. The reducer sums it
+  // and the bar renders the sum; the assertion below multiplies this by fifty.
+  leadSpend: { fcCredits: 16, fcOps: 12, fcSaved: 2, places: 4, anthropicUsd: 0.1, apify: 1 },
 };
 const COMPOSED = { composed: { variantA: { subject: 'S-A', body: 'Body A that is long enough.' }, variantB: { subject: 'S-B', body: 'Body B that is long enough.' } } };
 const BLOCKED = { reason: 'critical-fact-check', criticalFlags: ['your site is down'] };
@@ -219,6 +222,21 @@ const runBatch = async (opts) => {
     if (W.peak > 8) fails.push(`${W.peak} leads were in flight at once — the pool is not bounding anything, which is fifty poll loops and fifty job ids in one tab`);
     if (W.peak < 2) fails.push(`only ${W.peak} lead ran at a time, so the pool is serial and fifty audits take fifty times one audit`);
     if (W.jobIds.size !== 50) fails.push(`${W.jobIds.size} of 50 job ids were written to disk — the rest cannot be resumed if the tab closes, and the work is already paid for`);
+    // ══ THE BAR'S COST FIGURE IS THE SUM OF WHAT THE SERVER SAID ═══════════
+    // Fifty leads at 16 credits / 4 Places calls / $0.10 each. Computed by the
+    // same pure reducer the bar renders from, so the number on screen and the
+    // number asserted here are one computation. Both directions: a sum of zero
+    // means the spend never rode the events, which is exactly how a cost figure
+    // goes quietly dark while the bar keeps rendering.
+    {
+      const sp = panel && panel.spend;
+      if (!sp) fails.push('the panel carries no spend at all — the reducer dropped it and the bar has nothing to render');
+      else {
+        if (Math.round(sp.fcCredits) !== 800) fails.push(`the run's Firecrawl sum is ${sp.fcCredits}, not 50 x 16 = 800 — the bar under-reports what was spent`);
+        if (sp.places !== 200) fails.push(`the run's Places sum is ${sp.places}, not 50 x 4 = 200`);
+        if (Math.abs(sp.anthropicUsd - 5) > 0.01) fails.push(`the run's model sum is $${sp.anthropicUsd}, not 50 x $0.10 = $5.00`);
+      }
+    }
     if (out.length !== 50 || out.some(x => x.outcome !== 'researched')) fails.push(`the run reported ${out.filter(x => x.outcome === 'researched').length} of 50 audited`);
     if (store.length !== 50 || store.some(x => x.status !== 'researched')) fails.push('leads were not saved as researched, so a fifty-lead run left the pipeline unchanged');
     if (W.saveWithoutChanged) fails.push('a save was made without naming the row that changed, which pushes every row in the pipeline to Supabase instead of one');

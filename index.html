@@ -1508,6 +1508,13 @@ const applyResearchResult = (prev, data, ctx) => {
         L.verifiedCEOTitle = data.verifiedCEOTitle || L.verifiedCEOTitle || null;
         L.founderTitle = data.founderTitle || L.founderTitle || '';
         L.rateLimited = data.rateLimited ?? L.rateLimited ?? null;
+        // What this research run cost, from the server's own per-request
+        // ledger. Carried so the batch bar can sum a run without anyone
+        // reading the Render log. Deliberately NOT persisted to Supabase:
+        // it is a figure about the RUN, not about the business, and the
+        // authoritative record is the invoice - the server says the same at
+        // its /api/spend endpoint.
+        L.leadSpend = data.leadSpend ?? null;
         L.phoneSource = data.phoneSource || L.phoneSource || '';
         L.realSpeed = data.realSpeed ?? L.realSpeed ?? null;
         // Two-listings measurement: the call sheet's mechanical explanation for
@@ -2059,10 +2066,22 @@ const batchProgressReduce = (state, ev) => {
   if (ev.phase === 'start') {
     return { ...s, total, queued: dropOne(s.queued, name), running: (s.running || []).concat([name]) };
   }
+  // What the run has cost so far, summed from each done event's spend - the
+  // server's own per-request ledger riding the result. Accumulated HERE, in
+  // the pure reducer batchcheck executes, so the number on the bar and the
+  // number the harness asserts are one computation.
+  const _sp = (ev.spend && typeof ev.spend === 'object') ? ev.spend : null;
+  const _prev = s.spend || { fcCredits: 0, anthropicUsd: 0, places: 0, apify: 0 };
   return { ...s, total,
     finished: Number.isFinite(ev.finished) ? ev.finished : s.finished,
     running: dropOne(s.running, name),
     queued: dropOne(s.queued, name),
+    spend: _sp ? {
+      fcCredits: _prev.fcCredits + (Number(_sp.fcCredits) || 0),
+      anthropicUsd: _prev.anthropicUsd + (Number(_sp.anthropicUsd) || 0),
+      places: _prev.places + (Number(_sp.places) || 0),
+      apify: _prev.apify + (Number(_sp.apify) || 0),
+    } : _prev,
     done: (s.done || []).concat([name]) };
 };
 
@@ -2114,6 +2133,9 @@ const runBatchAudit = async (opts) => {
       });
       row = persist(merged.lead);
       clearInflightJob(lead.id);
+      // What the server says this lead cost, riding the result so the bar can
+      // sum a run without the Render log.
+      base.spend = (merged.lead && merged.lead.leadSpend) || null;
       if (merged.outcome !== 'researched') return { ...base, outcome: merged.outcome, note: merged.banner };
       if (!withEmail) return { ...base, outcome: 'researched', note: '' };
     } catch (e) {
@@ -2153,7 +2175,8 @@ const runBatchAudit = async (opts) => {
       const res = await one(queue[i]);
       results[i] = res;
       finished++;
-      report({ phase: 'done', lead: queue[i], index: i, total, finished, result: res });
+      report({ phase: 'done', lead: queue[i], index: i, total, finished, result: res,
+               spend: (res && res.spend) || null });
     }
   };
 
@@ -6770,6 +6793,15 @@ function ResearchView({
           batchRunning ? ('Auditing ' + done + ' of ' + total) : ('Finished — ' + done + ' of ' + total)),
         React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m)' } },
           mmss(elapsed) + (left != null ? ' · about ' + (left < 1 ? 'a minute' : left + ' min') + ' left, estimated from this run so far' : '')),
+        // What the run has cost, from the server's own per-lead ledger. Only
+        // once something has been spent, so a run of cached leads stays quiet.
+        (() => {
+          const sp = batchAt.spend;
+          if (!sp || (!sp.fcCredits && !sp.anthropicUsd && !sp.places)) return null;
+          return React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m)' } },
+            'this run: ~' + Math.round(sp.fcCredits) + ' Firecrawl credits · '
+            + sp.places + ' Places calls · $' + sp.anthropicUsd.toFixed(2) + ' model');
+        })(),
         React.createElement('div', { style: { flex: 1 } }),
         batchRunning && React.createElement('button', {
           className: 'btn btn-sm', onClick: startBatch,
