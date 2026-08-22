@@ -10769,9 +10769,26 @@ const readRecurringOffer = ({ text, trade, pagesRead } = {}) => {
 };
 
 
-const readOfferStrength = (text) => {
+const readOfferStrength = (text, pagesRead) => {
   const t = String(text || '').toLowerCase();
-  if (t.length < 200) return { checked: false };
+  // ---- THE SAME FLOOR AS ITS SIBLING ---------------------------------
+  // readRecurringOffer forty lines away demands 3,000 characters AND two
+  // pages before it will claim a business does not offer something, and its
+  // own comment says why: that is "enough of their site to be entitled to an
+  // absence claim". This made the identical class of claim - nothing
+  // anywhere on their site names an offer - off 200 characters and no page
+  // count at all, which on a starved Firecrawl run is a nav bar and a
+  // tagline. PART 3: absence claims require that we actually looked, and
+  // EXISTS BUT UNREAD is in this file because a live email told an attorney
+  // with a Reviews page that he had no reviews on his site.
+  //
+  // pagesRead is optional so nothing that already calls this breaks; when it
+  // is absent the character floor alone applies, and the ONE production call
+  // site passes it.
+  const _pages = Number(pagesRead);
+  if (t.length < 3000 || (Number.isFinite(_pages) && _pages < 2)) {
+    return { checked: false, why: `only ${Number.isFinite(_pages) ? _pages : '?'} page(s) and ${t.length} characters were read \u2014 not enough of their site to claim there is no offer on it` };
+  }
   // WIDENED after a live check found this reporting "no guarantee" on copy that
   // plainly had one. The old pattern required a trailing \b immediately after
   // "guarantee", so "satisfaction GUARANTEED" \u2014 the single most common phrasing on
@@ -21702,9 +21719,26 @@ const readMarketClarity = (text, { trade, city } = {}) => {
 // exactly the play CROJungle runs on them (the free audit IS the lead magnet).
 //
 // Measured from their own page copy. Three states as always.
-const readLeadMagnet = (text) => {
+const readLeadMagnet = (text, pagesRead) => {
   const t = String(text || '').toLowerCase();
-  if (t.length < 200) return { checked: false };
+  // ---- THE SAME FLOOR AS ITS SIBLING ---------------------------------
+  // readRecurringOffer forty lines away demands 3,000 characters AND two
+  // pages before it will claim a business does not offer something, and its
+  // own comment says why: that is "enough of their site to be entitled to an
+  // absence claim". This made the identical class of claim - nothing
+  // anywhere on their site names an offer - off 200 characters and no page
+  // count at all, which on a starved Firecrawl run is a nav bar and a
+  // tagline. PART 3: absence claims require that we actually looked, and
+  // EXISTS BUT UNREAD is in this file because a live email told an attorney
+  // with a Reviews page that he had no reviews on his site.
+  //
+  // pagesRead is optional so nothing that already calls this breaks; when it
+  // is absent the character floor alone applies, and the ONE production call
+  // site passes it.
+  const _pages = Number(pagesRead);
+  if (t.length < 3000 || (Number.isFinite(_pages) && _pages < 2)) {
+    return { checked: false, why: `only ${Number.isFinite(_pages) ? _pages : '?'} page(s) and ${t.length} characters were read \u2014 not enough of their site to claim there is nothing on it a stranger can take` };
+  }
 
   // Something a stranger can take away without speaking to anyone.
   const hasFreeAsset = /\b(free (guide|checklist|report|ebook|e-book|template|toolkit|worksheet|calculator|quiz|assessment|inspection report|buyers? guide|planning guide)|download (our|the|your|this|a) (free )?\w+|get (the|our|your) free \w+)\b/.test(t);
@@ -33295,12 +33329,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const trustedContent = scrapeTrustworthy ? content : '';
     // Measure offer strength from every page we read, not just the homepage —
     // a guarantee usually lives on a services or about page.
+    const _pagesForAbsence = (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead.length : 0;
     offerStrength = readOfferStrength(
-      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'), _pagesForAbsence);
     // Hormozi's LEADS layer: is there anything a stranger can take without
     // talking to a salesperson? Measured from the same full-site text.
     leadMagnet = readLeadMagnet(
-      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'));
+      [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'), _pagesForAbsence);
     // Abraham's frequency lever — the only one of his three this file has never
     // measured, and usually the only gap left on a business with nothing wrong.
     // pagesRead is passed so the absence gate is about what we ACTUALLY opened,
@@ -37036,6 +37071,22 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // The ladder already knows what is worth leading on and it is measured.
           // Overwrite the Brain's choice with it, and say so in the log so the
           // disagreement is visible rather than silent.
+          // ---- THE AUDIT GETS THE FINDINGS WHETHER OR NOT AN EMAIL CAN ----
+          // problemList, subjectOptions and harmsRanked were attached INSIDE the
+          // spine block below, so a lead with no sayable finding got none of
+          // them - while rankHarms had just logged "the audit and the call sheet
+          // still carry every one of them". That is the case the INTERNAL_ONLY
+          // rule exists for: seven review rungs measured, ranked, and
+          // deliberately kept out of the email precisely so they can be on the
+          // sheet Mike dials from. On those leads the sheet was empty and the
+          // business read as clean.
+          //
+          // This file's own TWO LADDERS rule: the spine decides what the EMAIL
+          // may say; it has never decided what the AUDIT knows. The block below
+          // still refines all three.
+          parsed.problemList = _harmsForResponse.problemList || [];
+          parsed.subjectOptions = _harmsForResponse.subjectOptions || [];
+          parsed.harmsRanked = _harmsForResponse.harmsRanked || [];
           if (_harmsForResponse.factualSpine && _harmsForResponse.factualSpine.claim) {
             const _ladderLead = _harmsForResponse.factualSpine.claim;
             const _brainLead = String(parsed.pitchAngle || '').slice(0, 90);
@@ -37452,7 +37503,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // the composed email falls back exactly as it does today. This can
             // sharpen the claim; it cannot introduce a number.
             try {
-              const _sp = _harmsForResponse && _harmsForResponse.factualSpine;
+              // parsed.factualSpine FIRST. This read _harmsForResponse's copy,
+              // and when a LOCAL_ONLY rung forces the swap forty lines above,
+              // parsed.factualSpine is a SPREAD COPY of it - so the sharpened
+              // claim was logged as "Using X instead of Y" and X reached
+              // nothing. A log that announces a change which did not happen is
+              // the same cost as one that names the wrong cause.
+              const _sp = (parsed && parsed.factualSpine) || (_harmsForResponse && _harmsForResponse.factualSpine);
               if (_sp && _sp.claim && _origOk.length) {
                 const _lw = String(_sp.claim).toLowerCase().split(/\s+/)
                   .filter(w => w.length > 5 && !/^(their|there|business|company|website|reviews?)$/.test(w));
@@ -42325,6 +42382,31 @@ app.listen(PORT, () => {
       }
       if (!_s.includes(_n('pageHtml: homepage', 'Html || content,'))) {
         _fails.push('the phone read is back on a variable that only exists on the Firecrawl path');
+      }
+      // 5. NO SLUG, NO SEND. ensureHunterAttribute returns null when Hunter's
+      //    API is down or the key is wrong, and every use of the result is
+      //    guarded with `if (slug)` - so a null one was silently skipped, the
+      //    lead was pushed anyway, reported in results.sent, and the sequence
+      //    step delivered its own static text to the prospect.
+      if (!_s.includes(_n('if (!pitchSlug || !subject', 'Slug) {'))) {
+        _fails.push('a send can go out with nowhere to put the written email, so every lead in the batch receives whatever static text sits in step 1 and is reported as sent');
+      }
+      if (!_s.includes(_n('if (!fu1.body || !fu1Body', 'Slug) missingFu.push'))) {
+        _fails.push('a follow-up with copy but no attribute to carry it is no longer refused, and the step goes out generic');
+      }
+      // 6. THE SHARPER CLAIM REACHES THE OBJECT THAT SHIPS. parsed.factualSpine
+      //    is a SPREAD COPY of the ladder's whenever a LOCAL_ONLY rung forced
+      //    the swap, so mutating the ladder's copy logged a change that reached
+      //    nothing.
+      if (!_s.includes(_n('const _sp = (parsed && parsed.factualSpine) ||', ' (_harmsForResponse && _harmsForResponse.factualSpine);'))) {
+        _fails.push('the sharper claim is written onto a copy of the spine that no longer ships, so the log announces a change nothing downstream can see');
+      }
+      // 7. THE AUDIT GETS ITS FINDINGS WHETHER OR NOT AN EMAIL CAN BE WRITTEN.
+      //    These three were attached inside the spine block, so a lead whose
+      //    every finding is INTERNAL_ONLY got none of them - while rankHarms
+      //    had just logged that the call sheet still carries every one.
+      if (!_s.includes(_n('parsed.problemList = _harmsForResponse.problemList |', '| [];'))) {
+        _fails.push('the findings reach the audit only when an EMAIL could be written, so a lead whose findings are all internal-only reaches Mike as a clean business - and the log tells him the sheet carries them');
       }
       // 4. AN ABSENT SERVICE ROW BUYS A SECOND SEARCH. pickRankRow PROMOTES
       //    that row over every found row and it produces harm 96 - the head
@@ -49576,8 +49658,12 @@ app.listen(PORT, () => {
   // Run against the real function, not a re-implementation.
   try {
     const _fails = [];
-    const PAD = ' We have served this town for thirty years and we answer the phone ourselves. '.repeat(4);
-    const _offer = (copy) => readOfferStrength(copy + PAD);
+    // Long enough to clear the ABSENCE floor, which is the sibling rule: 3,000
+    // characters and two pages before a site-wide "there is no offer here" is
+    // allowed. This fixture is about the offer PATTERNS, so it supplies a real
+    // read; the floor itself is asserted separately below.
+    const PAD = ' We have served this town for thirty years and we answer the phone ourselves. '.repeat(45);
+    const _offer = (copy) => readOfferStrength(copy + PAD, 3);
     const _cases = [
       ['a named seasonal promotion behind a generic ask', 'Get a quote today. $500 off our fall special this month only.', true],
       ['a free inspection', 'Contact us for a free inspection of your roof, no obligation.', true],
@@ -49618,6 +49704,27 @@ app.listen(PORT, () => {
       }
       if (_src.indexOf('namedOffer: offerStrength && offerStrength.checked ? !offerStrength.' + 'genericOnly') >= 0) {
         _fails.push('the inverted derivation is still wired to the rung');
+      }
+    }
+    // ---- AND AN ABSENCE NEEDS ENOUGH OF THE SITE TO BE ENTITLED TO IT ----
+    // readRecurringOffer demands 3,000 characters and two pages before it will
+    // say a business does not offer something. These two make the identical
+    // class of claim - nothing anywhere on their site names an offer, there is
+    // nothing a stranger can take - and asked for 200 characters and no page
+    // count, which on a starved Firecrawl run is a nav bar and a tagline.
+    {
+      const _thin = 'Acme Plumbing. Call us today. ' + 'x'.repeat(400);
+      if (readOfferStrength(_thin, 1).checked !== false) {
+        _fails.push('a 430-character read of ONE page is enough to claim there is no offer anywhere on their site - that is the absence claim PART 3 exists to stop, and the owner disproves it at a glance');
+      }
+      if (readLeadMagnet(_thin, 1).checked !== false) {
+        _fails.push('a 430-character read of ONE page is enough to claim there is nothing on their site a stranger can take away');
+      }
+      if (readOfferStrength(PAD + ' free inspection ', 4).checked !== true) {
+        _fails.push('a genuine multi-page read is being refused, which deletes the offer findings on every healthy lead');
+      }
+      if (readOfferStrength('short', 9).checked !== false) {
+        _fails.push('a page count alone licenses the claim - the characters have to be there too, or six empty pages read as a site with no offer on it');
       }
     }
     if (_fails.length) {
@@ -54529,6 +54636,27 @@ app.post('/api/send-to-hunter', async (req, res) => {
   // every lead and this route dropped them on the floor — steps 2 and 3 would have
   // gone out generic, or not at all. Roughly a third of replies live in those two
   // emails, so this was the largest silent loss in the send path.
+  // ---- NO SLUG, NO SEND ------------------------------------------------
+  // ensureHunterAttribute returns null when Hunter's API is down, the key is
+  // wrong, or the create call fails - and every use of these is guarded with
+  // `if (slug)`, so a null one was silently skipped. The lead was still pushed
+  // and still reported in results.sent, and the sequence step then delivered
+  // its own fallback text to the prospect: the "MISSING - DO NOT SEND"
+  // placeholder, or worse, a generic template with none of the measured work in
+  // it. Exactly the failure the follow-up copy guard was written to stop, one
+  // step earlier and on the email that decides everything.
+  //
+  // Batch-level, because it is a fact about the ACCOUNT rather than about a
+  // lead: if the attribute cannot be created, no lead in this request can be
+  // personalised, and sending them generically is unrecoverable.
+  if (!pitchSlug || !subjectSlug) {
+    const _missingAttr = [!pitchSlug && 'Pitch Body', !subjectSlug && 'Pitch Subject'].filter(Boolean);
+    console.log(`\u26d4 SEND REFUSED: Hunter would not give us ${_missingAttr.join(' or ')}, so the personalised email has nowhere to go and every lead in this batch would receive whatever static text sits in step 1. NOTHING was sent.`);
+    return res.status(502).json({
+      error: `Hunter did not return the custom attribute${_missingAttr.length > 1 ? 's' : ''} ${_missingAttr.join(' and ')}, which ${_missingAttr.length > 1 ? 'are' : 'is'} where the written email is placed. Every lead would have been sent the sequence's own placeholder text instead. Nothing was sent \u2014 check the Hunter API key and try again.`,
+      sent: 0, offered: leads.length,
+    });
+  }
   const fu1SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Subject');
   const fu1BodySlug = await ensureHunterAttribute(hunterKey, 'Follow Up 1 Body');
   const fu2SubjSlug = await ensureHunterAttribute(hunterKey, 'Follow Up 2 Subject');
@@ -54682,8 +54810,11 @@ app.post('/api/send-to-hunter', async (req, res) => {
       // unrecoverable — you cannot unsend it, and it is the last thing that
       // prospect will ever read from us.
       const missingFu = [];
-      if (!fu1.body) missingFu.push('follow-up 1');
-      if (!fu2.body) missingFu.push('follow-up 2');
+      // The COPY and the SLUG are two different ways for a step to go out
+      // generic and both end at the same prospect. The copy check has been here
+      // since the placeholder incident; the slug was assumed.
+      if (!fu1.body || !fu1BodySlug) missingFu.push('follow-up 1');
+      if (!fu2.body || !fu2BodySlug) missingFu.push('follow-up 2');
       // ---- AND THE REASON MUST BE THE REAL ONE ---------------------------
       // "Re-run Generate on this lead and push again" is the right advice for
       // exactly one of the two causes, and the wrong advice for the other.
