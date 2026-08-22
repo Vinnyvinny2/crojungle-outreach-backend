@@ -793,6 +793,49 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// Assertions that need an await. Settled before the report is printed, so a
+// green line can never appear ahead of a failure it does not know about yet.
+const PENDING = [];
+
+// ══ AN UNREADABLE CLOUD IS NOT AN EMPTY ONE ══════════════════════════════
+// sbLoadLeads returned null for both, and boot answers null by pushing the
+// whole local cache up as a first seed. On a genuinely empty table that is
+// right; on a read that FAILED it writes this browser's stale copy over every
+// row the cloud actually has, last write wins, and an audit done on another
+// machine is gone. It is the one failure in this file that cannot be undone
+// from the browser.
+{
+  let sbSrc = null;
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && n.id.name === 'sbLoadLeads' && n.init) {
+      sbSrc = 'const sbLoadLeads = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+  });
+  if (!sbSrc) {
+    fails.push('sbLoadLeads is not a module-scope function any more, so the empty-versus-unreadable distinction cannot be verified');
+  } else {
+    const mk = (answer) => new Function('sbFetch', 'rowToLead',
+      sbSrc + '\nreturn sbLoadLeads;')(async () => answer, (r) => ({ id: r.id }));
+    PENDING.push((async () => {
+      const failed = await mk(null)();
+      const empty = await mk([])();
+      const full = await mk([{ id: 'a' }])();
+      if (failed !== null) fails.push('a failed read no longer reports itself as unreadable, so boot will seed the local cache over whatever the cloud holds');
+      if (!Array.isArray(empty) || empty.length !== 0) fails.push(`a genuinely empty table came back as ${JSON.stringify(empty)} rather than [] - boot cannot tell it apart from a failure and the first seed never happens`);
+      if (!Array.isArray(full) || full.length !== 1) fails.push('a normal read is broken');
+      // And boot must act on the difference rather than on truthiness.
+      const N = (...p) => p.join('');
+      const bare = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+      if (bare.indexOf(N('cloudLeads === null ? [] : getLe', 'ads().filter')) < 0) {
+        fails.push('boot seeds from a read it could not make - the whole local cache is pushed over the cloud whenever Supabase does not answer');
+      }
+      if (bare.indexOf(N('window._sbSyncEnabled = cloudLeads !', '== null;')) < 0) {
+        fails.push('writes stay enabled while the cloud is unreadable, so every save this session is a blind upsert over rows nobody read');
+      }
+    })());
+  }
+}
+
 // ══ WHAT THE BULK CONTROLS SPEND ON ═══════════════════════════════════════
 // Two defects on the path Vin uses every morning, both invisible to any test
 // that does not read the call site. Needles assembled at runtime with comment
@@ -820,11 +863,14 @@ const mergeStat = runMergeCheck();
   if (!merges) fails.push('nothing calls applyResearchResult — the merge exists but the research path is applying results some other way');
 }
 
-if (fails.length) {
-  console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
-  fails.forEach(f => console.log('  ' + f));
-  process.exit(1);
-}
-console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
-if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
-if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
+Promise.all(PENDING).then(() => {
+  if (fails.length) {
+    console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
+    fails.forEach(f => console.log('  ' + f));
+    process.exit(1);
+  }
+
+  console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
+  if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
+  if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
+}).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });

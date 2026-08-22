@@ -1005,10 +1005,20 @@ const sbSaveLead = async (lead) => {
 };
 
 // Load all leads from Supabase (called once on app init)
+// ---- "WE COULD NOT READ" IS NOT "THERE IS NOTHING THERE" ------------------
+// This returned null for BOTH, and boot answers null by pushing the entire
+// local cache to the cloud as a first seed. On a genuinely empty table that is
+// right. On a read that FAILED - a 5xx, an expired key, a policy that now
+// filters every row - it writes this browser's stale copy over a healthy cloud,
+// row by row, last write wins. An audit done on another machine is gone.
+//
+// sbFetch already tells the two apart: it returns null when the request failed
+// and an empty ARRAY when the table answered with no rows. Only this line
+// collapsed them.
 const sbLoadLeads = async () => {
   const rows = await sbFetch('/leads?order=updated_at.desc&limit=500', { headers: { 'Prefer': 'return=representation' } });
-  if (!rows || !Array.isArray(rows) || rows.length === 0) return null;
-  return rows.map(rowToLead);
+  if (!rows || !Array.isArray(rows)) return null;   // could not read
+  return rows.map(rowToLead);                        // [] means genuinely empty
 };
 
 // Delete a lead from Supabase
@@ -12686,7 +12696,7 @@ function App() {
           console.log('Supabase: loaded ' + cloudLeads.length + ' cloud leads → in memory and on screen');
 
         }
-        setSbStatus('synced');
+        setSbStatus(cloudLeads === null ? 'offline' : 'synced');
         // ══ SEED WHAT THE CLOUD LACKS — NEVER RE-UPLOAD WHAT IT JUST SENT ══
         // This used to loop EVERY local lead through one unawaited fetch each —
         // ~200 requests re-uploading megabytes the cloud had sent us seconds
@@ -12703,13 +12713,24 @@ function App() {
         // downloaded — pushing them back cannot add information and can only
         // race. sbPushRows batches by bytes and reports failures through
         // __cjSync instead of eating them.
+        // AND NEVER SEED FROM A READ THAT FAILED. null here means the cloud did
+        // not answer; an empty array means it answered and holds nothing. Seeding
+        // on the first would push a stale local copy over every row the cloud
+        // actually has, which is the one failure in this file that cannot be
+        // undone from the browser.
         const _cloudIds2 = new Set((cloudLeads || []).map(l => l.id));
-        const _toSeed = getLeads().filter(l => !_cloudIds2.has(l.id));
+        const _toSeed = cloudLeads === null ? [] : getLeads().filter(l => !_cloudIds2.has(l.id));
+        if (cloudLeads === null) {
+          console.warn('Supabase: the leads read did not answer, so nothing is being seeded and nothing will be saved this session. What is on screen is this browser\'s cache, and the cloud is untouched.');
+        }
         if (_toSeed.length) {
           console.log('Supabase: seeding ' + _toSeed.length + ' local-only lead(s) the cloud lacks');
           sbPushRows(_toSeed.map(leadToRow));
         }
-        window._sbSyncEnabled = true;
+        // Writes stay OFF while the cloud is unreadable, for the same reason the
+        // seed does: every save in this session would be a blind upsert over
+        // rows we could not read.
+        window._sbSyncEnabled = cloudLeads !== null;
       } catch(e) {
         console.warn('Supabase offline:', e.message);
         setSbStatus('offline');
