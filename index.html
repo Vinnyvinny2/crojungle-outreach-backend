@@ -1987,11 +1987,19 @@ const researchViaQueue = async (body, opts) => {
     throw err;
   }
   // ══ A RESTARTING SERVER IS A DELAY, NOT A FAILURE ═══════════════════════
-  // The server answers 503 {booting:true} for the ~20 seconds its boot checks
-  // take after a deploy or a crash restart. Failing the lead on that reads as
-  // "research is broken", and in a batch it marks real leads as errors for a
-  // window that closes on its own. Retry the SUBMIT only — nothing has been
-  // spent yet — for up to a minute, then let the real answer through.
+  // The server answers 503 {booting:true} while its boot checks settle after a
+  // deploy or a crash restart. Failing the lead on that reads as "research is
+  // broken", and in a batch it marks real leads as errors for a window that
+  // closes on its own. Retry the SUBMIT only — nothing has been spent yet.
+  //
+  // 36 tries of 5s, not 12: the window has to OUTLAST the boot it waits for,
+  // and on Render the 2026-08-23 deploy measured ~80 seconds from the moment
+  // traffic cut over to the moment the verdict settled — Render switches
+  // traffic at port-open, a minute before the checks finish. A 60-second
+  // retry therefore gave up right before the door opened, and the operator
+  // read a healthy deploy as a failed run. Three minutes covers double the
+  // measured boot; past that the server is genuinely not coming back and the
+  // real answer should be let through.
   let submit;
   for (let _try = 0; ; _try++) {
     submit = await fetch(BACKEND + '/api/research-async', {
@@ -2000,10 +2008,10 @@ const researchViaQueue = async (body, opts) => {
       body: JSON.stringify(body),
       signal: o.signal,
     });
-    if (submit.status !== 503 || _try >= 12) break;
+    if (submit.status !== 503 || _try >= 36) break;
     let _b = null; try { _b = await submit.clone().json(); } catch (e) { void e; }
     if (!_b || !_b.booting) break;
-    console.log('[research] the server is still running its boot checks — retrying the submit in 5s (' + (_try + 1) + '/12)');
+    console.log('[research] the server is still running its boot checks — retrying the submit in 5s (' + (_try + 1) + '/36)');
     await new Promise(r => setTimeout(r, 5000));
   }
   if (!submit.ok) {
