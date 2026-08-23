@@ -4605,6 +4605,34 @@ TRAFFIC, never about speed), and a lab score with no field data behind it. The
 sentence states the seconds and never the word "slow" — the seconds he cannot
 argue with, the adjective he can.
 
+**And the key had nowhere to come from — which I documented as a Settings field
+without ever looking.** Vin: *"this is the second time youve told me the pagespeed
+api was in settings and its not what else have u been lying about."* He is right,
+and the failure is the one this file is mostly a record of, committed by me: I
+inferred the answer from the variable's NAME, wrote it into PART 8's knob table
+as fact, and then repeated it. An inference reported as a measurement.
+
+The sweep it earned found nothing else of the kind — the eleven keys this server
+consumes are otherwise all real Settings fields the app really sends — but it
+should never have taken a person noticing, so the class is now mechanical. `clientcheck`
+reads `KEY_SOURCES`, a declaration in server.js of where every key comes from, and
+fails the build on a key that is read with no row, a row naming an environment
+variable server.js never reads, or a 'client' row with no Settings field behind it.
+The boot EXECUTES the resolver for an `env:` row, which is the half a source scan
+cannot see.
+
+**Two versions of that check passed on a broken build first, and only falsification
+found either.** The first inferred env support from any similarly-named variable
+appearing anywhere in the file — so reverting the fix left it green, because the
+boot check that sets `PAGESPEED_KEY` still mentions the name. The second checked
+only the keys it could find by scanning: after the fix the key is resolved inside a
+helper, so `req.body.keys.pageSpeedKey` no longer appears literally, the key fell
+out of the scan entirely, and the check reported a clean pass while not looking at
+it at all. The declaration is the authority for WHICH keys exist; the scan is only
+what catches one that is read and never declared. Its first run also reported the
+word "Falls" as a missing setting, off the prose *"The model's own keys. Falls back
+to..."* — the needle-finds-a-comment trap, tenth recorded instance.
+
 **And the key had nowhere to come from.** `measureRealWorldSpeed` read
 `req.body.keys.pageSpeedKey` for its whole life, and there is no `pageSpeedKey`
 field anywhere in `index.html` — not in Settings, not in the request builder,

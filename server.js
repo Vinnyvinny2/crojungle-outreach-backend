@@ -28523,6 +28523,39 @@ const applyLabMobileScore = (pageSpeed, realSpeed) => {
 //
 // The client slot stays as a fallback so a key sent from Settings one day still
 // works, but the env var is the authority and the preflight names it.
+// ══ WHERE EVERY KEY COMES FROM, DECLARED ═══════════════════════════════════
+// clientcheck's first attempt at this INFERRED the answer: it treated a key as
+// satisfied if an environment variable of a similar name appeared anywhere in
+// this file. Reverting the PageSpeed fix left it green, because the boot check
+// that sets PAGESPEED_KEY still mentioned the name. A check whose premise is a
+// name match is a check that passes vacuously, which is the same class as the
+// defect it was written to catch.
+//
+// So it is declared instead, the way STEM_COMPLETE_WORDS and NICHE_BRIEF_EXPECT
+// are declared, and the two halves are checked by the two things that can
+// actually see them: clientcheck asserts a 'client' key has a Settings field the
+// app really sends, and the boot EXECUTES the resolver for an 'env' key. A key
+// read from a place nobody can fill in is silently empty forever, and the
+// measurement behind it then reads as "the API had nothing" rather than as "we
+// never asked" - which is how Google's record of the prospect's own visitors
+// stayed dark for the life of this project.
+const KEY_SOURCES = {
+  firecrawlKey:    'client',
+  apifyToken:      'client',
+  hunterKey:       'client',
+  fbToken:         'client',
+  ninjaPearKey:    'client',
+  companiesApiKey: 'client',
+  verifierKey:     'client',
+  adzunaId:        'client',
+  adzunaKey:       'client',
+  theirstackKey:   'client',
+  // Server-owned: a Google Cloud key from the same project as GOOGLE_PLACES_KEY.
+  // Deliberately NOT a Settings field - it would need a Netlify deploy to reach
+  // anybody and would put a Google credential in a browser for no reason.
+  pageSpeedKey:    'env:PAGESPEED_KEY',
+};
+
 const pageSpeedKeyFor = (keys) => String(
   (process.env.PAGESPEED_KEY || '').trim()
   || ((keys && (keys.pageSpeedKey || keys.pagespeedKey)) || '')
@@ -54092,6 +54125,10 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       }
       if (pageSpeedKeyFor({ pageSpeedKey: 'from-settings' }) !== 'from-render') {
         _fails.push('a stale key in a browser outranks the one set on the server');
+      }
+      // The declaration has to agree with the code, in both directions.
+      if (KEY_SOURCES.pageSpeedKey !== 'env:PAGESPEED_KEY') {
+        _fails.push(`KEY_SOURCES says the PageSpeed key comes from "${KEY_SOURCES.pageSpeedKey}", which is not what the resolver does — clientcheck reads that table, so a wrong row there makes the client-side half of this check assert the wrong thing`);
       }
       // And the operator must be told when the free measurement is not configured.
       delete process.env.PAGESPEED_KEY;
