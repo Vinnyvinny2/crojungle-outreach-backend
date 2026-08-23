@@ -1867,6 +1867,8 @@ const VERIFIABILITY_RULES = [
 const MEASURED_SIGNAL_SCORES = {
   //                     verifiability, surprise, weFixIt, ownerLevel
   absent_from_search:  { v: 4, s: 4, w: 5, o: 5 },
+  organic_invisible:   { v: 4, s: 4, w: 5, o: 5 },
+  ads_untracked:       { v: 5, s: 5, w: 5, o: 4 },
   // s was 2 for the same wrong reason \u2014 see the ladder entry. The comparison is
   // news even when the position is not.
   outranked_by_weaker: { v: 4, s: 4, w: 5, o: 5 },
@@ -7964,11 +7966,15 @@ const harvestInteriorMarkup = (url, html, companyName) => {
   try { rememberHtmlLinks(h, url, null); } catch (e) { void e; }
   // Advertising markers. Positives only: a tag on ANY page proves the account
   // exists. An absence here proves nothing and is never recorded as one.
-  const prev = _INTERIOR_ADS.get(host) || { googleAds: false, metaPixel: false, tagManager: false, pages: 0 };
+  const prev = _INTERIOR_ADS.get(host) || { googleAds: false, metaPixel: false, tagManager: false, adsConversion: false, callTracking: false, pages: 0 };
   const next = {
     googleAds: prev.googleAds || AD_TAG_SIGNATURES.hasGoogleAdsTag.test(h),
     metaPixel: prev.metaPixel || AD_TAG_SIGNATURES.hasMetaPixel.test(h),
     tagManager: prev.tagManager || AD_TAG_SIGNATURES.hasTagManager.test(h),
+    // Positives only, same rule as the three above: a conversion label on the
+    // services page proves it exists exactly as well as one on the homepage.
+    adsConversion: prev.adsConversion || AD_TAG_SIGNATURES.hasAdsConversion.test(h),
+    callTracking: prev.callTracking || AD_TAG_SIGNATURES.hasCallTracking.test(h),
     pages: prev.pages + 1,
   };
   _INTERIOR_ADS.set(host, next);
@@ -10922,6 +10928,13 @@ const fetchGBPHealth = async (placeId, placesKey) => {
   try {
     const mask = [
       'rating','userRatingCount','businessStatus','primaryTypeDisplayName',
+      // ══ THE SECONDARY CATEGORIES, FOR ONE WORD ON A CALL WE ALREADY MAKE ══
+      // A listing carrying only its primary category surfaces for one kind of
+      // search and vanishes from the rest - an HVAC contractor with no "furnace
+      // repair" or "emergency air conditioning" drops out of exactly the
+      // high-ticket emergency searches and keeps the low-margin general ones.
+      // Same Place Details request, same SKU, no extra call.
+      'types',
       'regularOpeningHours','websiteUri','nationalPhoneNumber','photos',
       // WHERE THEY ACTUALLY ARE. Free on a call we already make, and the only
       // authoritative answer: it comes from their own Place record rather than
@@ -10990,6 +11003,11 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       reviewRecency = { checked: true, newestDays: days, stale: days > 90, veryCold: days > 180 };
     }
     const primaryCategory = (d.primaryTypeDisplayName && d.primaryTypeDisplayName.text) || null;
+    // Every listing carries these two whatever it sells, so they are structure
+    // rather than category and counting them would make every business look
+    // well configured.
+    const GENERIC_PLACE_TYPES = new Set(['point_of_interest', 'establishment', 'premise', 'subpremise', 'geocode', 'street_address', 'route', 'locality', 'political']);
+    const placeCategories = (Array.isArray(d.types) ? d.types : []).filter(t => !GENERIC_PLACE_TYPES.has(String(t)));
 
     // Things we looked at that are NOT gaps - kept so the reasoning is visible
     // without becoming something we say to the owner. Declared BEFORE gaps
@@ -11047,6 +11065,16 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       photoCount,
       photosSeen,
       photosAtCap,
+      // ══ MEASURED, ON THE CALL SHEET, AND DELIBERATELY NOT A RUNG YET ══════
+      // The Places `types` array is GOOGLE'S OWN taxonomy and it is not the
+      // same list the owner picks from in his Business Profile. It is close
+      // enough to be real intelligence for Mike and NOT close enough to assert
+      // "your listing is missing categories" to the owner - and we have just
+      // spent a day fixing exactly that class of confident wrong claim about a
+      // Google measurement. It becomes a rung the day somebody checks the
+      // mapping against a listing they control, and not before.
+      placeCategories,
+      categoryCount: placeCategories.length,
       // Written in three places above and returned by nothing until now, which
       // is the recorded computed-but-not-passed class arriving inside the fix
       // for it. These are the sentences that say what we may NOT claim.
@@ -12313,6 +12341,8 @@ const RUNG_PILLAR = {
 
   // ── INVISIBLE: they never found him ───────────────────────────────────────
   absent_from_search:            'INVISIBLE',
+  organic_invisible:             'INVISIBLE',
+  ads_untracked:                 'BURNING',
   outranked_by_weaker:           'INVISIBLE',
   service_invisibility:          'INVISIBLE',
   coverage_gap:                  'INVISIBLE',
@@ -12434,6 +12464,64 @@ const benchmarkSentence = (id) => {
 };
 // The wall, as a testable predicate rather than as an instruction in a prompt.
 const BENCHMARK_SECOND_PERSON = /\b(you|your|yours|they|their|theirs|he|his|him)\b/i;
+
+// ══════════ AN OUTDATED SITE, SAID AS FACTS RATHER THAN AS TASTE ════════════
+// Vin, on a live audit: "the website is clearly outdated looking, this lacks
+// credibility and reputation - we need the audits to start picking up on
+// outdated websites. It can tell from the code whether the website is newer or
+// older... they rank high on Google and they're funnelling people to an
+// outdated website."
+//
+// He is right that it matters and right that the code can see it. The trap is
+// that "your site looks old" is an AESTHETIC JUDGEMENT, and this file's own
+// rule about weak_positioning says an opinion the owner cannot verify is worth
+// nothing in a cold email. The previous version of this measurement counted
+// five markers inline inside an eighty-key literal - untestable, unextendable -
+// and then said "the site reads as several years old next to what their
+// competitors are running", which names nothing he can go and check.
+//
+// So: the markers are the finding. Each one below is a specific thing sitting
+// in his own page source, each has a plain-English phrase, and the sentence we
+// send NAMES them. "Still built on a table layout with no mobile viewport tag"
+// is not taste, it is two facts.
+//
+// PURE, so the boot check runs the real thing against real page shapes.
+const SITE_AGE_MARKERS = [
+  { id: 'tables',    re: /<table[^>]*(?:width|border|cellpadding|cellspacing)=/i,
+    say: 'the page is still laid out with tables' },
+  { id: 'precss',    re: /<font\b|<center\b|\bbgcolor=|<marquee\b/i,
+    say: 'it still uses page tags the web replaced with stylesheets years ago' },
+  { id: 'flash',     re: /\.swf\b|application\/x-shockwave-flash|<embed[^>]+type=["']application/i,
+    say: 'it still has Flash on it, which no browser has run since 2020' },
+  { id: 'oldjquery', re: /jquery[.\-/]?(?:ui[.\-])?(?:1|2)\.\d+(?:\.\d+)?(?:\.min)?\.js/i,
+    say: 'it runs a code library that stopped being current in 2016' },
+  { id: 'xhtml',     re: /<!DOCTYPE[^>]*(?:XHTML|HTML 4)|<html[^>]+xmlns=/i,
+    say: 'the page still declares itself in a format that predates modern web pages' },
+  { id: 'keywords',  re: /<meta[^>]+name=["']keywords["']/i,
+    say: 'it carries a keywords tag that search engines stopped reading in 2009' },
+  { id: 'fixedwidth', re: /<(?:table|div)[^>]+width=["']?(?:7[5-9]\d|8\d\d|9\d\d|1000)["']?[\s>]/i,
+    say: 'the layout is pinned to a fixed width, so it cannot fit a phone' },
+  { id: 'oldbuilder', re: /content=["'][^"']*(?:FrontPage|Dreamweaver|Adobe Muse|iWeb|Microsoft Word)/i,
+    say: 'it was built with a website tool that no longer exists' },
+];
+// Two markers we already measure elsewhere and must not measure twice.
+const readSiteAge = ({ rawHtml, content, hasViewport, isHttps, copyrightYear } = {}) => {
+  const html = String(rawHtml || '');
+  if (!html || html.length < 400) return { checked: false, dated: false, markers: [], score: 0 };
+  const markers = [];
+  for (const m of SITE_AGE_MARKERS) if (m.re.test(html)) markers.push({ id: m.id, say: m.say });
+  if (hasViewport === false) markers.push({ id: 'noviewport', say: 'a phone gets the desktop page shrunk down instead of a mobile one' });
+  if (isHttps === false) markers.push({ id: 'nohttps', say: 'it is still on plain http, so browsers warn people away from it' });
+  const yr = Number(copyrightYear);
+  if (Number.isFinite(yr) && yr > 1990 && (new Date().getFullYear() - yr) >= 3) {
+    markers.push({ id: 'copyright', say: `the copyright line at the bottom still reads ${yr}` });
+  }
+  void content;
+  // Two is where an impression becomes evidence. One marker on its own is a
+  // quirk; two independent ones in the same page source is a build nobody has
+  // touched in years, and every one of them is checkable.
+  return { checked: true, markers, score: markers.length, dated: markers.length >= 2, veryDated: markers.length >= 4 };
+};
 
 const HARM_LADDER = [
   // ── DEAD ────────────────────────────────────────────────────────────────
@@ -12797,14 +12885,29 @@ const HARM_LADDER = [
     say: (m) => `Their newest Google review is about ${Math.round(m.reviewRecency)} days old`,
     costs: (m) => `a ${audienceOf(m.tradeWord).buyer} comparing options reads that as a business that may not still be running` },
 
-  { harm: 62, specific: 25, novel: 30, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
-    blind: 'a year printed on a badge stops registering after the first time you read it',
-    // Deliberately low on NOVEL. He has looked at his own site; he knows what it
-    // looks like. This is real harm and a poor opener, which is exactly the case
-    // the three-factor model exists to handle.
+  // ══ AN OPINION HE COULD NOT CHECK, TURNED INTO FACTS HE CAN ═════════════
+  // specific was 25 because the sentence was "the site reads as several years
+  // old next to what their competitors are running" - an aesthetic judgement
+  // naming nothing, and this file's own weak_positioning note says an opinion
+  // the owner cannot verify is worth nothing in a cold email. It names the
+  // markers now, so it is 80: every one of them is a specific thing sitting in
+  // his own page source.
+  //
+  // novel stays low on purpose. He HAS looked at his own site and he knows
+  // roughly how old it looks. What he does not know is that a stranger can
+  // read the age off the code in ten seconds.
+  { harm: 62, specific: 80, novel: 40, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
+    blind: 'he opens his own site through a bookmark and reads it as familiar rather than as old',
     test: (m) => m.datedSite === true,
-    say: () => 'The site reads as several years old next to what their competitors are running',
-    costs: 'a first-time visitor decides whether a business is still any good in a few seconds, mostly on how the site looks' },
+    say: (m) => {
+      const ms = Array.isArray(m.siteAgeMarkers) ? m.siteAgeMarkers.slice(0, 2) : [];
+      return ms.length >= 2 ? `On their own site, ${ms[0]}, and ${ms[1]}`
+        : ms.length === 1 ? `On their own site, ${ms[0]}`
+        : 'Their site carries several markers of a build nobody has updated in years';
+    },
+    // The loss frame, in Vin's own words: they are winning the search and
+    // spending that attention on a page built a decade ago.
+    costs: (m) => `every visitor they earn lands on this, and in ${audienceOf(m.tradeWord).trade || 'their trade'} the site IS the credibility` },
 
   // ── INVISIBLE ───────────────────────────────────────────────────────────
   // novel was 55, on the assumption he half-knows his rank. But being ABSENT is
@@ -12812,6 +12915,38 @@ const HARM_LADDER = [
   // \u2014 which is precisely why they do not know they are missing from the TRADE
   // search. outranked_by_weaker keeps novel 18 because he genuinely does half-know
   // that others are above him; absence is a different fact and it is news.
+  // ══ THE BLUE LINKS ARE A SEPARATE RANKING FROM THE MAP ══════════════════
+  // We measured the map pack for the life of this project and never the organic
+  // results underneath it, so a business sitting fourth in the map and nowhere
+  // on page one of the links read as a healthy lead. Harm 84 rather than 96:
+  // for a local trade the map matters more, and being absent from the map is
+  // the worse fact. Both can be true at once and they are different sentences.
+  // ══ PAYING FOR CLICKS WITH NOBODY READING THE METER ═════════════════════
+  // The ads tag proves an account. Whether anything is being COUNTED is a
+  // different marker and we never read it until now. An account with no
+  // conversion label is optimising on clicks rather than on customers, and for
+  // a trade the customer arrives as a phone call - so no call tracking either
+  // means the account cannot see the thing it is buying.
+  //
+  // Both halves are absence claims, so both ride adsReadable, the same "did we
+  // actually look at the markup" gate every other absence in this file carries.
+  // Telling an owner he is not doing something he is plainly doing is the
+  // fastest way to lose him.
+  { harm: 89, specific: 90, novel: 88, delegable: 30, weFix: 95, band: 'SPENDING', id: 'ads_untracked',
+    blind: 'the ad account shows him clicks and cost per click, and neither number knows whether the phone rang',
+    reframe: 'the spend is not the problem, the missing feedback loop is - nothing is telling the account which clicks became customers',
+    test: (m) => m.googleAdsTag === true && m.adsReadable === true
+      && m.adsConversion === false && m.callTracking === false,
+    say: () => 'They are running Google Ads and there is no conversion tracking and no call tracking anywhere on their site',
+    costs: 'every dollar of that budget is being spent on clicks nobody can tie to a booked job' },
+
+  { harm: 84, specific: 88, novel: 70, delegable: 20, weFix: 92, band: 'INVISIBLE', id: 'organic_invisible',
+    blind: 'he searches his own name, sees himself at the top, and never looks at the search his customers actually type',
+    reframe: 'the map and the links below it are ranked separately, so doing well in one says nothing about the other',
+    test: (m) => m.organicChecked === true && m.organicFound === false,
+    say: (m) => `They do not appear anywhere in the first ${m.organicScanned} search results for "${m.rankQuery}"`,
+    costs: 'everyone who scrolls past the map is choosing from a list they are not on' },
+
   { harm: 96, specific: 90, novel: 80, delegable: 20, weFix: 90, band: 'INVISIBLE', id: 'absent_from_search',
     blind: 'searching his own name shows him instantly. The search a customer types is a different search',
   reframe: 'people searching pick from what is in front of them, not from who is actually best',
@@ -14454,7 +14589,8 @@ const AREA_OF = {
   no_mobile_viewport: 'Website', tap_to_call_broken: 'Website',
   long_form: 'Getting in touch', form_only_no_booking: 'Getting in touch',
   no_after_hours: 'Getting in touch', phone_mismatch: 'Getting in touch',
-  absent_from_search: 'Being found', outranked_by_weaker: 'Being found',
+  absent_from_search: 'Being found', outranked_by_weaker: 'Being found', organic_invisible: 'Being found',
+  ads_untracked: 'Money already spent',
   coverage_gap: 'Being found',
   wrong_gbp_category: 'Being found', no_google_listing: 'Being found',
   no_website_on_profile: 'Being found',
@@ -14562,6 +14698,8 @@ const SUBJECTS_FOR = {
   phone_mismatch:       ['google has your old number', 'your numbers do not match'],
   tap_to_call_broken:   ['your number will not dial', 'tapping your number is dead'],
   absent_from_search:   ['you are not showing up', 'nobody can find you'],
+  organic_invisible:    ['you are not on page one', 'your rivals own that search'],
+  ads_untracked:        ['your ad clicks are untracked', 'nobody is counting your ads'],
   // ══ A RANKING FINDING WITH REVIEW SUBJECT LINES ═══════════════════════════
   // This rung is about POSITION: "Boaz Construction ranks above them for
   // 'commercial construction contractor in Indianapolis' with 23 reviews against
@@ -15182,6 +15320,8 @@ const HARM_LADDER_LAYER = {
   no_recurring_offer:    'OFFER',
   no_google_listing:     'LEADS',
   absent_from_search:    'LEADS',
+  organic_invisible:     'LEADS',
+  ads_untracked:         'LEADS',
   outranked_by_weaker:   'LEADS',
   coverage_gap:          'MARKET',
   wrong_gbp_category:    'LEADS',
@@ -15263,7 +15403,7 @@ const BINDING_LAYER_BONUS = 10;
 //   1  he does it himself this afternoon for nothing
 const SELLABLE = {
   // ── 5: this is the pitch ────────────────────────────────────────────────
-  site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5,
+  site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5, organic_invisible: 5, ads_untracked: 5,
   coverage_gap: 5,
   // The two business-level findings. Both are 5 by definition: one is a
   // retainer competing with a salaried hire the owner is already budgeting
@@ -15360,6 +15500,7 @@ const REFERRAL_TRADES = /\b(estate planning|estate attorney|probate|trust|wealth
 const REFERRAL_ADJUST = {
   outranked_by_weaker:  -30,  // he is not competing for a map-pack click
   absent_from_search:   -26,
+  organic_invisible:    -26,
   no_google_listing:    -18,  // still real: referrals do look you up
   wrong_gbp_category:   -20,
   thin_profile:         -14,
@@ -19157,7 +19298,7 @@ const CTA_BY_FINDING = {
   partial_owner_replies: 'process', stale_reviews: 'process', review_deficit: 'process',
   low_rating: 'process',
   // Search. There is a concrete artefact to hand over, so hand it over.
-  outranked_by_weaker: 'list', absent_from_search: 'list',
+  outranked_by_weaker: 'list', absent_from_search: 'list', organic_invisible: 'list', ads_untracked: 'list',
   coverage_gap: 'coverage',
   // Everything about how they are bought from — offer, positioning, booking.
   // The write-up already exists; it is delivered, not proposed.
@@ -21629,6 +21770,8 @@ const objectionFromSim = (sim) => {
 // have to satisfy a rule about novelty would be the tail wagging the dog.
 const OWNER_KNOWS = {
   // ── CANNOT KNOW: needs a join, an aggregate, or a record he cannot see ──
+  organic_invisible:            ['cannot_know', 'requires running the search his customers run and reading past the map to a list he never sees'],
+  ads_untracked:                ['cannot_know', 'requires reading his own page source for a tag nobody ever shows him'],
   absent_from_search:           ['cannot_know', 'requires running the search himself and reading a whole result list he has never pulled up'],
   outranked_by_weaker:          ['cannot_know', 'requires running the search AND comparing another listing’s review count against his own'],
   coverage_gap:                 ['cannot_know', 'requires searching a market he does not trade in to discover he is absent from it'],
@@ -31288,6 +31431,19 @@ const AD_TAG_SIGNATURES = {
   hasGoogleAdsTag: /AW-\d{8,}|googleadservices|google_conversion/i,
   hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i,
   hasTagManager: /googletagmanager\.com\/(?:gtm|ns)|GTM-[A-Z0-9]{4,}/i,
+  // ══ AN ACCOUNT IS NOT A CONVERSION ════════════════════════════════════════
+  // hasGoogleAdsTag proves an ads ACCOUNT exists. It says nothing about whether
+  // anything is being counted. A conversion needs a LABEL - the AW-xxx/yyy form,
+  // the conversion endpoint, or a named conversion event - and without one the
+  // ad account is optimising on clicks rather than on customers. That is money
+  // burning with nobody reading the meter, and it is checkable from the source
+  // we already hold.
+  hasAdsConversion: /AW-\d{6,}\/[A-Za-z0-9_-]{6,}|\/pagead\/conversion|gtag\(\s*['"]event['"]\s*,\s*['"](?:conversion|generate_lead|submit_lead_form)/i,
+  // For a trade the conversion IS a phone call, so an ad account with no call
+  // tracking is optimising on the wrong event entirely. These are the products
+  // that do it; a match proves it is installed, an absence proves only that
+  // none of THESE are.
+  hasCallTracking: /callrail|calltrackingmetrics|whatconverts|invoca|marchex|callsource|ringba|phonewagon|nimbata/i,
 };
 const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   const bw = builtWith && typeof builtWith === 'object' ? builtWith : {};
@@ -31300,10 +31456,13 @@ const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   // 500 is checkBuiltWith's own floor for "enough markup to read". Same number
   // on purpose: two different floors for one question is how they drift apart.
   const renderedRead = html.length >= 500;
-  const FROM_INTERIOR = { hasGoogleAdsTag: 'googleAds', hasMetaPixel: 'metaPixel', hasTagManager: 'tagManager' };
+  const FROM_INTERIOR = { hasGoogleAdsTag: 'googleAds', hasMetaPixel: 'metaPixel', hasTagManager: 'tagManager',
+    hasAdsConversion: 'adsConversion', hasCallTracking: 'callTracking' };
   if (!renderedRead && !inter) {
     return { hasGoogleAdsTag: bw.hasGoogleAdsTag ?? null, hasMetaPixel: bw.hasMetaPixel ?? null,
-      hasTagManager: bw.hasTagManager ?? null, adsRead: plainRead, adSource: plainRead ? 'plain fetch' : 'neither copy' };
+      hasTagManager: bw.hasTagManager ?? null, hasAdsConversion: bw.hasAdsConversion ?? null,
+      hasCallTracking: bw.hasCallTracking ?? null,
+      adsRead: plainRead, adSource: plainRead ? 'plain fetch' : 'neither copy' };
   }
   const where = [plainRead ? 'plain fetch' : '', renderedRead ? 'rendered homepage' : '',
     inter ? `${inter.pages} interior page(s)` : ''].filter(Boolean);
@@ -32217,6 +32376,75 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
   };
 };
 
+// ══════════ THE MAP PACK AND THE BLUE LINKS ARE TWO DIFFERENT RANKINGS ══════
+// Vin: "don't we need to know where they rank SEO wise? we need a verified
+// source for this - can't Firecrawl scrape that?"
+//
+// Two separate things, and we only ever measured one. The map pack is the three
+// listings with the map beside them; the ORGANIC results are the blue links
+// underneath, and a business can sit fourth in one and fourteenth in the other.
+//
+// Firecrawl cannot do it. Scraping Google's own results page gets blocked and
+// CAPTCHA'd within a handful of requests, it is against their terms, and a
+// blocked scrape returns a page with no results on it - which reads exactly
+// like "you do not rank", the most damaging false claim this system can make.
+// The same provider that gives us the real map pack gives organic positions at
+// the same price, so it is one vendor and one auth for both.
+//
+// HONEST SHAPE: like the pack read, this has never run against the live
+// endpoint. Without credentials it does not run at all and no organic claim is
+// permitted, which is the same failure mode as having no answer.
+const DFS_ORGANIC_URL = 'https://api.dataforseo.com/v3/serp/google/organic/live/advanced';
+
+// Pure, so the boot check runs it against a real response shape.
+const parseOrganicSerp = (body, ourDomain) => {
+  const dom = String(ourDomain || '').replace(/^www\./, '').toLowerCase();
+  if (!dom) return { ok: false, why: 'no domain to look for' };
+  const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
+  if (!task) return { ok: false, why: 'no tasks in the response' };
+  if (task.status_code && Number(task.status_code) >= 40000) {
+    return { ok: false, why: `task error ${task.status_code}: ${task.status_message || 'no message'}` };
+  }
+  const res = Array.isArray(task.result) ? task.result[0] : null;
+  const items = res && Array.isArray(res.items) ? res.items : [];
+  // ORGANIC only. A local pack, a paid row or a People Also Ask block sitting in
+  // the item list is not a blue-link position, and counting one as a position is
+  // how "you are third" gets said about a business that is nowhere.
+  const organic = items.filter(it => it && String(it.type || '') === 'organic');
+  if (!organic.length) return { ok: false, why: 'no organic results in the response' };
+  let position = null;
+  organic.forEach((it, i) => {
+    if (position !== null) return;
+    const host = String(it.domain || '').replace(/^www\./, '').toLowerCase();
+    if (host && (host === dom || host.endsWith('.' + dom))) position = i + 1;
+  });
+  return { ok: true, position, scanned: organic.length };
+};
+
+const checkOrganicRank = async ({ query, city, website }) => {
+  if (!DFS_READY) return { checked: false, why: 'no DataForSEO credentials, so no organic position is measured or claimed' };
+  let dom = '';
+  try { dom = new URL(String(website)).hostname.replace(/^www\./, '').toLowerCase(); } catch { return { checked: false, why: 'no readable domain on this lead' }; }
+  if (!query || !city) return { checked: false, why: 'no query or city to search' };
+  try {
+    const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
+    const r = await fetchT(DFS_ORGANIC_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ keyword: String(query), location_name: String(city), language_code: 'en', device: 'desktop', depth: 20 }]),
+    }, 20000);
+    const parsed = parseOrganicSerp(await safeJson(r), dom);
+    if (!parsed.ok) return { checked: false, why: parsed.why };
+    // A thin field is arithmetic, not a finding - the same floor the pack read
+    // carries, and for the same reason.
+    if (parsed.scanned < 8) return { checked: false, why: `only ${parsed.scanned} organic result(s) came back, too small a field to call a position` };
+    console.log(`\u{1F517} ORGANIC RANK [${query}]: ${parsed.position ? '#' + parsed.position : 'NOT FOUND'} of ${parsed.scanned} blue links. This is a different ranking from the map pack and a business can sit high in one and nowhere in the other.`);
+    return { checked: true, found: parsed.position !== null, position: parsed.position, scanned: parsed.scanned, query, city };
+  } catch (e) {
+    return { checked: false, why: `organic rank check failed: ${(e && e.message) || e}` };
+  }
+};
+
 const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
@@ -33027,6 +33255,9 @@ const _runResearchInner = async (req, res) => {
   let localVisibility = null;
   let gbpHealth = null;  // hoisted to function scope so the prompt (outside the Places-lead block) can read it
   let htmlSignals = { checked: false };  // hoisted to function scope so the prompt can read it
+  // The blue-link position, hoisted for the same reason. Separate from the map
+  // pack on purpose: a business can be fourth in one and fourteenth in the other.
+  let organicRank = { checked: false };
   // The homepage's own SOURCE, hoisted for the same reason. rawHtml below is
   // declared inside the Firecrawl branch, and auditSitePages runs several hundred
   // lines later in a different block — "line order is not scope" is a recorded
@@ -34057,7 +34288,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (effectivePlaceId && placesKey) {
         gbpHealth = await fetchGBPHealth(effectivePlaceId, placesKey);
         if (gbpHealth) {
-          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}`);
+          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}${Number.isFinite(gbpHealth.categoryCount) ? ` (${gbpHealth.categoryCount} in total: ${(gbpHealth.placeCategories || []).slice(0, 6).join(', ')})` : ''}`);
         }
       }
       // ══ REVIEW-PATTERN MINE — the highest-reply-rate asset the system produces ══
@@ -34255,6 +34486,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           const _pick = pickRankRow(lv.results);
           localRank = _pick.row;
           console.log(`RANK ROW [${company}]: ${_pick.note}`);
+          // ══ THE BLUE LINKS ARE A SECOND, SEPARATE RANKING ═══════════════
+          // Measured on the SAME phrase and the SAME city as the pack, because
+          // two positions for one search is a comparison and two positions for
+          // two different searches is noise. Costs one DataForSEO call and
+          // never runs without credentials, so a lead on the Places fallback
+          // simply has no organic claim rather than a guessed one.
+          const _headRow = (lv.results || []).find(r => r && r.kind === 'primary trade') || lv.results[0];
+          if (_headRow && _headRow.query && _headRow.city) {
+            try {
+              organicRank = await checkOrganicRank({ query: _headRow.query, city: _headRow.city, website });
+            } catch (e) { organicRank = { checked: false, why: (e && e.message) || 'organic read threw' }; }
+          }
           for (const r of lv.results) {
             if (r.found) {
               // ══ THE POSITION MAY HAVE BEEN REMOVED ON PURPOSE ═════════════
@@ -35253,7 +35496,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           booking: sitePages && sitePages.booking,
           bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
         };
+        // Read once, above the literal, so the markers and the boolean cannot
+        // drift apart the way five inline counters and one opinion did.
+        const _siteAge = readSiteAge({
+          rawHtml,
+          content,
+          hasViewport: (htmlSignals && htmlSignals.checked) ? htmlSignals.hasViewport : undefined,
+          isHttps: (htmlSignals && htmlSignals.checked) ? htmlSignals.isHttps : undefined,
+          copyrightYear: measureAbandonment(String(content || '')).copyrightYear,
+        });
+        if (_siteAge.checked && _siteAge.markers.length) {
+          console.log(`\u{1F5D3} SITE AGE [${company}]: ${_siteAge.score} marker(s) of an old build - ${_siteAge.markers.map(m => m.id).join(', ')}. ${_siteAge.dated ? 'Two or more together stops being taste and becomes evidence.' : 'One on its own is a quirk, not a finding.'}`);
+        }
         _harmInputs = {
+          // The blue-link position, separate from the map pack. Never guessed:
+          // without DataForSEO credentials organicChecked is false and the rung
+          // cannot fire, which is the same outcome as having no answer.
+          organicChecked: !!(organicRank && organicRank.checked),
+          organicFound: !!(organicRank && organicRank.found),
+          organicPosition: (organicRank && Number.isFinite(Number(organicRank.position))) ? Number(organicRank.position) : null,
+          organicScanned: (organicRank && Number.isFinite(Number(organicRank.scanned))) ? Number(organicRank.scanned) : null,
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           // The four fields the ledger produces. Delivered through
           // observationHarmInputs so the boot check runs the shipping code
@@ -35299,6 +35561,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // that challenged bots silenced both spending findings even when the
           // rendered homepage had been read perfectly well. adsRead is the merged
           // answer: did EITHER copy give us markup to read.
+          // ══ AN ADS ACCOUNT IS NOT A CONVERSION, AND A CLICK IS NOT A CALL ═
+          // hasGoogleAdsTag only ever proved an ads ACCOUNT exists. Whether
+          // anything is being COUNTED is a separate marker and we never read it.
+          // Both absences ride adsReadable, the same "did we look?" gate every
+          // other absence claim in this file carries.
+          adsConversion: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
+            ? builtWith.hasAdsConversion === true : null,
+          callTracking: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
+            ? builtWith.hasCallTracking === true : null,
           adsReadable: !!(builtWith && builtWith.adsRead === true),
           googleAdsTag: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
             ? builtWith.hasGoogleAdsTag === true : null,
@@ -35583,16 +35854,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           //
           // But there are hard markers underneath the impression, and we already
           // hold all of them. Two or more together is not an opinion any more.
-          datedSite: (() => {
-            let marks = 0;
-            const _ab = measureAbandonment(String(content || ''));
-            if (_ab.copyrightYear && (new Date().getFullYear() - _ab.copyrightYear) >= 3) marks++;
-            if (htmlSignals && htmlSignals.checked && htmlSignals.hasViewport === false) marks++;   // no mobile viewport
-            if (htmlSignals && htmlSignals.checked && htmlSignals.isHttps === false) marks++;        // still on http
-            if (/<table[^>]*(?:width|border|cellpadding)=/i.test(String(rawHtml || ''))) marks++;    // table layout
-            if (/<font\b|<center\b|\bbgcolor=/i.test(String(rawHtml || ''))) marks++;                // pre-CSS tags
-            return marks >= 2;
-          })(),
+          // Was five markers counted inline here, which meant nothing could
+          // fixture it and the sentence it fed named none of them. See
+          // readSiteAge: eleven markers now, each one a specific thing in his
+          // own page source with a phrase he can go and check.
+          datedSite: _siteAge.dated,
+          siteVeryDated: !!_siteAge.veryDated,
+          siteAgeMarkers: _siteAge.markers.map(m => m.say),
+          siteAgeScore: _siteAge.score,
           // ══ THE ONE FIGURE THE SPINE READS AND NOTHING SUPPLIED ═══════════
           // buildFactualSpine reads fourteen names to build `figures` — the ONLY
           // numbers the email is permitted to contain. Thirteen were already
@@ -49326,7 +49595,15 @@ app.listen(PORT, () => {
       const _nd = (...p) => p.join('');
       const _src = selfSource();
       const _i = _src.indexOf(_nd('const fetchGBP', 'Health'));
-      const _blk = _i > 0 ? _src.slice(_i, _i + 3000) : '';
+      // ══ A FIXED BYTE WINDOW IS A CHECK WITH AN EXPIRY DATE ═══════════════
+      // This sliced 3,000 characters from the function head. Adding one comment
+      // block to the field mask pushed the line it guards past the end of the
+      // window, and the check reported that the wire had been cut on a build
+      // where it was intact - a false RED, which costs the same trust as a
+      // false green. It reads to the END of the function now: the next
+      // declaration at column zero.
+      const _end = _i > 0 ? _src.indexOf('\nconst ', _i + 10) : -1;
+      const _blk = _i > 0 ? _src.slice(_i, _end > _i ? _end : _i + 8000) : '';
       if (!_blk) _fails.push('fetchGBPHealth could not be located, so the wire was not checked');
       else {
         if (_blk.indexOf(_nd("'reviewSummary',", "'reviews'")) < 0) {
@@ -53129,6 +53406,76 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ LOCAL PACK TRUST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ "YOUR SITE LOOKS OLD" IS TASTE. THE MARKERS ARE FACTS. ═══════════════
+  // Vin: "the website is clearly outdated looking... we need the audits to
+  // start picking up on outdated websites - it can tell from the code."
+  // He is right, and the trap is that the old sentence named nothing: "the site
+  // reads as several years old next to what their competitors are running" is
+  // an aesthetic judgement, and this file's own weak_positioning note says an
+  // opinion the owner cannot verify is worth nothing in a cold email.
+  try {
+    const _fails = [];
+    const _pad = '<p>' + 'x'.repeat(600) + '</p>';
+
+    // A genuinely old build: table layout, pre-CSS tags, no viewport.
+    const _old = readSiteAge({
+      rawHtml: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0"><html xmlns="http://www.w3.org/1999/xhtml"><table width="960" border="1" cellpadding="4"><tr><td><font size="2">Welcome</font></td></tr></table>${_pad}`,
+      hasViewport: false, isHttps: false, copyrightYear: 2011,
+    });
+    if (!_old.dated) _fails.push('a table-layout page with <font> tags, no viewport, plain http and a 2011 copyright does not read as dated');
+    if (!_old.veryDated) _fails.push('six independent markers do not reach the "very dated" band, so the strongest version of this finding can never fire');
+    if (!_old.markers.some(m => m.id === 'tables')) _fails.push('the table layout is not being detected');
+    if (!_old.markers.some(m => m.id === 'xhtml')) _fails.push('an XHTML doctype is not being detected');
+
+    // A modern build must come back clean. A filter that flags every site tells
+    // a salesperson nothing, which is the more expensive failure.
+    const _new = readSiteAge({
+      rawHtml: `<!DOCTYPE html><html lang="en"><head><meta name="viewport" content="width=device-width"></head><body><picture><img srcset="a.webp"></picture>${_pad}</body></html>`,
+      hasViewport: true, isHttps: true, copyrightYear: new Date().getFullYear(),
+    });
+    if (_new.dated) _fails.push(`a current, responsive page is being called dated over ${_new.markers.map(m => m.id).join(', ')}`);
+
+    // ONE marker is a quirk, not a finding. Two is where an impression becomes
+    // evidence, and the whole value of this rung is that it stops being taste.
+    const _one = readSiteAge({ rawHtml: `<html><head><meta name="keywords" content="roofing"></head><body>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    if (_one.dated) _fails.push('a single marker is enough to call a site dated, which is how this becomes an opinion again');
+    if (_one.score !== 1) _fails.push(`a page with one marker scored ${_one.score}`);
+
+    // Nothing read means nothing claimed - the EXISTS BUT UNREAD rule.
+    if (readSiteAge({ rawHtml: '' }).checked !== false) _fails.push('a page we never read still produces a verdict about how old it is');
+
+    // ── the rung has to SAY the markers, not describe an impression ────────
+    const _rung = HARM_LADDER.find(r => r && r.id === 'dated_credibility');
+    if (!_rung) {
+      _fails.push('the dated-site rung is gone from the ladder');
+    } else {
+      const _said = _rung.say({ siteAgeMarkers: _old.markers.map(m => m.say), tradeWord: 'roofer' });
+      if (!/table/i.test(_said)) _fails.push(`the sentence names no marker the owner could go and check: "${_said}"`);
+      if (/reads as|looks|feels|next to what their competitors/i.test(_said)) _fails.push(`the sentence is back to an aesthetic judgement: "${_said}"`);
+      if (_rung.specific < 60) _fails.push('the rung still scores itself as unverifiable, so it will lose to findings that name less');
+      // And it must still produce something when the markers did not travel -
+      // the computed-but-not-passed case, which this file records twenty times.
+      if (!_rung.say({ tradeWord: 'roofer' })) _fails.push('the rung produces an empty sentence when the markers are missing rather than falling back');
+    }
+
+    // ── the call site, because a fixture supplies its own arguments ────────
+    const _an = (...p) => p.join('');
+    if (!selfSourceNoComments().includes(_an('datedSite: _siteAge', '.dated'))) {
+      _fails.push('the ladder is not being handed the real site-age read, so the rung is scoring on something else');
+    }
+    if (!selfSourceNoComments().includes(_an('siteAgeMarkers: _siteAge.markers', '.map(m => m.say)'))) {
+      _fails.push('the markers never reach the ladder, so the sentence falls back to the impression on every lead');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ SITE AGE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ SITE AGE CHECK: ${SITE_AGE_MARKERS.length + 3} markers of an old build, each a specific thing in their own page source with a phrase the owner can check. Two together is evidence; one is a quirk and stays silent; a current responsive page comes back clean; and a page we never read produces no verdict at all. The rung NAMES the markers instead of saying the site "reads as several years old", which named nothing and could not be verified.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SITE AGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A LIMIT OF OUR READ IS NOT AN ASSERTION IN THE COPY ═══════════════════
