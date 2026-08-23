@@ -362,7 +362,13 @@ const runLead = async (b, over, capMs) => {
     const spend1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/spend`);
     ok(spend1.json && spend1.json.spend && spend1.json.spend.fc > 0, '/api/spend does not reflect the day');
     ok(spend1.json && spend1.json.byKind && Object.keys(spend1.json.byKind).length > 0, '/api/spend has no per-kind split, so FC_SCREENSHOT_CREDITS can never be reconciled');
-    ok(R.reviewsRead >= 1, `reviewsRead is ${R.reviewsRead} on a lead whose review mine answered — scenario C's null assertion is vacuous unless the golden path populates it`);
+    // Exactly the fixture's length, not merely non-zero. reviewsRead is the
+    // number of reviews the MODEL was shown, and the pull now fits its own
+    // corpus before counting anything — so this is the live proof that the
+    // corpus wire is intact end to end. `>= 1` would pass on a build where the
+    // corpus arrived truncated and the count was taken over the whole scrape,
+    // which is the exact defect the corpus builder replaces.
+    ok(R.reviewsRead === REVIEWS.length, `reviewsRead is ${R.reviewsRead}, not the ${REVIEWS.length} reviews the fake returned — the number reported as read has come apart from the number the model was shown`);
     ok(!/FACT CHECK DID NOT RUN/.test(srv.log()), 'the fact-check — the last gate before a prospect — did not run on the golden lead, and the marker-keyed fake fails soft exactly there');
     ok(state.contract.length === 0, `request-contract violations: ${state.contract.join(' | ')}`);
 
