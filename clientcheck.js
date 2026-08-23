@@ -931,6 +931,26 @@ const PENDING = [];
   }
 }
 
+// ══ THE RETRY WINDOW MUST OUTLAST THE BOOT IT WAITS FOR ═════════════════════
+// Render switches traffic to a new instance at port-open, a full minute before
+// the boot checks settle, and every POST answers 503 {booting:true} in between.
+// The 2026-08-23 deploy measured ~80 seconds of that window; the client retried
+// for 60 and gave up right before the door opened, so a healthy deploy read as
+// a failed run. The window is read from the code on BOTH sides rather than
+// asserted as a constant, so slowing the boot or shrinking the retry fails here
+// instead of on the next deploy.
+{
+  const m = /if \(submit\.status !== 503 \|\| _try >= (\d+)\) break;[\s\S]{0,600}?setTimeout\(r, (\d+)\)/.exec(src);
+  if (!m) {
+    fails.push('the boot-window submit retry is gone or reshaped, so a deploy makes every submit in its first minute fail as "research is broken"');
+  } else {
+    const windowMs = Number(m[1]) * Number(m[2]);
+    if (windowMs < 150000) {
+      fails.push(`the client retries a booting server for only ${Math.round(windowMs / 1000)}s, and the 2026-08-23 Render deploy took ~80s from traffic cutover to a settled verdict — the retry gives up before the door opens and a healthy deploy reads as a failed run`);
+    }
+  }
+}
+
 // ══ A KEY THE SERVER READS AND THE APP HAS NO FIELD FOR IS A DEAD SETTING ═══
 // measureRealWorldSpeed read `req.body.keys.pageSpeedKey` from the day it was
 // written. There has never been a pageSpeedKey field anywhere in index.html —

@@ -1124,6 +1124,42 @@ const COPY_TRIVIAL_FINDING = /(?:\b(?:favicon|alt text|broken (?:footer )?link|f
 // is legal when it describes people in general and illegal the moment it is
 // attached to THIS business - by a possessive, by their name, or by a specific
 // clock time that implies we watched it happen.
+// ══ TWO WARNINGS ABOUT ONE SENTENCE ARE ONE WARNING SAID TWICE ══════════════
+// TriStar Concrete, live 2026-08-23: the call sheet's "Do not say" carried two
+// entries both quoting "Nothing answers." — one rule flagged it as a
+// post-submission claim, another as a claim that nobody answers the phone. Both
+// were right, and for the person holding the sheet while a phone rings the
+// instruction is identical: do not say that sentence. Printing it twice is how
+// an operator learns the section is padding, and this file records that cost at
+// the CTA precaution that fired on nearly every lead.
+//
+// Deduped on the QUOTED SPAN, because the span is the thing Mike must not say
+// and the reasons are commentary on it. The FIRST entry survives — rules run in
+// severity order, so the first reason is the one that mattered most. Entries
+// carrying no quote, or a quote too short to be a sentence, are left alone:
+// two short quotes colliding would delete a real warning, and a filter that
+// eats real warnings costs more than a duplicate.
+const _riskQuoteOf = (entry) => {
+  const s = String(entry || '');
+  // The LAST double-quoted span: entries are shaped `reason — "sentence"`, and
+  // a reason may itself quote a fragment mid-text.
+  const m = s.match(/[“"]([^“”"]{12,})[”"]\s*\.?\s*$/);
+  return m ? m[1].toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() : null;
+};
+const dedupeClaimRisks = (list) => {
+  const seen = new Set();
+  const out = [];
+  for (const entry of (Array.isArray(list) ? list : [])) {
+    const q = _riskQuoteOf(entry);
+    if (q) {
+      if (seen.has(q)) continue;
+      seen.add(q);
+    }
+    out.push(entry);
+  }
+  return out;
+};
+
 const detectPostContactClaims = (prose) => {
   const out = [];
   // Someone putting themselves in contact with the business.
@@ -21123,6 +21159,62 @@ const stripSpelledQuantitiesDeep = (node, corpus, out, depth) => {
   return node;
 };
 
+// ══ THE FORBIDDEN RECENCY FRAMING CAME BACK PAST A 19-LINE INSTRUCTION ══════
+// TriStar Concrete, live 2026-08-23: "a comparison shopper reading the profile
+// sees a business that may have gone quiet". The audit prompt's own REVIEW
+// RECENCY block forbids exactly this — it quotes the 668-day live failure, says
+// nobody checks the date on a review and concludes a business has closed, and
+// tells the model what the measurement actually means. The model wrote the
+// framing anyway. PART 3's rule is the whole story: instructional guards do not
+// hold, and this one was only an instruction while every neighbouring family
+// has a stripper.
+//
+// The predicate needs BOTH halves, because each alone eats a true sentence:
+//   an AGE signal — "newest review ... days old", never the bare word "review",
+//     or "6 of the 80 reviews say it went quiet on them" (their customers' own
+//     words, the reply-earning material) would die with it;
+//   and a CONCLUSION — a hypothetical reader concluding something, or the
+//     ceased-trading vocabulary itself. Without this half, the bare measurement
+//     "their newest review is about 662 days old" would die, and that line is
+//     real internal intelligence: they have stopped asking for reviews.
+// No corpus parameter on purpose: this family is never licensed by anything we
+// read, because it is a claim about what a reader DOES, which nobody measured.
+const _RECENCY_AGE_RE = /\b(?:newest|latest|last|most recent)\s+(?:google\s+)?review\b|\breview recency\b|\breviews?[^.]{0,40}\b\d+\s*(?:days?|months?|years?)\s+old\b|\b\d+[- ](?:day|month|year)[- ]old\s+review/i;
+const _RECENCY_READER_RE = /\b(?:prospect|shopper|buyer|stranger|comparison shopper|someone (?:browsing|reading|checking|looking)|a (?:customer|visitor) (?:browsing|reading|checking|looking))\b/i;
+const _RECENCY_VERB_RE = /\b(?:sees?|reads?|concludes?|assumes?|wonders?|signals?|suggests?|implies|tells)\b/i;
+const _RECENCY_CLOSED_RE = /\b(?:gone quiet|still (?:active|open|in business|operating)|(?:may|might) have (?:closed|shut)|out of business|no longer (?:open|trading|operating))\b/i;
+const stripRecencyConclusions = (text) => {
+  const src = String(text || '');
+  if (!src) return { text: src, cut: [] };
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [];
+  for (const sn of sentences) {
+    const aged = _RECENCY_AGE_RE.test(sn);
+    const concluded = (_RECENCY_READER_RE.test(sn) && _RECENCY_VERB_RE.test(sn)) || _RECENCY_CLOSED_RE.test(sn);
+    if (aged && concluded) cut.push(sn.trim());
+    else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut };
+};
+const stripRecencyConclusionsDeep = (node, out, depth) => {
+  const d = Number(depth) || 0;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripRecencyConclusions(node);
+    if (r.cut.length) { out.cut.push(...r.cut); return r.text; }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(x => stripRecencyConclusionsDeep(x, out, d + 1));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripRecencyConclusionsDeep(node[k], out, d + 1);
+    }
+    return node;
+  }
+  return node;
+};
+
 // ══ A QUOTE IS THE MOST CHECKABLE CLAIM WE MAKE, AND NOTHING CHECKED IT ═════
 // SOURCE VERIFY guards exactly two fields — heroHeadline and ctaText — and
 // verifyOriginalFinding guards originalFindings. Every other prose field the
@@ -38777,6 +38869,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           }
 
           if (_readLimits.length) parsed._readLimits = _readLimits;
+          // Two rules flagging one sentence produce one warning, not two — the
+          // span is what must not be said, and the first reason stands for it.
+          const _dedupedRisks = dedupeClaimRisks(_claimRisks);
+          if (_dedupedRisks.length < _claimRisks.length) {
+            console.log(`CLAIM VERIFY [${company}]: ${_claimRisks.length - _dedupedRisks.length} duplicate warning(s) about the same quoted sentence collapsed — the instruction is identical either way, and a "Do not say" that repeats itself is one nobody reads.`);
+          }
+          _claimRisks.length = 0; _claimRisks.push(..._dedupedRisks);
           if (_claimRisks.length) {
             parsed._claimRisks = _claimRisks;
             console.log(`\u26d4 CLAIM VERIFY [${company}]: ${_claimRisks.length} unverifiable assertion(s) in the generated copy — ${_claimRisks.join(' | ')}. Flagged for review; do NOT send without checking these against what was actually measured.`);
@@ -39092,6 +39191,19 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           if (_sq.cut.length) {
             parsed._spelledRemoved = _sq.cut.slice(0, 4);
             console.log(`⛔ INVENTED SCALE [${company}]: removed ${_sq.cut.length} sentence(s) carrying a quantity written in WORDS that traces to nothing — ${_sq.phrases.slice(0, 4).join(', ')}. First one: "${String(_sq.cut[0]).slice(0, 140)}". Every figure gate in this system reads digits, so "forty-six dozen reviews" (CTR, live, against a measured 461) walked past all of them onto the call sheet.`);
+          }
+          // ══ AND NO READER-CONCLUSION BUILT ON A REVIEW DATE ═════════════
+          // The audit prompt forbids this framing at length and the model wrote
+          // it anyway on TriStar. Instructional guards do not hold; this one is
+          // mechanical now, beside its siblings.
+          const _rc = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripRecencyConclusionsDeep(parsed[k], _rc, 1);
+          }
+          if (_rc.cut.length) {
+            parsed._recencyRemoved = _rc.cut.slice(0, 4);
+            console.log(`\u26d4 RECENCY CONCLUSION [${company}]: removed ${_rc.cut.length} sentence(s) asserting what a reader concludes from the age of their reviews. First one: "${String(_rc.cut[0]).slice(0, 140)}". Nobody checks the date on the newest review and concludes a business has closed \u2014 the owner's own instinct, recorded in this file \u2014 and what the measurement really says (they stopped ASKING for reviews) is already in the audit as intelligence. The prompt has forbidden this framing since 2026-08-23 and the model produced it anyway, which is what every stripper in this battery exists for.`);
           }
           const _emptied = Object.keys(_was).filter(k => String(_was[k]).trim() && !String(parsed[k] || '').trim());
           if (_emptied.length) {
@@ -54154,6 +54266,115 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     console.log(`⛔ MOBILE SPEED RUNG CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ TWO WARNINGS ABOUT ONE SENTENCE ARE ONE WARNING SAID TWICE ═══════════
+  // TriStar Concrete, live: "Do not say" carried two entries both quoting
+  // "Nothing answers." — two different rules, one sentence, and for the person
+  // dialling the instruction is identical. A section that repeats itself is one
+  // an operator learns to skip, which is the recorded cost at the CTA
+  // precaution. EXECUTED on the real function with the live entries.
+  try {
+    const _fails = [];
+    const _tri = [
+      'claims nothing responds after submission — backend we never tested — "Nothing answers."',
+      'claims nobody answers — we never rang them and never sat outside their hours — "Nothing answers."',
+    ];
+    const _d1 = dedupeClaimRisks(_tri);
+    if (_d1.length !== 1) _fails.push(`the two live TriStar entries quoting the same sentence survive as ${_d1.length} — the sheet says "do not say Nothing answers" twice`);
+    else if (_d1[0] !== _tri[0]) _fails.push('the SECOND entry survived the dedupe — rules run in severity order, so the first reason is the one that mattered');
+
+    // Different quotes are different warnings and both must stand.
+    const _diff = dedupeClaimRisks([
+      'POST-CONTACT CLAIM — "Leads arrive through your form but there is no one waiting to answer them"',
+      'SPECIFIC OPERATING HOURS — "a customer who fills it out at 9pm sits in silence until morning"',
+    ]);
+    if (_diff.length !== 2) _fails.push('two warnings quoting DIFFERENT sentences were collapsed — a real warning was eaten');
+
+    // An entry with no quote at all is left alone, even beside its twin.
+    const _noQuote = dedupeClaimRisks([
+      'GAVE AWAY THE WORK: the copy itemises 4 separate fixable items.',
+      'GAVE AWAY THE WORK: the copy itemises 4 separate fixable items.',
+      'INFLATED RATIO — the copy says most of the businesses above them have fewer reviews.',
+    ]);
+    if (_noQuote.length !== 3) _fails.push('entries carrying no quoted span were deduped on something else — the span is the only safe key, and without one there is nothing safe to collapse on');
+
+    // A quote too short to be a sentence must not be a dedupe key: two distinct
+    // warnings could share a two-word fragment, and eating one deletes a real
+    // warning — the more expensive failure.
+    const _short = dedupeClaimRisks([
+      'claims the page is broken — "the site"',
+      'claims the listing is broken — "the site"',
+    ]);
+    if (_short.length !== 2) _fails.push('two warnings sharing a fragment under twelve characters were collapsed — a filter that can eat a real warning costs more than a duplicate');
+
+    // Punctuation and casing must not defeat it — the same sentence quoted by
+    // two rules can differ by a trailing full stop.
+    const _punct = dedupeClaimRisks([
+      'rule one — "Nothing answers."',
+      'rule two — "nothing answers"',
+    ]);
+    if (_punct.length !== 1) _fails.push('the same quoted sentence survives twice when the two rules differ by punctuation or case');
+
+    // ── the call site, because a fixture supplies its own arguments ────────
+    const _dn = (...p) => p.join('');
+    if (!selfSourceNoComments().includes(_dn('const _dedupedRisks = dedupeClaimRisks(', '_claimRisks);'))) {
+      _fails.push('the live claim-risk list is no longer deduped before it reaches the lead, so the function passes its fixtures while every sheet still carries the duplicates');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ CLAIM RISK DEDUPE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ CLAIM RISK DEDUPE CHECK: two rules flagging the same quoted sentence produce ONE "Do not say" entry — the span is the thing Mike must not say, and the first reason stands for it. Different quotes both stand, entries with no quote are untouched, a fragment under twelve characters is never a dedupe key, and punctuation cannot split one sentence into two warnings. On TriStar's live sheet "Nothing answers." was warned about twice, and a section that repeats itself is one an operator learns to skip.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CLAIM RISK DEDUPE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FORBIDDEN RECENCY FRAMING, REFUSED MECHANICALLY ══════════════════
+  // The audit prompt has forbidden "a reader sees old reviews and concludes the
+  // business went quiet" at length since the 668-day live failure, and on
+  // TriStar the model wrote it anyway. Both live sentences are the fixtures;
+  // the survivors matter as much, because each half of the predicate alone
+  // would eat one of them.
+  try {
+    const _fails = [];
+    const _tristar = 'Layer on a newest review that is about 662 days old, and a comparison shopper reading the profile sees a business that may have gone quiet at the same time customers say it went quiet on them.';
+    const _r1 = stripRecencyConclusions(_tristar);
+    if (!_r1.cut.length) _fails.push('the live TriStar sentence survives — a reader-conclusion built on a review date reached the sheet again');
+    const _668 = 'The newest review displayed is 668 days old, which signals to a prospect is this place still active.';
+    if (!stripRecencyConclusions(_668).cut.length) _fails.push('the original 668-day live sentence survives');
+
+    // The four survivors, each protecting one half of the predicate.
+    for (const [_s, _why] of [
+      ['Their newest Google review is about 662 days old.', 'the bare measurement was eaten — that line is real internal intelligence, and a gate that eats true sentences is one somebody switches off'],
+      ['They have stopped asking for reviews, which is worth knowing before the call.', 'the CORRECTED framing was eaten — that is the sentence the fix teaches'],
+      ['Two of the 80 reviews we read say the business went quiet on them after the contract was signed.', 'the customers\' own words were eaten — that is the reply-earning material, and "went quiet on them" is their idiom, not a ceased-trading claim'],
+      ['Their reviews are recent and the owner replies to most of them.', 'an ordinary review sentence with no age figure was eaten'],
+      // This one guards the AGE half of the predicate specifically: it carries a
+      // hypothetical reader AND a conclude-verb, so only the missing age signal
+      // keeps it alive. The first falsification of this check widened the age
+      // test to any review word and every fixture stayed green, which proved the
+      // age half had no fixture watching it — a falsification that does not
+      // reproduce is a missing case, not a pass.
+      ['Someone browsing the profile sees an owner who answers nearly every review.', 'a reader-conclusion about the owner ANSWERING reviews was eaten — the gate is keying on the word review instead of on review AGE, and that eats the strongest true sentence a reputation read produces'],
+    ]) {
+      if (stripRecencyConclusions(_s).cut.length) _fails.push(_why);
+    }
+
+    // ── the call site, because a fixture supplies its own arguments ────────
+    const _rn = (...p) => p.join('');
+    if (!selfSourceNoComments().includes(_rn('parsed[k] = stripRecencyConclusionsDeep(', 'parsed[k], _rc, 1);'))) {
+      _fails.push('the audit prose is no longer walked by this stripper, so the function passes its fixtures while the live sheet carries the framing');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ RECENCY CONCLUSION CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ RECENCY CONCLUSION CHECK: a sentence asserting what a reader concludes from the age of their reviews is removed whole from the audit — both live failures (TriStar's comparison shopper and the 668-day "is this place still active") are the fixtures. The bare age measurement, the corrected stopped-asking framing, the customers' own "went quiet on them" and an ordinary review sentence all survive, because a gate that eats true sentences is the more expensive failure. The prompt has forbidden this framing in words since 2026-08-23 and the model produced it anyway; instructional guards do not hold, and this one is mechanical now.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RECENCY CONCLUSION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A LIMIT OF OUR READ IS NOT AN ASSERTION IN THE COPY ═══════════════════
   // Live 2026-08-20: the same response that failed to match the CTA text in the
   // markdown reported CTA=true from the vision read. The run printed "1
@@ -56789,12 +57010,47 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // worst failure the gate has (every Firecrawl call in the process hanging
     // forever) produced silence instead of a red line. Bounded now, and the
     // timeout IS the finding.
-    const _out = await Promise.race([
-      Promise.all(Array.from({ length: 10 }, (_, i) => _gate(_job(30, i === 2 || i === 6)).catch(() => 'threw'))),
-      new Promise(r => setTimeout(() => r('STRANDED'), 15000)),
-    ]);
+    //
+    // ══ THE DEADLINE MEASURES STALL, NOT WALL CLOCK ══════════════════════
+    // Live on Render 2026-08-23 this check went RED on a correct gate: its old
+    // 15-second wall-clock deadline expired while the SCREENSHOT SCALER CHECK
+    // was blocking the event loop in multi-second chunks of synchronous PNG
+    // work — Render's own port scanner could not connect in the same window,
+    // which is the proof the loop was frozen, not the gate. Five of ten jobs
+    // had dispatched, progress was still being made, and the message said "a
+    // slot is leaking". A message naming the wrong cause is recorded three
+    // times in this file, and a wall-clock ruler on a shared-CPU dyno measures
+    // the dyno — the same lesson BATCH MEMORY CHECK earned at 12 seconds.
+    //
+    // So the deadline is ZERO PROGRESS: a genuinely leaked slot stops both
+    // dispatch and settlement forever, so it always produces a stall; a starved
+    // loop keeps making progress every time it unblocks, so it never can. The
+    // absolute cap stays as the loud backstop, sized so no dyno reaches it.
+    const _settledMarks = [];
+    const _allP = Promise.all(Array.from({ length: 10 }, (_, i) =>
+      _gate(_job(30, i === 2 || i === 6)).catch(() => 'threw').then((v) => { _settledMarks.push(1); return v; })));
+    const _STALL_MS = 20000, _CAP_MS = 120000;
+    let _out;
+    {
+      const _begin = Date.now();
+      let _lastCount = -1, _lastProgress = Date.now();
+      for (;;) {
+        const _done = await Promise.race([_allP.then(v => ({ v })), new Promise(r => setTimeout(() => r(null), 500))]);
+        if (_done) { _out = _done.v; break; }
+        const _count = _dispatch.length + _settledMarks.length;
+        if (_count !== _lastCount) { _lastCount = _count; _lastProgress = Date.now(); }
+        if (Date.now() - _lastProgress > _STALL_MS || Date.now() - _begin > _CAP_MS) { _out = 'STRANDED'; break; }
+      }
+    }
     if (_out === 'STRANDED') {
-      _fails.push('10 calls did not finish in 15s — a slot is leaking, and in production that wedges every Firecrawl call in the process with no error anywhere');
+      // Name the actual shape. All ten released but not all settled is the
+      // leaked-slot signature; releases that stopped partway is a wedged pump.
+      // Either way the stall ruler means a slow dyno alone cannot have done it.
+      if (_dispatch.length >= 10) {
+        _fails.push(`all 10 calls were released and only ${_settledMarks.length} settled, with no progress for ${Math.round(_STALL_MS / 1000)}s — a slot is leaking, and in production that wedges every Firecrawl call in the process with no error anywhere`);
+      } else {
+        _fails.push(`the gate released ${_dispatch.length} of 10 jobs and then made no progress for ${Math.round(_STALL_MS / 1000)}s — the pump is wedged or a slot leaked. Measured on stall rather than wall clock, so a slow boot cannot produce this: the 2026-08-23 deploy went red here on a correct gate because the old 15-second wall clock was timing the screenshot scaler's CPU work`);
+      }
     } else {
       if (_out.length !== 10) _fails.push(`${_out.length} of 10 calls settled — the rest are stranded`);
       if (_out.filter(x => x === 'threw').length !== 2) _fails.push('a throwing call did not reject its caller');
@@ -56822,14 +57078,23 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // to catch.
     const _gaps = _dispatch.slice(1).map((s, i) => s - _dispatch[i]);
     const _floor = FC_MIN_GAP_MS;
-    if (_dispatch.length !== 10) _fails.push(`the gate reported ${_dispatch.length} dispatches for 10 jobs — the spacing measurement has nothing to read`);
+    // Guarded on the stall verdict: with the run already stranded, "5 dispatches
+    // for 10 jobs" is a symptom of the same event, and reporting it as its own
+    // finding is how one failure printed as three different causes on the
+    // 2026-08-23 deploy. Starvation can only make gaps BIGGER, so the spacing
+    // floor itself never needs a starvation exemption.
+    if (_out !== 'STRANDED' && _dispatch.length !== 10) _fails.push(`the gate reported ${_dispatch.length} dispatches for 10 jobs — the spacing measurement has nothing to read`);
     const _tooClose = _gaps.filter(g => g < _floor).length;
     if (_tooClose) _fails.push(`${_tooClose} start(s) came less than ${_floor}ms after the one before — gaps were [${_gaps.join(', ')}] — the spacing that keeps a fan-out from becoming a burst is not holding`);
     // The slot must survive the throws: if a rejection leaked a slot, this hangs
     // rather than resolving, so the timeout is the assertion.
+    // 30s, not 3: this probe is one job through an idle gate, so the only thing
+    // a longer budget tolerates is a starved event loop — and 3s of starvation
+    // is routine while the screenshot scaler runs on a shared-CPU dyno. A
+    // genuinely wedged gate never dispatches the probe at any budget.
     const _after = await Promise.race([
       _gate(async () => 'alive'),
-      new Promise(r => setTimeout(() => r('WEDGED'), 3000)),
+      new Promise(r => setTimeout(() => r('WEDGED'), 30000)),
     ]);
     if (_after !== 'alive') _fails.push('the gate stopped accepting work after two throws — every later Firecrawl call in the process would hang');
     if (_fails.length) {
