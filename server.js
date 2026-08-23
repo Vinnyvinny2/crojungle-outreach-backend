@@ -28506,6 +28506,28 @@ const applyLabMobileScore = (pageSpeed, realSpeed) => {
   };
 };
 
+// ══ THE CLIENT HAS NEVER SENT THIS KEY, AND NOTHING SAID SO ═══════════════
+// measureRealWorldSpeed has read `req.body.keys.pageSpeedKey` since it was
+// written. There is no pageSpeedKey field anywhere in index.html — not in
+// Settings, not in the research request builder, nowhere. So the key was
+// ALWAYS empty, the function always returned {checked:false}, and the only
+// measurement in this audit taken from the prospect's own visitors has been
+// dark on every lead of this project's life. Vin, looking for the setting:
+// "no where to add pagespeed api." He was right; there was nowhere.
+//
+// It belongs on the SERVER anyway. It is a Google Cloud key from the same
+// project as GOOGLE_PLACES_KEY, it is free (PageSpeed Insights API), and every
+// other server-owned key in this file is an environment variable. Putting it in
+// Settings would need a Netlify deploy to reach anybody and would put a Google
+// credential in a browser for no reason.
+//
+// The client slot stays as a fallback so a key sent from Settings one day still
+// works, but the env var is the authority and the preflight names it.
+const pageSpeedKeyFor = (keys) => String(
+  (process.env.PAGESPEED_KEY || '').trim()
+  || ((keys && (keys.pageSpeedKey || keys.pagespeedKey)) || '')
+).trim();
+
 const measureRealWorldSpeed = async (website, key) => {
   if (!website || !key) return { checked: false, why: 'no PageSpeed key configured' };
   try {
@@ -35293,7 +35315,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // ── HOW IT PERFORMS FOR REAL PEOPLE ──────────────────────────────────
     // Google's record of their own visitors, on mobile. Free, and the only
     // measurement in the audit that comes from the prospect's actual traffic.
-    realSpeed = await measureRealWorldSpeed(website, req.body.keys && req.body.keys.pageSpeedKey);
+    realSpeed = await measureRealWorldSpeed(website, pageSpeedKeyFor(req.body.keys));
     // The lab score from the SAME response backfills the five consumers that
     // have read an empty object since the browser call was removed. Zero extra
     // calls — see applyLabMobileScore for the field-data-wins rule.
@@ -41926,8 +41948,8 @@ const preflightResearch = (body, env) => {
   // slow_mobile can never fire on any lead. A warning rather than a refusal:
   // the rest of the audit is unaffected, which is exactly the Apify shape one
   // line above and for the same reason.
-  if (!String((keys.pageSpeedKey || b.pageSpeedKey || '')).trim()) {
-    warnings.push('no PageSpeed key: slow_mobile cannot fire on any lead, and it is the only finding in the ladder measured from the prospect'+String.fromCharCode(0x2019)+'s own visitors rather than from something we looked at. The key is free from Google Cloud (PageSpeed Insights API) and the audit still runs without it.');
+  if (!pageSpeedKeyFor(keys)) {
+    warnings.push('PAGESPEED_KEY is not set on the server, so slow_mobile cannot fire on any lead '+String.fromCharCode(0x2014)+' and it is the only finding in the ladder measured from the prospect'+String.fromCharCode(0x2019)+'s own visitors rather than from something we looked at. The key is FREE from Google Cloud (enable the PageSpeed Insights API on the same project as GOOGLE_PLACES_KEY). There is no Settings field for it and there should not be: it is a server key like the Places one. The audit still runs without it.');
   }
   return { ok: true, warnings };
 };
@@ -44722,9 +44744,12 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _envOk = { GOOGLE_PLACES_KEY: 'gp_x' };
-    // pageSpeedKey belongs in "fully configured": without it slow_mobile is dark
-    // on every lead, and that is the only rung measured from the prospect's own
-    // visitors rather than from something we looked at.
+    // The PageSpeed key belongs in "fully configured": without it slow_mobile is
+    // dark on every lead, and that is the only rung measured from the prospect's
+    // own visitors rather than from something we looked at. Supplied through the
+    // CLIENT slot here on purpose - the env var is checked separately below, and
+    // a fixture that only ever exercised the env would not notice the fallback
+    // being removed.
     const _ok = { website: 'acme-plumbing.com', apiKey: 'sk-x', keys: { firecrawlKey: 'fc-x', apifyToken: 'ap-x', pageSpeedKey: 'ps-x' } };
 
     const _r0 = preflightResearch(_ok, _envOk);
@@ -54044,12 +54069,44 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (/mobileScore\s*:\s*(?:pageSpeed|Number\(pageSpeed)/.test(_msrc.slice(_msrc.indexOf(_mn('_harmInputs', ' = {'))).slice(0, 40000))) {
       _fails.push('the lab mobile score is being handed to the ladder, so a simulation can score and be said');
     }
-    // And the operator must be told when the free measurement is not configured.
-    const _pf = preflightResearch({ website: 'acme.com', apiKey: 'k', keys: { firecrawlKey: 'f', apifyToken: 'a' } }, { GOOGLE_PLACES_KEY: 'p' });
-    if (!(_pf.warnings || []).some(w => /PageSpeed/i.test(w))) {
-      _fails.push('a lead runs with no PageSpeed key and nothing says so, which is a whole rung dark in silence');
+    // ── THE KEY THE CLIENT HAS NEVER SENT ─────────────────────────────────
+    // measureRealWorldSpeed read req.body.keys.pageSpeedKey for its whole life
+    // and there is no pageSpeedKey field anywhere in index.html — not in
+    // Settings, not in the request builder. So the key was always empty and this
+    // measurement has been dark on every lead ever run, silently. Executed here
+    // in both directions, with the env restored afterwards so a boot check
+    // cannot change how the process behaves.
+    const _envHad = Object.prototype.hasOwnProperty.call(process.env, 'PAGESPEED_KEY');
+    const _envWas = process.env.PAGESPEED_KEY;
+    try {
+      delete process.env.PAGESPEED_KEY;
+      if (pageSpeedKeyFor({ pageSpeedKey: 'from-settings' }) !== 'from-settings') {
+        _fails.push('a key sent from Settings is ignored, so the only remaining door would be an environment variable nobody was told about');
+      }
+      if (pageSpeedKeyFor({}) !== '') {
+        _fails.push('an absent key resolves to something truthy, so the lookup would run with rubbish and report a failure as a measurement');
+      }
+      process.env.PAGESPEED_KEY = 'from-render';
+      if (pageSpeedKeyFor({}) !== 'from-render') {
+        _fails.push('the server environment variable does not reach the PageSpeed lookup — which is where this key has to live, because the client has never had a field for it');
+      }
+      if (pageSpeedKeyFor({ pageSpeedKey: 'from-settings' }) !== 'from-render') {
+        _fails.push('a stale key in a browser outranks the one set on the server');
+      }
+      // And the operator must be told when the free measurement is not configured.
+      delete process.env.PAGESPEED_KEY;
+      const _pf = preflightResearch({ website: 'acme.com', apiKey: 'k', keys: { firecrawlKey: 'f', apifyToken: 'a' } }, { GOOGLE_PLACES_KEY: 'p' });
+      if (!(_pf.warnings || []).some(w => /PAGESPEED_KEY/.test(w))) {
+        _fails.push('a lead runs with no PageSpeed key and nothing names the setting that fixes it, which is a whole rung dark in silence');
+      }
+      if (_pf.refuse) _fails.push('a missing PageSpeed key REFUSES the lead rather than warning — the rest of the audit is unaffected and refusing would delete good leads');
+    } finally {
+      if (_envHad) process.env.PAGESPEED_KEY = _envWas; else delete process.env.PAGESPEED_KEY;
     }
-    if (_pf.refuse) _fails.push('a missing PageSpeed key REFUSES the lead rather than warning — the rest of the audit is unaffected and refusing would delete good leads');
+    // The call site, because a fixture supplies its own arguments.
+    if (!_msrc.includes(_mn('measureRealWorldSpeed(website, pageSpeedKeyFor', '(req.body.keys)'))) {
+      _fails.push('the research route is not resolving the key through the one door, so the server environment variable reaches nothing');
+    }
 
     if (_fails.length) {
       console.log(`⛔ MOBILE SPEED RUNG CHECK: ${_fails.join(' | ')}.`);

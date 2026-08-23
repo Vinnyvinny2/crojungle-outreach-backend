@@ -4605,8 +4605,20 @@ TRAFFIC, never about speed), and a lab score with no field data behind it. The
 sentence states the seconds and never the word "slow" — the seconds he cannot
 argue with, the adjective he can.
 
-And a lead running with no PageSpeed key now says so once an hour instead of
-leaving a whole rung dark in silence. The key is free.
+**And the key had nowhere to come from.** `measureRealWorldSpeed` read
+`req.body.keys.pageSpeedKey` for its whole life, and there is no `pageSpeedKey`
+field anywhere in `index.html` — not in Settings, not in the request builder,
+nowhere. Vin, looking for it: *"no where to add pagespeed api."* He was right.
+The key was always empty, the function always returned `{checked:false}`, and
+the only measurement taken from the prospect's own visitors has been dark on
+every lead of this project's life, silently.
+
+It belongs on the SERVER anyway: it is a Google Cloud key from the same project
+as `GOOGLE_PLACES_KEY`, and putting it in Settings would need a Netlify deploy to
+reach anybody and would put a Google credential in a browser for no reason. It is
+`PAGESPEED_KEY` in Render now, resolved through one door, with the client slot
+kept as a fallback. A lead running without it says so once an hour and names the
+variable, instead of leaving a whole rung dark in silence.
 
 **What the falsification runs found in the check itself.** Two of the four
 reverts passed on a broken build: widening the test to fire on a lab score, and
@@ -4900,7 +4912,7 @@ nothing and touches no lead Vin is calling.
 | `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` | unset | the REAL Google local pack. Without both, no lead gets a search position at all — see §52. About $0.60-2.40 per 1,000 against Places at $35 per 1,000 |
 | `APIFY_MAX_REVIEWS` | 90 | reviews bought per lead. Apify bills per review, so this IS the Apify line |
 | `REVIEW_CORPUS_CHARS` | 30000 | how many of them the pain miner actually reads. Raise the pull without raising this and you are paying for reviews no model sees — see §54 |
-| `pageSpeedKey` (Settings, not env) | unset | free from Google Cloud. Without it `slow_mobile` cannot fire on any lead, and it is the only rung measured from the prospect's own visitors |
+| `PAGESPEED_KEY` | unset | FREE from Google Cloud (enable the PageSpeed Insights API on the same project as `GOOGLE_PLACES_KEY`). Without it `slow_mobile` cannot fire on any lead, and it is the only rung measured from the prospect's own visitors. There is deliberately no Settings field — see §54 |
 
 **Set the budgets to the PLAN, not the default.** The defaults (1500 Firecrawl
 credits, 600 Places calls, $20 of model) are a runaway-day safety net sized for
