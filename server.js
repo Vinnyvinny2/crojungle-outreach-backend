@@ -3414,7 +3414,21 @@ const meterAnthropic = (company, label, model, usage) => {
     const key = String(company || 'unknown');
     if (!_leadSpend.has(key)) _leadSpend.set(key, { calls: [], total: 0 });
     const rec = _leadSpend.get(key);
-    rec.calls.push({ label, model, fresh, cRead, cWrite, out, cost });
+    // ══ A LABEL THAT IS NOT A STRING PRINTS AS [object Object] ═════════
+    // One call site passed `{ label: 'email rewrite', company }` into a
+    // parameter that is a plain string, so the one call in the system that had
+    // bothered to name itself was the one line of the spend report nobody could
+    // read. Said out loud once per shape, because the whole value of this meter
+    // is being able to point at the expensive call by name.
+    let _lab = label;
+    if (typeof _lab !== 'string' || !_lab) {
+      if (!_UNPRICED.has('label:' + typeof _lab)) {
+        _UNPRICED.add('label:' + typeof _lab);
+        console.log(`\u26d4 ANTHROPIC CALL LABEL: a call site passed a ${typeof _lab} where the meter wants a short string name. It will appear in the spend report as "anthropic", indistinguishable from every other unnamed call, which is the whole reason the report could not answer which call is expensive.`);
+      }
+      _lab = 'anthropic';
+    }
+    rec.calls.push({ label: _lab, model, fresh, cRead, cWrite, out, cost });
     rec.total += cost;
     // Same door, two more meters: the UTC-day ledger the ceilings read, and the
     // per-request ledger the response reports. An unpriced model already
@@ -10017,7 +10031,7 @@ confidence: high = name explicitly tied to an ownership title. medium = clearly 
 CONTENT:
 ${corpus}` }]
       }),
-    }, 30000);
+    }, 30000, 'owner-brain');
 
     const d = await r.json();
     let text = anthropicText(d);
@@ -10489,7 +10503,7 @@ Return ONLY valid JSON, no markdown:
 SEARCH RESULTS:
 ${corpus}` }]
       }),
-    }, 30000);
+    }, 30000, 'owner-websearch');
 
     const d = await r.json();
     let text = anthropicText(d);
@@ -10594,7 +10608,7 @@ ABOUT THE EMAIL — this matters a lot:
 - Copy it EXACTLY as shown — character for character. Never guess a spelling, never complete a partial address, never invent a plausible one. If it is blurry, cut off, or you are not certain, return null. Null is the correct answer when unsure.` }
         ] }]
       }),
-    }, 30000);
+    }, 30000, 'vision-page');
 
     const d = await r.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -10668,7 +10682,7 @@ ALSO NAME THEIR TRADE. You are already reading their homepage, so this costs not
 Return ONLY JSON:
 {"match":"yes|no|unclear","confidence":"high|medium|low","reason":"one short sentence","trade":"what a customer would search, or empty string if unclear"}` }]
       }),
-    }, 20000);
+    }, 20000, 'domain-confirm');
 
     const d = await r.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -10754,7 +10768,7 @@ Return ONLY valid JSON:
 RESULTS:
 ${corpus}` }]
       }),
-    }, 25000);
+    }, 25000, 'size-search');
 
     const d = await r2.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -12368,6 +12382,7 @@ const RUNG_PILLAR = {
   expired_certificate:           'LEAKING',
   no_https:                      'LEAKING',
   no_mobile_viewport:            'LEAKING',
+  slow_mobile:                   'LEAKING',
   long_form:                     'LEAKING',
   no_published_pricing:          'LEAKING',
   no_offer:                      'LEAKING',
@@ -12747,6 +12762,57 @@ const HARM_LADDER = [
     // describe it after doing that.
     say: () => 'Their site is not built to resize for a phone. It loads at desktop width and has to be pinched to read',
     costs: 'most of the people finding them are on a phone, and the page arrives zoomed out and unreadable' },
+
+  // ══ THE ONLY THING WE MEASURE THAT HAPPENED TO HIS CUSTOMERS ═════════════
+  // Every other rung in this ladder is something WE looked at. This one is
+  // Google's record of what real phones actually experienced on his site over
+  // the last twenty-eight days, and it has been measured on every lead since
+  // measureRealWorldSpeed was written without ever being a rung — only a
+  // `flaws` string, which cannot be ranked, cannot be priced and can never open
+  // an email. So the most checkable money leak in the file has been unable to
+  // compete for a single opener.
+  //
+  // THE FIELD DATA ONLY, AND THIS IS NOT A DETAIL. The same response carries a
+  // Lighthouse LAB score, and the lab score is a simulation that moves between
+  // runs — this file has an entire entry about two looks at one business
+  // returning different numbers and the emails that came out of it. The field
+  // figures are a 28-day aggregate of real visits: they are stable, and he can
+  // open PageSpeed Insights on his own site and read the same number we did.
+  // A finding he can check is the only kind this system is allowed to send.
+  //
+  // The sentence names the WORST measured fault rather than listing them, and
+  // it never says "slow" as a judgement — it says the seconds, which is a fact.
+  { harm: 83, specific: 95, novel: 78, delegable: 85, weFix: 95, band: 'BLOCKS', id: 'slow_mobile',
+    blind: 'the only phone he sees his own site on is his own, already cached and on his own wifi, and nothing records what a stranger\'s phone waits',
+    reframe: 'somebody comparing three companies gives each of them a couple of seconds',
+    // Both halves are required. hasFieldData is the did-we-look gate: Google
+    // reports nothing at all for a site with too few visitors, and no data is a
+    // fact about traffic, never about speed. isProblem is Google's own
+    // threshold, not ours.
+    test: (m) => m.mobileFieldMeasured === true && m.mobileFieldSlow === true,
+    say: (m) => {
+      const lcp = Number(m.mobileLcpSec);
+      const cls = Number(m.mobileCls);
+      const inp = Number(m.mobileInpMs);
+      // Worst first, and one fault, not a list. Google's own failing lines.
+      if (Number.isFinite(lcp) && lcp > 2.5) {
+        return `Someone opening their site on a phone waits ${lcp} seconds before the page shows them anything. That is Google's own measurement of their real visitors over the last month, not a test we ran`;
+      }
+      if (Number.isFinite(cls) && cls > 0.25) {
+        return `Their page moves around while it loads on a phone, so somebody reaching for the call button can land on something else. Google measured that on their real visitors over the last month`;
+      }
+      if (Number.isFinite(inp) && inp > 500) {
+        return `Their page takes about ${(inp / 1000).toFixed(1)} of a second to answer a tap on a phone, which reads as broken rather than slow. Google measured that on their real visitors over the last month`;
+      }
+      // Every branch above rests on a MEASUREMENT — two of them state the
+      // figure, and the layout one deliberately does not, because a raw
+      // layout-shift score is a number no owner can interpret and what he can
+      // actually check is the movement itself. With none of the three measured
+      // we hold no sentence at all, and a vaguer one that still implies a speed
+      // problem is the same false claim with the evidence hidden.
+      return '';
+    },
+    costs: 'a visit that ends during the wait leaves no trace on his side, so this is the one leak he has no record of' },
 
   // ── CONTRADICTS ─────────────────────────────────────────────────────────
   // ══ A SECOND PHONE LINE IS AN ANNOYANCE, NOT A FIRE ══════════════════════
@@ -14586,7 +14652,7 @@ const AREA_OF = {
   broken_page: 'Website', site_empty: 'Website', no_https: 'Website',
   expired_certificate: 'Website', stale_copyright: 'Website',
   placeholder_text: 'Website', dead_blog: 'Website', dated_credibility: 'Website',
-  no_mobile_viewport: 'Website', tap_to_call_broken: 'Website',
+  no_mobile_viewport: 'Website', tap_to_call_broken: 'Website', slow_mobile: 'Website',
   long_form: 'Getting in touch', form_only_no_booking: 'Getting in touch',
   no_after_hours: 'Getting in touch', phone_mismatch: 'Getting in touch',
   absent_from_search: 'Being found', outranked_by_weaker: 'Being found', organic_invisible: 'Being found',
@@ -14754,6 +14820,8 @@ const SUBJECTS_FOR = {
   no_owner_replies:     ['your reviews sit unanswered', 'nobody answers your reviews'],
   no_hours_on_profile:  ['google has no hours for you', 'your hours are missing'],
   no_mobile_viewport:   ['your site breaks on a phone', 'your site is down on mobile'],
+  // Both under the 30-character ceiling, which drops a longer one in silence.
+  slow_mobile:          ['your site on a phone', 'the wait on a phone'],
   review_deficit:       ['you are behind on reviews', 'they have more reviews'],
   // '{years} years, {reviews} reviews' was here and broke two of Mike's own
   // subject rules at once — numbers, and two clauses split for rhythm. Three
@@ -15348,6 +15416,7 @@ const HARM_LADDER_LAYER = {
   no_https:              'CONVERSION',
   expired_certificate:   'CONVERSION',
   no_mobile_viewport:    'CONVERSION',
+  slow_mobile:           'CONVERSION',
   dated_credibility:     'CONVERSION',
   stale_copyright:       'CONVERSION',
   placeholder_text:      'CONVERSION',
@@ -15441,6 +15510,9 @@ const SELLABLE = {
   // Same for a seven-field form and a mobile viewport tag. Real, true, and a
   // ten-minute job with nothing behind it worth buying.
   no_owner_replies: 1, partial_owner_replies: 1, long_form: 1, no_mobile_viewport: 1,
+  // 4: a page rebuilt for speed is the rebuild we sell, and the fix is not
+  // something an owner or his current web guy does in an afternoon.
+  slow_mobile: 4,
   no_published_pricing: 1, no_lead_magnet: 1, stale_copyright: 1,
   placeholder_text: 1, dead_blog: 1, no_https: 1, expired_certificate: 1,
   thin_profile: 1, no_hours_on_profile: 1, no_website_on_profile: 1,
@@ -16810,7 +16882,7 @@ const rewriteEmailWithBrain = async (parts, apiKey, company, draft, why) => {
       body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 600,
         temperature: 0.4,
         messages: [{ role: 'user', content: prompt }] }),
-    }, 25000, { label: 'email rewrite', company });
+    }, 25000, 'email-rewrite');
     const d = await res.json();
     const out = String(anthropicText(d)).trim()
       .replace(/^["'\u201c]+|["'\u201d]+$/g, '').trim();
@@ -19265,6 +19337,7 @@ const CTA_BY_FINDING = {
   broken_page: 'accountability', site_empty: 'accountability', no_https: 'accountability',
   expired_certificate: 'accountability', tap_to_call_broken: 'accountability',
   no_mobile_viewport: 'accountability', placeholder_text: 'accountability',
+  slow_mobile: 'accountability',
   stale_copyright: 'accountability', dated_credibility: 'accountability',
   dead_blog: 'accountability', phone_mismatch: 'accountability',
   // Their Google listing. Same logic, different owner in most businesses.
@@ -21798,6 +21871,11 @@ const OWNER_KNOWS = {
   wrong_gbp_category:           ['has_not_looked', 'a category set once at signup and never revisited'],
   no_hours_on_profile:          ['has_not_looked', 'an unfilled field on his listing'],
   no_mobile_viewport:           ['has_not_looked', 'a tag in his own markup that only a phone reveals'],
+  // CANNOT_KNOW, and it is the clearest case in the table: this is a RECORD of
+  // other people's visits, aggregated over 28 days, on hardware and connections
+  // that are not his. Opening his own cached site on his own phone tells him
+  // nothing about it, which is exactly why the finding survives him checking.
+  slow_mobile:                  ['cannot_know', "a 28-day aggregate of other people's phones, which his own phone cannot show him"],
   tap_to_call_broken:           ['has_not_looked', 'his own number does not dial from a phone, and he has never tapped it'],
   stale_copyright:              ['has_not_looked', 'a footer year nobody reads on their own site'],
   placeholder_text:             ['has_not_looked', 'template text left behind, which he scrolls past every time'],
@@ -23911,7 +23989,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         system: [{ type: 'text', text: sys, cache_control: { type: 'ephemeral', ttl: '1h' } }],
         messages: [{ role: 'user', content: `THE MEASURED FACTS:\n${facts}\n\nWhat is going on here?${correction || ''}` }],
       }),
-    }, 45000);
+    }, 45000, 'situation-read');
     const d = await r.json();
     if (!d || !d.content) return null;
     // Already joined across blocks, which was half right \u2014 but it joined EVERY
@@ -24708,7 +24786,24 @@ const APIFY_ACTOR = 'compass~google-maps-reviews-scraper';
 //
 // The timeout moves with it. A larger scrape takes longer, and a request that
 // times out returns {checked:false} — no claim, but also no finding.
-const APIFY_MAX_REVIEWS = 150;
+//
+// ══ 150 → 90, AND IT IS MORE EVIDENCE, NOT LESS ═══════════════════════════
+// Everything above is right about why forty was too few, and it was written
+// believing all 150 reached the model. They did not: the miner cut its own
+// corpus at 22,000 characters, which is roughly SEVENTY-THREE reviews. So the
+// real reading has been about half the purchase for as long as the number has
+// been 150, and the other half was billed and binned on every lead.
+//
+// With the corpus builder below, every scraped review now reaches the model.
+// Ninety fully read is more than the seventy-three we were actually getting,
+// and Apify bills per review scraped, so it is also forty per cent cheaper. The
+// rungs that read this sample need ten to fifteen reviews to fire; ninety is far
+// above every one of those floors.
+//
+// If a run ever needs the deeper pull back, both halves have to move together —
+// APIFY_MAX_REVIEWS buys the reviews and REVIEW_CORPUS_CHARS decides how many of
+// them are read. Raising one alone is what produced this in the first place.
+const APIFY_MAX_REVIEWS = Math.max(20, parseInt(process.env.APIFY_MAX_REVIEWS || '', 10) || 90);
 const APIFY_TIMEOUT_MS = 150000;
 // ══ A REJECTED TOKEN IS AN ACCOUNT FACT, NOT A FACT ABOUT THIS BUSINESS ════
 // Live 2026-08-21: Apify answered 403 on every lead in the batch. The message
@@ -24762,6 +24857,100 @@ const readApifyPlaceMeta = (items) => {
     }
   }
   return { totalReviews: null, rating: null };
+};
+
+// ══ WE WERE PAYING FOR REVIEWS THE MINER COULD NEVER READ ═══════════════════
+// The pain miner built one string out of every scraped review and then sent
+// `md.slice(0, 22000)` to the model. Apify was asked for 150. A trade review
+// averages roughly 300 characters once the star prefix and any owner reply are
+// counted, so 22,000 characters is about SEVENTY-THREE of them — and because the
+// pull is newest-first, the ones cut were always the oldest half.
+//
+// Two separate faults, and the money one is the smaller of them.
+//
+//   THE MONEY. Apify bills per review scraped. We paid for 150 and the model
+//   read about half. That is not a saving to find, it is a bill for nothing.
+//
+//   THE TRUTH. Every sentence built on this says "N of the 150 reviews we read
+//   say it" — the miner's own denominator, the operational-pain share that
+//   decides the THROUGHPUT diagnosis, and the dismissible-finding floor. The
+//   model never read 150. It read what fitted. So the most-travelled number in
+//   the system was the size of a purchase rather than the size of a reading.
+//
+// Both are fixed by the same rule: EVERY REVIEW IS SEEN, LONG ONES ARE CLIPPED.
+// A pattern needs the complaint sentence, not the essay around it — an owner
+// writing six hundred words about a countertop says "nobody called me back" in
+// the first three lines like everybody else. So the budget is spent on breadth
+// rather than depth, which is exactly what a pattern needs, and the denominator
+// becomes true again by construction rather than by a second field somebody has
+// to remember to deliver.
+//
+// The clip ADAPTS rather than being a constant somebody tunes: if the natural
+// clip does not fit, it shrinks to the per-review share of the budget, floored
+// so a clip can never be too short to hold a complaint. Only below that floor
+// does anything get dropped, and a drop is reported rather than silent.
+//
+// PURE, and returns the reviews it actually used, so the caller can count owner
+// replies and negatives over THE SAME SET the model was shown. One function
+// decides what the sample is; nothing downstream may disagree with it.
+const REVIEW_CORPUS_CHARS = Math.max(4000, parseInt(process.env.REVIEW_CORPUS_CHARS || '', 10) || 30000);
+const REVIEW_CLIP_CHARS = 600;
+const REVIEW_CLIP_FLOOR = 160;
+const _clip = (t, n) => {
+  const s = String(t || '').trim();
+  if (s.length <= n) return s;
+  // Cut on a space so the tail is not half a word, and say it was cut: an
+  // unmarked clip reads as the reviewer stopping mid-sentence, and the quote
+  // verifier would then be matching against something nobody wrote.
+  const cut = s.slice(0, n);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut) + ' …';
+};
+const formatReviewForMining = (r, clip) => {
+  if (!r) return '';
+  return `[${r.stars === null || r.stars === undefined ? 'no rating' : r.stars + ' stars'}] ${_clip(r.text, clip)}` +
+         (r.ownerReply ? `\nResponse from the owner: ${_clip(r.ownerReply, Math.round(clip / 2))}` : '');
+};
+const buildReviewCorpus = (reviews, opts) => {
+  const list = Array.isArray(reviews) ? reviews.filter(Boolean) : [];
+  const budget = Math.max(1000, Number((opts && opts.budget)) || REVIEW_CORPUS_CHARS);
+  const wanted = Math.max(40, Number((opts && opts.clip)) || REVIEW_CLIP_CHARS);
+  const build = (clip) => {
+    const parts = list.map(r => formatReviewForMining(r, clip));
+    return { parts, len: parts.reduce((n, p) => n + p.length + 2, 0) };
+  };
+  let clip = wanted;
+  let out = build(clip);
+  if (out.len > budget && list.length) {
+    // The per-review share of the budget, minus the fixed prefix each row
+    // carries. Floored: a clip under REVIEW_CLIP_FLOOR cannot hold a complaint,
+    // and a corpus of truncated fragments would produce patterns nobody wrote.
+    clip = Math.max(REVIEW_CLIP_FLOOR, Math.floor(budget / list.length) - 18);
+    out = build(clip);
+  }
+  let used = list;
+  let parts = out.parts;
+  let dropped = 0;
+  if (out.len > budget) {
+    // Still over at the floor, which needs an extraordinary number of reviews.
+    // Drop from the END — the pull is newest-first, so the oldest go first.
+    let total = 0, keep = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const next = total + parts[i].length + 2;
+      if (next > budget) break;
+      total = next; keep = i + 1;
+    }
+    keep = Math.max(1, keep);
+    dropped = list.length - keep;
+    used = list.slice(0, keep);
+    parts = parts.slice(0, keep);
+  }
+  const clipped = used.reduce((n, r) => {
+    const t = String((r && r.text) || '');
+    return n + (t.length > clip ? 1 : 0);
+  }, 0);
+  return { text: parts.join('\n\n'), reviews: used, mined: used.length,
+           dropped, clipped, clipChars: clip, chars: parts.join('\n\n').length };
 };
 
 const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '', timeoutMs = APIFY_TIMEOUT_MS,
@@ -24870,13 +25059,21 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   }
   const reviews = items.map(normalizeApifyReview).filter(Boolean);
   if (!reviews.length) return { checked: false, why: `Apify returned ${items.length} row(s) but none parsed as reviews — output shape changed` };
-  const withText = reviews.filter(r => r.text.length > 0);
-  const negative = reviews.filter(r => typeof r.stars === 'number' && r.stars <= 3);
-  const ownerReplies = reviews.filter(r => r.ownerReply.length > 0).map(r => r.ownerReply);
+  // ══ ONE FUNCTION DECIDES WHAT THE SAMPLE IS ═════════════════════
+  // The corpus is built HERE rather than in the miner, so every count below is
+  // taken over exactly the reviews the model was shown. Split across two
+  // functions, the miner sliced its own string and the counts were taken over
+  // the whole scrape — so "40 owner replies out of the 150 we read" could be a
+  // ratio whose numerator and denominator were measured on different sets.
+  const _corpus = buildReviewCorpus(reviews, { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+  const mined = _corpus.reviews;
+  const withText = mined.filter(r => r.text.length > 0);
+  const negative = mined.filter(r => typeof r.stars === 'number' && r.stars <= 3);
+  const ownerReplies = mined.filter(r => r.ownerReply.length > 0).map(r => r.ownerReply);
   // How many of the reviews we read are from the last 12 months. Separates a
   // business that is currently busy from one coasting on years-old work.
   const _yearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
-  const recentCount = reviews.filter(r => {
+  const recentCount = mined.filter(r => {
     const d = r.when ? Date.parse(r.when) : NaN;
     return !isNaN(d) && d >= _yearAgo;
   }).length;
@@ -24905,6 +25102,11 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   // older than the far edge of the earlier window. If it is not, the two
   // windows are not equally observed and NOTHING is claimed. That is the whole
   // difference between a measurement and an artefact of pagination.
+  // Deliberately over EVERY scraped review rather than the mined subset. This
+  // reads DATES only, never text, so a clipped review is a complete input to it,
+  // and its own guard already refuses to speak unless both windows are fully
+  // observed — narrowing the input here could only shorten the history and turn
+  // a real measurement into "not measured" for no gain.
   const velocity = measureReviewVelocity(
     reviews.map(r => (r && r.when ? Date.parse(r.when) : NaN))
   );
@@ -24914,12 +25116,25 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
   }
 
-  const coverage = meta.totalReviews ? `${reviews.length} of ${meta.totalReviews} reviews`
-                                     : `${reviews.length} reviews (total on the profile unknown)`;
+  const coverage = meta.totalReviews ? `${mined.length} of ${meta.totalReviews} reviews`
+                                     : `${mined.length} reviews (total on the profile unknown)`;
   console.log(`APIFY REVIEWS [${companyName}]: read ${coverage} — ${withText.length} with text, ${negative.length} at 3 stars or below, ${ownerReplies.length} owner replies`);
-  return { checked: true, reviews, read: reviews.length, totalReviews: meta.totalReviews,
+  // ══ SAY OUT LOUD WHEN WE BOUGHT SOMETHING WE DID NOT USE ════════════
+  // Apify bills per review scraped. A drop here is money spent on a review no
+  // model ever saw, and the old code did it silently on every lead. It should
+  // now be rare enough to be news; if this line appears on ordinary leads, the
+  // corpus budget is too small for the pull, and those are the two settings
+  // named in it so nobody has to go looking.
+  if (_corpus.dropped > 0) {
+    console.log(`⛔ REVIEW CORPUS [${companyName}]: ${_corpus.dropped} of the ${reviews.length} reviews we PAID Apify to scrape did not fit in the ${REVIEW_CORPUS_CHARS.toLocaleString()}-character reading budget and were not shown to the model, even clipped to ${_corpus.clipChars} characters each. Every count on this lead is taken over the ${mined.length} that were shown, so nothing said about them is wrong — but we bought ${_corpus.dropped} reviews for nothing. Raise REVIEW_CORPUS_CHARS or lower APIFY_MAX_REVIEWS.`);
+  } else if (_corpus.clipped > 0) {
+    console.log(`REVIEW CORPUS [${companyName}]: every one of the ${mined.length} scraped reviews was shown to the model; ${_corpus.clipped} long one(s) were clipped to ${_corpus.clipChars} characters. Breadth over depth is deliberate — a repeating complaint is named in the first lines of a review, and reading every review is what lets a pattern be found at all.`);
+  }
+  return { checked: true, reviews: mined, read: mined.length, scraped: reviews.length,
+           corpus: _corpus.text, corpusDropped: _corpus.dropped, corpusClipped: _corpus.clipped,
+           totalReviews: meta.totalReviews,
            rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage, recentCount, velocity,
-           sampleComplete: meta.totalReviews ? reviews.length >= meta.totalReviews : false };
+           sampleComplete: meta.totalReviews ? mined.length >= meta.totalReviews : false };
 };
 
 // ── CACHING WRAPPER ────────────────────────────────────────────────────────
@@ -24973,10 +25188,14 @@ const deepReviewMine = async (companyName, placeId, apifyToken, apiKey, placeTot
     const rv = await fetchApifyReviews({ placeId, apifyToken, companyName, placeTotalHint });
     // NOT MEASURED is a first-class outcome. It must never collapse into "clean".
     if (!rv.checked) return { read: 0, why: rv.why };
-    const md = rv.reviews.map(r =>
-      `[${r.stars === null ? 'no rating' : r.stars + ' stars'}] ${r.text}` +
-      (r.ownerReply ? `\nResponse from the owner: ${r.ownerReply}` : '')
-    ).join('\n\n');
+    // ══ THE CORPUS IS BUILT WHERE THE SAMPLE IS DECIDED ═══════════════════
+    // This used to assemble its own string and then send `md.slice(0, 22000)`,
+    // which on a 150-review pull was about half of it — so the model read one
+    // set, every count downstream was taken over another, and the words "the
+    // 150 reviews we read" described a purchase rather than a reading. The pull
+    // now arrives already formatted and already fitted, and rv.read is the
+    // number of reviews in it. One number, true everywhere.
+    const md = rv.corpus || '';
     if (!md || md.length < 200) return { read: 0, why: `read ${rv.read} review(s) but they carried almost no text` };
     const res = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -25000,12 +25219,12 @@ owner can check his own review page.
 \u2022 Never estimate what share of the unread reviews would say the same.
 \u2022 If a pattern appears in only one review, it is not a pattern. Say nothing.
 
-This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md.slice(0, 22000)}` }]
+This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md}` }]
       }),
       // A larger corpus takes longer to read. 25s suited forty reviews; at 150
       // a timeout returns no pain at all, which is indistinguishable from a
       // clean profile and is the worst way for this to fail.
-    }, 45000);
+    }, 45000, 'review-pain-mine');
     const d = await res.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -25208,7 +25427,7 @@ Return ONLY valid JSON:
 REVIEWS:
 ${corpus}` }]
       }),
-    }, 25000);
+    }, 25000, 'review-pain-page');
     const d = await res.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -25287,7 +25506,7 @@ Return ONLY JSON:
 REPLIES:
 ${replyBlocks}` }]
       }),
-    }, 18000);
+    }, 18000, 'owner-in-replies');
     const d = await res.json();
     let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -25719,7 +25938,7 @@ Return ONLY JSON:
 PAGES:
 ${corpus}` }]
       }),
-    }, 22000);
+    }, 22000, 'site-pages-audit');
     const d = await res.json();
     let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -25980,7 +26199,7 @@ Return ONLY JSON:
 PAGE:
 ${md.slice(0, 14000)}` }]
       }),
-    }, 20000);
+    }, 20000, 'careers-page');
     const d = await res.json();
     let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -26072,7 +26291,7 @@ Return ONLY valid JSON:
 CONTENT:
 ${corpus}` }]
       }),
-    }, 35000);
+    }, 35000, 'business-pain');
 
     const d = await r.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -26198,7 +26417,7 @@ Return ONLY JSON: {"name":"full name or null","title":"their stated role or null
 RESULTS:
 ${corpus}` }]
       }),
-    }, 20000);
+    }, 20000, 'owner-license');
     const d = await res.json();
     let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -26274,7 +26493,7 @@ Return ONLY JSON: {"name":"the signed name or null","title":"role if stated, els
 REPLIES:
 ${replies.join('\n---\n').slice(0, 9000)}` }]
       }),
-    }, 18000);
+    }, 18000, 'owner-review-replies');
     const d = await res.json();
     let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -26447,7 +26666,7 @@ Return ONLY JSON, no other text:
 WEBSITE TEXT:
 ${content}` }]
       }),
-    }, 20000);
+    }, 20000, 'owner-business-name');
 
     const d = await res.json();
     let t = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -27625,7 +27844,7 @@ Return ONLY valid JSON:
 CONTENT:
 ${corpus}` }]
       }),
-    }, 35000);
+    }, 35000, 'founder-venting');
 
     const d = await r.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -27756,7 +27975,7 @@ Return ONLY valid JSON:
 LISTINGS:
 ${corpus}` }]
       }),
-    }, 35000);
+    }, 35000, 'for-sale-scan');
 
     const d = await r.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
@@ -35932,6 +36151,28 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // something we actually looked for.
           pricingMeasured: !!(sitePages && Array.isArray(sitePages.prices)),
           pricesPublished: (sitePages && Array.isArray(sitePages.prices)) ? sitePages.prices.length : null,
+          // ══ THE ONLY MEASUREMENT WE TAKE OF HIS ACTUAL CUSTOMERS ═══════
+          // Google's CrUX field data: what really happened to real phones
+          // visiting his site over the last twenty-eight days. Everything else
+          // in this object is something we looked at. This is something THEY
+          // experienced, and it is free.
+          //
+          // It has been measured on every lead since measureRealWorldSpeed was
+          // written and it has never been a rung — only a `flaws` string, which
+          // cannot be ranked, cannot be priced and can never open an email. So
+          // the single most checkable money leak we hold has been structurally
+          // unable to compete. Instance twenty-two of computed-but-not-passed.
+          //
+          // The LAB score is deliberately NOT delivered here. It is a
+          // simulation, it moves between runs, and this file has a whole entry
+          // about two looks at one business returning different numbers. The
+          // field figures are a 28-day aggregate: stable, and the owner can
+          // open PageSpeed Insights and see the same number we did.
+          mobileFieldMeasured: !!(realSpeed && realSpeed.checked && realSpeed.hasFieldData),
+          mobileFieldSlow: !!(realSpeed && realSpeed.checked && realSpeed.hasFieldData && realSpeed.isProblem),
+          mobileLcpSec: (realSpeed && Number.isFinite(Number(realSpeed.lcpSec))) ? Number(realSpeed.lcpSec) : null,
+          mobileCls: (realSpeed && Number.isFinite(Number(realSpeed.cls))) ? Number(realSpeed.cls) : null,
+          mobileInpMs: (realSpeed && Number.isFinite(Number(realSpeed.inpMs))) ? Number(realSpeed.inpMs) : null,
         };
         const _harms = rankHarms(_harmInputs);
         costliestHarm = _harms.worst || (_harms.byHarm || [])[0] || null;
@@ -41678,6 +41919,16 @@ const preflightResearch = (body, env) => {
   if (!String((keys.apifyToken || b.apifyToken || '')).trim()) {
     warnings.push('no Apify token: the review mine is dark, so review_pain_pattern '+String.fromCharCode(0x2014)+' one of only two findings with a real reply behind it '+String.fromCharCode(0x2014)+' cannot fire on any lead in this state. The audit still runs; add the token in Settings to get the best finding back.');
   }
+  // ══ A FREE MEASUREMENT NOBODY CONFIGURED IS A DARK RUNG ═══════════════
+  // PageSpeed is Google's own record of what real phones experienced on their
+  // site over 28 days. It is FREE with a key, it is the only measurement in the
+  // whole audit taken from the prospect's actual visitors, and without the key
+  // slow_mobile can never fire on any lead. A warning rather than a refusal:
+  // the rest of the audit is unaffected, which is exactly the Apify shape one
+  // line above and for the same reason.
+  if (!String((keys.pageSpeedKey || b.pageSpeedKey || '')).trim()) {
+    warnings.push('no PageSpeed key: slow_mobile cannot fire on any lead, and it is the only finding in the ladder measured from the prospect'+String.fromCharCode(0x2019)+'s own visitors rather than from something we looked at. The key is free from Google Cloud (PageSpeed Insights API) and the audit still runs without it.');
+  }
   return { ok: true, warnings };
 };
 // A warning per LEAD is a warning per BATCH times fifty, and a line printed
@@ -44471,7 +44722,10 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _envOk = { GOOGLE_PLACES_KEY: 'gp_x' };
-    const _ok = { website: 'acme-plumbing.com', apiKey: 'sk-x', keys: { firecrawlKey: 'fc-x', apifyToken: 'ap-x' } };
+    // pageSpeedKey belongs in "fully configured": without it slow_mobile is dark
+    // on every lead, and that is the only rung measured from the prospect's own
+    // visitors rather than from something we looked at.
+    const _ok = { website: 'acme-plumbing.com', apiKey: 'sk-x', keys: { firecrawlKey: 'fc-x', apifyToken: 'ap-x', pageSpeedKey: 'ps-x' } };
 
     const _r0 = preflightResearch(_ok, _envOk);
     if (!_r0.ok || (_r0.warnings || []).length) _fails.push('a fully-configured lead does not pass clean, so every real lead is refused or nagged and the gate gets switched off');
@@ -53478,6 +53732,334 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     console.log(`⛔ SITE AGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ WE WERE BUYING REVIEWS THE MODEL NEVER SAW ═══════════════════════════
+  // The miner cut its own corpus at 22,000 characters out of a 150-review pull.
+  // Apify bills per review scraped, so half of every review pull was paid for
+  // and binned — and worse, every sentence built on it said "N of the 150
+  // reviews we read", which described a purchase rather than a reading. That
+  // number is the pain finding's own denominator, the share that decides the
+  // THROUGHPUT diagnosis, and the floor that dismisses a thin finding.
+  //
+  // EXECUTED, on the real function, in both directions: a corpus that fits must
+  // not clip, and a corpus that cannot fit must still show EVERY review rather
+  // than the first however-many. A check that only proves the small case would
+  // pass on the build this replaces.
+  try {
+    const _fails = [];
+    const _rev = (n, len, stars) => Array.from({ length: n }, (_, i) => ({
+      stars: stars || (i % 5) + 1, when: '2026-06-01T00:00:00.000Z', ownerReply: '',
+      text: `review number ${i} ` + 'w'.repeat(Math.max(0, len - 20)),
+    }));
+    const _rows = (t) => (String(t || '').match(/\[(?:\d stars|no rating)\]/g) || []).length;
+
+    // 1. The ordinary lead: ninety reviews of ordinary length, all read whole.
+    const _ord = buildReviewCorpus(_rev(90, 300), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_ord.mined !== 90) _fails.push(`ninety ordinary reviews mined as ${_ord.mined} — the normal lead is losing evidence we paid for`);
+    if (_ord.dropped !== 0) _fails.push(`${_ord.dropped} of ninety ordinary reviews were dropped, which is the defect this replaces`);
+    if (_ord.clipped !== 0) _fails.push(`${_ord.clipped} ordinary reviews were clipped, so the budget is too small for the pull`);
+    if (_rows(_ord.text) !== 90) _fails.push(`the corpus carries ${_rows(_ord.text)} review rows but reports ${_ord.mined} mined — the number the model sees and the number we report have come apart`);
+
+    // 2. Long reviews. EVERY one must still reach the model; the clip is what
+    //    gives way, never the breadth. A repeating complaint is named in the
+    //    first lines of a review, so breadth is what a pattern actually needs.
+    const _long = buildReviewCorpus(_rev(90, 2000), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_long.mined !== 90) _fails.push(`only ${_long.mined} of ninety long reviews reached the model — this is the old behaviour, where the oldest half of the pull was billed and binned`);
+    if (_long.dropped !== 0) _fails.push(`${_long.dropped} long reviews were dropped when clipping alone would have fitted them`);
+    if (_long.clipped < 90) _fails.push(`only ${_long.clipped} of ninety two-thousand-character reviews were clipped, so the corpus is over budget or the clip is not being applied`);
+    if (_long.chars > REVIEW_CORPUS_CHARS) _fails.push(`the long corpus is ${_long.chars} characters against a budget of ${REVIEW_CORPUS_CHARS}`);
+    if (_long.clipChars < REVIEW_CLIP_FLOOR) _fails.push(`the clip fell to ${_long.clipChars} characters, below the floor a complaint needs to survive`);
+
+    // 3. The extreme, where dropping is the only honest answer left. It must
+    //    still be REPORTED rather than silent, and mined must match the text.
+    const _huge = buildReviewCorpus(_rev(600, 900), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_huge.dropped <= 0) _fails.push('six hundred long reviews fitted a thirty-thousand-character budget, so the budget is not being enforced at all');
+    if (_huge.mined + _huge.dropped !== 600) _fails.push(`mined ${_huge.mined} plus dropped ${_huge.dropped} is not the ${600} we started with — the report does not account for what we paid for`);
+    if (_rows(_huge.text) !== _huge.mined) _fails.push(`the truncated corpus carries ${_rows(_huge.text)} rows against ${_huge.mined} mined`);
+    if (_huge.chars > REVIEW_CORPUS_CHARS) _fails.push(`the truncated corpus is still ${_huge.chars} characters, over budget`);
+
+    // 4. One monster review must not be able to crowd out the rest. This is the
+    //    shape that made the old slice so damaging: one essay near the top of a
+    //    newest-first pull ate the budget the patterns needed.
+    const _mixed = buildReviewCorpus([{ stars: 1, text: 'x'.repeat(40000), ownerReply: '' }].concat(_rev(20, 200)),
+      { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_mixed.mined !== 21) _fails.push(`one forty-thousand-character review reduced the read to ${_mixed.mined} of 21 — a single essay is still able to crowd out the reviews a pattern needs`);
+
+    // 5. Empty and rubbish inputs must not throw. The miner asks its own guard
+    //    afterwards; a throw here would be caught as "deepReviewMine failed"
+    //    and reported as if the account were the problem.
+    if (buildReviewCorpus(null, {}).mined !== 0) _fails.push('a null review list did not produce an empty corpus');
+    if (buildReviewCorpus([null, undefined], {}).mined !== 0) _fails.push('a list of empty rows did not produce an empty corpus');
+
+    // ── the call sites, because a fixture supplies its own arguments ────────
+    // Needles assembled at runtime with comments stripped: this file records
+    // NINE separate occasions where a literal needle matched its own source
+    // line and passed on a broken build, and the comments above quote the
+    // broken code verbatim.
+    const _rn = (...p) => p.join('');
+    const _src = selfSourceNoComments();
+    if (!_src.includes(_rn('const mined = _corpus', '.reviews;'))) {
+      _fails.push('the review pull no longer resolves a mined set, so the counts and the corpus can disagree again');
+    }
+    for (const [_what, _needle] of [
+      ['owner replies', _rn('const ownerReplies = mined', '.filter(')],
+      ['negatives', _rn('const negative = mined', '.filter(')],
+      ['reviews with text', _rn('const withText = mined', '.filter(')],
+    ]) {
+      if (!_src.includes(_needle)) _fails.push(`${_what} are counted over the whole scrape rather than over the reviews the model was actually shown, so a ratio can have its numerator and denominator measured on different sets`);
+    }
+    if (!_src.includes(_rn('read: mined', '.length, scraped: reviews.length'))) {
+      _fails.push('the number reported as "reviews we read" is no longer the number the model was shown');
+    }
+    if (!_src.includes(_rn('const md = rv.corpus', ' ||'))) {
+      _fails.push('the pain miner is building its own corpus again instead of reading the one the pull already fitted');
+    }
+    // Scoped to the MINER's own body. The first version of this swept the whole
+    // file for the old slice and went RED on a correct build: `md` is the local
+    // name for markdown at five unrelated call sites, and a check that fires on
+    // healthy code costs exactly what one that misses a fault costs — it is the
+    // check somebody switches off, taking the real assertions beside it.
+    const _mineAt = _src.indexOf(_rn('const deepReviewMine', ' = async ('));
+    const _mineEnd = _mineAt >= 0 ? _src.indexOf(_rn('\ncons', 't '), _mineAt + 10) : -1;
+    const _mineSrc = _mineAt >= 0 ? _src.slice(_mineAt, _mineEnd > _mineAt ? _mineEnd : _src.length) : '';
+    if (!_mineSrc) {
+      _fails.push('the pain miner could not be located in the source, so nothing about its corpus is being checked');
+    } else if (/\bmd\s*\.\s*slice\s*\(/.test(_mineSrc)) {
+      _fails.push('the miner is slicing its own corpus again — that slice is what made "the 150 reviews we read" describe a purchase rather than a reading');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ REVIEW CORPUS CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ REVIEW CORPUS CHECK: every review Apify is paid to scrape reaches the model. The pull is ${APIFY_MAX_REVIEWS} and the reading budget is ${REVIEW_CORPUS_CHARS.toLocaleString()} characters, so an ordinary lead is read whole; long reviews are CLIPPED rather than the pull being cut short, because a repeating complaint is named in the first lines and breadth is what a pattern needs. Owner replies, negatives and the text count are all taken over that same set, so "N of the M reviews we read" is now a reading rather than a purchase — that number is the pain finding's denominator, the share behind the THROUGHPUT diagnosis and the floor that dismisses a thin finding. Dropping is possible only past six hundred long reviews, and it is reported by name rather than happening in silence.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW CORPUS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BILL COULD NOT BE READ, SO EVERY CUT WAS A GUESS ═════════════════
+  // meterAnthropic takes a short name per call and prints them sorted by cost,
+  // and the comment above reportLeadSpend says exactly why: "any call visible in
+  // the log but absent from this line is the leak."
+  //
+  // Five of twenty-four call sites passed one. The other nineteen all printed as
+  // the word "anthropic", so the line that exists to say WHICH call is expensive
+  // listed nineteen indistinguishable rows — and three separate sessions have
+  // proposed cuts to the Anthropic bill without one of them being measured. A
+  // meter that covers a fifth of the thing is worse than none, because it
+  // invites confident decisions about the wrong number. This file already
+  // records that sentence, about a different meter.
+  //
+  // The label is also the thing that makes ONE live lead answer the question
+  // outright, instead of another argument between estimates.
+  //
+  // Not a hand-kept list: the inventory is COMPUTED from the file's own call
+  // sites, so a call added tomorrow fails the build until somebody names it.
+  // Same discipline as STEM_COMPLETE_WORDS and NICHE_BRIEF_EXPECT.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoComments();
+    // Assembled at runtime. Written as a literal it IS an occurrence of itself,
+    // so the scan finds the check's own marker and reports a phantom unnamed
+    // call site. That is the tenth recorded instance of a needle matching its
+    // own source in this file, and the second I have written myself.
+    const _mark = ['anthropic', 'Fetch('].join('');
+    const _sites = [];
+    for (let _i = _src.indexOf(_mark); _i >= 0; _i = _src.indexOf(_mark, _i + 1)) {
+      // The definition itself is not a call site.
+      if (/const\s+$/.test(_src.slice(Math.max(0, _i - 20), _i))) continue;
+      const _win = _src.slice(_i, _i + 14000);
+      const _m = /\}, *(\d+) *(?:, *'([A-Za-z0-9_-]+)')?/.exec(_win);
+      _sites.push({ at: _i, timeout: _m ? Number(_m[1]) : null, label: (_m && _m[2]) || '' });
+    }
+    if (_sites.length < 20) {
+      // A parse that finds almost nothing reports a clean pass while seeing
+      // nothing, which this file records as the vacuous-check trap.
+      _fails.push(`only ${_sites.length} Anthropic call site(s) could be parsed out of this file, so this check is not looking at the real inventory`);
+    }
+    const _anon = _sites.filter(s => !s.label);
+    if (_anon.length) {
+      _fails.push(`${_anon.length} Anthropic call site(s) pass no name to the meter, so they print as "anthropic" and the spend report cannot say which call is expensive`);
+    }
+    const _seen = new Map();
+    for (const s of _sites) {
+      if (!s.label) continue;
+      _seen.set(s.label, (_seen.get(s.label) || 0) + 1);
+    }
+    for (const [_l, _n] of _seen) {
+      // 'boot-selftest' is the transport self-test firing the same helper nine
+      // times on purpose; every other repeat is two calls the report cannot
+      // tell apart, which is the defect one level down.
+      if (_n > 1 && _l !== 'boot-selftest') _fails.push(`${_n} call sites share the name "${_l}", so two different calls cannot be told apart in the spend report`);
+    }
+
+    // ── EXECUTED: the meter must refuse a label it cannot print ────────────
+    // The one call site that had bothered to name itself passed an OBJECT into
+    // a string parameter, so it rendered as [object Object] — the single most
+    // useless row in a report whose entire job is naming things.
+    const _probe = '__labelcheck__' + _sites.length;
+    const _usage = { input_tokens: 10, output_tokens: 10 };
+    // The guard prints its warning once per shape. Spend that one here, before
+    // the probe, and hand it back afterwards: the boot verdict counts every ⛔
+    // this process prints, so a check that deliberately triggers a real warning
+    // would fail the build on a healthy tree. The first genuine occurrence in a
+    // live run still speaks, because the key is removed again below.
+    const _labKey = 'label:object';
+    const _hadLabKey = _UNPRICED.has(_labKey);
+    _UNPRICED.add(_labKey);
+    meterAnthropic(_probe, { label: 'an object' }, 'claude-haiku-4-5-20251001', _usage);
+    if (!_hadLabKey) _UNPRICED.delete(_labKey);
+    meterAnthropic(_probe, 'a-real-name', 'claude-haiku-4-5-20251001', _usage);
+    const _rec = _leadSpend.get(_probe);
+    if (!_rec || _rec.calls.length !== 2) {
+      _fails.push('the meter did not record the two probe calls, so nothing here was actually executed');
+    } else {
+      if (_rec.calls.some(c => typeof c.label !== 'string')) _fails.push('the meter still stores a non-string label, which prints as [object Object] in the spend report');
+      if (!_rec.calls.some(c => c.label === 'a-real-name')) _fails.push('the meter did not keep a correctly-passed name');
+    }
+    // The probe spent nothing real, but it DID move the day ledger through the
+    // same door every live call uses. Put it back: a boot check charging
+    // phantom spend to the ceiling is a fault this file already records twice.
+    _leadSpend.delete(_probe);
+    try { noteRunSpend('anthropicUsd', -(2 * (10 * ANTHROPIC_PRICES['claude-haiku-4-5-20251001'].in + 10 * ANTHROPIC_PRICES['claude-haiku-4-5-20251001'].out)), 'anthropic'); } catch (e) { void e; }
+
+    if (_fails.length) {
+      console.log(`⛔ ANTHROPIC LABEL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ ANTHROPIC LABEL CHECK: all ${_sites.length} Anthropic call sites name themselves to the spend meter, and no two share a name. Nineteen of them used to pass nothing, so the per-lead cost line listed nineteen rows all reading "anthropic" — the one report built to say WHICH call is expensive could not, and three sessions argued about the model bill without measuring it. One live lead now answers it outright. The inventory is computed from this file's own call sites, so a call added tomorrow fails the build until it is named.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ANTHROPIC LABEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE ONE MEASUREMENT OF HIS CUSTOMERS, AND IT COULD NEVER BE SAID ═════
+  // Google's CrUX field data is a 28-day record of what real phones actually
+  // experienced on their site. It is free, it has been measured on every lead
+  // since measureRealWorldSpeed was written, and it was only ever a `flaws`
+  // string — a label that cannot be ranked, cannot be priced and can never open
+  // an email. Every other rung in the ladder is something WE looked at.
+  //
+  // EXECUTED on the real ladder in four directions, because the three silent
+  // ones are what make the loud one honest: field data that says FINE, no field
+  // data at all, and a LAB score with no field data behind it must all produce
+  // nothing. That last one matters most — a Lighthouse score is a simulation
+  // that moves between runs, and this file has a whole entry about two looks at
+  // one business returning different numbers.
+  try {
+    const _fails = [];
+    const _base = {
+      hasPlace: true, tradeWord: 'roofer', reviewCount: 120, rating: 4.6,
+      reviewsRead: 90, ownerReplies: 40, viewportChecked: true, hasViewport: true,
+    };
+    const _fires = (m) => (rankHarms({ ..._base, ...m }).all || []).find(h => h.id === 'slow_mobile') || null;
+
+    // 1. Field data, measured, and Google's own thresholds failed.
+    const _slow = _fires({ mobileFieldMeasured: true, mobileFieldSlow: true, mobileLcpSec: 6.2 });
+    if (!_slow) {
+      _fails.push('a site Google measured at 6.2 seconds for real phone visitors produces no finding at all — the rung is not in the ladder or its inputs are not reaching it');
+    } else {
+      const _said = String(_slow.finding || '');
+      if (!_said.includes('6.2')) _fails.push(`the sentence does not state the measured seconds: "${_said.slice(0, 90)}"`);
+      if (!/real visitors|their real visitors/i.test(_said)) _fails.push('the sentence does not say the figure came from their own visitors, which is the whole reason it survives him checking');
+      if (/\bslow\b/i.test(_said)) _fails.push('the sentence calls the site "slow", which is a judgement he can argue with, instead of stating the seconds, which he cannot');
+      if (pillarForRung('slow_mobile') !== 'LEAKING') _fails.push(`the rung is filed under ${pillarForRung('slow_mobile')} rather than LEAKING — somebody arrived and was lost, which is what LEAKING is for`);
+      if (_slow.emailBlocked) _fails.push('the rung is blocked from every email, which puts it back where it started');
+    }
+
+    // 2. Layout shift, when the paint time is fine. Deliberately NOT asserted to
+    //    carry its raw figure: "layout shift 0.41" is a number no owner can
+    //    interpret, and this file's rule is that precision nobody can collect on
+    //    is not precision. What he CAN check is the thing itself — open the site
+    //    on a phone and watch it move. So the assertion is that the sentence
+    //    exists, describes the movement, and invents no figure.
+    const _cls = _fires({ mobileFieldMeasured: true, mobileFieldSlow: true, mobileCls: 0.41 });
+    const _clsSaid = String((_cls && _cls.finding) || '');
+    if (!_cls || !_clsSaid) {
+      _fails.push('a page Google measured as visibly jumping on real phones produces no sentence — only the load-time branch is wired');
+    } else {
+      if (!/moves around|jump/i.test(_clsSaid)) _fails.push(`the layout-shift sentence does not describe the movement he could go and watch: "${_clsSaid.slice(0, 90)}"`);
+      if (/\d/.test(_clsSaid)) _fails.push(`the layout-shift sentence carries a figure: "${_clsSaid.slice(0, 90)}" — a raw layout-shift score means nothing to an owner and every digit in this system has to trace to permittedFigures`);
+    }
+
+    // 3. Tap latency, when both the paint and the layout are fine.
+    const _inp = _fires({ mobileFieldMeasured: true, mobileFieldSlow: true, mobileInpMs: 900 });
+    if (!_inp || !String((_inp && _inp.finding) || '').includes('0.9')) {
+      _fails.push('a page Google measured as taking most of a second to answer a tap produces no sentence — the third branch is unreachable');
+    }
+
+    // 4. THE THREE SILENCES, ASSERTED ON THE PREDICATE ITSELF.
+    //    The ladder-level fixtures below prove the WIRE. They cannot prove the
+    //    TEST, because a rung whose sentence comes out empty is dropped before
+    //    it reaches the list — so widening the test to fire on a lab score, or
+    //    deleting the field-says-fine half of it, left every ladder fixture
+    //    green on a broken build. Both falsifications passed, and only running
+    //    them found it. The predicate is what decides whether a simulation may
+    //    ever become a sentence, so the predicate is what gets asserted.
+    const _rung = HARM_LADDER.find(h => h.id === 'slow_mobile');
+    if (!_rung || typeof _rung.test !== 'function') {
+      _fails.push('slow_mobile is not in the ladder at all');
+    } else {
+      if (_rung.test({ mobileScore: 31, mobileScoreSource: 'lab', mobileFieldMeasured: false }) !== false) {
+        _fails.push('the rung fires on a Lighthouse LAB score with no field data behind it — a simulation that moves between runs deciding what a prospect is told');
+      }
+      if (_rung.test({ mobileFieldMeasured: true, mobileFieldSlow: false, mobileLcpSec: 1.2 }) !== false) {
+        _fails.push('the rung fires on field data that says the site performs FINE — the record beating the simulation is the whole rule here, and this reverses it');
+      }
+      if (_rung.test({ mobileFieldMeasured: false, mobileFieldSlow: true }) !== false) {
+        _fails.push('the rung fires without Google having any field data, so a site with too little traffic to measure is told it is slow');
+      }
+      if (_rung.test({ mobileFieldMeasured: true, mobileFieldSlow: true }) !== true) {
+        _fails.push('the rung does not fire on a site Google measured as failing its own thresholds for real visitors');
+      }
+    }
+
+    // And the same three, through the whole ladder, which proves the wire.
+    if (_fires({ mobileFieldMeasured: true, mobileFieldSlow: false, mobileLcpSec: 1.2 })) {
+      _fails.push('a site that performs FINE for real visitors still produced a speed finding');
+    }
+    if (_fires({ mobileFieldMeasured: false, mobileFieldSlow: false })) {
+      _fails.push('a lead with no field data at all produced a speed finding — Google reports nothing for a site with too few visitors, and that is a fact about traffic, never about speed');
+    }
+    // The lab-only case, spelled out: a simulation reaching the ladder under
+    // any name would let a number that moves between runs open an email.
+    if (_fires({ mobileScore: 31, mobileScoreSource: 'lab', mobileFieldMeasured: false })) {
+      _fails.push('a Lighthouse LAB score with no field data behind it produced a sendable finding — a simulation that moves between runs must never be a sentence a prospect reads');
+    }
+    // And a figure-less firing must produce nothing rather than something vaguer.
+    const _nofig = _fires({ mobileFieldMeasured: true, mobileFieldSlow: true });
+    if (_nofig && String(_nofig.finding || '').trim()) {
+      _fails.push(`the rung fired with no measured figure and still wrote a sentence: "${String(_nofig.finding).slice(0, 80)}" — a softer sentence that still implies a speed problem is the same claim with the evidence hidden`);
+    }
+
+    // ── the call site, because a fixture supplies its own arguments ────────
+    const _mn = (...p) => p.join('');
+    const _msrc = selfSourceNoComments();
+    for (const [_what, _needle] of [
+      ['whether Google had field data at all', _mn('mobileFieldMeasured: !!(realSpeed', ' && realSpeed.checked')],
+      ['whether it failed Google’s thresholds', _mn('mobileFieldSlow: !!(realSpeed', ' && realSpeed.checked')],
+      ['the measured seconds', _mn('mobileLcpSec: (realSpeed', ' && Number.isFinite(')],
+    ]) {
+      if (!_msrc.includes(_needle)) _fails.push(`${_what} never reaches the ladder, so the rung scores on nothing — the computed-but-not-passed class this file records twenty-two times`);
+    }
+    // The lab score must NOT be delivered to the ladder under any name.
+    if (/mobileScore\s*:\s*(?:pageSpeed|Number\(pageSpeed)/.test(_msrc.slice(_msrc.indexOf(_mn('_harmInputs', ' = {'))).slice(0, 40000))) {
+      _fails.push('the lab mobile score is being handed to the ladder, so a simulation can score and be said');
+    }
+    // And the operator must be told when the free measurement is not configured.
+    const _pf = preflightResearch({ website: 'acme.com', apiKey: 'k', keys: { firecrawlKey: 'f', apifyToken: 'a' } }, { GOOGLE_PLACES_KEY: 'p' });
+    if (!(_pf.warnings || []).some(w => /PageSpeed/i.test(w))) {
+      _fails.push('a lead runs with no PageSpeed key and nothing says so, which is a whole rung dark in silence');
+    }
+    if (_pf.refuse) _fails.push('a missing PageSpeed key REFUSES the lead rather than warning — the rest of the audit is unaffected and refusing would delete good leads');
+
+    if (_fails.length) {
+      console.log(`⛔ MOBILE SPEED RUNG CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ MOBILE SPEED RUNG CHECK: the only measurement in this audit taken from the prospect's own customers is finally a rung that can be ranked, priced and sent. It states the seconds Google recorded from real phones over 28 days, never the word "slow", and it is silent in all three ways it must be: a site that performs fine, a site with too little traffic for Google to have a record, and a Lighthouse LAB score with no field data behind it — a simulation that moves between runs can never become a sentence a prospect reads. Filed under LEAKING, and a lead running with no PageSpeed key says so instead of going dark.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MOBILE SPEED RUNG CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ A LIMIT OF OUR READ IS NOT AN ASSERTION IN THE COPY ═══════════════════
   // Live 2026-08-20: the same response that failed to match the CTA text in the
   // markdown reported CTA=true from the vision read. The run printed "1
@@ -58367,7 +58949,7 @@ Return ONLY valid JSON, no markdown:
 }`
         }]
       }),
-    }, 30000);
+    }, 30000, 'sequence-pick');
 
     const data = await r.json();
     const text = anthropicText(data, 'linkedin-drafts');

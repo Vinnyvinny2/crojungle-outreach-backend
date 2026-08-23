@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 215 boot checks at the bottom, each documenting the live failure that caused it
+- 218 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -4492,6 +4492,136 @@ a cheaper actor at half the rate is the obvious next cut).
 
 ---
 
+## 54. The bill could not be read, and half the reviews were never read — 2026-08-23
+
+Vin: *"continue building at the highest level build flalwessly done right the
+first time and we need to mitigae that cost a lot more theres no reason it
+should be that exepnsive."*
+
+Three things, and two of them are the same shape: a thing we PAY for that
+nothing downstream actually consumes.
+
+### We were buying reviews the model never saw
+
+Apify was asked for 150 reviews. The pain miner built one string out of them and
+sent `md.slice(0, 22000)` to the model. A trade review runs about 300 characters
+once the star prefix and any owner reply are counted, so **the model read about
+seventy-three of the hundred and fifty.** The pull is newest-first, so the half
+that was binned was always the older half.
+
+Apify bills per review scraped. That is not a saving to find, it is a bill for
+nothing.
+
+**And it made the most-travelled number in the system false.** Every sentence
+built on this reads "N of the 150 reviews we read say it" — the pain finding's
+own denominator, the share that decides the THROUGHPUT diagnosis (*"demand is
+not the problem, delivery is"*, which tells Mike **not** to sell this business
+more leads), and the floor that dismisses a thin finding. The model never read
+150. It read what fitted. So that number described a PURCHASE rather than a
+READING.
+
+One rule fixes both: **every review is seen, long ones are clipped.** A repeating
+complaint is named in the first lines of a review — an owner writing six hundred
+words about a countertop says "nobody called me back" up front like everybody
+else — so the budget is spent on breadth, which is what a pattern actually needs,
+and the denominator becomes true by construction rather than by a second field
+somebody has to remember to deliver. The clip ADAPTS: if the natural clip does
+not fit, it shrinks to the per-review share of the budget, floored so it can
+never be too short to hold a complaint. Only below that floor does anything get
+dropped, and a drop is now reported by name instead of happening on every lead
+in silence.
+
+The corpus is built where the SAMPLE is decided, not in the miner. Split across
+two functions, the miner cut its own string while owner replies, negatives and
+the text count were taken over the whole scrape — so "40 owner replies out of the
+150 we read" was a ratio whose halves were measured on different sets.
+
+**150 → 90, and it is more evidence, not less.** Ninety fully read beats the
+seventy-three we were actually getting, and Apify bills per review, so it is also
+**forty per cent cheaper (~$82/mo → ~$49/mo at 1,100 leads)**. Every rung reading
+this sample needs ten to fifteen reviews to fire. If the deeper pull is ever
+wanted back, both halves have to move together: `APIFY_MAX_REVIEWS` buys the
+reviews and `REVIEW_CORPUS_CHARS` decides how many are read. Raising one alone is
+what produced this.
+
+**Considered and rejected: sorting by lowest rating.** It would surface every
+complaint a business has, and it would break three things at once — the review
+velocity windows, the recency count and the owner-reply rate all assume a
+newest-first contiguous sample, and re-scoping four rung sentences to a
+negative-biased sample is a large truth surface for a gain nothing here can
+measure yet. `REVIEW CORPUS CHECK`, four falsifications, each red alone.
+
+### Nineteen of twenty-four model calls were anonymous in the meter
+
+`meterAnthropic` takes a short name per call and `reportLeadSpend` prints them
+sorted by cost. Its own comment says why: *"any call visible in the log but
+absent from this line is the leak."*
+
+Five call sites passed a name. The other nineteen printed as the word
+`anthropic`, so the one line built to say WHICH call is expensive listed nineteen
+indistinguishable rows — and three separate sessions have proposed cuts to the
+Anthropic bill without one of them being measured. A meter that covers a fifth of
+the thing is worse than none, because it invites confident decisions about the
+wrong number. This file already records that sentence, about a different meter.
+
+All twenty-four are named. `ANTHROPIC LABEL CHECK` computes the inventory from
+the file's own call sites — not a hand-kept list — so a call added tomorrow fails
+the build until somebody names it, and two calls sharing a name fails too,
+because a report that cannot tell them apart has the same defect one level down.
+
+**And the one call site that had bothered to name itself did it in a shape the
+meter cannot print.** `rewriteEmailWithBrain` passed `{ label: 'email rewrite',
+company }` into a parameter that is a plain string, so it rendered as
+`[object Object]` — the single most useless row in a report whose whole job is
+naming things. The meter now refuses a non-string label out loud.
+
+**What this buys: one live lead now answers the cost question outright.** Read
+the `💰 ANTHROPIC TOTAL` line, sorted by cost, with every call named. That is the
+next cost decision made on evidence instead of arithmetic.
+
+### The only measurement of his actual customers could never be said
+
+Google's CrUX field data is a 28-day record of what real phones experienced on
+their site. It is free, it has been measured on every lead since
+`measureRealWorldSpeed` was written — and it was only ever a `flaws` string,
+which cannot be ranked, cannot be priced and can never open an email. **Every
+other rung in the ladder is something WE looked at. This is the one thing we
+measure that happened to THEM**, and it was structurally unable to compete for a
+single opener. Instance twenty-two of computed-but-not-passed.
+
+`slow_mobile` is a rung now: harm 83, pillar **LEAKING**, `cannot_know` on the
+knowability table — and that last one is the clearest case in it. The only phone
+he ever sees his own site on is his own, already cached, on his own wifi.
+
+**The FIELD data only, and that is not a detail.** The same PageSpeed response
+carries a Lighthouse LAB score, and a lab score is a simulation that moves
+between runs — §6 is an entire entry about two looks at one business returning
+different numbers. The field figures are a 28-day aggregate: stable, and he can
+open PageSpeed Insights on his own site and read the same number we did.
+
+Three silences, all executed on the predicate itself: a site that performs fine,
+a site with too little traffic for Google to hold a record (that is a fact about
+TRAFFIC, never about speed), and a lab score with no field data behind it. The
+sentence states the seconds and never the word "slow" — the seconds he cannot
+argue with, the adjective he can.
+
+And a lead running with no PageSpeed key now says so once an hour instead of
+leaving a whole rung dark in silence. The key is free.
+
+**What the falsification runs found in the check itself.** Two of the four
+reverts passed on a broken build: widening the test to fire on a lab score, and
+deleting the field-says-fine half of it, both left every ladder fixture green —
+because a rung whose sentence comes out empty is DROPPED before it reaches the
+list, so the silence I was asserting was being produced by something other than
+the guard under test. The predicate is what decides whether a simulation may ever
+become a sentence, so the predicate is what gets asserted. Only running them
+found it.
+
+**218 boot checks green.** Eleven falsifications, each red alone.
+`index.html` did not change this round, so no Netlify deploy is needed.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -4551,7 +4681,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 215 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 218 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -4625,7 +4755,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 215 boot checks and the comments above
+and caused none of this week's failures. The 218 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
@@ -4768,6 +4898,9 @@ nothing and touches no lead Vin is calling.
 | `FAKE_UPSTREAM` | unset | servercheck's test seam — NEVER set in production; fetchtest proves it inert when absent |
 | `RENDER_ENV` | unset | shown by /healthz so staging and production cannot be confused |
 | `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` | unset | the REAL Google local pack. Without both, no lead gets a search position at all — see §52. About $0.60-2.40 per 1,000 against Places at $35 per 1,000 |
+| `APIFY_MAX_REVIEWS` | 90 | reviews bought per lead. Apify bills per review, so this IS the Apify line |
+| `REVIEW_CORPUS_CHARS` | 30000 | how many of them the pain miner actually reads. Raise the pull without raising this and you are paying for reviews no model sees — see §54 |
+| `pageSpeedKey` (Settings, not env) | unset | free from Google Cloud. Without it `slow_mobile` cannot fire on any lead, and it is the only rung measured from the prospect's own visitors |
 
 **Set the budgets to the PLAN, not the default.** The defaults (1500 Firecrawl
 credits, 600 Places calls, $20 of model) are a runaway-day safety net sized for
