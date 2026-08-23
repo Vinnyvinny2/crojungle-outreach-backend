@@ -931,6 +931,109 @@ const PENDING = [];
   }
 }
 
+// ══ A KEY THE SERVER READS AND THE APP HAS NO FIELD FOR IS A DEAD SETTING ═══
+// measureRealWorldSpeed read `req.body.keys.pageSpeedKey` from the day it was
+// written. There has never been a pageSpeedKey field anywhere in index.html —
+// not in Settings, not in the request builder. So the key was always empty, the
+// call always returned {checked:false}, and Google's record of what real phones
+// experienced on the prospect's site was dark on every lead of this project's
+// life. Nothing said so, because an absent key is indistinguishable from an API
+// that answered "no data" — and I documented it as a Settings field, twice,
+// without ever looking. Vin found it by going to add it: "no where to add
+// pagespeed api."
+//
+// This is the same class the whole file exists for — a value that is read in one
+// place and supplied by nothing — pointed at CONFIGURATION rather than at
+// measurements. It is checkable mechanically and it should never again depend on
+// somebody noticing.
+//
+// The rule: every name the server destructures out of `req.body.keys` must
+// either have a field on the Settings screen, or be resolvable from the server's
+// own environment. Nothing may be read from a place that cannot be filled in.
+{
+  // What the server pulls out of the keys object, from every destructure and
+  // every direct property read.
+  // Comments stripped first. The first run of this check reported "Falls" as a
+  // missing setting, off the prose "The model's own keys. Falls back to..." —
+  // which is the needle-finds-its-own-comment trap this project records nine
+  // times, and a check that cries wolf is the one somebody switches off.
+  const serverCode = server.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+  const wanted = new Set();
+  for (const m of serverCode.matchAll(/(?:const|let)\s*\{([^}]*)\}\s*=\s*(?:req\.body\.)?keys\s*\|\|/g)) {
+    for (const raw of m[1].split(',')) {
+      const n = raw.split(':')[0].trim();
+      if (!/^[A-Za-z_$][\w$]*$/.test(n)) continue;
+      // A name destructured and then never used is a dead BINDING, not a
+      // setting with nowhere to come from. Only a name the code actually reads
+      // can be a missing key. (indeedKey and crunchbaseKey were exactly this.)
+      const uses = (serverCode.match(new RegExp('\\b' + n + '\\b', 'g')) || []).length;
+      if (uses > 1) wanted.add(n);
+    }
+  }
+  // Only the explicit request path. `keys.size` on a Set inside a boot check is
+  // a different `keys` entirely, and counting it would put a phantom in the list.
+  for (const m of serverCode.matchAll(/req\.body\.keys(?:\s*&&\s*req\.body\.keys)?\s*\.\s*([A-Za-z_$][\w$]*)/g)) wanted.add(m[1]);
+
+  // What the Settings screen actually offers. The fields are declared as a
+  // descriptor array, so this reads `k: 'name'` rather than guessing from
+  // variable names — guessing from the name is exactly how pageSpeedKey got
+  // written down as a Settings field it never was.
+  const offered = new Set([...html.matchAll(/\bk:\s*'([A-Za-z_$][\w$]*)'/g)].map(m => m[1]));
+  // And what the client actually puts in a keys payload, which is a different
+  // question: a field can exist on the screen and never be sent.
+  const sent = new Set();
+  for (const m of src.matchAll(/keys:\s*\{([\s\S]{0,1200}?)\n\s*\}/g)) {
+    for (const km of m[1].matchAll(/\b([A-Za-z_$][\w$]*)\s*:/g)) sent.add(km[1]);
+  }
+  // Where each key comes from is DECLARED in server.js, not inferred. The first
+  // version of this treated a key as satisfied when an environment variable of a
+  // similar name appeared anywhere in the file — so reverting the PageSpeed fix
+  // left it green, because the boot check that sets PAGESPEED_KEY still mentions
+  // the name. A premise that is a name match is a check that passes vacuously.
+  const decl = {};
+  {
+    const m = /const KEY_SOURCES = \{([\s\S]*?)\n\};/.exec(serverCode);
+    if (m) for (const km of m[1].matchAll(/([A-Za-z_$][\w$]*)\s*:\s*'([^']+)'/g)) decl[km[1]] = km[2];
+  }
+  if (!Object.keys(decl).length) {
+    fails.push('server.js no longer declares KEY_SOURCES, so there is nothing saying where each API key is supposed to come from and this check can only guess');
+  }
+
+  // The declaration is the authority for WHICH keys exist; the scan above is
+  // what catches a key that is read and never declared. Checking only the
+  // scanned set left the original defect green: after the fix the key is
+  // resolved inside a helper, so `req.body.keys.pageSpeedKey` no longer appears
+  // literally and the key fell out of the scan entirely — the check reported a
+  // clean pass while not looking at it at all.
+  const every = new Set([...wanted, ...Object.keys(decl)]);
+  const dead = [];
+  for (const k of every) {
+    const from = decl[k];
+    if (!from) {
+      dead.push(`${k} (no row in KEY_SOURCES — nobody has said where this key is supposed to come from)`);
+      continue;
+    }
+    if (from.startsWith('env:')) {
+      // The boot EXECUTES the resolver for these; all this side can check is
+      // that the variable is real and that the app is not also being asked for it.
+      if (!new RegExp('process\\.env\\.' + from.slice(4) + '\\b').test(serverCode)) {
+        dead.push(`${k} (declared as ${from} and server.js never reads that variable)`);
+      }
+      continue;
+    }
+    if (!offered.has(k)) dead.push(`${k} (declared as a client key and there is no Settings field to fill it)`);
+    else if (!sent.has(k)) dead.push(`${k} (a Settings field exists but no request payload sends it)`);
+  }
+  if (dead.length) {
+    fails.push(`the server reads ${dead.length} key(s) out of req.body.keys that the app cannot supply: ${dead.join('; ')}. A key with nowhere to come from is silently empty forever, and the measurement behind it reads as "the API had nothing" rather than as "we never asked"`);
+  } else if (every.size < 8) {
+    fails.push(`only ${every.size} API key(s) could be resolved between the scan and KEY_SOURCES, so this check is not looking at the real set`);
+  } else {
+    const envN = [...every].filter(k => (decl[k] || '').startsWith('env:')).length;
+    notes.push(`\u2713 config: all ${every.size} API key(s) this server consumes have a declared source \u2014 ${every.size - envN} with a Settings field the app actually sends, ${envN} resolved from the server's own environment and EXECUTED at boot. pageSpeedKey was read for the life of this project with no field anywhere, and no way to tell an empty key from an API with no data.`);
+  }
+}
+
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
@@ -940,5 +1043,6 @@ Promise.all(PENDING).then(() => {
 
   console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
   if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
+  notes.forEach(n => console.log(n));
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });
