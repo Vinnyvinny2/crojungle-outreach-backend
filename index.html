@@ -233,6 +233,11 @@ const persistedFieldsFrom = (l) => ({
       // binding layer, the first broken link and the buying-path friction, all
       // three of which were measured on every lead and rendered nowhere.
       theOneThing: l.theOneThing ?? null,
+      // The /10 and the facts strip. Code-assembled server-side from the same
+      // verified inputs the ladder scores on; without persistence they vanish
+      // on the first reload, which is the recorded fate of the strategic read.
+      websiteScore: l.websiteScore ?? null,
+      auditFacts: l.auditFacts ?? null,
       // Positive-only advertising evidence from Google's own Transparency
       // Centre. Never a negative: only verified advertisers appear there.
       adsTransparency: l.adsTransparency ?? null,
@@ -854,6 +859,8 @@ const rowToLead = (r) => ({
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
   theOneThing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.theOneThing) || null,
+  websiteScore: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.websiteScore) || null,
+  auditFacts: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditFacts) || null,
   // Which ask this lead was sent, and the page it points at. Persisted because a
   // reply arrives days later and the arm is the only thing that makes it mean
   // anything.
@@ -1471,6 +1478,8 @@ const applyResearchResult = (prev, data, ctx) => {
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
+        L.websiteScore = data.websiteScore ?? L.websiteScore ?? null;
+        L.auditFacts = data.auditFacts ?? L.auditFacts ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // What moved between two looks at this business. The only facts in the
         // system with a date on them that did not come from a job board, and
@@ -1564,6 +1573,8 @@ const applyResearchResult = (prev, data, ctx) => {
         L.outreachChannel = data.outreachChannel ?? L.outreachChannel ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
+        L.websiteScore = data.websiteScore ?? L.websiteScore ?? null;
+        L.auditFacts = data.auditFacts ?? L.auditFacts ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // What moved between two looks at this business. The only facts in the
         // system with a date on them that did not come from a job board, and
@@ -2286,6 +2297,8 @@ const auditRecordFor = (lead) => {
     icpScore: Number.isFinite(Number(l.icpScore)) ? Number(l.icpScore) : null,
     status: l.approved ? 'approved' : (l.pitch ? 'email written' : (leadHasAudit(l) ? 'audited' : 'not audited')),
     // WHAT IT IS
+    websiteScore: (l.websiteScore && l.websiteScore.checked) ? l.websiteScore : null,
+    auditFacts: (l.auditFacts && typeof l.auditFacts === 'object') ? l.auditFacts : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
     oneThing: t ? {
@@ -2479,7 +2492,17 @@ const auditExportHtml = (records, meta) => {
               + '.</b> ' + p(String(r.heldBack.why || 'it did not clear the buying-authority floor'))
               + ' Use it to get past the front desk if it helps, but do not open by calling them the owner: if they are not, the call ends there.</p>'
             : '')
-          + (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
+          + ((r.websiteScore || r.auditFacts) ? '<p class="dim">'
+          + (r.websiteScore ? '<b>Their website: ' + r.websiteScore.score + '/10</b> (' + p(r.websiteScore.basedOn) + '). ' : '')
+          + (r.auditFacts ? [
+              'Ads: ' + (r.auditFacts.ads === 'yes' ? 'running' : r.auditFacts.ads === 'no' ? 'none found' : 'could not read'),
+              r.auditFacts.booking ? ('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[r.auditFacts.booking] || r.auditFacts.booking)) : '',
+              (typeof r.auditFacts.formFields === 'number') ? ('Form: ' + r.auditFacts.formFields + ' fields') : '',
+              (typeof r.auditFacts.campaignPages === 'number' && r.auditFacts.campaignPages > 0) ? ('Campaign pages: ' + r.auditFacts.campaignPages + ' unlinked') : '',
+              r.auditFacts.mobile ? ('Mobile: ' + (r.auditFacts.mobile === 'slow' ? 'slow for their real visitors' : 'fine')) : '',
+            ].filter(Boolean).join(' \u00b7 ') : '')
+          + '</p>' : '')
+      + (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
           + (r.expectObjection ? '<p><b>Expect to hear:</b> <q>' + p(r.expectObjection) + '</q> That is our own prospect model reading this as the owner. Have an answer ready.</p>' : '')
           + (r.ageDays === null ? ''
              : r.ageDays <= 1
@@ -5902,6 +5925,70 @@ function LeadBriefing({ lead }) {
       React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
     ) : null,
 
+    // ── SCORE, FACTS, AND THE TOP THREE MONEY LEAKS ─────────────────────────
+    // Vin, reading the TriStar sheet: "theres info everywhere... i dont cealry
+    // know what 1 2 and 3 of the biggest revenue leaks are." One card answers
+    // the three questions an operator asks before anything else: how bad is the
+    // website (a /10 with every point traceable to a measurement), what are the
+    // hard facts (ads, booking, campaign pages, real-visitor speed — each
+    // three-state, because could-not-read is not "no"), and the three biggest
+    // money leaks numbered, each with the product that fixes it. All of it is
+    // code-assembled server-side; nothing here can be a fabrication.
+    (() => {
+      const ws = lead.websiteScore;
+      const af = lead.auditFacts;
+      const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
+      // Top money leaks: pillar-ranked rows only, copy quotes and TAXED-level
+      // reputation notes excluded — those are context, not the sale.
+      const leaks = pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages).slice(0, 3);
+      if (!ws && !af && !leaks.length) return null;
+      const PILLAR_LABEL = { BURNING: 'money leaving now', UNCAUGHT: 'people who tried and could not reach them',
+        INVISIBLE: 'people who never found them', LEAKING: 'arrived and lost', ROTTING: 'in hand, then lost', TAXED: 'reputation tax' };
+      const PILLAR_PRODUCT = { BURNING: 'ad + tracking cleanup inside a retainer', UNCAUGHT: 'automated response layer (AI Brain)',
+        INVISIBLE: 'search ownership (marketing retainer)', LEAKING: 'website rebuild / conversion work',
+        ROTTING: 'follow-up automation (AI Brain)', TAXED: 'reputation operations' };
+      const chip = (txt, tone) => React.createElement('span', {
+        style: { display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11,
+          border: '1px solid ' + (tone === 'bad' ? 'rgba(248,113,113,.4)' : 'var(--b)'),
+          color: tone === 'bad' ? '#f87171' : 'var(--m2)', marginRight: 6, marginBottom: 4 } }, txt);
+      const facts = [];
+      if (af) {
+        facts.push(chip('Ads: ' + (af.ads === 'yes' ? 'running' : af.ads === 'no' ? 'none found' : 'could not read'), af.ads === 'yes' ? null : null));
+        if (af.ads === 'yes' && af.adsConversion === false) facts.push(chip('no conversion tracking', 'bad'));
+        if (af.booking) facts.push(chip('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking), (af.booking === 'form' || af.booking === 'phone_only' || af.booking === 'none_found') ? 'bad' : null));
+        if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
+        // Positive only, per the read's own rule: finding campaign pages is a
+        // fact; not finding them proves nothing, and the caption says so.
+        if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? ('Campaign pages: ' + af.campaignPages + ' unlinked') : 'Campaign pages: none found (absence proves nothing)'));
+        if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
+        if (af.https === false) facts.push(chip('plain http', 'bad'));
+      }
+      return React.createElement('div', {
+        style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
+      },
+        ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
+          React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : ws.score <= 7 ? '#fbbf24' : 'var(--t)' } }, ws.score + '/10'),
+          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'their website, from what we measured (' + ws.basedOn + ')'),
+          React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
+            (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
+        ) : null,
+        facts.length ? React.createElement('div', null, facts) : null,
+        leaks.length ? React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8 } },
+            'The ' + (leaks.length === 1 ? 'biggest money leak' : leaks.length + ' biggest money leaks')),
+          leaks.map((r, i) => React.createElement('div', { key: 'lk' + i, style: { display: 'flex', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--b)' : 'none', alignItems: 'baseline' } },
+            React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: '#6366f1', minWidth: 18 } }, (i + 1) + '.'),
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.5 } }, r.problem),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 2 } },
+                (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
+                (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
+            )
+          ))
+        ) : null
+      );
+    })(),
+
     // ── THE ONE THING ───────────────────────────────────────────────────────
     // The system computed three independent diagnoses on every lead and rendered
     // none of them. The binding layer appeared as four words in 11px grey at the
@@ -6067,7 +6154,7 @@ function LeadBriefing({ lead }) {
 
         Array.isArray(lead.problemList) && lead.problemList.length ? React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } },
-            'What we found that is broken, wrong, or costing them customers \u2014 ' + lead.problemList.length + ', worst first'),
+            'What we found that is broken, wrong, or costing them customers \u2014 ' + lead.problemList.length + ', ordered by the money they cost'),
           React.createElement('div', null, lead.problemList.map((p, i) => React.createElement('div', {
             key: 'pl' + i,
             style: { display: 'grid', gridTemplateColumns: '150px 1fr', gap: 14, alignItems: 'baseline', padding: '9px 0', borderBottom: i === lead.problemList.length - 1 ? 'none' : '1px solid var(--b)' },
@@ -6148,6 +6235,19 @@ function LeadBriefing({ lead }) {
     sr && (sr.whatHeNeeds || sr.askOnTheCall) ? React.createElement('div', null,
       React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What is actually worth selling them'),
       sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
+      // The catalogue names, derived from the top money leaks' pillars — so the
+      // recommendation always lands on something CROJungle sells, without the
+      // model being asked to name a product (which is how feature-pitches ship).
+      (() => {
+        const MAPP = { BURNING: 'ad + tracking cleanup inside a retainer', UNCAUGHT: 'automated response layer (AI Brain)',
+          INVISIBLE: 'search ownership (marketing retainer)', LEAKING: 'website rebuild / conversion work',
+          ROTTING: 'follow-up automation (AI Brain)' };
+        const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
+        const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
+          .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];
+        return prods.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginTop: 7 } },
+          'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
+      })(),
       sr.askOnTheCall ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginTop: 7 } }, sr.askOnTheCall) : null
     ) : null,
 
