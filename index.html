@@ -2314,6 +2314,10 @@ const auditRecordFor = (lead) => {
     // WHAT IT IS
     websiteScore: (l.websiteScore && l.websiteScore.checked) ? l.websiteScore : null,
     auditFacts: (l.auditFacts && typeof l.auditFacts === 'object') ? l.auditFacts : null,
+    // Review intelligence for the sheet. INTERNAL by the standing rule: reviews
+    // are how we read the business, never what gets said to the owner.
+    opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
+    negUnanswered: (Number.isFinite(Number(l.reviewsNegativeUnanswered)) && Number(l.reviewsNegativeUnanswered) > 0) ? Number(l.reviewsNegativeUnanswered) : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
     oneThing: t ? {
@@ -2517,6 +2521,11 @@ const auditExportHtml = (records, meta) => {
               r.auditFacts.mobile ? ('Mobile: ' + (r.auditFacts.mobile === 'slow' ? 'slow for their real visitors' : 'fine')) : '',
             ].filter(Boolean).join(' \u00b7 ') : '')
           + '</p>' : '')
+          + ((r.opsBuckets || r.negUnanswered) ? '<p class="dim"><b>Review read (internal \u2014 never name reviews to him):</b> '
+          + [
+              (r.opsBuckets && r.opsBuckets[0]) ? ('complaints are mostly \u201c' + p(r.opsBuckets[0].label) + '\u201d' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
+              r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply') : '',
+            ].filter(Boolean).join(' \u00b7 ') + '</p>' : '')
       + (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
           + (r.expectObjection ? '<p><b>Expect to hear:</b> <q>' + p(r.expectObjection) + '</q> That is our own prospect model reading this as the owner. Have an answer ready.</p>' : '')
           + (r.ageDays === null ? ''
