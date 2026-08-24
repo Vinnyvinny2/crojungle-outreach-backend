@@ -12075,10 +12075,13 @@ const reframeOf = (rung, m) => {
 // must never read as a broken one.
 const paidLeakGapFrom = (m = {}) => {
   if (m.bookingMeasured === true && m.booking === 'phone_only') {
-    return 'the only published way to reach them is a phone line with office hours';
+    // "the only published way to reach them" read as jargon to the owner of
+    // this system. Same bound (we describe the routes their site SHOWS),
+    // plainer words.
+    return 'the only way in their site offers is a phone call during office hours';
   }
   if (m.bookingMeasured === true && m.booking === 'form') {
-    return 'the only way to act on it is a form and a wait for someone to reply';
+    return 'the only thing a click can do there is fill in a form and wait';
   }
   if (m.formFieldCountIsSingleForm === true && Number(m.formFieldCount) >= 7) {
     return `the form it lands on asks for ${Number(m.formFieldCount)} pieces of information first`;
@@ -13629,7 +13632,11 @@ const HARM_LADDER = [
     // writing "Google Ads tag NOT FOUND". The platform is read from the same
     // fields the facts strip reads, so the header and the finding can never
     // disagree again.
-    say: (m) => `Their site has ${(m.googleAdsTag === true && m.metaPixel === true) ? 'Google and Facebook ad tracking' : m.googleAdsTag === true ? 'Google Ads tracking' : 'Facebook ad tracking'} on it, and ${keepSpan(String(m.paidLeakGap))}`,
+    // "has ad tracking on it" was the third wording and the owner of this
+    // system still could not tell what it meant. "Set up for X ads" says the
+    // same bounded fact \u2014 the wiring exists; no claim that a campaign is
+    // live today \u2014 in words a salesperson can repeat.
+    say: (m) => `Their site is set up for ${(m.googleAdsTag === true && m.metaPixel === true) ? 'Google and Facebook' : m.googleAdsTag === true ? 'Google' : 'Facebook'} ads, and ${keepSpan(String(m.paidLeakGap))}`,
     costs: 'every click they pay for arrives somewhere it cannot be acted on' },
 
   // ── PAYING FOR THE SEARCH THEY ARE NOT WINNING ───────────────────────
@@ -20169,17 +20176,17 @@ const NEVER_AMBIENT = new Set(['hiring_marketing_now']);
 // gets the figure-free version rather than an invented number.
 const MONEY_LINE_BY_PILLAR = {
   BURNING: (jv) => jv
-    ? `${jv}. The ad budget is buying clicks, and nothing counts which of them ever became one of those jobs.`
-    : 'The budget spends either way. Nothing counts what it bought, so nobody can say what it is worth.',
+    ? `${jv}. They pay for every click, and nothing tells them which clicks ever turned into a job \u2014 the money goes out blind.`
+    : 'They pay for every click, and nothing tells them which clicks ever turned into a customer \u2014 the money goes out blind.',
   UNCAUGHT: (jv) => jv
-    ? `${jv}. A person who tried to reach them and got nothing was one of those jobs, already dialling.`
-    : 'A person who tried to reach them and got nothing was a customer, already dialling.',
+    ? `${jv}. Every person who tried to reach them and got no answer took one of those jobs somewhere else.`
+    : 'Every person who tried to reach them and got no answer took their business somewhere else.',
   INVISIBLE: (jv) => jv
     ? `${jv}. The people running that search hand those jobs to whoever they can actually see.`
     : 'The people running that search hire from what is in front of them.',
   LEAKING: (jv) => jv
-    ? `${jv}. A visitor who got interested and had no easy next step is one of those jobs, stalling at the door.`
-    : 'A visitor who got interested and had no easy next step stalls at the door.',
+    ? `${jv}. An interested visitor who finds no easy next step gives up, and one of those jobs goes with them.`
+    : 'An interested visitor who finds no easy next step gives up and takes the job with them.',
   ROTTING: (jv) => jv
     ? `${jv}. A quote that sits unanswered is one of those jobs, already in hand and going cold.`
     : 'A quote that sits unanswered is a job already in hand, going cold.',
@@ -20191,8 +20198,8 @@ const MONEY_LINE_BY_PILLAR = {
 // actually describes; everything else keeps the pillar line.
 const RUNG_MONEY_LINE = {
   review_pain_pattern: (jv) => jv
-    ? `${jv}. Every person who hit the same wall those reviews describe and never wrote one was one of those jobs.`
-    : 'Every person who hit the same wall those reviews describe and never wrote one was a customer, already lost.',
+    ? `${jv}. For every person who said this in public, more hit the same wall, said nothing, and went elsewhere \u2014 each one was one of those jobs.`
+    : 'For every person who said this in public, more hit the same wall, said nothing, and went elsewhere.',
   no_recurring_offer: (jv) => jv
     ? `${jv}. A client already won has no reason to come back on a schedule, so one of those jobs has to be sold again from zero every time.`
     : 'A client already won has no reason to come back on a schedule, so the same work has to be sold again from zero every time.',
@@ -20211,6 +20218,11 @@ const moneyLineFor = (id, jobValue) => {
 // before comparing — so the fix is display-only, applied where the audit rows
 // are assembled. Initialisms only; ordinary trade words are untouched.
 const fixAcronymCase = (s) => String(s == null ? '' : s).replace(/\b(cpa|hvac)\b/g, (m0) => m0.toUpperCase());
+// A mined complaint leads its finding by design (the email's opener rules),
+// so problem rows opened lowercase mid-fragment \u2014 "slow or no follow-up
+// after estimate appointments, and..." \u2014 which the owner read as broken
+// grammar on the sheet. Display-only, first letter only.
+const sentenceCaseStart = (s) => { const t = String(s == null ? '' : s); return t ? t.charAt(0).toUpperCase() + t.slice(1) : t; };
 
 const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
@@ -20244,7 +20256,7 @@ const buildProblemList = (harms, opts = {}) => {
       && !(bindingLayer && HARM_LADDER_LAYER[h.id] === bindingLayer);
     return {
       area: AREA_OF[h.id] || 'Other',
-      problem: fixAcronymCase(h.finding),   // measured sentence, written by code
+      problem: sentenceCaseStart(fixAcronymCase(h.finding)),   // measured sentence, written by code
       costs: fixAcronymCase(h.costs),       // what it does to his business
       harm: h.harm,
       opener: Number.isFinite(Number(h.opener)) ? Number(h.opener) : (Number(h.harm) || 0),
@@ -20359,7 +20371,7 @@ const buildTheOneThing = ({ growthConstraint, valueEquation, bottleneck, bottlen
   // failure that sentence was right about.
   let _why = gc ? _clean(gc.why) : null;
   if (_why && w && /^Nothing here is broken enough to lead an email with/.test(_why)) {
-    _why = `No single funnel layer measured as clearly binding - but the ladder still found something real, and the email leads on it: "${String(w.finding || '').slice(0, 110)}". Sell that finding on its own terms rather than a bigger story.`;
+    _why = `Nothing we measured stands out as the single biggest blocker - but the measurements still found something real, and the email leads on it: "${String(w.finding || '').slice(0, 110)}". Sell that finding on its own terms rather than a bigger story.`;
   }
   return {
     // WHAT IS BINDING, and why it is not the cheaper thing underneath.
@@ -24493,7 +24505,7 @@ ${shapeList}
 
 \u2550\u2550\u2550 OUTPUT \u2550\u2550\u2550
 JSON only, no prose around it, exactly these keys:
-{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeCaresAbout":"ONE sentence, INTERNAL, read from BEHAVIOUR ONLY \u2014 things he did that were measured: whether he answers reviews himself and how he writes when he does, what he wrote about himself on his own site, what he is hiring for, which service he leads with. Never a guess at his personality and never a claim about his motives. This is what tells the salesperson where he will lean in and where he will bristle. Null if nothing behavioural was measured.","whatHeNeeds":"ONE recommendation, in one or two sentences. Name the single change that would remove the most friction between what this business has already earned and a sale, and say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
+{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeCaresAbout":"ONE sentence, INTERNAL, read from BEHAVIOUR ONLY \u2014 things he did that were measured: whether he answers reviews himself and how he writes when he does, what he wrote about himself on his own site, what he is hiring for, which service he leads with. Never a guess at his personality and never a claim about his motives. This is what tells the salesperson where he will lean in and where he will bristle. Null if nothing behavioural was measured.","whatHeNeeds":"ONE recommendation, in one or two sentences, written for a salesperson with NO marketing vocabulary. Name the concrete things \u2014 the form, the phone, the price, the clicks, the search \u2014 and follow the money out loud, the way you would explain it across a desk: what he is paying for, where it lands, why it stalls there, what one change unblocks. NEVER the words capture, intake, conversion, friction, funnel, or optimize \u2014 say what the thing IS instead. Say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
 
 \u2550\u2550\u2550 ABOUT \"rows\" \u2014 READ THIS TWICE \u2550\u2550\u2550
 Five to seven rows. YOU choose the labels for THIS business; they are not a fixed list and they are not the names of our measurements.
@@ -25144,7 +25156,7 @@ const measureGrowthConstraint = ({
     // This branch says what was actually measured; the dismissive text below
     // survives ONLY for leads where the frictions genuinely are not there.
     layer = 'CONVERSION';
-    condition = `No single layer dominates, but ${ve.frictionCount} measured obstacles sit between an interested customer and a booked job: ${ve.friction.slice(0, 3).join('; ')}.`;
+    condition = `No single blocker dominates, but ${ve.frictionCount} measured obstacles sit between an interested customer and a booked job: ${ve.friction.slice(0, 3).join('; ')}.`;
     why = `Each is checkable on their own site in a minute. Sell the fix to the friction that is really there rather than a bigger story \u2014 and if the search half of this lead was not measured, re-run it before deciding this is all there is.`;
     product = 'conversion and capture';
   }
@@ -25154,8 +25166,8 @@ const measureGrowthConstraint = ({
     // pretending otherwise is how a system talks itself into a bad email.
     layer = 'MARKET';
     condition = marketClarity.checked
-      ? `No layer measured as clearly binding. Their positioning reads as ${marketClarity.band}${marketClarity.signals.length ? ' \u2014 ' + marketClarity.signals[0] : ''}.`
-      : `No layer measured as clearly binding on this lead, and their copy was not readable enough to judge positioning.`;
+      ? `Nothing we measured stands out as the single biggest blocker. The way they present themselves reads as ${marketClarity.band}${marketClarity.signals.length ? ' \u2014 ' + marketClarity.signals[0] : ''}.`
+      : `Nothing we measured stands out as the single biggest blocker on this lead, and their copy was not readable enough to judge how they present themselves.`;
     why = `Nothing here is broken enough to lead an email with. Write a shorter email built on the strongest single measured finding, or leave this lead for the call pile \u2014 manufacturing a crisis for a business that does not have one is the fastest way to lose credibility with an owner who knows his own numbers.`;
     product = 'positioning';
   }
@@ -45429,7 +45441,7 @@ app.listen(PORT, () => {
     if (fcBrowsersForLimit(500) !== 10) _fails.push('the 500/min tier moved off 10 browsers');
 
     // — the money line fits the finding it sits under —
-    if (!/never wrote one/.test(String(moneyLineFor('review_pain_pattern', 'an annual engagement runs several thousand dollars') || ''))) {
+    if (!/more hit the same wall, said nothing/.test(String(moneyLineFor('review_pain_pattern', 'an annual engagement runs several thousand dollars') || ''))) {
       _fails.push('review_pain_pattern still gets the generic pillar money line — "a quote that sits unanswered" printed under a finding about miscoded expenses');
     }
 
@@ -45469,13 +45481,13 @@ app.listen(PORT, () => {
     const _dn = (a, b) => a + b;
     // 1. The ads sentence names the platform the fields actually hold.
     const _ptl = HARM_LADDER.find(r => r.id === 'paid_traffic_leaks');
-    const _gap = 'the only published way to reach them is a phone line with office hours';
+    const _gap = 'the only way in their site offers is a phone call during office hours';
     const _sayMeta = _ptl.say({ googleAdsTag: false, metaPixel: true, paidLeakGap: _gap });
     const _sayGoog = _ptl.say({ googleAdsTag: true, metaPixel: false, paidLeakGap: _gap });
     const _sayBoth = _ptl.say({ googleAdsTag: true, metaPixel: true, paidLeakGap: _gap });
     if (/Google/i.test(_sayMeta)) _fails.push("a Meta-only lead is still told it has GOOGLE ads tracking (Breck's Paving, live, refuted by its own fact-checker)");
-    if (!/Google Ads tracking/.test(_sayGoog) || /Facebook/.test(_sayGoog)) _fails.push('a Google-only lead does not read as Google');
-    if (!/Google and Facebook/.test(_sayBoth)) _fails.push('a both-platforms lead does not name both');
+    if (!/set up for Google ads/.test(_sayGoog) || /Facebook/.test(_sayGoog)) _fails.push('a Google-only lead does not read as Google');
+    if (!/set up for Google and Facebook ads/.test(_sayBoth)) _fails.push('a both-platforms lead does not name both');
     const _afMeta = buildAuditFacts({ googleAdsTag: false, metaPixel: true, adsReadable: true });
     if (_afMeta.ads !== 'no' || _afMeta.metaPixel !== true) _fails.push('the facts strip cannot represent Meta-only, so the header and the finding will disagree again');
     // 2. The marketplace guard, executed both ways.
@@ -45494,6 +45506,14 @@ app.listen(PORT, () => {
     // 4. The acronym fix, executed and bounded.
     if (!/hire a CPA\b/.test(fixAcronymCase('Someone ready to hire a cpa cannot book a time.'))) _fails.push('the initialism fix does not fire');
     if (fixAcronymCase('the cpanel login and hvacr parts') !== 'the cpanel login and hvacr parts') _fails.push('the initialism fix fires inside longer words');
+    // 4b. The money lines and findings read like sentences a person says.
+    const _mlB = moneyLineFor('paid_traffic_leaks', 'a kitchen or bathroom remodel runs $15k-$80k');
+    if (!/the money goes out blind/.test(String(_mlB))) _fails.push('the BURNING money line lost its plain form');
+    if (/The ad budget is buying clicks/.test(String(_mlB))) _fails.push('the BURNING money line is back to the wording the owner could not parse');
+    const _mlR = moneyLineFor('review_pain_pattern', 'a kitchen or bathroom remodel runs $15k-$80k');
+    if (!/more hit the same wall, said nothing/.test(String(_mlR))) _fails.push('the review money line is back to the sentence nobody could parse');
+    if (sentenceCaseStart('slow or no follow-up after estimates') !== 'Slow or no follow-up after estimates') _fails.push('findings still open lowercase mid-fragment on the sheet');
+
     // 5. Call sites and rewordings, needles assembled at runtime over the
     //    comment-stripped source (a literal needle finds itself; these
     //    comments quote the broken sentences verbatim).
@@ -45506,7 +45526,7 @@ app.listen(PORT, () => {
       ['the gated synthesis is not written back, so the sheet still reads the raw one', _dn('situationRead = ', '_srx;')],
       ['the audit fields do not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(parsed[k], ', '_pcx, 1)')],
       ['the leak promotion floor is not the email anecdote floor', _dn('reviewPainMentions) >= ', '3')],
-      ['the audit rows are not initialism-fixed', _dn('problem: fixAcronymCase', '(h.finding)')],
+      ['the audit rows are not initialism-fixed and sentence-cased', _dn('problem: sentenceCaseStart', '(fixAcronymCase(h.finding))')],
     ]) {
       if (!_tsrc.includes(_needle)) _fails.push(_what + ' - the computed-but-not-passed class');
     }
@@ -53118,7 +53138,7 @@ app.listen(PORT, () => {
       bookingMeasured: true, booking: 'form', pricingMeasured: true, pricesPublished: 0,
       servicePagesChecked: 3, servicePagesInvisible: 2, serviceInvisibleNames: ['probate', 'trust administration'],
       recurringChecked: true, hasRecurringOffer: false, datedSite: true,
-      adsTagConfirmed: true, paidLeakGap: 'the only way to act on it is a form and a wait for someone to reply',
+      adsTagConfirmed: true, paidLeakGap: 'the only thing a click can do there is fill in a form and wait',
       duplicateChecked: true, duplicateFound: true, duplicateOtherReviews: 41,
     };
     const _r = rankHarms(_m);
@@ -57103,7 +57123,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       formFieldCount: 9, formFieldCountIsSingleForm: true, tenureYears: 18, reviewsPerYear: 4,
       marketsSeen: ['Leawood KS'], marketsAbsent: ['Overland Park KS'], marketsSearched: ['Leawood KS', 'Overland Park KS'],
       gbpCategory: 'Doctor', googlePhone: '913-341-2188', businessStatus: 'OPERATIONAL',
-      paidLeakGap: 'the only published way to reach them is a phone line with office hours',
+      paidLeakGap: 'the only way in their site offers is a phone call during office hours',
       marketingRoleName: 'marketing manager', jobPostedDaysAgo: 14, hiringMarketing: true,
       aboveReviewsN: 3, aboveReviewsAvg: 120, painTheme: 'slow callbacks',
     };

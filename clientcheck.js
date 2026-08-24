@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -644,6 +644,17 @@ const mergeStat = runMergeCheck();
         if (mod.trim(_ml2, _ml1, 1) !== 'The ad budget is buying clicks and nothing counts them.') fails.push('the repeated job-value sentence is not trimmed off later leaks');
         if (mod.trim(_ml1, _ml1, 0) !== _ml1) fails.push('leak #1 lost its job-value sentence');
         if (mod.trim('A different opener entirely. Tail.', _ml1, 2) !== 'A different opener entirely. Tail.') fails.push('a leak with its own money line was trimmed');
+        // ══ THE WARNINGS READ AS A QUOTE PLUS ONE PLAIN LINE ══════════════
+        // J Chester's live sheet carried three paragraphs of detector
+        // rationale. The caller gets the sentence not to say and one reason.
+        const _liveRisk = 'POST-CONTACT CLAIM: says what happens after a customer contacts THIS business, which we have never observed. Legal as a general truth about people, and legal marked as your own read; illegal stated as a report \u2014 "But someone who fills out your quote form right now is waiting on a human to call them back, an"';
+        const _pr = mod.plain ? mod.plain(_liveRisk) : plainRiskMissing();
+        if (!/waiting on a human to call them back/.test(_pr)) fails.push('the warning lost the quoted sentence — the one thing the caller must not say');
+        if (/Legal as a general truth/.test(_pr)) fails.push('the warning still carries the detector rationale — engineering prose on a sales sheet');
+        if (!/never watched what happens after someone contacts them/.test(_pr)) fails.push('the warning lost its plain-English reason');
+        // Layer codes translate; an unknown code passes through untouched.
+        if (mod.layer('MARKET') !== 'how they position themselves (MARKET)') fails.push('MARKET does not translate — "The one thing \u2014 MARKET" confused the person who built this system');
+        if (mod.layer('SOMENEWLAYER') !== 'SOMENEWLAYER') fails.push('an unknown layer code is mangled instead of passed through');
         if (!/^<!doctype html>/i.test(page)) fails.push('the export is not a complete HTML document');
         // Self-contained means it LOADS nothing. A link the reader can click is
         // fine and a screenshot URL in the text is fine; a stylesheet, a script,
@@ -672,7 +683,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -694,7 +705,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
