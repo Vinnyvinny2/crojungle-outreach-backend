@@ -13040,8 +13040,9 @@ const HARM_LADDER = [
     blind: 'the ad account shows him clicks and cost per click, and neither number knows whether the phone rang',
     reframe: 'the spend is not the problem, the missing feedback loop is - nothing is telling the account which clicks became customers',
     test: (m) => m.googleAdsTag === true && m.adsReadable === true
+      && m.tagManager === false
       && m.adsConversion === false && m.callTracking === false,
-    say: () => 'They are running Google Ads and there is no conversion tracking and no call tracking anywhere on their site',
+    say: () => 'They are running Google Ads, and no page we read carries conversion tracking or call tracking',
     costs: 'every dollar of that budget is being spent on clicks nobody can tie to a booked job' },
 
   { harm: 84, specific: 88, novel: 70, delegable: 20, weFix: 92, band: 'INVISIBLE', id: 'organic_invisible',
@@ -13694,7 +13695,7 @@ const HARM_LADDER = [
     // case (not in the pack at all) and must not be excluded by requiring a
     // number; rank is only consulted when it exists.
     test: (m) => m.googleAdsTag === true && m.rankChecked === true
-      && (m.rankFound === false
+      && ((m.rankFound === false && m.rankAbsenceConfirmed === true)
           || (typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank > 3)),
     say: (m) => {
       const q = String(m.rankQuery || '').trim();
@@ -20143,6 +20144,40 @@ const AMBIENT_NOVEL_MAX = 35;
 // storefront observation unless the binding layer happened to be LEADS.
 // A dated event is not a market-wide condition, whatever its novelty score.
 const NEVER_AMBIENT = new Set(['hiring_marketing_now']);
+// ══ THE TRANSLATION LAYER: A FINDING, SAID AS THE MONEY IT LOSES ═════════════
+// The agreed goal of the audit is not the most problems, it is the biggest
+// money leaks, said so the owner feels them. The finding does not have to be
+// spectacular; the translation does. Every sentence here is assembled by code,
+// the ONLY figure it can ever carry is the trade table's own job-value sentence
+// (already licensed by AUDIT MONEY CHECK), and a trade the table does not know
+// gets the figure-free version rather than an invented number.
+const MONEY_LINE_BY_PILLAR = {
+  BURNING: (jv) => jv
+    ? `${jv}. The ad budget is buying clicks, and nothing counts which of them ever became one of those jobs.`
+    : 'The budget spends either way. Nothing counts what it bought, so nobody can say what it is worth.',
+  UNCAUGHT: (jv) => jv
+    ? `${jv}. A person who tried to reach them and got nothing was one of those jobs, already dialling.`
+    : 'A person who tried to reach them and got nothing was a customer, already dialling.',
+  INVISIBLE: (jv) => jv
+    ? `${jv}. The people running that search hand those jobs to whoever they can actually see.`
+    : 'The people running that search hire from what is in front of them.',
+  LEAKING: (jv) => jv
+    ? `${jv}. A visitor who got interested and had no easy next step is one of those jobs, stalling at the door.`
+    : 'A visitor who got interested and had no easy next step stalls at the door.',
+  ROTTING: (jv) => jv
+    ? `${jv}. A quote that sits unanswered is one of those jobs, already in hand and going cold.`
+    : 'A quote that sits unanswered is a job already in hand, going cold.',
+  TAXED: () => 'Trust decides which businesses get called at all, so this costs calls that never happen. That is the one loss no dashboard can show.',
+};
+const moneyLineFor = (id, jobValue) => {
+  const pillar = pillarForRung(id);
+  const build = pillar && MONEY_LINE_BY_PILLAR[pillar];
+  if (!build) return null;
+  const jv = String(jobValue || '').trim();
+  const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null);
+  return line || null;
+};
+
 const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
   const bindingLayer = opts.bindingLayer || null;
@@ -20187,6 +20222,15 @@ const buildProblemList = (harms, opts = {}) => {
       // later (the copy quotes) can carry its own.
       pillar: pillarForRung(h.id) || null,
       moneyRank: _effRank(h.id),
+      // Marked here, from the ONE declaration, so the client's top-3 leaks can
+      // refuse a review METRIC without holding a second copy of the internal
+      // list. Live 2026-08-24: "their Google reviews have slowed" was leak #2
+      // on America's Home Place with "fix we sell: search ownership" under it
+      // \u2014 a retainer pitch built on a number we are barred from ever saying
+      // to the owner. Internal rows stay in this list for the audit; they can
+      // never be one of the three leaks the call is built on.
+      internalOnly: !!INTERNAL_ONLY_RUNGS[h.id],
+      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue),
     };
   });
   // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
@@ -21556,7 +21600,7 @@ const buildAuditFacts = (m = {}, unlinked = null) => {
   return {
     ads,
     // Only meaningful beside a live tag; null otherwise so nothing renders.
-    adsConversion: ads === 'yes' ? (m.adsConversion === true) : null,
+    adsConversion: ads === 'yes' ? (m.tagManager === true ? null : (m.adsConversion === true)) : null,
     callTracking: (m.adsReadable === true) ? (m.callTracking === true) : null,
     metaPixel: (m.adsReadable === true) ? (m.metaPixel === true) : null,
     booking: (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) ? m.booking : null,
@@ -24659,7 +24703,7 @@ const diagnosisConflict = (layer, bottleneck) => {
 };
 const measureGrowthConstraint = ({
   marketClarity = { checked: false },
-  rank, rankScanned, reviewCount, reviewRating, weakerAbove,
+  rank, rankScanned, rankAbsentConfirmed, reviewCount, reviewRating, weakerAbove,
   offerStrength, valueEquation, opsPainCount, opsPain, bottleneck, city, trade,
 } = {}) => {
   const ve = valueEquation || {};
@@ -24710,7 +24754,13 @@ const measureGrowthConstraint = ({
   // Absent, buried and ranking-well are three different measurements and they
   // earn three different sentences. The call site passes rankScanned even when it
   // found nothing, so "we looked and they were not there" is knowable.
-  const rankNotFound = (typeof rankScanned === 'number' && rankScanned > 0) && !haveRank;
+  // CONFIRMED absence only. This used to be (rankScanned > 0 && !haveRank) —
+  // one unconfirmed draw — so on America's Home Place the ONE THING block said
+  // "not in the top 20 at all. Not buried — absent" while absent_from_search,
+  // which demands two misses, correctly held its tongue on the same lead. Two
+  // readers of one measurement, one walled and one raw, is the recorded
+  // disease; the diagnosis now clears the same bar the ladder does.
+  const rankNotFound = rankAbsentConfirmed === true;
   const buried = haveRank && rank > 10;
   // Retained under the old name because the LEADS gate and the returned shape
   // both read it - but it now means "absent OR buried", which is what that gate
@@ -36113,6 +36163,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         growthConstraint = measureGrowthConstraint({
           rank: localRank && localRank.found ? localRank.rank : undefined,
           rankScanned: localRank ? localRank.scanned : undefined,
+          rankAbsentConfirmed: !!(localRank && localRank.checked && !localRank.found && localRank.absenceConfirmed),
           // ══ THE DIAGNOSIS READ ITS REVIEW BASE OFF THE RANK ROW ═══════════
           // TriStar, live 2026-08-23: 90 reviews on their Place record and the
           // constraint saw NONE of them, because localRank.ours only exists
@@ -36839,7 +36890,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // proof), and does this lead carry customer-WRITTEN contact
               // evidence (a repeating complaint, at least two people).
               evidence: { adsLive: !!(_measured && _measured.adsLiveInPack),
-                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 2 } }),
+                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 2 },
+              money: { jobValue: tradeJobValue(String((_harmInputs || {}).tradeWord || '')) } }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
             subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
@@ -37200,6 +37252,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       growthConstraint = measureGrowthConstraint({
         rank: localRank && localRank.found ? localRank.rank : undefined,
         rankScanned: localRank ? localRank.scanned : undefined,
+        rankAbsentConfirmed: !!(localRank && localRank.checked && !localRank.found && localRank.absenceConfirmed),
         // Authority order, same as the first call site and for the same live
         // failure: the rank row only exists when a trusted search matched us,
         // and the Place record's own count is what proves customers arrive.
@@ -44656,6 +44709,25 @@ app.listen(PORT, () => {
     // ── the call sites, because a fixture supplies its own arguments ───────
     const _gn = (...p) => p.join('');
     const _gsrc = selfSourceNoComments();
+    // ── ABSENCE IN THE DIAGNOSIS CLEARS THE SAME BAR THE LADDER DOES ────
+    // Live on America's Home Place: the ONE THING said "not in the top 20 at
+    // all. Not buried — absent" off ONE search draw, while absent_from_search
+    // (which demands two misses) held its tongue on the same lead. One
+    // measurement, two readers, two verdicts on one sheet. The diagnosis now
+    // takes rankAbsentConfirmed and an unconfirmed miss binds nothing on
+    // visibility.
+    const _oneMiss = measureGrowthConstraint({ rankScanned: 20, offerStrength: { checked: true, named: true }, reviewCount: 40, reviewRating: 4.6 });
+    if (_oneMiss && _oneMiss.checked !== false && /absent|not on|not in/i.test(String(_oneMiss.condition || '')) && _oneMiss.layer === 'LEADS') {
+      _fails.push('a single unconfirmed miss still produces the absence diagnosis — the strongest sentence on the sheet, resting on evidence the ladder itself calls insufficient');
+    }
+    const _twoMiss = measureGrowthConstraint({ rankScanned: 20, rankAbsentConfirmed: true, offerStrength: { checked: true, named: true }, reviewCount: 40, reviewRating: 4.6 });
+    if (!(_twoMiss && _twoMiss.layer === 'LEADS')) {
+      _fails.push('a CONFIRMED absence no longer binds LEADS — the gate was tightened past the true case');
+    }
+    const _gac = (_gsrc.match(new RegExp('rankAbsentConfirmed' + ': !!\\(localRank && localRank\\.checked', 'g')) || []).length;
+    if (_gac < 2) {
+      _fails.push(`only ${_gac} of the 2 growth-constraint call sites hand the confirmed-absence flag in — a fixture supplies its own arguments and cannot see a call site, which is the recorded half-check`);
+    }
     const _authCount = (_gsrc.match(new RegExp('reviewCount: \\(gbpHealth && Number\\.isFinite\\(Number\\(gbpHealth\\.reviewCount\\)\\)\\)', 'g')) || []).length;
     if (_authCount < 2) {
       _fails.push(`only ${_authCount} of the 2 growth-constraint call sites read the review base from the Place record — the other is back on the rank row, which does not exist on a rank-dark lead, and the diagnosis goes blind exactly when the search half is dark`);
@@ -44771,6 +44843,8 @@ app.listen(PORT, () => {
     // The facts strip: three states, and could-not-read is never "no".
     const _fy = buildAuditFacts({ googleAdsTag: true, adsReadable: true, adsConversion: false, callTracking: false });
     if (_fy.ads !== 'yes' || _fy.adsConversion !== false) _fails.push('a live ads tag with no conversion tracking does not read as running-without-tracking');
+    const _fgtm = buildAuditFacts({ googleAdsTag: true, adsReadable: true, tagManager: true, adsConversion: false, callTracking: false });
+    if (_fgtm.adsConversion !== null) _fails.push('the facts strip says "no conversion tracking" through a Google Tag Manager container \u2014 the red chip on the card would carry the same false claim the rung now refuses');
     if (buildAuditFacts({ googleAdsTag: false, adsReadable: true }).ads !== 'no') _fails.push('a readable page with no tag does not read as no');
     if (buildAuditFacts({ googleAdsTag: false, adsReadable: false }).ads === 'no') _fails.push('a page we could not read reports "no ads" — the absence claim without the did-we-look gate, aimed at the fact Vin most wants accurate');
     if (buildAuditFacts({}, null).campaignPages !== null) _fails.push('an unrun unlinked-page read reports a campaign-page count');
@@ -44849,6 +44923,29 @@ app.listen(PORT, () => {
       if (_rt.test({ adsReadable: true, tagManager: true, googleAdsTag: true, metaPixel: false }) !== false) _fails.push('no_retargeting fires through a Google Tag Manager container — a GTM container can hold a pixel we cannot see, the exact rule social_spend_no_search already carries');
       if (_rt.test({ adsReadable: false, tagManager: false, googleAdsTag: true, metaPixel: false }) !== false) _fails.push('no_retargeting fires on markup we could not read — an absence claim with no look behind it');
       if (_rt.test({ adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false }) !== false) _fails.push('no_retargeting fires on a site running NO Google ads — there is no paid visitor to re-reach, so there is no finding');
+    }
+    const _au = HARM_LADDER.find(h => h.id === 'ads_untracked');
+    if (!_au || typeof _au.test !== 'function') _fails.push('ads_untracked is not in the ladder at all');
+    else {
+      if (_au.test({ googleAdsTag: true, adsReadable: true, tagManager: false, adsConversion: false, callTracking: false }) !== true) _fails.push('ads_untracked does not fire on the exact shape it exists for');
+      if (_au.test({ googleAdsTag: true, adsReadable: true, tagManager: true, adsConversion: false, callTracking: false }) !== false) _fails.push('ads_untracked fires through a Google Tag Manager container — Google\u2019s own recommended setup runs conversion tracking INSIDE the container, so "no conversion tracking anywhere" through GTM is exactly the confident wrong claim the sibling rungs already refuse');
+      if (_au.test({ googleAdsTag: true, adsReadable: true, tagManager: false, adsConversion: true, callTracking: false }) !== false) _fails.push('ads_untracked fires on a site that HAS a conversion event');
+      if (/anywhere on their site/i.test(String(_au.say && _au.say({})) || '')) _fails.push('ads_untracked still claims the whole site — the claim is bounded by the pages we read, and the sentence must say so');
+    }
+    // The list rows must carry the internal flag and the money translation,
+    // because the client's top-3 leaks and the export both read them.
+    {
+      const _mlRows = buildProblemList({ byHarm: [
+        { id: 'ads_untracked', finding: 'ads, nothing counted', costs: 'c', harm: 84, opener: 80, novel: 78 },
+        { id: 'review_velocity_drop', finding: 'reviews slowed', costs: 'c2', harm: 70, opener: 60, novel: 60 },
+      ] }, { money: { jobValue: 'a roof replacement runs $8k-$40k' } });
+      const _mlAds = _mlRows.find(r => r.id === 'ads_untracked');
+      const _mlRev = _mlRows.find(r => r.id === 'review_velocity_drop');
+      if (!_mlAds || !!_mlAds.internalOnly) _fails.push('a sayable rung is marked internal, so the leaks card would refuse it');
+      if (!_mlRev || !_mlRev.internalOnly) _fails.push('a review-METRIC rung is not marked internal \u2014 live 2026-08-24 "their Google reviews have slowed" was leak #2 on a call sheet with a retainer pitch under it, built on a number we are barred from saying to the owner');
+      if (!_mlAds || !/\$8k-\$40k/.test(String(_mlAds.moneyLine || ''))) _fails.push('the money translation does not carry the trade table\u2019s own job value \u2014 the one licensed figure it can hold');
+      const _mlBare = buildProblemList({ byHarm: [ { id: 'ads_untracked', finding: 'f', costs: 'c', harm: 84, opener: 80, novel: 78 } ] }, {});
+      if (/\$|\bfive figures\b|\bhundred thousand\b/.test(String((_mlBare[0] || {}).moneyLine || ''))) _fails.push('a lead with NO trade job value still got a figure in its money line \u2014 the one thing a translation layer must never do is invent the number');
     }
     const _fn = HARM_LADDER.find(h => h.id === 'no_financing');
     if (!_fn || typeof _fn.test !== 'function') _fails.push('no_financing is not in the ladder at all');
@@ -51558,9 +51655,15 @@ app.listen(PORT, () => {
         _fails.push('the spend-and-position finding fires on a business ranked #2 — it would tell a top-three business it is losing the search it is winning');
       }
       // Not in the pack at all is the STRONGEST case and must not be excluded
-      // by requiring a number.
-      if (!_byId(rankHarms({ ..._payBase, rankFound: false, rank: null }), 'paying_for_a_search_they_lose')) {
-        _fails.push('a business paying for clicks and absent from the map entirely produced no finding — the strongest version of this shape');
+      // by requiring a number. It IS excluded until a second search agrees:
+      // absence is the one claim that cannot be softened into a band if it is
+      // wrong, and this rung was firing harm 94 off a single draw while
+      // absent_from_search demanded two misses for the same sentence.
+      if (!_byId(rankHarms({ ..._payBase, rankFound: false, rank: null, rankAbsenceConfirmed: true }), 'paying_for_a_search_they_lose')) {
+        _fails.push('a business paying for clicks and CONFIRMED absent from the map produced no finding — the strongest version of this shape');
+      }
+      if (_byId(rankHarms({ ..._payBase, rankFound: false, rank: null }), 'paying_for_a_search_they_lose')) {
+        _fails.push('the spend-and-position finding claims absence off ONE search draw — one business returned #3 and #12 minutes apart, and harm 94 was riding a coin flip');
       }
       // A Facebook pixel is not a Google Ads account.
       if (_byId(rankHarms({ ..._payBase, googleAdsTag: false, metaPixel: true }), 'paying_for_a_search_they_lose')) {

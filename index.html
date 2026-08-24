@@ -2333,7 +2333,11 @@ const auditRecordFor = (lead) => {
     bindingLayer: (gc && gc.layer) || '',
     // EVIDENCE
     originalFindings: arr(ba.originalFindings || l.originalFindings),
-    problems: arr(l.problemList).map(p => ({ area: p.area || '', problem: p.problem || '', costs: p.costs || '', harm: p.harm })),
+    problems: arr(l.problemList).map(p => ({ area: p.area || '', problem: p.problem || '', costs: p.costs || '', harm: p.harm, internalOnly: !!p.internalOnly, moneyLine: p.moneyLine || '' })),
+    // The three leaks the call is built on: sayable rows only, with the money
+    // translation. Same filter as the screen card — one rule, two renderers.
+    leaks: arr(l.problemList).filter(p => p && Number.isFinite(p.moneyRank) && p.moneyRank <= 5 && !p.fromTheirPages && !p.internalOnly).slice(0, 3)
+      .map(p => ({ problem: p.problem || '', moneyLine: p.moneyLine || '', costs: p.costs || '' })),
     // Called directly, not behind a `typeof` guard. buildAuditRows is a hoisted
     // module-scope declaration in this same script block, so a guard here could
     // only ever do one thing: silently empty this section if somebody moved the
@@ -2463,7 +2467,9 @@ const auditExportHtml = (records, meta) => {
           + (t.why ? '<p class="dim">' + p(t.why) + '</p>' : '')
           + (t.firstBrokenLinkWhy ? '<h4>Fix this first' + (t.firstBrokenLink ? ' &mdash; ' + e(t.firstBrokenLink) : '') + '</h4><p>' + p(t.firstBrokenLinkWhy) + '</p>' : '')
           + (t.friction.length ? '<h4>' + (t.earnedButBlocked ? 'Earned, and blocked &mdash; ' : '') + t.frictionCount + ' thing(s) between interested and booked</h4>' + ul(t.friction, x => '<li>' + p(x) + '</li>') : '')
-          + (t.costliest && t.costliest.problem ? '<h4>Costing them most</h4><p>' + p(t.costliest.problem) + (t.costliest.costs ? '. ' + p(t.costliest.costs) : '') + '</p>' : '')
+          + (Array.isArray(r.leaks) && r.leaks.length ? '<h4>The ' + (r.leaks.length === 1 ? 'biggest money leak' : r.leaks.length + ' biggest money leaks') + '</h4><ol>'
+            + r.leaks.map(lk => '<li>' + p(lk.problem) + (lk.moneyLine ? '<br><b>' + p(lk.moneyLine) + '</b>' : '') + '</li>').join('') + '</ol>'
+            : (t.costliest && t.costliest.problem ? '<h4>Costing them most</h4><p>' + p(t.costliest.problem) + (t.costliest.costs ? '. ' + p(t.costliest.costs) : '') + '</p>' : ''))
           + '</section>' : '')
       + sec('What is actually going on here',
           (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
@@ -2474,7 +2480,7 @@ const auditExportHtml = (records, meta) => {
           ul(r.originalFindings, f => '<li>' + p(f.finding || f.what || f) + (f.quote ? '<br><q>' + p(f.quote) + '</q>' : '') + '</li>'))
       + sec('What is broken, worst first',
           r.problems.length ? '<table><tr><th>Area</th><th>Problem</th><th>What it costs</th></tr>'
-            + r.problems.map(x => '<tr><td>' + e(x.area) + '</td><td>' + p(x.problem) + '</td><td>' + p(x.costs) + '</td></tr>').join('') + '</table>' : '')
+            + r.problems.map(x => '<tr><td>' + e(x.area) + '</td><td>' + p(x.problem) + (x.internalOnly ? ' <i>(internal \u2014 never say reviews to him)</i>' : '') + '</td><td>' + p(x.costs) + '</td></tr>').join('') + '</table>' : '')
       + sec('Where their ad clicks might land',
           (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to. A page built for an ad is not in the menu by design. Their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li>' + e(x) + '</li>') : '')
           + (r.adsVerified ? '<p>Listed as a verified advertiser in Google\'s Ads Transparency Center.</p>' : ''))
@@ -5964,7 +5970,12 @@ function LeadBriefing({ lead }) {
       const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
       // Top money leaks: pillar-ranked rows only, copy quotes and TAXED-level
       // reputation notes excluded — those are context, not the sale.
-      const leaks = pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages).slice(0, 3);
+      // Internal rows are excluded HERE, at the one filter that decides the
+      // three leaks a call is built on. Live 2026-08-24: "their Google reviews
+      // have slowed" was leak #2 with a retainer pitch under it, and the seven
+      // review-metric rungs can never be said to the owner. They stay in the
+      // full findings list below, marked, where a call sheet wants them.
+      const leaks = pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages && !r.internalOnly).slice(0, 3);
       if (!ws && !af && !leaks.length) return null;
       const PILLAR_LABEL = { BURNING: 'money leaving now', UNCAUGHT: 'people who tried and could not reach them',
         INVISIBLE: 'people who never found them', LEAKING: 'arrived and lost', ROTTING: 'in hand, then lost', TAXED: 'reputation tax' };
@@ -6009,7 +6020,7 @@ function LeadBriefing({ lead }) {
       },
         ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
           React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : ws.score <= 7 ? '#fbbf24' : 'var(--t)' } }, ws.score + '/10'),
-          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'their website, from what we measured (' + ws.basedOn + ')'),
+          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'their website build \u2014 higher is better (' + ws.basedOn + '). Grades the site itself; ads, tracking and search are judged separately below'),
           React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
             (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
         ) : null,
@@ -6021,7 +6032,11 @@ function LeadBriefing({ lead }) {
             React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: '#6366f1', minWidth: 18 } }, (i + 1) + '.'),
             React.createElement('div', null,
               React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.5 } }, r.problem),
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 2 } },
+              // The translation: the finding said as the money it loses. Code-
+              // assembled server-side; its only figure is the trade table's own
+              // job-value sentence, so nothing here can be invented.
+              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, color: '#fbbf24', lineHeight: 1.55, marginTop: 4 } }, r.moneyLine) : null,
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 3 } },
                 (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
                 (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
             )
@@ -6084,14 +6099,12 @@ function LeadBriefing({ lead }) {
               key: 'fr' + i, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55 }
             }, f)))
         ) : null,
-        // And what it is COSTING most. The findings list below is ordered by
-        // this now; it used to be ordered by how well each would open a cold
-        // email, which is a different question with a different answer.
-        t.costliest && t.costliest.problem ? React.createElement('div', null,
-          H('Costing them most'),
-          React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
-            t.costliest.problem + (t.costliest.costs ? '. ' + String(t.costliest.costs).charAt(0).toUpperCase() + String(t.costliest.costs).slice(1) + '.' : '.'))
-        ) : null
+        // The "Costing them most" sub-block is GONE from the screen: it printed
+        // leak #1's exact sentence a second time, four hundred pixels below the
+        // numbered leak card that owns the money story. Vin, reading the first
+        // live sheet: "theres info everywhere". The data still travels and the
+        // export builds its leaks section from the same rows.
+        null
       );
     })(),
 
@@ -6202,7 +6215,8 @@ function LeadBriefing({ lead }) {
           },
             React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: 'var(--m2)' } }, p.area),
             React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: 3 } }, p.problem),
+              React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: 3 } }, p.problem,
+                p.internalOnly ? React.createElement('span', { style: { fontSize: 10, color: '#fbbf24', marginLeft: 8, border: '1px solid rgba(251,191,36,.35)', borderRadius: 8, padding: '1px 6px', verticalAlign: 'middle' } }, 'internal \u2014 never say reviews to him') : null),
               p.costs ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)' } }, 'Costs them: ' + p.costs) : null
             )
           )))
@@ -12980,7 +12994,30 @@ function App() {
         if (cloudLeads && cloudLeads.length > 0) {
           const local = getLeads();
           const cloudIds = new Set(cloudLeads.map(l => l.id));
-          const localOnly = local.filter(l => !cloudIds.has(l.id));
+          // ══ A STALE CACHE MUST NOT RE-ENTER THE PIPELINE ══════════════════
+          // Live 2026-08-24: the new index.html was dragged into an OLD Netlify
+          // site, that origin's localStorage still held a weeks-old pipeline,
+          // the cloud answered fine — and every relic lead merged onto the
+          // screen AND was seeded into Supabase as if it were new work. Vin:
+          // "it has stale leads that just collided with our pipeline."
+          //
+          // The rule: once the cloud has ANSWERED, it is the truth. A local-only
+          // lead earns a merge only if it was created HERE, recently — fresh
+          // offline work that has not synced yet. Anything else is a cache from
+          // another era or another deploy: it does not render, it does not
+          // seed, and because the merged list becomes the new cache, it cleans
+          // itself out. An empty cloud still takes the full first-seed, so a
+          // genuine migration is untouched. The drop is named out loud.
+          const _freshLocal = (l) => {
+            const d = Date.parse((l && l.createdAt) || '');
+            return Number.isFinite(d) && (Date.now() - d) < 7 * 86400000;
+          };
+          const localOnly = local.filter(l => !cloudIds.has(l.id) && _freshLocal(l));
+          const _staleDropped = local.filter(l => !cloudIds.has(l.id) && !_freshLocal(l));
+          if (_staleDropped.length) {
+            console.warn('Supabase: dropped ' + _staleDropped.length + ' stale cached lead(s) the cloud does not have — this browser held them from an older session/deploy and they are NOT being re-uploaded: '
+              + _staleDropped.slice(0, 5).map(l => l && l.name).filter(Boolean).join(', ') + (_staleDropped.length > 5 ? ', …' : ''));
+          }
           const merged = [...cloudLeads, ...localOnly];
 
           // ══ SHOW THE DATA FIRST, CACHE IT SECOND ═══════════════════════════
