@@ -719,6 +719,11 @@ const FC_CONCURRENCY_EXPLICIT = !!(process.env.FC_CONCURRENCY || '').trim();
 const fcBrowsersForLimit = (perMin) => {
   const n = Number(perMin);
   if (!Number.isFinite(n) || n <= 0) return null;
+  // The 5000/min tier publishes 50 concurrent browsers; we take half. On the
+  // first Standard-plan run, three leads waited 143-272s of wall clock for one
+  // of TEN browser slots while the plan allowed fifty - our own gate was the
+  // throttle. Half the published cap keeps the deliberate headroom.
+  if (n >= 5000) return 25;
   if (n >= 500) return 10;
   if (n >= 100) return 5;
   if (n >= 50) return 3;
@@ -13774,7 +13779,8 @@ const HARM_LADDER = [
   { harm: 74, specific: 85, novel: 74, delegable: 60, weFix: 90, band: 'BLOCKS', id: 'no_financing',
     blind: 'a pay-over-time button shows up on other people\u2019s sites, and nobody reads a competitor\u2019s checkout next to their own',
     reframe: 'for a job that costs more than most people pay at once, the company that offers monthly payments is the easy yes',
-    test: (m) => m.financingMeasured === true && m.financingOffered === false && m.bigTicketTrade === true,
+    test: (m) => m.financingMeasured === true && m.financingOffered === false && m.bigTicketTrade === true
+      && m.unreadPricing !== true,
     say: () => 'Nothing on the pages we read lets a customer pay over time, in a trade where most jobs cost more than people pay at once',
     costs: 'the customer who cannot pay it all at once rarely says so, he just picks the company that lets him pay monthly' },
 
@@ -20169,9 +20175,21 @@ const MONEY_LINE_BY_PILLAR = {
     : 'A quote that sits unanswered is a job already in hand, going cold.',
   TAXED: () => 'Trust decides which businesses get called at all, so this costs calls that never happen. That is the one loss no dashboard can show.',
 };
+// Two rungs where the pillar's generic sentence reads wrong against the
+// specific finding: Gurian, live, got "a quote that sits unanswered" under a
+// finding about miscoded expenses. The override states the loss the finding
+// actually describes; everything else keeps the pillar line.
+const RUNG_MONEY_LINE = {
+  review_pain_pattern: (jv) => jv
+    ? `${jv}. Every person who hit the same wall those reviews describe and never wrote one was one of those jobs.`
+    : 'Every person who hit the same wall those reviews describe and never wrote one was a customer, already lost.',
+  no_recurring_offer: (jv) => jv
+    ? `${jv}. A client already won has no reason to come back on a schedule, so one of those jobs has to be sold again from zero every time.`
+    : 'A client already won has no reason to come back on a schedule, so the same work has to be sold again from zero every time.',
+};
 const moneyLineFor = (id, jobValue) => {
   const pillar = pillarForRung(id);
-  const build = pillar && MONEY_LINE_BY_PILLAR[pillar];
+  const build = RUNG_MONEY_LINE[id] || (pillar && MONEY_LINE_BY_PILLAR[pillar]);
   if (!build) return null;
   const jv = String(jobValue || '').trim();
   const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null);
@@ -20315,11 +20333,23 @@ const buildTheOneThing = ({ growthConstraint, valueEquation, bottleneck, bottlen
   const ve = (valueEquation && valueEquation.checked) ? valueEquation : null;
   const w  = (worst && worst.id) ? worst : null;
   if (!gc && !ve && !bottleneck && !w) return null;
+  // ══ THE DISMISSAL CANNOT SIT BESIDE A COMPOSED EMAIL ═════════════════════
+  // Legacy Bath, live 2026-08-24: the sheet said "Nothing here is broken enough
+  // to lead an email with" three lines above a leak card and a composed email
+  // both built on a harm-74 financing finding. Two engines, one sheet, opposite
+  // verdicts - the recorded diagnosis-conflict class. When the ladder holds a
+  // sendable finding, the dismissal is replaced with the honest version; a
+  // genuinely clean lead keeps it, because manufacturing a crisis is the
+  // failure that sentence was right about.
+  let _why = gc ? _clean(gc.why) : null;
+  if (_why && w && /^Nothing here is broken enough to lead an email with/.test(_why)) {
+    _why = `No single funnel layer measured as clearly binding - but the ladder still found something real, and the email leads on it: "${String(w.finding || '').slice(0, 110)}". Sell that finding on its own terms rather than a bigger story.`;
+  }
   return {
     // WHAT IS BINDING, and why it is not the cheaper thing underneath.
     layer: gc ? gc.layer : null,
     diagnosis: gc ? _clean(gc.condition) : null,
-    why: gc ? _clean(gc.why) : null,
+    why: _why,
     role: gc ? _clean(gc.role) : null,
     product: gc ? gc.product : null,
     // WHAT MUST BE FIXED FIRST. The only dependency model in the system.
@@ -21320,6 +21350,95 @@ const stripRecencyConclusions = (text) => {
   }
   return { text: keep.join(' ').trim(), cut };
 };
+// ══ A REVIEW COUNT THE READ CANNOT SUPPORT IS A FABRICATION WITH A UNIT ════
+// Everlasting, live: the deep mine timed out, the fallback read the 5 reviews
+// Google exposes, and the audit wrote "Seven of forty recent Google reviews
+// mention the same thing". Both numbers were invented - we read five. A count
+// about reviews is checkable against exactly two measured numbers: how many we
+// READ, and the profile's own total. Anything else takes its sentence with it.
+const _RC_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, twenty: 20, thirty: 30, forty: 40, fifty: 50 };
+const _RC_NUM_RE = new RegExp('(?<![\\d,])(\\d{1,3}|' + Object.keys(_RC_WORDS).join('|') + ')\\s+(?:of\\s+(?:the\\s+|your\\s+|their\\s+)?(\\d{1,4}|' + Object.keys(_RC_WORDS).join('|') + ')\\s+)?(?:recent\\s+)?(?:Google\\s+)?reviews?' + '\\b', 'gi');
+const _rcNum = (s) => { const n = String(s || '').toLowerCase(); return /^\d+$/.test(n) ? Number(n) : (_RC_WORDS[n] || null); };
+const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal) => {
+  const src = String(text || '');
+  const read = Number(reviewsRead);
+  if (!src || !Number.isFinite(read) || read <= 0) return { text: src, cut: [] };
+  const prof = Number.isFinite(Number(profileTotal)) ? Number(profileTotal) : null;
+  const okN = (n) => n !== null && (n <= read || (prof !== null && Math.abs(n - prof) <= 2));
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [];
+  for (const sn of sentences) {
+    let bad = false;
+    _RC_NUM_RE.lastIndex = 0;
+    let m;
+    while ((m = _RC_NUM_RE.exec(sn)) !== null) {
+      const n = _rcNum(m[1]);
+      const of = m[2] !== undefined ? _rcNum(m[2]) : null;
+      if (!okN(n)) { bad = true; break; }
+      if (m[2] !== undefined && (of === null || !(of === read || (prof !== null && Math.abs(of - prof) <= 2)))) { bad = true; break; }
+      if (of !== null && n !== null && n > of) { bad = true; break; }
+    }
+    if (bad) cut.push(sn.trim()); else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut };
+};
+const stripImpossibleReviewCountsDeep = (node, out, depth, read, prof) => {
+  const d = Number(depth) || 0;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripImpossibleReviewCounts(node, read, prof);
+    if (r.cut.length) { out.cut.push(...r.cut); return r.text; }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(x => stripImpossibleReviewCountsDeep(x, out, d + 1, read, prof));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripImpossibleReviewCountsDeep(node[k], out, d + 1, read, prof);
+    }
+    return node;
+  }
+  return node;
+};
+
+// ══ A CLAIM ABOUT WHAT COMPETITOR SITES CONTAIN, WHEN WE READ NONE ═════════
+// Everlasting, live: "a buyer comparing three builders is reading the same
+// interchangeable language on all three sites" and "positioning itself
+// identically to every competitor" - the audit asserted the content of sites
+// nobody opened. §52 named the audit-narrative claim gap; this is its first
+// mechanical piece. Narrow on purpose: it cuts only sentences asserting what
+// competitor SITES/pages hold or that a buyer is reading them - a named
+// competitor's measured review count is untouched.
+const _COMPETITOR_SITE_RE = new RegExp('(?:all\\s+(?:three|four|five|\\d+)\\s+(?:sites|websites)|every\\s+competitor|other\\s+(?:firms?|builders?|contractors?|remodelers?|companies)[\u2019\']?s?\\s+(?:sites?|websites?|pages?))', 'i');
+const stripCompetitorSiteClaims = (text) => {
+  const src = String(text || '');
+  if (!src) return { text: src, cut: [] };
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [];
+  for (const sn of sentences) {
+    if (_COMPETITOR_SITE_RE.test(sn)) cut.push(sn.trim()); else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut };
+};
+const stripCompetitorSiteClaimsDeep = (node, out, depth) => {
+  const d = Number(depth) || 0;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripCompetitorSiteClaims(node);
+    if (r.cut.length) { out.cut.push(...r.cut); return r.text; }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(x => stripCompetitorSiteClaimsDeep(x, out, d + 1));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripCompetitorSiteClaimsDeep(node[k], out, d + 1);
+    }
+    return node;
+  }
+  return node;
+};
+
 const stripRecencyConclusionsDeep = (node, out, depth) => {
   const d = Number(depth) || 0;
   if (d > 6 || node == null) return node;
@@ -25326,7 +25445,10 @@ const readApifyPlaceMeta = (items) => {
 // PURE, and returns the reviews it actually used, so the caller can count owner
 // replies and negatives over THE SAME SET the model was shown. One function
 // decides what the sample is; nothing downstream may disagree with it.
-const REVIEW_CORPUS_CHARS = Math.max(4000, parseInt(process.env.REVIEW_CORPUS_CHARS || '', 10) || 30000);
+// 36,000 because Legacy Bath, live: 23 of 90 PAID-for reviews did not fit the
+// 30,000 budget even clipped. The extra 6k characters cost ~$0.002 of Haiku per
+// lead and stop buying reviews the model never sees.
+const REVIEW_CORPUS_CHARS = Math.max(4000, parseInt(process.env.REVIEW_CORPUS_CHARS || '', 10) || 36000);
 const REVIEW_CLIP_CHARS = 600;
 const REVIEW_CLIP_FLOOR = 160;
 const _clip = (t, n) => {
@@ -25660,7 +25782,7 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
       // A larger corpus takes longer to read. 25s suited forty reviews; at 150
       // a timeout returns no pain at all, which is indistinguishable from a
       // clean profile and is the worst way for this to fail.
-    }, 45000, 'review-pain-mine');
+    }, 45000, 'review-pain-mine', { retryOnTimeout: true });
     const d = await res.json();
     let text = (anthropicText(d)).replace(/```json|```/g, '').trim();
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
@@ -29936,6 +30058,41 @@ const SB_EXPECTED_SCHEMA = [
   ['call_outcomes', 'outcome'], ['lead_pages', 'token'], ['send_log', 'email'],
   ['leads', 'held_back_contact'], ['leads', 'corpus_read'],
 ];
+// ══ ONE FREE CALL THAT SETTLES "IS THE DATAFORSEO PASSWORD RIGHT" ═══════════
+// The first credentialed run failed on every call with "no tasks in the
+// DataForSEO response" and the log swallowed their answer, so auth-wrong and
+// request-wrong were indistinguishable. Their /appendix/user_data endpoint is
+// FREE and answers with the account itself - so one call after the verdict
+// settles the question before a lead ever spends. The parser is pure so the
+// boot check runs it against both real shapes.
+const parseDfsUserData = (body) => {
+  if (!body) return { ok: false, why: 'no JSON came back at all - a network failure, not an answer' };
+  if (Number(body.status_code) >= 40000 || (!Array.isArray(body.tasks) && body.status_code)) {
+    return { ok: false, why: `their answer: ${body.status_code} ${String(body.status_message || '').slice(0, 120)} - the CREDENTIALS were refused. Fix DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD in Render (the password is the API password from their dashboard, not the site login).` };
+  }
+  const t = Array.isArray(body.tasks) ? body.tasks[0] : null;
+  const r = t && Array.isArray(t.result) ? t.result[0] : null;
+  const bal = r && r.money && Number.isFinite(Number(r.money.balance)) ? Number(r.money.balance) : null;
+  return { ok: true, balance: bal };
+};
+const probeDfsAuth = async () => {
+  if (!DFS_READY) return;
+  try {
+    const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
+    const r = await fetchT('https://api.dataforseo.com/v3/appendix/user_data', {
+      method: 'GET', headers: { 'Authorization': `Basic ${auth}` },
+    }, 15000);
+    const parsed = parseDfsUserData(await safeJson(r));
+    if (parsed.ok) {
+      console.log(`DFS AUTH PROBE: credentials accepted${parsed.balance !== null ? ` - account balance $${parsed.balance}` : ''}. The rank, organic and duplicate reads can actually run on this instance.`);
+    } else {
+      console.log(`⚠ DFS AUTH PROBE FAILED: ${parsed.why} Until this passes, NO lead gets a search position - every rank read falls back to Places, which may not state one.`);
+    }
+  } catch (e) {
+    console.log(`⚠ DFS AUTH PROBE FAILED: ${(e && e.message) || e} - could not reach api.dataforseo.com at all.`);
+  }
+};
+
 const probeSupabaseSchema = async () => {
   if (!SB_URL || !SB_KEY) {
     console.log('SCHEMA PROBE: Supabase is not configured on this server, so nothing that persists (query memory, bench, observations, call outcomes, ask pages, send log) will record anything. Set SUPABASE_URL and SUPABASE_KEY on Render.');
@@ -32623,6 +32780,15 @@ const checkLocalRankStable = async (args) => {
     return { ...a, rankStable: null,
       rankNote: 'only one usable sample \u2014 the position is approximate and the digit must not appear in the email' };
   }
+  // Found by BOTH looks on a source that refuses to hand over a position
+  // (the Places fallback): rank is null on each side, Math.abs(null - null) is
+  // 0, and the old line printed "#null of 20 ... so this position is real".
+  // Live on all three leads of the first DFS-credentialed run. They ARE in the
+  // results - that is the real fact - and the position stays unsayable.
+  if (a.rank == null || b.rank == null) {
+    return { ...a, rankStable: true,
+      rankNote: 'both checks found them IN the results; the position itself is not sayable (this source ranks by name relevance, not by the real pack)' };
+  }
   const drift = Math.abs(a.rank - b.rank);
   if (drift === 0) {
     return { ...a, rankStable: true, rankSamples: [a.rank, b.rank],
@@ -33021,7 +33187,12 @@ const packOrderTrusted = (source) => PACK_TRUSTED_SOURCES.has(String(source || '
 
 const parseLocalFinder = (body) => {
   const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
-  if (!task) return { ok: false, why: 'no tasks in the DataForSEO response' };
+  if (!task) {
+    const _own = body && body.status_code
+      ? ` - their own answer: ${body.status_code} ${String(body.status_message || '').slice(0, 140)} (40xxx here means the CREDENTIALS were refused - check DATAFORSEO_PASSWORD in Render)`
+      : (body ? '' : ' - the response body was not JSON at all, which is usually a network failure');
+    return { ok: false, why: `no tasks in the DataForSEO response${_own}` };
+  }
   if (task.status_code && Number(task.status_code) >= 40000) {
     return { ok: false, why: `DataForSEO task error ${task.status_code}: ${task.status_message || 'no message'}` };
   }
@@ -33075,7 +33246,14 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
         body: JSON.stringify([{
           keyword: String(query || ''),
-          location_name: String(city || ''),
+          // location_code 2840 is the United States in DataForSEO's own
+          // location database. The first live run sent location_name with the
+          // lead's city ("San Antonio, TX") and their API does not know that
+          // string - locations must come from THEIR database, and an
+          // abbreviated state is not in it. The query itself already carries
+          // "in San Antonio, TX", which is exactly what a real searcher types,
+          // so the country-level location is the correct scope.
+          location_code: 2840,
           language_code: 'en',
           device: 'desktop',
           depth: 20,
@@ -33155,7 +33333,12 @@ const parseOrganicSerp = (body, ourDomain) => {
   const dom = String(ourDomain || '').replace(/^www\./, '').toLowerCase();
   if (!dom) return { ok: false, why: 'no domain to look for' };
   const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
-  if (!task) return { ok: false, why: 'no tasks in the response' };
+  if (!task) {
+    const _own = body && body.status_code
+      ? ` - their own answer: ${body.status_code} ${String(body.status_message || '').slice(0, 140)}`
+      : (body ? '' : ' - the response body was not JSON at all');
+    return { ok: false, why: `no tasks in the response${_own}` };
+  }
   if (task.status_code && Number(task.status_code) >= 40000) {
     return { ok: false, why: `task error ${task.status_code}: ${task.status_message || 'no message'}` };
   }
@@ -33242,7 +33425,7 @@ const checkOrganicRank = async ({ query, city, website }) => {
     const r = await fetchT(DFS_ORGANIC_URL, {
       method: 'POST',
       headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify([{ keyword: String(query), location_name: String(city), language_code: 'en', device: 'desktop', depth: 20 }]),
+      body: JSON.stringify([{ keyword: String(query), location_code: 2840, language_code: 'en', device: 'desktop', depth: 20 }]),
     }, 20000);
     const parsed = parseOrganicSerp(await safeJson(r), dom);
     if (!parsed.ok) return { checked: false, why: parsed.why };
@@ -35321,7 +35504,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // "#undefined of undefined ... 4 of the NaN above them have FEWER
               // reviews". The finding underneath is real and important; the line
               // reporting it read like a crash.
-              const _pos = Number.isFinite(Number(r.rank)) ? Number(r.rank) : null;
+              const _pos = (typeof r.rank === 'number' && Number.isFinite(r.rank) && r.rank > 0) ? r.rank : null;
               const _scanned = Number.isFinite(Number(r.scanned)) ? Number(r.scanned) : null;
               const _above = _pos !== null ? _pos - 1 : null;
               const weak = r.weakerAbove
@@ -39691,6 +39874,27 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             if (k.charAt(0) === '_') continue;
             parsed[k] = stripRecencyConclusionsDeep(parsed[k], _rc, 1);
           }
+          // ══ A REVIEW COUNT THE READ CANNOT SUPPORT, AND A CLAIM ABOUT ═══
+          // ══ COMPETITOR SITES NOBODY OPENED - both live on 2026-08-24 ═══
+          const _irc = { cut: [] };
+          const _profTotal = (gbpHealth && Number.isFinite(Number(gbpHealth.reviewCount))) ? Number(gbpHealth.reviewCount) : null;
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripImpossibleReviewCountsDeep(parsed[k], _irc, 1, reviewsRead, _profTotal);
+          }
+          if (_irc.cut.length) {
+            parsed._reviewCountRemoved = _irc.cut.slice(0, 4);
+            console.log(`⛔ IMPOSSIBLE REVIEW COUNT [${company}]: removed ${_irc.cut.length} sentence(s) whose review count fits neither the ${reviewsRead} we read nor the profile total. First one: "${String(_irc.cut[0]).slice(0, 140)}". "Seven of forty recent reviews" went out on a lead where the deep mine timed out and five were read.`);
+          }
+          const _cc = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripCompetitorSiteClaimsDeep(parsed[k], _cc, 1);
+          }
+          if (_cc.cut.length) {
+            parsed._competitorClaimRemoved = _cc.cut.slice(0, 4);
+            console.log(`⛔ COMPETITOR SITE CLAIM [${company}]: removed ${_cc.cut.length} sentence(s) asserting what competitor sites contain - we read none of them. First one: "${String(_cc.cut[0]).slice(0, 140)}".`);
+          }
           if (_rc.cut.length) {
             parsed._recencyRemoved = _rc.cut.slice(0, 4);
             console.log(`\u26d4 RECENCY CONCLUSION [${company}]: removed ${_rc.cut.length} sentence(s) asserting what a reader concludes from the age of their reviews. First one: "${String(_rc.cut[0]).slice(0, 140)}". Nobody checks the date on the newest review and concludes a business has closed \u2014 the owner's own instinct, recorded in this file \u2014 and what the measurement really says (they stopped ASKING for reviews) is already in the audit as intelligence. The prompt has forbidden this framing since 2026-08-23 and the model produced it anyway, which is what every stripper in this battery exists for.`);
@@ -42721,7 +42925,7 @@ const _jobs = new Map();          // id -> { status, startedAt, finishedAt, comp
 // Six, not more: each lead holds page buffers, and the memory gate above is now
 // calibrated well enough to hold leads at the door if that genuinely climbs -
 // which is the honest way to find the ceiling, rather than guessing it here.
-const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '6', 10) || 6);
+const RESEARCH_CONCURRENCY = Math.max(1, parseInt(process.env.RESEARCH_CONCURRENCY || '8', 10) || 8);
 // The measured half of the same question. Render's container limit is near
 // 256MB; boot settles around 145MB and one page render can add tens of MB on top
 // of that. 205 leaves room for a decode to finish without the next lead being
@@ -43382,6 +43586,7 @@ app.listen(PORT, () => {
       RSS_BASELINE_MB = Math.round(process.memoryUsage().rss / 1048576);
       console.log(`\u{1F9E0} RSS BASELINE: this process settles at ${RSS_BASELINE_MB}MB resident, so a lead is admitted below ${rssCeilingNow()}MB (baseline + ${RESEARCH_RSS_HEADROOM_MB}MB for a page render). The old fixed ceiling of ${RESEARCH_RSS_CEILING_MB}MB was written from a 145MB boot, and every lead was tripping it, sleeping the full ${Math.round(RESEARCH_RSS_MAX_WAIT_MS / 1000)}s bound and starting anyway.`);
       probeSupabaseSchema().catch(() => {});
+      probeDfsAuth().catch(() => {});
     }, 5000);
     if (_schemaTimer.unref) _schemaTimer.unref();
   }
@@ -44976,6 +45181,104 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ MONEY SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ WHAT THE FIRST DATAFORSEO-CREDENTIALED RUN EXPOSED, EXECUTED ═════════
+  // Three leads, 2026-08-24: every DFS call failed with a swallowed reason, an
+  // invented "Seven of forty reviews" shipped after the mine timed out, the
+  // audit asserted the content of competitor sites nobody opened, and one sheet
+  // said "nothing here is broken enough" beside a composed email. Every fixture
+  // below is the live sentence or the live shape.
+  try {
+    const _fails = [];
+
+    // — a review count the read cannot support takes its sentence with it —
+    if (stripImpossibleReviewCounts('Seven of forty recent Google reviews mention the same thing.', 5, 237).cut.length !== 1) {
+      _fails.push('the live "Seven of forty" sentence survives on a lead where five reviews were read');
+    }
+    if (stripImpossibleReviewCounts('The owner replies to 77 of the 79 we read reviews personally.', 79, 405).cut.length !== 0) {
+      _fails.push('a TRUE count over the reviews we actually read was eaten — a gate that eats true sentences is the more expensive failure');
+    }
+    if (stripImpossibleReviewCounts('They have 305 public reviews at 4.8 stars.', 67, 305).cut.length !== 0) {
+      _fails.push('citing the profile TOTAL was eaten — that number is Google\u2019s own record and always sayable');
+    }
+    if (stripImpossibleReviewCounts('Seven of forty reviews say it.', null, 237).cut.length !== 0) {
+      _fails.push('a lead with NO measured read had sentences stripped — with nothing to check against, the gate must stay silent');
+    }
+
+    // — competitor sites nobody opened —
+    if (stripCompetitorSiteClaims('A buyer comparing three builders is reading the same interchangeable language on all three sites.').cut.length !== 1) {
+      _fails.push('the live all-three-sites sentence survives — the audit asserted the content of sites we never read');
+    }
+    if (stripCompetitorSiteClaims('They are positioning themselves identically to every competitor.').cut.length !== 1) {
+      _fails.push('the every-competitor assertion survives');
+    }
+    if (stripCompetitorSiteClaims('Fusion Orthodontics shows up above them with 492 reviews against their 540.').cut.length !== 0) {
+      _fails.push('the NAMED-competitor spine sentence was eaten — that one is measured and is the flagship finding');
+    }
+
+    // — financing rides the unread-pricing guard —
+    const _fin = HARM_LADDER.find(h => h.id === 'no_financing');
+    if (_fin && _fin.test({ financingMeasured: true, financingOffered: false, bigTicketTrade: true, unreadPricing: true }) !== false) {
+      _fails.push('no_financing fires while the sitemap lists PRICING pages we never opened — Legacy Bath, live, and its own fact-checker called the claim imprecise');
+    }
+    if (_fin && _fin.test({ financingMeasured: true, financingOffered: false, bigTicketTrade: true }) !== true) {
+      _fails.push('no_financing no longer fires on a full read with no unread pricing pages — the guard was widened into a delete');
+    }
+
+    // — the dismissal cannot sit beside a composed email —
+    const _gcDismiss = { checked: true, layer: 'MARKET', condition: 'x', product: 'positioning',
+      why: 'Nothing here is broken enough to lead an email with. Write a shorter email.' };
+    const _tWith = buildTheOneThing({ growthConstraint: _gcDismiss, worst: { id: 'no_financing', finding: 'Nothing lets a customer pay over time' } });
+    if (!_tWith || /^Nothing here is broken enough/.test(String(_tWith.why || ''))) {
+      _fails.push('the "nothing here is broken enough" dismissal still prints beside a composed email built on a real finding — Legacy Bath, live, opposite verdicts on one sheet');
+    }
+    const _tClean = buildTheOneThing({ growthConstraint: _gcDismiss });
+    if (!_tClean || !/^Nothing here is broken enough/.test(String(_tClean.why || ''))) {
+      _fails.push('a genuinely clean lead lost the honest dismissal — manufacturing a crisis is the failure that sentence was right about');
+    }
+
+    // — the free auth probe can tell a wrong password from a network failure —
+    const _refused = parseDfsUserData({ version: '0.1', status_code: 40100, status_message: 'You are not authorized to access this resource.' });
+    if (_refused.ok !== false || !/CREDENTIALS were refused/.test(_refused.why)) {
+      _fails.push('a DataForSEO auth refusal does not name the credentials — auth-wrong and request-wrong stay indistinguishable, which cost the whole first run');
+    }
+    const _okBody = parseDfsUserData({ status_code: 20000, tasks: [{ result: [{ money: { balance: 47.5 } }] }] });
+    if (_okBody.ok !== true || _okBody.balance !== 47.5) _fails.push('an accepted probe does not read the balance');
+    const _noTasks = parseLocalFinder({ status_code: 40100, status_message: 'You are not authorized.' });
+    if (!/40100/.test(String(_noTasks.why))) {
+      _fails.push('a task-less DFS response no longer carries THEIR status code — the swallowed reason is what made the first live failure undiagnosable');
+    }
+
+    // — the Standard tier takes 25 of its published 50 browsers —
+    if (fcBrowsersForLimit(5000) !== 25) _fails.push('the 5000/min tier no longer maps to 25 browsers — three leads waited 143-272s of wall clock for one of ten slots on a plan that allows fifty');
+    if (fcBrowsersForLimit(500) !== 10) _fails.push('the 500/min tier moved off 10 browsers');
+
+    // — the money line fits the finding it sits under —
+    if (!/never wrote one/.test(String(moneyLineFor('review_pain_pattern', 'an annual engagement runs several thousand dollars') || ''))) {
+      _fails.push('review_pain_pattern still gets the generic pillar money line — "a quote that sits unanswered" printed under a finding about miscoded expenses');
+    }
+
+    // — the call sites, because a fixture supplies its own arguments —
+    const _dn = (...p) => p.join('');
+    const _dsrc = selfSourceNoComments();
+    for (const [_what, _needle] of [
+      ['the impossible-count stripper never runs on the audit', _dn('stripImpossibleReviewCountsDeep(parsed[k], _irc,', ' 1, reviewsRead, _profTotal)')],
+      ['the competitor-site stripper never runs on the audit', _dn('stripCompetitorSiteClaimsDeep(parsed[k],', ' _cc, 1)')],
+      ['the found-but-unsayable pair still prints as a real position', _dn('if (a.rank == null || b.rank', ' == null) {')],
+      ['the mine call no longer retries a timeout', _dn("'review-pain-mine', { retryOnTimeout:", ' true })')],
+      ['the DFS local body went back to a location name their database does not hold', _dn('location_code: 2840,', '')],
+    ]) {
+      if (!_dsrc.includes(_needle)) _fails.push(`${_what} — the computed-but-not-passed class`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ FIRST DFS RUN CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIRST DFS RUN CHECK: the four faults of the first credentialed run cannot recur silently. A review count that fits neither the reviews we read nor the profile total takes its sentence with it (the live "Seven of forty" is the fixture, and a true count and the profile total both survive); a claim about what competitor sites contain is removed when we read none of them, while the named-competitor spine survives; the financing absence stays silent when the sitemap lists pricing pages we never opened; the no-crisis dismissal cannot print beside a composed email; a task-less DataForSEO response now carries THEIR status code, a free auth probe settles wrong-password before any lead spends, and the request sends a location their database actually holds; and the Standard tier takes 25 of its 50 published browsers so our own gate stops being the wall clock.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIRST DFS RUN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A MODELED TRAFFIC FIGURE IS AN ESTIMATE, AND THE WALL AROUND IT ══════

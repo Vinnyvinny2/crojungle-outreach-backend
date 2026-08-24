@@ -2106,7 +2106,7 @@ const BATCH_DEFAULT_SIZE = 50;
 // RAISED 3 -> 6 alongside RESEARCH_CONCURRENCY on the server, 2026-08-22.
 // These two must move together: the client pool decides how many leads are
 // ever in flight, so a server raised on its own changes nothing for a batch.
-const BATCH_CONCURRENCY = 6;
+const BATCH_CONCURRENCY = 8;
 
 // ══ WHERE THE RUN ACTUALLY IS ══════════════════════════════════════════════
 // The panel used to hold ONE name while the runner runs three leads at once, so
@@ -2486,25 +2486,33 @@ const auditExportHtml = (records, meta) => {
           + (r.adsVerified ? '<p>Listed as a verified advertiser in Google\'s Ads Transparency Center.</p>' : ''))
       + sec('What he clearly cares about', r.whatHeCaresAbout ? '<p>' + p(r.whatHeCaresAbout) + '</p>' : '')
       + (r.niche ? sec('Their world',
-          '<p class="dim">Background on the segment, not a measurement of this business. None of it is a claim about them and none of it is in the email.</p>'
-          + '<p><b>' + e(r.niche.label) + '</b></p>'
-          + (r.niche.unit ? '<p>The unit of business: ' + p(r.niche.unit) + '</p>' : '')
-          + (r.niche.buyer ? '<p>Who buys: ' + p(r.niche.buyer) + '</p>' : '')
-          + (r.niche.whatTheyDoNotHave ? '<p>What this kind of business does not have: ' + p(r.niche.whatTheyDoNotHave) + '</p>' : '')
-          + (r.niche.leakType ? '<p>Where the margin usually leaks: ' + p(r.niche.leakType) + '</p>' : '')
-          + (r.niche.vocabulary.length ? '<h4>Their words</h4><table class="sig">' + r.niche.vocabulary.map(v =>
+          '<p class="dim"><b>' + e(r.niche.label) + '</b> \u2014 the full segment brief (their vocabulary, the software to ask about, the questions worth asking) is printed ONCE at the end of this file. It is identical for every lead in this trade, and fifty copies of it buried the numbers Mike actually dials from.</p>') : '')
+      + ''; };
+  // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
+  // On a 50-lead export the crew-trades brief printed fifty times — a page of
+  // identical static text per lead, which is exactly the "info everywhere"
+  // complaint. Each distinct brief renders once, in an appendix the per-lead
+  // pointer names.
+  const briefBody = (n, e, p, ul) => ''
+          + '<p class="dim">Background on the segment, not a measurement of any business in this file. None of it is a claim about them and none of it is in any email.</p>'
+          + '<p><b>' + e(n.label) + '</b></p>'
+          + (n.unit ? '<p>The unit of business: ' + p(n.unit) + '</p>' : '')
+          + (n.buyer ? '<p>Who buys: ' + p(n.buyer) + '</p>' : '')
+          + (n.whatTheyDoNotHave ? '<p>What this kind of business does not have: ' + p(n.whatTheyDoNotHave) + '</p>' : '')
+          + (n.leakType ? '<p>Where the margin usually leaks: ' + p(n.leakType) + '</p>' : '')
+          + (n.vocabulary.length ? '<h4>Their words</h4><table class="sig">' + n.vocabulary.map(v =>
               '<tr><td>' + e(v.term) + '</td><td>' + p(v.means || '') + '</td></tr>').join('') + '</table>' : '')
-          + (r.niche.software.length ? '<h4>Ask which of these they run</h4>' + ul(r.niche.software, x =>
+          + (n.software.length ? '<h4>Ask which of these they run</h4>' + ul(n.software, x =>
               '<li>' + e(x.category) + ': ' + e((x.products || []).join(', ')) + '</li>')
               + '<p class="dim">We did not check. Asking is a diagnostic that costs nothing; asserting one would be a guess.</p>' : '')
-          + (r.niche.sourced.length ? '<h4>Published figures for the segment</h4>' + ul(r.niche.sourced, x =>
+          + (n.sourced.length ? '<h4>Published figures for the segment</h4>' + ul(n.sourced, x =>
               '<li>' + p(x.say) + ' <span class="dim">[' + e(x.source || '') + ', ' + e(x.at || '') + ']</span></li>')
-              + '<p class="dim">These describe the category. Not one of them is a measurement of this business, and saying one as if it were is the fastest way to lose an operator who knows his own numbers.</p>' : '')
-          + (r.niche.askOnCall.length ? '<h4>Questions worth asking</h4>' + ul(r.niche.askOnCall, q => '<li>' + p(q) + '</li>') : '')
-          + (r.niche.ageDays !== null && r.niche.ageDays > 540
-              ? '<p class="dim">This brief was verified ' + e(r.niche.verifiedAt) + ', over eighteen months ago. Re-check any figure before saying it out loud.</p>'
-              : (r.niche.verifiedAt ? '<p class="dim">Verified ' + e(r.niche.verifiedAt) + '.</p>' : ''))
-        ) : '')
+              + '<p class="dim">These describe the category. Not one of them is a measurement of any business in this file, and saying one as if it were is the fastest way to lose an operator who knows his own numbers.</p>' : '')
+          + (n.askOnCall.length ? '<h4>Questions worth asking</h4>' + ul(n.askOnCall, q => '<li>' + p(q) + '</li>') : '')
+          + (n.ageDays !== null && n.ageDays > 540
+              ? '<p class="dim">This brief was verified ' + e(n.verifiedAt) + ', over eighteen months ago. Re-check any figure before saying it out loud.</p>'
+              : (n.verifiedAt ? '<p class="dim">Verified ' + e(n.verifiedAt) + '.</p>' : ''));
+  const oneTail = (r, i) => ''
       + sec('What changed since we last looked',
           (r.changes || []).length
             ? '<ul>' + (r.changes || []).map(c => '<li>' + p(c.say) + (c.sayable ? '' : ' <span class="dim">(ours to know, not his to hear)</span>') + '</li>').join('') + '</ul>'
@@ -2601,7 +2609,6 @@ const auditExportHtml = (records, meta) => {
       + sec('The email as written', r.pitch ? '<p class="dim">Subject: ' + p(r.subject) + '</p><pre>' + p(r.pitch) + '</pre>' : '')
       + sec('Full-page renders', ul(r.renders, s => '<li>' + e(s.label) + ': <a href="' + e(s.url) + '">' + e(s.url) + '</a></li>'))
       + '</article>';
-  };
   return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
@@ -2621,7 +2628,17 @@ const auditExportHtml = (records, meta) => {
     + '<h1>' + e(m.title || 'CROJungle audits') + '</h1>'
     + '<p class="dim">' + records.length + ' audit(s) &middot; exported ' + e(m.at || '') + '</p>'
     + (records.length > 1 ? '<nav>' + records.map((r, i) => '<div><a href="#a' + i + '">' + e(r.company) + '</a></div>').join('') + '</nav>' : '')
-    + records.map(one).join('')
+    + records.map((r, i) => one(r, i) + oneTail(r, i)).join('')
+    + (() => {
+        const seen = new Map();
+        for (const r of records) {
+          if (r && r.niche && r.niche.label && !seen.has(r.niche.label)) seen.set(r.niche.label, r.niche);
+        }
+        if (!seen.size) return '';
+        return '<article><header><h2>The segment briefs</h2><div class="meta">One copy per trade \u2014 every lead above that names one points here.</div></header>'
+          + [...seen.values()].map(n => '<section><h3>' + e(n.label) + '</h3>' + briefBody(n, e, p, ul) + '</section>').join('')
+          + '</article>';
+      })()
     + '</body></html>';
 };
 
@@ -7086,7 +7103,9 @@ function ResearchView({
       paddingBottom: batchBar ? (batchBarH || 116) : 0 }
   },
 
-  batchBar,
+  // Through a portal: the always-mounted ResearchView is display:none on other
+  // tabs, and a portal is the one way a fixed bottom bar escapes that.
+  batchBar ? ReactDOM.createPortal(batchBar, document.body) : null,
 
   // ══ RE-RUN CONFIRM MODAL ══════════════════════════════════════════════
   rerunConfirm && React.createElement('div', {
@@ -13130,6 +13149,15 @@ function App() {
     refresh();
     setToast('Pitch generated');
   };
+  // ══ THE RUN MUST SURVIVE A TAB SWITCH ══════════════════════════════════
+  // ResearchView owns the batch run's state — the bottom bar, the roster, the
+  // pollers, and the run-scoped export. It used to mount only while the
+  // Research tab was open, so tabbing to Find mid-run unmounted all of it: the
+  // status bar vanished (Vin, live 2026-08-24: "the tab that shows the auditing
+  // status disappears if u tab off") and the "export just this run" option
+  // disappeared with it. ResearchView is now ALWAYS mounted and merely hidden
+  // when another tab is active; its bar renders through a portal to the page
+  // body, so a running batch stays visible from every tab.
   const renderView = () => {
     if (view === 'find') return React.createElement(FindView, {
       onCreate,
@@ -13141,7 +13169,11 @@ function App() {
       onCreate,
       settings
     });
-    if (view === 'research') return React.createElement(ResearchView, {
+    return null;
+  };
+  const researchAlways = React.createElement('div', {
+    style: { display: view === 'research' ? 'contents' : 'none' }
+  }, React.createElement(ResearchView, {
       leadId: activeLead,
       // ══ THE BUTTON PASSED THE LEAD AND THE HANDLER THREW IT AWAY ═══════
       // The button calls onNext(lead.id). This handler's signature was `()` —
@@ -13162,7 +13194,8 @@ function App() {
       onNext: (id) => { if (id) setActiveLead(id); setView('generate'); },
       onSelectLead: setActiveLead,
       settings
-    });
+    }));
+  const renderOther = () => {
     if (view === 'generate') return React.createElement(GenerateView, {
       leadId: activeLead,
       onDone: onGenDone,
@@ -13272,7 +13305,7 @@ function App() {
        ' Stop and fix this before researching or generating anything else.')
   )), React.createElement('div', {
     className: 'main'
-  }, renderView()), toast && React.createElement(Toast, {
+  }, renderView(), renderOther(), researchAlways), toast && React.createElement(Toast, {
     msg: toast,
     onClose: () => setToast(null)
   }));
