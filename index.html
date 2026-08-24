@@ -2444,16 +2444,74 @@ const auditExportHtml = (records, meta) => {
   const ul = (items, fn) => items.length ? '<ul>' + items.map(fn).join('') + '</ul>' : '';
   const one = (r, i) => {
     const t = r.oneThing;
+    // ══ SEVEN CATEGORIES, EACH ORIGINAL SECTION EXACTLY ONCE ═══════════════
+    // Vin, 2026-08-24, after three mock rounds: keep ALL the depth, organize
+    // it, and make the sheet INFORM rather than instruct — "i still dont trust
+    // the brain or the audits to always pick the perfect thing". So the money
+    // ranking is labeled as the system's read with every finding visible below
+    // it, and the old "Open with" script is gone: the sheet shows what the
+    // email already led with (a fact — it was sent), never what to say next.
+    // 1 THE CALL · 2 THE MONEY · 3 THE CONVERSATION · 4 THE BUSINESS ·
+    // 5 THE EVIDENCE · 6 THE ANGLES · 7 THE EDGES (in oneTail) · footer.
+    const cat = (title, capTxt, body) => body
+      ? '<section><h3>' + e(title) + (capTxt ? '<span class="cap">' + e(capTxt) + '</span>' : '') + '</h3>' + body + '</section>' : '';
+    const af = r.auditFacts;
+    const facts = af ? [
+      'Ads ' + (af.ads === 'yes' ? 'running' : af.ads === 'no' ? 'none found' : 'could not read'),
+      af.booking ? ('Booking ' + ({ online_booking: 'online', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking)) : '',
+      (typeof af.formFields === 'number') ? ('Form ' + af.formFields + ' fields') : '',
+      (typeof af.campaignPages === 'number' && af.campaignPages > 0) ? (af.campaignPages + ' unlinked pages') : '',
+      af.mobile ? ('Mobile ' + (af.mobile === 'slow' ? 'slow for real visitors' : 'fine')) : '',
+    ].filter(Boolean).join(' · ') : '';
+    const measured = r.ageDays === null ? '' : (r.ageDays <= 1 ? 'measured today' : 'measured ' + r.ageDays + ' days ago');
+    // The Do-not-say body, shortened for the call. The same flag arrives twice
+    // — once as a critical fact-check entry and once inside claimRisks with a
+    // "fact-check:" prefix — and Fit Money's sheet printed one warning twice in
+    // a row. Deduplicate on normalised text, keeping the critical copy, which
+    // lists first. First sentence only: the full engineering reasoning stays on
+    // the audit screen, not on a sheet somebody is holding while a phone rings.
+    const doNotSay = (() => {
+      const firstSentence = (x) => {
+        const txt = String(typeof x === 'string' ? x : (x && x.what) || JSON.stringify(x)).trim();
+        // Keep any quoted example whole: the quote IS the instruction.
+        const q = txt.indexOf('"');
+        const cut = txt.search(/(?<=[a-z0-9)"'”])\.\s+(?=[A-Z])/);
+        if (cut > 0 && (q < 0 || cut > q)) return txt.slice(0, cut + 1);
+        return txt.length > 300 ? txt.slice(0, 300).replace(/\s+\S*$/, '') + '…' : txt;
+      };
+      const _seen = [];
+      const _norm = (x) => String(typeof x === 'string' ? x : (x && x.what) || '').toLowerCase().replace(/^fact-check:\s*/, '').replace(/[^a-z0-9]+/g, '').slice(0, 160);
+      const items = r.criticalFactCheck.concat(r.claimRisks).filter(x => {
+        const n = _norm(x);
+        if (!n) return true;
+        if (_seen.some(k => k === n || k.startsWith(n) || n.startsWith(k))) return false;
+        _seen.push(n);
+        return true;
+      });
+      if (items.length) return ul(items, x => '<li>' + p(firstSentence(x)) + '</li>')
+        + '<div class="tw">Shortened for the call. The full reasoning for each is on the audit screen.</div>';
+      // Never silent on an audited lead: no heading reads as "we checked and it
+      // is clean", and a dropped fact-check is the opposite fact.
+      return r.status === 'not audited' ? '' : '<span class="tw">Nothing was flagged on this audit. This is a checked result, not a missing one.</span>';
+    })();
+    const convRows = [];
+    if (r.pitch) convRows.push(['The email led with',
+      (r.subject ? '<div class="dim">Subject: ' + p(r.subject) + '</div>' : '') + '<pre>' + p(r.pitch) + '</pre>'
+      + '<div class="tw">Already in front of him — the call does not have to open the same way.</div>', '']);
+    if (r.expectObjection) convRows.push(['He will likely say',
+      '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
+    if (r.askOnTheCall) convRows.push(['Worth asking', '<span class="ask">' + p(r.askOnTheCall) + '</span>', '']);
+    if (doNotSay) convRows.push(['Do not say', doNotSay, 'no']);
     return '<article id="a' + i + '">'
-      + '<header><h2>' + e(r.company) + '</h2><div class="meta">'
-      + [r.trade, r.location,
-         // The owner line, and the ONLY place a title may appear. An absent
-         // title now prints as absent: it used to default to the word "Owner",
-         // which is what put "Michelle Musacchio, Owner" on a sheet after the
-         // resolver had explicitly refused that title.
-         r.owner ? e(r.owner) + (r.ownerTitle ? ', ' + e(r.ownerTitle) : ' (no title found)') : '',
-         r.phone, r.email, r.website].filter(Boolean).map(e).join(' &middot; ')
-      + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></header>'
+      + '<header><div class="hrow"><div><h2>' + e(r.company) + '</h2><div class="meta">'
+      + [r.trade, r.location, r.website, measured].filter(Boolean).map(e).join(' &middot; ')
+      + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></div>'
+      + ((r.websiteScore || facts) ? '<div style="text-align:right;max-width:300px;flex-shrink:0">'
+        + (r.websiteScore ? '<div class="scoren">' + r.websiteScore.score + '<span>/10 site build</span></div>' : '')
+        + (facts ? '<div class="meta">' + e(facts) + '</div>' : '')
+        + (r.websiteScore && r.websiteScore.basedOn ? '<div class="meta">Graded on: ' + p(r.websiteScore.basedOn) + '</div>' : '')
+        + '</div>' : '')
+      + '</div></header>'
       + (r.corpusWarning ? '<div class="stop"><b>Read this first.</b> ' + p(r.corpusWarning) + '</div>' : '')
       + (r.ladderFailed && r.ladderFailed.why
           ? '<div class="stop"><b>Do not call from this sheet.</b> The measured checks failed on this lead'
@@ -2461,33 +2519,73 @@ const auditExportHtml = (records, meta) => {
             + ', so everything below was written with nothing under it. Re-run this lead before using any of it. Cause: '
             + e(String(r.ladderFailed.why)) + '</div>'
           : '')
-      + sec('What this business is', r.background ? '<p>' + p(r.background) + '</p>' : '')
-      + (t ? '<section class="one"><h3>The one thing' + (t.layer ? ' &mdash; ' + e(t.layer) : '') + '</h3>'
-          + (t.diagnosis ? '<p class="big">' + p(t.diagnosis) + '</p>' : '')
-          + (t.why ? '<p class="dim">' + p(t.why) + '</p>' : '')
-          + (t.firstBrokenLinkWhy ? '<h4>Fix this first' + (t.firstBrokenLink ? ' &mdash; ' + e(t.firstBrokenLink) : '') + '</h4><p>' + p(t.firstBrokenLinkWhy) + '</p>' : '')
-          + (t.friction.length ? '<h4>' + (t.earnedButBlocked ? 'Earned, and blocked &mdash; ' : '') + t.frictionCount + ' thing(s) between interested and booked</h4>' + ul(t.friction, x => '<li>' + p(x) + '</li>') : '')
-          + (Array.isArray(r.leaks) && r.leaks.length ? '<h4>The ' + (r.leaks.length === 1 ? 'biggest money leak' : r.leaks.length + ' biggest money leaks') + '</h4><ol>'
-            + r.leaks.map(lk => '<li>' + p(lk.problem) + (lk.moneyLine ? '<br><b>' + p(lk.moneyLine) + '</b>' : '') + '</li>').join('') + '</ol>'
-            : (t.costliest && t.costliest.problem ? '<h4>Costing them most</h4><p>' + p(t.costliest.problem) + (t.costliest.costs ? '. ' + p(t.costliest.costs) : '') + '</p>' : ''))
-          + '</section>' : '')
-      + sec('What is actually going on here',
-          (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
+      // ═══ 1 · THE CALL ═══ The owner line is the ONLY place a title may
+      // appear, and an absent title prints as absent: it used to default to
+      // the word "Owner", which is what put "Michelle Musacchio, Owner" on a
+      // sheet after the resolver had explicitly refused that title.
+      + '<section class="call"><div>'
+      + '<div class="cname">' + (r.owner
+          ? e(r.owner) + '<span> &middot; ' + (r.ownerTitle ? e(r.ownerTitle) : 'no title found') + (r.email ? ' &middot; ' + e(r.email) : '') + '</span>'
+          : (r.email ? e(r.email) + '<span> &middot; no confirmed owner</span>' : 'No confirmed contact'))
+      + '</div>'
+      + (r.heldBack && r.heldBack.name
+          ? '<div class="dim" style="margin-top:4px"><b>A name we do not stand behind: ' + e(r.heldBack.name)
+            + (r.heldBack.title ? ' (' + e(r.heldBack.title) + ')' : ', no title found')
+            + '.</b> ' + p(String(r.heldBack.why || 'it did not clear the buying-authority floor'))
+            + ' Use it to get past the front desk; do not open by calling them the owner.</div>'
+          : '')
+      + (r.callWindow ? '<div class="dim" style="margin-top:4px">' + p(r.callWindow) + '</div>' : '')
+      + (r.ageDays !== null && r.ageDays > 1
+          ? '<div class="dim" style="margin-top:4px"><b>Measured ' + r.ageDays + ' days ago.</b> Re-check the search position and the review count before saying either out loud — both move, and being wrong about one ends the call.</div>'
+          : '')
+      + '</div>'
+      + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
+      + '</section>'
+      // ═══ 2 · THE MONEY ═══ The ranking is the system's read, said so on its
+      // face — every finding stays visible in The evidence, the pick is Mike's.
+      + cat('The money', "the system's ranking — every finding is in The evidence; the pick is yours",
+          (Array.isArray(r.leaks) && r.leaks.length
+            ? r.leaks.map((lk, n) => '<div class="mrow"><div class="n">' + (n + 1) + '.</div><div><div>' + p(lk.problem) + '</div>'
+                + (lk.moneyLine ? '<div class="mline">' + p(lk.moneyLine) + '</div>' : '')
+                + (lk.costs ? '<div class="tw">' + p(lk.costs) + '</div>' : '') + '</div></div>').join('')
+            : (t && t.costliest && t.costliest.problem
+                ? '<div class="mrow"><div class="n">1.</div><div><div>' + p(t.costliest.problem) + '</div>'
+                  + (t.costliest.costs ? '<div class="tw">' + p(t.costliest.costs) + '</div>' : '')
+                  + '</div></div><p class="dim">No ranked money leaks on this lead — this is the finding scored as costing them most.</p>'
+                : '')))
+      // ═══ 3 · THE CONVERSATION ═══ Informs, never instructs.
+      + (convRows.length ? cat('The conversation', 'what we know about how it will go — the opening is your call',
+          '<div class="grid">' + convRows.map(x => '<div class="gl' + (x[2] ? ' ' + x[2] : '') + '">' + e(x[0]) + '</div><div>' + x[1] + '</div>').join('') + '</div>') : '')
+      // ═══ 4 · THE BUSINESS ═══ What this business is, what is actually going
+      // on, and the one-thing diagnosis — three overlapping sections merged
+      // into one read, each fact still appearing exactly once.
+      + cat('The business', '',
+          (r.background ? '<p>' + p(r.background) + '</p>' : '')
+          + (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
           + (r.read ? '<p>' + p(r.read) + '</p>' : '')
+          + (t ? ((t.diagnosis ? '<p><b>' + (t.layer ? e(t.layer) + ': ' : '') + '</b>' + p(t.diagnosis) + '</p>' : '')
+              + (t.why ? '<p class="dim">' + p(t.why) + '</p>' : '')
+              + (t.firstBrokenLinkWhy ? '<p><b>Fix this first' + (t.firstBrokenLink ? ' — ' + e(t.firstBrokenLink) : '') + '.</b> ' + p(t.firstBrokenLinkWhy) + '</p>' : '')
+              + (t.friction.length ? '<p class="dim">' + (t.earnedButBlocked ? 'Earned, and blocked — ' : '') + t.frictionCount + ' thing(s) between interested and booked: ' + t.friction.map(x => p(x)).join(' · ') + '</p>' : ''))
+            : '')
+          + ul(r.rows, x => '<li><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>')
           + (r.bindingLayer ? '<p class="dim">Binding layer: ' + e(r.bindingLayer) + '</p>' : '')
-          + ul(r.rows, x => '<li><b>' + e(x.label) + '</b> &mdash; ' + p(x.says) + '</li>'))
-      + sec('What we found in their own words',
-          ul(r.originalFindings, f => '<li>' + p(f.finding || f.what || f) + (f.quote ? '<br><q>' + p(f.quote) + '</q>' : '') + '</li>'))
-      + sec('What is broken, worst first',
-          r.problems.length ? '<table><tr><th>Area</th><th>Problem</th><th>What it costs</th></tr>'
-            + r.problems.map(x => '<tr><td>' + e(x.area) + '</td><td>' + p(x.problem) + (x.internalOnly ? ' <i>(internal \u2014 never say reviews to him)</i>' : '') + '</td><td>' + p(x.costs) + '</td></tr>').join('') + '</table>' : '')
-      + sec('Where their ad clicks might land',
-          (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to. A page built for an ad is not in the menu by design. Their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li>' + e(x) + '</li>') : '')
-          + (r.adsVerified ? '<p>Listed as a verified advertiser in Google\'s Ads Transparency Center.</p>' : ''))
-      + sec('What he clearly cares about', r.whatHeCaresAbout ? '<p>' + p(r.whatHeCaresAbout) + '</p>' : '')
-      + (r.niche ? sec('Their world',
-          '<p class="dim"><b>' + e(r.niche.label) + '</b> \u2014 the full segment brief (their vocabulary, the software to ask about, the questions worth asking) is printed ONCE at the end of this file. It is identical for every lead in this trade, and fifty copies of it buried the numbers Mike actually dials from.</p>') : '')
-      + ''; };
+          + (r.whatHeCaresAbout ? '<p><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
+      // ═══ 5 · THE EVIDENCE ═══ Every finding once, money-ordered (the server
+      // already sorts problemList by pillar), their own words as the sub-line.
+      // This is the section that killed the old triple repetition: the problems
+      // table, the own-words list and the friction bullets each said the same
+      // finding in three places.
+      + cat('The evidence', 'every finding, ordered by what it costs him — marked rows are ours to know',
+          ((r.changes || []).filter(c => c.sayable).map(c => '<div class="erow"><b>Changed since we last looked:</b> ' + p(c.say) + ' <span class="tw">(a dated fact — everything else on this sheet is how the business looks today)</span></div>').join(''))
+          + r.problems.map(x => {
+              const sub = [x.area ? e(x.area) : '', x.costs ? 'costs him: ' + p(x.costs) : ''].filter(Boolean).join(' · ');
+              return '<div class="erow"><b>' + p(x.problem) + '</b>'
+                + (x.internalOnly ? ' <span class="tw">(internal — never say reviews to him)</span>' : '')
+                + (sub ? '<div class="tw">' + sub + '</div>' : '') + '</div>';
+            }).join('')
+          + r.originalFindings.map(f => '<div class="erow">' + p(f.finding || f.what || f)
+              + (f.quote ? '<div class="tw">Their words: <q>' + p(f.quote) + '</q></div>' : '') + '</div>').join('')); };
   // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
   // On a 50-lead export the crew-trades brief printed fifty times — a page of
   // identical static text per lead, which is exactly the "info everywhere"
@@ -2512,117 +2610,62 @@ const auditExportHtml = (records, meta) => {
           + (n.ageDays !== null && n.ageDays > 540
               ? '<p class="dim">This brief was verified ' + e(n.verifiedAt) + ', over eighteen months ago. Re-check any figure before saying it out loud.</p>'
               : (n.verifiedAt ? '<p class="dim">Verified ' + e(n.verifiedAt) + '.</p>' : ''));
-  const oneTail = (r, i) => ''
-      + sec('What changed since we last looked',
-          (r.changes || []).length
-            ? '<ul>' + (r.changes || []).map(c => '<li>' + p(c.say) + (c.sayable ? '' : ' <span class="dim">(ours to know, not his to hear)</span>') + '</li>').join('') + '</ul>'
-              + '<p class="dim">These are the only facts on this sheet with a date attached. Everything else is how the business looks today.</p>'
-            : '')
-      + sec('Before you dial',
-          (r.heldBack && r.heldBack.name
-            ? '<p><b>We have a name and we do not stand behind it: ' + e(r.heldBack.name)
-              + (r.heldBack.title ? ' (' + e(r.heldBack.title) + ')' : ', no title found')
-              + '.</b> ' + p(String(r.heldBack.why || 'it did not clear the buying-authority floor'))
-              + ' Use it to get past the front desk if it helps, but do not open by calling them the owner: if they are not, the call ends there.</p>'
-            : '')
-          + ((r.websiteScore || r.auditFacts) ? '<p class="dim">'
-          + (r.websiteScore ? '<b>Their website: ' + r.websiteScore.score + '/10</b> (' + p(r.websiteScore.basedOn) + '). ' : '')
-          + (r.auditFacts ? [
-              'Ads: ' + (r.auditFacts.ads === 'yes' ? 'running' : r.auditFacts.ads === 'no' ? 'none found' : 'could not read'),
-              r.auditFacts.booking ? ('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[r.auditFacts.booking] || r.auditFacts.booking)) : '',
-              (typeof r.auditFacts.formFields === 'number') ? ('Form: ' + r.auditFacts.formFields + ' fields') : '',
-              (typeof r.auditFacts.campaignPages === 'number' && r.auditFacts.campaignPages > 0) ? ('Campaign pages: ' + r.auditFacts.campaignPages + ' unlinked') : '',
-              r.auditFacts.mobile ? ('Mobile: ' + (r.auditFacts.mobile === 'slow' ? 'slow for their real visitors' : 'fine')) : '',
-            ].filter(Boolean).join(' \u00b7 ') : '')
-          + '</p>' : '')
-          + ((r.opsBuckets || r.negUnanswered) ? '<p class="dim"><b>Review read (internal \u2014 never name reviews to him):</b> '
-          + [
-              (r.opsBuckets && r.opsBuckets[0]) ? ('complaints are mostly \u201c' + p(r.opsBuckets[0].label) + '\u201d' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
-              r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply') : '',
-            ].filter(Boolean).join(' \u00b7 ') + '</p>' : '')
-      + (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
-          + (r.expectObjection ? '<p><b>Expect to hear:</b> <q>' + p(r.expectObjection) + '</q> That is our own prospect model reading this as the owner. Have an answer ready.</p>' : '')
-          + (r.ageDays === null ? ''
-             : r.ageDays <= 1
-             ? '<p class="dim">Measured today. Everything above is current.</p>'
-             : '<p class="dim"><b>Measured ' + r.ageDays + ' days ago.</b> Re-check the search position and the review count before saying either out loud. Both move, and being wrong about one ends the call.</p>'))
-      + sec('What is actually worth selling them',
-          (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
-          + (r.askOnTheCall ? '<p class="ask"><b>Ask before pitching:</b> ' + p(r.askOnTheCall) + '</p>' : ''))
-      // ══ THE SIGNAL TABLE IS GONE FROM THE EXPORT, ON PURPOSE ══════════════
-      // It went in two steps. First the provenance column left — useful while
-      // debugging the machine, noise on a sheet somebody is holding during a
-      // cold call. Then the table itself, because what remained was a column of
-      // "Not checked" rows next to a handful of numbers that the prose sections
-      // above already say better: "176 reviews at 4.8, third of twenty" belongs
-      // in the read, not in a grid the caller has to interpret mid-dial.
-      //
-      // The signals are STILL COMPUTED and still on the audit screen, where
-      // reading a grid is what you are there to do. auditRecordFor keeps
-      // carrying them so nothing downstream loses a measurement — this is a
-      // rendering decision about one artefact, not a deletion.
-      // Never silent on an audited lead. sec() renders nothing for an empty
-      // body, so a dropped fact-check printed no heading — and no heading reads
-      // as "we checked and it is clean". Those are opposite facts.
-      // ══ WRITTEN FOR A DEVELOPER, PRINTED ON A SALES DOCUMENT ═════════════
-      // Real entries from the 2026-08-21 export: a paragraph beginning
-      // "This is a claim about backend behaviour (tap-to-call functionality)
-      // made without evidence. The site scan confirms 'tap-to-call (tel:) link
-      // ABSENT'..." — three sentences of engineering rationale for a man holding
-      // the page while a phone rings.
-      //
-      // The section is NOT deleted: it is the thing that stops Mike repeating a
-      // claim we cannot stand behind, and dropping it is how a false sentence
-      // gets said out loud. What changes is the register. The first sentence is
-      // the instruction; everything after it is why, and why belongs on the
-      // audit screen where somebody is debugging, not on a sheet somebody is
-      // dialling from. The full text is still on the screen and still in the
-      // stored lead — nothing is lost, it is just not in the caller's way.
-      + sec('Do not say', (() => {
-          const firstSentence = (x) => {
-            const t = String(typeof x === 'string' ? x : (x && x.what) || JSON.stringify(x)).trim();
-            // Keep any quoted example whole: the quote IS the instruction.
-            const q = t.indexOf('"');
-            const cut = t.search(/(?<=[a-z0-9)"'\u201d])\.\s+(?=[A-Z])/);
-            if (cut > 0 && (q < 0 || cut > q)) return t.slice(0, cut + 1);
-            return t.length > 300 ? t.slice(0, 300).replace(/\s+\S*$/, '') + '\u2026' : t;
-          };
-          // The same flag arrives twice — once as a critical fact-check entry
-          // and once inside claimRisks with a "fact-check:" prefix — and Fit
-          // Money's sheet printed the veterinary-headline warning twice in a
-          // row. Deduplicate on normalised text, keeping the critical copy,
-          // which lists first.
-          const _seen = [];
-          const _norm = (x) => String(typeof x === 'string' ? x : (x && x.what) || '').toLowerCase().replace(/^fact-check:\s*/, '').replace(/[^a-z0-9]+/g, '').slice(0, 160);
-          const items = r.criticalFactCheck.concat(r.claimRisks).filter(x => {
-            const n = _norm(x);
-            if (!n) return true;
-            if (_seen.some(k => k === n || k.startsWith(n) || n.startsWith(k))) return false;
-            _seen.push(n);
-            return true;
-          });
-          if (items.length) return ul(items, x => '<li>' + p(firstSentence(x)) + '</li>')
-            + '<p class="dim">Shortened for the call. The full reasoning for each is on the audit screen.</p>';
-          return r.status === 'not audited' ? '' : '<p class="dim">Nothing was flagged on this audit. This is a checked result, not a missing one.</p>';
-        })())
-      + sec('What we could not check', ul(r.readLimits, x => '<li>' + p(String(x)) + '</li>'))
-      + sec('The email as written', r.pitch ? '<p class="dim">Subject: ' + p(r.subject) + '</p><pre>' + p(r.pitch) + '</pre>' : '')
-      + sec('Full-page renders', ul(r.renders, s => '<li>' + e(s.label) + ': <a href="' + e(s.url) + '">' + e(s.url) + '</a></li>'))
-      + '</article>';
+  const oneTail = (r, i) => {
+    const t = r.oneThing;
+    // ═══ 6 · THE ANGLES ═══ What is worth selling beside the questions that
+    // open him up — the trade questions inline where the caller needs them;
+    // the full brief still prints once in the appendix.
+    const qs = (r.niche && Array.isArray(r.niche.askOnCall)) ? r.niche.askOnCall : [];
+    const angles = (r.whatHeNeeds || qs.length)
+      ? '<section><div class="cols"><div>'
+        + '<h4>What is worth selling</h4>'
+        + (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '<p class="dim">Nothing recommended on this lead yet.</p>')
+        + (t && t.product ? '<p class="dim">Product that fits: ' + e(t.product) + '</p>' : '')
+        + '</div>'
+        + (qs.length ? '<div><h4>Questions worth asking</h4><div class="qlist">' + qs.map(q => p(q)).join('<br>') + '</div></div>' : '')
+        + '</div></section>'
+      : '';
+    // ═══ 7 · THE EDGES ═══ What we could not check (a different thing from a
+    // claim we cannot stand behind) beside the internal review intelligence —
+    // reviews are how we read the business, never what gets said to the owner.
+    const internal = [
+      (r.opsBuckets && r.opsBuckets[0]) ? ('Complaints are mostly “' + p(r.opsBuckets[0].label) + '”' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
+      r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply — the cheapest fix a call can open with') : '',
+    ].concat((r.changes || []).filter(c => !c.sayable).map(c => p(c.say))).filter(Boolean);
+    const couldNot = ''
+      + ul(r.readLimits, x => '<li>' + p(String(x)) + '</li>')
+      // Positive-only advertising evidence, and the pages the site links
+      // nowhere. Both bounded: the negative form of either is barred, so
+      // neither is ever phrased as an absence in anything that leaves here.
+      + (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to — a page built for an ad is not in the menu by design; their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li class="dim">' + e(x) + '</li>') : '')
+      + (r.adsVerified ? '<p class="dim">Listed as a verified advertiser in Google’s Ads Transparency Center.</p>' : '');
+    const edges = (couldNot || internal.length)
+      ? '<section><div class="cols"><div><h4>What we could not check</h4>' + (couldNot || '<p class="dim">Nothing noted.</p>') + '</div>'
+        + (internal.length ? '<div><h4>Internal — never say to him</h4>' + internal.map(x => '<p class="dim">' + x + '</p>').join('') + '</div>' : '')
+        + '</div></section>'
+      : '';
+    // Footer: the pages actually rendered (as links — an <img> would break the
+    // self-contained rule) and the per-lead pointer at the appendix brief.
+    const foot = (r.renders.length || r.niche)
+      ? '<div class="foot"><div>' + (r.renders.length ? 'Pages rendered: ' + r.renders.map(sh => '<a href="' + e(sh.url) + '">' + e(sh.label) + '</a>').join(' · ') : '') + '</div>'
+        + (r.niche ? '<div style="text-align:right"><b>' + e(r.niche.label) + '</b> — the full segment brief (their vocabulary, the software to ask about, the questions worth asking) is printed ONCE at the end of this file.</div>' : '')
+        + '</div>'
+      : '';
+    return angles + edges + foot + '</article>'; };
   return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
-    + ':root{color-scheme:light}body{margin:0;padding:28px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#16181d;background:#fff;max-width:920px;margin:0 auto}'
-    + 'h1{font-size:22px;margin:0 0 4px}h2{font-size:20px;margin:0 0 4px}h3{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#6b7280;margin:20px 0 6px;padding-bottom:5px;border-bottom:1px solid #e5e7eb}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#374151}p{margin:0 0 8px}.big{font-size:17px;font-weight:600}.dim{color:#6b7280;font-size:13px}'
-    + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:6px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
-    + 'article{padding:26px 0;border-top:3px solid #16181d}article:first-of-type{border-top:none}header .meta{color:#6b7280;font-size:13px;margin-bottom:6px}'
-    + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#eef2ff;color:#4338ca}'
-    + '.one{background:#f5f6ff;border-left:3px solid #6366f1;padding:2px 16px 12px;border-radius:6px}.one h3{border-bottom:none;color:#4338ca}'
+    + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
+    + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}'
+    + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
+    + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#86868b;font-size:13px;margin-bottom:6px}'
+    + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#515154}'
+    + ''
     + 'table{border-collapse:collapse;width:100%;font-size:13px}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;border-bottom:1px solid #e5e7eb;padding:6px 8px 6px 0}'
-    + 'td{border-bottom:1px solid #f0f1f3;padding:7px 8px 7px 0;vertical-align:top}.sig td:first-child{width:170px;color:#374151}.good{color:#15803d}.bad{color:#b91c1c}'
-    + 'ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}q{color:#374151;font-style:italic}pre{white-space:pre-wrap;font:13px/1.6 inherit;background:#f7f8fa;padding:12px;border-radius:6px}'
-    + '.ask{background:#fffbeb;padding:8px 10px;border-radius:5px}nav{font-size:13px;margin-bottom:20px;columns:2}nav a{color:#4338ca;text-decoration:none}'
+    + 'td{border-bottom:1px solid #f0f1f3;padding:7px 8px 7px 0;vertical-align:top}.sig td:first-child{width:170px;color:#515154}.good{color:#1d1d1f}.bad{color:#b91c1c}'
+    + 'ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}q{color:#515154;font-style:italic}pre{white-space:pre-wrap;font:13px/1.55 inherit;background:#f5f5f7;padding:12px;border-radius:10px;margin:6px 0 0}'
+    + '.ask{color:#515154;font-size:13px}nav{font-size:13px;margin-bottom:20px;columns:2}nav a{color:#1d1d1f;text-decoration:none}'
     + '@media print{body{padding:0;max-width:none}article{break-after:page;border-top:none}nav{display:none}}'
     + '</style></head><body>'
     + '<h1>' + e(m.title || 'CROJungle audits') + '</h1>'
@@ -5944,6 +5987,41 @@ function LeadBriefing({ lead }) {
 
   return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
 
+    // ── NOT SENDABLE AS WRITTEN ─────────────────────────────────────────────
+    // Separated from the general "do not say" list below, because the two are
+    // different kinds of thing and burying one in the other is how Wade shipped.
+    // Its fact-check said, twice, "'380 five-star reviews' — evidence shows 156.
+    // This must be corrected immediately before any send" — and that sentence sat
+    // in a list of six notes next to an Approve button.
+    //
+    // A behavioural reframe the checker disliked is a note. A number the prospect
+    // can disprove by opening his own Google profile is a different category, and
+    // it belongs above everything else in red.
+    // ── THE MEASUREMENTS ARE GONE ON THIS LEAD ─────────────────────────────
+    // Above the send-blocker because it is wider than one claim: it says the
+    // whole page below is unverified narrative. A crash and a genuinely clean
+    // business produced the identical screen until this existed.
+    (ba._ladderFailed && ba._ladderFailed.why) ? React.createElement('div', {
+      style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
+    },
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
+        'Do not call from this audit \u2014 the measurements failed'),
+      React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55 } },
+        'All ' + (ba._ladderFailed.rungs || 'the') + ' measured checks were lost on this lead, so everything below was written with nothing under it. Re-run Research before using any of it. Cause: ' + String(ba._ladderFailed.why))
+    ) : null,
+
+    (ba._criticalFactCheck && ba._criticalFactCheck.length) ? React.createElement('div', {
+      style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
+    },
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
+        'Not sendable as written \u2014 ' + ba._criticalFactCheck.length + ' claim' + (ba._criticalFactCheck.length > 1 ? 's' : '') + ' the prospect can disprove'),
+      React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
+        ba._criticalFactCheck.slice(0, 5).map((x, i) => React.createElement('li', {
+          key: i, style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 4 }
+        }, String(x)))
+      )
+    ) : null,
+
     // ── CONTACT ─────────────────────────────────────────────────────────────
     React.createElement('div', {
       // Four across on a wide screen, wrapping gracefully below. The rule beneath
@@ -5962,15 +6040,6 @@ function LeadBriefing({ lead }) {
       L('Website', (lead.website || '').replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, ''), null, 'var(--g)')
     ),
 
-    // ── WHAT THIS BUSINESS IS ───────────────────────────────────────────────
-    // The example opened with a plain description before any diagnosis, and the
-    // app had nothing equivalent — it went straight from contact details to a
-    // verdict, so a reader who had never heard of the business met a conclusion
-    // about a company they could not picture.
-    sr && sr.background ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'What this business is'),
-      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
-    ) : null,
 
     // ── SCORE, FACTS, AND THE TOP THREE MONEY LEAKS ─────────────────────────
     // Vin, reading the TriStar sheet: "theres info everywhere... i dont cealry
@@ -6044,15 +6113,16 @@ function LeadBriefing({ lead }) {
         facts.length ? React.createElement('div', null, facts) : null,
         leaks.length ? React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8 } },
-            'The ' + (leaks.length === 1 ? 'biggest money leak' : leaks.length + ' biggest money leaks')),
+            'The money \u2014 ' + (leaks.length === 1 ? 'the biggest leak' : 'the ' + leaks.length + ' biggest leaks'),
+            React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'the system\u2019s ranking \u2014 every finding is below; the pick is yours')),
           leaks.map((r, i) => React.createElement('div', { key: 'lk' + i, style: { display: 'flex', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--b)' : 'none', alignItems: 'baseline' } },
-            React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: '#6366f1', minWidth: 18 } }, (i + 1) + '.'),
+            React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--t)', minWidth: 18 } }, (i + 1) + '.'),
             React.createElement('div', null,
               React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.5 } }, r.problem),
               // The translation: the finding said as the money it loses. Code-
               // assembled server-side; its only figure is the trade table's own
               // job-value sentence, so nothing here can be invented.
-              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, color: '#fbbf24', lineHeight: 1.55, marginTop: 4 } }, r.moneyLine) : null,
+              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.55, marginTop: 4 } }, r.moneyLine) : null,
               React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 3 } },
                 (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
                 (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
@@ -6061,6 +6131,83 @@ function LeadBriefing({ lead }) {
         ) : null
       );
     })(),
+
+    // ── THE CONVERSATION ────────────────────────────────────────────────────
+    // Mirrors the export sheet, and per Vin 2026-08-24 it INFORMS rather than
+    // instructs — "i still dont trust the brain or the audits to always pick
+    // the perfect thing". No scripted opener: what the email already led with
+    // (a fact — it was sent), the pushback our prospect model predicts (one
+    // reading, not a rule), the diagnostic worth asking, and Do-not-say.
+    (() => {
+      const sim = (lead.generatedResult && lead.generatedResult.prospectSim) || lead.prospectSim || null;
+      const said = String((sim && (sim.reason || sim.why || sim.reaction)) || '').trim();
+      const obj = said.length >= 25 ? said.slice(0, 300) : '';
+      const rows = [];
+      const gl = (txt, red) => React.createElement('div', { key: 'l' + rows.length, style: { color: red ? 'var(--r)' : 'var(--m)', fontSize: 12, paddingTop: 1, fontWeight: red ? 600 : 400 } }, txt);
+      const gv = (children) => React.createElement('div', { key: 'v' + rows.length, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55, minWidth: 0 } }, children);
+      if (lead.pitch) rows.push(gl('The email led with'), gv([
+        lead.subject ? React.createElement('div', { key: 's', style: { color: 'var(--m2)', fontSize: 12, marginBottom: 3 } }, 'Subject: ' + lead.subject) : null,
+        React.createElement('div', { key: 'p', style: { whiteSpace: 'pre-wrap', color: 'var(--m2)' } }, String(lead.pitch).slice(0, 400) + (String(lead.pitch).length > 400 ? '\u2026' : '')),
+        React.createElement('div', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5, marginTop: 3 } }, 'Already in front of him \u2014 the call does not have to open the same way.'),
+      ]));
+      if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
+        React.createElement('span', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
+      if (sr && sr.askOnTheCall) rows.push(gl('Worth asking'), gv(sr.askOnTheCall));
+      // Every flagged claim, where anyone briefed from this screen can see it.
+      // Without this a teammate reads a confident summary and repeats an
+      // unverifiable claim on a call, because nothing told them not to.
+      if (risks.length) rows.push(gl('Do not say', true), gv(React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
+        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 4, lineHeight: 1.5, fontSize: 12.5 } }, String(x))))));
+      if (!rows.length) return null;
+      return React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
+          'The conversation',
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8, color: 'var(--m)' } }, 'what we know about how it will go \u2014 the opening is your call')),
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '118px 1fr', gap: '10px 16px' } }, rows)
+      );
+    })(),
+
+    // ── WHAT THIS BUSINESS IS ───────────────────────────────────────────────
+    // The example opened with a plain description before any diagnosis, and the
+    // app had nothing equivalent — it went straight from contact details to a
+    // verdict, so a reader who had never heard of the business met a conclusion
+    // about a company they could not picture.
+    sr && sr.background ? React.createElement('div', null,
+      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'What this business is'),
+      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
+    ) : null,
+
+
+    // ── THE VERDICT ─────────────────────────────────────────────────────────
+    counted.length >= 4 && React.createElement('div', {
+      style: { padding: '12px 15px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8 }
+    },
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 5 } }, 'What is actually going on here'),
+      // The headline is the shape named in one sentence — the thing that made
+      // the hand-written example land before any evidence arrived.
+      sr && sr.headline ? React.createElement('div', {
+        style: { fontSize: 17, fontWeight: 600, color: 'var(--t)', lineHeight: 1.4, marginBottom: 8 }
+      }, sr.headline) : null,
+      // ── SYNTHESIS FIRST, TEMPLATE SECOND ────────────────────────────────
+      // growthConstraint.condition is a HARDCODED SENTENCE — every OFFER lead
+      // got "They have already earned the hard part — N reviews at X★. What is
+      // missing is any reason for a stranger to choose them…" with only the
+      // review count swapped in. That is a template, not a read, and it is why
+      // the deployed tab looked nothing like the briefing it was modelled on.
+      // situationRead is the Brain reasoning across every signal at once; the
+      // template stays only as a fallback for leads audited before it existed.
+      React.createElement('div', { style: { fontSize: 14, color: 'var(--t)', lineHeight: 1.65, whiteSpace: 'pre-line' } },
+        (sr && sr.read) || ba.situationRead
+          || (gc && gc.checked !== false && gc.condition ? String(gc.condition).replace(/\s*\u26a0[^]*$/, '') : null)
+          || ba.realPain || lead.discoveryReason || 'Not enough measured yet to say what is holding this business back.'),
+      (!(sr && sr.read) && !ba.situationRead && gc && gc.why) ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } },
+        String(gc.why).replace(/\s*\u26a0[^]*$/, '')) : null,
+      React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 7 } },
+        problems.length === 0
+          ? 'We measured ' + counted.length + ' things and found no problems.'
+          : (counted.length - problems.length) + ' of ' + counted.length + ' measured signals are clean.'
+            + (gc && gc.layer ? '  The binding layer is ' + gc.layer + '.' : ''))
+    ),
 
     // ── THE ONE THING ───────────────────────────────────────────────────────
     // The system computed three independent diagnoses on every lead and rendered
@@ -6088,7 +6235,7 @@ function LeadBriefing({ lead }) {
       if (!t.diagnosis && !t.firstBrokenLinkWhy && !fr.length && !(t.costliest && t.costliest.problem)) return null;
       const H = (txt) => React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 5 } }, txt);
       return React.createElement('div', {
-        style: { padding: '14px 16px', background: 'rgba(99,102,241,.07)', borderLeft: '3px solid #6366f1', borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 12 }
+        style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
       },
         React.createElement('div', null,
           H(t.layer ? 'The one thing \u2014 ' + t.layer : 'The one thing'),
@@ -6124,37 +6271,6 @@ function LeadBriefing({ lead }) {
         null
       );
     })(),
-
-    // ── THE VERDICT ─────────────────────────────────────────────────────────
-    counted.length >= 4 && React.createElement('div', {
-      style: { padding: '12px 15px', background: 'rgba(34,197,94,.07)', borderLeft: '3px solid var(--g)', borderRadius: 6 }
-    },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 5 } }, 'What is actually going on here'),
-      // The headline is the shape named in one sentence — the thing that made
-      // the hand-written example land before any evidence arrived.
-      sr && sr.headline ? React.createElement('div', {
-        style: { fontSize: 17, fontWeight: 600, color: 'var(--g)', lineHeight: 1.4, marginBottom: 8 }
-      }, sr.headline) : null,
-      // ── SYNTHESIS FIRST, TEMPLATE SECOND ────────────────────────────────
-      // growthConstraint.condition is a HARDCODED SENTENCE — every OFFER lead
-      // got "They have already earned the hard part — N reviews at X★. What is
-      // missing is any reason for a stranger to choose them…" with only the
-      // review count swapped in. That is a template, not a read, and it is why
-      // the deployed tab looked nothing like the briefing it was modelled on.
-      // situationRead is the Brain reasoning across every signal at once; the
-      // template stays only as a fallback for leads audited before it existed.
-      React.createElement('div', { style: { fontSize: 14, color: 'var(--t)', lineHeight: 1.65, whiteSpace: 'pre-line' } },
-        (sr && sr.read) || ba.situationRead
-          || (gc && gc.checked !== false && gc.condition ? String(gc.condition).replace(/\s*\u26a0[^]*$/, '') : null)
-          || ba.realPain || lead.discoveryReason || 'Not enough measured yet to say what is holding this business back.'),
-      (!(sr && sr.read) && !ba.situationRead && gc && gc.why) ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } },
-        String(gc.why).replace(/\s*\u26a0[^]*$/, '')) : null,
-      React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 7 } },
-        problems.length === 0
-          ? 'We measured ' + counted.length + ' things and found no problems.'
-          : (counted.length - problems.length) + ' of ' + counted.length + ' measured signals are clean.'
-            + (gc && gc.layer ? '  The binding layer is ' + gc.layer + '.' : ''))
-    ),
 
     // ── SIGNAL BY SIGNAL ────────────────────────────────────────────────────
     // ── THE SYNTHESISED TABLE ───────────────────────────────────────────────
@@ -6304,7 +6420,7 @@ function LeadBriefing({ lead }) {
     // Missing entirely from the first build. It is the section that turns a
     // briefing into a decision — and the "ask before pitching" line is what stops
     // a caller pitching growth to a business that is already at capacity.
-    sr && (sr.whatHeNeeds || sr.askOnTheCall) ? React.createElement('div', null,
+    sr && sr.whatHeNeeds ? React.createElement('div', null,
       React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What is actually worth selling them'),
       sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
       // The catalogue names, derived from the top money leaks' pillars — so the
@@ -6320,58 +6436,11 @@ function LeadBriefing({ lead }) {
         return prods.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginTop: 7 } },
           'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
       })(),
-      sr.askOnTheCall ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginTop: 7 } }, sr.askOnTheCall) : null
+      // askOnTheCall renders in The conversation above \u2014 one home each.
+      null
     ) : null,
 
-    // ── NOT SENDABLE AS WRITTEN ─────────────────────────────────────────────
-    // Separated from the general "do not say" list below, because the two are
-    // different kinds of thing and burying one in the other is how Wade shipped.
-    // Its fact-check said, twice, "'380 five-star reviews' — evidence shows 156.
-    // This must be corrected immediately before any send" — and that sentence sat
-    // in a list of six notes next to an Approve button.
-    //
-    // A behavioural reframe the checker disliked is a note. A number the prospect
-    // can disprove by opening his own Google profile is a different category, and
-    // it belongs above everything else in red.
-    // ── THE MEASUREMENTS ARE GONE ON THIS LEAD ─────────────────────────────
-    // Above the send-blocker because it is wider than one claim: it says the
-    // whole page below is unverified narrative. A crash and a genuinely clean
-    // business produced the identical screen until this existed.
-    (ba._ladderFailed && ba._ladderFailed.why) ? React.createElement('div', {
-      style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
-    },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
-        'Do not call from this audit \u2014 the measurements failed'),
-      React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55 } },
-        'All ' + (ba._ladderFailed.rungs || 'the') + ' measured checks were lost on this lead, so everything below was written with nothing under it. Re-run Research before using any of it. Cause: ' + String(ba._ladderFailed.why))
-    ) : null,
 
-    (ba._criticalFactCheck && ba._criticalFactCheck.length) ? React.createElement('div', {
-      style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
-    },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
-        'Not sendable as written \u2014 ' + ba._criticalFactCheck.length + ' claim' + (ba._criticalFactCheck.length > 1 ? 's' : '') + ' the prospect can disprove'),
-      React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
-        ba._criticalFactCheck.slice(0, 5).map((x, i) => React.createElement('li', {
-          key: i, style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 4 }
-        }, String(x)))
-      )
-    ) : null,
-
-    // ── DO NOT SAY ──────────────────────────────────────────────────────────
-    // Every flagged claim, on the page, where anyone briefed from this can see
-    // it. Without this a teammate reads a confident summary and repeats an
-    // unverifiable claim on a call, because nothing told them not to.
-    risks.length > 0 && React.createElement('div', {
-      style: { padding: '11px 14px', background: 'rgba(239,68,68,.07)', border: '1px solid rgba(239,68,68,.35)', borderRadius: 6 }
-    },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say \u2014 we did not measure this'),
-      React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
-        risks.slice(0, 8).map((x, i) => React.createElement('li', {
-          key: i, style: { fontSize: 12, color: 'var(--t)', lineHeight: 1.5, marginBottom: 4 }
-        }, String(x)))
-      )
-    )
   );
 }
 
