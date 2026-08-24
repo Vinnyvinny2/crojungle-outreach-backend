@@ -563,6 +563,21 @@ const mergeStat = runMergeCheck();
       try { page = mod.html([mod.rec(LEAD)], { title: 'T', at: 'now' }); }
       catch (e) { fails.push('the audit export threw on a normal lead: ' + e.message); }
 
+      // ══ THE SEGMENT BRIEF RENDERS ONCE PER TRADE, NOT ONCE PER LEAD ══════
+      // A 50-lead export printed the identical crew-trades brief fifty times —
+      // a full page of static text per lead burying the numbers Mike dials
+      // from. Two leads sharing one brief must produce ONE copy of its body
+      // and a pointer in each article.
+      try {
+        const briefLead = { ...LEAD, nicheBrief: { label: 'MARKER_BRIEF', unit: 'MARKER_UNIT', buyer: 'the owner',
+          vocabulary: [{ term: 'a square', means: 'one hundred square feet' }], software: [], sourced: [], askOnCall: ['who picks up?'], verifiedAt: '2026-08-21' } };
+        const two = mod.html([mod.rec(briefLead), mod.rec({ ...briefLead, name: 'Second Co' })], { title: 'T', at: 'now' });
+        const bodies = (two.match(/MARKER_UNIT/g) || []).length;
+        if (bodies !== 1) fails.push('two leads sharing one segment brief rendered its body ' + bodies + ' time(s), not once — the export re-buries the numbers under repeated static text');
+        const pointers = (two.match(/printed ONCE at the end/g) || []).length;
+        if (pointers !== 2) fails.push('the per-lead brief pointer rendered ' + pointers + ' time(s) for two leads — a lead whose article does not name its brief loses the appendix');
+      } catch (e) { fails.push('the brief-appendix export threw: ' + e.message); }
+
       // ══ A BLIND AUDIT MUST NOT PRINT AS A NORMAL ONE ═══════════════════════
       // Stanley Schultze, live 2026-08-21: BOTH homepage requests came back 402
       // (Firecrawl out of credits), we opened not one page of his site, and his
