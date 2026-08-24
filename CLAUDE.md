@@ -137,7 +137,7 @@ simulator then reads it as the owner and returns reply / ignore / delete.
   own sentences. The five sentences retired for being unreadable are kept in
   `READABLE FINDING CHECK` as negative fixtures, so the wording cannot come back
 - `verifyBrainEmail` — 26 fabrication families, the last gate before sending
-- 223 boot checks at the bottom, each documenting the live failure that caused it
+- 225 boot checks at the bottom, each documenting the live failure that caused it
 
 ## Key components in index.html
 
@@ -4839,6 +4839,97 @@ Netlify deploy.
 
 ---
 
+## 57. The money map grew four signals, and the bill came down — 2026-08-24
+
+Vin: *"quote to close is huge... #4 is a big one... lets mitgate the cost per 1k
+leads as much as phsycially possible... we need this to be 244 or cheaper."*
+Three cost moves, four new signals, and one ranking rule he signed off on.
+
+### The bill, recomputed again
+
+| move | per 1k leads |
+|---|---|
+| §53–54 baseline | ~$305 |
+| duplicate-listing search moved off Places onto DFS pack rows we already buy | **−$30** |
+| Firecrawl annual billing (Vin action, no code) | −$15 |
+| traffic estimate added (DFS Labs, ~1¢/lead) | +$15 |
+| **after this round** | **~$275** |
+| `APIFY_ACTOR` flipped to a cheaper Google-reviews actor (Vin action, unproven) | −~$22 → **~$253** |
+
+The remaining distance to $244 is inside the Anthropic line, and the meter that
+§54 labeled is how it gets found: run one live lead, read `💰 ANTHROPIC TOTAL`
+sorted by cost, and cut the named call that earns it least. Guessing ahead of
+that read is the disease this file records.
+
+**The duplicate-listing read no longer buys a Places search.** The DFS maps
+endpoint returns the same candidate rows at ~$2 per thousand against $35, and
+the matcher's proof standard is unchanged — same domain or phone AND same
+street address. Places remains the fallback so a lead without DFS credentials
+measures exactly as before.
+
+**The traffic estimate is INTERNAL and says so on its own row.** DFS Labs'
+domain overview is a MODEL of organic visits, not a measurement — he has
+Analytics, we have an estimate, and being confidently wrong about his own
+visits is the §52 class. It lands on the audit screen and the call sheet
+labelled "third-party estimate — internal only", reaches no email, licenses no
+figure, and a domain the index has never seen reports as a fact about the
+INDEX, never as "no traffic".
+
+### The four signals
+
+- **`no_financing` (ROTTING, harm 74)** — the quote-to-close signal that needs
+  no review. In a trade where the job routinely costs more than people pay at
+  once (the declared `BIG_TICKET_TRADE_RE` list, kept NARROW on purpose), a
+  pay-over-time option is standard, and its absence is measurable from pages we
+  already hold. Presence anywhere kills it; the absence claim requires 2,000
+  characters of markup or 3,000 of text actually read — the same look-first
+  rule every absence in this file carries. A locksmith with no payment plan is
+  a normal business, and the check asserts that direction too.
+- **`no_retargeting` (BURNING, harm 72)** — Vin's "#4". Deliberately NARROW:
+  Google's own tag can re-reach past visitors, so "you cannot retarget" would
+  be false on any site with a Google tag. What is measured and true is the
+  Facebook half: Google ads tag present, Meta pixel absent, markup readable,
+  and no GTM container — a container can hold a pixel we cannot see, the exact
+  rule `social_spend_no_search` already carries.
+- **Ops buckets** — the review complaints split into the four kinds an operator
+  sells to (nobody responds / quotes take too long / scheduling breaks down /
+  work has to be redone), counted from the miner's own "N of M reviews"
+  arithmetic, most-mentioned first BECAUSE the call-sheet chip reads row zero.
+  INTERNAL, like every review-derived thing.
+- **Unanswered negatives** — counted over the mined set, on the call sheet as
+  the cheapest fix a call can open with. INTERNAL.
+
+**`intent_mismatch` was deferred, not built.** Measuring whether the pages
+match what customers actually search needs per-service DFS organic queries —
+about a penny more per lead — and the head-term-only read we hold today cannot
+support the claim. Building it on today's data would be the §30 failure again:
+measuring him on a search he does not sell on.
+
+### The check caught a dead rung before it ever ran
+
+`MONEY SIGNAL CHECK` executes every predicate both ways, and its first boot
+found `BIG_TICKET_TRADE_RE` matching NOTHING: the leading `\b` had been
+corrupted to a literal backspace byte (0x08) by the editing pipeline — the
+recorded §15 trap in a new costume, invisible in every terminal print of the
+regex. `no_financing` was dead on arrival and nothing would ever have said so.
+The same byte sat in `FINANCING_RE`'s affirm/klarna entries. A sweep found all
+five bytes; zero remain, in either file.
+
+**Two first-version fixtures measured nothing, and only falsification found
+them.** The bucket-order fixture put the most-mentioned bucket FIRST in
+declaration order too, so removing the sort left it green — rewritten so the
+5-mention bucket is declared LATER than the 1-mention one. And the
+called-back fixture said "never called", which the old regex also matched, so
+reverting the widening left it green — the fixture is now "no one ever called
+back", the exact phrasing the first fixture missed on. Seven falsifications,
+each red alone.
+
+**225 boot checks green.** `index.html` changed (the merge, the persistence,
+and the review-intelligence chips on the summary card), so this needs a
+Netlify deploy.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.
@@ -4898,7 +4989,7 @@ node pngscale.js --selftest             # 21 assertions on the screenshot scaler
 #   server.js ever executed fitWithin either — the only guard was a source regex
 #   asserting the CALL SITE exists, which passed on the run that lost every
 #   image on a lead. SCREENSHOT SCALER CHECK now runs the real function at boot.
-PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 223 boot checks
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 225 boot checks
 #   The heap cap is not optional. Render's ceiling is near 256MB and on
 #   2026-08-18 a build that booted fine here crash-looped there — 47 boot
 #   checks had each grown a private readFileSync of this 2.9MB file. Every
@@ -4972,7 +5063,7 @@ on. Reject first, then abort. The test caught it; review would not have.
 ## What NOT to do
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 223 boot checks and the comments above
+and caused none of this week's failures. The 225 boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
@@ -5117,6 +5208,7 @@ nothing and touches no lead Vin is calling.
 | `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` | unset | the REAL Google local pack. Without both, no lead gets a search position at all — see §52. About $0.60-2.40 per 1,000 against Places at $35 per 1,000 |
 | `APIFY_MAX_REVIEWS` | 90 | reviews bought per lead. Apify bills per review, so this IS the Apify line |
 | `REVIEW_CORPUS_CHARS` | 30000 | how many of them the pain miner actually reads. Raise the pull without raising this and you are paying for reviews no model sees — see §54 |
+| `APIFY_ACTOR` | unset | override the Google-reviews actor (owner~name form, validated). The default actor is proven; a cheaper one (~half the per-review rate, −~$22 per 1k leads) is a flip Vin makes deliberately, and the log names which one ran — see §57 |
 | `PAGESPEED_KEY` | unset | FREE from Google Cloud (enable the PageSpeed Insights API on the same project as `GOOGLE_PLACES_KEY`). Without it `slow_mobile` cannot fire on any lead, and it is the only rung measured from the prospect's own visitors. There is deliberately no Settings field — see §54 |
 
 **Set the budgets to the PLAN, not the default.** The defaults (1500 Firecrawl
