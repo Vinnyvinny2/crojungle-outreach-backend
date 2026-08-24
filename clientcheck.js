@@ -606,6 +606,25 @@ const mergeStat = runMergeCheck();
         const thin = mod.rec({ ...LEAD, corpusRead: { homepageChars: 9000, interiorPages: 0 }, firecrawlOutOfCredits: false });
         if (!thin.corpusWarning) fails.push('a homepage-only audit is presented as a full read of their site');
       }
+      // ══ THE FUNNEL WALK IS THE STORY'S SPINE ══════════════════════════════
+      // Server-assembled from measurements, attached beside theOneThing, and —
+      // because a code block bypasses the strippers — its render is the only
+      // place a dropped wire would show. Executed: a lead carrying a walk must
+      // render every part of it, and the one-thing's copy of the same
+      // bottleneck must NOT render beside the walk's own fix-first (nothing
+      // said twice, the V2 rule).
+      try {
+        const fsLead = { ...LEAD, funnelStory: { checked: true,
+          stages: [{ id: 'money_out', label: 'Money out', text: 'MARKER_FSTAGE' }],
+          fixFirst: { link: 'FOUNDATION', plain: 'MARKER_FIXPLAIN', why: 'MARKER_FIXWHY', join: 'MARKER_FIXJOIN' } } };
+        const fsPage = mod.html([mod.rec(fsLead)], { title: 'T', at: 'now' });
+        for (const mk of ['MARKER_FSTAGE', 'MARKER_FIXPLAIN', 'MARKER_FIXWHY', 'MARKER_FIXJOIN']) {
+          if (fsPage.indexOf(mk) < 0) fails.push('the funnel walk drops ' + mk + ' — the code-assembled spine is computed on the server and never reaches the sheet');
+        }
+        if (fsPage.indexOf('MARKER_FIRSTBROKEN') >= 0) {
+          fails.push("the one-thing fix-first still renders beside the walk's own fix-first — the same bottleneck said twice");
+        }
+      } catch (e) { fails.push('the funnel-walk export threw: ' + e.message); }
       if (page) {
         const MARKERS = ['MARKER_OWNER', 'MARKER_TITLE', 'MARKER_PHONE', 'MARKER_BACKGROUND',
           'MARKER_HEADLINE', 'MARKER_READ', 'MARKER_ROWLABEL', 'MARKER_ROWSAYS', 'MARKER_LAYER',

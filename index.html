@@ -233,6 +233,7 @@ const persistedFieldsFrom = (l) => ({
       // binding layer, the first broken link and the buying-path friction, all
       // three of which were measured on every lead and rendered nowhere.
       theOneThing: l.theOneThing ?? null,
+      funnelStory: l.funnelStory ?? null,
       // The /10 and the facts strip. Code-assembled server-side from the same
       // verified inputs the ladder scores on; without persistence they vanish
       // on the first reload, which is the recorded fate of the strategic read.
@@ -865,6 +866,7 @@ const rowToLead = (r) => ({
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
   theOneThing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.theOneThing) || null,
+  funnelStory: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.funnelStory) || null,
   websiteScore: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.websiteScore) || null,
   auditFacts: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditFacts) || null,
   trafficEstimate: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.trafficEstimate) || null,
@@ -1487,6 +1489,7 @@ const applyResearchResult = (prev, data, ctx) => {
         L.leadMagnet = data.leadMagnet ?? L.leadMagnet ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
+        L.funnelStory = data.funnelStory ?? L.funnelStory ?? null;
         L.websiteScore = data.websiteScore ?? L.websiteScore ?? null;
         L.auditFacts = data.auditFacts ?? L.auditFacts ?? null;
         L.trafficEstimate = data.trafficEstimate ?? L.trafficEstimate ?? null;
@@ -1585,6 +1588,7 @@ const applyResearchResult = (prev, data, ctx) => {
         L.outreachChannel = data.outreachChannel ?? L.outreachChannel ?? null;
         L.valueEquation = data.valueEquation ?? L.valueEquation ?? null;
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
+        L.funnelStory = data.funnelStory ?? L.funnelStory ?? null;
         L.websiteScore = data.websiteScore ?? L.websiteScore ?? null;
         L.auditFacts = data.auditFacts ?? L.auditFacts ?? null;
         L.trafficEstimate = data.trafficEstimate ?? L.trafficEstimate ?? null;
@@ -2439,6 +2443,7 @@ const auditRecordFor = (lead) => {
     // WHAT IT IS
     websiteScore: (l.websiteScore && l.websiteScore.checked) ? l.websiteScore : null,
     auditFacts: (l.auditFacts && typeof l.auditFacts === 'object') ? l.auditFacts : null,
+    funnelStory: (l.funnelStory && l.funnelStory.checked === true) ? l.funnelStory : null,
     // Review intelligence for the sheet. INTERNAL by the standing rule: reviews
     // are how we read the business, never what gets said to the owner.
     opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
@@ -2595,6 +2600,10 @@ const auditExportHtml = (records, meta) => {
       (typeof af.formFields === 'number') ? ('Form ' + af.formFields + ' fields') : '',
       (typeof af.campaignPages === 'number' && af.campaignPages > 0) ? (af.campaignPages + ' pages only reachable by ad link') : '',
       af.mobile ? ('Mobile ' + (af.mobile === 'slow' ? 'slow for real visitors' : 'fine')) : '',
+      af.roiStatus === 'blind' ? 'Nothing ties ad clicks to jobs'
+        : af.roiStatus === 'hidden' ? 'Ad tracking inside a tag container (could not see in)'
+        : af.roiStatus === 'counted' ? 'Ad clicks tracked to outcomes' : '',
+      af.searchSource === 'places' ? 'Search read on the fallback (no position possible this run)' : '',
     ].filter(Boolean).join(' · ') : '';
     const measured = r.ageDays === null ? '' : (r.ageDays <= 1 ? 'measured today' : 'measured ' + r.ageDays + ' days ago');
     // Do-not-say: the quote plus one plain line (plainRisk), deduped — rendered
@@ -2655,9 +2664,24 @@ const auditExportHtml = (records, meta) => {
       // ═══ THE STORY — one flow: what it is, where the money leaks, the sell ═══
       + cat('The story', 'what it is, where the money leaks, what we would sell — in one read',
           (r.background ? '<p>' + p(r.background) + '</p>' : '')
+          // The funnel walk is the SPINE: code over measurements, in the
+          // money's own order, each stage only present when measured. The
+          // model's headline and read stay below it as the colour. When the
+          // walk carries its own fix-first, the one-thing's copy of the same
+          // bottleneck is suppressed — nothing said twice.
+          + (r.funnelStory && Array.isArray(r.funnelStory.stages) && (r.funnelStory.stages.length || r.funnelStory.fixFirst)
+            ? '<div class="fwalk">'
+              + r.funnelStory.stages.map(s2 => '<div class="frow"><b>' + e(s2.label) + '.</b> ' + p(s2.text) + '</div>').join('')
+              + (r.funnelStory.fixFirst
+                ? '<div class="frow"><b>Fix first.</b> ' + e(String(r.funnelStory.fixFirst.plain || '').replace(/^./, (c) => c.toUpperCase()))
+                  + (r.funnelStory.fixFirst.why ? ' — ' + p(r.funnelStory.fixFirst.why) : '')
+                  + (r.funnelStory.fixFirst.join ? ' ' + p(r.funnelStory.fixFirst.join) : '') + '</div>'
+                : '')
+              + '</div>'
+            : '')
           + (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
           + (r.read ? '<p>' + p(r.read) + '</p>' : '')
-          + (t && t.diagnosis ? '<p class="dim">' + (t.layer ? '<b>' + e(layerPlain(t.layer).replace(/^./, (c) => c.toUpperCase())) + ':</b> ' : '') + p(t.diagnosis) + (t.why ? ' ' + p(t.why) : '') + (t.firstBrokenLinkWhy ? ' Fix first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + ': ' + p(t.firstBrokenLinkWhy) : '') + '</p>' : '')
+          + (t && t.diagnosis ? '<p class="dim">' + (t.layer ? '<b>' + e(layerPlain(t.layer).replace(/^./, (c) => c.toUpperCase())) + ':</b> ' : '') + p(t.diagnosis) + (t.why ? ' ' + p(t.why) : '') + ((t.firstBrokenLinkWhy && !(r.funnelStory && r.funnelStory.fixFirst)) ? ' Fix first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + ': ' + p(t.firstBrokenLinkWhy) : '') + '</p>' : '')
           + ((g.frictionLoose || []).length ? '<p class="dim">' + g.frictionLoose.length + ' thing(s) stand between an interested customer and a booked job: ' + g.frictionLoose.map(x => p(x)).join(' · ') + '</p>' : '')
           + ul(r.rows, x => '<li class="dim"><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>')
           + (r.whatHeNeeds ? '<p><b>The sell:</b> ' + p(r.whatHeNeeds) + '</p>' : '')
@@ -2764,7 +2788,7 @@ const auditExportHtml = (records, meta) => {
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.fwalk{margin:10px 0 12px;border-left:2px solid #d2d2d7;padding-left:14px}.frow{font-size:13.5px;line-height:1.6;margin-bottom:7px}.frow b{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#515154;margin-right:4px}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#86868b;font-size:13px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#515154}'
@@ -6156,7 +6180,20 @@ function LeadBriefing({ lead }) {
     sr && sr.background ? React.createElement('div', null,
       React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The story',
         React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'what it is, where the money leaks, what we would sell')),
-      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
+      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background),
+      // The funnel walk — the code-assembled spine, in the money's own order.
+      // Server-built from measurements; a stage missing here was not measured.
+      (lead.funnelStory && Array.isArray(lead.funnelStory.stages) && (lead.funnelStory.stages.length || lead.funnelStory.fixFirst))
+        ? React.createElement('div', { style: { marginTop: 10, borderLeft: '2px solid var(--b)', paddingLeft: 12 } },
+            lead.funnelStory.stages.map((st, si) => React.createElement('div', { key: 'fs' + si, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 6 } },
+              React.createElement('b', { style: { fontSize: 10, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--m2)', marginRight: 5 } }, st.label + '.'),
+              st.text)),
+            lead.funnelStory.fixFirst ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
+              React.createElement('b', { style: { fontSize: 10, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--m2)', marginRight: 5 } }, 'Fix first.'),
+              String(lead.funnelStory.fixFirst.plain || '').replace(/^./, (c) => c.toUpperCase())
+                + (lead.funnelStory.fixFirst.why ? ' — ' + lead.funnelStory.fixFirst.why : '')
+                + (lead.funnelStory.fixFirst.join ? ' ' + lead.funnelStory.fixFirst.join : '')) : null)
+        : null
     ) : null,
 
     // ── THE VERDICT ─────────────────────────────────────────────────────────
@@ -6305,7 +6342,13 @@ function LeadBriefing({ lead }) {
       const facts = [];
       if (af) {
         facts.push(chip(adsFactsLabel(af), null));
-        if (af.ads === 'yes' && af.adsConversion === false) facts.push(chip('no conversion tracking', 'bad'));
+        // The ROI answer, three states, in words Vin asked for: "are they even
+        // tracking their ads leads". 'blind' is the red one; 'hidden' is a
+        // GTM container we cannot see inside — reported as could-not-see,
+        // never as missing; 'counted' is the good news said plainly.
+        if (af.roiStatus === 'blind') facts.push(chip('nothing ties ad clicks to jobs', 'bad'));
+        else if (af.roiStatus === 'hidden') facts.push(chip('tracking sits inside a tag container \u2014 could not see in', null));
+        else if (af.roiStatus === 'counted') facts.push(chip('ad clicks tracked to outcomes', null));
         if (af.booking) facts.push(chip('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking), (af.booking === 'form' || af.booking === 'phone_only' || af.booking === 'none_found') ? 'bad' : null));
         if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
         // Positive only, per the read's own rule: finding campaign pages is a
@@ -6313,6 +6356,10 @@ function LeadBriefing({ lead }) {
         if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? (af.campaignPages + ' page(s) only reachable by ad link') : 'Ad landing pages: none found (they may still exist)'));
         if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
         if (af.https === false) facts.push(chip('plain http', 'bad'));
+        // Which source measured the search read. 'places' is the fallback —
+        // no position is possible on that run, which is the honest answer to
+        // "is DataForSEO still not working" straight from the sheet.
+        if (af.searchSource === 'places') facts.push(chip('search read on the fallback \u2014 no position possible this run', null));
       }
       const te = lead.trafficEstimate;
       if (te && te.checked && te.inIndex && Number.isFinite(te.organicEtvMonthly)) {
