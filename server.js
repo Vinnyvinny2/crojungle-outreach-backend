@@ -20204,9 +20204,14 @@ const RUNG_MONEY_LINE = {
     ? `${jv}. A client already won has no reason to come back on a schedule, so one of those jobs has to be sold again from zero every time.`
     : 'A client already won has no reason to come back on a schedule, so the same work has to be sold again from zero every time.',
 };
-const moneyLineFor = (id, jobValue) => {
-  const pillar = pillarForRung(id);
-  const build = RUNG_MONEY_LINE[id] || (pillar && MONEY_LINE_BY_PILLAR[pillar]);
+const moneyLineFor = (id, jobValue, pillarOverride) => {
+  const home = pillarForRung(id);
+  const pillar = pillarOverride || home;
+  // The rung's own line speaks only from its home pillar. review_pain_pattern's
+  // "each one was one of those jobs" asserts lost work; a workmanship theme
+  // reclassified to TAXED does not support that claim and gets the reputation
+  // line instead.
+  const build = (pillar === home ? RUNG_MONEY_LINE[id] : null) || (pillar && MONEY_LINE_BY_PILLAR[pillar]);
   if (!build) return null;
   const jv = String(jobValue || '').trim();
   const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null);
@@ -20239,7 +20244,24 @@ const buildProblemList = (harms, opts = {}) => {
   //   With no written evidence on the lead, nothing moves at all.
   const _ev = opts.evidence || {};
   const _TAG_BURNING = new Set(['paying_for_a_search_they_lose', 'ads_untracked', 'social_spend_no_search', 'paid_traffic_leaks']);
+  // ══ A COMPLAINT WE CANNOT FIX IS CONTEXT, NOT A LEAK ═════════════════════
+  // Vin, on Breck's: "we have no control over the quality they produce unsure
+  // why this is in there." When the dominant mined theme is workmanship-shaped
+  // rather than contact-shaped (evidence.reviewThemeContact === false, decided
+  // at the call site off the SAME string the rung prints), the row moves to
+  // TAXED — reputation — at that pillar's own order, which sits past the
+  // client's top-3 floor of 5. The row stays in the list and on the sheet;
+  // it can never again be one of the three leaks the call is built on. A
+  // contact-shaped theme keeps its home pillar and the promotion below.
+  const _pillarOf = (id) => {
+    if (id === 'review_pain_pattern' && _ev.reviewThemeContact === false) return 'TAXED';
+    return pillarForRung(id) || null;
+  };
   const _effRank = (id) => {
+    if (id === 'review_pain_pattern' && _ev.reviewThemeContact === false) {
+      const t = MONEY_PILLAR_BY_ID.get('TAXED');
+      return t ? t.order : 6;
+    }
     const base = moneyOrder(id);
     if (!_ev.writtenContact) return base;
     if (id === 'review_pain_pattern') return 2.4;
@@ -20266,7 +20288,7 @@ const buildProblemList = (harms, opts = {}) => {
       // Which kind of money this loses, for the ordering below and for the
       // screen's pillar chip. moneyRank is what the sort reads; a row merged in
       // later (the copy quotes) can carry its own.
-      pillar: pillarForRung(h.id) || null,
+      pillar: _pillarOf(h.id),
       moneyRank: _effRank(h.id),
       // Marked here, from the ONE declaration, so the client's top-3 leaks can
       // refuse a review METRIC without holding a second copy of the internal
@@ -20276,7 +20298,7 @@ const buildProblemList = (harms, opts = {}) => {
       // to the owner. Internal rows stay in this list for the audit; they can
       // never be one of the three leaks the call is built on.
       internalOnly: !!INTERNAL_ONLY_RUNGS[h.id],
-      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue),
+      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue, _pillarOf(h.id)),
     };
   });
   // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
@@ -21715,7 +21737,7 @@ const OPS_BUCKET_DEFS = [
   { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|had to chase|kept waiting|unresponsive|no response/i },
   { id: 'quote_delay', label: 'quotes take too long', re: /quote (?:delay|took|never)|slow(?:er)? (?:response|to respond|quote)|took (?:weeks|days|forever)|waiting (?:on|for) (?:a |the )?(?:quote|estimate)/i },
   { id: 'scheduling', label: 'scheduling breaks down', re: /schedul|reschedul|missed (?:the )?appointment|no[- ]?show|double[- ]?book|cancel/i },
-  { id: 'work_quality', label: 'work has to be redone', re: /redo|re-?work|come back (?:and|to) fix|had to fix|left (?:a mess|unfinished)|unfinished/i },
+  { id: 'work_quality', label: 'work has to be redone', re: /redo|re-?work|come back (?:and|to) fix|had to fix|left (?:a mess|unfinished)|unfinished|drainage|uneven|crack(?:s|ed|ing)?\b|poor(?:ly)? (?:done|quality|workmanship)|quality (?:control|issues?|problems?)|workmanship|shoddy|sloppy|damaged?\b/i },
 ];
 const classifyOpsBuckets = (signals) => {
   const rows = [];
@@ -21735,6 +21757,28 @@ const classifyOpsBuckets = (signals) => {
   // down -- the right value exists and the wrong row sits on top.
   rows.sort((a, b) => b.mentions - a.mentions);
   return rows;
+};
+// ══ WHICH KIND THE DOMINANT COMPLAINT IS — THE LEAK/CONTEXT SPLIT ═══════════
+// Vin, on Breck's Paving, where "quality control issues — drainage, uneven
+// surfaces" ranked as money leak #2: "this is terrible... we have no control
+// over the quality they produce unsure why this is in there." A complaint about
+// callbacks, quotes or scheduling is a leak CROJungle sells against; a complaint
+// about the work itself is context about the business — real, on the sheet,
+// never the thing the money ranking promotes. Decided POSITIVELY on the contact
+// buckets, never by the absence of quality words: a theme matching neither kind
+// is not contact evidence. A mixed theme (contact AND quality words) keeps full
+// leak status — contact wins — and the string classified here is reviewPainTop,
+// the SAME string the rung's say() prints, so the ranking basis and the printed
+// sentence cannot diverge. Reads OPS_BUCKET_DEFS so there is exactly one copy
+// of the vocabulary. Null when there is no theme at all.
+const CONTACT_BUCKET_IDS = new Set(['no_response', 'quote_delay', 'scheduling']);
+const contactShapedTheme = (theme) => {
+  const t = String(theme || '');
+  if (!t) return null;
+  for (const def of OPS_BUCKET_DEFS) {
+    if (CONTACT_BUCKET_IDS.has(def.id) && def.re.test(t)) return true;
+  }
+  return false;
 };
 
 const scoreWebsite = (m = {}) => {
@@ -21805,9 +21849,35 @@ const buildAuditFacts = (m = {}, unlinked = null) => {
   return {
     ads,
     // Only meaningful beside a live tag; null otherwise so nothing renders.
-    adsConversion: ads === 'yes' ? (m.tagManager === true ? null : (m.adsConversion === true)) : null,
-    callTracking: (m.adsReadable === true) ? (m.callTracking === true) : null,
-    metaPixel: (m.adsReadable === true) ? (m.metaPixel === true) : null,
+    // Tri-state PASSTHROUGH: an unmeasured marker stays null rather than
+    // reading as false — a plain-only fetch never tests the conversion label,
+    // and `null === true` was quietly turning "not measured" into a red
+    // "no conversion tracking" chip.
+    adsConversion: ads === 'yes' ? (m.tagManager === true ? null : (m.adsConversion === true ? true : m.adsConversion === false ? false : null)) : null,
+    callTracking: (m.adsReadable === true) ? (m.callTracking === true ? true : m.callTracking === false ? false : null) : null,
+    metaPixel: (m.adsReadable === true) ? (m.metaPixel === true ? true : m.metaPixel === false ? false : null) : null,
+    // ══ CAN ANYONE SEE WHAT A PAID CLICK BECOMES ═══════════════════════════
+    // Vin: "are they even tracking their ads leads... i bet the ROI on those
+    // ads is so so so so ugly." One three-state answer, assembled from the
+    // measurements and never wider than them: 'counted' (a conversion label or
+    // call tracking on a page we read), 'hidden' (a Tag Manager container we
+    // cannot see inside — never reported as missing), 'blind' (readable pages,
+    // Google ads wired, and neither marker anywhere we read). Scoped to the
+    // pages we read on purpose: call assets and GA4 imports let Google count
+    // conversions WITHOUT site code, so "nobody can see ROI" would overclaim
+    // even on a clean read. Null when they run no Google ads or we could not
+    // measure.
+    roiStatus: ads !== 'yes' ? null
+      : (m.adsConversion === true || m.callTracking === true) ? 'counted'
+      : m.tagManager === true ? 'hidden'
+      : (m.adsConversion === false && m.callTracking === false) ? 'blind'
+      : null,
+    // Which source measured the search read: 'dataforseo' is the real local
+    // pack (positions sayable); 'places' is the lookup fallback (absence only,
+    // no position possible). §59: the operator could not tell the two apart
+    // anywhere but the Render log, which is why "is DataForSEO working" was
+    // unanswerable from a sheet.
+    searchSource: m.rankSource || null,
     booking: (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) ? m.booking : null,
     formFields: (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount))) ? Number(m.formFieldCount) : null,
     // POSITIVE ONLY, per the unlinked-page read's own rule: a count when we
@@ -21821,6 +21891,170 @@ const buildAuditFacts = (m = {}, unlinked = null) => {
     viewport: m.viewportChecked === true ? (m.hasViewport !== false) : null,
     siteAgeMarkers: Number.isFinite(Number(m.siteAgeScore)) ? Number(m.siteAgeScore) : null,
   };
+};
+
+// ══ THE FUNNEL, WALKED IN ORDER, BY CODE ═════════════════════════════════════
+// Vin, on Breck's Paving: "the brain and these audits dont know the true goal...
+// its just grabbing a bunch of info and putting it into spots like theyre is no
+// cohesive overall story... one thing leads to another." His own walk of that
+// lead IS the spec: where the money goes out and whether anything counts what it
+// buys; whether the people already looking can find them; what a click lands on;
+// what happens after somebody reaches out; what repeats in their public record;
+// and what to fix FIRST. The model kept being asked to tell that story and kept
+// producing a list, because a story is an ORDER, and order is a thing code holds
+// better than prose.
+//
+// Every sentence here is code over measurements the ladder already polices. A
+// stage whose inputs were not measured is OMITTED, never guessed and never
+// zeroed, the same rule scoreWebsite carries. Digits appear only when they ARE
+// the measurement (a field count, a mention count); no dollar figure at all,
+// because the money lines beside the leaks carry the one licensed figure.
+// Platform names, never "channels" — the abstract wording is a retired
+// negative fixture. Facebook wiring is always "set up for": a pixel proves an
+// account, never a live campaign, and the one direct proof of live ads this
+// system holds (a sponsored row in the real results) is Google-side only.
+// FUNNEL STORY CHECK executes every branch and scores every sentence with the
+// same plain-English gate the ladder's own sentences pass, because a block
+// attached after the model's JSON parsed walks past all seven strippers by
+// construction — this is its gate.
+const BOTTLENECK_PLAIN = {
+  'OPERATIONS': 'the work itself, before any new demand',
+  'CAPTURE': 'catching the leads they already pay for',
+  'CONVERSION': 'the page a visitor lands on',
+  'SCALE': 'more of what already works',
+  'FOLLOW-UP': 'answering the people who already reached out',
+  'DEMAND': 'getting in front of more people',
+  'FOUNDATION': 'the site itself, before anything is spent sending people to it',
+  'NOT MEASURED': 'unknown — we could not read enough of their pages to name it',
+  'MARKET': 'how they position themselves',
+  'OFFER': 'what they offer and how it is packaged',
+  'LEADS': 'being found by the people already looking',
+  'THROUGHPUT': 'keeping up with the work they already have',
+};
+const buildFunnelStory = (m = {}, x = {}) => {
+  const stages = [];
+
+  // ── 1 · MONEY OUT: what they pay for, and whether anything counts it ──────
+  if (m.adsReadable === true && (m.googleAdsTag !== null || m.metaPixel !== null)) {
+    const g = m.googleAdsTag === true, f = m.metaPixel === true;
+    let text = '';
+    if (g && f) text = 'Their site is set up for both Google and Facebook ads.';
+    else if (g) text = 'Their site is set up for Google ads.';
+    else if (f) text = 'Their site is set up for Facebook and Instagram ads.';
+    else if (m.googleAdsTag === false && m.metaPixel === false) text = 'No ad wiring appears on any page we read.';
+    if (g && x.adsLive === true) {
+      text += ' A paid Google result for their own search proves those ads are running right now.';
+    }
+    // The ROI half, three states, scoped to the pages we read. Google can count
+    // conversions WITHOUT site code (call assets, GA4 imports), so this never
+    // says "nobody can see" — it says what the pages carry, which he can check.
+    if (g) {
+      if (m.adsConversion === true || m.callTracking === true) {
+        text += ' The pages we read carry tracking that can tie a paid click to a job.';
+      } else if (m.tagManager === true) {
+        text += ' Their tags run inside a Google Tag Manager container, so we could not see whether anything counts what those clicks become.';
+      } else if (m.adsConversion === false && m.callTracking === false) {
+        // A short concrete clause leads on purpose: the plain-English gate
+        // reads the opening clause and refuses one that opens on "conversion".
+        text += ' The wiring stops there, though: no page we read carries conversion tracking or call tracking, so nothing on the site ties a paid click to a booked job.';
+      }
+    }
+    if (text) stages.push({ id: 'money_out', label: 'Money out', text });
+  }
+
+  // ── 2 · WHO FINDS THEM: the people already typing what they sell ──────────
+  {
+    let text = '';
+    const q = String(m.rankQuery || '').trim();
+    if (m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && q) {
+      text = `When somebody searches "${q}", they are not in the results at all — we ran that search twice.`;
+    } else if (m.rankChecked === true && m.rankFound === true && Number.isFinite(Number(m.rank)) && q) {
+      text = Number(m.rank) <= 3
+        ? `When somebody searches "${q}", they are in the top three — the people already looking can find them.`
+        : `When somebody searches "${q}", they show up, but not in the top three.`;
+    }
+    // The join Vin walked on Breck's: Facebook-only wiring while the Google
+    // search is measured bad or confirmed empty. All five gates or silence.
+    // tagManager === false is load-bearing: a GTM container can hold a Google
+    // tag we cannot see, so "nothing for Google" through GTM is the confident
+    // wrong claim the sibling rungs already refuse. And the Meta half never
+    // exceeds "set up for" — a pixel proves wiring, not spend — so the
+    // conditional is stated out loud, which is also a question only he can
+    // answer.
+    if (m.adsReadable === true && m.tagManager === false
+      && m.metaPixel === true && m.googleAdsTag === false
+      && m.rankChecked === true
+      && (m.rankAbsenceConfirmed === true || (m.rankFound === true && Number.isFinite(Number(m.rank)) && Number(m.rank) > 3))) {
+      text += `${text ? ' ' : ''}So their ads are set up to reach people who were not looking, while the people already typing this work into Google cannot find them. If those ads are live, they are paying for the harder sell while the easier customer walks past.`;
+    }
+    if (text) stages.push({ id: 'who_finds_them', label: 'Who finds them', text });
+  }
+
+  // ── 3 · WHAT A CLICK LANDS ON: the bottom of the path ─────────────────────
+  {
+    const parts = [];
+    if (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) {
+      parts.push({
+        online_booking: 'A visitor can book a time on the site itself.',
+        form: 'The only thing a visitor can do there is fill in a form and wait.',
+        phone_only: 'The only way in their site offers is a phone call during office hours.',
+        none_found: 'No route in appears on the pages we read at all.',
+      }[m.booking]);
+    }
+    if (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount)) && Number(m.formFieldCount) >= 7) {
+      parts.push(`That form asks for ${Number(m.formFieldCount)} pieces of information before anything happens.`);
+    }
+    if (m.pricingMeasured === true && Number(m.pricesPublished) === 0 && m.unreadPricing !== true) {
+      parts.push('No price appears on any page we read.');
+    }
+    if (m.financingMeasured === true && m.financingOffered === false && m.bigTicketTrade === true) {
+      parts.push('Nothing on the pages we read lets a customer pay over time.');
+    }
+    if (parts.length) stages.push({ id: 'the_door', label: 'What a click lands on', text: parts.join(' ') });
+  }
+
+  // ── 4 · AFTER THEY REACH OUT: contact complaints, and the capacity read ───
+  {
+    const parts = [];
+    const themeContact = contactShapedTheme(String(m.reviewPainTop || ''));
+    const mentions = Number(m.reviewPainMentions);
+    const read = Number(m.reviewsRead);
+    const theme = String(m.reviewPainTop || '').trim();
+    if (themeContact === true && theme && Number.isFinite(mentions) && mentions >= 2 && Number.isFinite(read) && read >= 10) {
+      parts.push(`${mentions} of the ${read} reviews we read describe the same thing: ${theme}.`);
+      // The capacity read, bounded the way §47's hedge rule demands: "signs
+      // of", with both named measurements in the same sentence. Ops roles only
+      // — hiring for marketing is a demand signal, not a capacity one —
+      // and present tense only, because an undated posting buys no clock.
+      const roles = (Array.isArray(x.opsRoles) ? x.opsRoles : []).map(r => String((r && r.title) || r || '').trim()).filter(Boolean).slice(0, 2);
+      if (roles.length && ((x.opsPain && x.opsPain.binding === true) || mentions >= 3)) {
+        parts.push(`They are also hiring for ${roles.join(' and ')} right now — customers describing that in public while these roles sit open are signs of a team at capacity.`);
+      }
+    }
+    if (parts.length) stages.push({ id: 'after_contact', label: 'After they reach out', text: parts.join(' ') });
+    // A workmanship-shaped pattern is CONTEXT: real, on the sheet, never the
+    // leak. Vin: "we have no control over the quality they produce."
+    if (themeContact === false && theme && Number.isFinite(mentions) && mentions >= 2) {
+      stages.push({ id: 'what_repeats', label: 'What repeats', text: `What repeats in their public record: ${theme}. That is context about the business, not a leak we can fix for them — and it is the first thing a comparing customer reads.` });
+    }
+  }
+
+  // ── FIX FIRST: same variables the one-thing reads, never re-derived ───────
+  const _b = String(x.bottleneck || '').trim();
+  const fixFirst = _b ? {
+    link: _b,
+    plain: BOTTLENECK_PLAIN[_b] || _b.toLowerCase(),
+    why: String(x.bottleneckWhy || '').trim() || null,
+    // The order sentence Vin endorsed, said only when both halves are measured:
+    // the search is bad or empty AND the landing path is broken.
+    join: (stages.some(s => s.id === 'the_door')
+      && stages.some(s => s.id === 'who_finds_them' && /not in the (?:results|top three)|show up, but not/.test(s.text)))
+      ? 'Showing up higher will not pay off while it lands on the same dead end. The door first, then the traffic.'
+      : null,
+  } : null;
+
+  if (!stages.length && !fixFirst) return null;
+  return { checked: true, stages, fixFirst };
 };
 
 // ══ AUTHENTIC FEAR, AND THE ONLY HONEST WAY TO PRODUCE IT ═══════════════════
@@ -24482,14 +24716,22 @@ WHY IT IS RIGHT: it puts two numbers next to each other that he has never put to
 
   const sys = `${FACT_DISCIPLINE}
 
-You are a business strategist, not an auditor. You are looking at one local business and answering one question: what is actually going on here?
+You are a business strategist, not an auditor. You are looking at one local business and answering one question: what is actually going on here \u2014 and where does the money leak?
 
-A colleague who has never heard of this business will read your answer before a call. They need to understand the business in six minutes.
+A colleague who has never heard of this business will read your answer before a call. They need to understand the business in six minutes, and the call they are about to make sells one thing: stopping the biggest measured leak. The goal is never the most problems; it is the leaks, in order, connected as one story where each stage explains the next.
 
 ${goldExamples}
 
 \u2550\u2550\u2550 HOW TO THINK \u2550\u2550\u2550
 Put the numbers next to each other and ask what SHAPE they make. The shape is usually not any single fact and is sometimes the opposite of one. A business can have a real problem in every individual measurement and still be fundamentally healthy, and it can measure clean everywhere and still be stuck.
+
+WALK THE MONEY, IN ORDER \u2014 this is the spine of the read, and the facts arrive in roughly this order: what they PAY for and whether anything counts what it buys (ad wiring, conversion and call tracking \u2014 only as measured); whether the people ALREADY LOOKING can find them (the measured search result); what a visitor can DO once they arrive (book, call, price, the form); what happens AFTER somebody reaches out (their customers' own written complaints, and what they are hiring for); what repeats in their record. One stage explains the next \u2014 a bad search result matters MORE when the ads point the other way, an 8-field form matters MORE when clicks are being paid for \u2014 so connect them instead of listing them.
+
+TWO PIECES OF WORLD KNOWLEDGE THAT GOVERN THE READ:
+\u2022 A person searching Google for this work is already trying to hire. A Facebook or Instagram ad interrupts somebody who was not looking. When the measurements show money wired to the interrupting side while the searching side cannot find them, that is the most expensive shape a local business can be in \u2014 say it plainly. When only one half is measured, say only that half.
+\u2022 Money leaks at the FIRST broken link. Being found more cannot pay off while the page it lands on cannot hold anyone \u2014 the door before the traffic. If they are already paying for something that works, the sell is never more of it; it is the thing that stops the waste.
+
+AND ONE RULE ABOUT COMPLAINTS: a complaint about workmanship, pricing or staff attitude is context about the business \u2014 real, worth a row \u2014 never the leak the read is built on. We cannot fix their work. The leaks we sell against are: nobody answering, nothing bookable, nothing counted, nobody finding them.
 
 YOU MAY AND SHOULD USE WHAT YOU KNOW ABOUT THE WORLD:
 \u2022 Market size. Anderson SC is small; Dallas is not. First place in a small town has a ceiling.
@@ -24505,7 +24747,7 @@ ${shapeList}
 
 \u2550\u2550\u2550 OUTPUT \u2550\u2550\u2550
 JSON only, no prose around it, exactly these keys:
-{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeCaresAbout":"ONE sentence, INTERNAL, read from BEHAVIOUR ONLY \u2014 things he did that were measured: whether he answers reviews himself and how he writes when he does, what he wrote about himself on his own site, what he is hiring for, which service he leads with. Never a guess at his personality and never a claim about his motives. This is what tells the salesperson where he will lean in and where he will bristle. Null if nothing behavioural was measured.","whatHeNeeds":"ONE recommendation, in one or two sentences, written for a salesperson with NO marketing vocabulary. Name the concrete things \u2014 the form, the phone, the price, the clicks, the search \u2014 and follow the money out loud, the way you would explain it across a desk: what he is paying for, where it lands, why it stalls there, what one change unblocks. NEVER the words capture, intake, conversion, friction, funnel, or optimize \u2014 say what the thing IS instead. Say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
+{"shape":"ONE_OF_THE_ABOVE","background":"2-3 sentences: what this business actually IS. Who runs it, roughly how long, what they sell, how big, anything from the owner\'s own story. Written for someone who has never heard of them. NOT a diagnosis \u2014 no problems, no findings, just the picture. If the owner wrote something about himself, use it here.","headline":"one short declarative sentence naming the situation, in words a person would say out loud across a desk \u2014 a plain subject doing a plain verb. No metaphor (budgets do not chase, money does not bleed), no two-balanced-clauses construction, nothing an owner would have to re-read","read":"3-5 sentences. Facts and reasoning interleaved, in the voice of the examples.","rows":[{"label":"short business-level grouping","says":"one or two sentences of what it means"}],"whatHeCaresAbout":"ONE sentence, INTERNAL, read from BEHAVIOUR ONLY \u2014 things he did that were measured: whether he answers reviews himself and how he writes when he does, what he wrote about himself on his own site, what he is hiring for, which service he leads with. Never a guess at his personality and never a claim about his motives. This is what tells the salesperson where he will lean in and where he will bristle. Null if nothing behavioural was measured.","whatHeNeeds":"ONE recommendation, in one or two sentences, written for a salesperson with NO marketing vocabulary. Name the concrete things \u2014 the form, the phone, the price, the clicks, the search \u2014 and follow the money out loud, the way you would explain it across a desk: what he is paying for, where it lands, why it stalls there, what one change unblocks. NEVER the words capture, intake, conversion, friction, funnel, or optimize \u2014 say what the thing IS instead. Say plainly what would NOT help. Not a menu: no 'the two openings are', no 'and also', no list. If two things genuinely tie, pick the one that must be fixed FIRST and say why the other waits.","askOnTheCall":"one question whose answer would confirm or kill this read"}
 
 \u2550\u2550\u2550 ABOUT \"rows\" \u2014 READ THIS TWICE \u2550\u2550\u2550
 Five to seven rows. YOU choose the labels for THIS business; they are not a fixed list and they are not the names of our measurements.
@@ -24698,6 +24940,19 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     if (!rows.length) faults.push('It returned no rows \u2014 five to seven are required.');
     else if (scannerNamed >= 2) faults.push(`${scannerNamed} rows used our scanner's own labels instead of business groupings \u2014 name each row for what it IS to the business.`);
     if (restated) faults.push('The read was thin: it restated a page-level finding, ran short, or contained no measured numbers. It must say what the signals ADD UP TO.');
+    // ══ THE HEADLINE FINALLY GETS A GATE ═══════════════════════════════════
+    // It is the first sentence of THE STORY on every sheet and its entire
+    // positive spec was six words, so its register drifted until the owner
+    // read "The ad budget is chasing Facebook while the buyers already
+    // searching Google can't find them" and asked why the grammar was so bad.
+    // Same rules the ladder's own sentences pass: the reading-grade ceiling
+    // and the agency-phrase list. A metaphor gate does not exist and cannot
+    // be built from a regex; this is the mechanical half, and the spec below
+    // carries the rest. HARD faults, so the retry names them.
+    {
+      const _hlF = plainEnglishFaults(String(parsed.headline || ''), {});
+      if (_hlF.length) faults.push(`The headline fails the plain-language rules the rest of the sheet obeys: ${_hlF[0]} Rewrite it as one short plain sentence a person would say out loud across a desk.`);
+    }
     if (restated) {
       console.log(`\u26a0 SITUATION READ [${company}]: came back thin \u2014 ${flat.length < 180 ? 'too short to be a synthesis' : !/\d/.test(flat) ? 'contains no measured numbers, so it is assertion rather than reasoning' : 'opens by restating a page-level finding'}. Using it, but this is the failure mode to watch: a read that could be replaced by a table row.`);
     }
@@ -32427,10 +32682,20 @@ const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   const where = [plainRead ? 'plain fetch' : '', renderedRead ? 'rendered homepage' : '',
     inter ? `${inter.pages} interior page(s)` : ''].filter(Boolean);
   const out = { adsRead: true, adSource: where.join(' + ') };
+  // Absence is licensed per MARKER, not per merge. The plain fetch computes only
+  // the first three signatures (checkBuiltWith never tests the conversion label
+  // or call tracking), and interior pages are harvested positives-only. So a
+  // "false" must come from a copy that actually TESTED this marker: the rendered
+  // homepage for all five, the plain fetch for the three it computes. Interior
+  // pages can prove presence and can never prove absence, which is the rule the
+  // harvest's own comment already states.
+  const PLAIN_COMPUTED = new Set(['hasGoogleAdsTag', 'hasMetaPixel', 'hasTagManager']);
   for (const k of Object.keys(AD_TAG_SIGNATURES)) {
-    out[k] = (bw[k] === true
+    const positive = bw[k] === true
       || (renderedRead && AD_TAG_SIGNATURES[k].test(html))
-      || (inter && inter[FROM_INTERIOR[k]] === true)) ? true : false;
+      || (inter && inter[FROM_INTERIOR[k]] === true);
+    const absenceRead = renderedRead || (plainRead && PLAIN_COMPUTED.has(k));
+    out[k] = positive ? true : (absenceRead ? false : null);
   }
   return out;
 };
@@ -35134,8 +35399,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     builtWith.hasGoogleAdsTag = _ads.hasGoogleAdsTag;
     builtWith.hasMetaPixel = _ads.hasMetaPixel;
     builtWith.hasTagManager = _ads.hasTagManager;
+    // THE TWO MARKERS THAT NEVER MADE IT OFF THE MERGE. mergeAdSignals has
+    // computed the conversion label and call tracking since they were added,
+    // and this call site copied back only the three markers that predate them.
+    // builtWith.hasAdsConversion was therefore never assigned anywhere, so
+    // _harmInputs.adsConversion read `undefined === true` = false on every
+    // confirmed lead, and ads_untracked (harm 89) asserted "no conversion
+    // tracking" off a wire that had never carried a measurement. AD WIRE CHECK.
+    builtWith.hasAdsConversion = _ads.hasAdsConversion;
+    builtWith.hasCallTracking = _ads.hasCallTracking;
     builtWith.adsRead = _ads.adsRead;
-    console.log(`AD SIGNALS [${company}]: read from ${_ads.adSource} \u2014 google ads tag ${_ads.hasGoogleAdsTag === null ? 'NOT CHECKED' : _ads.hasGoogleAdsTag}, meta pixel ${_ads.hasMetaPixel === null ? 'NOT CHECKED' : _ads.hasMetaPixel}, tag manager ${_ads.hasTagManager === null ? 'NOT CHECKED' : _ads.hasTagManager}. These three gate both SPENDING findings and were previously read only from a plain no-JavaScript fetch, which returns nothing at all on a site that challenges bots.`);
+    console.log(`AD SIGNALS [${company}]: read from ${_ads.adSource} \u2014 google ads tag ${_ads.hasGoogleAdsTag === null ? 'NOT CHECKED' : _ads.hasGoogleAdsTag}, meta pixel ${_ads.hasMetaPixel === null ? 'NOT CHECKED' : _ads.hasMetaPixel}, tag manager ${_ads.hasTagManager === null ? 'NOT CHECKED' : _ads.hasTagManager}, conversion tracking ${_ads.hasAdsConversion === null ? 'NOT CHECKED' : _ads.hasAdsConversion}, call tracking ${_ads.hasCallTracking === null ? 'NOT CHECKED' : _ads.hasCallTracking}. The first three gate the SPENDING findings; the last two decide whether anything on the site counts what a paid click becomes, and they spent their whole lives computed here and never copied off the merge.`);
     const email = emailData; // from browser via browserData
 
     // ═══ CONFIRM WE'RE AUDITING THE RIGHT COMPANY ════════════════════════════
@@ -36623,9 +36897,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           rankStable: localRank && localRank.rankStable,
           weakerAbove: localRank && localRank.weakerAbove,
           adsReadable: !!(builtWith && builtWith.adsRead === true),
-          googleAdsTag: (builtWith && builtWith.confirmed === true && !builtWith.blocked) ? builtWith.hasGoogleAdsTag === true : null,
-          metaPixel: (builtWith && builtWith.confirmed === true && !builtWith.blocked) ? builtWith.hasMetaPixel === true : null,
-          tagManager: (builtWith && builtWith.confirmed === true && !builtWith.blocked) ? builtWith.hasTagManager === true : null,
+          // Same merged-read gate as _harmInputs, for the same reason: a null
+          // recorded here on a lead whose rendered copy proved the tag wastes
+          // the future comparison. ads_started still needs a prior FALSE, so
+          // old null snapshots can never manufacture a change.
+          googleAdsTag: (builtWith && builtWith.adsRead === true) ? (builtWith.hasGoogleAdsTag ?? null) : null,
+          metaPixel: (builtWith && builtWith.adsRead === true) ? (builtWith.hasMetaPixel ?? null) : null,
+          tagManager: (builtWith && builtWith.adsRead === true) ? (builtWith.hasTagManager ?? null) : null,
         });
         if (_obsKey) {
           const _prior = await readPriorObservation(_obsKey, company);
@@ -36691,7 +36969,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // undefined` is falsey — which would read as "no ads tag" rather than
           // "we could not look". Those are different claims and only one of them
           // is true.
-          adsTagConfirmed: !!(builtWith && builtWith.confirmed === true && !builtWith.blocked
+          adsTagConfirmed: !!(builtWith && builtWith.adsRead === true
             && (builtWith.hasGoogleAdsTag === true || builtWith.hasMetaPixel === true)),
           // ONE DERIVATION. paidLeakGapFrom reads booking and bookingMeasured
           // and resolveMeasurements returns neither \u2014 they are assembled from
@@ -36725,17 +37003,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // anything is being COUNTED is a separate marker and we never read it.
           // Both absences ride adsReadable, the same "did we look?" gate every
           // other absence claim in this file carries.
-          adsConversion: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
-            ? builtWith.hasAdsConversion === true : null,
-          callTracking: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
-            ? builtWith.hasCallTracking === true : null,
+          // The null-gate follows the MERGED read, not the plain fetch. These
+          // six lines gated on `confirmed && !blocked` for their whole lives
+          // while the comment above adsReadable already explained why that is
+          // wrong: builtWith holds the MERGED answer since the call site writes
+          // it back, so nulling it because the PLAIN fetch was refused threw
+          // away a tag the rendered homepage had proven. A bot-challenged site
+          // lost every ad finding to a gate about the copy nobody reads.
+          // mergeAdSignals now returns true/false/null per marker (absence only
+          // from a copy that tested that marker), so this is a passthrough.
+          adsConversion: (builtWith && builtWith.adsRead === true)
+            ? (builtWith.hasAdsConversion ?? null) : null,
+          callTracking: (builtWith && builtWith.adsRead === true)
+            ? (builtWith.hasCallTracking ?? null) : null,
           adsReadable: !!(builtWith && builtWith.adsRead === true),
-          googleAdsTag: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
-            ? builtWith.hasGoogleAdsTag === true : null,
-          metaPixel: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
-            ? builtWith.hasMetaPixel === true : null,
-          tagManager: (builtWith && builtWith.confirmed === true && !builtWith.blocked)
-            ? builtWith.hasTagManager === true : null,
+          googleAdsTag: (builtWith && builtWith.adsRead === true)
+            ? (builtWith.hasGoogleAdsTag ?? null) : null,
+          metaPixel: (builtWith && builtWith.adsRead === true)
+            ? (builtWith.hasMetaPixel ?? null) : null,
+          tagManager: (builtWith && builtWith.adsRead === true)
+            ? (builtWith.hasTagManager ?? null) : null,
           // ══ THE VISIBILITY GAP, FINALLY DELIVERED ═════════════════════════
           // We buy up to six Places searches per lead to compute this, print it
           // as "★ VISIBILITY GAP ... This is the retainer pitch, in their own
@@ -36847,6 +37134,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // resolveMeasurements. A row that is not us leaves us with no sayable
           // position AND no sayable absence.
           rankChecked: _measured.rankChecked,
+          // Which source measured it — 'dataforseo' or 'places'. Computed at
+          // resolveMeasurements since §52 and consumed NOWHERE until the facts
+          // strip needed it: the recorded computed-but-not-passed class.
+          rankSource: _measured.rankSource,
           rankAbsenceConfirmed: _measured.rankAbsenceConfirmed,
           // The position when it was measured but is NOT sayable, so the eight
           // conversion-side rungs keep their traffic damper on a lead whose two
@@ -37222,7 +37513,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                           // BURNING finding on Conner's (2026-08-24), and the
                           // email side already refuses 2 mentions as "he will
                           // do that division before he finishes the sentence".
-                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 3 },
+                          // …AND the complaint must be one we sell against.
+                          // Count-only promotion put Breck's workmanship theme
+                          // at leak #2; the classifier reads reviewPainTop, the
+                          // same string the rung prints.
+                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 3
+                            && contactShapedTheme(String((_harmInputs || {}).reviewPainTop || '')) === true,
+                          reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).reviewPainTop || '')) },
               money: { jobValue: tradeJobValue(String((_harmInputs || {}).tradeWord || '')) } }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
@@ -38579,7 +38876,19 @@ Your recommendedProduct and every item in topThreeProducts MUST come from this l
             + (_interiorLabels.length ? ` Interior page renders attached: ${_interiorLabels.join(', ')}. Each is labelled above its image.` : '');
         msgContent.push({
           type: 'text',
-          text: `You are CROJungle's senior marketing auditor. Your job is to find the single most expensive problem in this business's digital presence and recommend the right CROJungle product to fix it.
+          text: `You are CROJungle's senior auditor. Your job is to follow this business's money through the path a customer takes, name where it leaks, and recommend the one CROJungle product that stops the biggest leak.
+
+Walk it in order, and tell it as ONE story where each stage explains the next \u2014 never a list of separate observations:
+1. What they PAY for, and whether anything counts what it buys them (ad wiring, conversion tracking, call tracking \u2014 from the measurements below, never assumed).
+2. Whether the people ALREADY LOOKING for this work can find them (the measured search results below).
+3. What a visitor can DO once they arrive (book, call, price, the form).
+4. What happens AFTER somebody reaches out (their customers' own written complaints about callbacks, quotes and scheduling \u2014 and what they are hiring for).
+5. What repeats in their public record.
+
+Three rules of the walk:
+- A person searching Google for this work is already trying to hire; a Facebook or Instagram ad interrupts somebody who was not looking. Money on the interrupting side while the searching side cannot find them is the most expensive shape a local business can be in \u2014 and you may say so ONLY when the measurements below show both halves: the ad wiring measured, AND the search result measured. Never assert it from one half.
+- Money leaks at the FIRST broken link. Being found more will not pay off while the page it lands on cannot hold anyone \u2014 so the fix order runs bottom-up: the door first, then the traffic to it.
+- A complaint about workmanship, pricing or staff attitude is context about the business, never the leak to lead with \u2014 we cannot fix their work. The leaks we sell against are: nobody answering, nothing bookable, nothing counted, nobody finding them.
 
 COMPANY: ${company}
 WEBSITE: ${website || 'Unknown'}
@@ -38864,7 +39173,7 @@ TECH STACK: ${builtWith.blocked || builtWith.confirmed === false ? `\u26d4 NOT S
 - Live Chat: ${builtWith.hasChat === true ? 'Yes (confirmed)' : builtWith.hasChat === false ? 'None detected on page (unverified)' : 'not readable'}`}
 
 ADS:
-- Google Ads: ${(builtWith.blocked || builtWith.confirmed === false) ? '\u26d4 not readable \u2014 our fetch was refused, so make NO claim about whether they run Google Ads' : builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
+- Google Ads: ${builtWith.adsRead !== true ? '\u26d4 not readable \u2014 no copy of their pages could be read, so make NO claim about whether they run Google Ads' : builtWith.hasGoogleAdsTag ? 'CONFIRMED — Google Ads conversion tag found in their page source (they are running or have run Google Ads)' : 'No ads tag found on page (inconclusive - do NOT claim they run no ads)'}
 - GOOGLE LOCAL SERVICES ADS (LSA): ${lsa.status === 'running_lsa'
   ? `\u2705 THEY ARE RUNNING LSA. Proof: "${String(lsa.evidence).slice(0,140)}" — the "${lsa.marker}" mark is issued only through Local Services Ads. This is the STRONGEST possible qualifying signal we have: they are already paying Google per lead, which means budget exists, intent exists, and the only question is what happens to those leads after they arrive. Lead with what happens AFTER the LSA call comes in — LSA charges per lead, so an unanswered or un-followed-up lead is money already spent and wasted. You MAY state that they run Local Services Ads. You may NOT state or guess their budget, lead volume, cost per lead, or ranking.`
   : lsa.status === 'eligible_ambiguous_badge'
@@ -38908,17 +39217,17 @@ ${discoverySignals.rebranding ? '- REBRAND SIGNAL: rebranding — full marketing
 
 VISUAL PRECISION RULE: Only quote text you can read clearly in the screenshot. If text is blurry, truncated, or partially visible, describe without quoting. Never guess truncated text — a wrong quote destroys credibility with a founder who knows their own site.
 
-AUDIT TASK — CROJungle is a full-service growth partner, NOT a single-product vendor. Audit the ENTIRE business across all five areas, then lead with the sharpest, most expensive problem:
-1. ACQUISITION — are they capturing demand? (ads, SEO, paid search presence)
-2. CONVERSION — does the site turn a visitor into a customer? (CTA, positioning, social proof, mobile)
-3. INFRASTRUCTURE — do they have marketing systems? (CRM, tracking, automation)
-4. OPERATIONS — are they bleeding money on manual labor that AI software could replace? (use the hiring signal above)
+AUDIT TASK — CROJungle is a full-service growth partner, NOT a single-product vendor. Audit the ENTIRE business across all five areas, in the money's own order, then lead with the sharpest, most expensive leak:
+1. ACQUISITION — what are they paying to be found, and on which side? A Google search reaches people already trying to hire; Facebook and Instagram ads interrupt people who were not looking. Say which side their measured wiring points at, and ONLY what the measurements above state.
+2. CONVERSION — does the site turn a visitor into a customer? (booking route, the form, price, CTA, positioning, mobile)
+3. INFRASTRUCTURE — can they SEE what their money buys? If ads are wired and no conversion or call tracking appears on the pages we read, nothing ties a paid click to a booked job — whoever runs those ads is flying blind, and that is a leak in itself. (CRM, tracking, automation)
+4. OPERATIONS — are they bleeding money on manual labor that AI software could replace? Customer-written complaints about callbacks and scheduling BESIDE open ops roles are signs of a team at capacity. (use the hiring signal above)
 5. GROWTH & VALUE — funding/exit context: what's suppressing their revenue or valuation?
 
 Then answer:
-- What is the single most expensive problem across ALL five areas? Be specific — reference their actual content, tech gaps, hiring, or exit context.
+- Where does the money leak FIRST on the path a customer takes? Being found more cannot pay off while the page it lands on cannot hold anyone — the door before the traffic. Be specific — reference their actual content, tech gaps, hiring, or exit context.
 - What is the ONE thing a founder would be embarrassed about if you pointed it out?
-- Which CROJungle offering fixes it and why?
+- Which CROJungle offering fixes THAT link and why — never a later one?
 
 ═══ WHO CROJUNGLE ACTUALLY IS (this governs the voice of every pitch) ═══
 CROJungle is led by Mike Taft and Muhammad Junaid. Mike is a faith-led entrepreneur whose career runs through government contracting, private technology, Wall Street investing, and building companies from the ground up. Mike is the tip of the spear: he meets a leader on the specific things keeping them from their goals, and uses CROJ as the production engine — custom software, AI integration, marketing — to bring cost down and profit up.
@@ -41975,7 +42284,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           }
           return `Possibly ${builtWith.platform}, from a weak signature only — UNCONFIRMED, and nothing may be claimed about it to the prospect`;
         })(),
-        googleAds: builtWith.blocked || builtWith.confirmed === false ? 'Not readable — our fetch of their page was refused, so we know NOTHING about their ads' : builtWith.hasGoogleAdsTag ? 'Google Ads conversion tag found on site — confirmed ad infrastructure' : 'No Google Ads tag on page (they may still run ads — unverified)',
+        googleAds: builtWith.adsRead !== true ? 'Not readable — no copy of their pages could be read, so we know NOTHING about their ads' : builtWith.hasGoogleAdsTag ? 'Google Ads tag found on site — confirmed ad account wiring (an account, not proof of a live campaign)' : 'No Google Ads tag on page (they may still run ads — unverified)',
         seoBasics: builtWith.confirmed ? [
           !builtWith.titleTag || builtWith.titleTag.length < 15 ? 'weak/missing title tag' : '',
           !builtWith.hasMetaDesc ? 'no meta description' : '',
@@ -42755,6 +43064,22 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // no new fabrication surface, and nothing here that was not already being
       // paid for on every lead.
       theOneThing: buildTheOneThing({ growthConstraint, valueEquation, bottleneck, bottleneckWhy, worst: costliestHarm }),
+      // ══ THE FUNNEL, WALKED IN ORDER ═══════════════════════════════════════
+      // Vin's Breck's Paving walk, reproduced by code on every lead: money out
+      // and whether anything counts it, who finds them, what a click lands on,
+      // what happens after contact, what repeats, and what to fix first. Reads
+      // the SAME bottleneck variables the one-thing reads (never re-derived)
+      // and only ever renders a stage whose inputs were measured. This is the
+      // story spine; the model's read stays as colour around it.
+      funnelStory: buildFunnelStory(_harmInputs, {
+        bottleneck, bottleneckWhy,
+        // Same source resolveMeasurements reads for adsLiveInPack — _measured
+        // itself is block-scoped upstream and not visible here (scopecheck
+        // caught the first draft reading it, the recorded §40 class).
+        adsLive: !!(localRank && localRank.paidIsUs),
+        opsPain: readOperationalPain(publicPainSignals, reviewsRead),
+        opsRoles: (careers && Array.isArray(careers.opsRoles)) ? careers.opsRoles.slice(0, 3) : [],
+      }),
       // ══ THE NUMBER AND THE FACTS THE OPERATOR ASKS FIRST ═════════════════
       // Both pure, both fed from _harmInputs — the one object whose fields the
       // RUNG INPUT and delivery checks already police, so a fact shown here is
@@ -45187,16 +45512,56 @@ app.listen(PORT, () => {
     if (_noWritten[0].id !== 'ads_untracked') {
       _fails.push('with no written evidence on the lead the tag-BURNING rung was demoted anyway — the inference loses only to written evidence, not to nothing');
     }
+    // ══ A COMPLAINT WE CANNOT FIX IS CONTEXT, NOT A LEAK ═══════════════════
+    // Vin, on Breck's Paving, where "quality control issues — drainage, uneven
+    // surfaces" ranked as money leak #2: "we have no control over the quality
+    // they produce unsure why this is in there." The falsifying direction the
+    // old fixtures could not see: a workmanship-dominant theme must NOT
+    // promote, must move to TAXED past the client's top-3 floor of 5, and must
+    // lose the lost-jobs money line its evidence does not support.
+    const _rework = buildProblemList(_evHarms, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: false } });
+    const _rwRow = _rework.find(r => r.id === 'review_pain_pattern');
+    if (!_rwRow || _rwRow.pillar !== 'TAXED' || _rwRow.moneyRank !== 6) {
+      _fails.push(`a workmanship-dominant review theme still ranks as a money leak (pillar ${_rwRow && _rwRow.pillar}, rank ${_rwRow && _rwRow.moneyRank}) — a complaint about the work itself is context, not a leak we sell against`);
+    }
+    // Asserted POSITIVELY: the first version checked that the lost-jobs phrase
+    // was absent, and the fixture passes no job value, so the rung's no-value
+    // line lacked the phrase either way and reverting the fix stayed green —
+    // the fixture-that-measures-nothing trap, caught by falsification.
+    if (_rwRow && !/Trust decides/.test(String(_rwRow.moneyLine || ''))) {
+      _fails.push('the workmanship-context row does not carry the reputation money line — it still speaks as its home pillar, asserting losses its evidence does not support');
+    }
+    const _ctRow = _written.find(r => r.id === 'review_pain_pattern');
+    if (_ctRow && _ctRow.pillar !== 'ROTTING') {
+      _fails.push('a contact-shaped complaint lost its home pillar');
+    }
+    // The classifier itself, executed. Positive contact match decides — never
+    // the absence of quality words — and contact wins on a mixed theme.
+    if (contactShapedTheme('no one ever called back about the estimate') !== true) _fails.push('a callback complaint no longer classifies as contact-shaped, which would demote the strongest evidence this system holds');
+    if (contactShapedTheme('quality control issues - drainage, uneven surfaces') !== false) _fails.push("Breck's workmanship theme classifies as contact-shaped — the exact live failure this gate exists for");
+    if (contactShapedTheme('they never called back after the damage') !== true) _fails.push('a mixed contact+quality theme lost its leak status — contact wins on mixed');
+    if (contactShapedTheme('') !== null) _fails.push('an absent theme classifies as something');
+    // And the widened quality vocabulary reaches the call-sheet buckets too.
+    const _rwBuckets = classifyOpsBuckets(['quality control issues - drainage and uneven surfaces - 3 of the 90 reviews we read say it']);
+    if (!_rwBuckets.some(b => b.id === 'work_quality')) {
+      _fails.push("Breck's drainage/uneven phrasing lands in NO bucket, so the call-sheet complaint chip goes silent on the commonest workmanship wording");
+    }
     // The wire: the call site must hand both evidence classes over, or the rule
     // passes its fixtures while every live lead runs without it.
     const _en = (...p) => p.join('');
     if (!selfSourceNoComments().includes(_en('evidence: { adsLive: !!(_measured && _measured.adsLiveInPack)', ','))) {
       _fails.push('the live call site no longer passes the evidence classes, so the agreed rule runs on fixtures and never on a lead');
     }
+    if (!selfSourceNoComments().includes(_en('&& contactShapedTheme(String((_harmInputs || {}).', "reviewPainTop || '')) === true"))) {
+      _fails.push('the live call site no longer classifies the dominant theme, so the workmanship gate runs on fixtures and never on a lead');
+    }
+    if (!selfSourceNoComments().includes(_en('reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).', "reviewPainTop || ''))"))) {
+      _fails.push('the live call site no longer passes reviewThemeContact, so the TAXED demotion can never fire on a lead');
+    }
     if (_fails.length) {
       console.log(`⛔ FINDINGS MONEY ORDER CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top rank with TAXED. And the agreed evidence rule holds in both directions: a repeating complaint three customers WROTE outranks an ads TAG (two no longer does; the email's own anecdote floor) (an account is not a campaign), while BURNING proven live by a sponsored row keeps #1, and with no written evidence nothing moves at all.`);
+      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top rank with TAXED. The agreed evidence rule holds in both directions: a repeating complaint three customers WROTE outranks an ads TAG (two no longer does; the email's own anecdote floor), while BURNING proven live by a sponsored row keeps #1, and with no written evidence nothing moves at all. And the complaint's KIND now decides: a contact-shaped theme promotes, a workmanship-shaped theme moves to TAXED past the top-3 floor and loses the lost-jobs money line — a complaint about the work itself is context, not a leak we sell against.`);
     }
   } catch (e) {
     console.log(`⛔ FINDINGS MONEY ORDER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -45240,6 +45605,17 @@ app.listen(PORT, () => {
     if (buildAuditFacts({ googleAdsTag: false, adsReadable: false }).ads === 'no') _fails.push('a page we could not read reports "no ads" — the absence claim without the did-we-look gate, aimed at the fact Vin most wants accurate');
     if (buildAuditFacts({}, null).campaignPages !== null) _fails.push('an unrun unlinked-page read reports a campaign-page count');
     if (buildAuditFacts({}, { checked: true, campaignCount: 2, unlinkedCount: 5 }).campaignPages !== 2) _fails.push('a real campaign-page count does not reach the strip');
+    // ── the ROI answer, all four states, plus the unmeasured trap ──────────
+    const _froi1 = buildAuditFacts({ googleAdsTag: true, adsReadable: true, tagManager: false, adsConversion: false, callTracking: false });
+    if (_froi1.roiStatus !== 'blind') _fails.push('Google ads wired, readable pages, neither tracking marker — and the strip does not say the money goes out blind');
+    const _froi2 = buildAuditFacts({ googleAdsTag: true, adsReadable: true, tagManager: false, adsConversion: true, callTracking: false });
+    if (_froi2.roiStatus !== 'counted') _fails.push('a real conversion label does not read as counted — the "are we 100% sure" question, answered wrong in the safe direction is still answered wrong');
+    if (_fgtm.roiStatus !== 'hidden') _fails.push('a Tag Manager container does not read as hidden — it would be reported as missing tracking, the exact claim the rung refuses');
+    const _froi4 = buildAuditFacts({ googleAdsTag: true, adsReadable: true, tagManager: false });
+    if (_froi4.roiStatus !== null) _fails.push('an UNMEASURED conversion read produced a verdict — null must never harden into blind');
+    if (_froi4.adsConversion !== null) _fails.push('an unmeasured conversion marker reads false on the strip — the null === true trap, back again');
+    if (buildAuditFacts({ rankSource: 'places' }).searchSource !== 'places') _fails.push('the search source does not reach the strip, so a sheet still cannot say whether DataForSEO answered');
+    if (buildAuditFacts({}).searchSource !== null) _fails.push('a lead with no rank read invents a search source');
 
     // ── the call site, because a fixture supplies its own arguments ────────
     const _wn = (...p) => p.join('');
@@ -45257,6 +45633,104 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ WEBSITE SCORE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FUNNEL STORY, EXECUTED BRANCH BY BRANCH ════════════════════════
+  // A block attached after the model's JSON parsed bypasses all seven audit
+  // strippers by construction, so this check is buildFunnelStory's whole gate:
+  // every branch executed both ways, and every sentence it can emit scored by
+  // the same plain-English rules the ladder's own sentences pass — the §10
+  // insight-line failure was exactly a first sentence exempt from both.
+  try {
+    const _fails = [];
+    // Breck's Paving's own shape: Facebook-only wiring, confirmed search
+    // absence, an 8-field form, no price, workmanship-dominant complaints.
+    const BRECKS = {
+      adsReadable: true, metaPixel: true, googleAdsTag: false, tagManager: false,
+      adsConversion: null, callTracking: null,
+      rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, rankQuery: 'parking lot paving in Columbus, OH',
+      bookingMeasured: true, booking: 'form', formFieldCountIsSingleForm: true, formFieldCount: 8,
+      pricingMeasured: true, pricesPublished: 0,
+      reviewPainTop: 'quality control issues - drainage, uneven surfaces', reviewPainMentions: 3, reviewsRead: 90,
+      tradeWord: 'paving',
+    };
+    const _fs = buildFunnelStory(BRECKS, { bottleneck: 'FOUNDATION', bottleneckWhy: 'The site cannot hold a visitor.', adsLive: false, opsPain: null, opsRoles: [] });
+    const _stage = (r, id) => ((r && r.stages) || []).find(s => s.id === id) || null;
+    if (!_fs || _fs.checked !== true) _fails.push('the Breck-shaped lead produced no story at all');
+    const _mo = _stage(_fs, 'money_out');
+    if (!_mo || !/set up for Facebook and Instagram ads/.test(_mo.text)) _fails.push('Facebook-only wiring does not open the money stage');
+    if (_mo && /Google ads\./.test(_mo.text)) _fails.push('the money stage claims Google wiring on a Facebook-only lead');
+    const _wf = _stage(_fs, 'who_finds_them');
+    if (!_wf || !/not in the results at all/.test(_wf.text)) _fails.push('a confirmed search absence does not reach the story');
+    if (!_wf || !/people who were not looking/.test(_wf.text) || !/If those ads are live/.test(_wf.text)) {
+      _fails.push('the Facebook-versus-Google join is missing on the exact shape Vin walked, or it dropped the stated conditional that keeps a pixel from becoming spend');
+    }
+    const _dr = _stage(_fs, 'the_door');
+    if (!_dr || !/fill in a form and wait/.test(_dr.text) || !/8 pieces of information/.test(_dr.text) || !/No price appears/.test(_dr.text)) {
+      _fails.push('the landing stage lost the form, the field count or the missing price');
+    }
+    const _wr = _stage(_fs, 'what_repeats');
+    if (!_wr || !/context about the business/.test(_wr.text)) _fails.push('the workmanship pattern is missing, or presented as a leak instead of context');
+    if (_stage(_fs, 'after_contact')) _fails.push('a workmanship theme produced a contact-complaints stage');
+    if (!_fs || !_fs.fixFirst || !_fs.fixFirst.join) _fails.push('a bad search plus a broken door did not produce the fix-order sentence Vin endorsed: showing up higher cannot pay off while it lands on the same dead end');
+
+    // The GTM silence. Removing the tagManager gate ships the join through a
+    // container that can hold a Google tag we cannot see — the falsification.
+    const _gtm = buildFunnelStory({ ...BRECKS, tagManager: true }, {});
+    if (((_gtm && _gtm.stages) || []).some(s => /people who were not looking/.test(s.text))) {
+      _fails.push('the Facebook-versus-Google join fires through a Google Tag Manager container');
+    }
+    // Google wiring with a genuinely clean read, plus the live proof.
+    const _gb = buildFunnelStory({ adsReadable: true, googleAdsTag: true, metaPixel: false, tagManager: false, adsConversion: false, callTracking: false }, { adsLive: true });
+    const _gmo = _stage(_gb, 'money_out');
+    if (!_gmo || !/no page we read carries conversion tracking or call tracking/.test(_gmo.text)) _fails.push('Google ads with a clean read does not say what the pages are missing');
+    if (!_gmo || !/running right now/.test(_gmo.text)) _fails.push('a sponsored row proving live ads does not reach the story — the one direct proof of live spend the system holds');
+    // An unmeasured conversion read is silence, never blindness.
+    const _gu = buildFunnelStory({ adsReadable: true, googleAdsTag: true, metaPixel: false, tagManager: false, adsConversion: null, callTracking: null }, {});
+    const _guo = _stage(_gu, 'money_out');
+    if (_guo && /no page we read carries conversion tracking/.test(_guo.text)) _fails.push('an UNMEASURED conversion read produced the blind sentence — null hardened into an absence claim');
+    // A contact theme beside open ops roles produces the capacity read, bounded
+    // to "signs of" with both named measurements in the sentence.
+    const _cap = buildFunnelStory({ adsReadable: false, reviewPainTop: 'no one ever called back about the estimate', reviewPainMentions: 4, reviewsRead: 60 }, { opsRoles: [{ title: 'Dispatcher' }], opsPain: { binding: true } });
+    const _cs = _stage(_cap, 'after_contact');
+    if (!_cs || !/4 of the 60 reviews we read/.test(_cs.text)) _fails.push('a contact-shaped complaint pattern does not reach the story with its own arithmetic');
+    if (!_cs || !/signs of a team at capacity/.test(_cs.text) || !/Dispatcher/.test(_cs.text)) _fails.push('open ops roles beside contact complaints do not produce the capacity read, or it lost the named measurements that keep it honest');
+    const _capNo = buildFunnelStory({ adsReadable: false, reviewPainTop: 'no one ever called back about the estimate', reviewPainMentions: 4, reviewsRead: 60 }, { opsRoles: [], opsPain: { binding: true } });
+    if (/team at capacity/.test(JSON.stringify(_capNo || {}))) _fails.push('the capacity read fires with no open role measured — a claim with half its evidence missing');
+    // Unmeasured stages are OMITTED, and a lead with nothing measured is null.
+    if (buildFunnelStory({}, {}) !== null) _fails.push('a lead with nothing measured produced a story');
+    if (buildFunnelStory({ adsReadable: false, rankChecked: false }, {}) !== null) _fails.push('unreadable ads and an unchecked search still produced stages');
+    // Defence in depth: even a corrupted input object carrying a tag value we
+    // never read must not produce a money stage — the did-we-look gate, not
+    // the field contract, is what this asserts.
+    if (buildFunnelStory({ adsReadable: false, googleAdsTag: true, metaPixel: false, tagManager: false }, {}) !== null) _fails.push('a money stage rendered off tag fields we did not read — the did-we-look gate is gone');
+    // Every sentence every fixture emitted, scored by the ladder's own gate.
+    for (const _r of [_fs, _gtm, _gb, _gu, _cap]) {
+      for (const _s of ((_r && _r.stages) || [])) {
+        const _pf = plainEnglishFaults(_s.text, { trade: 'paving', mined: String(BRECKS.reviewPainTop) });
+        if (_pf.length) _fails.push(`the ${_s.id} stage fails the plain-English gate: ${_pf[0]}`);
+      }
+    }
+    if (_fs && _fs.fixFirst && _fs.fixFirst.join) {
+      const _pj = plainEnglishFaults(_fs.fixFirst.join, {});
+      if (_pj.length) _fails.push(`the fix-order sentence fails the plain-English gate: ${_pj[0]}`);
+    }
+    // The call site — a fixture supplies its own arguments and cannot see it.
+    const _sn = (...p) => p.join('');
+    const _ssrc = selfSourceNoComments();
+    if (!_ssrc.includes(_sn('funnelStory: buildFunnelStory(', '_harmInputs, {'))) {
+      _fails.push('the response no longer carries the funnel story, so the sheet is back to model prose for its spine');
+    }
+    if (!_ssrc.includes(_sn('bottleneck, ', 'bottleneckWhy,'))) {
+      _fails.push('the story no longer reads the same bottleneck variables the one-thing reads — a second derivation is the two-hand-kept-copies disease');
+    }
+    if (_fails.length) {
+      console.log(`⛔ FUNNEL STORY CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ FUNNEL STORY CHECK: the funnel walk is code over policed measurements — money out (with the three-state answer to whether anything counts what a click becomes), who finds them, what a click lands on, what happens after contact, what repeats, and what to fix first off the same bottleneck variables the one-thing reads. The Facebook-versus-Google join needs all five gates and states its conditional out loud; a GTM container silences it; an unmeasured read is omitted, never zeroed; the capacity read needs the complaint AND the open role; and every sentence it can emit passes the same plain-English gate the ladder's own sentences pass.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FUNNEL STORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════
@@ -45526,6 +46000,11 @@ app.listen(PORT, () => {
       ['the gated synthesis is not written back, so the sheet still reads the raw one', _dn('situationRead = ', '_srx;')],
       ['the audit fields do not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(parsed[k], ', '_pcx, 1)')],
       ['the leak promotion floor is not the email anecdote floor', _dn('reviewPainMentions) >= ', '3')],
+      // The headline finally has a gate: the first sentence of THE STORY runs
+      // the same plain-language rules as the sheet. Removing the faults line
+      // reverts it to the six-word spec whose drift the owner read as broken
+      // grammar.
+      ['the headline runs the plain-language gate as a hard fault', _dn('plainEnglishFaults(String(parsed.', 'headline || \'\'), {})')],
       ['the audit rows are not initialism-fixed and sentence-cased', _dn('problem: sentenceCaseStart', '(fixAcronymCase(h.finding))')],
     ]) {
       if (!_tsrc.includes(_needle)) _fails.push(_what + ' - the computed-but-not-passed class');
@@ -52779,6 +53258,13 @@ app.listen(PORT, () => {
       if (/NICHE_BRIEFS|_niche\b|nicheBrief/.test(body)) {
         _fails.push(`${forbidden} reads the niche library — industry framing is for the call and the audit, and the email path must never see it`);
       }
+      // The funnel story is the same wall: it is the sheet's spine, assembled
+      // for a person holding a phone, and none of it is email-gated material.
+      // A writer function that so much as mentions it has a route from the
+      // audit narrative into an inbox that no stripper covers.
+      if (/buildFunnelStory|funnelStory|BOTTLENECK_PLAIN/.test(body)) {
+        _fails.push(`${forbidden} reads the funnel story — the sheet's spine must never reach the email path`);
+      }
     }
 
     if (_fails.length) {
@@ -54396,6 +54882,29 @@ app.listen(PORT, () => {
     const e2 = mergeAdSignals(PLAIN_OK, PAD);
     if (e2.hasGoogleAdsTag !== false) _fails.push('a page we read with no ads tag no longer reads false, so the spending findings can never fire');
 
+    // 6. THE DEAD WIRE. A conversion label in the rendered page must come back
+    //    true, and a readable page without one false. Until 2026-08-24 the two
+    //    markers were computed here and never copied onto builtWith, so
+    //    _harmInputs.adsConversion read `undefined === true` on every lead and
+    //    ads_untracked asserted "no conversion tracking" off a wire that had
+    //    never carried a measurement.
+    const f1 = mergeAdSignals(BLOCKED, '<script>gtag(\'event\', \'conversion\', {send_to: \'AW-123456789/AbCdEfGh1234\'});</script>' + PAD);
+    if (f1.hasAdsConversion !== true) _fails.push('a conversion label in the rendered page is missed, so "no conversion tracking" would be said about a site that counts its conversions');
+    const f2 = mergeAdSignals(BLOCKED, '<script src="https://cdn.callrail.com/companies/123/abc/12/swap.js"></script>' + PAD);
+    if (f2.hasCallTracking !== true) _fails.push('a call-tracking script in the rendered page is missed');
+    if (f2.hasAdsConversion !== false) _fails.push('a rendered page we read without a conversion label no longer reads false for it');
+
+    // 7. ABSENCE IS PER MARKER. The plain fetch never tests the conversion
+    //    label, so a plain-only read may claim the three markers it computes
+    //    and must stay silent on the two it does not.
+    const g1 = mergeAdSignals(PLAIN_OK, '');
+    if (g1.hasGoogleAdsTag !== false) _fails.push('a confirmed plain fetch no longer licenses absence for the marker it computed');
+    if (g1.hasAdsConversion !== null) _fails.push('a plain-only read claims "no conversion tracking" though the plain fetch never tests that marker');
+    // Interior pages are harvested positives-only: presence yes, absence never.
+    const g2 = mergeAdSignals(BLOCKED, '', { googleAds: true, metaPixel: false, tagManager: false, adsConversion: false, callTracking: false, pages: 3 });
+    if (g2.hasGoogleAdsTag !== true) _fails.push('an interior-page positive is lost');
+    if (g2.hasMetaPixel !== null) _fails.push('interior pages alone license an absence claim, though they are harvested positives-only');
+
     // 6. And the wiring. Everything above tests the function; only this proves
     //    the merged answer is what the rungs actually read. Needles assembled at
     //    runtime, comment lines stripped — both recorded traps in this file.
@@ -54406,6 +54915,16 @@ app.listen(PORT, () => {
       }
       if (_src.indexOf('adsReadable: !!(builtWith && builtWith.' + 'adsRead === true)') < 0) {
         _fails.push('the did-we-look gate no longer follows the merged read, so a bot-challenged plain fetch silences both spending findings again');
+      }
+      // The two copy lines that close the dead wire, and the merged-read null
+      // gates. Needles assembled at runtime so they cannot match themselves.
+      if (_src.indexOf('builtWith.hasAdsConversion = _ads.' + 'hasAdsConversion;') < 0
+        || _src.indexOf('builtWith.hasCallTracking = _ads.' + 'hasCallTracking;') < 0) {
+        _fails.push('the conversion/call-tracking markers are computed by the merge and never copied onto builtWith again, so ads_untracked is back on the dead wire');
+      }
+      if (_src.indexOf('adsConversion: (builtWith && builtWith.' + 'adsRead === true)') < 0
+        || _src.indexOf('googleAdsTag: (builtWith && builtWith.' + 'adsRead === true)') < 0) {
+        _fails.push('the tri-state ad fields null-gate on the plain fetch again instead of the merged read, so a bot-challenged site loses every ad finding');
       }
     }
 
