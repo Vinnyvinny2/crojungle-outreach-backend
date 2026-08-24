@@ -642,6 +642,77 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ 6b-4. THE AUDIT SCREEN IS EXECUTED, NOT READ ════════════════════════════
+// LeadBriefing is the audit screen. Until 2026-08-24 nothing in this repo had
+// ever run it — a throw anywhere in its tree takes the whole audit view down,
+// which is a far worse failure than any one missing section. Executed with a
+// recording React stub: the seven categories of the approved sheet must all
+// render, askOnTheCall must appear exactly once (it moved from the selling
+// block into The conversation — two homes is the drift this file records), and
+// a null lead must return null rather than throw.
+{
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit'];
+  const found = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
+      found[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+    if (n.type === 'FunctionDeclaration' && n.id && NEED.includes(n.id.name)) {
+      found[n.id.name] = src.slice(n.start, n.end);
+    }
+  });
+  const missing = NEED.filter(k => !found[k]);
+  if (missing.length) {
+    fails.push(`the audit screen cannot be verified: ${missing.join(', ')} not found at module scope`);
+  } else {
+    const texts = [];
+    const ReactStub = { createElement: (type, props, ...kids) => {
+      const flat = (a) => a.forEach(x => Array.isArray(x) ? flat(x) : (typeof x === 'string' || typeof x === 'number') && texts.push(String(x)));
+      flat(kids);
+      return { type, props, kids };
+    } };
+    let briefing = null;
+    try {
+      briefing = new Function('React', found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+    } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
+    if (briefing) {
+      const LEAD = {
+        id: 'x1', name: 'Smith & Sons', website: 'https://smith.example',
+        ownerName: 'Jason Hicks', email: 'info@x.example', phone: '2103613587',
+        websiteScore: { checked: true, score: 8, basedOn: '5 of 6', graded: [] },
+        auditFacts: { ads: 'no', booking: 'online_booking', formFields: 4, campaignPages: 10, mobile: 'fine', https: true },
+        opsBuckets: [{ label: 'quotes take too long', mentions: 5 }], reviewsNegativeUnanswered: 2,
+        situationRead: { background: 'BG', headline: 'HL', read: 'RD', rows: [{ label: 'L', says: 'S' }],
+          whatHeCaresAbout: 'C', whatHeNeeds: 'N', askOnTheCall: 'ASKQ_MARKER' },
+        growthConstraint: { layer: 'MARKET', condition: 'c' },
+        theOneThing: { layer: 'CONVERSION', diagnosis: 'DIAG', why: 'WHY', firstBrokenLink: 'CONVERSION', firstBrokenLinkWhy: 'FBLW', earnedButBlocked: true, frictionCount: 2, friction: ['F1', 'F2'], costliest: null },
+        brainAudit: { originalFindings: [{ finding: 'OF', evidence: 'EV' }], _criticalFactCheck: ['CRIT'], _ladderFailed: null },
+        problemList: [{ area: 'A', problem: 'PROB', costs: 'COSTS', harm: 80, moneyRank: 1, pillar: 'ROTTING', moneyLine: 'ML' }],
+        _claimRisks: ['RISK1'],
+        subject: 'SUBJ', pitch: 'PITCHTEXT',
+        generatedResult: { prospectSim: { reason: 'My jobs come from referrals and reviews, the website does nothing for me at all.' } },
+      };
+      let threw = '';
+      try { briefing({ lead: LEAD }); } catch (e) { threw = e.message; }
+      if (threw) {
+        fails.push('the audit screen THROWS on a normal audited lead: ' + threw + ' — an exception here blanks the whole audit view');
+      } else {
+        const joined = texts.join('|');
+        for (const label of ['Not sendable as written', 'Who to talk to', 'The money', 'The conversation',
+          'The email led with', 'He will likely say', 'Worth asking', 'Do not say',
+          'What this business is', 'The one thing', 'What is actually worth selling them']) {
+          if (joined.indexOf(label) < 0) fails.push('the audit screen no longer renders "' + label + '" — a category of the approved seven-part layout is dark');
+        }
+        const askCount = texts.filter(t => t === 'ASKQ_MARKER').length;
+        if (askCount !== 1) fails.push('askOnTheCall renders ' + askCount + ' time(s) on the audit screen, not once — it belongs in The conversation and nowhere else, or the two copies drift');
+      }
+      try {
+        if (briefing({ lead: null }) !== null) fails.push('the audit screen does not return null for a null lead');
+      } catch (e) { fails.push('the audit screen throws on a null lead: ' + e.message); }
+    }
+  }
+}
+
 // ══ 6c. THE SEND MUST CARRY BOTH SEQUENCES AND STAMP WHICH ONE FIRED ════════
 // Rotation is a settings entry; these are the three client wires that make it
 // real. Each is a needle for a line that, missing, silently reverts the send
