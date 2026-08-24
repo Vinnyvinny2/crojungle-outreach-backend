@@ -12419,6 +12419,8 @@ const RUNG_PILLAR = {
   no_https:                      'LEAKING',
   no_mobile_viewport:            'LEAKING',
   slow_mobile:                   'LEAKING',
+  no_retargeting:                'BURNING',
+  no_financing:                  'ROTTING',
   long_form:                     'LEAKING',
   no_published_pricing:          'LEAKING',
   no_offer:                      'LEAKING',
@@ -13744,6 +13746,37 @@ const HARM_LADDER = [
     say: () => 'Their site has Facebook and Instagram ad tracking on it, and nothing for Google',
     costs: 'somebody who is already searching for this is the easiest customer there is to win' },
 
+  // ══ PAYING FOR THE FIRST VISIT WITH NO WAY TO EARN THE SECOND ═══════════
+  // Vin, 2026-08-24, on the retargeting gap: "#4 is a big one." The claim is
+  // deliberately NARROW: Google's own tag can re-reach past visitors, so "you
+  // cannot retarget at all" would be false on any site with a Google tag. What
+  // is measured and true is the FACEBOOK half: the Google ads tag is on the
+  // page and the Meta pixel is not, so a visitor who leaves can never be shown
+  // this business on Facebook or Instagram. Both halves are read off their own
+  // markup, and the absence half rides adsReadable like every absence here.
+  { harm: 72, specific: 88, novel: 80, delegable: 35, weFix: 95, band: 'SPENDING', id: 'no_retargeting',
+    blind: 'the piece of code that would follow a past visitor is invisible on the page itself, and nothing he looks at day to day records whether it is there',
+    reframe: 'most people do not hire on the first visit, and staying in front of them costs pennies against paying for a brand new click',
+    test: (m) => m.adsReadable === true && m.tagManager === false
+      && m.googleAdsTag === true && m.metaPixel === false,
+    say: () => 'Their site pays to bring visitors in through Google ads, and carries nothing that could show those visitors this business again on Facebook or Instagram',
+    costs: 'every visitor they paid for gets one chance to buy, and then has to be bought again at full price' },
+
+  // ══ A FIVE-FIGURE TRADE WITH NO WAY TO PAY OVER TIME ════════════════════
+  // Quote-to-close is where the big money dies in these trades, and reviews
+  // only show it when a customer bothers to write. This is the close-rate
+  // signal that does not need a review: in a trade where the job routinely
+  // costs more than people pay at once, a financing option on the site is
+  // standard — and its absence is measurable from pages we already hold.
+  // Absence standard per readRecurringOffer's own rule: enough of the site
+  // actually read, or the rung stays silent. Presence anywhere kills it.
+  { harm: 74, specific: 85, novel: 74, delegable: 60, weFix: 90, band: 'BLOCKS', id: 'no_financing',
+    blind: 'a pay-over-time button shows up on other people\u2019s sites, and nobody reads a competitor\u2019s checkout next to their own',
+    reframe: 'for a job that costs more than most people pay at once, the company that offers monthly payments is the easy yes',
+    test: (m) => m.financingMeasured === true && m.financingOffered === false && m.bigTicketTrade === true,
+    say: () => 'Nothing on the pages we read lets a customer pay over time, in a trade where most jobs cost more than people pay at once',
+    costs: 'the customer who cannot pay it all at once rarely says so, he just picks the company that lets him pay monthly' },
+
   // ── TWO LISTINGS, ONE BUSINESS ────────────────────────────────────────
   // On the CLAUDE.md roadmap since 2026-08-18: "splits reviews and ranking,
   // invisible to the owner, risky to fix alone, and explains the outranked
@@ -14689,6 +14722,7 @@ const AREA_OF = {
   expired_certificate: 'Website', stale_copyright: 'Website',
   placeholder_text: 'Website', dead_blog: 'Website', dated_credibility: 'Website',
   no_mobile_viewport: 'Website', tap_to_call_broken: 'Website', slow_mobile: 'Website',
+  no_retargeting: 'Advertising', no_financing: 'Website',
   long_form: 'Getting in touch', form_only_no_booking: 'Getting in touch',
   no_after_hours: 'Getting in touch', phone_mismatch: 'Getting in touch',
   absent_from_search: 'Being found', outranked_by_weaker: 'Being found', organic_invisible: 'Being found',
@@ -14858,6 +14892,9 @@ const SUBJECTS_FOR = {
   no_mobile_viewport:   ['your site breaks on a phone', 'your site is down on mobile'],
   // Both under the 30-character ceiling, which drops a longer one in silence.
   slow_mobile:          ['your site on a phone', 'the wait on a phone'],
+  // Both under the 30-character ceiling, which drops a longer one in silence.
+  no_retargeting:       ['your ad clicks, once', 'paying twice for visitors'],
+  no_financing:         ['paying for a big job', 'the monthly-payment gap'],
   review_deficit:       ['you are behind on reviews', 'they have more reviews'],
   // '{years} years, {reviews} reviews' was here and broke two of Mike's own
   // subject rules at once — numbers, and two clauses split for rhythm. Three
@@ -15453,6 +15490,8 @@ const HARM_LADDER_LAYER = {
   expired_certificate:   'CONVERSION',
   no_mobile_viewport:    'CONVERSION',
   slow_mobile:           'CONVERSION',
+  no_retargeting:        'CONVERSION',
+  no_financing:          'OFFER',
   dated_credibility:     'CONVERSION',
   stale_copyright:       'CONVERSION',
   placeholder_text:      'CONVERSION',
@@ -15549,6 +15588,11 @@ const SELLABLE = {
   // 4: a page rebuilt for speed is the rebuild we sell, and the fix is not
   // something an owner or his current web guy does in an afternoon.
   slow_mobile: 4,
+  // 4: a pixel is minutes to install and the STRATEGY behind following past
+  // visitors is retainer work; financing is a vendor signup wrapped in an
+  // offer decision, which is the offer work we sell.
+  no_retargeting: 4,
+  no_financing: 3,
   no_published_pricing: 1, no_lead_magnet: 1, stale_copyright: 1,
   placeholder_text: 1, dead_blog: 1, no_https: 1, expired_certificate: 1,
   thin_profile: 1, no_hours_on_profile: 1, no_website_on_profile: 1,
@@ -19373,6 +19417,7 @@ const CTA_BY_FINDING = {
   broken_page: 'accountability', site_empty: 'accountability', no_https: 'accountability',
   expired_certificate: 'accountability', tap_to_call_broken: 'accountability',
   no_mobile_viewport: 'accountability', placeholder_text: 'accountability',
+  no_retargeting: 'ads', no_financing: 'process',
   slow_mobile: 'accountability',
   stale_copyright: 'accountability', dated_credibility: 'accountability',
   dead_blog: 'accountability', phone_mismatch: 'accountability',
@@ -20101,6 +20146,25 @@ const NEVER_AMBIENT = new Set(['hiring_marketing_now']);
 const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
   const bindingLayer = opts.bindingLayer || null;
+  // ══ A LOSS A CUSTOMER WROTE DOWN BEATS A LOSS WE INFERRED ═══════════════
+  // Agreed with the owner 2026-08-24. BURNING sits first because money already
+  // moving is the strongest frame — but an advertising TAG only ever proves an
+  // account existed, and pillar order alone put that inference above two
+  // customers publicly writing "been calling for three weeks, still no call
+  // back". Evidence class breaks pillar order in exactly one direction:
+  //   BURNING proven LIVE (a sponsored row in the actual results) keeps #1.
+  //   BURNING inferred from a tag drops below customer-written contact
+  //     evidence, and the written evidence itself rises just under UNCAUGHT.
+  //   With no written evidence on the lead, nothing moves at all.
+  const _ev = opts.evidence || {};
+  const _TAG_BURNING = new Set(['paying_for_a_search_they_lose', 'ads_untracked', 'social_spend_no_search', 'paid_traffic_leaks']);
+  const _effRank = (id) => {
+    const base = moneyOrder(id);
+    if (!_ev.writtenContact) return base;
+    if (id === 'review_pain_pattern') return 2.4;
+    if (base === 1 && _TAG_BURNING.has(id) && !_ev.adsLive) return 2.6;
+    return base;
+  };
   const rows = harms.byHarm.map(h => {
     const novel = Number(h.novel);
     // Unknown novelty is NOT treated as ambient. Requiring a real number stops
@@ -20122,7 +20186,7 @@ const buildProblemList = (harms, opts = {}) => {
       // screen's pillar chip. moneyRank is what the sort reads; a row merged in
       // later (the copy quotes) can carry its own.
       pillar: pillarForRung(h.id) || null,
-      moneyRank: moneyOrder(h.id),
+      moneyRank: _effRank(h.id),
     };
   });
   // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
@@ -21367,6 +21431,63 @@ const tradeJobValue = (tradeWord) => {
 // — a component we never measured LEAVES THE DENOMINATOR instead of scoring
 // nothing. A site we half-read gets a score based on the half we read, and the
 // card says how much that was.
+// ══ FINANCING: THE CLOSE-RATE SIGNAL THAT NEEDS NO REVIEW ═══════════════════
+// Quote-to-close is where the big money dies in these trades and reviews only
+// show it when somebody bothers to write. Whether the site offers a way to pay
+// over time is measurable from pages we already hold: the financing vendors
+// load by name (Wisetack, GreenSky, Synchrony and peers) and the offer itself
+// is visible text. Absence follows readRecurringOffer's recorded standard —
+// enough of the site actually read, or no claim at all. Presence anywhere wins.
+const FINANCING_RE = /wisetack|greensky|synchrony|hearth\.com|acorn ?finance|service ?finance|foundation ?finance|momnt|sunlight financial|financ(?:e|ing) (?:available|options?|plans?)|apply (?:for|now for) financing|payment plans?|monthly payments?|pay (?:over time|monthly|in installments)|0% (?:apr|interest|financing)|same[- ]as[- ]cash|\baffirm\b|\bklarna\b/i;
+// Trades where a job routinely costs more than people pay at once, so a
+// pay-over-time option is STANDARD and its absence is a fair finding. Written
+// as open-ended stems on purpose — \bplumb\b cannot match "plumbing" is the
+// recorded trap — and kept NARROW: a trade not listed simply never fires the
+// rung, which is the cheap direction to be wrong in.
+const BIG_TICKET_TRADE_RE = /\b(?:roof|hvac|heat|air.?condition|remodel|kitchen|bath|pool|foundation|solar|siding|window|concrete|pav(?:e|ing)|restorat|water.?damage|garage.?door|deck|epoxy|turf|masonr)/i;
+const measureFinancing = ({ rawHtml, text } = {}) => {
+  const h = String(rawHtml || '');
+  const t = String(text || '');
+  const looked = h.length >= 2000 || t.length >= 3000;
+  const offered = FINANCING_RE.test(h) || FINANCING_RE.test(t);
+  // Presence is a find whatever we read; absence needs the look.
+  if (offered) return { checked: true, offered: true };
+  if (!looked) return { checked: false, offered: null };
+  return { checked: true, offered: false };
+};
+
+// ══ THE REVIEW COMPLAINTS, SPLIT INTO THE BUCKETS AN OPERATOR SELLS TO ═══════
+// Vin's OpEx pitch runs on WHICH KIND of operational failure the reviews show —
+// nobody answering is an automation sale, scheduling chaos is a process sale.
+// One lump ("2 operational patterns") could not say. INTERNAL: this reads the
+// miner's own pain strings and the split goes to the call sheet and the audit
+// screen, never to an email.
+const OPS_BUCKET_DEFS = [
+  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|had to chase|kept waiting|unresponsive|no response/i },
+  { id: 'quote_delay', label: 'quotes take too long', re: /quote (?:delay|took|never)|slow(?:er)? (?:response|to respond|quote)|took (?:weeks|days|forever)|waiting (?:on|for) (?:a |the )?(?:quote|estimate)/i },
+  { id: 'scheduling', label: 'scheduling breaks down', re: /schedul|reschedul|missed (?:the )?appointment|no[- ]?show|double[- ]?book|cancel/i },
+  { id: 'work_quality', label: 'work has to be redone', re: /redo|re-?work|come back (?:and|to) fix|had to fix|left (?:a mess|unfinished)|unfinished/i },
+];
+const classifyOpsBuckets = (signals) => {
+  const rows = [];
+  for (const def of OPS_BUCKET_DEFS) {
+    let mentions = 0, hit = false;
+    for (const s of (Array.isArray(signals) ? signals : [])) {
+      const t = String(s || '');
+      if (!def.re.test(t)) continue;
+      hit = true;
+      mentions += reviewPainMentions(t) || 1;
+    }
+    if (hit) rows.push({ id: def.id, label: def.label, mentions });
+  }
+  // Most-mentioned first, sorted HERE rather than by any consumer: the client's
+  // "Complaints: mostly X" chip reads row zero, and an order that is an accident
+  // of the definition list is the computed-but-not-passed disease one level
+  // down -- the right value exists and the wrong row sits on top.
+  rows.sort((a, b) => b.mentions - a.mentions);
+  return rows;
+};
+
 const scoreWebsite = (m = {}) => {
   const graded = [];   // { what, got, of, why }
   const skipped = [];
@@ -22078,6 +22199,8 @@ const OWNER_KNOWS = {
   // that are not his. Opening his own cached site on his own phone tells him
   // nothing about it, which is exactly why the finding survives him checking.
   slow_mobile:                  ['cannot_know', "a 28-day aggregate of other people's phones, which his own phone cannot show him"],
+  no_retargeting:               ['has_not_looked', 'a tag in his own markup, beside the one he (or his ad person) did install'],
+  no_financing:                 ['decided', 'whether to offer financing is a choice he looks at, though the site carrying no trace of one may not be'],
   tap_to_call_broken:           ['has_not_looked', 'his own number does not dial from a phone, and he has never tapped it'],
   stale_copyright:              ['has_not_looked', 'a footer year nobody reads on their own site'],
   placeholder_text:             ['has_not_looked', 'template text left behind, which he scrolls past every time'],
@@ -25012,7 +25135,25 @@ function extractHtmlSignals(rawHtml, pageUrl) {
 //
 // EVERY unknown shape degrades to {checked:false}. There is no path from a failure
 // to "no complaints found".
-const APIFY_ACTOR = 'compass~google-maps-reviews-scraper';
+// ══ THE ACTOR IS A SETTING, BECAUSE THE PRICE PER THOUSAND REVIEWS IS NOT ═══
+// Apify bills per review scraped and actors differ by roughly half on the same
+// data. Making the actor an environment variable lets a cheaper one be TRIALLED
+// without a deploy — and the guards that make that safe already exist and are
+// falsified: normalizeApifyReview degrades any unknown row shape to null, an
+// unparseable dataset returns {checked:false} rather than "no complaints", and
+// the truncation guard judges the pull against Google's own count. A worse
+// actor can only produce NOT MEASURED, never a false claim. The id shape is
+// validated because a typo here would 404 every review pull while reading like
+// a dead token.
+const _APIFY_ACTOR_RAW = String(process.env.APIFY_ACTOR || '').trim();
+const APIFY_ACTOR = /^[a-z0-9-]+~[a-z0-9-]+$/i.test(_APIFY_ACTOR_RAW)
+  ? _APIFY_ACTOR_RAW
+  : 'compass~google-maps-reviews-scraper';
+if (_APIFY_ACTOR_RAW && APIFY_ACTOR !== _APIFY_ACTOR_RAW) {
+  console.log(`\u26a0 APIFY_ACTOR "${_APIFY_ACTOR_RAW}" is not a valid actor id (owner~name) \u2014 using the default. A typo here would 404 every review pull while reading exactly like a dead token.`);
+} else if (_APIFY_ACTOR_RAW) {
+  console.log(`APIFY ACTOR: using ${APIFY_ACTOR} from the environment. Every safety on the review pull is shape-based, so a different actor can only produce NOT MEASURED, never a false claim \u2014 watch the APIFY REVIEWS lines on the first run to confirm it parses.`);
+}
 // ══ FORTY WAS A NUMBER, NOT A DECISION ═══════════════════════════════════════
 // Nothing here explained it, and it was quietly capping the strongest finding
 // this system produces. Reading 40 of 133 means a complaint appearing eight
@@ -25311,6 +25452,9 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   const mined = _corpus.reviews;
   const withText = mined.filter(r => r.text.length > 0);
   const negative = mined.filter(r => typeof r.stars === 'number' && r.stars <= 3);
+  // The negatives NOBODY answered: the reviews a comparison shopper reads as
+  // unanswered, counted over the same mined set as everything else. Internal.
+  const negativeUnanswered = negative.filter(r => !r.ownerReply || !r.ownerReply.length).length;
   const ownerReplies = mined.filter(r => r.ownerReply.length > 0).map(r => r.ownerReply);
   // How many of the reviews we read are from the last 12 months. Separates a
   // business that is currently busy from one coasting on years-old work.
@@ -25375,7 +25519,7 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
   return { checked: true, reviews: mined, read: mined.length, scraped: reviews.length,
            corpus: _corpus.text, corpusDropped: _corpus.dropped, corpusClipped: _corpus.clipped,
            totalReviews: meta.totalReviews,
-           rating: meta.rating, negativeCount: negative.length, ownerReplies, coverage, recentCount, velocity,
+           rating: meta.rating, negativeCount: negative.length, negativeUnanswered, ownerReplies, coverage, recentCount, velocity,
            sampleComplete: meta.totalReviews ? mined.length >= meta.totalReviews : false };
 };
 
@@ -25563,7 +25707,8 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
     // worth retrying. totalReviews travels out too, so the log can say how deep we read.
     return { signals, summary: parsed.summary || '', totalReviews: total,
              read: rv.read, coverage: rv.coverage, sampleComplete: rv.sampleComplete,
-             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount, recentCount: rv.recentCount,
+             ownerReplies: rv.ownerReplies, negativeCount: rv.negativeCount,
+             negativeUnanswered: rv.negativeUnanswered, recentCount: rv.recentCount,
              // WAS MISSING, AND IT KILLED THE FEATURE. _fetchApifyReviewsUncached
              // computes `velocity` and returns it on rv; this literal did not
              // forward it, so deep.velocity was undefined on every lead,
@@ -32610,8 +32755,46 @@ const findDuplicateListing = async ({ companyName, placeId, website, phone, loca
   // name against the other listing's, and it was never being passed one.
   const pre = matchDuplicateListing({ name: companyName, placeId, website, phone, address: location }, []);
   if (pre.checked === false) return pre;   // missing identity — do not spend the search
-  if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!companyName || !location) return { checked: false, why: 'no name or address to search' };
+  // ══ THE SAME QUESTION AT A FIFTEENTH OF THE PRICE ═══════════════════════
+  // This search asks Google Maps "how many listings do you hold for this exact
+  // name" — and it was the last per-lead Places Enterprise call left after the
+  // rank searches moved to DataForSEO, at $35 per thousand against roughly $2.
+  // DataForSEO's maps endpoint answers the identical question from the identical
+  // index, parseLocalFinder already accepts its maps_search rows, and the match
+  // logic below is byte-for-byte the same either way. Places stays as the
+  // fallback so a lead without credentials measures exactly as before — the
+  // saving must never cost the finding.
+  if (DFS_READY) {
+    try {
+      const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
+      const r = await fetchT('https://api.dataforseo.com/v3/serp/google/maps/live/advanced', {
+        method: 'POST',
+        headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify([{
+          keyword: `${companyName} ${location}`.slice(0, 200),
+          location_name: 'United States',
+          language_code: 'en',
+          device: 'desktop',
+          depth: 10,
+        }]),
+      }, 20000);
+      const body = await safeJson(r);
+      const parsed = parseLocalFinder(body);
+      if (parsed.ok) {
+        return matchDuplicateListing({ name: companyName, placeId, website, phone, address: location },
+          parsed.results.map(p => ({
+            id: p.placeId, name: p.name, website: p.website,
+            phone: p.phone || '', address: p.address || '',
+            reviews: p.reviews, rating: p.rating,
+          })));
+      }
+      console.log(`⚠ DUPLICATE LISTING [${companyName}]: DataForSEO did not answer usefully - ${parsed.why}. Falling back to the Places name search for this lead.`);
+    } catch (e) {
+      console.log(`⚠ DUPLICATE LISTING [${companyName}]: DataForSEO call failed - ${(e && e.message) || e}. Falling back to the Places name search.`);
+    }
+  }
+  if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env and no DataForSEO answer' };
   try {
     notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
@@ -32812,6 +32995,11 @@ const parseLocalFinder = (body) => {
       name: String(it.title || '').trim(),
       placeId: it.place_id || null,
       website: it.url || it.domain || '',
+      // Phone and street address ride along so the duplicate-listing match can
+      // run on rows this response already paid for. Absent on some row types;
+      // matchDuplicateListing already treats a missing identity as unmatchable.
+      phone: String(it.phone || '').trim(),
+      address: String(it.address || '').trim(),
       rating: Number.isFinite(Number(rating.value)) ? Number(rating.value) : null,
       reviews: Number.isFinite(Number(rating.votes_count)) ? Number(rating.votes_count) : 0,
       // A sponsored row is above the organic list and is NOT an organic
@@ -32935,6 +33123,63 @@ const parseOrganicSerp = (body, ourDomain) => {
     if (host && (host === dom || host.endsWith('.' + dom))) position = i + 1;
   });
   return { ok: true, position, scanned: organic.length };
+};
+
+// ══ TRAFFIC VOLUME: AN ESTIMATE, BOUGHT CHEAP, AND NEVER A CLAIM ════════════
+// Vin: "we need to somehow figure out how to add an api for volume of traffic
+// ... i know semrush but likley not free we need free." The honest answer is
+// that FREE does not exist: SimilarWeb and Semrush are paid, and nothing free
+// covers small local domains. The nearest thing is DataForSEO Labs — the same
+// vendor and auth as the rank reads — whose domain overview MODELS monthly
+// organic visits from the keywords a domain ranks for, at about a cent a call.
+//
+// The number is an ESTIMATE OF A MODEL, not a measurement, and that decides
+// everything about where it may go:
+//   INTERNAL ONLY. The call sheet and the audit screen, labeled "third-party
+//     estimate". Never a rung, never an email, never a figure the owner is
+//     told about his own business — he has Analytics and we have a model.
+//   Absent-from-index is a fact about the INDEX. Small local sites are often
+//     not modeled at all; that must never be reported as "no traffic".
+//   The paid-keyword count is the one hard nugget: a domain the index has SEEN
+//     in paid results carries corroboration that ads have run — positive only.
+const fetchTrafficEstimate = async (website) => {
+  if (!DFS_READY) return { checked: false, why: 'no DataForSEO credentials' };
+  const host = String(website || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].trim();
+  if (!host || !/\./.test(host)) return { checked: false, why: 'no usable domain' };
+  try {
+    const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
+    const r = await fetchT('https://api.dataforseo.com/v3/dataforseo_labs/google/domain_rank_overview/live', {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ target: host, location_code: 2840, language_code: 'en' }]),
+    }, 15000);
+    const body = await safeJson(r);
+    return parseTrafficOverview(body);
+  } catch (e) {
+    return { checked: false, why: 'traffic estimate failed: ' + e.message };
+  }
+};
+// PURE, so the boot check runs the real parse on the real Labs shapes instead
+// of reading source — the same split every other vendor parser here has.
+const parseTrafficOverview = (body) => {
+  const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
+  if (!task || (task.status_code && Number(task.status_code) >= 40000)) {
+    return { checked: false, why: `DataForSEO Labs error: ${(task && task.status_message) || 'no readable answer'}` };
+  }
+  const res = Array.isArray(task.result) ? task.result[0] : null;
+  const item = res && Array.isArray(res.items) ? res.items[0] : null;
+  const met = item && item.metrics ? item.metrics : null;
+  if (!met || !met.organic) {
+    return { checked: true, inIndex: false,
+      why: 'the index holds no model for this domain — a fact about the INDEX, never about their traffic. Small local sites are routinely absent. Say nothing about volume.' };
+  }
+  const org = met.organic || {};
+  const paid = met.paid || {};
+  return { checked: true, inIndex: true, source: 'dataforseo_labs',
+    organicEtvMonthly: Number.isFinite(Number(org.etv)) ? Math.round(Number(org.etv)) : null,
+    organicKeywords: Number.isFinite(Number(org.count)) ? Number(org.count) : null,
+    paidKeywords: Number.isFinite(Number(paid.count)) ? Number(paid.count) : null,
+    note: 'modeled by a third-party index from ranked keywords — an estimate, not a measurement; internal only' };
 };
 
 const checkOrganicRank = async ({ query, city, website }) => {
@@ -33840,6 +34085,8 @@ const _runResearchInner = async (req, res) => {
   let _openerForResponse = null;
   let phoneResult = { phone: '', display: '', source: 'none' };
   let realSpeed = { checked: false };
+  let trafficEstimate = { checked: false };
+  let reviewsNegativeUnanswered = null;
   let duplicateListing = { checked: false, why: 'not attempted' };
   let adsTransparency = { checked: false, why: 'not attempted' };
   let socialPresence = { checked: false };
@@ -34845,6 +35092,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // strangers is useful regardless of whether a pain pattern was found.
           if (deep && typeof deep.read === 'number' && deep.read > 0) {
             reviewsRead = deep.read;
+            if (Number.isFinite(Number(deep.negativeUnanswered))) reviewsNegativeUnanswered = Number(deep.negativeUnanswered);
             ownerReplyCount = Array.isArray(deep.ownerReplies) ? deep.ownerReplies.length : 0;
             ownerReplySample = (Array.isArray(deep.ownerReplies) ? deep.ownerReplies : [])
               .map(x => String(x || '').replace(/\s+/g, ' ').trim())
@@ -35591,6 +35839,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // Google's record of their own visitors, on mobile. Free, and the only
     // measurement in the audit that comes from the prospect's actual traffic.
     realSpeed = await measureRealWorldSpeed(website, pageSpeedKeyFor(req.body.keys));
+    // The modeled traffic volume, about a cent, same vendor as the rank reads.
+    // INTERNAL ONLY and labeled an estimate — see fetchTrafficEstimate.
+    trafficEstimate = await fetchTrafficEstimate(website);
+    if (trafficEstimate.checked && trafficEstimate.inIndex) {
+      console.log(`\u{1F4C8} TRAFFIC ESTIMATE [${company}]: ~${trafficEstimate.organicEtvMonthly ?? '?'} organic visits/month modeled from ${trafficEstimate.organicKeywords ?? '?'} ranked keyword(s)${Number(trafficEstimate.paidKeywords) > 0 ? `, and the index has seen ${trafficEstimate.paidKeywords} PAID keyword(s) on this domain — corroboration that ads have run` : ''}. A third-party model, roughly $0.01 — internal and the call sheet only, never a claim to the owner.`);
+    } else if (trafficEstimate.checked) {
+      console.log(`\u{1F4C8} TRAFFIC ESTIMATE [${company}]: the index holds no model for this domain. That is a fact about the INDEX — say nothing about their traffic volume.`);
+    }
     // The lab score from the SAME response backfills the five consumers that
     // have read an empty object since the browser call was removed. Zero extra
     // calls — see applyLabMobileScore for the field-data-wins rule.
@@ -36474,6 +36730,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // about two looks at one business returning different numbers. The
           // field figures are a 28-day aggregate: stable, and the owner can
           // open PageSpeed Insights and see the same number we did.
+          // ══ THE FINANCING READ, DELIVERED ═════════════════════════════
+          // Computed over the homepage source plus everything scraped; the
+          // trade gate rides the same tradeWord every other rung reads.
+          ...(() => {
+            const _fin = measureFinancing({ rawHtml, text: String(content || '') + ' ' + String((sitePages && sitePages.corpus) || '') });
+            return {
+              financingMeasured: _fin.checked === true,
+              financingOffered: _fin.checked === true ? _fin.offered === true : null,
+              bigTicketTrade: BIG_TICKET_TRADE_RE.test(String(customerTrade || verifiedIndustry || '')),
+            };
+          })(),
           mobileFieldMeasured: !!(realSpeed && realSpeed.checked && realSpeed.hasFieldData),
           mobileFieldSlow: !!(realSpeed && realSpeed.checked && realSpeed.hasFieldData && realSpeed.isProblem),
           mobileLcpSec: (realSpeed && Number.isFinite(Number(realSpeed.lcpSec))) ? Number(realSpeed.lcpSec) : null,
@@ -36566,7 +36833,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // The problems section, built from the ladder instead of written by a
             // model. Every entry is measured, every entry is genuinely a problem,
             // and each carries what it costs and which area it belongs to.
-            problemList: buildProblemList(_harms, { bindingLayer: (_harmInputs || {}).bindingLayer, company }),
+            problemList: buildProblemList(_harms, { bindingLayer: (_harmInputs || {}).bindingLayer, company,
+              // The evidence classes the agreed rule needs: is the ad spend
+              // PROVEN live (a sponsored row in the pack — the only direct
+              // proof), and does this lead carry customer-WRITTEN contact
+              // evidence (a repeating complaint, at least two people).
+              evidence: { adsLive: !!(_measured && _measured.adsLiveInPack),
+                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 2 } }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
             subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
@@ -42047,6 +42320,13 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // campaign pages the site does not link to, and real-visitor speed.
       websiteScore: scoreWebsite(_harmInputs),
       auditFacts: buildAuditFacts(_harmInputs, sitePages && sitePages.unlinkedPages),
+      // A modeled monthly-visits figure, INTERNAL and labeled an estimate.
+      // Never a rung and never an email: he has Analytics, we have a model.
+      trafficEstimate: trafficEstimate && trafficEstimate.checked ? trafficEstimate : null,
+      // The review complaints split into the buckets an operator sells to, and
+      // the negatives nobody answered. INTERNAL — call sheet and screen only.
+      opsBuckets: classifyOpsBuckets(publicPainSignals),
+      reviewsNegativeUnanswered,
       realSpeed: realSpeed || null,
       // Two-listings measurement — on the call sheet it is the mechanical
       // explanation for an outranked finding, so it must survive the round trip.
@@ -44425,10 +44705,35 @@ app.listen(PORT, () => {
     if (!_row || _row.pillar !== 'BURNING') {
       _fails.push('rows no longer carry their money pillar, so the screen cannot label which kind of money each finding loses');
     }
+
+    // ══ THE AGREED EVIDENCE RULE, EXECUTED IN BOTH DIRECTIONS ══════════════
+    // A loss a customer wrote down beats a loss we inferred — but ONLY that.
+    const _evHarms = { byHarm: [
+      { id: 'ads_untracked', finding: 'ads with no conversion tracking', costs: 'y', harm: 84, opener: 80, novel: 78 },
+      { id: 'review_pain_pattern', finding: 'quotes that never come back — 3 people say it publicly', costs: 'r', harm: 76, opener: 75, novel: 88 },
+    ] };
+    const _written = buildProblemList(_evHarms, { evidence: { adsLive: false, writtenContact: true } });
+    if (_written[0].id !== 'review_pain_pattern') {
+      _fails.push('two customers publicly describing the loss still rank below an ads TAG — a tag proves an account existed, and the customers are the strongest evidence this system ever holds');
+    }
+    const _live = buildProblemList(_evHarms, { evidence: { adsLive: true, writtenContact: true } });
+    if (_live[0].id !== 'ads_untracked') {
+      _fails.push('BURNING proven LIVE by a sponsored row lost its #1 — the rule demotes the inference, never the proof');
+    }
+    const _noWritten = buildProblemList(_evHarms, { evidence: { adsLive: false, writtenContact: false } });
+    if (_noWritten[0].id !== 'ads_untracked') {
+      _fails.push('with no written evidence on the lead the tag-BURNING rung was demoted anyway — the inference loses only to written evidence, not to nothing');
+    }
+    // The wire: the call site must hand both evidence classes over, or the rule
+    // passes its fixtures while every live lead runs without it.
+    const _en = (...p) => p.join('');
+    if (!selfSourceNoComments().includes(_en('evidence: { adsLive: !!(_measured && _measured.adsLiveInPack)', ','))) {
+      _fails.push('the live call site no longer passes the evidence classes, so the agreed rule runs on fixtures and never on a lead');
+    }
     if (_fails.length) {
       console.log(`⛔ FINDINGS MONEY ORDER CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top with opener 999 now rank with TAXED: unique evidence, still not a money leak, and an owner cannot be convinced that a sentence on a page costs him dollars.`);
+      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top rank with TAXED. And the agreed evidence rule holds in both directions: a repeating complaint two customers WROTE outranks an ads TAG (an account is not a campaign), while BURNING proven live by a sponsored row keeps #1, and with no written evidence nothing moves at all.`);
     }
   } catch (e) {
     console.log(`⛔ FINDINGS MONEY ORDER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -44487,6 +44792,154 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ WEBSITE SCORE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════
+  // Vin, 2026-08-24: "#4 is a big one" (the retargeting gap), "quote to close
+  // is huge" (financing on a five-figure trade), and the review complaints
+  // split into the buckets an operator sells to. Every fixture below runs the
+  // REAL predicate or the REAL rung test, and every signal has a must-fire AND
+  // a must-stay-silent direction, because a signal that fires on every site
+  // tells a salesperson nothing — the recorded more-expensive failure.
+  try {
+    const _fails = [];
+
+    // ─ financing: presence anywhere wins, absence needs the look ────────
+    const _pad = 'their pages, read in full, with plenty of ordinary copy. '.repeat(60);
+    const _f1 = measureFinancing({ rawHtml: '<script src="https://api.wisetack.com/embed.js"></script>', text: '' });
+    if (!(_f1.checked === true && _f1.offered === true)) _fails.push('a Wisetack embed in the markup did not read as financing offered — presence is a find whatever we read');
+    const _f2 = measureFinancing({ rawHtml: '', text: 'Financing available on approved credit. ' + _pad });
+    if (!(_f2.checked === true && _f2.offered === true)) _fails.push('"financing available" in the page text did not read as offered');
+    const _f3 = measureFinancing({ rawHtml: '', text: 'We replace roofs across the metro. Call for an estimate. ' + _pad });
+    if (!(_f3.checked === true && _f3.offered === false)) _fails.push('a full read with no financing vocabulary did not produce the absence');
+    const _f4 = measureFinancing({ rawHtml: '<p>hello</p>', text: 'thin scrape' });
+    if (_f4.checked !== false) _fails.push('a page we barely read produced a financing verdict — an absence claim with no look behind it, the EXISTS BUT UNREAD class');
+
+    // ─ the trade gate, both directions, on the real regex ─────────────
+    for (const _t of ['roofing contractor', 'bathroom remodeling', 'HVAC repair', 'concrete paving']) {
+      if (!BIG_TICKET_TRADE_RE.test(_t)) _fails.push(`"${_t}" did not read as a big-ticket trade`);
+    }
+    for (const _t of ['plumber', 'lawn care service', 'locksmith', 'pest control']) {
+      if (BIG_TICKET_TRADE_RE.test(_t)) _fails.push(`"${_t}" read as big-ticket — the rung would claim a financing gap in a trade where paying at once is normal, which is a false finding about a reasonable choice`);
+    }
+
+    // ─ the buckets: classified, counted, and MOST-MENTIONED FIRST ───────
+    const _ob = classifyOpsBuckets([
+      'they never called back after the estimate',
+      '5 of 90 reviews describe missed appointments and rescheduling chaos',
+    ]);
+    if (!(Array.isArray(_ob) && _ob.length === 2)) {
+      _fails.push(`two distinct complaint kinds produced ${Array.isArray(_ob) ? _ob.length : 'no'} bucket(s), not two`);
+    } else {
+      if (_ob[0].id !== 'scheduling') _fails.push(`the top bucket is "${_ob[0].id}", not the most-mentioned one — the client's "Complaints: mostly X" chip reads row zero and would name the wrong fault. The fixture puts the 5-mention bucket LATER in the definition list than the 1-mention one on purpose: the first version had the most-mentioned bucket also first by declaration, so removing the sort left it green`);
+      if (Number(_ob[0].mentions) !== 5) _fails.push(`the scheduling bucket counted ${_ob[0].mentions} mention(s), not the 5 the signal itself states`);
+      if (_ob[1].id !== 'no_response') _fails.push(`the second bucket is "${_ob[1].id}", not the 1-mention no-response complaint`);
+    }
+    if (classifyOpsBuckets([]).length !== 0) _fails.push('an empty signal list produced a bucket');
+    const _cb = classifyOpsBuckets(['no one ever called back about the quote']);
+    if (!(_cb.length === 1 && _cb[0].id === 'no_response')) _fails.push('"no one ever called back" did not land in the no-response bucket — the commonest phrasing of the commonest complaint, and the first fixture through this classifier missed on exactly it');
+    if (classifyOpsBuckets(['praise: everyone loves the crew']).length !== 0) _fails.push('praise with no operational vocabulary landed in a bucket — the classifier is matching on nothing');
+
+    // ─ the two rungs, executed on the real ladder objects ─────────────
+    const _rt = HARM_LADDER.find(h => h.id === 'no_retargeting');
+    if (!_rt || typeof _rt.test !== 'function') _fails.push('no_retargeting is not in the ladder at all');
+    else {
+      if (_rt.test({ adsReadable: true, tagManager: false, googleAdsTag: true, metaPixel: false }) !== true) _fails.push('no_retargeting does not fire on the exact shape it exists for: Google ads tag present, no Meta pixel, markup readable');
+      if (_rt.test({ adsReadable: true, tagManager: false, googleAdsTag: true, metaPixel: true }) !== false) _fails.push('no_retargeting fires with a Meta pixel PRESENT — telling an owner he cannot retarget while his own page carries the pixel');
+      if (_rt.test({ adsReadable: true, tagManager: true, googleAdsTag: true, metaPixel: false }) !== false) _fails.push('no_retargeting fires through a Google Tag Manager container — a GTM container can hold a pixel we cannot see, the exact rule social_spend_no_search already carries');
+      if (_rt.test({ adsReadable: false, tagManager: false, googleAdsTag: true, metaPixel: false }) !== false) _fails.push('no_retargeting fires on markup we could not read — an absence claim with no look behind it');
+      if (_rt.test({ adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false }) !== false) _fails.push('no_retargeting fires on a site running NO Google ads — there is no paid visitor to re-reach, so there is no finding');
+    }
+    const _fn = HARM_LADDER.find(h => h.id === 'no_financing');
+    if (!_fn || typeof _fn.test !== 'function') _fails.push('no_financing is not in the ladder at all');
+    else {
+      if (_fn.test({ financingMeasured: true, financingOffered: false, bigTicketTrade: true }) !== true) _fails.push('no_financing does not fire on a big-ticket trade with a full read and no financing anywhere');
+      if (_fn.test({ financingMeasured: true, financingOffered: true, bigTicketTrade: true }) !== false) _fails.push('no_financing fires on a site that OFFERS financing');
+      if (_fn.test({ financingMeasured: false, financingOffered: null, bigTicketTrade: true }) !== false) _fails.push('no_financing fires on a site we never properly read');
+      if (_fn.test({ financingMeasured: true, financingOffered: false, bigTicketTrade: false }) !== false) _fails.push('no_financing fires on a small-ticket trade — a locksmith with no payment plan is a normal business, not a finding');
+    }
+
+    // ─ the call sites, because a fixture supplies its own arguments ─────
+    const _nn = (...p) => p.join('');
+    const _nsrc = selfSourceNoComments();
+    for (const [_what, _needle] of [
+      ['the financing trio never reaches the ladder', _nn('financingMeasured: _fin.', 'checked === true')],
+      ['the trade gate never reaches the ladder', _nn('bigTicketTrade: BIG_TICKET_TRADE_RE.', 'test(String(customerTrade')],
+      ['the buckets never leave the server', _nn('opsBuckets: classifyOpsBuckets(', 'publicPainSignals)')],
+      ['the unanswered-negative count is never taken off the mined set', _nn('negative.filter(r => !r.', 'ownerReply || !r.ownerReply.length).length')],
+      ['the unanswered-negative count never reaches the response', _nn('reviewsNegativeUnanswered = Number(', 'deep.negativeUnanswered)')],
+    ]) {
+      if (!_nsrc.includes(_needle)) _fails.push(`${_what} — the computed-but-not-passed class this file records twenty-two times`);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ MONEY SIGNAL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ MONEY SIGNAL CHECK: the four signals added for the money map run both ways — financing (presence anywhere is a find, the absence claim needs 3,000 characters actually read, and a locksmith with no payment plan is a normal business), the retargeting gap (fires only on a readable page carrying a Google ads tag and no Meta pixel, silent through a GTM container it cannot see inside), the complaint buckets (counted from the miner's own "N of M reviews" arithmetic, most-mentioned first because the call-sheet chip reads row zero), and the unanswered negatives counted over the mined set. Every one delivered to the ladder or the response by an asserted call site.`);
+    }
+  } catch (e) {
+    console.log(`⛔ MONEY SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A MODELED TRAFFIC FIGURE IS AN ESTIMATE, AND THE WALL AROUND IT ══════
+  // The one thing that makes third-party traffic data safe to buy is that it
+  // can never be spoken to the owner or become a claim: he has Analytics, we
+  // have a model, and being confidently wrong about his own visits is the
+  // fastest possible way to lose him. EXECUTED on the real parser, plus the
+  // wall: nothing in the ladder, the rung tables or the email evidence may
+  // read it.
+  try {
+    const _fails = [];
+    const _hit = parseTrafficOverview({ tasks: [{ status_code: 20000, result: [{ items: [{
+      metrics: { organic: { etv: 1543.7, count: 212 }, paid: { count: 4, etv: 90 } } }] }] }] });
+    if (!_hit.checked || !_hit.inIndex) _fails.push('a real Labs answer does not parse');
+    else {
+      if (_hit.organicEtvMonthly !== 1544) _fails.push(`the modeled visits parse to ${_hit.organicEtvMonthly}, not 1544`);
+      if (_hit.paidKeywords !== 4) _fails.push('the paid-keyword count is dropped — the one hard nugget in the response, corroboration that ads have run');
+      if (!/estimate, not a measurement/.test(String(_hit.note))) _fails.push('the estimate no longer labels itself as one, so a downstream reader can quote it as a fact');
+    }
+    // Absent from the index is a fact about the INDEX.
+    const _miss = parseTrafficOverview({ tasks: [{ status_code: 20000, result: [{ items: [{}] }] }] });
+    if (!_miss.checked || _miss.inIndex !== false) _fails.push('a domain the index does not model is not reported as absent-from-index');
+    else if (!/about the INDEX/.test(String(_miss.why))) _fails.push('the absent case does not say it is a fact about the index — "no model held" read as "no traffic" is the false-absence failure aimed at a number about his whole business');
+    if (parseTrafficOverview({ tasks: [{ status_code: 40401, status_message: 'auth' }] }).checked !== false) {
+      _fails.push('a Labs task error parses as an answer');
+    }
+    if (parseTrafficOverview(null).checked !== false) _fails.push('a null body parses as an answer');
+
+    // ── THE WALL: internal only, structurally ──────────────────────────────
+    const _tn = (...p) => p.join('');
+    const _tsrc = selfSourceNoComments();
+    if (!_tsrc.includes(_tn('trafficEstimate: trafficEstimate && trafficEstimate.checked', ' ? trafficEstimate : null,'))) {
+      _fails.push('the estimate no longer reaches the response, so it was bought and dropped');
+    }
+    // EVERY occurrence, not the first: the first `_harmInputs = {` in this file
+    // is the empty DECLARATION, whose block holds nothing — so the first
+    // version of this wall inspected an empty pair of braces, reported clean,
+    // and the falsification that handed the estimate to the ladder stayed
+    // GREEN. A wall that inspects the wrong room is no wall.
+    {
+      const _mark = _tn('_harmInputs', ' = {');
+      for (let _hi = _tsrc.indexOf(_mark); _hi > -1; _hi = _tsrc.indexOf(_mark, _hi + 1)) {
+        let _d = 0, _e = _hi;
+        const _open = _tsrc.indexOf('{', _hi);
+        for (let k = _open; k < _tsrc.length; k++) { if (_tsrc[k] === '{') _d++; else if (_tsrc[k] === '}') { _d--; if (!_d) { _e = k; break; } } }
+        if (/trafficEstimate|organicEtv/i.test(_tsrc.slice(_hi, _e))) {
+          _fails.push('the traffic ESTIMATE is being handed to the ladder — a modeled number scoring rungs is a modeled number one hop from an email');
+          break;
+        }
+      }
+    }
+    if (/organicEtv/i.test(String(typeof buildEmailEvidence === 'function' ? buildEmailEvidence : ''))) {
+      _fails.push('the email evidence builder reads the traffic estimate');
+    }
+    if (_fails.length) {
+      console.log(`⛔ TRAFFIC ESTIMATE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ TRAFFIC ESTIMATE CHECK: the modeled monthly-visits figure parses from the real Labs shape, labels itself an estimate, reports a domain the index does not model as a fact about the INDEX rather than as "no traffic", and is walled to the call sheet and the audit screen — it reaches the response and can never reach the ladder or the email evidence. He has Analytics; we have a model; the paid-keyword count is the one hard nugget and it is kept as positive-only corroboration that ads have run.`);
+    }
+  } catch (e) {
+    console.log(`⛔ TRAFFIC ESTIMATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE AUDIT COULD QUOTE ANYTHING ════════════════════════════════════════
@@ -55497,6 +55950,37 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // every branch of that standard runs here.
   try {
     const _fails = [];
+    // ══ THE SEARCH MOVED TO DATAFORSEO, AND THE WIRE IS EXECUTED ═══════════
+    // The name search was the last per-lead Places Enterprise call ($35/1,000)
+    // after the rank searches moved; DataForSEO's maps endpoint answers the
+    // identical question at about $2. The saving must never cost the finding,
+    // so: the parser must carry PHONE and ADDRESS off a maps row (the match
+    // demands same street address, and a parser that drops it makes every DFS
+    // row unmatchable — the finding goes silent while the meter says we saved
+    // money), and the Places fallback must survive for a lead without creds.
+    {
+      const _mapsBody = { tasks: [{ status_code: 20000, result: [{ items: [
+        { type: 'maps_search', title: 'Acme Plumbing', place_id: 'pid_Z',
+          url: 'https://www.acmeplumbing.com', phone: '(210) 555-0134',
+          address: '4122 Bennett Memorial Rd, Durham, NC 27705',
+          rating: { value: 4.7, votes_count: 12 } },
+      ] }] }] };
+      const _pp = parseLocalFinder(_mapsBody);
+      if (!_pp.ok) _fails.push('a maps_search row no longer parses at all');
+      else {
+        const _row = _pp.results[0] || {};
+        if (_row.phone !== '(210) 555-0134') _fails.push('the parser drops the PHONE off a maps row, so the duplicate match — which needs the same phone or website — cannot run on DataForSEO rows and the finding goes dark exactly where the money was saved');
+        if (!/Bennett Memorial/.test(String(_row.address || ''))) _fails.push('the parser drops the ADDRESS off a maps row, and the match demands the same street address');
+      }
+      const _dn = (...p) => p.join('');
+      const _dsrc = selfSourceNoComments();
+      if (!_dsrc.includes(_dn('serp/google/maps', '/live/advanced'))) {
+        _fails.push('the duplicate search no longer has a DataForSEO path, so every lead is back on the $35-per-thousand Places call');
+      }
+      if (!_dsrc.includes(_dn("if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env", " and no DataForSEO answer' };"))) {
+        _fails.push('the Places fallback for the duplicate search is gone — a lead without DataForSEO credentials loses the finding instead of paying the old price');
+      }
+    }
     const OWN = { placeId: 'pid_A', website: 'https://www.acmeplumbing.com', phone: '(210) 555-0134', address: '4122 Bennett Memorial Rd, Durham, NC 27705' };
     const other = (over) => ({ id: 'pid_B', name: 'Acme Plumbing', website: '', phone: '', address: '4122 Bennett Memorial Rd, Durham, NC 27705', reviews: 88, rating: 4.6, ...over });
     // Same domain, same address, different id: FOUND.

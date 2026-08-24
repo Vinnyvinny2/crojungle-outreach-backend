@@ -238,6 +238,12 @@ const persistedFieldsFrom = (l) => ({
       // on the first reload, which is the recorded fate of the strategic read.
       websiteScore: l.websiteScore ?? null,
       auditFacts: l.auditFacts ?? null,
+      trafficEstimate: l.trafficEstimate ?? null,
+      // Review intelligence for the call sheet: which operational bucket the
+      // mined complaints fall into, and how many negatives the owner left
+      // unanswered. Both are INTERNAL — reviews are how we read the business.
+      opsBuckets: l.opsBuckets ?? null,
+      reviewsNegativeUnanswered: l.reviewsNegativeUnanswered ?? null,
       // Positive-only advertising evidence from Google's own Transparency
       // Centre. Never a negative: only verified advertisers appear there.
       adsTransparency: l.adsTransparency ?? null,
@@ -861,6 +867,9 @@ const rowToLead = (r) => ({
   theOneThing: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.theOneThing) || null,
   websiteScore: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.websiteScore) || null,
   auditFacts: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditFacts) || null,
+  trafficEstimate: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.trafficEstimate) || null,
+  opsBuckets: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.opsBuckets) || null,
+  reviewsNegativeUnanswered: (r.brain_audit && r.brain_audit._persisted && Number.isFinite(Number(r.brain_audit._persisted.reviewsNegativeUnanswered))) ? Number(r.brain_audit._persisted.reviewsNegativeUnanswered) : null,
   // Which ask this lead was sent, and the page it points at. Persisted because a
   // reply arrives days later and the arm is the only thing that makes it mean
   // anything.
@@ -1480,6 +1489,9 @@ const applyResearchResult = (prev, data, ctx) => {
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.websiteScore = data.websiteScore ?? L.websiteScore ?? null;
         L.auditFacts = data.auditFacts ?? L.auditFacts ?? null;
+        L.trafficEstimate = data.trafficEstimate ?? L.trafficEstimate ?? null;
+        L.opsBuckets = data.opsBuckets ?? L.opsBuckets ?? null;
+        L.reviewsNegativeUnanswered = data.reviewsNegativeUnanswered ?? L.reviewsNegativeUnanswered ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // What moved between two looks at this business. The only facts in the
         // system with a date on them that did not come from a job board, and
@@ -1575,6 +1587,9 @@ const applyResearchResult = (prev, data, ctx) => {
         L.theOneThing = data.theOneThing ?? L.theOneThing ?? null;
         L.websiteScore = data.websiteScore ?? L.websiteScore ?? null;
         L.auditFacts = data.auditFacts ?? L.auditFacts ?? null;
+        L.trafficEstimate = data.trafficEstimate ?? L.trafficEstimate ?? null;
+        L.opsBuckets = data.opsBuckets ?? L.opsBuckets ?? null;
+        L.reviewsNegativeUnanswered = data.reviewsNegativeUnanswered ?? L.reviewsNegativeUnanswered ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // What moved between two looks at this business. The only facts in the
         // system with a date on them that did not come from a job board, and
@@ -2299,6 +2314,10 @@ const auditRecordFor = (lead) => {
     // WHAT IT IS
     websiteScore: (l.websiteScore && l.websiteScore.checked) ? l.websiteScore : null,
     auditFacts: (l.auditFacts && typeof l.auditFacts === 'object') ? l.auditFacts : null,
+    // Review intelligence for the sheet. INTERNAL by the standing rule: reviews
+    // are how we read the business, never what gets said to the owner.
+    opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
+    negUnanswered: (Number.isFinite(Number(l.reviewsNegativeUnanswered)) && Number(l.reviewsNegativeUnanswered) > 0) ? Number(l.reviewsNegativeUnanswered) : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
     oneThing: t ? {
@@ -2502,6 +2521,11 @@ const auditExportHtml = (records, meta) => {
               r.auditFacts.mobile ? ('Mobile: ' + (r.auditFacts.mobile === 'slow' ? 'slow for their real visitors' : 'fine')) : '',
             ].filter(Boolean).join(' \u00b7 ') : '')
           + '</p>' : '')
+          + ((r.opsBuckets || r.negUnanswered) ? '<p class="dim"><b>Review read (internal \u2014 never name reviews to him):</b> '
+          + [
+              (r.opsBuckets && r.opsBuckets[0]) ? ('complaints are mostly \u201c' + p(r.opsBuckets[0].label) + '\u201d' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
+              r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply') : '',
+            ].filter(Boolean).join(' \u00b7 ') + '</p>' : '')
       + (r.callWindow ? '<p>' + p(r.callWindow) + '</p>' : '')
           + (r.expectObjection ? '<p><b>Expect to hear:</b> <q>' + p(r.expectObjection) + '</q> That is our own prospect model reading this as the owner. Have an answer ready.</p>' : '')
           + (r.ageDays === null ? ''
@@ -5962,6 +5986,23 @@ function LeadBriefing({ lead }) {
         if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? ('Campaign pages: ' + af.campaignPages + ' unlinked') : 'Campaign pages: none found (absence proves nothing)'));
         if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
         if (af.https === false) facts.push(chip('plain http', 'bad'));
+      }
+      const te = lead.trafficEstimate;
+      if (te && te.checked && te.inIndex && Number.isFinite(te.organicEtvMonthly)) {
+        facts.push(chip('~' + te.organicEtvMonthly.toLocaleString() + ' organic visits/mo (third-party estimate \u2014 internal only)'));
+        if (Number(te.paidKeywords) > 0) facts.push(chip('index has seen paid keywords on this domain'));
+      }
+      // Review intelligence — INTERNAL by rule (reviews are how we read the
+      // business, never what we say to the owner). The bucket tells Mike what
+      // KIND of operational fault the complaints describe; the unanswered
+      // negatives are the cheapest fix a call can open with.
+      const ob = lead.opsBuckets;
+      if (Array.isArray(ob) && ob.length) {
+        const top = ob[0];
+        if (top && top.label) facts.push(chip('Complaints: mostly ' + top.label + (Number(top.mentions) > 1 ? ' (' + top.mentions + ' mentions)' : '') + ' \u2014 internal only', 'bad'));
+      }
+      if (Number.isFinite(Number(lead.reviewsNegativeUnanswered)) && Number(lead.reviewsNegativeUnanswered) > 0) {
+        facts.push(chip(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 internal only', 'bad'));
       }
       return React.createElement('div', {
         style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
