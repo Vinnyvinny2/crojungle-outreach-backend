@@ -193,7 +193,13 @@ const INVARIANTS = [
 
 (async () => {
   const { spawn } = require('child_process');
-  const srv = spawn('node', ['server.js'], { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+  // The canonical boot shape, cap included. This spawn was the ONE boot in the
+// project without --max-old-space-size, and on 2026-08-24 that difference
+// alone flipped the verdict: uncapped, V8 never bothers collecting, the boot
+// settled at 206MB and BOOT HEAP CHECK correctly went red — while the capped
+// boot (CI, Render, PART 6's command) collects down under the ceiling and is
+// green. Fuzzing a heap shape production never runs is testing nothing.
+const srv = spawn('node', ['--max-old-space-size=256', 'server.js'], { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
   // Wait for the BOOT VERDICT to settle, not a fixed sleep: the boot-window
   // gate answers 503 to every POST under /api/ until the verdict is green, so
   // a sleep tuned to one machine's boot speed would fuzz a door that is
@@ -202,7 +208,7 @@ const INVARIANTS = [
     let up = false;
     for (let i = 0; i < 120; i++) {
       try {
-        const h = await fetch(`http://localhost:${PORT}/healthz`);
+        const h = await fetch(`http://127.0.0.1:${PORT}/healthz`);
         if (h.status === 200) { up = true; break; }
       } catch (e) { void e; }
       await new Promise(r => setTimeout(r, 1000));
@@ -221,7 +227,7 @@ const INVARIANTS = [
     const lead = synth();
     let res;
     try {
-      const r = await fetch(`http://localhost:${PORT}/api/compose-email`, {
+      const r = await fetch(`http://127.0.0.1:${PORT}/api/compose-email`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(lead),
       });
