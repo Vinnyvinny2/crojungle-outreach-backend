@@ -2298,6 +2298,39 @@ const runBatchAudit = async (opts) => {
 // from the same auditFacts both surfaces hold, so a Meta-only advertiser reads
 // "Facebook only" everywhere instead of "none found" in one place and
 // "Google" in another.
+// ══ ONE GROUPING FOR EVERY RENDERER — the V2 spine ══════════════════════════
+// Top leaks with their supporting facts NESTED (same money pillar), every
+// remaining money-pillar finding a one-line "smaller leak" (none buried), rows
+// with no pillar to the reference tail, internal rows marked. Called by
+// auditRecordFor AND the screen, so the two can never group differently.
+const groupAuditFindings = (problemList, oneThing) => {
+  const t = (oneThing && typeof oneThing === 'object') ? oneThing : null;
+  const pl = (Array.isArray(problemList) ? problemList : []).filter(p => p && p.problem);
+  const sayable = pl.filter(p => !p.internalOnly);
+  const top = sayable.filter(p => Number.isFinite(p.moneyRank) && p.moneyRank <= 5 && !p.fromTheirPages).slice(0, 3);
+  const topIds = new Set(top.map(p => p.id));
+  const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 80);
+  const taken = new Set(top.map(p => norm(p.problem)));
+  const leaks = top.map(p => ({ id: p.id, problem: p.problem || '', moneyLine: p.moneyLine || '', costs: p.costs || '', pillar: p.pillar || '', support: [] }));
+  const small = [], other = [], internal = [];
+  for (const p of pl) {
+    if (topIds.has(p.id)) continue;
+    if (norm(p.problem) && taken.has(norm(p.problem))) continue;
+    if (p.internalOnly) { internal.push({ problem: p.problem, costs: p.costs || '' }); continue; }
+    const host = p.pillar ? leaks.find(k => k.pillar === p.pillar) : null;
+    if (host) { host.support.push(p.problem + (p.costs ? ' \u2014 ' + p.costs : '')); taken.add(norm(p.problem)); }
+    else if (p.pillar) { small.push({ problem: p.problem, costs: p.costs || '', pillar: p.pillar }); taken.add(norm(p.problem)); }
+    else { other.push({ area: p.area || '', problem: p.problem, costs: p.costs || '' }); taken.add(norm(p.problem)); }
+  }
+  const fr = (t && Array.isArray(t.friction)) ? t.friction : [];
+  const frHost = leaks.find(k => k.pillar === 'UNCAUGHT' || k.pillar === 'LEAKING');
+  let frLoose = [];
+  if (fr.length && frHost) {
+    for (const f of fr) { if (!taken.has(norm(f))) { frHost.support.push(f); taken.add(norm(f)); } }
+  } else { frLoose = fr; }
+  return { leaks, small, other, internal, frictionLoose: frLoose };
+};
+
 // ══ A WARNING A CALLER CAN USE: THE QUOTE, THEN ONE PLAIN LINE OF WHY ═══════
 // J Chester's sheet carried three near-identical paragraphs of detector
 // rationale ("Legal as a general truth about people, and legal marked as your
@@ -2430,6 +2463,13 @@ const auditRecordFor = (lead) => {
     // translation. Same filter as the screen card — one rule, two renderers.
     leaks: arr(l.problemList).filter(p => p && Number.isFinite(p.moneyRank) && p.moneyRank <= 5 && !p.fromTheirPages && !p.internalOnly).slice(0, 3)
       .map(p => ({ problem: p.problem || '', moneyLine: p.moneyLine || '', costs: p.costs || '', pillar: p.pillar || '' })),
+    // ══ V2 GROUPING: EVERY FINDING EXACTLY ONCE, EVERY MONEY SIGNAL VISIBLE ══
+    // The owner, 2026-08-24: the sheet repeated the same fact five times and
+    // three sections competed to be the point. Now: the top leaks carry their
+    // supporting facts NESTED (same money pillar), every remaining money-pillar
+    // finding is a one-line "smaller leak" (none buried in reference), and only
+    // rows with no money pillar fall through to the reference tail.
+    grouped: groupAuditFindings(arr(l.problemList), t),
     // Called directly, not behind a `typeof` guard. buildAuditRows is a hoisted
     // module-scope declaration in this same script block, so a guard here could
     // only ever do one thing: silently empty this section if somebody moved the
@@ -2536,35 +2576,31 @@ const auditExportHtml = (records, meta) => {
   const ul = (items, fn) => items.length ? '<ul>' + items.map(fn).join('') + '</ul>' : '';
   const one = (r, i) => {
     const t = r.oneThing;
-    // ══ SEVEN CATEGORIES, EACH ORIGINAL SECTION EXACTLY ONCE ═══════════════
-    // Vin, 2026-08-24, after three mock rounds: keep ALL the depth, organize
-    // it, and make the sheet INFORM rather than instruct — "i still dont trust
-    // the brain or the audits to always pick the perfect thing". So the money
-    // ranking is labeled as the system's read with every finding visible below
-    // it, and the old "Open with" script is gone: the sheet shows what the
-    // email already led with (a fact — it was sent), never what to say next.
-    // 1 THE CALL · 2 THE MONEY · 3 THE CONVERSATION · 4 THE BUSINESS ·
-    // 5 THE EVIDENCE · 6 THE ANGLES · 7 THE EDGES (in oneTail) · footer.
+    // ══ V2 — ONE SPINE, EVERYTHING EXACTLY ONCE ════════════════════════════
+    // The owner, 2026-08-24, after the seven-category round still read as "the
+    // same info everywhere": the sheet repeated one fact up to five times and
+    // three sections (the leaks, the one-thing, the going-on read) each wrote
+    // like the conclusion. V2: strip → THE STORY (one flow) → THE LEAKS with
+    // their supporting facts NESTED → THE SMALLER LEAKS (every remaining money
+    // signal, one line, none buried) → call prep → reference, do-not-say last.
+    // Channel-neutral on purpose: the same grouped leaks feed the call sheet,
+    // the email and the LinkedIn drafts.
     const cat = (title, capTxt, body) => body
       ? '<section><h3>' + e(title) + (capTxt ? '<span class="cap">' + e(capTxt) + '</span>' : '') + '</h3>' + body + '</section>' : '';
+    const g = r.grouped || { leaks: [], small: [], other: [], internal: [], frictionLoose: [] };
     const af = r.auditFacts;
     const facts = af ? [
       adsFactsLabel(af),
       af.booking ? ('Booking ' + ({ online_booking: 'online', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking)) : '',
       (typeof af.formFields === 'number') ? ('Form ' + af.formFields + ' fields') : '',
-      (typeof af.campaignPages === 'number' && af.campaignPages > 0) ? (af.campaignPages + ' unlinked pages') : '',
+      (typeof af.campaignPages === 'number' && af.campaignPages > 0) ? (af.campaignPages + ' pages only reachable by ad link') : '',
       af.mobile ? ('Mobile ' + (af.mobile === 'slow' ? 'slow for real visitors' : 'fine')) : '',
     ].filter(Boolean).join(' · ') : '';
     const measured = r.ageDays === null ? '' : (r.ageDays <= 1 ? 'measured today' : 'measured ' + r.ageDays + ' days ago');
-    // The Do-not-say body, shortened for the call. The same flag arrives twice
-    // — once as a critical fact-check entry and once inside claimRisks with a
-    // "fact-check:" prefix — and Fit Money's sheet printed one warning twice in
-    // a row. Deduplicate on normalised text, keeping the critical copy, which
-    // lists first. First sentence only: the full engineering reasoning stays on
-    // the audit screen, not on a sheet somebody is holding while a phone rings.
+    // Do-not-say: the quote plus one plain line (plainRisk), deduped — rendered
+    // LAST, inside the reference tail in oneTail. Stashed here where the pieces
+    // are in scope.
     const doNotSay = (() => {
-      // plainRisk (module scope): the quoted span plus one plain-English
-      // reason — the engineering rationale stays on the stored lead.
       const firstSentence = (x) => plainRisk(typeof x === 'string' ? x : (x && x.what) || JSON.stringify(x));
       const _seen = [];
       const _norm = (x) => String(typeof x === 'string' ? x : (x && x.what) || '').toLowerCase().replace(/^fact-check:\s*/, '').replace(/[^a-z0-9]+/g, '').slice(0, 160);
@@ -2577,26 +2613,15 @@ const auditExportHtml = (records, meta) => {
       });
       if (items.length) return ul(items, x => '<li>' + p(firstSentence(x)) + '</li>')
         + '<div class="tw">Shortened for the call. The full reasoning for each is on the audit screen.</div>';
-      // Never silent on an audited lead: no heading reads as "we checked and it
-      // is clean", and a dropped fact-check is the opposite fact.
       return r.status === 'not audited' ? '' : '<span class="tw">Nothing was flagged on this audit. This is a checked result, not a missing one.</span>';
     })();
     r._doNotSay = doNotSay;
-    const convRows = [];
-    if (r.pitch) convRows.push(['The email led with',
-      (r.subject ? '<div class="dim">Subject: ' + p(r.subject) + '</div>' : '') + '<pre>' + p(r.pitch) + '</pre>'
-      + '<div class="tw">Already in front of him — the call does not have to open the same way.</div>', '']);
-    if (r.expectObjection) convRows.push(['He will likely say',
-      '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
-    if (r.askOnTheCall) convRows.push(['Worth asking', '<span class="ask">' + p(r.askOnTheCall) + '</span>', '']);
-    // Do-not-say renders LAST, in oneTail — the owner's direction: the
-    // business first, the guardrails at the end.
     return '<article id="a' + i + '">'
       + '<header><div class="hrow"><div><h2>' + e(r.company) + '</h2><div class="meta">'
       + [r.trade, r.location, r.website, measured].filter(Boolean).map(e).join(' &middot; ')
       + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></div>'
       + ((r.websiteScore || facts) ? '<div style="text-align:right;max-width:300px;flex-shrink:0">'
-        + (r.websiteScore ? '<div class="scoren">' + r.websiteScore.score + '<span>/10 site build</span></div>' : '')
+        + (r.websiteScore ? '<div class="scoren">' + r.websiteScore.score + '<span>/10 website</span></div>' : '')
         + (facts ? '<div class="meta">' + e(facts) + '</div>' : '')
         + (r.websiteScore && r.websiteScore.basedOn ? '<div class="meta">Graded on: ' + p(r.websiteScore.basedOn) + '</div>' : '')
         + '</div>' : '')
@@ -2608,10 +2633,7 @@ const auditExportHtml = (records, meta) => {
             + ', so everything below was written with nothing under it. Re-run this lead before using any of it. Cause: '
             + e(String(r.ladderFailed.why)) + '</div>'
           : '')
-      // ═══ 1 · THE CALL ═══ The owner line is the ONLY place a title may
-      // appear, and an absent title prints as absent: it used to default to
-      // the word "Owner", which is what put "Michelle Musacchio, Owner" on a
-      // sheet after the resolver had explicitly refused that title.
+      // ═══ 10-SECOND STRIP: WHO TO CALL ═══
       + '<section class="call"><div>'
       + '<div class="cname">' + (r.owner
           ? e(r.owner) + '<span> &middot; ' + (r.ownerTitle ? e(r.ownerTitle) : 'no title found') + (r.email ? ' &middot; ' + e(r.email) + (r.emailNote ? ' (' + e(r.emailNote) + ')' : '') : '') + '</span>'
@@ -2630,57 +2652,52 @@ const auditExportHtml = (records, meta) => {
       + '</div>'
       + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
       + '</section>'
-      // ═══ WHAT THIS BUSINESS IS — FIRST, AT THE OWNER'S DIRECTION ═══ The
-      // caller pictures the business before any diagnosis of it.
-      + cat('What this business is', '', r.background ? '<p>' + p(r.background) + '</p>' : '')
-      // ═══ 2 · THE MONEY ═══ The ranking is the system's read, said so on its
-      // face — every finding stays visible in The evidence, the pick is Mike's.
-      + cat('The money', "the system's ranking — every finding is in The evidence; the pick is yours",
-          (Array.isArray(r.leaks) && r.leaks.length
-            ? r.leaks.map((lk, n) => {
-                const ml = trimRepeatedJobValue(lk.moneyLine, r.leaks[0] && r.leaks[0].moneyLine, n);
-                return '<div class="mrow"><div class="n">' + (n + 1) + '.</div><div><div>' + p(lk.problem) + '</div>'
-                + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
+      // ═══ THE STORY — one flow: what it is, where the money leaks, the sell ═══
+      + cat('The story', 'what it is, where the money leaks, what we would sell — in one read',
+          (r.background ? '<p>' + p(r.background) + '</p>' : '')
+          + (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
+          + (r.read ? '<p>' + p(r.read) + '</p>' : '')
+          + (t && t.diagnosis ? '<p class="dim">' + (t.layer ? '<b>' + e(layerPlain(t.layer).replace(/^./, (c) => c.toUpperCase())) + ':</b> ' : '') + p(t.diagnosis) + (t.why ? ' ' + p(t.why) : '') + (t.firstBrokenLinkWhy ? ' Fix first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + ': ' + p(t.firstBrokenLinkWhy) : '') + '</p>' : '')
+          + ((g.frictionLoose || []).length ? '<p class="dim">' + g.frictionLoose.length + ' thing(s) stand between an interested customer and a booked job: ' + g.frictionLoose.map(x => p(x)).join(' · ') + '</p>' : '')
+          + ul(r.rows, x => '<li class="dim"><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>')
+          + (r.whatHeNeeds ? '<p><b>The sell:</b> ' + p(r.whatHeNeeds) + '</p>' : '')
+          + (r.bindingLayer ? '<p class="dim">Biggest blocker: ' + e(layerPlain(r.bindingLayer)) + '</p>' : '')
+          + (r.whatHeCaresAbout ? '<p class="dim"><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
+      // ═══ THE LEAKS — top three, every supporting fact nested under its leak ═══
+      + cat('The leaks', 'ranked by the system — every supporting fact sits under its leak',
+          (g.leaks.length
+            ? g.leaks.map((lk, n) => {
+                const ml = trimRepeatedJobValue(lk.moneyLine, g.leaks[0] && g.leaks[0].moneyLine, n);
+                return '<div class="mrow"><div class="n">' + (n + 1) + '.</div><div><div><b>' + p(lk.problem) + '</b></div>'
                 + (lk.costs ? '<div class="tw">' + p(lk.costs) + '</div>' : '')
+                + (lk.support.length ? '<div class="tw">' + lk.support.map(x => p(x)).join(' · ') + '</div>' : '')
+                + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
                 + (lk.pillar && PILLAR_PRODUCT[lk.pillar] ? '<div class="tw">' + e(PILLAR_LABEL[lk.pillar] || lk.pillar) + ' &middot; fix we sell: ' + e(PILLAR_PRODUCT[lk.pillar]) + '</div>' : '')
                 + '</div></div>'; }).join('')
             : (t && t.costliest && t.costliest.problem
-                ? '<div class="mrow"><div class="n">1.</div><div><div>' + p(t.costliest.problem) + '</div>'
+                ? '<div class="mrow"><div class="n">1.</div><div><div><b>' + p(t.costliest.problem) + '</b></div>'
                   + (t.costliest.costs ? '<div class="tw">' + p(t.costliest.costs) + '</div>' : '')
                   + '</div></div><p class="dim">No ranked money leaks on this lead — this is the finding scored as costing them most.</p>'
                 : '')))
-      // ═══ 3 · THE CONVERSATION ═══ Informs, never instructs.
-      + (convRows.length ? cat('The conversation', 'what we know about how it will go — the opening is your call',
-          '<div class="grid">' + convRows.map(x => '<div class="gl' + (x[2] ? ' ' + x[2] : '') + '">' + e(x[0]) + '</div><div>' + x[1] + '</div>').join('') + '</div>') : '')
-      // ═══ 4 · THE BUSINESS ═══ What this business is, what is actually going
-      // on, and the one-thing diagnosis — three overlapping sections merged
-      // into one read, each fact still appearing exactly once.
-      + cat('The business', '',
-          (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
-          + (r.read ? '<p>' + p(r.read) + '</p>' : '')
-          + (t ? ((t.diagnosis ? '<p><b>' + (t.layer ? e(layerPlain(t.layer).replace(/^./, (c) => c.toUpperCase())) + ': ' : '') + '</b>' + p(t.diagnosis) + '</p>' : '')
-              + (t.why ? '<p class="dim">' + p(t.why) + '</p>' : '')
-              + (t.firstBrokenLinkWhy ? '<p><b>Fix this first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + '.</b> ' + p(t.firstBrokenLinkWhy) + '</p>' : '')
-              + (t.friction.length ? '<p class="dim">' + (t.earnedButBlocked ? 'Earned, and blocked — ' : '') + t.frictionCount + ' thing(s) stand between an interested customer and a booked job: ' + t.friction.map(x => p(x)).join(' · ') + '</p>' : ''))
-            : '')
-          + ul(r.rows, x => '<li><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>')
-          + (r.bindingLayer ? '<p class="dim">Biggest blocker: ' + e(layerPlain(r.bindingLayer)) + '</p>' : '')
-          + (r.whatHeCaresAbout ? '<p><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
-      // ═══ 5 · THE EVIDENCE ═══ Every finding once, money-ordered (the server
-      // already sorts problemList by pillar), their own words as the sub-line.
-      // This is the section that killed the old triple repetition: the problems
-      // table, the own-words list and the friction bullets each said the same
-      // finding in three places.
-      + cat('The evidence', 'every finding, ordered by what it costs him — marked rows are ours to know',
-          ((r.changes || []).filter(c => c.sayable).map(c => '<div class="erow"><b>Changed since we last looked:</b> ' + p(c.say) + ' <span class="tw">(a dated fact — everything else on this sheet is how the business looks today)</span></div>').join(''))
-          + r.problems.map(x => {
-              const sub = [x.area ? e(x.area) : '', x.costs ? 'costs him: ' + p(x.costs) : ''].filter(Boolean).join(' · ');
-              return '<div class="erow"><b>' + p(x.problem) + '</b>'
-                + (x.internalOnly ? ' <span class="tw">(internal — never say reviews to him)</span>' : '')
-                + (sub ? '<div class="tw">' + sub + '</div>' : '') + '</div>';
-            }).join('')
-          + r.originalFindings.map(f => '<div class="erow">' + p(f.finding || f.what || f)
-              + (f.quote ? '<div class="tw">Their words: <q>' + p(f.quote) + '</q></div>' : '') + '</div>').join('')); };
+      // ═══ THE SMALLER LEAKS — every remaining money signal, one line, none hidden ═══
+      + cat('The smaller leaks', 'every other measured money signal — ranked, none hidden',
+          g.small.length ? g.small.map(x => '<div class="erow"><b>' + p(x.problem) + '</b>'
+            + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
+            + (x.pillar && PILLAR_LABEL[x.pillar] ? ' <span class="tw">(' + e(PILLAR_LABEL[x.pillar]) + ')</span>' : '') + '</div>').join('') : '')
+      // ═══ THE CALL PREP ═══
+      + (() => {
+          const rows = [];
+          if (r.askOnTheCall) rows.push(['Worth asking', '<span class="ask">' + p(r.askOnTheCall) + '</span>', '']);
+          if (r.expectObjection) rows.push(['He will likely say',
+            '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
+          if (r.pitch) rows.push(['The email led with',
+            (r.subject ? '<div class="dim">Subject: ' + p(r.subject) + '</div>' : '') + '<pre>' + p(r.pitch) + '</pre>'
+            + '<div class="tw">Already in front of him — the call does not have to open the same way.</div>', '']);
+          if (!rows.length) return '';
+          return cat('The call', 'what we know about how it will go — the opening is your call',
+            '<div class="grid">' + rows.map(x => '<div class="gl">' + e(x[0]) + '</div><div>' + x[1] + '</div>').join('') + '</div>');
+        })(); };
+
   // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
   // On a 50-lead export the crew-trades brief printed fifty times — a page of
   // identical static text per lead, which is exactly the "info everywhere"
@@ -2706,57 +2723,48 @@ const auditExportHtml = (records, meta) => {
               ? '<p class="dim">This brief was verified ' + e(n.verifiedAt) + ', over eighteen months ago. Re-check any figure before saying it out loud.</p>'
               : (n.verifiedAt ? '<p class="dim">Verified ' + e(n.verifiedAt) + '.</p>' : ''));
   const oneTail = (r, i) => {
-    const t = r.oneThing;
-    // ═══ 6 · THE ANGLES ═══ What is worth selling beside the questions that
-    // open him up — the trade questions inline where the caller needs them;
-    // the full brief still prints once in the appendix.
-    const qs = (r.niche && Array.isArray(r.niche.askOnCall)) ? r.niche.askOnCall : [];
-    const angles = (r.whatHeNeeds || qs.length)
-      ? '<section><div class="cols"><div>'
-        + '<h4>What is worth selling</h4>'
-        + (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '<p class="dim">Nothing recommended on this lead yet.</p>')
-        + (t && t.product ? '<p class="dim">Product that fits: ' + e(t.product) + '</p>' : '')
-        + '</div>'
-        + (qs.length ? '<div><h4>Questions worth asking</h4><div class="qlist">' + qs.map(q => p(q)).join('<br>') + '</div></div>' : '')
-        + '</div></section>'
-      : '';
-    // ═══ 7 · THE EDGES ═══ What we could not check (a different thing from a
-    // claim we cannot stand behind) beside the internal review intelligence —
-    // reviews are how we read the business, never what gets said to the owner.
+    const g = r.grouped || { other: [], internal: [] };
+    // ═══ REFERENCE — read if you need it. Internal intelligence, what we could
+    // not check, anything with no money pillar, their own words, and Do-not-say
+    // LAST — the business first, the guardrails at the end.
     const internal = [
       (r.opsBuckets && r.opsBuckets[0]) ? ('Complaints are mostly “' + p(r.opsBuckets[0].label) + '”' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
       r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply — the cheapest fix a call can open with') : '',
-    ].concat((r.changes || []).filter(c => !c.sayable).map(c => p(c.say))).filter(Boolean);
+    ].concat((g.internal || []).map(x => p(x.problem)))
+     .concat((r.changes || []).filter(c => !c.sayable).map(c => p(c.say))).filter(Boolean);
+    const sayableChanges = (r.changes || []).filter(c => c.sayable);
     const couldNot = ''
       + ul(r.readLimits, x => '<li>' + p(String(x)) + '</li>')
-      // Positive-only advertising evidence, and the pages the site links
-      // nowhere. Both bounded: the negative form of either is barred, so
-      // neither is ever phrased as an absence in anything that leaves here.
       + (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to — a page built for an ad is not in the menu by design; their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li class="dim">' + e(x) + '</li>') : '')
       + (r.adsVerified ? '<p class="dim">Listed as a verified advertiser in Google’s Ads Transparency Center.</p>' : '');
-    const edges = (couldNot || internal.length)
-      ? '<section><div class="cols"><div><h4>What we could not check</h4>' + (couldNot || '<p class="dim">Nothing noted.</p>') + '</div>'
-        + (internal.length ? '<div><h4>Internal — never say to him</h4>' + internal.map(x => '<p class="dim">' + x + '</p>').join('') + '</div>' : '')
-        + '</div></section>'
+    const ownWords = r.originalFindings.map(f => '<div class="erow">' + p(f.finding || f.what || f)
+      + (f.quote ? '<div class="tw">Their words: <q>' + p(f.quote) + '</q></div>' : '') + '</div>').join('');
+    const alsoMeasured = (g.other || []).map(x => '<div class="erow">' + p(x.problem)
+      + (x.costs || x.area ? '<div class="tw">' + [x.area ? e(x.area) : '', x.costs ? 'costs him: ' + p(x.costs) : ''].filter(Boolean).join(' · ') + '</div>' : '') + '</div>').join('');
+    const changesBlock = sayableChanges.length
+      ? sayableChanges.map(c => '<div class="erow"><b>Changed since we last looked:</b> ' + p(c.say) + ' <span class="tw">(a dated fact — everything else on this sheet is how the business looks today)</span></div>').join('')
       : '';
-    // Footer: the pages actually rendered (as links — an <img> would break the
-    // self-contained rule) and the per-lead pointer at the appendix brief.
+    const refBody = ''
+      + changesBlock
+      + (ownWords ? '<h4>From their own pages</h4>' + ownWords : '')
+      + (alsoMeasured ? '<h4>Also measured</h4>' + alsoMeasured : '')
+      + (internal.length ? '<h4>Internal — never say to him</h4>' + internal.map(x => '<p class="dim">' + x + '</p>').join('') : '')
+      + (couldNot ? '<h4>What we could not check</h4>' + couldNot : '')
+      + (r._doNotSay ? '<h4 style="color:#b91c1c">Do not say</h4>' + r._doNotSay : '');
+    const reference = refBody ? '<section class="ref"><h3>Reference<span class="cap">read if you need it — internal intelligence and guardrails</span></h3>' + refBody + '</section>' : '';
     const foot = (r.renders.length || r.niche)
       ? '<div class="foot"><div>' + (r.renders.length ? 'Pages rendered: ' + r.renders.map(sh => '<a href="' + e(sh.url) + '">' + e(sh.label) + '</a>').join(' · ') : '') + '</div>'
         + (r.niche ? '<div style="text-align:right"><b>' + e(r.niche.label) + '</b> — the full segment brief (their vocabulary, the software to ask about, the questions worth asking) is printed ONCE at the end of this file.</div>' : '')
         + '</div>'
       : '';
-    // ═══ DO NOT SAY — LAST, BY DESIGN ═══
-    const dns = r._doNotSay
-      ? '<section><h3 style="color:#b91c1c">Do not say</h3>' + r._doNotSay + '</section>'
-      : '';
-    return angles + edges + dns + foot + '</article>'; };
+    return reference + foot + '</article>'; };
+
   return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#86868b;font-size:13px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#515154}'
@@ -6146,131 +6154,10 @@ function LeadBriefing({ lead }) {
     // verdict, so a reader who had never heard of the business met a conclusion
     // about a company they could not picture.
     sr && sr.background ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'What this business is'),
+      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The story',
+        React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'what it is, where the money leaks, what we would sell')),
       React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
     ) : null,
-
-    // ── SCORE, FACTS, AND THE TOP THREE MONEY LEAKS ─────────────────────────
-    // Vin, reading the TriStar sheet: "theres info everywhere... i dont cealry
-    // know what 1 2 and 3 of the biggest revenue leaks are." One card answers
-    // the three questions an operator asks before anything else: how bad is the
-    // website (a /10 with every point traceable to a measurement), what are the
-    // hard facts (ads, booking, campaign pages, real-visitor speed — each
-    // three-state, because could-not-read is not "no"), and the three biggest
-    // money leaks numbered, each with the product that fixes it. All of it is
-    // code-assembled server-side; nothing here can be a fabrication.
-    (() => {
-      const ws = lead.websiteScore;
-      const af = lead.auditFacts;
-      const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
-      // Top money leaks: pillar-ranked rows only, copy quotes and TAXED-level
-      // reputation notes excluded — those are context, not the sale.
-      // Internal rows are excluded HERE, at the one filter that decides the
-      // three leaks a call is built on. Live 2026-08-24: "their Google reviews
-      // have slowed" was leak #2 with a retainer pitch under it, and the seven
-      // review-metric rungs can never be said to the owner. They stay in the
-      // full findings list below, marked, where a call sheet wants them.
-      const leaks = pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages && !r.internalOnly).slice(0, 3);
-      if (!ws && !af && !leaks.length) return null;
-      // PILLAR_LABEL / PILLAR_PRODUCT are module-scope — one copy for the
-      // screen, the selling block and the export.
-      const chip = (txt, tone) => React.createElement('span', {
-        style: { display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11,
-          border: '1px solid ' + (tone === 'bad' ? 'rgba(248,113,113,.4)' : 'var(--b)'),
-          color: tone === 'bad' ? '#f87171' : 'var(--m2)', marginRight: 6, marginBottom: 4 } }, txt);
-      const facts = [];
-      if (af) {
-        facts.push(chip(adsFactsLabel(af), null));
-        if (af.ads === 'yes' && af.adsConversion === false) facts.push(chip('no conversion tracking', 'bad'));
-        if (af.booking) facts.push(chip('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking), (af.booking === 'form' || af.booking === 'phone_only' || af.booking === 'none_found') ? 'bad' : null));
-        if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
-        // Positive only, per the read's own rule: finding campaign pages is a
-        // fact; not finding them proves nothing, and the caption says so.
-        if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? (af.campaignPages + ' page(s) only reachable by ad link') : 'Ad landing pages: none found (they may still exist)'));
-        if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
-        if (af.https === false) facts.push(chip('plain http', 'bad'));
-      }
-      const te = lead.trafficEstimate;
-      if (te && te.checked && te.inIndex && Number.isFinite(te.organicEtvMonthly)) {
-        facts.push(chip('~' + te.organicEtvMonthly.toLocaleString() + ' organic visits/mo (third-party estimate \u2014 internal only)'));
-        if (Number(te.paidKeywords) > 0) facts.push(chip('index has seen paid keywords on this domain'));
-      }
-      // Review intelligence — INTERNAL by rule (reviews are how we read the
-      // business, never what we say to the owner). The bucket tells Mike what
-      // KIND of operational fault the complaints describe; the unanswered
-      // negatives are the cheapest fix a call can open with.
-      const ob = lead.opsBuckets;
-      if (Array.isArray(ob) && ob.length) {
-        const top = ob[0];
-        if (top && top.label) facts.push(chip('Complaints: mostly ' + top.label + (Number(top.mentions) > 1 ? ' (' + top.mentions + ' mentions)' : '') + ' \u2014 internal only', 'bad'));
-      }
-      if (Number.isFinite(Number(lead.reviewsNegativeUnanswered)) && Number(lead.reviewsNegativeUnanswered) > 0) {
-        facts.push(chip(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 internal only', 'bad'));
-      }
-      return React.createElement('div', {
-        style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
-      },
-        ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
-          React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : ws.score <= 7 ? '#fbbf24' : 'var(--t)' } }, ws.score + '/10'),
-          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'how well their website is built \u2014 10 is best (' + ws.basedOn + '). Ads and search are scored separately'),
-          React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
-            (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
-        ) : null,
-        facts.length ? React.createElement('div', null, facts) : null,
-        leaks.length ? React.createElement('div', null,
-          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8 } },
-            'The money \u2014 ' + (leaks.length === 1 ? 'the biggest leak' : 'the ' + leaks.length + ' biggest leaks'),
-            React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'the system\u2019s ranking \u2014 every finding is below; the pick is yours')),
-          leaks.map((r, i) => React.createElement('div', { key: 'lk' + i, style: { display: 'flex', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--b)' : 'none', alignItems: 'baseline' } },
-            React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--t)', minWidth: 18 } }, (i + 1) + '.'),
-            React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.5 } }, r.problem),
-              // The translation: the finding said as the money it loses. Code-
-              // assembled server-side; its only figure is the trade table's own
-              // job-value sentence, so nothing here can be invented.
-              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.55, marginTop: 4 } }, trimRepeatedJobValue(r.moneyLine, leaks[0] && leaks[0].moneyLine, i)) : null,
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 3 } },
-                (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
-                (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
-            )
-          ))
-        ) : null
-      );
-    })(),
-
-    // ── THE CONVERSATION ────────────────────────────────────────────────────
-    // Mirrors the export sheet, and per Vin 2026-08-24 it INFORMS rather than
-    // instructs — "i still dont trust the brain or the audits to always pick
-    // the perfect thing". No scripted opener: what the email already led with
-    // (a fact — it was sent), the pushback our prospect model predicts (one
-    // reading, not a rule), the diagnostic worth asking, and Do-not-say.
-    (() => {
-      const sim = (lead.generatedResult && lead.generatedResult.prospectSim) || lead.prospectSim || null;
-      const said = String((sim && (sim.reason || sim.why || sim.reaction)) || '').trim();
-      const obj = said.length >= 25 ? said.slice(0, 300) : '';
-      const rows = [];
-      const gl = (txt, red) => React.createElement('div', { key: 'l' + rows.length, style: { color: red ? 'var(--r)' : 'var(--m)', fontSize: 12, paddingTop: 1, fontWeight: red ? 600 : 400 } }, txt);
-      const gv = (children) => React.createElement('div', { key: 'v' + rows.length, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55, minWidth: 0 } }, children);
-      if (lead.pitch) rows.push(gl('The email led with'), gv([
-        lead.subject ? React.createElement('div', { key: 's', style: { color: 'var(--m2)', fontSize: 12, marginBottom: 3 } }, 'Subject: ' + lead.subject) : null,
-        React.createElement('div', { key: 'p', style: { whiteSpace: 'pre-wrap', color: 'var(--m2)' } }, String(lead.pitch).slice(0, 400) + (String(lead.pitch).length > 400 ? '\u2026' : '')),
-        React.createElement('div', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5, marginTop: 3 } }, 'Already in front of him \u2014 the call does not have to open the same way.'),
-      ]));
-      if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
-        React.createElement('span', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
-      if (sr && sr.askOnTheCall) rows.push(gl('Worth asking'), gv(sr.askOnTheCall));
-      // Do-not-say moved to its own section at the BOTTOM of the audit —
-      // the owner's call, 2026-08-24: warnings last, the business first.
-      if (!rows.length) return null;
-      return React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
-          'The conversation',
-          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8, color: 'var(--m)' } }, 'what we know about how it will go \u2014 the opening is your call')),
-        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '118px 1fr', gap: '10px 16px' } }, rows)
-      );
-    })(),
-
-
 
     // ── THE VERDICT ─────────────────────────────────────────────────────────
     counted.length >= 4 && React.createElement('div', {
@@ -6364,6 +6251,170 @@ function LeadBriefing({ lead }) {
       );
     })(),
 
+    // ── WHAT IS WORTH SELLING HIM ───────────────────────────────────────────
+    // Missing entirely from the first build. It is the section that turns a
+    // briefing into a decision — and the "ask before pitching" line is what stops
+    // a caller pitching growth to a business that is already at capacity.
+    sr && sr.whatHeNeeds ? React.createElement('div', null,
+      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'The sell'),
+      sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
+      // The catalogue names, derived from the top money leaks' pillars — so the
+      // recommendation always lands on something CROJungle sells, without the
+      // model being asked to name a product (which is how feature-pitches ship).
+      (() => {
+        const MAPP = PILLAR_PRODUCT;
+        const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
+        const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
+          .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];
+        return prods.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginTop: 7 } },
+          'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
+      })(),
+      // askOnTheCall renders in The conversation above \u2014 one home each.
+      null
+    ) : null,
+
+    // ── SCORE, FACTS, AND THE TOP THREE MONEY LEAKS ─────────────────────────
+    // Vin, reading the TriStar sheet: "theres info everywhere... i dont cealry
+    // know what 1 2 and 3 of the biggest revenue leaks are." One card answers
+    // the three questions an operator asks before anything else: how bad is the
+    // website (a /10 with every point traceable to a measurement), what are the
+    // hard facts (ads, booking, campaign pages, real-visitor speed — each
+    // three-state, because could-not-read is not "no"), and the three biggest
+    // money leaks numbered, each with the product that fixes it. All of it is
+    // code-assembled server-side; nothing here can be a fabrication.
+    (() => {
+      const ws = lead.websiteScore;
+      const af = lead.auditFacts;
+      const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
+      // Top money leaks: pillar-ranked rows only, copy quotes and TAXED-level
+      // reputation notes excluded — those are context, not the sale.
+      // Internal rows are excluded HERE, at the one filter that decides the
+      // three leaks a call is built on. Live 2026-08-24: "their Google reviews
+      // have slowed" was leak #2 with a retainer pitch under it, and the seven
+      // review-metric rungs can never be said to the owner. They stay in the
+      // full findings list below, marked, where a call sheet wants them.
+      const grp = groupAuditFindings(pl, lead.theOneThing);
+      const leaks = grp.leaks;
+      if (!ws && !af && !leaks.length) return null;
+      // PILLAR_LABEL / PILLAR_PRODUCT are module-scope — one copy for the
+      // screen, the selling block and the export.
+      const chip = (txt, tone) => React.createElement('span', {
+        style: { display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11,
+          border: '1px solid ' + (tone === 'bad' ? 'rgba(248,113,113,.4)' : 'var(--b)'),
+          color: tone === 'bad' ? '#f87171' : 'var(--m2)', marginRight: 6, marginBottom: 4 } }, txt);
+      const facts = [];
+      if (af) {
+        facts.push(chip(adsFactsLabel(af), null));
+        if (af.ads === 'yes' && af.adsConversion === false) facts.push(chip('no conversion tracking', 'bad'));
+        if (af.booking) facts.push(chip('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking), (af.booking === 'form' || af.booking === 'phone_only' || af.booking === 'none_found') ? 'bad' : null));
+        if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
+        // Positive only, per the read's own rule: finding campaign pages is a
+        // fact; not finding them proves nothing, and the caption says so.
+        if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? (af.campaignPages + ' page(s) only reachable by ad link') : 'Ad landing pages: none found (they may still exist)'));
+        if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
+        if (af.https === false) facts.push(chip('plain http', 'bad'));
+      }
+      const te = lead.trafficEstimate;
+      if (te && te.checked && te.inIndex && Number.isFinite(te.organicEtvMonthly)) {
+        facts.push(chip('~' + te.organicEtvMonthly.toLocaleString() + ' organic visits/mo (third-party estimate \u2014 internal only)'));
+        if (Number(te.paidKeywords) > 0) facts.push(chip('index has seen paid keywords on this domain'));
+      }
+      // Review intelligence — INTERNAL by rule (reviews are how we read the
+      // business, never what we say to the owner). The bucket tells Mike what
+      // KIND of operational fault the complaints describe; the unanswered
+      // negatives are the cheapest fix a call can open with.
+      const ob = lead.opsBuckets;
+      if (Array.isArray(ob) && ob.length) {
+        const top = ob[0];
+        if (top && top.label) facts.push(chip('Complaints: mostly ' + top.label + (Number(top.mentions) > 1 ? ' (' + top.mentions + ' mentions)' : '') + ' \u2014 internal only', 'bad'));
+      }
+      if (Number.isFinite(Number(lead.reviewsNegativeUnanswered)) && Number(lead.reviewsNegativeUnanswered) > 0) {
+        facts.push(chip(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 internal only', 'bad'));
+      }
+      return React.createElement('div', {
+        style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
+      },
+        ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
+          React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : ws.score <= 7 ? '#fbbf24' : 'var(--t)' } }, ws.score + '/10'),
+          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'how well their website is built \u2014 10 is best (' + ws.basedOn + '). Ads and search are scored separately'),
+          React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
+            (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
+        ) : null,
+        facts.length ? React.createElement('div', null, facts) : null,
+        leaks.length ? React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8 } },
+            'The money \u2014 ' + (leaks.length === 1 ? 'the biggest leak' : 'the ' + leaks.length + ' biggest leaks'),
+            React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'the system\u2019s ranking \u2014 every finding is below; the pick is yours')),
+          leaks.map((r, i) => React.createElement('div', { key: 'lk' + i, style: { display: 'flex', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--b)' : 'none', alignItems: 'baseline' } },
+            React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--t)', minWidth: 18 } }, (i + 1) + '.'),
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)', lineHeight: 1.5 } }, r.problem),
+              r.costs ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', lineHeight: 1.5, marginTop: 2 } }, r.costs) : null,
+              r.support && r.support.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.55, marginTop: 3 } }, r.support.join(' \u00b7 ')) : null,
+              // The translation: the finding said as the money it loses. Code-
+              // assembled server-side; its only figure is the trade table's own
+              // job-value sentence, so nothing here can be invented.
+              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.55, marginTop: 4 } }, trimRepeatedJobValue(r.moneyLine, leaks[0] && leaks[0].moneyLine, i)) : null,
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 3 } },
+                (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
+                (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
+            )
+          ))
+        ) : null
+      );
+    })(),
+
+    // ── THE SMALLER LEAKS — every remaining money signal, one line, none hidden ──
+    (() => {
+      const grp = groupAuditFindings(Array.isArray(lead.problemList) ? lead.problemList : [], lead.theOneThing);
+      if (!grp.small.length) return null;
+      return React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
+          'The smaller leaks',
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'every other measured money signal \u2014 none hidden')),
+        grp.small.map((x, i) => React.createElement('div', { key: 'sl' + i, style: { padding: '6px 0', borderBottom: i < grp.small.length - 1 ? '1px solid var(--b)' : 'none', fontSize: 13, lineHeight: 1.5 } },
+          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
+          x.costs ? React.createElement('span', { style: { color: 'var(--m)' } }, ' \u2014 ' + x.costs) : null,
+          x.pillar && PILLAR_LABEL[x.pillar] ? React.createElement('span', { style: { color: 'var(--m)', fontSize: 11.5 } }, ' (' + PILLAR_LABEL[x.pillar] + ')') : null))
+      );
+    })(),
+
+    // ── THE CONVERSATION ────────────────────────────────────────────────────
+    // Mirrors the export sheet, and per Vin 2026-08-24 it INFORMS rather than
+    // instructs — "i still dont trust the brain or the audits to always pick
+    // the perfect thing". No scripted opener: what the email already led with
+    // (a fact — it was sent), the pushback our prospect model predicts (one
+    // reading, not a rule), the diagnostic worth asking, and Do-not-say.
+    (() => {
+      const sim = (lead.generatedResult && lead.generatedResult.prospectSim) || lead.prospectSim || null;
+      const said = String((sim && (sim.reason || sim.why || sim.reaction)) || '').trim();
+      const obj = said.length >= 25 ? said.slice(0, 300) : '';
+      const rows = [];
+      const gl = (txt, red) => React.createElement('div', { key: 'l' + rows.length, style: { color: red ? 'var(--r)' : 'var(--m)', fontSize: 12, paddingTop: 1, fontWeight: red ? 600 : 400 } }, txt);
+      const gv = (children) => React.createElement('div', { key: 'v' + rows.length, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55, minWidth: 0 } }, children);
+      if (lead.pitch) rows.push(gl('The email led with'), gv([
+        lead.subject ? React.createElement('div', { key: 's', style: { color: 'var(--m2)', fontSize: 12, marginBottom: 3 } }, 'Subject: ' + lead.subject) : null,
+        React.createElement('div', { key: 'p', style: { whiteSpace: 'pre-wrap', color: 'var(--m2)' } }, String(lead.pitch).slice(0, 400) + (String(lead.pitch).length > 400 ? '\u2026' : '')),
+        React.createElement('div', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5, marginTop: 3 } }, 'Already in front of him \u2014 the call does not have to open the same way.'),
+      ]));
+      if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
+        React.createElement('span', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
+      if (sr && sr.askOnTheCall) rows.push(gl('Worth asking'), gv(sr.askOnTheCall));
+      // Do-not-say moved to its own section at the BOTTOM of the audit —
+      // the owner's call, 2026-08-24: warnings last, the business first.
+      if (!rows.length) return null;
+      return React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
+          'The conversation',
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8, color: 'var(--m)' } }, 'what we know about how it will go \u2014 the opening is your call')),
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '118px 1fr', gap: '10px 16px' } }, rows)
+      );
+    })(),
+
+
+
+
+
     // ── SIGNAL BY SIGNAL ────────────────────────────────────────────────────
     // ── THE SYNTHESISED TABLE ───────────────────────────────────────────────
     // buildAuditRows returns ELEVEN FIXED MECHANICAL SIGNALS, identical on every
@@ -6431,12 +6482,19 @@ function LeadBriefing({ lead }) {
           )),
         ) : null; })(),
 
-        Array.isArray(lead.problemList) && lead.problemList.length ? React.createElement('div', null,
+        Array.isArray(lead.problemList) && lead.problemList.length ? (() => {
+          // Everything with a money pillar already rendered above (nested under
+          // its leak or in The smaller leaks). What remains here: rows with no
+          // pillar, and the internal review metrics, marked.
+          const grp = groupAuditFindings(lead.problemList, lead.theOneThing);
+          const rest = grp.other.map(x => ({ ...x, internalOnly: false })).concat(grp.internal.map(x => ({ ...x, area: 'internal', internalOnly: true })));
+          if (!rest.length) return null;
+          return React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } },
-            'What we found that is broken, wrong, or costing them customers \u2014 ' + lead.problemList.length + ', ordered by the money they cost'),
-          React.createElement('div', null, lead.problemList.map((p, i) => React.createElement('div', {
+            'Also measured \u2014 ' + rest.length + ' more'),
+          React.createElement('div', null, rest.map((p, i) => React.createElement('div', {
             key: 'pl' + i,
-            style: { display: 'grid', gridTemplateColumns: '150px 1fr', gap: 14, alignItems: 'baseline', padding: '9px 0', borderBottom: i === lead.problemList.length - 1 ? 'none' : '1px solid var(--b)' },
+            style: { display: 'grid', gridTemplateColumns: '150px 1fr', gap: 14, alignItems: 'baseline', padding: '9px 0', borderBottom: i === rest.length - 1 ? 'none' : '1px solid var(--b)' },
           },
             React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: 'var(--m2)' } }, p.area),
             React.createElement('div', null,
@@ -6444,8 +6502,8 @@ function LeadBriefing({ lead }) {
                 p.internalOnly ? React.createElement('span', { style: { fontSize: 10, color: '#fbbf24', marginLeft: 8, border: '1px solid rgba(251,191,36,.35)', borderRadius: 8, padding: '1px 6px', verticalAlign: 'middle' } }, 'internal \u2014 never say reviews to him') : null),
               p.costs ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)' } }, 'Costs them: ' + p.costs) : null
             )
-          )))
-        ) : sr && Array.isArray(sr.rows) && sr.rows.length ? React.createElement('div', null,
+          ))));
+        })() : sr && Array.isArray(sr.rows) && sr.rows.length ? React.createElement('div', null,
       // ══ THIS FALLBACK BORROWED A HEADING THAT DOES NOT DESCRIBE IT ══════
       // problemList comes from the harm ladder, which contains ONLY problems,
       // so "broken, wrong, or costing them customers" is accurate above it.
@@ -6508,27 +6566,6 @@ function LeadBriefing({ lead }) {
       )
     ),
 
-    // ── WHAT IS WORTH SELLING HIM ───────────────────────────────────────────
-    // Missing entirely from the first build. It is the section that turns a
-    // briefing into a decision — and the "ask before pitching" line is what stops
-    // a caller pitching growth to a business that is already at capacity.
-    sr && sr.whatHeNeeds ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What is actually worth selling them'),
-      sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
-      // The catalogue names, derived from the top money leaks' pillars — so the
-      // recommendation always lands on something CROJungle sells, without the
-      // model being asked to name a product (which is how feature-pitches ship).
-      (() => {
-        const MAPP = PILLAR_PRODUCT;
-        const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
-        const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
-          .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];
-        return prods.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginTop: 7 } },
-          'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
-      })(),
-      // askOnTheCall renders in The conversation above \u2014 one home each.
-      null
-    ) : null,
 
     // ── DO NOT SAY — LAST, BY DESIGN ────────────────────────────────────────
     // Every flagged claim, rendered as the QUOTE plus one plain-English line of
