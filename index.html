@@ -2291,6 +2291,54 @@ const runBatchAudit = async (opts) => {
 // network — it opens on any machine, prints to PDF from the browser, and cannot
 // half-load. That is what "nothing gets ruined" has to mean for a file that
 // leaves this app and gets emailed around.
+// ══ ONE ADS LABEL FOR EVERY RENDERER ════════════════════════════════════════
+// Breck's Paving, live 2026-08-24: the header said "Ads none found" while a
+// leak said "has Google Ads tracking" — the header read the Google field alone
+// and the rung fired on either platform. The label now says which platform,
+// from the same auditFacts both surfaces hold, so a Meta-only advertiser reads
+// "Facebook only" everywhere instead of "none found" in one place and
+// "Google" in another.
+const adsFactsLabel = (af) => {
+  if (!af) return '';
+  if (af.ads === 'yes' && af.metaPixel === true) return 'Ads: Google + Facebook';
+  if (af.ads === 'yes') return 'Ads: Google running';
+  if (af.ads === 'no' && af.metaPixel === true) return 'Ads: Facebook only';
+  if (af.ads === 'no') return 'Ads: none found';
+  return 'Ads: could not read';
+};
+// The pillar vocabulary, ONE copy — it was three (the money card, the selling
+// block's MAPP, and nothing for the export, which is why the sheet's leaks
+// carried no "fix we sell" line at all).
+const PILLAR_LABEL = { BURNING: 'money leaving now', UNCAUGHT: 'people who tried and could not reach them',
+  INVISIBLE: 'people who never found them', LEAKING: 'arrived and lost', ROTTING: 'in hand, then lost', TAXED: 'reputation tax' };
+const PILLAR_PRODUCT = { BURNING: 'ad + tracking cleanup inside a retainer', UNCAUGHT: 'automated response layer (AI Brain)',
+  INVISIBLE: 'search ownership (marketing retainer)', LEAKING: 'website rebuild / conversion work',
+  ROTTING: 'follow-up automation (AI Brain)', TAXED: 'reputation operations' };
+// The same finding was printing twice in THE EVIDENCE: the copy-quote findings
+// were merged INTO problemList on the server (AUDIT UNIQUENESS) and the
+// standalone originalFindings list still carried them. Drop an original whose
+// text is already a problem row — matched on a normalised prefix, because the
+// merged row can carry a longer tail.
+const dedupeOwnWords = (problems, originals) => {
+  const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 80);
+  const seen = (Array.isArray(problems) ? problems : []).map(p => norm(p && p.problem)).filter(Boolean);
+  return (Array.isArray(originals) ? originals : []).filter(f => {
+    const n = norm(f && (f.finding || f.what || f));
+    if (!n) return true;
+    return !seen.some(k => k === n || k.startsWith(n) || n.startsWith(k));
+  });
+};
+// Leak money lines all open with the trade table's one job-value sentence, so
+// three leaks read as one template. The first keeps it; later ones that start
+// with the same first sentence render only their specific half.
+const trimRepeatedJobValue = (moneyLine, firstMoneyLine, idx) => {
+  const s = String(moneyLine || '');
+  if (!idx || !s || !firstMoneyLine) return s;
+  const head = String(firstMoneyLine).split(/(?<=\.)\s+/)[0];
+  if (head && s.startsWith(head)) return s.slice(head.length).trim();
+  return s;
+};
+
 const auditRecordFor = (lead) => {
   const l = lead || {};
   const ba = l.brainAudit || {};
@@ -2306,9 +2354,16 @@ const auditRecordFor = (lead) => {
     owner: l.verifiedCEO || l.founderName || '',
     ownerTitle: l.verifiedCEOTitle || l.title || '',
     email: l.email || '',
+    // How much to trust the address, same rules as the screen — a junior
+    // caller reading "education@" on a different domain deserves the label.
+    emailNote: l.emailResult
+      ? (/SMTP-verified/i.test(l.emailResult.label || '') ? 'mailbox confirmed live'
+        : /scraped|Published/i.test(l.emailResult.label || '') ? 'published on their own site'
+        : 'pattern-built, not confirmed')
+      : '',
     phone: l.phoneDisplay || l.phone || '',
     location: l.location || '',
-    trade: l.tradeWord || l.industry || '',
+    trade: String(l.tradeWord || l.industry || '').replace(/\b(cpa|hvac)\b/g, (m0) => m0.toUpperCase()),
     icpScore: Number.isFinite(Number(l.icpScore)) ? Number(l.icpScore) : null,
     status: l.approved ? 'approved' : (l.pitch ? 'email written' : (leadHasAudit(l) ? 'audited' : 'not audited')),
     // WHAT IT IS
@@ -2331,13 +2386,13 @@ const auditRecordFor = (lead) => {
     read: (sr && sr.read) || srFlat || '',
     rows: arr(sr && sr.rows).filter(r => r && (r.label || r.says)),
     bindingLayer: (gc && gc.layer) || '',
-    // EVIDENCE
-    originalFindings: arr(ba.originalFindings || l.originalFindings),
+    // EVIDENCE — own-words rows that already became problem rows render once.
+    originalFindings: dedupeOwnWords(arr(l.problemList), arr(ba.originalFindings || l.originalFindings)),
     problems: arr(l.problemList).map(p => ({ area: p.area || '', problem: p.problem || '', costs: p.costs || '', harm: p.harm, internalOnly: !!p.internalOnly, moneyLine: p.moneyLine || '' })),
     // The three leaks the call is built on: sayable rows only, with the money
     // translation. Same filter as the screen card — one rule, two renderers.
     leaks: arr(l.problemList).filter(p => p && Number.isFinite(p.moneyRank) && p.moneyRank <= 5 && !p.fromTheirPages && !p.internalOnly).slice(0, 3)
-      .map(p => ({ problem: p.problem || '', moneyLine: p.moneyLine || '', costs: p.costs || '' })),
+      .map(p => ({ problem: p.problem || '', moneyLine: p.moneyLine || '', costs: p.costs || '', pillar: p.pillar || '' })),
     // Called directly, not behind a `typeof` guard. buildAuditRows is a hoisted
     // module-scope declaration in this same script block, so a guard here could
     // only ever do one thing: silently empty this section if somebody moved the
@@ -2457,7 +2512,7 @@ const auditExportHtml = (records, meta) => {
       ? '<section><h3>' + e(title) + (capTxt ? '<span class="cap">' + e(capTxt) + '</span>' : '') + '</h3>' + body + '</section>' : '';
     const af = r.auditFacts;
     const facts = af ? [
-      'Ads ' + (af.ads === 'yes' ? 'running' : af.ads === 'no' ? 'none found' : 'could not read'),
+      adsFactsLabel(af),
       af.booking ? ('Booking ' + ({ online_booking: 'online', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking)) : '',
       (typeof af.formFields === 'number') ? ('Form ' + af.formFields + ' fields') : '',
       (typeof af.campaignPages === 'number' && af.campaignPages > 0) ? (af.campaignPages + ' unlinked pages') : '',
@@ -2525,7 +2580,7 @@ const auditExportHtml = (records, meta) => {
       // sheet after the resolver had explicitly refused that title.
       + '<section class="call"><div>'
       + '<div class="cname">' + (r.owner
-          ? e(r.owner) + '<span> &middot; ' + (r.ownerTitle ? e(r.ownerTitle) : 'no title found') + (r.email ? ' &middot; ' + e(r.email) : '') + '</span>'
+          ? e(r.owner) + '<span> &middot; ' + (r.ownerTitle ? e(r.ownerTitle) : 'no title found') + (r.email ? ' &middot; ' + e(r.email) + (r.emailNote ? ' (' + e(r.emailNote) + ')' : '') : '') + '</span>'
           : (r.email ? e(r.email) + '<span> &middot; no confirmed owner</span>' : 'No confirmed contact'))
       + '</div>'
       + (r.heldBack && r.heldBack.name
@@ -2545,9 +2600,13 @@ const auditExportHtml = (records, meta) => {
       // face — every finding stays visible in The evidence, the pick is Mike's.
       + cat('The money', "the system's ranking — every finding is in The evidence; the pick is yours",
           (Array.isArray(r.leaks) && r.leaks.length
-            ? r.leaks.map((lk, n) => '<div class="mrow"><div class="n">' + (n + 1) + '.</div><div><div>' + p(lk.problem) + '</div>'
-                + (lk.moneyLine ? '<div class="mline">' + p(lk.moneyLine) + '</div>' : '')
-                + (lk.costs ? '<div class="tw">' + p(lk.costs) + '</div>' : '') + '</div></div>').join('')
+            ? r.leaks.map((lk, n) => {
+                const ml = trimRepeatedJobValue(lk.moneyLine, r.leaks[0] && r.leaks[0].moneyLine, n);
+                return '<div class="mrow"><div class="n">' + (n + 1) + '.</div><div><div>' + p(lk.problem) + '</div>'
+                + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
+                + (lk.costs ? '<div class="tw">' + p(lk.costs) + '</div>' : '')
+                + (lk.pillar && PILLAR_PRODUCT[lk.pillar] ? '<div class="tw">' + e(PILLAR_LABEL[lk.pillar] || lk.pillar) + ' &middot; fix we sell: ' + e(PILLAR_PRODUCT[lk.pillar]) + '</div>' : '')
+                + '</div></div>'; }).join('')
             : (t && t.costliest && t.costliest.problem
                 ? '<div class="mrow"><div class="n">1.</div><div><div>' + p(t.costliest.problem) + '</div>'
                   + (t.costliest.costs ? '<div class="tw">' + p(t.costliest.costs) + '</div>' : '')
@@ -6063,18 +6122,15 @@ function LeadBriefing({ lead }) {
       // full findings list below, marked, where a call sheet wants them.
       const leaks = pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages && !r.internalOnly).slice(0, 3);
       if (!ws && !af && !leaks.length) return null;
-      const PILLAR_LABEL = { BURNING: 'money leaving now', UNCAUGHT: 'people who tried and could not reach them',
-        INVISIBLE: 'people who never found them', LEAKING: 'arrived and lost', ROTTING: 'in hand, then lost', TAXED: 'reputation tax' };
-      const PILLAR_PRODUCT = { BURNING: 'ad + tracking cleanup inside a retainer', UNCAUGHT: 'automated response layer (AI Brain)',
-        INVISIBLE: 'search ownership (marketing retainer)', LEAKING: 'website rebuild / conversion work',
-        ROTTING: 'follow-up automation (AI Brain)', TAXED: 'reputation operations' };
+      // PILLAR_LABEL / PILLAR_PRODUCT are module-scope — one copy for the
+      // screen, the selling block and the export.
       const chip = (txt, tone) => React.createElement('span', {
         style: { display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11,
           border: '1px solid ' + (tone === 'bad' ? 'rgba(248,113,113,.4)' : 'var(--b)'),
           color: tone === 'bad' ? '#f87171' : 'var(--m2)', marginRight: 6, marginBottom: 4 } }, txt);
       const facts = [];
       if (af) {
-        facts.push(chip('Ads: ' + (af.ads === 'yes' ? 'running' : af.ads === 'no' ? 'none found' : 'could not read'), af.ads === 'yes' ? null : null));
+        facts.push(chip(adsFactsLabel(af), null));
         if (af.ads === 'yes' && af.adsConversion === false) facts.push(chip('no conversion tracking', 'bad'));
         if (af.booking) facts.push(chip('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking), (af.booking === 'form' || af.booking === 'phone_only' || af.booking === 'none_found') ? 'bad' : null));
         if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
@@ -6122,7 +6178,7 @@ function LeadBriefing({ lead }) {
               // The translation: the finding said as the money it loses. Code-
               // assembled server-side; its only figure is the trade table's own
               // job-value sentence, so nothing here can be invented.
-              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.55, marginTop: 4 } }, r.moneyLine) : null,
+              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.55, marginTop: 4 } }, trimRepeatedJobValue(r.moneyLine, leaks[0] && leaks[0].moneyLine, i)) : null,
               React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 3 } },
                 (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
                 (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
@@ -6326,18 +6382,18 @@ function LeadBriefing({ lead }) {
               'Map-pack, local-rank and after-hours findings are withheld on this lead \u2014 they are measured and true, and they describe a market this business does not sell into.'),
           ) : null,
 
-        Array.isArray(lead.originalFindings) && lead.originalFindings.length ? React.createElement('div', { style: { marginBottom: 18 } },
+        (() => { const _ofd = dedupeOwnWords(Array.isArray(lead.problemList) ? lead.problemList : [], Array.isArray(lead.originalFindings) ? lead.originalFindings : []); return _ofd.length ? React.createElement('div', { style: { marginBottom: 18 } },
           React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#4ade80', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid rgba(74,222,128,.25)' } },
-            'What we found in their own words \u2014 ' + lead.originalFindings.length),
-          lead.originalFindings.map((f, i) => React.createElement('div', {
+            'What we found in their own words \u2014 ' + _ofd.length),
+          _ofd.map((f, i) => React.createElement('div', {
             key: 'of' + i,
-            style: { padding: '9px 0', borderBottom: i < lead.originalFindings.length - 1 ? '1px solid var(--b)' : 'none' },
+            style: { padding: '9px 0', borderBottom: i < _ofd.length - 1 ? '1px solid var(--b)' : 'none' },
           },
             React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: 4 } }, f.finding),
             f.evidence ? React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', fontStyle: 'italic' } },
               '\u201c' + String(f.evidence).slice(0, 220) + '\u201d \u2014 from their own page') : null,
           )),
-        ) : null,
+        ) : null; })(),
 
         Array.isArray(lead.problemList) && lead.problemList.length ? React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } },
@@ -6427,9 +6483,7 @@ function LeadBriefing({ lead }) {
       // recommendation always lands on something CROJungle sells, without the
       // model being asked to name a product (which is how feature-pitches ship).
       (() => {
-        const MAPP = { BURNING: 'ad + tracking cleanup inside a retainer', UNCAUGHT: 'automated response layer (AI Brain)',
-          INVISIBLE: 'search ownership (marketing retainer)', LEAKING: 'website rebuild / conversion work',
-          ROTTING: 'follow-up automation (AI Brain)' };
+        const MAPP = PILLAR_PRODUCT;
         const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
         const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
           .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];

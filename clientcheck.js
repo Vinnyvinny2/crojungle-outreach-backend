@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,8 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml };')();
+      mod = new Function(found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+        + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -623,6 +624,26 @@ const mergeStat = runMergeCheck();
         if (page.indexOf('Smith &amp; Sons &lt;Roofing&gt;') < 0) {
           fails.push('the export does not escape the company name, so a business called "Smith & Sons <Roofing>" silently corrupts the file from that point on');
         }
+        // ══ THE INFO-TRAVEL HELPERS, EXECUTED BOTH WAYS ═══════════════════
+        // Breck's Paving, live 2026-08-24: header "Ads none found" beside a
+        // leak claiming Google Ads tracking. One label now serves every
+        // renderer, and a Meta-only advertiser must never read "none found".
+        if (mod.adsLabel({ ads: 'no', metaPixel: true }) !== 'Ads: Facebook only') fails.push('a Meta-only advertiser reads "' + mod.adsLabel({ ads: 'no', metaPixel: true }) + '" instead of naming Facebook — the header/finding split-brain returns');
+        if (mod.adsLabel({ ads: 'yes', metaPixel: true }) !== 'Ads: Google + Facebook') fails.push('both platforms do not read as both');
+        if (mod.adsLabel({ ads: 'no', metaPixel: false }) !== 'Ads: none found') fails.push('a genuinely tag-free site no longer reads "none found"');
+        if (mod.adsLabel({ ads: 'unreadable' }) !== 'Ads: could not read') fails.push('an unreadable page reads as a fact about the business');
+        // The same finding printed twice in THE EVIDENCE on 2 of 3 live sheets:
+        // merged copy-quote rows in problemList AND the standalone own-words list.
+        const _dd = mod.dedupe([{ problem: 'Every service page opens with the same promise — the kitchen page says X' }],
+          [{ finding: 'Every service page opens with the same promise — the kitchen page says X' }, { finding: 'A different original finding entirely' }]);
+        if (_dd.length !== 1 || !/different original/.test(_dd[0].finding)) fails.push('own-words rows that already became problem rows still render twice (or a distinct one was eaten)');
+        // Three leaks all opening "A kitchen or bathroom remodel runs $15k-$80k."
+        // read as one template; later leaks keep only their specific half.
+        const _ml1 = 'A remodel runs $15k-$80k. Every person who hit the same wall was one of those jobs.';
+        const _ml2 = 'A remodel runs $15k-$80k. The ad budget is buying clicks and nothing counts them.';
+        if (mod.trim(_ml2, _ml1, 1) !== 'The ad budget is buying clicks and nothing counts them.') fails.push('the repeated job-value sentence is not trimmed off later leaks');
+        if (mod.trim(_ml1, _ml1, 0) !== _ml1) fails.push('leak #1 lost its job-value sentence');
+        if (mod.trim('A different opener entirely. Tail.', _ml1, 2) !== 'A different opener entirely. Tail.') fails.push('a leak with its own money line was trimmed');
         if (!/^<!doctype html>/i.test(page)) fails.push('the export is not a complete HTML document');
         // Self-contained means it LOADS nothing. A link the reader can click is
         // fine and a screenshot URL in the text is fine; a stylesheet, a script,
@@ -651,7 +672,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -673,7 +694,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {

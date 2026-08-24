@@ -13619,7 +13619,17 @@ const HARM_LADDER = [
     // caught this rung on its first run, on the day its sibling was rewritten
     // by hand — which is the whole argument for having the gate rather than
     // the intention.
-    say: (m) => `Their site has Google Ads tracking on it, and ${keepSpan(String(m.paidLeakGap))}`,
+    // ══ AND THE SENTENCE NAMED A PLATFORM THE TEST NEVER CHECKED ═════════
+    // adsTagConfirmed is deliberately true for a Google tag OR a Meta pixel —
+    // the click arriving at a dead route is the same loss whichever platform
+    // sold it — and this sentence hardcoded "Google Ads". The comment in
+    // _harmInputs warns about exactly this failure for the two sibling rungs,
+    // and this rung committed it: Breck's Paving, live 2026-08-24, only tag a
+    // Meta pixel, sheet and email both claiming Google, its own fact-checker
+    // writing "Google Ads tag NOT FOUND". The platform is read from the same
+    // fields the facts strip reads, so the header and the finding can never
+    // disagree again.
+    say: (m) => `Their site has ${(m.googleAdsTag === true && m.metaPixel === true) ? 'Google and Facebook ad tracking' : m.googleAdsTag === true ? 'Google Ads tracking' : 'Facebook ad tracking'} on it, and ${keepSpan(String(m.paidLeakGap))}`,
     costs: 'every click they pay for arrives somewhere it cannot be acted on' },
 
   // ── PAYING FOR THE SEARCH THEY ARE NOT WINNING ───────────────────────
@@ -20193,8 +20203,14 @@ const moneyLineFor = (id, jobValue) => {
   if (!build) return null;
   const jv = String(jobValue || '').trim();
   const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null);
-  return line || null;
+  return line ? fixAcronymCase(line) : null;
 };
+
+// "a cpa cannot book a time" reached a call sheet lowercase, 2026-08-24. The
+// trade word travels lowercase on purpose — every matcher in this file lowers
+// before comparing — so the fix is display-only, applied where the audit rows
+// are assembled. Initialisms only; ordinary trade words are untouched.
+const fixAcronymCase = (s) => String(s == null ? '' : s).replace(/\b(cpa|hvac)\b/g, (m0) => m0.toUpperCase());
 
 const buildProblemList = (harms, opts = {}) => {
   if (!harms || !Array.isArray(harms.byHarm)) return [];
@@ -20228,8 +20244,8 @@ const buildProblemList = (harms, opts = {}) => {
       && !(bindingLayer && HARM_LADDER_LAYER[h.id] === bindingLayer);
     return {
       area: AREA_OF[h.id] || 'Other',
-      problem: h.finding,       // measured sentence, written by code
-      costs: h.costs,           // what it does to his business
+      problem: fixAcronymCase(h.finding),   // measured sentence, written by code
+      costs: fixAcronymCase(h.costs),       // what it does to his business
       harm: h.harm,
       opener: Number.isFinite(Number(h.opener)) ? Number(h.opener) : (Number(h.harm) || 0),
       novel: Number.isFinite(novel) ? novel : null,
@@ -21505,6 +21521,64 @@ const stripUnverifiedQuotes = (text, corpus) => {
   }).join(' ');
   return { text: out, cut };
 };
+// ══ THE BACKEND-CLAIM ROWS, ONE TABLE FOR TWO CONSUMERS ═════════════════════
+// The audit fact-check flags these into Do-not-say; the post-contact stripper
+// REMOVES a synthesis or audit sentence they match. They were twelve inline
+// _flag calls inside the route, which is why the stripper could not exist
+// without copying them — the two-hand-kept-copies disease. Every regex is
+// verbatim from that battle-tested block ("Tested 15/15 with zero false
+// positives against legitimate measured claims").
+const AUDIT_BACKEND_CLAIM_ROWS = [
+  [/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission backend behaviour'],
+  [/\bdisappears? forever\b/i, 'claims backend outcome (no record) we cannot see'],
+  [/\bno one (ever )?(sees|responds|answers)\b.{0,30}\bsubmit/i, 'claims what happens after a form submit'],
+  [/\bgoes (straight )?to (their )?(voicemail|no ?one|nobody)\b/i, 'claims call-handling we did not test'],
+  [/\bno (auto[- ]?reply|autoresponder|automatic (reply|response))\b/i, 'claims there is NO auto-reply \u2014 we never submitted the form, so this is unknowable'],
+  [/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'claims nothing responds after submission \u2014 backend we never tested'],
+  [/\b(nobody|no one|no-one|nothing|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back|is there|is listening)\b/i, 'claims nobody answers \u2014 we never rang them and never sat outside their hours'],
+  [/\b(after|outside|past)\s+(hours|business hours|\d{1,2}\s*(am|pm))[^.]{0,40}\b(nobody|no one|nothing|goes unanswered|unanswered|dead|silence)\b/i, 'claims what happens outside their opening hours \u2014 never measured'],
+  [/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'asserts the fate of a submission we never made'],
+  [/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'states what the prospect already did \u2014 invented'],
+  [/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'claims a competitor responded first \u2014 no such data exists'],
+  [/\bby (the time|morning|monday)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'invented timeline of a deal being lost'],
+];
+
+// ══ AND NO CLAIM ABOUT WHAT HAPPENS AFTER SOMEBODY CONTACTS THEM ════════════
+// detectPostContactClaims is the ONE detector for this family — it already
+// feeds Do-not-say. This walker applies it as a STRIPPER to audit prose,
+// because flagging and removing are different things (§24, the invented
+// prices): "You capture interest on the phone, but nothing responds
+// automatically when that call lands outside business hours" printed in THE
+// BUSINESS on Conner's, live 2026-08-24, while its own fact-check listed it as
+// unsayable. One detector, two consumers — never a second copy of the rule.
+const stripPostContactClaims = (text) => {
+  if (typeof text !== 'string' || text.length < 40) return { text, cut: [] };
+  const parts = String(text).split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [];
+  for (const s of parts) {
+    if (s.trim().length >= 26 && (detectPostContactClaims(s).length || AUDIT_BACKEND_CLAIM_ROWS.some(([re]) => re.test(s)))) cut.push(s.trim()); else keep.push(s);
+  }
+  return { text: keep.join(' ').replace(/\s{2,}/g, ' ').trim(), cut };
+};
+const stripPostContactClaimsDeep = (node, out, depth) => {
+  const d = depth || 1;
+  if (d > 6) return node;
+  if (typeof node === 'string') {
+    const r = stripPostContactClaims(node);
+    if (r.cut.length && out) out.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripPostContactClaimsDeep(x, out, d + 1));
+  if (node && typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripPostContactClaimsDeep(node[k], out, d + 1);
+    }
+    return node;
+  }
+  return node;
+};
+
 const stripUnverifiedQuotesDeep = (node, corpus, out, depth) => {
   const d = depth || 0;
   if (d > 6 || node === null || node === undefined) return node;
@@ -22245,7 +22319,10 @@ const callWindowFor = (hoursText, tradeWord) => {
   const open = Number.isFinite(earliest) ? earliest : 8;
   if (onSite) {
     return { checked: true, open24: false,
-      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is on a roof or under a house.` };
+      // "on a roof or under a house" printed on a PAVING contractor and a kitchen
+      // remodeler on 2026-08-24 — roofer imagery hardcoded for thirty trades.
+      // "out on a job" is true of every one of them.
+      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is out on a job.` };
   }
   if (inRooms) {
     return { checked: true, open24: false,
@@ -23725,7 +23802,10 @@ const measureValueEquation = ({ booking, bookingMeasured = true, hasTelLink, for
     belief.push('a real self-serve booking tool \u2014 the customer gets a slot without waiting for anyone');
   } else if (booking === 'form') {
     delay = 2;
-    friction.push('the only way to start is a form that submits and waits for a human to call back');
+    // Bounded: "waits for a human to call back" asserted their callback
+    // mechanism, which nobody measured — the same post-contact family the
+    // fact-checker flags, in our own code-assembled sentence.
+    friction.push('the only way to start is a contact form \u2014 nothing on the site can book a time');
   } else if (booking === 'phone_only') {
     delay = 3;
     friction.push('the only way to start is a phone call during business hours');
@@ -33221,6 +33301,10 @@ const parseLocalFinder = (body) => {
       // matchDuplicateListing already treats a missing identity as unmatchable.
       phone: String(it.phone || '').trim(),
       address: String(it.address || '').trim(),
+      // The row's own primary category, for the marketplace guard: "parking
+      // lot in Columbus, OH" returns parking GARAGES, and a paving company's
+      // absence from a list of parking garages proves nothing about paving.
+      category: String(it.category || '').trim(),
       rating: Number.isFinite(Number(rating.value)) ? Number(rating.value) : null,
       reviews: Number.isFinite(Number(rating.votes_count)) ? Number(rating.votes_count) : 0,
       // A sponsored row is above the organic list and is NOT an organic
@@ -33231,6 +33315,36 @@ const parseLocalFinder = (body) => {
   }
   if (!out.length) return { ok: false, why: 'DataForSEO returned items but none of them were business rows' };
   return { ok: true, results: out };
+};
+
+// ══ THE MARKETPLACE GUARD — DID THIS SEARCH RETURN THEIR TRADE AT ALL ═══════
+// The town guard's sibling. Breck's Paving, live 2026-08-24: their sitemap slug
+// /services/parking-lot became the query "parking lot in Columbus, OH", which
+// returns parking GARAGES — and the paving company's absence from a list of
+// parking garages shipped as "invisible for the exact search". A pure function
+// so the boot check executes the real rule. Three deliberate boundaries:
+//  - the TRADE's words always count, because "Dentist" answering a dental query
+//    needs no further proof;
+//  - the PHRASE's own words count only against a provider-shaped category
+//    ("Gutter cleaning service" keeps a gutter query alive), because a PLACE
+//    category ("Parking garage") contains the phrase's words by construction;
+//  - too little to compare — a short trade word, no categories in the rows —
+//    returns null, and null must never refuse: this guard can only ever refuse
+//    on positive evidence of a different marketplace.
+const packTradeOverlap = (cats, tradeWords, phraseWords) => {
+  const norm = (a) => (Array.isArray(a) ? a : []).map(w => String(w || '').toLowerCase()).filter(w => w.length >= 4);
+  const tw = norm(tradeWords), pw = norm(phraseWords);
+  if (!tw.length && !pw.length) return null;
+  const rows = (Array.isArray(cats) ? cats : []).map(c => String(c || '').toLowerCase()).filter(Boolean);
+  if (!rows.length) return null;
+  const pre = (w) => w.slice(0, 4);
+  const PROVIDER = /\b(service|services|contractor|company|installer|installation|repair|repairs|cleaning|remodel\w*|builder|restoration|supplier|provider|firm|agency|clinic|dentist|surgeon|attorney|lawyer|accountant|studio|shop|specialist|expert|professional)s?\b|(?:er|ist)s?$/;
+  for (const c of rows) {
+    const cw = c.split(/[^a-z]+/).filter(x => x.length >= 4);
+    if (cw.some(x => tw.some(w => pre(w) === pre(x)))) return true;
+    if (PROVIDER.test(c) && cw.some(x => pw.some(w => pre(w) === pre(x)))) return true;
+  }
+  return false;
 };
 
 // ══ ONE DOOR FOR "WHO IS IN THIS SEARCH, IN WHAT ORDER" ═════════════════════
@@ -33439,7 +33553,7 @@ const checkOrganicRank = async ({ query, city, website }) => {
   }
 };
 
-const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng }) => {
+const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng, guardTrade }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
   // ══ REFUSE TO SEARCH A SECTOR LABEL ═══════════════════════════════════════
@@ -33517,6 +33631,7 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
       rating: x.rating,
       userRatingCount: x.reviews,
       location: x.location || null,
+      category: x.category || '',
     }));
     if (!places.length) return { checked: false, why: `no results at all for "${query}"` };
     // ══ A FIELD TOO SMALL TO BE A POSITION ═══════════════════════════════════
@@ -33530,6 +33645,21 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     // sentence spends the one first impression this domain gets on him.
     if (places.length < 6) {
       return { checked: false, why: `only ${places.length} business(es) came back for "${query}" — too small a field to call a position. Below six, "not in the top three" is arithmetic rather than a finding${_narrowed ? `, and this was the narrowed phrase; the generic term is "${_generic}"` : ''}` };
+    }
+
+    // ══ PROVE THE SEARCH RETURNED THEIR MARKETPLACE BEFORE BELIEVING IT ═════
+    // Positive-evidence only: the guard fires when at least half the rows carry
+    // a category and NONE of them overlaps the trade (or, for provider-shaped
+    // categories, the phrase). Rows without categories — the Places fallback —
+    // leave it inert, and a verdict of null never refuses.
+    const _catRows = places.map(p => String(p.category || '')).filter(Boolean);
+    if (_catRows.length >= Math.ceil(places.length / 2)) {
+      const _mkOverlap = packTradeOverlap(_catRows,
+        String(guardTrade || industry || '').split(/[^a-zA-Z]+/),
+        String(phrase || '').split(/[^a-zA-Z]+/));
+      if (_mkOverlap === false) {
+        return { checked: false, why: `the businesses "${query}" returned are ${_catRows[0]}-type listings, not ${String(guardTrade || industry || 'their trade')} businesses — the search answered a different marketplace, so no presence or absence claim is permitted from it` };
+      }
     }
 
     // == PROVE THE SEARCH LANDED IN THEIR TOWN BEFORE BELIEVING IT ===========
@@ -33907,7 +34037,9 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   } else {
     const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
     for (const svc of services) {
-      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng });
+      // guardTrade is the lead's TRADE, not the slug: the slug's own words
+      // are what a place-category shares by construction (parking lot).
+      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng, guardTrade: industry });
       if (r.checked) results.push({ ...r, kind: 'their own service page', svc });
     }
     // ---- AND AN ABSENCE HERE BUYS A SECOND LOOK TOO -----------------------
@@ -37073,7 +37205,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // proof), and does this lead carry customer-WRITTEN contact
               // evidence (a repeating complaint, at least two people).
               evidence: { adsLive: !!(_measured && _measured.adsLiveInPack),
-                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 2 },
+                          // >= 3, matching the email's anecdote floor: a
+                          // 2-of-90 complaint took leak #1 from a measured
+                          // BURNING finding on Conner's (2026-08-24), and the
+                          // email side already refuses 2 mentions as "he will
+                          // do that division before he finishes the sentence".
+                          writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 3 },
               money: { jobValue: tradeJobValue(String((_harmInputs || {}).tradeWord || '')) } }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
@@ -38233,7 +38370,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       bottleneckWhy = `$${Math.round(_revPerEmp/1000)}k revenue per employee across ${verifiedEmployees} people is labor-heavy, and they are not buying traffic — so the constraint is what it costs them to deliver, not what it costs to get found. Automation moves margin before marketing moves revenue.`;
     } else if (_hasAds && !_hasCapture) {
       bottleneck = 'CAPTURE';
-      bottleneckWhy = 'They are PAYING for traffic but have no capture layer (no CRM, no booking, no email capture). The ads work; the catching does not. Every ad dollar buys a visitor the site cannot hold. Selling them more ad management here is selling more water for a leaking bucket.';
+      bottleneckWhy = 'They are PAYING for traffic, and nothing on the pages we read can hold a visitor \u2014 no booking tool, no email capture, no sign of a CRM. The ads work; the catching does not. Every ad dollar buys a visitor the site cannot hold. Selling them more ad management here is selling more water for a leaking bucket.';
     } else if (_hasAds && !_siteConverts) {
       bottleneck = 'CONVERSION';
       bottleneckWhy = 'They are paying for traffic that lands on a page which cannot convert it (no clear CTA / dated or weak structure). The traffic is already bought — the page is where it dies.';
@@ -38247,7 +38384,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // while a competitor answers first. This is a response-speed problem, which is
       // software/automation work — NOT a reason to buy more traffic.
       bottleneck = 'FOLLOW-UP';
-      bottleneckWhy = `They capture interest (${_siteBooking === 'form' ? 'a quote/contact form' : 'phone only'}) but nothing responds automatically \u2014 no CRM, no automated reply. The lead is caught and then left waiting for a human. In any market where a competitor answers in minutes, that wait IS the lost sale. Sending more traffic into this makes the leak bigger, not smaller.`;
+      // ══ BOUNDED TO WHAT WAS MEASURED ═══════════════════════════════════
+      // The old sentence asserted "nothing responds automatically — no CRM, no
+      // automated reply": a claim about their backend, which we never tested,
+      // in exactly the family the fact-checker flags — and it printed word for
+      // word on all three leads of the 2026-08-24 run. What was MEASURED is
+      // the published route in and the absence of any self-serve booking or
+      // CRM signature on the pages we read. Say that, scoped.
+      bottleneckWhy = `They capture interest (${_siteBooking === 'form' ? 'a quote/contact form' : 'phone only'}), and on the pages we read there is no scheduler and no sign of anything that would answer by itself \u2014 so whoever reaches out is waiting on a human. In any market where a competitor answers in minutes, that wait is the lost sale. Sending more traffic into this makes the leak bigger, not smaller.`;
     } else if (_mktgHire) {
       bottleneck = 'DEMAND';
       bottleneckWhy = 'They are HIRING for marketing: budget is allocated, direction is not chosen. A retainer outperforms one junior hire and they are actively deciding right now.';
@@ -39189,11 +39333,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             const sentence = phraseAround(_allProse, m[0]) || String(m[0]);
             _claimRisks.push(`${why} — "${String(sentence).trim().slice(0, 220)}"`);
           };
-          // 1. Backend / post-submit behaviour we never observed
-          _flag(/\b(waits?|waiting) for (a )?(human )?callback\b/i, 'claims post-submission backend behaviour');
-          _flag(/\bdisappears? forever\b/i, 'claims backend outcome (no record) we cannot see');
-          _flag(/\bno one (ever )?(sees|responds|answers)\b.{0,30}\bsubmit/i, 'claims what happens after a form submit');
-          _flag(/\bgoes (straight )?to (their )?(voicemail|no ?one|nobody)\b/i, 'claims call-handling we did not test');
+          // 1. Backend / post-submit behaviour we never observed. The rows
+          // live in AUDIT_BACKEND_CLAIM_ROWS at module scope, because the
+          // post-contact STRIPPER reads the same table — one copy, two
+          // consumers, per the recorded two-hand-kept-copies disease.
+          for (const [_bre, _bwhy] of AUDIT_BACKEND_CLAIM_ROWS) _flag(_bre, _bwhy);
           // ── BROADENED after a live run slipped every one of these through ──
           // CLAIM VERIFY reported "clean" on three audits while the fact-checker
           // flagged 5-6 claims on each. The patterns were pinned to the EXACT
@@ -39201,7 +39345,6 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // forever"), so the model simply said the same thing differently.
           // Every pattern below is taken verbatim from a live email. Tested 15/15
           // with zero false positives against legitimate measured claims.
-          _flag(/\bno (auto[- ]?reply|autoresponder|automatic (reply|response))\b/i, 'claims there is NO auto-reply \u2014 we never submitted the form, so this is unknowable');
           // WIDENED. This caught "nothing responds" and missed "nobody answers
           // outside business hours" \u2014 the identical unmeasured claim in different
           // words, which then shipped in a live email and was only caught
@@ -39212,13 +39355,6 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // person AFTER they hit the friction we measured. The friction is real;
           // what follows it is invention, and it is the class of claim an owner
           // disproves instantly by saying "my service actually calls them back".
-          _flag(/\bnothing (answers|responds|comes back|fires back|happens)\b/i, 'claims nothing responds after submission \u2014 backend we never tested');
-          _flag(/\b(nobody|no one|no-one|nothing|not a soul)\s+(answers|picks up|responds|replies|calls back|gets back|is there|is listening)\b/i, 'claims nobody answers \u2014 we never rang them and never sat outside their hours');
-          _flag(/\b(after|outside|past)\s+(hours|business hours|\d{1,2}\s*(am|pm))[^.]{0,40}\b(nobody|no one|nothing|goes unanswered|unanswered|dead|silence)\b/i, 'claims what happens outside their opening hours \u2014 never measured');
-          _flag(/\b(goes|sits|waits)\s+(unanswered|unread|ignored|into a void|nowhere)\b/i, 'asserts the fate of a submission we never made');
-          _flag(/\bthey'?ve already (signed|hired|booked|heard from|chosen)\b/i, 'states what the prospect already did \u2014 invented');
-          _flag(/\bwhoever (called|got|gets|answered|answers) (them |him |her )?back first\b/i, 'claims a competitor responded first \u2014 no such data exists');
-          _flag(/\bby (the time|morning|monday)\b[^.]{0,60}\b(already|signed|hired|gone)\b/i, 'invented timeline of a deal being lost');
           _flag(/\b(two|three|several) other (companies|firms|contractors|builders|agencies)\b/i, 'invented competitor count');
           // ── STATED OUTCOMES: the wall is observable, what happens after it is not ──
           // These survived the previous broadening because they describe the RESULT
@@ -39895,6 +40031,16 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             parsed._competitorClaimRemoved = _cc.cut.slice(0, 4);
             console.log(`⛔ COMPETITOR SITE CLAIM [${company}]: removed ${_cc.cut.length} sentence(s) asserting what competitor sites contain - we read none of them. First one: "${String(_cc.cut[0]).slice(0, 140)}".`);
           }
+          // ══ AND NO POST-CONTACT CLAIM IN THE AUDIT NARRATIVE ═══════════
+          const _pcx = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripPostContactClaimsDeep(parsed[k], _pcx, 1);
+          }
+          if (_pcx.cut.length) {
+            parsed._postContactRemoved = _pcx.cut.slice(0, 4);
+            console.log(`⛔ POST-CONTACT CLAIM STRIPPED [${company}]: removed ${_pcx.cut.length} sentence(s) asserting what happens after a customer contacts them — backend nobody tested. First one: "${String(_pcx.cut[0]).slice(0, 140)}". The detector has fed Do-not-say for weeks; flagging and removing are different things, and the audit narrative is what Mike repeats on the call.`);
+          }
           if (_rc.cut.length) {
             parsed._recencyRemoved = _rc.cut.slice(0, 4);
             console.log(`\u26d4 RECENCY CONCLUSION [${company}]: removed ${_rc.cut.length} sentence(s) asserting what a reader concludes from the age of their reviews. First one: "${String(_rc.cut[0]).slice(0, 140)}". Nobody checks the date on the newest review and concludes a business has closed \u2014 the owner's own instinct, recorded in this file \u2014 and what the measurement really says (they stopped ASKING for reviews) is already in the audit as intelligence. The prompt has forbidden this framing since 2026-08-23 and the model produced it anyway, which is what every stripper in this battery exists for.`);
@@ -40171,6 +40317,34 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 situationRead = await buildSituationRead(measuredFacts.concat(_extra).join('\n'), apiKey, company);
                 if (situationRead) {
                   console.log(`SITUATION READ [${company}]: written AFTER the audit, from ${measuredFacts.length} measured fact(s) plus ${_extra.length} block(s) of the audit's own evidence, their homepage copy included. It used to run BEFORE the audit on the bullets alone, which is why the smartest call in the system was the least informed one.`);
+                }
+                if (situationRead && typeof situationRead === 'object') {
+                  // ══ THE SYNTHESIS GOES THROUGH THE SAME GATES AS THE AUDIT ═
+                  // buildSituationRead runs AFTER the battery above, so its
+                  // prose — the headline, the read, the character rows Mike
+                  // actually reads in THE BUSINESS — reached the sheet ungated.
+                  // Live 2026-08-24: J Chester's rows carried "A prospect
+                  // comparing firms reads that as a business that has stopped
+                  // growing" (the recency-conclusion family, mechanically
+                  // stripped from the audit since the TriStar run) and "a form
+                  // with no automated acknowledgment" (the post-contact
+                  // family). Same walkers, second application — the rules live
+                  // in ONE place; only the call site is new.
+                  const _srg = { q: { cut: [] }, m: { cut: [], figures: [] }, sq: { cut: [], phrases: [] }, rc: { cut: [] }, irc: { cut: [] }, cc: { cut: [] }, pc: { cut: [] } };
+                  const _srProf = (gbpHealth && Number.isFinite(Number(gbpHealth.reviewCount))) ? Number(gbpHealth.reviewCount) : null;
+                  let _srx = situationRead;
+                  _srx = stripUnverifiedQuotesDeep(_srx, _corpus, _srg.q, 1);
+                  _srx = stripUnmeasuredMoneyDeep(_srx, _corpus, _srg.m, 1, 'situationRead');
+                  _srx = stripSpelledQuantitiesDeep(_srx, _corpus, _srg.sq, 1);
+                  _srx = stripRecencyConclusionsDeep(_srx, _srg.rc, 1);
+                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf);
+                  _srx = stripCompetitorSiteClaimsDeep(_srx, _srg.cc, 1);
+                  _srx = stripPostContactClaimsDeep(_srx, _srg.pc, 1);
+                  situationRead = _srx;
+                  const _srCut = _srg.q.cut.length + _srg.m.cut.length + _srg.sq.cut.length + _srg.rc.cut.length + _srg.irc.cut.length + _srg.cc.cut.length + _srg.pc.cut.length;
+                  if (_srCut) {
+                    console.log(`⛔ SITUATION READ GATED [${company}]: removed ${_srCut} sentence(s) from the synthesis — quotes ${_srg.q.cut.length}, money ${_srg.m.cut.length}, spelled scale ${_srg.sq.cut.length}, recency conclusions ${_srg.rc.cut.length}, review counts ${_srg.irc.cut.length}, competitor sites ${_srg.cc.cut.length}, post-contact claims ${_srg.pc.cut.length}. First: "${String(_srg.rc.cut[0] || _srg.pc.cut[0] || _srg.q.cut[0] || _srg.m.cut[0] || _srg.sq.cut[0] || _srg.irc.cut[0] || _srg.cc.cut[0] || '').slice(0, 140)}". The synthesis is what Mike reads in THE BUSINESS, and until now it was the one block of prose no gate ever touched.`);
+                  }
                 }
               }
             } catch (e) { console.log(`SITUATION READ [${company}]: failed after the audit — ${e && e.message}`); }
@@ -44852,7 +45026,7 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     const _ve5 = { checked: true, denominator: 5, frictionCount: 3, numerator: 0,
-      friction: ['the only way to start is a form that submits and waits for a human to call back',
+      friction: ['the only way to start is a contact form \u2014 nothing on the site can book a time',
                  'the form asks for 8 fields',
                  'no price appears anywhere, so the only way to find out what it costs is to hand over contact details and wait'] };
     const _opsContact = { themes: 1, mentions: 2, reviewsRead: 90, share: 2 / 90, binding: false };
@@ -45010,7 +45184,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ FINDINGS MONEY ORDER CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top rank with TAXED. And the agreed evidence rule holds in both directions: a repeating complaint two customers WROTE outranks an ads TAG (an account is not a campaign), while BURNING proven live by a sponsored row keeps #1, and with no written evidence nothing moves at all.`);
+      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top rank with TAXED. And the agreed evidence rule holds in both directions: a repeating complaint three customers WROTE outranks an ads TAG (two no longer does; the email's own anecdote floor) (an account is not a campaign), while BURNING proven live by a sponsored row keeps #1, and with no written evidence nothing moves at all.`);
     }
   } catch (e) {
     console.log(`⛔ FINDINGS MONEY ORDER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -45279,6 +45453,77 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ FIRST DFS RUN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ INFO TRAVEL CHECK — the 2026-08-24 three-sheet read, each fault EXECUTED ══
+  // Vin: "lets make sure that all the info always correctly travels to the
+  // audit... nothing is misconstrued." One sheet said "Ads none found" in its
+  // header, "has Google Ads tracking" in its leaks and "Google Ads tag NOT
+  // FOUND" in its own fact-check; a paving company was declared invisible for
+  // a search that returns parking garages; the synthesis carried two claim
+  // families the audit strips mechanically; and a 2-of-90 anecdote took leak
+  // #1 from a measured BURNING finding.
+  try {
+    const _fails = [];
+    // Needles are ASSEMBLED at runtime so they cannot find their own source.
+    const _dn = (a, b) => a + b;
+    // 1. The ads sentence names the platform the fields actually hold.
+    const _ptl = HARM_LADDER.find(r => r.id === 'paid_traffic_leaks');
+    const _gap = 'the only published way to reach them is a phone line with office hours';
+    const _sayMeta = _ptl.say({ googleAdsTag: false, metaPixel: true, paidLeakGap: _gap });
+    const _sayGoog = _ptl.say({ googleAdsTag: true, metaPixel: false, paidLeakGap: _gap });
+    const _sayBoth = _ptl.say({ googleAdsTag: true, metaPixel: true, paidLeakGap: _gap });
+    if (/Google/i.test(_sayMeta)) _fails.push("a Meta-only lead is still told it has GOOGLE ads tracking (Breck's Paving, live, refuted by its own fact-checker)");
+    if (!/Google Ads tracking/.test(_sayGoog) || /Facebook/.test(_sayGoog)) _fails.push('a Google-only lead does not read as Google');
+    if (!/Google and Facebook/.test(_sayBoth)) _fails.push('a both-platforms lead does not name both');
+    const _afMeta = buildAuditFacts({ googleAdsTag: false, metaPixel: true, adsReadable: true });
+    if (_afMeta.ads !== 'no' || _afMeta.metaPixel !== true) _fails.push('the facts strip cannot represent Meta-only, so the header and the finding will disagree again');
+    // 2. The marketplace guard, executed both ways.
+    if (packTradeOverlap(['Parking garage', 'Parking lot', 'Parking garage'], ['paving', 'contractor'], ['parking', 'lot']) !== false) _fails.push('a paving company measured against parking garages is not refused');
+    if (packTradeOverlap(['Gutter cleaning service', 'Gutter installation service'], ['roofer'], ['gutter', 'installation']) !== true) _fails.push('a gutter query answered by gutter services is refused - the guard eats a true search');
+    if (packTradeOverlap(['Dentist', 'Dental clinic'], ['dentist'], ['dental', 'implants']) !== true) _fails.push('a dental search answered by dentists is refused');
+    if (packTradeOverlap([], ['paving'], ['parking']) !== null) _fails.push('rows without categories must produce no verdict');
+    if (packTradeOverlap(['Parking garage'], ['cpa'], ['cpa']) !== null) _fails.push('a trade word too short to compare must produce no verdict, never a refusal');
+    // 3. The post-contact stripper, executed on the live shapes.
+    const _pcCut = stripPostContactClaims('You capture interest on the phone, but nothing responds automatically when that call lands outside business hours. The pricing is published on four package tiers.');
+    if (_pcCut.cut.length !== 1 || !/pricing is published/.test(_pcCut.text)) _fails.push("the live Conner's backend sentence is not stripped, or a true sentence went with it");
+    const _pcKeep = stripPostContactClaims('People comparing three contractors call the one that dials. The only published way to reach them is a phone line with office hours.');
+    if (_pcKeep.cut.length !== 0) _fails.push('a general truth about people or a measured route claim was stripped: "' + String(_pcKeep.cut[0] || '').slice(0, 80) + '"');
+    const _pcOwn = stripPostContactClaims('Their form submissions sit unread until Monday morning. The form asks for nine fields on one page.');
+    if (_pcOwn.cut.length !== 1 || !/nine fields/.test(_pcOwn.text)) _fails.push('an owned aftermath claim survived the stripper');
+    // 4. The acronym fix, executed and bounded.
+    if (!/hire a CPA\b/.test(fixAcronymCase('Someone ready to hire a cpa cannot book a time.'))) _fails.push('the initialism fix does not fire');
+    if (fixAcronymCase('the cpanel login and hvacr parts') !== 'the cpanel login and hvacr parts') _fails.push('the initialism fix fires inside longer words');
+    // 5. Call sites and rewordings, needles assembled at runtime over the
+    //    comment-stripped source (a literal needle finds itself; these
+    //    comments quote the broken sentences verbatim).
+    const _tsrc = selfSourceNoComments();
+    for (const [_what, _needle] of [
+      ['the service-page rank call no longer passes the TRADE for the marketplace guard', _dn('guardTrade: industry ', '});')],
+      ['the marketplace guard is not wired into checkLocalRank', _dn('_mkOverlap === ', 'false')],
+      ['the synthesis does not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(_srx, ', '_srg.pc, 1)')],
+      ['the synthesis does not pass through the recency stripper', _dn('stripRecencyConclusionsDeep(_srx, ', '_srg.rc, 1)')],
+      ['the gated synthesis is not written back, so the sheet still reads the raw one', _dn('situationRead = ', '_srx;')],
+      ['the audit fields do not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(parsed[k], ', '_pcx, 1)')],
+      ['the leak promotion floor is not the email anecdote floor', _dn('reviewPainMentions) >= ', '3')],
+      ['the audit rows are not initialism-fixed', _dn('problem: fixAcronymCase', '(h.finding)')],
+    ]) {
+      if (!_tsrc.includes(_needle)) _fails.push(_what + ' - the computed-but-not-passed class');
+    }
+    for (const [_what, _gone] of [
+      ['the paving contractor is back on a roof', _dn('he is on a roof or ', 'under a house')],
+      ['the FOLLOW-UP diagnosis asserts the backend again', _dn('no CRM, no ', 'automated reply')],
+      ['the friction item asserts the callback mechanism again', _dn('submits and waits for ', 'a human to call back')],
+    ]) {
+      if (_tsrc.includes(_gone)) _fails.push(_what);
+    }
+    if (_fails.length) {
+      console.log(`⛔ INFO TRAVEL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ INFO TRAVEL CHECK: what a measurement says and what the sheet says are the same fact again. The ads finding names the platform the fields actually hold, so a Meta-only lead can never again read "Google Ads tracking" under a header saying "Ads none found"; a rank search that returned a different marketplace (parking GARAGES for a paving company) is refused instead of becoming "invisible for the exact search"; the synthesis passes through the same seven strippers as the audit, so a reader-conclusion about review age or a backend claim nobody tested cannot reach THE BUSINESS; the post-contact family is now STRIPPED from audit prose, not only flagged into Do-not-say; the leak promotion takes the email's own 3-mention anecdote floor; the calling window says "out on a job" instead of putting every crew trade on a roof; and "a cpa" prints as CPA.`);
+    }
+  } catch (e) {
+    console.log(`⛔ INFO TRAVEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ A MODELED TRAFFIC FIGURE IS AN ESTIMATE, AND THE WALL AROUND IT ══════
@@ -48508,7 +48753,9 @@ app.listen(PORT, () => {
     if (!/checkLocalRankStable\(\{ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng \}\)/.test(_src)) {
       _fails.push('the head-term rank search is not anchored to the business');
     }
-    if (!/checkLocalRank\(\{ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng \}\)/.test(_src)) {
+    // The call now also carries guardTrade for the marketplace guard — the
+    // anchor assertion matches the coordinates half however the tail grows.
+    if (!/checkLocalRank\(\{ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng(, guardTrade: industry)? \}\)/.test(_src)) {
       _fails.push('the service-page rank searches are not anchored to the business');
     }
     if (!/'location',/.test(_src) || !/lat: \(d\.location/.test(_src)) {
