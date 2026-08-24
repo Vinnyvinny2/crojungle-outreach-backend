@@ -20118,6 +20118,11 @@ const buildProblemList = (harms, opts = {}) => {
       novel: Number.isFinite(novel) ? novel : null,
       ambient,
       id: h.id,
+      // Which kind of money this loses, for the ordering below and for the
+      // screen's pillar chip. moneyRank is what the sort reads; a row merged in
+      // later (the copy quotes) can carry its own.
+      pillar: pillarForRung(h.id) || null,
+      moneyRank: moneyOrder(h.id),
     };
   });
   // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
@@ -20136,7 +20141,18 @@ const buildProblemList = (harms, opts = {}) => {
   //
   // Only the ORDER changes. Membership, the ambient rule and the count are all
   // untouched, so nothing the email reads moves.
-  const _byCost = (a, b) => (b.harm - a.harm) || (b.opener - a.opener) || String(a.id).localeCompare(String(b.id));
+  // ══ ORDERED BY THE MONEY, NOT BY THE FEELING ═════════════════════════════
+  // "worst first" sorted by harm, a hand-assigned guess at how bad a fault
+  // FEELS — and §52 built the money map precisely because the audit's goal is
+  // the biggest revenue leaks, not the most problems. Live on TriStar the list
+  // opened with two message-match copy quotes while "customers publicly saying
+  // nobody called them back" sat third and the 8-field form sat fifth. Vin,
+  // reading it: "i dont cealry know what 1 2 and 3 of the biggest revenue leaks
+  // are" — and separately, "nit picking copy of the wbeiste is kind of a dead
+  // end". Money pillar first (BURNING > UNCAUGHT > INVISIBLE > LEAKING >
+  // ROTTING > TAXED), harm inside a pillar, id as the stable tiebreak.
+  const _byCost = (a, b) => ((Number.isFinite(a.moneyRank) ? a.moneyRank : 97) - (Number.isFinite(b.moneyRank) ? b.moneyRank : 97))
+    || (b.harm - a.harm) || (b.opener - a.opener) || String(a.id).localeCompare(String(b.id));
   const real = rows.filter(r => !r.ambient).sort(_byCost);
   const amb  = rows.filter(r =>  r.ambient).sort(_byCost);
   // A thin audit is worse than a padded one. When the measurements genuinely
@@ -21341,6 +21357,100 @@ const tradeJobValue = (tradeWord) => {
   if (!t) return null;
   const hit = TRADE_JOB_VALUE.find(x => x.re.test(t));
   return hit ? hit.say : null;   // unlisted trade -> no money sentence, shorter email
+};
+
+// ══ ONE NUMBER FOR THE WEBSITE, WITH EVERY POINT TRACEABLE ═══════════════════
+// Vin: "id like to see on the ui just a ranking out of 10 of their website so we
+// know if all else fails we can just push a website." The number is code, not
+// taste: every component is a measurement this file already takes, each names
+// what it saw, and — the rule this file records as "unmeasured treated as zero"
+// — a component we never measured LEAVES THE DENOMINATOR instead of scoring
+// nothing. A site we half-read gets a score based on the half we read, and the
+// card says how much that was.
+const scoreWebsite = (m = {}) => {
+  const graded = [];   // { what, got, of, why }
+  const skipped = [];
+  const add = (what, got, of, why) => graded.push({ what, got, of, why });
+
+  // Built for a phone (2). The single loudest age signal there is.
+  if (m.viewportChecked === true) {
+    add('built for a phone', m.hasViewport === false ? 0 : 2, 2,
+      m.hasViewport === false ? 'loads at desktop width and has to be pinched to read' : 'resizes for a phone');
+  } else skipped.push('phone layout');
+
+  // Modern build (2), from the eleven concrete age markers.
+  if (Number.isFinite(Number(m.siteAgeScore))) {
+    const n = Number(m.siteAgeScore);
+    add('modern build', n >= 4 ? 0 : n >= 2 ? 1 : 2, 2,
+      n >= 2 ? `${n} concrete marker(s) of an old build in their own source` : 'no meaningful age markers in the source');
+  } else skipped.push('build age');
+
+  // A way to book (2). The route a ready customer actually gets.
+  if (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) {
+    const got = m.booking === 'online_booking' ? 2 : m.booking === 'form' ? 1 : m.booking === 'phone_only' ? 0.5 : 0;
+    add('a way to book', got, 2, {
+      online_booking: 'a real self-serve scheduler',
+      form: 'a form that submits and waits for a human',
+      phone_only: 'a phone line during business hours, nothing else',
+      none_found: 'no route in at all on the pages we read',
+    }[m.booking]);
+  } else skipped.push('booking route');
+
+  // The form asks little (1). Only when a single real form was measured.
+  if (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount))) {
+    const n = Number(m.formFieldCount);
+    add('a form a stranger finishes', n >= 9 ? 0 : n >= 6 ? 0.5 : 1, 1, `${n} fields before anything happens`);
+  } else skipped.push('form size');
+
+  // Fast for the real visitors Google measured (2).
+  if (m.mobileFieldMeasured === true) {
+    add('fast on a real phone', m.mobileFieldSlow === true ? 0 : 2, 2,
+      m.mobileFieldSlow === true ? "failed Google's thresholds for their own visitors over 28 days" : 'fine for their real visitors');
+  } else skipped.push('real-visitor speed');
+
+  // Secure (1).
+  if (typeof m.isHttps === 'boolean') {
+    add('secure connection', m.isHttps ? 1 : 0, 1, m.isHttps ? 'serves over https' : 'plain http, and browsers say so out loud');
+  } else skipped.push('https');
+
+  const of = graded.reduce((n, g) => n + g.of, 0);
+  const got = graded.reduce((n, g) => n + g.got, 0);
+  if (!of) return { checked: false, skipped };
+  // One decimal, scaled to ten whatever was measurable.
+  const score = Math.round((got / of) * 100) / 10;
+  return { checked: true, score, outOf: 10, graded, skipped,
+           basedOn: `${graded.length} of ${graded.length + skipped.length} components measured` };
+};
+
+// ══ THE FACTS AN OPERATOR ASKS FIRST, AS FACTS ═══════════════════════════════
+// "we need to know if they have landing pages simply stated... we need to be
+// sure about if theyre running ads yes or no." Three-state everywhere: yes, no,
+// and could-not-read are different answers and only two of them are about the
+// business. Ads absence additionally requires adsReadable — the did-we-look
+// gate every absence claim in this file carries.
+const buildAuditFacts = (m = {}, unlinked = null) => {
+  const ads = m.googleAdsTag === true ? 'yes'
+    : (m.adsReadable === true && m.googleAdsTag === false) ? 'no'
+    : 'unreadable';
+  return {
+    ads,
+    // Only meaningful beside a live tag; null otherwise so nothing renders.
+    adsConversion: ads === 'yes' ? (m.adsConversion === true) : null,
+    callTracking: (m.adsReadable === true) ? (m.callTracking === true) : null,
+    metaPixel: (m.adsReadable === true) ? (m.metaPixel === true) : null,
+    booking: (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) ? m.booking : null,
+    formFields: (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount))) ? Number(m.formFieldCount) : null,
+    // POSITIVE ONLY, per the unlinked-page read's own rule: a count when we
+    // found them, null when the read did not run — and the client's caption
+    // must say absence proves nothing, because a campaign page is routinely
+    // off the sitemap entirely.
+    campaignPages: (unlinked && unlinked.checked) ? (Number(unlinked.campaignCount) || 0) : null,
+    unlinkedPages: (unlinked && unlinked.checked) ? (Number(unlinked.unlinkedCount) || 0) : null,
+    mobile: m.mobileFieldMeasured === true ? (m.mobileFieldSlow === true ? 'slow' : 'fine') : null,
+    https: (typeof m.isHttps === 'boolean') ? m.isHttps : null,
+    viewport: m.viewportChecked === true ? (m.hasViewport !== false) : null,
+    siteAgeMarkers: Number.isFinite(Number(m.siteAgeScore)) ? Number(m.siteAgeScore) : null,
+  };
 };
 
 // ══ AUTHENTIC FEAR, AND THE ONLY HONEST WAY TO PRODUCE IT ═══════════════════
@@ -24439,6 +24549,26 @@ const measureGrowthConstraint = ({
 
   const strongRep = haveRep && reviewRating >= 4.3 && reviewCount >= 20;
   const visible   = haveRank && rank <= 3;
+  // ══ DEMAND CAN BE PROVEN BY MORE THAN A RANK ══════════════════════════════
+  // The CONVERSION branch needs proof that customers ARRIVE before it may claim
+  // they are being lost on the way in, and it accepted exactly two proofs: a
+  // strong reputation or a top-three rank. TriStar, live 2026-08-23: no trusted
+  // rank (the DataForSEO credentials were not on that deploy), and the review
+  // base never reached this function at all — so a business with NINETY Google
+  // reviews and customers publicly writing "been calling for three weeks, still
+  // no call back" was treated as having no evidence anybody arrives, and five
+  // measured obstacles fell through to "nothing here is broken enough".
+  //
+  // Two more proofs, both stronger than a rank:
+  //   A review complaint about CONTACT is a customer who arrived and was lost —
+  //     the literal event the CONVERSION layer describes, written by the person
+  //     it happened to. Two independent mentions is the same bar the pain rung
+  //     uses. _ops.mentions counts only OPS_PAIN_WORDS rows (callbacks,
+  //     scheduling, no response), so a price gripe cannot prove arrival.
+  //   A review base of thirty is a flow of real customers whatever the search
+  //     says — nobody accumulates thirty Google reviews without demand.
+  const _opsArrival = opsPain && Number(opsPain.mentions) >= 2;
+  const arrivalProven = strongRep || visible || _opsArrival || (haveRep && reviewCount >= 30);
   // ══ THREE RANK STATES, NOT ONE MISNAMED BOOLEAN ═══════════════════════════
   // This was `const invisible = haveRank && rank > 10`. Two failures came out of
   // that single line.
@@ -24608,9 +24738,14 @@ const measureGrowthConstraint = ({
   // Threshold raised from 3 to 5. A contact form and unpublished pricing is the
   // normal state of a small business, not a crisis, and treating it as one is
   // what made every audit say the same thing.
-  else if ((strongRep || visible) && ve.checked && ve.denominator >= 5) {
+  else if (arrivalProven && ve.checked && ve.denominator >= 5) {
     layer = 'CONVERSION';
-    condition = `They have already won the hard part \u2014 ${haveRep ? `${reviewCount} reviews at ${reviewRating}\u2605` : 'real demand is arriving'}. The people who want to hire them are getting there. What is broken is everything between arriving and becoming a customer: ${ve.frictionCount} separate measured obstacles sit in that path.`;
+    // Name the proof actually held, strongest first: a customer saying so beats
+    // an inference from the review count.
+    const _proof = _opsArrival
+      ? `their own reviews describe customers reaching out and being lost on the way in \u2014 ${opsPain.mentions} of the ${opsPain.reviewsRead || 'reviews'} we read say it`
+      : haveRep ? `${reviewCount} reviews at ${reviewRating}\u2605` : 'real demand is arriving';
+    condition = `They have already won the hard part \u2014 ${_proof}. The people who want to hire them are getting there. What is broken is everything between arriving and becoming a customer: ${ve.frictionCount} separate measured obstacles sit in that path.`;
     why = `This is the cheapest revenue in the business, because it is not new demand \u2014 it is demand already earned, leaking on the way in. Spending on more traffic before this is fixed pours more into the same gap.`;
     product = 'conversion and capture';
   }
@@ -24625,6 +24760,21 @@ const measureGrowthConstraint = ({
     condition = `Nothing on the site says who this is for. ${marketClarity.gaps[0]}.`;
     why = `Market sits at the very top of the hierarchy \u2014 above the offer, above traffic, above the buying path. A stranger who cannot tell in five seconds whether a business is for him leaves, and no amount of ranking or response speed recovers him. It is also the most durable thing on this list: a competitor can copy a guarantee in an afternoon and cannot copy a decision about who you serve.`;
     product = 'positioning';
+  }
+  else if (ve.checked && ve.frictionCount >= 3) {
+    // ══ FRICTION WITHOUT A DOMINANT LAYER IS NOT "NO CRISIS" ═══════════════
+    // The old fallback printed "Nothing here is broken enough to lead an email
+    // with... manufacturing a crisis" on ANY lead that missed every branch
+    // above — including TriStar, which missed them only because the rank was
+    // dark and the review base never arrived, while carrying an 8-field form,
+    // no booking route and no published price. An owner reading his own audit
+    // dismiss his own measured problems is worse than either honest answer.
+    // This branch says what was actually measured; the dismissive text below
+    // survives ONLY for leads where the frictions genuinely are not there.
+    layer = 'CONVERSION';
+    condition = `No single layer dominates, but ${ve.frictionCount} measured obstacles sit between an interested customer and a booked job: ${ve.friction.slice(0, 3).join('; ')}.`;
+    why = `Each is checkable on their own site in a minute. Sell the fix to the friction that is really there rather than a bigger story \u2014 and if the search half of this lead was not measured, re-run it before deciding this is all there is.`;
+    product = 'conversion and capture';
   }
   else {
     // Nothing measured is binding. Say that plainly rather than inventing a
@@ -35707,8 +35857,17 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         growthConstraint = measureGrowthConstraint({
           rank: localRank && localRank.found ? localRank.rank : undefined,
           rankScanned: localRank ? localRank.scanned : undefined,
-          reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
-          reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+          // ══ THE DIAGNOSIS READ ITS REVIEW BASE OFF THE RANK ROW ═══════════
+          // TriStar, live 2026-08-23: 90 reviews on their Place record and the
+          // constraint saw NONE of them, because localRank.ours only exists
+          // when a trusted rank search matched us — so on every rank-dark lead
+          // the diagnosis could not prove customers arrive, and a lead with
+          // five measured obstacles fell through to "nothing here is broken
+          // enough". Authority order, same as resolveMeasurements.
+          reviewCount: (gbpHealth && Number.isFinite(Number(gbpHealth.reviewCount))) ? Number(gbpHealth.reviewCount)
+            : (localRank && localRank.ours ? localRank.ours.reviews : undefined),
+          reviewRating: (gbpHealth && Number.isFinite(Number(gbpHealth.rating))) ? Number(gbpHealth.rating)
+            : (localRank && localRank.ours ? localRank.ours.rating : undefined),
           weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
           offerStrength, valueEquation, marketClarity,
           opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
@@ -36768,8 +36927,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       growthConstraint = measureGrowthConstraint({
         rank: localRank && localRank.found ? localRank.rank : undefined,
         rankScanned: localRank ? localRank.scanned : undefined,
-        reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
-        reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+        // Authority order, same as the first call site and for the same live
+        // failure: the rank row only exists when a trusted search matched us,
+        // and the Place record's own count is what proves customers arrive.
+        reviewCount: (gbpHealth && Number.isFinite(Number(gbpHealth.reviewCount))) ? Number(gbpHealth.reviewCount)
+          : (localRank && localRank.ours ? localRank.ours.reviews : undefined),
+        reviewRating: (gbpHealth && Number.isFinite(Number(gbpHealth.rating))) ? Number(gbpHealth.rating)
+          : (localRank && localRank.ours ? localRank.ours.rating : undefined),
         weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
         offerStrength, valueEquation, marketClarity,
         opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
@@ -39630,11 +39794,23 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   // The quote IS the cost line here: it is the proof, in his
                   // words, and it is the reason this row cannot be a template.
                   costs: o.evidence ? `their own words: "${String(o.evidence).slice(0, 140)}"` : '',
-                  harm: 70, opener: 999, novel: 95, ambient: false, id: 'audit_original',
+                  // ══ NO LONGER PINNED TO THE TOP ═══════════════════════════
+                  // These were prepended with opener 999, so two message-match
+                  // copy quotes opened TriStar's "worst first" list while the
+                  // callback complaints and the 8-field form sat below them.
+                  // A quote of his own page is unique evidence and stays in the
+                  // list — but a copy observation is not a money leak, and the
+                  // owner cannot be convinced that a sentence on a page costs
+                  // him dollars. Ranked with TAXED (order 6): present, near the
+                  // bottom, above only the internal metrics.
+                  harm: 70, opener: 70, novel: 95, ambient: false, id: 'audit_original',
+                  pillar: 'TAXED', moneyRank: 6,
                   fromTheirPages: true,
                 }));
               if (_rows.length) {
-                parsed.problemList = [..._rows, ...parsed.problemList];
+                const _mr = (r) => (Number.isFinite(r && r.moneyRank) ? r.moneyRank : 97);
+                parsed.problemList = [...parsed.problemList, ..._rows]
+                  .sort((a, b) => (_mr(a) - _mr(b)) || ((b.harm || 0) - (a.harm || 0)));
                 // ══ ONE COUNT, OR THE CALL STARTS WRONG ══════════════════════
                 // The email says "N things" and Mike opens the audit on the call.
                 // If those two numbers disagree the first thing that happens on
@@ -41863,6 +42039,14 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // no new fabrication surface, and nothing here that was not already being
       // paid for on every lead.
       theOneThing: buildTheOneThing({ growthConstraint, valueEquation, bottleneck, bottleneckWhy, worst: costliestHarm }),
+      // ══ THE NUMBER AND THE FACTS THE OPERATOR ASKS FIRST ═════════════════
+      // Both pure, both fed from _harmInputs — the one object whose fields the
+      // RUNG INPUT and delivery checks already police, so a fact shown here is
+      // a fact the ladder scored on. websiteScore is the /10 with every point
+      // traceable; auditFacts is ads yes/no/unreadable, the booking route, the
+      // campaign pages the site does not link to, and real-visitor speed.
+      websiteScore: scoreWebsite(_harmInputs),
+      auditFacts: buildAuditFacts(_harmInputs, sitePages && sitePages.unlinkedPages),
       realSpeed: realSpeed || null,
       // Two-listings measurement — on the call sheet it is the mechanical
       // explanation for an outranked finding, so it must survive the round trip.
@@ -44115,6 +44299,194 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ DIAGNOSIS AGREEMENT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A LEAD WITH FIVE MEASURED OBSTACLES IS NOT "NO CRISIS" ═══════════════
+  // TriStar, live 2026-08-23: 90 reviews, customers publicly writing "been
+  // calling for three weeks, still no call back", an 8-field form as the only
+  // route in, no booking, no published price — and the one-thing block said
+  // "Nothing here is broken enough to lead an email with... manufacturing a
+  // crisis". Two faults compounding: the diagnosis read its review base off the
+  // rank row (which does not exist on a rank-dark lead), and the CONVERSION
+  // branch accepted only a rank or a strong rating as proof customers arrive —
+  // when a review complaint about CONTACT is the arrival event itself, written
+  // by the person it happened to. EXECUTED on the real function.
+  try {
+    const _fails = [];
+    const _ve5 = { checked: true, denominator: 5, frictionCount: 3, numerator: 0,
+      friction: ['the only way to start is a form that submits and waits for a human to call back',
+                 'the form asks for 8 fields',
+                 'no price appears anywhere, so the only way to find out what it costs is to hand over contact details and wait'] };
+    const _opsContact = { themes: 1, mentions: 2, reviewsRead: 90, share: 2 / 90, binding: false };
+    const _os0 = { checked: true, gapCount: 2 };
+    const _mc = { checked: true, band: 'partial', signals: [], gaps: [], isConstraint: false };
+
+    // 1. The TriStar shape: rank dark, 90 reviews, contact complaints, heavy friction.
+    const _tri = measureGrowthConstraint({
+      reviewCount: 90, reviewRating: 4.2, offerStrength: _os0, valueEquation: _ve5,
+      marketClarity: _mc, opsPain: _opsContact, opsPainCount: 2,
+    });
+    if (_tri.layer !== 'CONVERSION') {
+      _fails.push(`the TriStar shape diagnoses ${_tri.layer} rather than CONVERSION — customers who arrived and were lost, plus five measured obstacles, is the conversion layer by definition`);
+    } else if (!/reviews describe customers reaching out|reviews at/.test(String(_tri.condition))) {
+      _fails.push(`the CONVERSION condition does not name its proof: "${String(_tri.condition).slice(0, 100)}"`);
+    }
+    if (/Nothing here is broken enough/.test(String(_tri.why || ''))) {
+      _fails.push('the TriStar shape still gets the no-crisis dismissal');
+    }
+
+    // 2. Contact complaints alone prove arrival on a smaller review base.
+    const _small = measureGrowthConstraint({
+      reviewCount: 12, reviewRating: 4.0, offerStrength: _os0, valueEquation: _ve5,
+      marketClarity: _mc, opsPain: _opsContact, opsPainCount: 2,
+    });
+    if (_small.layer !== 'CONVERSION') _fails.push(`two customers publicly describing being lost after contact do not prove arrival on a 12-review business (got ${_small.layer})`);
+
+    // 3. Friction without a dominant layer says the friction, not the dismissal.
+    const _fric = measureGrowthConstraint({
+      reviewCount: 8, reviewRating: 4.0, offerStrength: _os0,
+      valueEquation: { ..._ve5, denominator: 4 },
+      marketClarity: _mc, opsPain: { themes: 0, mentions: 0, reviewsRead: 40, share: 0, binding: false }, opsPainCount: 0,
+    });
+    if (/Nothing here is broken enough/.test(String(_fric.why || ''))) {
+      _fails.push('a lead with three measured frictions still reads "nothing here is broken enough" — an owner reading his own audit dismiss his own measured problems is worse than either honest answer');
+    }
+    if (!/measured obstacles/.test(String(_fric.condition || ''))) {
+      _fails.push(`the friction fallback does not state what was measured: "${String(_fric.condition).slice(0, 90)}"`);
+    }
+
+    // 4. The dismissal SURVIVES for a genuinely clean lead — it is the correct
+    //    sentence there, and deleting it would manufacture a crisis instead.
+    const _clean = measureGrowthConstraint({
+      reviewCount: 45, reviewRating: 4.8, offerStrength: { checked: true, gapCount: 1 },
+      valueEquation: { checked: true, denominator: 2, frictionCount: 1, numerator: 2, friction: ['the form asks for 4 fields'] },
+      marketClarity: _mc, opsPain: { themes: 0, mentions: 0, reviewsRead: 45, share: 0, binding: false }, opsPainCount: 0,
+    });
+    if (!/Nothing here is broken enough/.test(String(_clean.why || ''))) {
+      _fails.push('a genuinely clean lead lost the honest no-crisis verdict — pretending otherwise is how a system talks itself into a bad email');
+    }
+
+    // 5. Priority is untouched: binding delivery complaints still outrank CONVERSION.
+    const _tp = measureGrowthConstraint({
+      reviewCount: 90, reviewRating: 4.2, offerStrength: _os0, valueEquation: _ve5,
+      marketClarity: _mc, opsPain: { themes: 2, mentions: 8, reviewsRead: 90, share: 8 / 90, binding: true }, opsPainCount: 8,
+    });
+    if (_tp.layer !== 'THROUGHPUT') _fails.push(`binding delivery complaints no longer outrank CONVERSION (got ${_tp.layer})`);
+
+    // ── the call sites, because a fixture supplies its own arguments ───────
+    const _gn = (...p) => p.join('');
+    const _gsrc = selfSourceNoComments();
+    const _authCount = (_gsrc.match(new RegExp('reviewCount: \\(gbpHealth && Number\\.isFinite\\(Number\\(gbpHealth\\.reviewCount\\)\\)\\)', 'g')) || []).length;
+    if (_authCount < 2) {
+      _fails.push(`only ${_authCount} of the 2 growth-constraint call sites read the review base from the Place record — the other is back on the rank row, which does not exist on a rank-dark lead, and the diagnosis goes blind exactly when the search half is dark`);
+    }
+    void _gn;
+
+    if (_fails.length) {
+      console.log(`⛔ GROWTH ARRIVAL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ GROWTH ARRIVAL CHECK: the CONVERSION diagnosis can now prove customers arrive from the customers themselves — two review complaints about contact, or a thirty-review base — not only from a rank or a strong rating, and both call sites read the review base from the Place record instead of from a rank row that does not exist on a rank-dark lead. A lead with measured friction gets its friction named instead of "nothing here is broken enough"; a genuinely clean lead keeps the honest dismissal, because manufacturing a crisis is the failure the old sentence was right about; and binding delivery complaints still outrank everything.`);
+    }
+  } catch (e) {
+    console.log(`⛔ GROWTH ARRIVAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ "WORST FIRST" NOW MEANS THE MONEY, AND THE CHECK EXECUTES THE SORT ═══
+  // Live on TriStar the findings list opened with two message-match copy quotes
+  // while "customers publicly saying nobody called them back" sat third and the
+  // 8-field form fifth — because the copy rows were prepended with opener 999
+  // and the rest sorted by harm, a hand-assigned guess at how bad a fault
+  // FEELS. §52 built the money map because the audit's goal is the biggest
+  // revenue leaks; this is the list finally reading it.
+  try {
+    const _fails = [];
+    const _harms = { byHarm: [
+      // Deliberately arranged so harm order and money order DISAGREE: the
+      // LEAKING rung carries the highest harm, and must still sit below the
+      // BURNING and UNCAUGHT rungs. A fixture where the two orders agree would
+      // pass on the old sort — the fixture-that-measures-nothing trap.
+      { id: 'no_published_pricing', finding: 'no price appears anywhere', costs: 'x', harm: 90, opener: 60, novel: 40 },
+      { id: 'ads_untracked', finding: 'they run ads with no conversion tracking', costs: 'y', harm: 84, opener: 80, novel: 78 },
+      { id: 'no_after_hours', finding: 'the only route in is a phone line with hours', costs: 'z', harm: 74, opener: 70, novel: 55 },
+      { id: 'form_only_no_booking', finding: 'someone ready to hire cannot book a time', costs: 'w', harm: 58, opener: 60, novel: 45 },
+    ] };
+    const _list = buildProblemList(_harms, {});
+    const _ids = _list.map(r => r.id);
+    if (_ids[0] !== 'ads_untracked') {
+      _fails.push(`the list opens on ${_ids[0]} rather than the BURNING rung — money leaving right now is the strongest frame the pillar table declares, and harm ${_harms.byHarm[0].harm} on a LEAKING rung outranked it`);
+    }
+    if (_ids.indexOf('no_after_hours') > _ids.indexOf('no_published_pricing')) {
+      _fails.push('an UNCAUGHT finding (a person who tried to reach him) sits below a LEAKING one — the pillar order that both replies this project earned came from is not reaching the list');
+    }
+    if (_ids.indexOf('no_after_hours') > _ids.indexOf('form_only_no_booking')) {
+      _fails.push('within UNCAUGHT, the lower-harm rung leads — harm no longer breaks ties inside a pillar');
+    }
+    const _row = _list[0];
+    if (!_row || _row.pillar !== 'BURNING') {
+      _fails.push('rows no longer carry their money pillar, so the screen cannot label which kind of money each finding loses');
+    }
+    if (_fails.length) {
+      console.log(`⛔ FINDINGS MONEY ORDER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FINDINGS MONEY ORDER CHECK: the findings list orders by which kind of money a finding loses — BURNING, then UNCAUGHT, then INVISIBLE, LEAKING, ROTTING, TAXED — with harm breaking ties inside a pillar, executed on a fixture where harm order and money order deliberately disagree. Each row carries its pillar so the screen can say it. The copy quotes that used to be pinned to the top with opener 999 now rank with TAXED: unique evidence, still not a money leak, and an owner cannot be convinced that a sentence on a page costs him dollars.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FINDINGS MONEY ORDER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ ONE NUMBER FOR THE WEBSITE, AND THE FACTS STRIP — EXECUTED ═══════════
+  // Vin: "id like to see just a ranking out of 10 of their website so if all
+  // else fails we can just push a website" and "we need to be sure about if
+  // theyre running ads yes or no." Both are code over measurements the ladder
+  // already scores on. The rule under test is the recorded one: a component we
+  // never measured LEAVES THE DENOMINATOR — a half-read site is scored on the
+  // half we read, never given zeros for the half we did not.
+  try {
+    const _fails = [];
+    // TriStar's shape: viewport present, four age markers, form-only booking,
+    // 8 fields, https, real-visitor speed unmeasured.
+    const _tri = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 4,
+      bookingMeasured: true, booking: 'form', formFieldCountIsSingleForm: true, formFieldCount: 8, isHttps: true });
+    if (!_tri.checked) _fails.push('a fully-measured site produced no score');
+    else {
+      if (!(_tri.score >= 3 && _tri.score <= 6.5)) _fails.push(`the TriStar shape scores ${_tri.score}/10 — an outdated form-walled site should sit in the bottom half, visibly`);
+      if (!_tri.skipped.includes('real-visitor speed')) _fails.push('an unmeasured component is not reported as skipped, so the operator cannot tell a bad site from a half-read one');
+      if (!/5 of 6/.test(String(_tri.basedOn))) _fails.push(`basedOn reads "${_tri.basedOn}" rather than naming 5 of 6 components`);
+    }
+    const _good = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 0,
+      bookingMeasured: true, booking: 'online_booking', formFieldCountIsSingleForm: true, formFieldCount: 4,
+      mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true });
+    if (!_good.checked || _good.score < 9) _fails.push(`a modern site with a real scheduler scores ${_good && _good.score}/10 — a score that cannot go high tells nobody anything`);
+    // THE RULE: unmeasured leaves the denominator.
+    const _half = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true });
+    if (!_half.checked) _fails.push('a half-read site produced no score at all — the honest answer is a score over what was read');
+    else if (_half.score < 9) _fails.push(`a site measured only on viewport and https — both fine — scores ${_half.score}/10: the unmeasured components are being scored as ZERO, which is the exact class PART 6 names, pointed at a number an operator will repeat`);
+    if (scoreWebsite({}).checked !== false) _fails.push('a lead with nothing measured produced a score from nothing');
+
+    // The facts strip: three states, and could-not-read is never "no".
+    const _fy = buildAuditFacts({ googleAdsTag: true, adsReadable: true, adsConversion: false, callTracking: false });
+    if (_fy.ads !== 'yes' || _fy.adsConversion !== false) _fails.push('a live ads tag with no conversion tracking does not read as running-without-tracking');
+    if (buildAuditFacts({ googleAdsTag: false, adsReadable: true }).ads !== 'no') _fails.push('a readable page with no tag does not read as no');
+    if (buildAuditFacts({ googleAdsTag: false, adsReadable: false }).ads === 'no') _fails.push('a page we could not read reports "no ads" — the absence claim without the did-we-look gate, aimed at the fact Vin most wants accurate');
+    if (buildAuditFacts({}, null).campaignPages !== null) _fails.push('an unrun unlinked-page read reports a campaign-page count');
+    if (buildAuditFacts({}, { checked: true, campaignCount: 2, unlinkedCount: 5 }).campaignPages !== 2) _fails.push('a real campaign-page count does not reach the strip');
+
+    // ── the call site, because a fixture supplies its own arguments ────────
+    const _wn = (...p) => p.join('');
+    const _wsrc = selfSourceNoComments();
+    if (!_wsrc.includes(_wn('websiteScore: scoreWebsite(', '_harmInputs),'))) {
+      _fails.push('the response no longer carries the score, so the card computes on the client from fields it does not have — or not at all');
+    }
+    if (!_wsrc.includes(_wn('auditFacts: buildAuditFacts(', '_harmInputs, sitePages && sitePages.unlinkedPages),'))) {
+      _fails.push('the response no longer carries the facts strip');
+    }
+    if (_fails.length) {
+      console.log(`⛔ WEBSITE SCORE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ WEBSITE SCORE CHECK: the /10 is code over six measured components — phone layout, build age, booking route, form size, real-visitor speed, https — every point traceable, and a component we never measured leaves the DENOMINATOR instead of scoring zero, so a half-read site is scored on the half we read and the card says how much that was. The facts strip is three-state: ads running, none found, and could-not-read are different answers, and only two of them are about the business. TriStar's shape lands in the bottom half; a modern site with a real scheduler can actually reach the top.`);
+    }
+  } catch (e) {
+    console.log(`⛔ WEBSITE SCORE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE AUDIT COULD QUOTE ANYTHING ════════════════════════════════════════
@@ -57333,8 +57705,14 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
     if (!_blk) _fails.push('the verification site could not be located, so the merge was not checked');
     else {
-      if (!/parsed\.problemList = \[\.\.\._rows/.test(_blk)) {
+      // MEMBERSHIP, not position: the rows joined at the TOP until 2026-08-23,
+      // when two message-match copy quotes opened TriStar's "worst first" list
+      // above the callback complaints. They now merge and sort by money rank.
+      if (!/parsed\.problemList = \[\.\.\.parsed\.problemList, \.\.\._rows\]/.test(_blk)) {
         _fails.push('the verified own-page findings are still not joining the findings section \u2014 they are computed, logged, and dropped, and the section stays the same list every lead gets');
+      }
+      if (!/moneyRank: 6/.test(_blk)) {
+        _fails.push('the merged copy rows carry no money rank, so the sort puts them wherever the default lands \u2014 which was the top, above the customers saying nobody calls back');
       }
       // The count is read by the EMAIL ("we found N things") and by the audit
       // Mike opens on the call. If the merge moves one and not the other, the
@@ -57349,7 +57727,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_fails.length) {
       console.log(`\u26d4 AUDIT UNIQUENESS CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`\u2713 AUDIT UNIQUENESS CHECK: findings that quote the business's own copy now join the findings section, at the top, and both counts move with them. Before this the section rendered the ladder alone \u2014 35 sentences, eleven of them fixed and fifteen varying only by a number \u2014 so it said the same thing on every lead by construction, and the only rows no competitor's audit could produce were verified and then dropped.`);
+      console.log(`\u2713 AUDIT UNIQUENESS CHECK: findings that quote the business's own copy join the findings section \u2014 ranked with TAXED, near the bottom, because a copy observation is unique evidence and still not a money leak \u2014 and both counts move with them. Before this the section rendered the ladder alone \u2014 35 sentences, eleven of them fixed and fifteen varying only by a number \u2014 so it said the same thing on every lead by construction, and the only rows no competitor's audit could produce were verified and then dropped.`);
     }
   } catch (e) {
     console.log(`\u26d4 AUDIT UNIQUENESS CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
