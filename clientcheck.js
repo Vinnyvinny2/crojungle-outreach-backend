@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -655,6 +655,24 @@ const mergeStat = runMergeCheck();
         // Layer codes translate; an unknown code passes through untouched.
         if (mod.layer('MARKET') !== 'how they position themselves (MARKET)') fails.push('MARKET does not translate — "The one thing \u2014 MARKET" confused the person who built this system');
         if (mod.layer('SOMENEWLAYER') !== 'SOMENEWLAYER') fails.push('an unknown layer code is mangled instead of passed through');
+        // ══ THE V2 GROUPING — the spine of the sheet, executed both ways ══
+        // Every finding lands in exactly one place: nested under its leak
+        // (same money pillar), in The smaller leaks (any other pillar), in the
+        // reference tail (no pillar), or marked internal. Nothing may appear
+        // twice and nothing with a pillar may be buried.
+        const _g = mod.group([
+          { id: 'lead1', problem: 'LEAK_ONE text', costs: 'c1', moneyRank: 1, pillar: 'BURNING' },
+          { id: 'supp1', problem: 'SUPPORT_ROW text', costs: 'c2', pillar: 'BURNING' },
+          { id: 'small1', problem: 'SMALL_LEAK text', costs: 'c3', pillar: 'ROTTING' },
+          { id: 'plain1', problem: 'NO_PILLAR row', costs: 'c4' },
+          { id: 'int1', problem: 'INTERNAL row', costs: 'c5', pillar: 'TAXED', internalOnly: true },
+        ], { friction: ['FRICTION item'] });
+        if (_g.leaks.length !== 1 || _g.leaks[0].problem !== 'LEAK_ONE text') fails.push('the grouping lost the leak');
+        if (!_g.leaks[0].support.some(x => /SUPPORT_ROW/.test(x))) fails.push('a same-pillar fact is not NESTED under its leak — it will print as a duplicate row again');
+        if (!_g.small.some(x => /SMALL_LEAK/.test(x.problem))) fails.push('a money-pillar finding fell out of The smaller leaks — a revenue signal buried, the thing the owner asked to never happen');
+        if (!_g.other.some(x => /NO_PILLAR/.test(x.problem))) fails.push('a no-pillar row lost from the reference tail');
+        if (!_g.internal.some(x => /INTERNAL row/.test(x.problem))) fails.push('an internal row vanished');
+        if (_g.small.some(x => /SUPPORT_ROW/.test(x.problem)) || _g.other.some(x => /SUPPORT_ROW|SMALL_LEAK/.test(x.problem))) fails.push('a finding appears in two sections — the repetition V2 exists to kill');
         if (!/^<!doctype html>/i.test(page)) fails.push('the export is not a complete HTML document');
         // Self-contained means it LOADS nothing. A link the reader can click is
         // fine and a screenshot URL in the text is fine; a stylesheet, a script,
@@ -683,7 +701,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -705,7 +723,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
@@ -730,9 +748,9 @@ const mergeStat = runMergeCheck();
         fails.push('the audit screen THROWS on a normal audited lead: ' + threw + ' — an exception here blanks the whole audit view');
       } else {
         const joined = texts.join('|');
-        for (const label of ['Not sendable as written', 'Who to talk to', 'The money', 'The conversation',
+        for (const label of ['Not sendable as written', 'Who to talk to', 'The story', 'The money', 'The conversation',
           'The email led with', 'He will likely say', 'Worth asking', 'Do not say',
-          'What this business is', 'The one thing', 'What is actually worth selling them']) {
+          'The one thing', 'The sell']) {
           if (joined.indexOf(label) < 0) fails.push('the audit screen no longer renders "' + label + '" — a category of the approved seven-part layout is dark');
         }
         const askCount = texts.filter(t => t === 'ASKQ_MARKER').length;
