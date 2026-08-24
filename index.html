@@ -2298,6 +2298,43 @@ const runBatchAudit = async (opts) => {
 // from the same auditFacts both surfaces hold, so a Meta-only advertiser reads
 // "Facebook only" everywhere instead of "none found" in one place and
 // "Google" in another.
+// ══ A WARNING A CALLER CAN USE: THE QUOTE, THEN ONE PLAIN LINE OF WHY ═══════
+// J Chester's sheet carried three near-identical paragraphs of detector
+// rationale ("Legal as a general truth about people, and legal marked as your
+// own read; illegal stated as a report..."). That is engineering prose. The
+// caller needs the sentence not to say and one reason.
+const RISK_REASONS = [
+  [/POST-CONTACT CLAIM/i, 'we never watched what happens after someone contacts them'],
+  [/SPECIFIC OPERATING HOURS/i, 'we never measured their hours, only whether their listing shows any'],
+  [/nothing responds after submission|post-?submission/i, 'what happens after they reach out is something we never tested'],
+  [/nobody answers/i, 'we never rang them and never sat outside their hours'],
+  [/invented competitor|competitor count|competitor responded/i, 'no competitor behaviour was measured'],
+  [/invented timeline|already (signed|hired|booked)/i, 'that timeline is invented, nothing we measured dates it'],
+  [/marketing jargon/i, "marketing vocabulary, say it in the owner's words"],
+  [/visitor disappears|unobserved/i, 'what a visitor does next is something we never observed'],
+];
+const plainRisk = (x) => {
+  const t = String(x || '');
+  const m = t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"][.\s]*$/) || t.match(/[\u2018']([^\u2018\u2019']{10,220})[\u2019']/) || t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"]/);
+  const quote = m ? m[1] : '';
+  let reason = '';
+  for (const [re, r] of RISK_REASONS) { if (re.test(t)) { reason = r; break; } }
+  if (!reason) {
+    reason = t.replace(/^fact-check:\s*/i, '').replace(/^[A-Z][A-Z -]{3,40}:\s*/, '').split(/(?<=[a-z0-9])\.\s/)[0];
+    if (reason.length > 160) reason = reason.slice(0, 160).replace(/\s+\S*$/, '') + '\u2026';
+  }
+  return quote ? '\u201c' + quote + '\u201d \u2014 ' + reason : reason;
+};
+// ══ THE HORMOZI LAYER NAMES, TRANSLATED ═════════════════════════════════════
+// "The one thing — MARKET: No layer measured as clearly binding" confused the
+// person who built this system. The codes stay (they are the vocabulary of the
+// stored data); the sheet says what each one means.
+const LAYER_PLAIN = { MARKET: 'how they position themselves', OFFER: 'what they promise a customer',
+  LEADS: 'getting found', CONVERSION: 'turning interest into booked jobs', 'FOLLOW-UP': 'following up on interest',
+  OPERATIONS: 'delivering the work', CAPTURE: 'catching the visitors they pay for', SCALE: 'compounding what already works',
+  FOUNDATION: 'the website itself', DEMAND: 'getting more people in the door', THROUGHPUT: 'keeping up with the work' };
+const layerPlain = (x) => { const k = String(x || '').toUpperCase().trim(); return LAYER_PLAIN[k] ? LAYER_PLAIN[k] + ' (' + k + ')' : String(x || ''); };
+
 const adsFactsLabel = (af) => {
   if (!af) return '';
   if (af.ads === 'yes' && af.metaPixel === true) return 'Ads: Google + Facebook';
@@ -2526,14 +2563,9 @@ const auditExportHtml = (records, meta) => {
     // lists first. First sentence only: the full engineering reasoning stays on
     // the audit screen, not on a sheet somebody is holding while a phone rings.
     const doNotSay = (() => {
-      const firstSentence = (x) => {
-        const txt = String(typeof x === 'string' ? x : (x && x.what) || JSON.stringify(x)).trim();
-        // Keep any quoted example whole: the quote IS the instruction.
-        const q = txt.indexOf('"');
-        const cut = txt.search(/(?<=[a-z0-9)"'”])\.\s+(?=[A-Z])/);
-        if (cut > 0 && (q < 0 || cut > q)) return txt.slice(0, cut + 1);
-        return txt.length > 300 ? txt.slice(0, 300).replace(/\s+\S*$/, '') + '…' : txt;
-      };
+      // plainRisk (module scope): the quoted span plus one plain-English
+      // reason — the engineering rationale stays on the stored lead.
+      const firstSentence = (x) => plainRisk(typeof x === 'string' ? x : (x && x.what) || JSON.stringify(x));
       const _seen = [];
       const _norm = (x) => String(typeof x === 'string' ? x : (x && x.what) || '').toLowerCase().replace(/^fact-check:\s*/, '').replace(/[^a-z0-9]+/g, '').slice(0, 160);
       const items = r.criticalFactCheck.concat(r.claimRisks).filter(x => {
@@ -2549,6 +2581,7 @@ const auditExportHtml = (records, meta) => {
       // is clean", and a dropped fact-check is the opposite fact.
       return r.status === 'not audited' ? '' : '<span class="tw">Nothing was flagged on this audit. This is a checked result, not a missing one.</span>';
     })();
+    r._doNotSay = doNotSay;
     const convRows = [];
     if (r.pitch) convRows.push(['The email led with',
       (r.subject ? '<div class="dim">Subject: ' + p(r.subject) + '</div>' : '') + '<pre>' + p(r.pitch) + '</pre>'
@@ -2556,7 +2589,8 @@ const auditExportHtml = (records, meta) => {
     if (r.expectObjection) convRows.push(['He will likely say',
       '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
     if (r.askOnTheCall) convRows.push(['Worth asking', '<span class="ask">' + p(r.askOnTheCall) + '</span>', '']);
-    if (doNotSay) convRows.push(['Do not say', doNotSay, 'no']);
+    // Do-not-say renders LAST, in oneTail — the owner's direction: the
+    // business first, the guardrails at the end.
     return '<article id="a' + i + '">'
       + '<header><div class="hrow"><div><h2>' + e(r.company) + '</h2><div class="meta">'
       + [r.trade, r.location, r.website, measured].filter(Boolean).map(e).join(' &middot; ')
@@ -2596,6 +2630,9 @@ const auditExportHtml = (records, meta) => {
       + '</div>'
       + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
       + '</section>'
+      // ═══ WHAT THIS BUSINESS IS — FIRST, AT THE OWNER'S DIRECTION ═══ The
+      // caller pictures the business before any diagnosis of it.
+      + cat('What this business is', '', r.background ? '<p>' + p(r.background) + '</p>' : '')
       // ═══ 2 · THE MONEY ═══ The ranking is the system's read, said so on its
       // face — every finding stays visible in The evidence, the pick is Mike's.
       + cat('The money', "the system's ranking — every finding is in The evidence; the pick is yours",
@@ -2619,16 +2656,15 @@ const auditExportHtml = (records, meta) => {
       // on, and the one-thing diagnosis — three overlapping sections merged
       // into one read, each fact still appearing exactly once.
       + cat('The business', '',
-          (r.background ? '<p>' + p(r.background) + '</p>' : '')
-          + (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
+          (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
           + (r.read ? '<p>' + p(r.read) + '</p>' : '')
-          + (t ? ((t.diagnosis ? '<p><b>' + (t.layer ? e(t.layer) + ': ' : '') + '</b>' + p(t.diagnosis) + '</p>' : '')
+          + (t ? ((t.diagnosis ? '<p><b>' + (t.layer ? e(layerPlain(t.layer).replace(/^./, (c) => c.toUpperCase())) + ': ' : '') + '</b>' + p(t.diagnosis) + '</p>' : '')
               + (t.why ? '<p class="dim">' + p(t.why) + '</p>' : '')
-              + (t.firstBrokenLinkWhy ? '<p><b>Fix this first' + (t.firstBrokenLink ? ' — ' + e(t.firstBrokenLink) : '') + '.</b> ' + p(t.firstBrokenLinkWhy) + '</p>' : '')
-              + (t.friction.length ? '<p class="dim">' + (t.earnedButBlocked ? 'Earned, and blocked — ' : '') + t.frictionCount + ' thing(s) between interested and booked: ' + t.friction.map(x => p(x)).join(' · ') + '</p>' : ''))
+              + (t.firstBrokenLinkWhy ? '<p><b>Fix this first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + '.</b> ' + p(t.firstBrokenLinkWhy) + '</p>' : '')
+              + (t.friction.length ? '<p class="dim">' + (t.earnedButBlocked ? 'Earned, and blocked — ' : '') + t.frictionCount + ' thing(s) stand between an interested customer and a booked job: ' + t.friction.map(x => p(x)).join(' · ') + '</p>' : ''))
             : '')
           + ul(r.rows, x => '<li><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>')
-          + (r.bindingLayer ? '<p class="dim">Binding layer: ' + e(r.bindingLayer) + '</p>' : '')
+          + (r.bindingLayer ? '<p class="dim">Biggest blocker: ' + e(layerPlain(r.bindingLayer)) + '</p>' : '')
           + (r.whatHeCaresAbout ? '<p><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
       // ═══ 5 · THE EVIDENCE ═══ Every finding once, money-ordered (the server
       // already sorts problemList by pillar), their own words as the sub-line.
@@ -2710,7 +2746,11 @@ const auditExportHtml = (records, meta) => {
         + (r.niche ? '<div style="text-align:right"><b>' + e(r.niche.label) + '</b> — the full segment brief (their vocabulary, the software to ask about, the questions worth asking) is printed ONCE at the end of this file.</div>' : '')
         + '</div>'
       : '';
-    return angles + edges + foot + '</article>'; };
+    // ═══ DO NOT SAY — LAST, BY DESIGN ═══
+    const dns = r._doNotSay
+      ? '<section><h3 style="color:#b91c1c">Do not say</h3>' + r._doNotSay + '</section>'
+      : '';
+    return angles + edges + dns + foot + '</article>'; };
   return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
@@ -6100,6 +6140,16 @@ function LeadBriefing({ lead }) {
     ),
 
 
+    // ── WHAT THIS BUSINESS IS ───────────────────────────────────────────────
+    // The example opened with a plain description before any diagnosis, and the
+    // app had nothing equivalent — it went straight from contact details to a
+    // verdict, so a reader who had never heard of the business met a conclusion
+    // about a company they could not picture.
+    sr && sr.background ? React.createElement('div', null,
+      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'What this business is'),
+      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
+    ) : null,
+
     // ── SCORE, FACTS, AND THE TOP THREE MONEY LEAKS ─────────────────────────
     // Vin, reading the TriStar sheet: "theres info everywhere... i dont cealry
     // know what 1 2 and 3 of the biggest revenue leaks are." One card answers
@@ -6136,7 +6186,7 @@ function LeadBriefing({ lead }) {
         if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
         // Positive only, per the read's own rule: finding campaign pages is a
         // fact; not finding them proves nothing, and the caption says so.
-        if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? ('Campaign pages: ' + af.campaignPages + ' unlinked') : 'Campaign pages: none found (absence proves nothing)'));
+        if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? (af.campaignPages + ' page(s) only reachable by ad link') : 'Ad landing pages: none found (they may still exist)'));
         if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
         if (af.https === false) facts.push(chip('plain http', 'bad'));
       }
@@ -6162,7 +6212,7 @@ function LeadBriefing({ lead }) {
       },
         ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
           React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : ws.score <= 7 ? '#fbbf24' : 'var(--t)' } }, ws.score + '/10'),
-          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'their website build \u2014 higher is better (' + ws.basedOn + '). Grades the site itself; ads, tracking and search are judged separately below'),
+          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'how well their website is built \u2014 10 is best (' + ws.basedOn + '). Ads and search are scored separately'),
           React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
             (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
         ) : null,
@@ -6209,11 +6259,8 @@ function LeadBriefing({ lead }) {
       if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
         React.createElement('span', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
       if (sr && sr.askOnTheCall) rows.push(gl('Worth asking'), gv(sr.askOnTheCall));
-      // Every flagged claim, where anyone briefed from this screen can see it.
-      // Without this a teammate reads a confident summary and repeats an
-      // unverifiable claim on a call, because nothing told them not to.
-      if (risks.length) rows.push(gl('Do not say', true), gv(React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
-        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 4, lineHeight: 1.5, fontSize: 12.5 } }, String(x))))));
+      // Do-not-say moved to its own section at the BOTTOM of the audit —
+      // the owner's call, 2026-08-24: warnings last, the business first.
       if (!rows.length) return null;
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
@@ -6223,15 +6270,6 @@ function LeadBriefing({ lead }) {
       );
     })(),
 
-    // ── WHAT THIS BUSINESS IS ───────────────────────────────────────────────
-    // The example opened with a plain description before any diagnosis, and the
-    // app had nothing equivalent — it went straight from contact details to a
-    // verdict, so a reader who had never heard of the business met a conclusion
-    // about a company they could not picture.
-    sr && sr.background ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'What this business is'),
-      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background)
-    ) : null,
 
 
     // ── THE VERDICT ─────────────────────────────────────────────────────────
@@ -6262,7 +6300,7 @@ function LeadBriefing({ lead }) {
         problems.length === 0
           ? 'We measured ' + counted.length + ' things and found no problems.'
           : (counted.length - problems.length) + ' of ' + counted.length + ' measured signals are clean.'
-            + (gc && gc.layer ? '  The binding layer is ' + gc.layer + '.' : ''))
+            + (gc && gc.layer ? '  Biggest blocker: ' + layerPlain(gc.layer) + '.' : ''))
     ),
 
     // ── THE ONE THING ───────────────────────────────────────────────────────
@@ -6294,7 +6332,7 @@ function LeadBriefing({ lead }) {
         style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
       },
         React.createElement('div', null,
-          H(t.layer ? 'The one thing \u2014 ' + t.layer : 'The one thing'),
+          H(t.layer ? 'The one thing \u2014 ' + layerPlain(t.layer) : 'The one thing'),
           t.diagnosis ? React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: 'var(--t)', lineHeight: 1.45 } }, t.diagnosis) : null,
           // WHY this layer and not the cheaper one below it. Stripped by the
           // server for the whole life of the field, so it has never been read.
@@ -6304,16 +6342,14 @@ function LeadBriefing({ lead }) {
         // every other finding is an independent rung with no notion that fixing
         // one is pointless until another is fixed.
         t.firstBrokenLinkWhy ? React.createElement('div', null,
-          H('Fix this first \u2014 ' + (t.firstBrokenLink || '')),
+          H('Fix this first \u2014 ' + layerPlain(t.firstBrokenLink || '')),
           React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } }, t.firstBrokenLinkWhy)
         ) : null,
         // The path from interested to booked, in sentences the owner can check
         // on his own site in under a minute. This is the website sale, stated as
         // measurements rather than as an opinion about his website.
         fr.length ? React.createElement('div', null,
-          H(t.earnedButBlocked
-            ? 'Earned, and blocked \u2014 ' + (t.frictionCount || fr.length) + ' thing(s) between interested and booked'
-            : (t.frictionCount || fr.length) + ' thing(s) between interested and booked'),
+          H((t.earnedButBlocked ? 'Earned, and blocked \u2014 ' : '') + (t.frictionCount || fr.length) + ' thing(s) stand between an interested customer and a booked job'),
           React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 } },
             fr.map((f, i) => React.createElement('li', {
               key: 'fr' + i, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55 }
@@ -6492,6 +6528,18 @@ function LeadBriefing({ lead }) {
       })(),
       // askOnTheCall renders in The conversation above \u2014 one home each.
       null
+    ) : null,
+
+    // ── DO NOT SAY — LAST, BY DESIGN ────────────────────────────────────────
+    // Every flagged claim, rendered as the QUOTE plus one plain-English line of
+    // why — the engineering rationale stays in the stored lead. Placed at the
+    // bottom at the owner's direction: the caller reads the business first and
+    // the guardrails last.
+    risks.length ? React.createElement('div', { style: { borderTop: '1px solid var(--b)', paddingTop: 14 } },
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say'),
+      React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
+        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 5, lineHeight: 1.5, fontSize: 12.5, color: 'var(--t)' } }, plainRisk(x)))
+      )
     ) : null,
 
 
