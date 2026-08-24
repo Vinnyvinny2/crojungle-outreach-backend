@@ -12457,6 +12457,87 @@ const RUNG_PILLAR = {
 // One accessor, so a caller can never read the table directly and miss a rung
 // that decides its bucket from evidence.
 const pillarForRung = (id) => RUNG_PILLAR[String(id || '')] || null;
+
+// ══ WHERE ON THE CUSTOMER'S PATH EACH FINDING LIVES ══════════════════════════
+// Vin approved the funnel-shaped audit 2026-08-24 with one condition: "make
+// sure each finding always goes along with the proper place for the funnel."
+// So the place is DECLARED, per rung, the same discipline as RUNG_PILLAR and
+// OWNER_KNOWS: a rung added tomorrow cannot inherit a stage by accident,
+// because FUNNEL STAGE MAP CHECK refuses the boot until a human writes one
+// down. Four stages:
+//   found — do the people looking for this work see them (search, the ads and
+//           their tracking, the Google listing)
+//   door  — what a click lands on (booking, the form, price, the pages)
+//   after — what happens once somebody reaches out (answering, quotes,
+//           follow-up, the next job from the same customer)
+//   work  — the work itself and the reputation record: CONTEXT under the
+//           funnel, never a leak location (we cannot fix their paving)
+const RUNG_FUNNEL_STAGE = {
+  // ── found ──────────────────────────────────────────────────────────────────
+  paying_for_a_search_they_lose: 'found',
+  social_spend_no_search:        'found',
+  ads_untracked:                 'found',
+  no_retargeting:                'found',
+  hiring_marketing_now:          'found',
+  absent_from_search:            'found',
+  organic_invisible:             'found',
+  outranked_by_weaker:           'found',
+  service_invisibility:          'found',
+  coverage_gap:                  'found',
+  rank_slipped:                  'found',
+  no_google_listing:             'found',
+  listing_closed:                'found',
+  wrong_gbp_category:            'found',
+  duplicate_listing:             'found',
+  thin_profile:                  'found',
+  no_hours_on_profile:           'found',
+  no_website_on_profile:         'found',
+  // ── door ───────────────────────────────────────────────────────────────────
+  // paid_traffic_leaks is filed at the DOOR on purpose: the tag is the money,
+  // but the FAULT it names is where the click lands — Vin's own walk: "ads
+  // dump into the same form."
+  paid_traffic_leaks:            'door',
+  no_after_hours:                'door',
+  form_only_no_booking:          'door',
+  tap_to_call_broken:            'door',
+  phone_mismatch:                'door',
+  broken_page:                   'door',
+  site_empty:                    'door',
+  expired_certificate:           'door',
+  no_https:                      'door',
+  no_mobile_viewport:            'door',
+  slow_mobile:                   'door',
+  long_form:                     'door',
+  no_published_pricing:          'door',
+  no_financing:                  'door',
+  no_offer:                      'door',
+  undifferentiated:              'door',
+  dated_credibility:             'door',
+  stale_copyright:               'door',
+  placeholder_text:              'door',
+  dead_blog:                     'door',
+  no_lead_magnet:                'door',
+  // ── after ──────────────────────────────────────────────────────────────────
+  review_pain_pattern:           'after',
+  no_recurring_offer:            'after',
+  // ── work: context, never a leak ────────────────────────────────────────────
+  review_velocity_drop:          'work',
+  not_compounding:               'work',
+  review_deficit:                'work',
+  low_rating:                    'work',
+  no_owner_replies:              'work',
+  partial_owner_replies:         'work',
+  stale_reviews:                 'work',
+};
+// The one accessor. review_pain_pattern's stage follows the THEME the same way
+// its pillar does: a contact-shaped complaint is an after-contact leak, a
+// workmanship-shaped one is context about the work — decided off the SAME
+// classification the ranking uses, so the stage and the rank cannot disagree.
+const stageForRung = (id, themeContact) => {
+  const k = String(id || '');
+  if (k === 'review_pain_pattern' && themeContact === false) return 'work';
+  return RUNG_FUNNEL_STAGE[k] || null;
+};
 // The money ordering, as one function. A bucket we will not email (MISPRICED)
 // sorts to the BACK rather than to the front on its order number of zero - that
 // zero means "above the ladder in leverage", not "first in the queue", and a
@@ -20289,6 +20370,9 @@ const buildProblemList = (harms, opts = {}) => {
       // screen's pillar chip. moneyRank is what the sort reads; a row merged in
       // later (the copy quotes) can carry its own.
       pillar: _pillarOf(h.id),
+      // Where on the customer's path this finding lives — declared per rung,
+      // theme-aware for the review pattern, same classification the rank uses.
+      funnelStage: stageForRung(h.id, _ev.reviewThemeContact),
       moneyRank: _effRank(h.id),
       // Marked here, from the ONE declaration, so the client's top-3 leaks can
       // refuse a review METRIC without holding a second copy of the internal
@@ -20339,6 +20423,21 @@ const buildProblemList = (harms, opts = {}) => {
   // the same paragraph three times, twice as "[lead]" because those callers
   // pass no company. Same information, one line.
   const out = real.length >= 3 ? real : real.concat(amb.slice(0, 3 - real.length));
+  // ══ THE THREE BIGGEST LEAKS, NUMBERED 1-2-3 ══════════════════════════════
+  // Vin: "the goal for the audit is to identify the top 3 biggest things that
+  // are damaging the business and making it lose revenue." The rank is
+  // assigned HERE, on the sorted list, so the screen, the export and anything
+  // downstream all read the same 1-2-3 instead of re-deriving it — the same
+  // one-copy rule as the ranking itself. A row that can never be a leak never
+  // gets a number: internal review metrics, ambient market-wide conditions,
+  // and anything past the money floor of 5 (TAXED context included).
+  let _lr = 0;
+  for (const r of out) {
+    if (_lr >= 3) break;
+    if (r.internalOnly || r.ambient) continue;
+    if (!Number.isFinite(r.moneyRank) || r.moneyRank > 5) continue;
+    r.leakRank = ++_lr;
+  }
   if (amb.length && real.length >= 3 && opts.company) {
     console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
   }
@@ -22053,8 +22152,22 @@ const buildFunnelStory = (m = {}, x = {}) => {
       : null,
   } : null;
 
-  if (!stages.length && !fixFirst) return null;
-  return { checked: true, stages, fixFirst };
+  // ══ WHAT WE ACTUALLY LOOKED AT, PER STAGE ═════════════════════════════════
+  // The funnel layout marks every stage broken, clean or NOT MEASURED — and
+  // "clean" versus "not measured" cannot be derived from the findings alone,
+  // because both produce zero rows. The flags say whether the stage's inputs
+  // were read at all: findings decide BROKEN, these decide whether the silence
+  // means CLEAN or NO READ. "after" is honest about its usual state — the only
+  // window this system has into what happens after contact is the customers'
+  // own written record, so with fewer than ten reviews read it stays unmeasured.
+  const measured = {
+    found: m.rankChecked === true || m.adsReadable === true,
+    door: m.bookingMeasured === true || m.formFieldCountIsSingleForm === true
+      || m.pricingMeasured === true || typeof m.isHttps === 'boolean',
+    after: Number(m.reviewsRead) >= 10,
+  };
+  if (!stages.length && !fixFirst && !measured.found && !measured.door && !measured.after) return null;
+  return { checked: true, stages, measured, fixFirst };
 };
 
 // ══ AUTHENTIC FEAR, AND THE ONLY HONEST WAY TO PRODUCE IT ═══════════════════
@@ -22187,6 +22300,29 @@ const plainEnglishFaults = (sentence, { trade = '', mined = '' } = {}) => {
   if (_a) out.push(`opens on "${_a[0]}" — the sentence is about a concept rather than about him or his customer`);
   const _d = String(sentence || '').match(PLAIN_DANGLING);
   if (_d) out.push(`"${_d[0]}" makes the reader go back and work out what it stands for`);
+  return out;
+};
+
+// ══ A SENTENCE THAT PARROTS AN EVIDENCE LINE IS NOT A THOUGHT ════════════════
+// Vin: "it seems like the brain doesnt actually think about whats going on it
+// just tells about the signals i need it to think." The funnel walk and the
+// ranked leaks are PRINTED on the sheet as evidence; the read exists to add
+// what connects them. Instructional guards do not hold, so this is the
+// mechanical half: a read sentence sharing 70%+ of its content words with any
+// single evidence line is a restatement. Short sentences and short evidence
+// lines are exempt — "8 fields" appearing in both is a reference, not a copy.
+const restatedEvidenceLines = (readText, evidenceLines) => {
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+  const evSets = (Array.isArray(evidenceLines) ? evidenceLines : []).map(l => new Set(norm(l))).filter(s => s.size >= 5);
+  const out = [];
+  for (const s of String(readText || '').split(/(?<=[.!?])\s+/)) {
+    const words = norm(s);
+    if (words.length < 7) continue;
+    for (const ev of evSets) {
+      const shared = words.filter(w => ev.has(w)).length;
+      if (shared / words.length >= 0.7) { out.push(s.trim()); break; }
+    }
+  }
   return out;
 };
 
@@ -24601,7 +24737,7 @@ const SITUATION_SHAPES = [
 //
 // Two attempts, not more. If the second one fails the same way the problem is the
 // prompt, not the sample, and burning a third call hides that from us.
-const buildSituationRead = async (facts, apiKey, company) => {
+const buildSituationRead = async (facts, apiKey, company, evidenceLines = []) => {
   if (!apiKey) return null;
   let last = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -24609,7 +24745,7 @@ const buildSituationRead = async (facts, apiKey, company) => {
 
 \u26a0 YOUR PREVIOUS ANSWER WAS REJECTED. ${last && last.faults ? last.faults.join(' ') : ''}
 Write it again, fixing exactly that. Everything else about the task is unchanged.`;
-    const r = await _situationReadAttempt(facts, apiKey, company, correction);
+    const r = await _situationReadAttempt(facts, apiKey, company, correction, evidenceLines);
     if (!r) return null;
     if (!r.faults || !r.faults.length) {
       if (attempt > 1) console.log(`\u2713 SITUATION READ [${company}]: the second attempt cleared the checks that failed the first.`);
@@ -24633,7 +24769,7 @@ Write it again, fixing exactly that. Everything else about the task is unchanged
 // Cached input is $0.30/M \u2014 ten times cheaper. And this call RETRIES on a failed
 // check, so a lead that fails once pays for the whole prompt twice; Craig Swapp
 // and Comfort-Air both did exactly that.
-async function _situationReadAttempt(facts, apiKey, company, correction) {
+async function _situationReadAttempt(facts, apiKey, company, correction, evidenceLines = []) {
 
   const shapeList = SITUATION_SHAPES.map(([k, d]) => `${k} \u2014 ${d}`).join('\n');
 
@@ -24791,10 +24927,13 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         // answer starts. Stated here so the request means one thing whatever
         // SITUATION_MODEL is set to.
         ...(THINKING_FOR(SITUATION_MODEL) ? { thinking: THINKING_FOR(SITUATION_MODEL) } : {}),
-        // medium, not the default high: this is a 5-field JSON synthesis from
-        // facts already assembled, not an open problem. Effort is what replaced
-        // the old fixed thinking budget, which returns a 400 on this family.
-        ...(THINKING_FOR(SITUATION_MODEL) ? { output_config: { effort: 'medium' } } : {}),
+        // HIGH, raised from medium 2026-08-24. Vin: "it seems like the brain
+        // doesnt actually think about whats going on it just tells about the
+        // signals i need it to think." This is the one call whose entire job
+        // is judgement — the story that connects the walk, the leaks and the
+        // record into one read — and the restatement gate now fails an answer
+        // that parrots, so the extra thinking has a check collecting on it.
+        ...(THINKING_FOR(SITUATION_MODEL) ? { output_config: { effort: 'high' } } : {}),
         // 900 -> 1400 -> 1800 -> 4200. The first three were sized against the
         // ANSWER, which is ~840 tokens. On an adaptive-thinking model max_tokens
         // caps thinking PLUS the answer, so a ceiling tuned for the answer alone
@@ -24803,7 +24942,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         //
         // Headroom is cheap and truncation is not: the whole point of this call
         // is the one line anybody has ever praised.
-        max_tokens: 4200,
+        max_tokens: 6000,
         // `sys` is the shape list, both worked examples and the rules \u2014 identical
         // on every lead, ~2,950 Sonnet tokens, billed fresh every time until now.
         // Cached input is $0.30/M against $3.00/M. This call also retries on a
@@ -24940,6 +25079,14 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     if (!rows.length) faults.push('It returned no rows \u2014 five to seven are required.');
     else if (scannerNamed >= 2) faults.push(`${scannerNamed} rows used our scanner's own labels instead of business groupings \u2014 name each row for what it IS to the business.`);
     if (restated) faults.push('The read was thin: it restated a page-level finding, ran short, or contained no measured numbers. It must say what the signals ADD UP TO.');
+    // ══ A READ THAT PARROTS THE EVIDENCE IS NOT A READ ═════════════════════
+    // The walk and the ranked leaks are printed on the sheet BELOW this read.
+    // Two near-copies of evidence lines fail the attempt with the fault named,
+    // so the retry knows exactly what to do differently.
+    {
+      const _rst = restatedEvidenceLines(String(parsed.read || ''), evidenceLines);
+      if (_rst.length >= 2) faults.push(`${_rst.length} sentences of the read restate evidence lines that are already printed on the sheet (e.g. "${String(_rst[0]).slice(0, 90)}"). The evidence is displayed below your read. Write what CONNECTS the facts — why this shape, what it costs him, what breaks first — never the facts again.`);
+    }
     // ══ THE HEADLINE FINALLY GETS A GATE ═══════════════════════════════════
     // It is the first sentence of THE STORY on every sheet and its entire
     // positive spec was six words, so its register drifted until the owner
@@ -34678,6 +34825,9 @@ const _runResearchInner = async (req, res) => {
   // it — "line order is not scope" is a recorded failure class in this file.
   let bottleneck = '';
   let bottleneckWhy = '';
+  // The funnel walk, computed ONCE per lead: the synthesis reads it as
+  // evidence and the response returns it, and two calls could drift.
+  let funnelStory = null;
   // rankHarms runs inside a block far below and `worst` — its own comment calls
   // it "what is actually costing them most" — died with that block. Hoisted for
   // the same reason as the bottleneck: the audit should be able to say what this
@@ -40622,6 +40772,16 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // page copy and what the audit concluded. A few hundred extra tokens
             // on one call, and the difference between a model reasoning from a
             // summary and a model reasoning from the evidence.
+            // ══ THE WALK, COMPUTED ONCE, BEFORE THE NARRATOR ══════════════
+            // The synthesis is the ONE voice that tells the story; the walk
+            // and the ranked leaks are its evidence, and the response returns
+            // the same object — computed here so nothing can drift.
+            funnelStory = buildFunnelStory(_harmInputs, {
+              bottleneck, bottleneckWhy,
+              adsLive: !!(localRank && localRank.paidIsUs),
+              opsPain: readOperationalPain(publicPainSignals, reviewsRead),
+              opsRoles: (careers && Array.isArray(careers.opsRoles)) ? careers.opsRoles.slice(0, 3) : [],
+            });
             try {
               if (Array.isArray(measuredFacts) && measuredFacts.length >= 6 && !situationRead) {
                 const _extra = [];
@@ -40635,7 +40795,18 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _extra.push(`The findings the audit ranked, strongest first: ${parsed.candidateFindings.slice(0, 6).map(c => (c && c.finding) || '').filter(Boolean).join(' | ')}`);
                 }
                 if (parsed.patternLine) _extra.push(`The pattern the audit named: ${parsed.patternLine}`);
-                situationRead = await buildSituationRead(measuredFacts.concat(_extra).join('\n'), apiKey, company);
+                if (funnelStory && Array.isArray(funnelStory.stages) && funnelStory.stages.length) {
+                  _extra.push(`THE MEASURED FUNNEL WALK (code-assembled, every sentence verified, and ALREADY PRINTED on the sheet as evidence \u2014 never restate these lines; your read is what CONNECTS them):\n${funnelStory.stages.map(s => `- ${s.label}: ${s.text}`).join('\n')}`);
+                }
+                {
+                  const _lks = ((_harmsForResponse && _harmsForResponse.problemList) || []).filter(r => r && r.leakRank);
+                  if (_lks.length) _extra.push(`THE BIGGEST MEASURED LEAKS, RANKED 1-2-3 (already numbered on the sheet \u2014 explain what connects them and which to fix first, never re-list them):\n${_lks.map(r => `${r.leakRank}. ${r.problem}`).join('\n')}`);
+                }
+                situationRead = await buildSituationRead(measuredFacts.concat(_extra).join('\n'), apiKey, company,
+                  [
+                    ...((funnelStory && funnelStory.stages) || []).map(s => s && s.text),
+                    ...(((_harmsForResponse && _harmsForResponse.problemList) || []).map(r => r && r.problem)),
+                  ].filter(Boolean));
                 if (situationRead) {
                   console.log(`SITUATION READ [${company}]: written AFTER the audit, from ${measuredFacts.length} measured fact(s) plus ${_extra.length} block(s) of the audit's own evidence, their homepage copy included. It used to run BEFORE the audit on the bullets alone, which is why the smartest call in the system was the least informed one.`);
                 }
@@ -40829,7 +41000,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   // him dollars. Ranked with TAXED (order 6): present, near the
                   // bottom, above only the internal metrics.
                   harm: 70, opener: 70, novel: 95, ambient: false, id: 'audit_original',
-                  pillar: 'TAXED', moneyRank: 6,
+                  pillar: 'TAXED', moneyRank: 6, funnelStage: 'door',
                   fromTheirPages: true,
                 }));
               if (_rows.length) {
@@ -43071,15 +43242,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // the SAME bottleneck variables the one-thing reads (never re-derived)
       // and only ever renders a stage whose inputs were measured. This is the
       // story spine; the model's read stays as colour around it.
-      funnelStory: buildFunnelStory(_harmInputs, {
-        bottleneck, bottleneckWhy,
-        // Same source resolveMeasurements reads for adsLiveInPack — _measured
-        // itself is block-scoped upstream and not visible here (scopecheck
-        // caught the first draft reading it, the recorded §40 class).
-        adsLive: !!(localRank && localRank.paidIsUs),
-        opsPain: readOperationalPain(publicPainSignals, reviewsRead),
-        opsRoles: (careers && Array.isArray(careers.opsRoles)) ? careers.opsRoles.slice(0, 3) : [],
-      }),
+      // Computed once, before the synthesis, which reads it as evidence —
+      // see THE WALK, COMPUTED ONCE at that call site.
+      funnelStory: funnelStory,
       // ══ THE NUMBER AND THE FACTS THE OPERATOR ASKS FIRST ═════════════════
       // Both pure, both fed from _harmInputs — the one object whose fields the
       // RUNG INPUT and delivery checks already police, so a fact shown here is
@@ -45718,8 +45883,23 @@ app.listen(PORT, () => {
     // The call site — a fixture supplies its own arguments and cannot see it.
     const _sn = (...p) => p.join('');
     const _ssrc = selfSourceNoComments();
-    if (!_ssrc.includes(_sn('funnelStory: buildFunnelStory(', '_harmInputs, {'))) {
+    if (!_ssrc.includes(_sn('funnelStory = buildFunnelStory(', '_harmInputs, {'))) {
+      _fails.push('the walk is no longer computed before the synthesis, so the narrator reasons without its evidence');
+    }
+    if (!_ssrc.includes(_sn('funnelStory: ', 'funnelStory,'))) {
       _fails.push('the response no longer carries the funnel story, so the sheet is back to model prose for its spine');
+    }
+    if (!_ssrc.includes(_sn('THE MEASURED FUNNEL WALK', ' (code-assembled'))) {
+      _fails.push('the walk no longer reaches the synthesis as evidence, so the one narrator is back to reasoning from bullets');
+    }
+    // The measured map: silence must be tellable apart — CLEAN needs a look,
+    // NO READ is the honest default, and the flags never invent one.
+    const _mm = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 2, rankQuery: 'x in y', bookingMeasured: true, booking: 'online_booking' }, {});
+    if (!_mm || !_mm.measured || _mm.measured.found !== true || _mm.measured.door !== true || _mm.measured.after !== false) {
+      _fails.push('the per-stage measured flags are wrong on a clean measured lead — the funnel cannot tell CLEAN from NO READ');
+    }
+    if (_fs && _fs.measured && _fs.measured.after !== true) {
+      _fails.push("the Breck's shape read 90 reviews and the after stage still claims no read");
     }
     if (!_ssrc.includes(_sn('bottleneck, ', 'bottleneckWhy,'))) {
       _fails.push('the story no longer reads the same bottleneck variables the one-thing reads — a second derivation is the two-hand-kept-copies disease');
@@ -45731,6 +45911,81 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ FUNNEL STORY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ EVERY FINDING HAS ITS PLACE ON THE FUNNEL, AND THE TOP 3 ARE NUMBERED ═
+  // Vin, approving the funnel layout: "make sure each finding always goes
+  // along with the proper place for the funnel" and "the biggest leaks are
+  // ranked 1 2 and 3 cuz the goal for the audit is to identify the top 3
+  // biggest things that are damaging the business." Both are declarations a
+  // human maintains, so both are refused at boot when they rot.
+  try {
+    const _fails = [];
+    // 1. COMPLETENESS, both directions: every ladder rung declares a stage,
+    //    and no stage is declared for a rung that no longer exists.
+    const _ladderIds = new Set(HARM_LADDER.map(h => h.id));
+    for (const _id of _ladderIds) {
+      if (!RUNG_FUNNEL_STAGE[_id]) _fails.push(`rung "${_id}" has no funnel stage — a finding with no place on the funnel disappears from the sheet, so the build refuses until a human writes one down`);
+    }
+    for (const _k of Object.keys(RUNG_FUNNEL_STAGE)) {
+      if (!_ladderIds.has(_k)) _fails.push(`RUNG_FUNNEL_STAGE declares "${_k}", which is not in the ladder — a stale row sits there looking checked`);
+      if (!['found', 'door', 'after', 'work'].includes(RUNG_FUNNEL_STAGE[_k])) _fails.push(`rung "${_k}" declares unknown stage "${RUNG_FUNNEL_STAGE[_k]}"`);
+    }
+    // 2. The theme override, both ways — the stage and the rank read the SAME
+    //    classification, so they cannot disagree about what the complaint is.
+    if (stageForRung('review_pain_pattern', true) !== 'after') _fails.push('a contact-shaped complaint lost its after-contact stage');
+    if (stageForRung('review_pain_pattern', false) !== 'work') _fails.push('a workmanship-shaped complaint still sits on the funnel as a leak location — Vin: "we have no control over the quality they produce"');
+    if (stageForRung('absent_from_search', false) !== 'found') _fails.push('the theme override leaked onto a rung it does not belong to');
+    if (stageForRung('nonexistent_rung') !== null) _fails.push('an unknown rung invents a stage');
+    // 3. The numbering, executed on the real list builder: 1-2-3 in money
+    //    order, and a row that can never be a leak never gets a number.
+    const _rk = buildProblemList({ byHarm: [
+      { id: 'ads_untracked', finding: 'ads with nothing counted', costs: 'c', harm: 84, opener: 80, novel: 78 },
+      { id: 'review_pain_pattern', finding: 'quotes that never come back', costs: 'c', harm: 76, opener: 75, novel: 88 },
+      { id: 'no_after_hours', finding: 'no way to book a time', costs: 'c', harm: 74, opener: 70, novel: 60 },
+      { id: 'no_published_pricing', finding: 'no price anywhere', costs: 'c', harm: 66, opener: 60, novel: 50 },
+      { id: 'stale_reviews', finding: 'reviews stale', costs: 'c', harm: 70, opener: 60, novel: 60 },
+    ] }, { evidence: { adsLive: false, writtenContact: true, reviewThemeContact: true } });
+    const _byId = Object.fromEntries(_rk.map(r => [r.id, r]));
+    if (!_byId.ads_untracked || _byId.ads_untracked.funnelStage !== 'found') _fails.push('the rows do not carry their funnel stage');
+    if (!_byId.review_pain_pattern || _byId.review_pain_pattern.funnelStage !== 'after') _fails.push('a contact-themed complaint row is not staged after contact');
+    const _ranked = _rk.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
+    if (_ranked.length !== 3) _fails.push(`${_ranked.length} leak rank(s) assigned, not 3 — the audit's stated goal is the top three`);
+    if (_ranked.length === 3 && (_ranked[0].leakRank !== 1 || _ranked[2].leakRank !== 3)) _fails.push('the leak ranks are not 1-2-3');
+    if (_ranked.some(r => r.id === 'stale_reviews')) _fails.push('an internal review metric took a leak number — the seven internal rungs can never be one of the three things we say are damaging the business');
+    const _order = _rk.filter(r => Number.isFinite(r.leakRank)).map(r => r.leakRank);
+    if (String(_order) !== String([..._order].sort((a, b) => a - b))) _fails.push('the leak numbers disagree with the money order — two rankings of one list');
+    // A workmanship theme keeps its rows OFF the numbers entirely.
+    const _rw = buildProblemList({ byHarm: [
+      { id: 'review_pain_pattern', finding: 'poor drainage repeats', costs: 'c', harm: 76, opener: 75, novel: 88 },
+    ] }, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: false } });
+    if (_rw.some(r => Number.isFinite(r.leakRank))) _fails.push('a workmanship-only lead still numbers the complaint as a leak');
+    if (_rw[0] && _rw[0].funnelStage !== 'work') _fails.push('the workmanship row is not filed under the work-itself context');
+    // 4. The restatement gate, executed — the mechanical half of "i need it
+    //    to think". A parroting read fails; a reasoning read that references
+    //    the same facts passes.
+    const _ev = [
+      'The only thing a visitor can do there is fill in a form and wait. That form asks for 8 pieces of information before anything happens.',
+      'When somebody searches "parking lot paving in Columbus, OH", they are not in the results at all — we ran that search twice.',
+    ];
+    const _parrot = 'The only thing a visitor can do there is fill in a form and wait patiently. When somebody searches "parking lot paving in Columbus, OH", they are not in the results at all after we ran that search twice.';
+    if (restatedEvidenceLines(_parrot, _ev).length < 2) _fails.push('a read that copies two evidence lines nearly word for word is not caught — the narrator can pass by parroting');
+    const _thinks = 'Sixty-nine years of reputation and none of it is working for them online: the buyers already searching cannot see it, and the ones who arrive are asked to do the most work. Fixing the page before the spend is the only order that pays.';
+    if (restatedEvidenceLines(_thinks, _ev).length !== 0) _fails.push('a genuinely synthesized read is flagged as a restatement — a gate that cries wolf gets switched off');
+    // 5. Call sites, assembled at runtime — a fixture supplies its own
+    //    arguments and cannot see a dropped wire.
+    const _fn = (...p) => p.join('');
+    const _fsrc = selfSourceNoComments();
+    if (!_fsrc.includes(_fn('funnelStage: stageForRung(h.id, _ev.', 'reviewThemeContact),'))) _fails.push('the live rows no longer carry a stage from the one accessor');
+    if (!_fsrc.includes(_fn('r.leakRank = ', '++_lr;'))) _fails.push('the live list no longer numbers the top three');
+    if (!_fsrc.includes(_fn('restatedEvidenceLines(String(parsed.', "read || ''), evidenceLines)"))) _fails.push('the restatement gate is not wired into the synthesis attempt — it runs on fixtures and never on a lead');
+    if (_fails.length) {
+      console.log(`⛔ FUNNEL STAGE MAP CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ FUNNEL STAGE MAP CHECK: all ${_ladderIds.size} rungs declare their place on the funnel — found, door, after, or the work-itself context — so a finding can never float loose on the sheet, and a rung added tomorrow refuses the boot until a human places it. The top three leaks are numbered 1-2-3 on the sorted list itself, one copy for every consumer; internal metrics, ambient conditions and workmanship context can never take a number. The complaint's theme decides its stage through the same classifier that decides its rank. And the restatement gate holds both ways: a read that parrots two evidence lines fails with the fault named, and a read that actually reasons about the same facts passes.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FUNNEL STAGE MAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════

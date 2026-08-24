@@ -2413,6 +2413,80 @@ const trimRepeatedJobValue = (moneyLine, firstMoneyLine, idx) => {
   return s;
 };
 
+// ══ THE FUNNEL LAYOUT'S ONE GROUPING ═════════════════════════════════════════
+// Vin approved the funnel-shaped audit with the rule "each finding always goes
+// along with the proper place for the funnel." Rows arrive from the server
+// already staged (funnelStage, declared per rung); leads audited before that
+// fall back to the money pillar so an old audit still renders into the funnel
+// instead of dumping everything in the reference tail. ONE grouping for the
+// screen and the export, like groupAuditFindings before it.
+const FUNNEL_STAGE_DEFS = [
+  { id: 'found', label: 'Getting found', sub: 'do the people looking for this work see them' },
+  { id: 'door', label: 'The door', sub: 'what a click lands on' },
+  { id: 'after', label: 'After they reach out', sub: 'a request becoming a job' },
+];
+const PILLAR_TO_STAGE = { BURNING: 'found', INVISIBLE: 'found', UNCAUGHT: 'door', LEAKING: 'door', ROTTING: 'after', TAXED: 'work' };
+const groupByFunnelStage = (pl, fs) => {
+  const rows = (Array.isArray(pl) ? pl : []).filter(Boolean);
+  const seen = new Set();
+  const once = (r) => { const k = String(r.problem || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 160); if (!k || seen.has(k)) return false; seen.add(k); return true; };
+  const stageOf = (r) => r.funnelStage || PILLAR_TO_STAGE[r.pillar] || null;
+  const g = { found: [], door: [], after: [] };
+  const work = []; const unstaged = [];
+  for (const r of rows) {
+    if (r.internalOnly) continue;              // the reference keeps the internal list
+    if (!once(r)) continue;
+    const st = stageOf(r);
+    if (st === 'work') work.push(r);
+    else if (g[st]) g[st].push(r);
+    else unstaged.push(r);
+  }
+  // The 1-2-3 the audit exists to name. Server-assigned since the funnel
+  // build; a legacy lead derives the same numbers from the same predicate so
+  // the badges can never disagree with the money order.
+  const rankOf = new Map();
+  const ranked = rows.filter(r => Number.isFinite(r.leakRank));
+  if (ranked.length) { for (const r of ranked) rankOf.set(r, r.leakRank); }
+  else {
+    let lr = 0;
+    for (const r of rows) {
+      if (lr >= 3) break;
+      if (r.internalOnly || r.ambient || r.fromTheirPages) continue;
+      if (!Number.isFinite(r.moneyRank) || r.moneyRank > 5) continue;
+      rankOf.set(r, ++lr);
+    }
+  }
+  const measured = (fs && fs.measured) || {};
+  const status = (id) => g[id].length ? 'broken' : (measured[id] === true ? 'clean' : 'no_read');
+  return { stages: FUNNEL_STAGE_DEFS.map(d => ({ id: d.id, label: d.label, sub: d.sub, rows: g[d.id], status: status(d.id) })), work, unstaged, rankOf };
+};
+// The funnel drawing. One function, both surfaces — statuses in, inline SVG
+// out. Red marks a stop (the house rule); an unmeasured stage is dashed and
+// never coloured, because "we did not look" must not read as a verdict.
+const funnelSvg = (sts, pal) => {
+  const P = pal || { broken: '#fef2f2', brokenLine: '#dc2626', clean: '#f5f5f7', cleanLine: '#a1a1a6', noread: '#fafafa', noreadLine: '#c7c7cc', text: '#515154', brokenText: '#b91c1c', dim: '#86868b' };
+  const band = (d, st, label, ly) => {
+    const fill = st === 'broken' ? P.broken : st === 'clean' ? P.clean : P.noread;
+    const line = st === 'broken' ? P.brokenLine : st === 'clean' ? P.cleanLine : P.noreadLine;
+    const dash = st === 'no_read' ? ' stroke-dasharray="5 4"' : '';
+    const tcol = st === 'broken' ? P.brokenText : P.text;
+    return '<path d="' + d + '" fill="' + fill + '" stroke="' + line + '" stroke-width="1.5" stroke-linejoin="round"' + dash + '/>'
+      + '<text x="100" y="' + ly + '" text-anchor="middle" font-size="9.5" font-weight="700" letter-spacing="0.8" fill="' + tcol + '" font-family="-apple-system,Helvetica,sans-serif">' + label + '</text>';
+  };
+  const drip = (x, y) => '<path d="M' + x + ' ' + y + ' C ' + (x + 13) + ' ' + (y + 6) + ', ' + (x + 20) + ' ' + (y + 16) + ', ' + (x + 17) + ' ' + (y + 30) + '" stroke="' + P.brokenLine + '" stroke-width="1.5" stroke-dasharray="3 4" fill="none"/>'
+    + '<circle cx="' + (x + 17) + '" cy="' + (y + 38) + '" r="2.6" fill="' + P.brokenLine + '"/><circle cx="' + (x + 13) + '" cy="' + (y + 49) + '" r="1.8" fill="' + P.brokenLine + '"/>';
+  return '<svg width="200" height="402" viewBox="0 0 200 402" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="funnel">'
+    + band('M12 6 L188 6 L166 108 L34 108 Z', sts.found, 'GETTING FOUND', 62)
+    + (sts.found === 'broken' ? drip(174, 40) : '')
+    + band('M38 120 L162 120 L144 222 L56 222 Z', sts.door, 'THE DOOR', 176)
+    + (sts.door === 'broken' ? drip(151, 154) : '')
+    + band('M60 234 L140 234 L126 324 L74 324 Z', sts.after, 'AFTER CONTACT', 284)
+    + (sts.after === 'broken' ? drip(130, 262) : '')
+    + '<path d="M86 336 L114 336 L111 372 L89 372 Z" fill="' + P.clean + '" stroke="' + P.cleanLine + '" stroke-width="1.5" stroke-linejoin="round"/>'
+    + '<text x="100" y="392" text-anchor="middle" font-size="11" fill="' + P.dim + '" font-family="-apple-system,Helvetica,sans-serif">booked jobs</text>'
+    + '</svg>';
+};
+
 const auditRecordFor = (lead) => {
   const l = lead || {};
   const ba = l.brainAudit || {};
@@ -2444,6 +2518,7 @@ const auditRecordFor = (lead) => {
     websiteScore: (l.websiteScore && l.websiteScore.checked) ? l.websiteScore : null,
     auditFacts: (l.auditFacts && typeof l.auditFacts === 'object') ? l.auditFacts : null,
     funnelStory: (l.funnelStory && l.funnelStory.checked === true) ? l.funnelStory : null,
+    problemList: arr(l.problemList),
     // Review intelligence for the sheet. INTERNAL by the standing rule: reviews
     // are how we read the business, never what gets said to the owner.
     opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
@@ -2661,53 +2736,60 @@ const auditExportHtml = (records, meta) => {
       + '</div>'
       + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
       + '</section>'
-      // ═══ THE STORY — one flow: what it is, where the money leaks, the sell ═══
-      + cat('The story', 'what it is, where the money leaks, what we would sell — in one read',
+      // ═══ THE STORY — one thinking voice, the only prose on the page ═══
+      + cat('The story', 'what is going on here, in one read — every number in it is measured',
           (r.background ? '<p>' + p(r.background) + '</p>' : '')
-          // The funnel walk is the SPINE: code over measurements, in the
-          // money's own order, each stage only present when measured. The
-          // model's headline and read stay below it as the colour. When the
-          // walk carries its own fix-first, the one-thing's copy of the same
-          // bottleneck is suppressed — nothing said twice.
-          + (r.funnelStory && Array.isArray(r.funnelStory.stages) && (r.funnelStory.stages.length || r.funnelStory.fixFirst)
-            ? '<div class="fwalk">'
-              + r.funnelStory.stages.map(s2 => '<div class="frow"><b>' + e(s2.label) + '.</b> ' + p(s2.text) + '</div>').join('')
-              + (r.funnelStory.fixFirst
-                ? '<div class="frow"><b>Fix first.</b> ' + e(String(r.funnelStory.fixFirst.plain || '').replace(/^./, (c) => c.toUpperCase()))
-                  + (r.funnelStory.fixFirst.why ? ' — ' + p(r.funnelStory.fixFirst.why) : '')
-                  + (r.funnelStory.fixFirst.join ? ' ' + p(r.funnelStory.fixFirst.join) : '') + '</div>'
-                : '')
-              + '</div>'
-            : '')
           + (r.headline ? '<p class="big">' + p(r.headline) + '</p>' : '')
           + (r.read ? '<p>' + p(r.read) + '</p>' : '')
-          + (t && t.diagnosis ? '<p class="dim">' + (t.layer ? '<b>' + e(layerPlain(t.layer).replace(/^./, (c) => c.toUpperCase())) + ':</b> ' : '') + p(t.diagnosis) + (t.why ? ' ' + p(t.why) : '') + ((t.firstBrokenLinkWhy && !(r.funnelStory && r.funnelStory.fixFirst)) ? ' Fix first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + ': ' + p(t.firstBrokenLinkWhy) : '') + '</p>' : '')
-          + ((g.frictionLoose || []).length ? '<p class="dim">' + g.frictionLoose.length + ' thing(s) stand between an interested customer and a booked job: ' + g.frictionLoose.map(x => p(x)).join(' · ') + '</p>' : '')
-          + ul(r.rows, x => '<li class="dim"><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>')
+          // No model read on this lead (an old audit, or the narrator was
+          // refused): the code walk is the honest fallback story.
+          + (!r.read && r.funnelStory && Array.isArray(r.funnelStory.stages) && r.funnelStory.stages.length
+            ? r.funnelStory.stages.map(s2 => '<p>' + p(s2.text) + '</p>').join('') : '')
           + (r.whatHeNeeds ? '<p><b>The sell:</b> ' + p(r.whatHeNeeds) + '</p>' : '')
-          + (r.bindingLayer ? '<p class="dim">Biggest blocker: ' + e(layerPlain(r.bindingLayer)) + '</p>' : '')
           + (r.whatHeCaresAbout ? '<p class="dim"><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
-      // ═══ THE LEAKS — top three, every supporting fact nested under its leak ═══
-      + cat('The leaks', 'ranked by the system — every supporting fact sits under its leak',
-          (g.leaks.length
-            ? g.leaks.map((lk, n) => {
-                const ml = trimRepeatedJobValue(lk.moneyLine, g.leaks[0] && g.leaks[0].moneyLine, n);
-                return '<div class="mrow"><div class="n">' + (n + 1) + '.</div><div><div><b>' + p(lk.problem) + '</b></div>'
-                + (lk.costs ? '<div class="tw">' + p(lk.costs) + '</div>' : '')
-                + (lk.support.length ? '<div class="tw">' + lk.support.map(x => p(x)).join(' · ') + '</div>' : '')
+      // ═══ THE FUNNEL — the skeleton. Every finding at its stage, exactly once,
+      // as terse evidence; the top three leaks numbered where they sit. ═══
+      + (() => {
+          const fg = groupByFunnelStage(r.problemList, r.funnelStory);
+          const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
+          if (!anyRows && !r.funnelStory && !(t && (t.friction || []).length)) return '';
+          const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
+          const lead1 = lead1Row && lead1Row[0].moneyLine;
+          const stagesHtml = fg.stages.map(s3 => {
+            const cls = s3.status === 'broken' ? 'fb' : s3.status === 'clean' ? 'fc' : 'fn';
+            const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'clean' ? 'NO FAULT FOUND' : 'NOT MEASURED';
+            const rowsHtml = s3.rows.map(x => {
+              const lr = fg.rankOf.get(x);
+              const ml = Number.isFinite(lr) ? trimRepeatedJobValue(x.moneyLine, lead1, lr - 1) : null;
+              return '<div class="ferow">' + (Number.isFinite(lr) ? '<span class="lkb">LEAK ' + lr + '</span>' : '')
+                + '<b>' + p(x.problem) + '</b>'
+                + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
                 + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
-                + (lk.pillar && PILLAR_PRODUCT[lk.pillar] ? '<div class="tw">' + e(PILLAR_LABEL[lk.pillar] || lk.pillar) + ' &middot; fix we sell: ' + e(PILLAR_PRODUCT[lk.pillar]) + '</div>' : '')
-                + '</div></div>'; }).join('')
-            : (t && t.costliest && t.costliest.problem
-                ? '<div class="mrow"><div class="n">1.</div><div><div><b>' + p(t.costliest.problem) + '</b></div>'
-                  + (t.costliest.costs ? '<div class="tw">' + p(t.costliest.costs) + '</div>' : '')
-                  + '</div></div><p class="dim">No ranked money leaks on this lead — this is the finding scored as costing them most.</p>'
-                : '')))
-      // ═══ THE SMALLER LEAKS — every remaining money signal, one line, none hidden ═══
-      + cat('The smaller leaks', 'every other measured money signal — ranked, none hidden',
-          g.small.length ? g.small.map(x => '<div class="erow"><b>' + p(x.problem) + '</b>'
-            + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
-            + (x.pillar && PILLAR_LABEL[x.pillar] ? ' <span class="tw">(' + e(PILLAR_LABEL[x.pillar]) + ')</span>' : '') + '</div>').join('') : '')
+                + (Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? '<div class="tw">fix we sell: ' + e(PILLAR_PRODUCT[x.pillar]) + '</div>' : '')
+                + '</div>';
+            }).join('');
+            const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
+              ? '<div class="ferow tw">' + t.friction.map(x => p(x)).join(' · ') + '</div>' : '';
+            const emptyNote = (!rowsHtml && !legacyFriction)
+              ? (s3.status === 'no_read'
+                ? '<div class="tw">Nothing measured here' + (s3.id === 'after' ? ' — what happens after someone reaches out is a question for the call, not a claim.' : '.') + '</div>'
+                : '<div class="tw">Measured — no fault found.</div>')
+              : '';
+            return '<div class="fstage ' + cls + '"><div class="fsh"><b>' + e(s3.label) + '</b><span class="fss">' + e(s3.sub) + '</span><span class="fst">' + st + '</span></div>' + rowsHtml + legacyFriction + emptyNote + '</div>';
+          }).join('');
+          const ff = (r.funnelStory && r.funnelStory.fixFirst) || null;
+          const ffHtml = ff
+            ? '<div class="ffirst"><b>Fix first:</b> ' + e(String(ff.plain || '')) + (ff.why ? ' — ' + p(ff.why) : '') + (ff.join ? ' ' + p(ff.join) : '') + '</div>'
+            : (t && t.firstBrokenLinkWhy ? '<div class="ffirst"><b>Fix first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + ':</b> ' + p(t.firstBrokenLinkWhy) + '</div>' : '');
+          const workHtml = fg.work.length
+            ? '<div class="fwork"><b>Under the funnel — the work itself (context, not a leak):</b> ' + fg.work.map(x => p(x.problem)).join(' · ') + '</div>' : '';
+          const unstagedHtml = fg.unstaged.length
+            ? '<div style="margin-top:8px">' + fg.unstaged.map(x => '<div class="ferow"><b>' + p(x.problem) + '</b>'
+              + (x.costs || x.area ? ' <span class="tw">— ' + [x.area ? e(x.area) : '', x.costs ? p(x.costs) : ''].filter(Boolean).join(' · ') + '</span>' : '') + '</div>').join('') + '</div>' : '';
+          const sts = {}; for (const s3 of fg.stages) sts[s3.id] = s3.status;
+          return cat('The funnel', "a customer's path to hiring them, top to bottom — where it breaks, the money falls out",
+            '<div class="fwrap"><div class="fsvg">' + funnelSvg(sts) + '</div><div class="fstages">' + stagesHtml + ffHtml + workHtml + unstagedHtml + '</div></div>');
+        })()
       // ═══ THE CALL PREP ═══
       + (() => {
           const rows = [];
@@ -2763,15 +2845,26 @@ const auditExportHtml = (records, meta) => {
       + (r.adsVerified ? '<p class="dim">Listed as a verified advertiser in Google’s Ads Transparency Center.</p>' : '');
     const ownWords = r.originalFindings.map(f => '<div class="erow">' + p(f.finding || f.what || f)
       + (f.quote ? '<div class="tw">Their words: <q>' + p(f.quote) + '</q></div>' : '') + '</div>').join('');
-    const alsoMeasured = (g.other || []).map(x => '<div class="erow">' + p(x.problem)
-      + (x.costs || x.area ? '<div class="tw">' + [x.area ? e(x.area) : '', x.costs ? 'costs him: ' + p(x.costs) : ''].filter(Boolean).join(' · ') + '</div>' : '') + '</div>').join('');
+    // "Also measured" is gone: every staged row renders at its funnel stage
+    // and unstaged rows render under the funnel — a second copy here was the
+    // exact repetition Vin flagged. The model's own groupings and the system's
+    // one-change diagnosis move HERE, as reference rather than a second story.
+    const t2 = (r.oneThing && typeof r.oneThing === 'object') ? r.oneThing : null;
+    const modelRows = (r.rows || []).length
+      ? ul(r.rows, x => '<li class="dim"><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>') : '';
+    const sysDiag = (t2 && t2.diagnosis
+      ? '<p class="dim"><b>System one-change diagnosis' + (t2.layer ? ' — ' + e(layerPlain(t2.layer)) : '') + ':</b> ' + p(t2.diagnosis) + (t2.why ? ' ' + p(t2.why) : '') + '</p>' : '')
+      + (r.bindingLayer && !(t2 && t2.layer) ? '<p class="dim">Biggest blocker: ' + e(layerPlain(r.bindingLayer)) + '</p>' : '')
+      + (t2 && t2.costliest && t2.costliest.problem
+        ? '<p class="dim"><b>Scored as costing them most:</b> ' + p(t2.costliest.problem) + (t2.costliest.costs ? ' — ' + p(t2.costliest.costs) : '') + '</p>' : '');
     const changesBlock = sayableChanges.length
       ? sayableChanges.map(c => '<div class="erow"><b>Changed since we last looked:</b> ' + p(c.say) + ' <span class="tw">(a dated fact — everything else on this sheet is how the business looks today)</span></div>').join('')
       : '';
     const refBody = ''
       + changesBlock
       + (ownWords ? '<h4>From their own pages</h4>' + ownWords : '')
-      + (alsoMeasured ? '<h4>Also measured</h4>' + alsoMeasured : '')
+      + (modelRows ? '<h4>The read, grouped by the model</h4>' + modelRows : '')
+      + (sysDiag || '')
       + (internal.length ? '<h4>Internal — never say to him</h4>' + internal.map(x => '<p class="dim">' + x + '</p>').join('') : '')
       + (couldNot ? '<h4>What we could not check</h4>' + couldNot : '')
       + (r._doNotSay ? '<h4 style="color:#b91c1c">Do not say</h4>' + r._doNotSay : '');
@@ -2788,7 +2881,7 @@ const auditExportHtml = (records, meta) => {
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.fwalk{margin:10px 0 12px;border-left:2px solid #d2d2d7;padding-left:14px}.frow{font-size:13.5px;line-height:1.6;margin-bottom:7px}.frow b{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#515154;margin-right:4px}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#86868b;font-size:11.5px}.fst{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:#a1a1a6}.fb .fst{color:#b91c1c}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#515154;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#86868b;font-size:13px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#515154}'
@@ -6177,116 +6270,93 @@ function LeadBriefing({ lead }) {
     // app had nothing equivalent — it went straight from contact details to a
     // verdict, so a reader who had never heard of the business met a conclusion
     // about a company they could not picture.
-    sr && sr.background ? React.createElement('div', null,
+    // ── THE STORY — the one narrator. Background, headline and read in one
+    // card; the walk prose is gone from here because the funnel section below
+    // renders the same facts as staged evidence — nothing said twice.
+    (sr || counted.length >= 4) ? React.createElement('div', null,
       React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The story',
-        React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'what it is, where the money leaks, what we would sell')),
-      React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65 } }, sr.background),
-      // The funnel walk — the code-assembled spine, in the money's own order.
-      // Server-built from measurements; a stage missing here was not measured.
-      (lead.funnelStory && Array.isArray(lead.funnelStory.stages) && (lead.funnelStory.stages.length || lead.funnelStory.fixFirst))
-        ? React.createElement('div', { style: { marginTop: 10, borderLeft: '2px solid var(--b)', paddingLeft: 12 } },
-            lead.funnelStory.stages.map((st, si) => React.createElement('div', { key: 'fs' + si, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 6 } },
-              React.createElement('b', { style: { fontSize: 10, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--m2)', marginRight: 5 } }, st.label + '.'),
-              st.text)),
-            lead.funnelStory.fixFirst ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
-              React.createElement('b', { style: { fontSize: 10, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--m2)', marginRight: 5 } }, 'Fix first.'),
-              String(lead.funnelStory.fixFirst.plain || '').replace(/^./, (c) => c.toUpperCase())
-                + (lead.funnelStory.fixFirst.why ? ' — ' + lead.funnelStory.fixFirst.why : '')
-                + (lead.funnelStory.fixFirst.join ? ' ' + lead.funnelStory.fixFirst.join : '')) : null)
-        : null
-    ) : null,
-
-    // ── THE VERDICT ─────────────────────────────────────────────────────────
-    counted.length >= 4 && React.createElement('div', {
-      style: { padding: '12px 15px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8 }
-    },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 5 } }, 'What is actually going on here'),
-      // The headline is the shape named in one sentence — the thing that made
-      // the hand-written example land before any evidence arrived.
-      sr && sr.headline ? React.createElement('div', {
-        style: { fontSize: 17, fontWeight: 600, color: 'var(--t)', lineHeight: 1.4, marginBottom: 8 }
-      }, sr.headline) : null,
-      // ── SYNTHESIS FIRST, TEMPLATE SECOND ────────────────────────────────
-      // growthConstraint.condition is a HARDCODED SENTENCE — every OFFER lead
-      // got "They have already earned the hard part — N reviews at X★. What is
-      // missing is any reason for a stranger to choose them…" with only the
-      // review count swapped in. That is a template, not a read, and it is why
-      // the deployed tab looked nothing like the briefing it was modelled on.
-      // situationRead is the Brain reasoning across every signal at once; the
-      // template stays only as a fallback for leads audited before it existed.
+        React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'what is going on here, in one read — every number in it is measured')),
+      sr && sr.background ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65, marginBottom: 8 } }, sr.background) : null,
+      sr && sr.headline ? React.createElement('div', { style: { fontSize: 17, fontWeight: 600, color: 'var(--t)', lineHeight: 1.4, marginBottom: 8 } }, sr.headline) : null,
       React.createElement('div', { style: { fontSize: 14, color: 'var(--t)', lineHeight: 1.65, whiteSpace: 'pre-line' } },
         (sr && sr.read) || ba.situationRead
+          || (lead.funnelStory && Array.isArray(lead.funnelStory.stages) && lead.funnelStory.stages.length
+            ? lead.funnelStory.stages.map(st => st.text).join('\n') : null)
           || (gc && gc.checked !== false && gc.condition ? String(gc.condition).replace(/\s*\u26a0[^]*$/, '') : null)
           || ba.realPain || lead.discoveryReason || 'Not enough measured yet to say what is holding this business back.'),
-      (!(sr && sr.read) && !ba.situationRead && gc && gc.why) ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } },
-        String(gc.why).replace(/\s*\u26a0[^]*$/, '')) : null,
       React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 7 } },
         problems.length === 0
           ? 'We measured ' + counted.length + ' things and found no problems.'
           : (counted.length - problems.length) + ' of ' + counted.length + ' measured signals are clean.'
             + (gc && gc.layer ? '  Biggest blocker: ' + layerPlain(gc.layer) + '.' : ''))
-    ),
+    ) : null,
 
-    // ── THE ONE THING ───────────────────────────────────────────────────────
-    // The system computed three independent diagnoses on every lead and rendered
-    // none of them. The binding layer appeared as four words in 11px grey at the
-    // bottom of the verdict box with its reason stripped by the server; the
-    // buying-path friction — the interested-to-book-to-close measurement, which
-    // is the thing Vin describes as wrong with ninety per cent of these sites —
-    // was returned, persisted and drawn nowhere; the first broken link in the
-    // revenue chain never left the server at all.
-    //
-    // This is the answer to "the audits give a bunch of issues but don't nail
-    // what is actually worth selling them". It goes ABOVE the findings, because
-    // the findings are its evidence, not a menu.
-    //
-    // Every sentence here was assembled by code from a measurement. No model
-    // wrote any of it, so nothing in this block can be a fabrication.
+    // ── THE FUNNEL — the skeleton. Every finding at its stage, exactly once;
+    // the top three leaks numbered where they sit; red only where it breaks.
     (() => {
-      const t = lead.theOneThing;
-      // Defensive on shape, not on presence. A lead persisted by an older build,
-      // or a row that came back partial, must not throw here — this block sits at
-      // the top of the briefing and an exception takes the whole audit screen
-      // down, which is a far worse failure than a missing section.
-      if (!t || typeof t !== 'object') return null;
-      const fr = Array.isArray(t.friction) ? t.friction : [];
-      if (!t.diagnosis && !t.firstBrokenLinkWhy && !fr.length && !(t.costliest && t.costliest.problem)) return null;
-      const H = (txt) => React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 5 } }, txt);
-      return React.createElement('div', {
-        style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
-      },
-        React.createElement('div', null,
-          H(t.layer ? 'The one thing \u2014 ' + layerPlain(t.layer) : 'The one thing'),
-          t.diagnosis ? React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: 'var(--t)', lineHeight: 1.45 } }, t.diagnosis) : null,
-          // WHY this layer and not the cheaper one below it. Stripped by the
-          // server for the whole life of the field, so it has never been read.
-          t.why ? React.createElement('div', { style: { fontSize: 13, color: 'var(--m2)', lineHeight: 1.6, marginTop: 6 } }, t.why) : null
-        ),
-        // What has to be fixed FIRST. The only dependency model in the system:
-        // every other finding is an independent rung with no notion that fixing
-        // one is pointless until another is fixed.
-        t.firstBrokenLinkWhy ? React.createElement('div', null,
-          H('Fix this first \u2014 ' + layerPlain(t.firstBrokenLink || '')),
-          React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } }, t.firstBrokenLinkWhy)
-        ) : null,
-        // The path from interested to booked, in sentences the owner can check
-        // on his own site in under a minute. This is the website sale, stated as
-        // measurements rather than as an opinion about his website.
-        fr.length ? React.createElement('div', null,
-          H((t.earnedButBlocked ? 'Earned, and blocked \u2014 ' : '') + (t.frictionCount || fr.length) + ' thing(s) stand between an interested customer and a booked job'),
-          React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 } },
-            fr.map((f, i) => React.createElement('li', {
-              key: 'fr' + i, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55 }
-            }, f)))
-        ) : null,
-        // The "Costing them most" sub-block is GONE from the screen: it printed
-        // leak #1's exact sentence a second time, four hundred pixels below the
-        // numbered leak card that owns the money story. Vin, reading the first
-        // live sheet: "theres info everywhere". The data still travels and the
-        // export builds its leaks section from the same rows.
-        null
-      );
+      const fg = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory);
+      const t = (lead.theOneThing && typeof lead.theOneThing === 'object') ? lead.theOneThing : null;
+      const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
+      if (!anyRows && !lead.funnelStory && !(t && (t.friction || []).length)) return null;
+      const sts = {}; for (const s3 of fg.stages) sts[s3.id] = s3.status;
+      const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
+      const lead1 = lead1Row && lead1Row[0].moneyLine;
+      const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#b9c0cc', brokenText: '#f87171', dim: '#8b93a2' };
+      const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
+      const stageBlocks = fg.stages.map((s3, si) => {
+        const broken = s3.status === 'broken';
+        const stTxt = broken ? 'BROKEN' : s3.status === 'clean' ? 'NO FAULT FOUND' : 'NOT MEASURED';
+        const rowsEls = s3.rows.map((x, ri) => {
+          const lr = fg.rankOf.get(x);
+          const ml = Number.isFinite(lr) ? trimRepeatedJobValue(x.moneyLine, lead1, lr - 1) : null;
+          return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
+            Number.isFinite(lr) ? badge(lr) : null,
+            React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
+            x.costs ? React.createElement('span', { style: { color: 'var(--m)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
+            ml ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', marginTop: 3 } }, ml) : null,
+            Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
+        });
+        const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
+          ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
+        const emptyNote = (!s3.rows.length && !legacyFriction)
+          ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', marginTop: 3 } },
+              s3.status === 'no_read'
+                ? ('Nothing measured here' + (s3.id === 'after' ? ' \u2014 what happens after someone reaches out is a question for the call, not a claim.' : '.'))
+                : 'Measured \u2014 no fault found.')
+          : null;
+        return React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12, marginBottom: 12 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--m2)' } }, s3.label),
+            React.createElement('span', { style: { fontSize: 11.5, color: 'var(--m)' } }, s3.sub),
+            React.createElement('span', { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--m)' } }, stTxt)),
+          rowsEls, legacyFriction, emptyNote);
+      });
+      const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
+      const ffEl = ff
+        ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
+            React.createElement('b', null, 'Fix first: '), String(ff.plain || '') + (ff.why ? ' \u2014 ' + ff.why : '') + (ff.join ? ' ' + ff.join : ''))
+        : (t && t.firstBrokenLinkWhy ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
+            React.createElement('b', null, 'Fix first' + (t.firstBrokenLink ? ' \u2014 ' + layerPlain(t.firstBrokenLink) : '') + ': '), t.firstBrokenLinkWhy) : null);
+      const workEl = fg.work.length ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginBottom: 8 } },
+        React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
+        fg.work.map(x => x.problem).join(' \u00b7 ')) : null;
+      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6 } },
+        fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
+          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
+          (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
+      const sysDiag = t && t.diagnosis ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', lineHeight: 1.6, marginTop: 8 } },
+        React.createElement('b', null, 'System one-change diagnosis' + (t.layer ? ' \u2014 ' + layerPlain(t.layer) : '') + ': '), t.diagnosis + (t.why ? ' ' + t.why : '')) : null;
+      return React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
+        React.createElement('div', { style: { display: 'flex', gap: 20 } },
+          React.createElement('div', { style: { flexShrink: 0 }, dangerouslySetInnerHTML: { __html: funnelSvg(sts, DARK) } }),
+          React.createElement('div', { style: { flex: 1, minWidth: 0 } }, stageBlocks, ffEl, workEl, unstagedEl, sysDiag)));
     })(),
+
+    // (The one-thing card is gone from the screen: its fix-first and friction
+    // render inside THE FUNNEL above, and its diagnosis is the funnel's dim
+    // system line — the same fact was appearing in three places.)
 
     // ── WHAT IS WORTH SELLING HIM ───────────────────────────────────────────
     // Missing entirely from the first build. It is the section that turns a
@@ -6330,9 +6400,11 @@ function LeadBriefing({ lead }) {
       // have slowed" was leak #2 with a retainer pitch under it, and the seven
       // review-metric rungs can never be said to the owner. They stay in the
       // full findings list below, marked, where a call sheet wants them.
-      const grp = groupAuditFindings(pl, lead.theOneThing);
-      const leaks = grp.leaks;
-      if (!ws && !af && !leaks.length) return null;
+      // The numbered leaks render inside THE FUNNEL, at their stages — this
+      // card is the score and the hard facts only. pl stays for the products
+      // line below.
+      void pl;
+      if (!ws && !af) return null;
       // PILLAR_LABEL / PILLAR_PRODUCT are module-scope — one copy for the
       // screen, the selling block and the export.
       const chip = (txt, tone) => React.createElement('span', {
@@ -6387,44 +6459,12 @@ function LeadBriefing({ lead }) {
           React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
             (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
         ) : null,
-        facts.length ? React.createElement('div', null, facts) : null,
-        leaks.length ? React.createElement('div', null,
-          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8 } },
-            'The money \u2014 ' + (leaks.length === 1 ? 'the biggest leak' : 'the ' + leaks.length + ' biggest leaks'),
-            React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'the system\u2019s ranking \u2014 every finding is below; the pick is yours')),
-          leaks.map((r, i) => React.createElement('div', { key: 'lk' + i, style: { display: 'flex', gap: 10, padding: '7px 0', borderTop: i ? '1px solid var(--b)' : 'none', alignItems: 'baseline' } },
-            React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--t)', minWidth: 18 } }, (i + 1) + '.'),
-            React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)', lineHeight: 1.5 } }, r.problem),
-              r.costs ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', lineHeight: 1.5, marginTop: 2 } }, r.costs) : null,
-              r.support && r.support.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.55, marginTop: 3 } }, r.support.join(' \u00b7 ')) : null,
-              // The translation: the finding said as the money it loses. Code-
-              // assembled server-side; its only figure is the trade table's own
-              // job-value sentence, so nothing here can be invented.
-              r.moneyLine ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.55, marginTop: 4 } }, trimRepeatedJobValue(r.moneyLine, leaks[0] && leaks[0].moneyLine, i)) : null,
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 3 } },
-                (PILLAR_LABEL[r.pillar] ? PILLAR_LABEL[r.pillar] : '') +
-                (PILLAR_PRODUCT[r.pillar] ? ' \u00b7 fix we sell: ' + PILLAR_PRODUCT[r.pillar] : ''))
-            )
-          ))
-        ) : null
+        facts.length ? React.createElement('div', null, facts) : null
       );
     })(),
 
-    // ── THE SMALLER LEAKS — every remaining money signal, one line, none hidden ──
-    (() => {
-      const grp = groupAuditFindings(Array.isArray(lead.problemList) ? lead.problemList : [], lead.theOneThing);
-      if (!grp.small.length) return null;
-      return React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
-          'The smaller leaks',
-          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'every other measured money signal \u2014 none hidden')),
-        grp.small.map((x, i) => React.createElement('div', { key: 'sl' + i, style: { padding: '6px 0', borderBottom: i < grp.small.length - 1 ? '1px solid var(--b)' : 'none', fontSize: 13, lineHeight: 1.5 } },
-          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-          x.costs ? React.createElement('span', { style: { color: 'var(--m)' } }, ' \u2014 ' + x.costs) : null,
-          x.pillar && PILLAR_LABEL[x.pillar] ? React.createElement('span', { style: { color: 'var(--m)', fontSize: 11.5 } }, ' (' + PILLAR_LABEL[x.pillar] + ')') : null))
-      );
-    })(),
+    // (The smaller-leaks section is gone: every remaining money row renders at
+    // its funnel stage, and rows with no stage render under the funnel.)
 
     // ── THE CONVERSATION ────────────────────────────────────────────────────
     // Mirrors the export sheet, and per Vin 2026-08-24 it INFORMS rather than
