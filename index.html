@@ -1068,7 +1068,12 @@ const sbSaveLead = async (lead) => {
 const sbLoadLeads = async () => {
   const out = [];
   let after = null;
-  let size = 40;
+  // 20, down from 40: live 2026-08-25 a 40-row page hit the database's
+  // statement timeout (rows have grown a whole audit heavier since the size
+  // was chosen), and every boot burned a failed statement before the halving
+  // ladder saved it. The ladder stays — it is what turns a slow database into
+  // a slow load instead of a lost pipeline.
+  let size = 20;
   for (let guard = 0; guard < 400; guard++) {
     const q = '/leads?order=id.asc&limit=' + size + (after === null ? '' : '&id=gt.' + encodeURIComponent(after));
     const rows = await sbFetch(q, { headers: { 'Prefer': 'return=representation' } });
@@ -3222,11 +3227,19 @@ const downloadAudits = (leads, title) => {
 // different. "Include re-runs" is a deliberate choice, not the default.
 const batchCandidates = (allLeads, o) => {
   const opts = o || {};
-  const limit = Math.max(1, Number(opts.limit) || BATCH_DEFAULT_SIZE);
+  // A non-empty ticked set REPLACES the top-N-by-score pick — the operator
+  // chose the leads, so the pick IS the limit. Live 2026-08-25: "it forces me
+  // to audit the leads like i cant select which leads to run the 50 audits
+  // on it pre chooses." Eligibility still applies: a running, not-a-fit or
+  // no-website lead cannot be bought into a batch by ticking it, and an
+  // already-audited tick still needs the re-audit box.
+  const picked = (opts.pickedIds instanceof Set && opts.pickedIds.size) ? opts.pickedIds : null;
+  const limit = picked ? picked.size : Math.max(1, Number(opts.limit) || BATCH_DEFAULT_SIZE);
   const includeDone = !!opts.includeResearched;
   const inflight = opts.inflight || null;
   return (allLeads || [])
     .filter((l) => l && l.id)
+    .filter((l) => !picked || picked.has(l.id))
     .filter((l) => !l.notAFit)
     // A lead with no website has nothing to audit — leadChannel 'call' routes it
     // to the phone, and spending a research cycle on it returns an empty read.
@@ -7004,6 +7017,9 @@ function ResearchView({
   const [batchSize, setBatchSize] = useState(BATCH_DEFAULT_SIZE);
   const [batchEmail, setBatchEmail] = useState(false);
   const [batchIncludeDone, setBatchIncludeDone] = useState(false);
+  // The operator's hand-picked batch: lead ids ticked on the board. Empty set
+  // means the old behaviour (top scores first, up to the number box).
+  const [batchPick, setBatchPick] = useState(() => new Set());
   const [batchRunning, setBatchRunning] = useState(false);
   // ══ "I HAD TO CHECK THE LOGS TO KNOW WHERE WE ARE" ═════════════════════
   // This held ONE name while the runner runs three leads at once, so "now:"
@@ -7033,8 +7049,13 @@ function ResearchView({
   const batchStopRef = React.useRef(false);
   const startBatch = async () => {
     if (batchRunning) { batchStopRef.current = true; return; }
-    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone, inflight: getInflightJobs() });
-    if (!pool.length) { setResearchError('Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.'); return; }
+    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone, inflight: getInflightJobs(), pickedIds: batchPick });
+    if (!pool.length) {
+      setResearchError(batchPick.size
+        ? 'None of your ticked leads can run: they are already running, already audited (tick re-audit to include them), or have no website to read.'
+        : 'Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.');
+      return;
+    }
     batchStopRef.current = false;
     setBatchResults([]);
     // Seeded here as well as by the runner's roster event, so the panel is
@@ -7044,6 +7065,10 @@ function ResearchView({
                  queued: pool.map(l => (l && (l.name || l.company || l.id)) || '') });
     setBatchStartedAt(Date.now());
     setBatchRunning(true);
+    // The ticks are consumed by the run they started; a stale pick silently
+    // steering NEXT week's batch is the class of quiet scope bug the search
+    // box already had once.
+    setBatchPick(new Set());
     setResearchError('');
     try {
       const out = await runBatchAudit({
@@ -7778,17 +7803,25 @@ function ResearchView({
           // find-a-lead box, not a scope control; the scope is the pipeline.
           const _inf = getInflightJobs();
           const _batchPool = getLeads();
-          const ready = batchCandidates(_batchPool, { limit: batchSize, includeResearched: batchIncludeDone, inflight: _inf }).length;
+          const _picked = batchPick.size;
+          const ready = batchCandidates(_batchPool, { limit: batchSize, includeResearched: batchIncludeDone, inflight: _inf, pickedIds: batchPick }).length;
           const pool = batchCandidates(_batchPool, { limit: 9999, includeResearched: batchIncludeDone, inflight: _inf }).length;
           return React.createElement(React.Fragment, null,
-            React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center', marginBottom: 5 } },
-              React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'Audit up to'),
-              React.createElement('input', {
-                type: 'number', min: 1, max: 200, value: batchSize, disabled: batchRunning,
-                onChange: e => setBatchSize(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1))),
-                style: { width: 54, fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--b)', background: 'var(--s2)', color: 'var(--t)' },
-              }),
-              React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'leads')),
+            _picked
+              ? React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center', marginBottom: 5 } },
+                  React.createElement('span', { style: { fontSize: 12, color: 'var(--t)', fontWeight: 600 } }, 'Your ' + _picked + ' ticked lead' + (_picked === 1 ? '' : 's') + ' decide this batch'),
+                  React.createElement('button', {
+                    onClick: () => setBatchPick(new Set()), disabled: batchRunning,
+                    style: { background: 'transparent', border: '1px solid var(--b)', borderRadius: 6, color: 'var(--m2)', fontSize: 11, padding: '2px 8px', cursor: 'pointer' },
+                  }, 'Clear ticks'))
+              : React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center', marginBottom: 5 } },
+                  React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'Audit up to'),
+                  React.createElement('input', {
+                    type: 'number', min: 1, max: 200, value: batchSize, disabled: batchRunning,
+                    onChange: e => setBatchSize(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1))),
+                    style: { width: 54, fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--b)', background: 'var(--s2)', color: 'var(--t)' },
+                  }),
+                  React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'leads \u2014 or tick leads on the board to choose them yourself')),
             // The pool BEFORE the limit, because "50 ready" against a pipeline of
             // 4 and against a pipeline of 400 are different situations and the
             // old line could not tell them apart.
@@ -7808,6 +7841,10 @@ function ResearchView({
                     + (batchAt.queued || []).length + ' queued, '
                     + (batchAt.finished || 0) + ' done. '
                     + BATCH_CONCURRENCY + ' run at a time.')
+                : _picked
+                ? (ready + ' of your ' + _picked + ' ticked lead' + (_picked === 1 ? '' : 's') + ' will run'
+                    + (ready < _picked ? ' \u2014 the rest are already running, already audited (tick re-audit to include them), or have no site to read' : '')
+                    + (batchEmail ? ', each with an email written after it.' : '. Audit only \u2014 no emails.'))
                 : pool === 0
                 ? 'Nothing to audit. Every lead with a website has been done \u2014 tick re-audit below to run them again.'
                 : (ready + ' of ' + pool + ' waiting will run' + (batchEmail ? ', each with an email written after it.' : '. Audit only \u2014 no emails.'))),
@@ -7827,7 +7864,7 @@ function ResearchView({
               onClick: startBatch,
             }, batchRunning
                 ? ('Stop \u2014 ' + batchAt.finished + ' of ' + batchAt.total + ' done')
-                : (ready === 0 ? 'Nothing to audit' : ('Audit ' + ready + ' lead' + (ready === 1 ? '' : 's')))));
+                : (ready === 0 ? 'Nothing to audit' : ('Audit ' + ready + (_picked ? ' ticked' : '') + ' lead' + (ready === 1 ? '' : 's')))));
         })(),
         // ── GETTING FIFTY AUDITS OUT ──────────────────────────────────────
         // Fifty audits on screen and no way to hand them to anybody. Exports
@@ -8135,7 +8172,7 @@ function ResearchView({
       if (days === 1) return 'yesterday';
       return days + 'd ago';
     };
-    const GRID = '16px minmax(0, 1.5fr) 44px minmax(0, 2.4fr) 118px 84px 24px';
+    const GRID = '20px 16px minmax(0, 1.5fr) 44px minmax(0, 2.4fr) 118px 84px 24px';
     const statusLine = (r) => {
       if (r.status === 'running') {
         const d = (batchAt.detail || {})[r.name];
@@ -8160,6 +8197,7 @@ function ResearchView({
         tabEl('not_audited', 'Not audited', bd.counts.notAudited, 'var(--m)')),
       React.createElement('div', { style: { display: 'grid', gridTemplateColumns: GRID, gap: '0 14px', padding: '9px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: 'var(--m)', borderBottom: '1px solid var(--b)', flexShrink: 0 } },
         React.createElement('span', null, ''),
+        React.createElement('span', null, ''),
         React.createElement('span', null, 'LEAD'),
         React.createElement('span', null, 'SCORE'),
         React.createElement('span', null, 'STATUS \u00b7 LEAK 1'),
@@ -8176,6 +8214,16 @@ function ResearchView({
               padding: '11px 10px', borderBottom: '1px solid var(--b)', cursor: 'pointer',
               background: r.status === 'audited' ? 'rgba(255,255,255,.015)' : 'transparent' }
           },
+            // The operator's pick for the next batch. Click must not open the
+            // audit, so both handlers stop the row's own click.
+            React.createElement('input', {
+              type: 'checkbox',
+              checked: batchPick.has(r.id),
+              onClick: (e) => e.stopPropagation(),
+              onChange: (e) => { e.stopPropagation(); setBatchPick(p => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; }); },
+              title: 'Tick to hand-pick this lead for the next batch',
+              style: { justifySelf: 'center', cursor: 'pointer', accentColor: 'var(--p)' },
+            }),
             React.createElement('span', { style: { width: 8, height: 8, borderRadius: 99, background: DOT[r.status] || 'var(--m)', justifySelf: 'center' } }),
             React.createElement('span', { style: { minWidth: 0 } },
               React.createElement('span', { style: { display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--t)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.name),
