@@ -645,6 +645,22 @@ const mergeStat = runMergeCheck();
           fails.push('a staged finding did not land at its declared funnel stage, or a stage with findings does not read broken');
         }
         if (st.after.status !== 'no_read') fails.push('an unmeasured stage with no findings does not read NOT MEASURED — silence hardened into a verdict');
+        // A stage the walk measured as WORKING (trusted top-three) that still
+        // carries leak rows is 'mixed', never 'broken' — "BROKEN" printed
+        // directly above "That part works." on a live sheet. Without the
+        // strength flag the same rows still read broken.
+        const gmx = mod.groupStage([
+          { problem: 'weaker rival above', funnelStage: 'found', moneyRank: 3, harm: 92, leakRank: 1, pillar: 'INVISIBLE' },
+        ], { measured: { found: true, door: true, after: false }, strong: { found: true } });
+        const mxFound = gmx.stages.find(x => x.id === 'found');
+        if (!mxFound || mxFound.status !== 'mixed') fails.push('a stage the walk measured as WORKING still reads BROKEN beside "That part works." — the strength flag never reaches the chip');
+        const gmx2 = mod.groupStage([
+          { problem: 'weaker rival above', funnelStage: 'found', moneyRank: 3, harm: 92, leakRank: 1, pillar: 'INVISIBLE' },
+        ], { measured: { found: true, door: true, after: false } });
+        const mxFound2 = gmx2.stages.find(x => x.id === 'found');
+        if (!mxFound2 || mxFound2.status !== 'broken') fails.push('a stage with leaks and NO measured strength stopped reading BROKEN — the mixed state fired on nothing');
+        const mxSvg = mod.fsvg({ found: 'mixed', door: 'clean', after: 'no_read' }, null);
+        if (mxSvg.indexOf('circle') < 0) fails.push('a mixed stage draws no leak drips — the leaks are real even where the stage works');
         if (!st.door.rows.some(r => r.problem === 'legacy pillar row')) fails.push('a legacy row with only a pillar did not fall back to a stage — old audits dump everything in the reference tail');
         if (gfs.work.some(r => r.internalOnly)) fails.push('an internal review metric reached the funnel context strip — the reference owns the internal list');
         if (!gfs.work.some(r => r.problem === 'workmanship repeats')) fails.push('the workmanship context row is missing from under the funnel');
@@ -868,7 +884,11 @@ const mergeStat = runMergeCheck();
     if (briefing) {
       const LEAD = {
         id: 'x1', name: 'Smith & Sons', website: 'https://smith.example',
-        ownerName: 'Jason Hicks', email: 'info@x.example', phone: '2103613587',
+        // verifiedCEO + a NAMELESS decisionMaker is the live no-resolver-hit
+        // shape (Irwin's): the old render read lead.ownerName — a field that
+        // exists nowhere — and printed an em-dash beside a resolved name.
+        verifiedCEO: 'Jason Hicks', decisionMaker: { name: null, title: null },
+        ownerNameEvidence: 'OWNER_EV_MARKER', email: 'info@x.example', phone: '2103613587',
         websiteScore: { checked: true, score: 8, basedOn: '5 of 6', graded: [] },
         funnelStory: { checked: true, stages: [{ id: 'money_out', label: 'Money out', text: 'SCREEN_WALK_MARKER.' }], measured: { found: true, door: false, after: false }, fixFirst: null },
         auditFacts: { ads: 'no', booking: 'online_booking', formFields: 4, campaignPages: 10, mobile: 'fine', https: true },
@@ -900,6 +920,8 @@ const mergeStat = runMergeCheck();
         for (const gone of ['The money', 'The one thing', 'The smaller leaks']) {
           if (joined.indexOf(gone) >= 0) fails.push('"' + gone + '" is back on the audit screen — its content lives at the funnel stages now, and a second copy is the exact repetition Vin flagged');
         }
+        if (joined.indexOf('Jason Hicks') < 0) fails.push('the resolved contact name does not render under Who to talk to — the screen is back on the phantom lead.ownerName field, which exists nowhere and printed an em-dash beside shane.irwin@ on a live sheet');
+        if (joined.indexOf('OWNER_EV_MARKER') < 0) fails.push('the code-checked owner-name evidence never reaches the screen');
         const askCount = texts.filter(t => t === 'ASKQ_MARKER').length;
         if (askCount !== 1) fails.push('askOnTheCall renders ' + askCount + ' time(s) on the audit screen, not once — it belongs in The conversation and nowhere else, or the two copies drift');
         // The walk's measured sentence renders at its stage ON THE SCREEN —
@@ -1131,6 +1153,35 @@ const PENDING = [];
       }
       if (bare.indexOf(N('window._sbSyncEnabled = cloudLeads !', '== null;')) < 0) {
         fails.push('writes stay enabled while the cloud is unreadable, so every save this session is a blind upsert over rows nobody read');
+      }
+      // ══ PAGES, NOT ONE STATEMENT — executed both ways ════════════════════
+      // Live 2026-08-25: one 500-row read died on Postgres 57014 "statement
+      // timeout" (each lead row now carries the whole audit), the screen read
+      // as "the leads disappeared", and only the null-guard above kept the
+      // session from seeding over the cloud. The read is keyset-paginated now;
+      // these fixtures prove (a) pages are walked and ASSEMBLED, (b) the walk
+      // is keyset (id=gt.<last>), and (c) a page that fails MID-WALK returns
+      // null for the whole load — a partial list served as the truth would
+      // mark every unread cloud lead a stale local relic and drop it.
+      const _rowsA = Array.from({ length: 40 }, (_, i) => ({ id: 'a' + String(i).padStart(2, '0') }));
+      const _rowsB = [{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }];
+      const _paths = [];
+      const _pageFetch = async (path) => {
+        _paths.push(String(path));
+        if (String(path).indexOf('id=gt.') < 0) return _rowsA;
+        if (String(path).indexOf('id=gt.a39') >= 0) return _rowsB;
+        return [];
+      };
+      const _paged = await (new Function('sbFetch', 'rowToLead', sbSrc + '\nreturn sbLoadLeads;')(_pageFetch, (r) => ({ id: r.id })))();
+      if (!Array.isArray(_paged) || _paged.length !== 43) {
+        fails.push('the leads read is not paginated (or pages are not assembled): a 43-row cloud came back as ' + (Array.isArray(_paged) ? _paged.length : _paged) + ' — one full-table statement is what died with 57014 on launch night');
+      }
+      if (!_paths.some(pth => pth.indexOf('id=gt.a39') >= 0)) {
+        fails.push('the second page is not requested by keyset (id=gt.<last>) — offset pages re-sort under concurrent writes and rows shift between pages');
+      }
+      const _midFail = await (new Function('sbFetch', 'rowToLead', sbSrc + '\nreturn sbLoadLeads;')(async (path) => (String(path).indexOf('id=gt.') < 0 ? _rowsA : null), (r) => ({ id: r.id })))();
+      if (_midFail !== null) {
+        fails.push('a page that fails MID-WALK returns a PARTIAL list as the truth — every cloud lead on the unread pages would be dropped as a stale local relic, which is worse than no read at all');
       }
     })());
   }

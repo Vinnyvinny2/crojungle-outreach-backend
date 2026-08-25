@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260822;
+const CONTRACT_VERSION = 20260825;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -914,7 +914,11 @@ const NET_SERVICE = [
   [/firecrawl\.dev/i, 'firecrawl'],
   [/anthropic\.com/i, 'anthropic'],
   [/dataforseo\.com/i, 'dataforseo'],
-  [/pagespeedonline\.googleapis\.com/i, 'pagespeed'],
+  // The code calls www.googleapis.com/pagespeedonline/... — the service name
+  // is in the PATH, not the host — so a host-shaped regex here never matched
+  // anything this process emits and every PageSpeed call billed its seconds to
+  // "google (other)". Match the service name wherever it appears.
+  [/pagespeedonline/i, 'pagespeed'],
   [/places\.googleapis\.com/i, 'google places'],
   [/googleapis\.com/i, 'google (other)'],
   [/apify\.com/i, 'apify'],
@@ -7083,7 +7087,22 @@ const selfSourceNoComments = () => {
   }
   return _selfSourceNoCommentsCache;
 };
-const releaseSelfSource = () => { _selfSourceCache = null; _selfSourceNoCommentsCache = null; };
+let _selfSourceNoCommentsLFCache = null;
+// The LF-normalised comment-stripped view. Eighteen checks each built this
+// exact string fresh — a ~60k-element split plus a ~2.9MB string per check —
+// and that churn alone held the boot heap at 196MB of the 200MB assertion and
+// stretched the drain phase the boot sentinel measures (the 57s FIRECRAWL
+// GATE CHECK was mostly GC at the high-water mark). One memoised copy,
+// released with the others. It is a SEPARATE memo from selfSourceNoComments
+// on purpose: that one splits on '\n' and PRESERVES \r, and a needle at the
+// bootHold test pins that CRLF behaviour — normalising it would break needles.
+const selfSourceNoCommentsLF = () => {
+  if (_selfSourceNoCommentsLFCache === null) {
+    _selfSourceNoCommentsLFCache = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+  }
+  return _selfSourceNoCommentsLFCache;
+};
+const releaseSelfSource = () => { _selfSourceCache = null; _selfSourceNoCommentsCache = null; _selfSourceNoCommentsLFCache = null; };
 const AUDIT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const _auditCache = new Map();   // hash -> { at, company, payload }
 
@@ -8014,6 +8033,28 @@ const jobPostingsFromHtml = (html, now = Date.now()) => {
     .sort((a, b) => Date.parse(b.datePosted) - Date.parse(a.datePosted))
     .filter(j => { const k = j.title.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
 };
+// ══ ONE LIST OF WHAT A SCHEDULER IS, ONE RULE FOR WHAT A REAL FORM IS ══════
+// There were two hand-kept scheduler lists — measureBookingPath's and
+// checkBuiltWith's — and they disagreed. Live (Irwin's Septic): the critique's
+// "Booking tool: YES" came from the plain-fetch list, whose bare `acuity` and
+// unanchored `cal.com` match ordinary prose and "medical.com", while the
+// cascade's own answer was phone_only — and the checker withdrew a composed
+// email over a contradiction between our own two lists. One list now, with
+// `cal.com` requiring a non-letter in front so "medical.com" cannot trip it.
+const SCHEDULER_SIGNATURES = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook|savvycal|(?:^|[^a-z])cal\.com|hubspot\.com\/meetings|chilipiper|appointlet|simplybook|squareup\.com\/appointments|book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
+// A REAL form asks for a way to reach a person back. A site-search box is
+// <form><input type="text"> too, and reading one as "a route in" would
+// manufacture a capture path on a phone-only site — the same false-claim class
+// pointed the other way. So: an email or tel input, a textarea, or at least
+// two contact-named fields.
+const htmlHasRealForm = (h) => {
+  const s = String(h || '');
+  if (/<textarea\b/i.test(s)) return true;
+  if (!/<form\b/i.test(s)) return false;
+  if (/<input\b[^>]*type=["'](email|tel)["']/i.test(s)) return true;
+  const named = (s.match(/<(?:input|select)\b[^>]*(?:name|placeholder|id|aria-label)=["'][^"']*(name|e-?mail|phone|message|address|zip)[^"']*["']/gi) || []).length;
+  return named >= 2;
+};
 const harvestInteriorMarkup = (url, html, companyName) => {
   const h = String(html || '');
   if (h.length < 500) return false;
@@ -8025,7 +8066,14 @@ const harvestInteriorMarkup = (url, html, companyName) => {
   try { rememberHtmlLinks(h, url, null); } catch (e) { void e; }
   // Advertising markers. Positives only: a tag on ANY page proves the account
   // exists. An absence here proves nothing and is never recorded as one.
-  const prev = _INTERIOR_ADS.get(host) || { googleAds: false, metaPixel: false, tagManager: false, adsConversion: false, callTracking: false, pages: 0 };
+  const prev = _INTERIOR_ADS.get(host) || { googleAds: false, metaPixel: false, tagManager: false, adsConversion: false, callTracking: false, forms: false, formPage: null, scheduler: false, schedulerPage: null, pages: 0 };
+  // The booking route, same rule as the ad markers: a form or a scheduler in
+  // the SOURCE of any page is positive evidence. Firecrawl markdown deletes
+  // <form> and <iframe>, so this is the only reader that can see a contact
+  // form that lives on an interior page — the Irwin's shape, where the
+  // cascade fell through to "phone_only" while the contact page held a form.
+  const _formHere = htmlHasRealForm(h);
+  const _schedHere = SCHEDULER_SIGNATURES.test(h);
   const next = {
     googleAds: prev.googleAds || AD_TAG_SIGNATURES.hasGoogleAdsTag.test(h),
     metaPixel: prev.metaPixel || AD_TAG_SIGNATURES.hasMetaPixel.test(h),
@@ -8034,6 +8082,10 @@ const harvestInteriorMarkup = (url, html, companyName) => {
     // services page proves it exists exactly as well as one on the homepage.
     adsConversion: prev.adsConversion || AD_TAG_SIGNATURES.hasAdsConversion.test(h),
     callTracking: prev.callTracking || AD_TAG_SIGNATURES.hasCallTracking.test(h),
+    forms: prev.forms || _formHere,
+    formPage: prev.formPage || (_formHere ? String(url).slice(0, 200) : null),
+    scheduler: prev.scheduler || _schedHere,
+    schedulerPage: prev.schedulerPage || (_schedHere ? String(url).slice(0, 200) : null),
     pages: prev.pages + 1,
   };
   _INTERIOR_ADS.set(host, next);
@@ -9906,6 +9958,17 @@ const _getLeadershipLen = (companyName) => _leadershipTextLen.get(String(company
 // the corroboration text — which INCLUDES the business name, because a business
 // named after its owner corroborates that owner all by itself and Places gave
 // us that name, not the model.
+// ONE rule for "the business carries this person's surname" — the resolver's
+// eponymous-authority block and the brain-added-name evidence both read it,
+// because a second hand-written copy of this exact test is how the resolver
+// promoted a no-title candidate while the same evidence on a brain-read name
+// went unused ("Who to talk to" printed an em-dash beside shane.irwin@... on a
+// business called Irwin's).
+const surnameInCompanyName = (name, companyName) => {
+  const _surname = String(name || '').trim().split(/\s+/).pop().toLowerCase().replace(/[^a-z]/g, '');
+  if (_surname.length < 3) return false;
+  return new RegExp(`\\b${_surname}\\b`).test(String(companyName || '').toLowerCase());
+};
 const nameCorroborated = (name, companyName, corpus) => {
   const flat = (String(companyName || '') + ' ' + String(corpus || '')).toLowerCase().replace(/\s+/g, ' ');
   const np = String(name || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -11349,6 +11412,11 @@ const phraseAround = (t, hit) => {
   if (!leadCut && from > 0 && !/\s/.test(t[from - 1] || '')) span = span.replace(/^\S*\s+/, '');
   if (!tailCut && to < t.length && !/\s/.test(t[to] || '')) span = span.replace(/\s+\S*$/, '');
   span = span.replace(/\s+/g, ' ').replace(/^[\s,;:.\u2014-]+|[\s,;:\u2014-]+$/g, '').trim();
+  // The corpus is markdown, so a span that starts at a heading or list line
+  // starts with its decoration - a live sheet quoted their copy as
+  // '### Turn to the Pros...'. The hashes are OUR notation, not their words;
+  // one strip here covers every quoted-span consumer.
+  span = span.replace(/^(?:#{1,6}\s+|>\s+|[*\u2022]\s+|`+\s*)+/, '').trim();
   // Their own quotation marks, if the trim orphaned one half of a pair, must
   // not survive inside OUR quotation marks. Curly SINGLE quotes are left alone:
   // \u2019 is also the apostrophe, and "isn\u2019t" losing it reads worse than any
@@ -12092,14 +12160,23 @@ const reframeOf = (rung, m) => {
 // when nothing about the destination was actually measured — an unmeasured route
 // must never read as a broken one.
 const paidLeakGapFrom = (m = {}) => {
-  if (m.bookingMeasured === true && m.booking === 'phone_only') {
+  if (m.bookingMeasured === true && m.booking === 'phone_only' && m.captureSeen !== true) {
     // "the only published way to reach them" read as jargon to the owner of
     // this system. Same bound (we describe the routes their site SHOWS),
-    // plainer words.
+    // plainer words. captureSeen gates the word "only": when ANY capture
+    // evidence exists — even the model's unmeasured read — asserting "the
+    // only way in is a phone call" is the exact claim the fact-checker
+    // withdrew a live email over. Suppression on model evidence is the safe
+    // direction; a claim on model evidence never is.
     return 'the only way in their site offers is a phone call during office hours';
   }
+  if (m.bookingMeasured === true && m.booking === 'phone_only' && m.captureSeen === true) {
+    // A capture path exists somewhere, so "only way in" is out — but the
+    // capture read may be the model's, so no form is asserted either.
+    return 'nothing on their site books a time, and the direct route in is a phone call during office hours';
+  }
   if (m.bookingMeasured === true && m.booking === 'form') {
-    return 'the only thing a click can do there is fill in a form and wait';
+    return 'nothing on their site books a time, so a paid click ends in a form and a wait';
   }
   if (m.formFieldCountIsSingleForm === true && Number(m.formFieldCount) >= 7) {
     return `the form it lands on asks for ${Number(m.formFieldCount)} pieces of information first`;
@@ -13001,7 +13078,9 @@ const HARM_LADDER = [
   reframe: 'people comparing three options go with whichever one lets them start',
     // If their sitemap lists a booking page we never opened, we cannot say the
     // phone is the only route — we did not look at the page built to be the route.
-    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true && m.open24 !== true,
+    // captureSeen: a form ANYWHERE (even one only the model saw) means an
+    // after-hours visitor CAN take a first step, so this rung must stay silent.
+    test: (m) => m.booking === 'phone_only' && m.bookingMeasured === true && m.unreadBooking !== true && m.open24 !== true && m.captureSeen !== true,
     // ══ FOUR AUDITS, THE SAME TWELVE WORDS ═══════════════════════════════
     // Appeared in 4 of 20 audits with identical wording. What "closed" means
     // depends entirely on the trade, and urgency is already measured: for an
@@ -20281,10 +20360,30 @@ const NEVER_AMBIENT = new Set(['hiring_marketing_now']);
 // the ONLY figure it can ever carry is the trade table's own job-value sentence
 // (already licensed by AUDIT MONEY CHECK), and a trade the table does not know
 // gets the figure-free version rather than an invented number.
+// ── ONE ROI PREDICATE ───────────────────────────────────────────────────────
+// The walk, the facts strip and (now) the money line all answer "does anything
+// count what a click becomes" — and the live sheet carried the walk saying
+// "The pages we read carry tracking that can tie a paid click to a job"
+// directly above a money line saying "the money goes out blind" on a lead
+// whose conversion tracking was MEASURED TRUE. One predicate, three readers.
+const roiStatusOf = (m = {}) => (m.adsConversion === true || m.callTracking === true) ? 'counted'
+  : m.tagManager === true ? 'hidden'
+  : (m.adsConversion === false && m.callTracking === false) ? 'blind'
+  : null;
 const MONEY_LINE_BY_PILLAR = {
-  BURNING: (jv) => jv
-    ? `${jv}. They pay for every click, and nothing tells them which clicks ever turned into a job \u2014 the money goes out blind.`
-    : 'They pay for every click, and nothing tells them which clicks ever turned into a customer \u2014 the money goes out blind.',
+  // BURNING is the one pillar whose sentence depends on a measurement: "the
+  // money goes out blind" is only true in the measured-blind state. Counted,
+  // hidden and unmeasured each get the sentence their evidence supports.
+  BURNING: (jv, roi) => {
+    const tail = roi === 'blind'
+      ? 'They pay for every click, and nothing tells them which clicks ever turned into a job \u2014 the money goes out blind.'
+      : roi === 'counted'
+        ? 'They pay for every click, and the tracking shows clicks arriving \u2014 the leak is what those clicks land on, not the counting.'
+        : roi === 'hidden'
+          ? 'They pay for every click, and whether anything counts what a click becomes sits inside their tag container, where we cannot see it.'
+          : 'Money is leaving on every click \u2014 this is the one leak that costs cash even in a slow week.';
+    return jv ? `${jv}. ${tail}` : tail.replace('turned into a job', 'turned into a customer');
+  },
   UNCAUGHT: (jv) => jv
     ? `${jv}. Every person who tried to reach them and got no answer took one of those jobs somewhere else.`
     : 'Every person who tried to reach them and got no answer took their business somewhere else.',
@@ -20304,6 +20403,17 @@ const MONEY_LINE_BY_PILLAR = {
 // finding about miscoded expenses. The override states the loss the finding
 // actually describes; everything else keeps the pillar line.
 const RUNG_MONEY_LINE = {
+  // ads_untracked can only fire in the measured-blind state (its test demands
+  // it), so the blind sentence is true by construction for it.
+  ads_untracked: (jv) => jv
+    ? `${jv}. They pay for every click, and nothing tells them which clicks ever turned into a job \u2014 the money goes out blind.`
+    : 'They pay for every click, and nothing tells them which clicks ever turned into a customer \u2014 the money goes out blind.',
+  // hiring_marketing_now involves no clicks at all — "They pay for every
+  // click" under a job-posting finding is the same template/finding mismatch
+  // the Gurian entry above records for ROTTING.
+  hiring_marketing_now: (jv) => jv
+    ? `${jv}. They are about to pay a full salary at this \u2014 the job posting is their own statement of what it is already costing them.`
+    : 'They are about to pay a full salary at this \u2014 the job posting is their own statement of what it is already costing them.',
   review_pain_pattern: (jv) => jv
     ? `${jv}. For every person who said this in public, more hit the same wall, said nothing, and went elsewhere \u2014 each one was one of those jobs.`
     : 'For every person who said this in public, more hit the same wall, said nothing, and went elsewhere.',
@@ -20311,7 +20421,7 @@ const RUNG_MONEY_LINE = {
     ? `${jv}. A client already won has no reason to come back on a schedule, so one of those jobs has to be sold again from zero every time.`
     : 'A client already won has no reason to come back on a schedule, so the same work has to be sold again from zero every time.',
 };
-const moneyLineFor = (id, jobValue, pillarOverride) => {
+const moneyLineFor = (id, jobValue, pillarOverride, roi) => {
   const home = pillarForRung(id);
   const pillar = pillarOverride || home;
   // The rung's own line speaks only from its home pillar. review_pain_pattern's
@@ -20321,7 +20431,7 @@ const moneyLineFor = (id, jobValue, pillarOverride) => {
   const build = (pillar === home ? RUNG_MONEY_LINE[id] : null) || (pillar && MONEY_LINE_BY_PILLAR[pillar]);
   if (!build) return null;
   const jv = String(jobValue || '').trim();
-  const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null);
+  const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null, roi);
   return line ? fixAcronymCase(line) : null;
 };
 
@@ -20408,7 +20518,7 @@ const buildProblemList = (harms, opts = {}) => {
       // to the owner. Internal rows stay in this list for the audit; they can
       // never be one of the three leaks the call is built on.
       internalOnly: !!INTERNAL_ONLY_RUNGS[h.id],
-      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue, _pillarOf(h.id)),
+      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue, _pillarOf(h.id), (opts.money || {}).roi),
     };
   });
   // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
@@ -21582,13 +21692,21 @@ const stripRecencyConclusions = (text) => {
 const _RC_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, twenty: 20, thirty: 30, forty: 40, fifty: 50 };
 const _RC_NUM_RE = new RegExp('(?<![\\d,])(\\d{1,3}|' + Object.keys(_RC_WORDS).join('|') + ')\\s+(?:of\\s+(?:the\\s+|your\\s+|their\\s+)?(\\d{1,4}|' + Object.keys(_RC_WORDS).join('|') + ')\\s+)?(?:recent\\s+)?(?:Google\\s+)?reviews?' + '\\b', 'gi');
 const _rcNum = (s) => { const n = String(s || '').toLowerCase(); return /^\d+$/.test(n) ? Number(n) : (_RC_WORDS[n] || null); };
-const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal, negativeCount) => {
+// knownCounts: review counts we MEASURED for OTHER businesses — the DFS pack
+// rows' own votes_count for the competitors in the ranked search. Live: the
+// stripper ate "#1 competitor's 101 reviews" on the Irwin's run, and 101 was
+// Caliber's measured count from the pack row — a gate that only knew the
+// prospect's numbers judged a competitor's number by them. Passed as a
+// separate argument, never through the corpus: the corpus is STRINGS ONLY on
+// purpose, because a count in it would license "$101" in a money sentence.
+const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal, negativeCount, knownCounts) => {
   const src = String(text || '');
   const read = Number(reviewsRead);
   if (!src || !Number.isFinite(read) || read <= 0) return { text: src, cut: [] };
   const prof = Number.isFinite(Number(profileTotal)) ? Number(profileTotal) : null;
   const neg = Number.isFinite(Number(negativeCount)) ? Number(negativeCount) : null;
-  const okN = (n) => n !== null && (n <= read || (prof !== null && Math.abs(n - prof) <= 2));
+  const known = (Array.isArray(knownCounts) ? knownCounts : []).map(Number).filter(Number.isFinite);
+  const okN = (n) => n !== null && (n <= read || (prof !== null && Math.abs(n - prof) <= 2) || known.some(k => Math.abs(n - k) <= 2));
   const sentences = src.split(/(?<=[.!?])\s+/);
   const keep = [], cut = [];
   for (const sn of sentences) {
@@ -21610,30 +21728,43 @@ const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal, negativeCo
       const n = _rcNum(m[1]);
       const of = m[2] !== undefined ? _rcNum(m[2]) : null;
       if (!okN(n)) { bad = true; break; }
-      if (m[2] !== undefined && (of === null || !(of === read || (prof !== null && Math.abs(of - prof) <= 2)))) { bad = true; break; }
+      if (m[2] !== undefined && (of === null || !(of === read || (prof !== null && Math.abs(of - prof) <= 2) || known.some(k => Math.abs(of - k) <= 2)))) { bad = true; break; }
       if (of !== null && n !== null && n > of) { bad = true; break; }
     }
     if (bad) cut.push(sn.trim()); else keep.push(sn);
   }
   return { text: keep.join(' ').trim(), cut };
 };
-const stripImpossibleReviewCountsDeep = (node, out, depth, read, prof, neg) => {
+const stripImpossibleReviewCountsDeep = (node, out, depth, read, prof, neg, known) => {
   const d = Number(depth) || 0;
   if (d > 6 || node == null) return node;
   if (typeof node === 'string') {
-    const r = stripImpossibleReviewCounts(node, read, prof, neg);
+    const r = stripImpossibleReviewCounts(node, read, prof, neg, known);
     if (r.cut.length) { out.cut.push(...r.cut); return r.text; }
     return node;
   }
-  if (Array.isArray(node)) return node.map(x => stripImpossibleReviewCountsDeep(x, out, d + 1, read, prof, neg));
+  if (Array.isArray(node)) return node.map(x => stripImpossibleReviewCountsDeep(x, out, d + 1, read, prof, neg, known));
   if (typeof node === 'object') {
     for (const k of Object.keys(node)) {
       if (k.charAt(0) === '_') continue;
-      node[k] = stripImpossibleReviewCountsDeep(node[k], out, d + 1, read, prof, neg);
+      node[k] = stripImpossibleReviewCountsDeep(node[k], out, d + 1, read, prof, neg, known);
     }
     return node;
   }
   return node;
+};
+// The counts we hold for OTHER businesses in the ranked search — every row
+// checkLocalRank returns is trust-gated at source (above/weakerRows/topRivals
+// are empty unless orderTrusted), so everything here is a measured number a
+// sentence may legitimately carry.
+const competitorCountsFrom = (lr) => {
+  if (!lr || typeof lr !== 'object') return [];
+  const rows = []
+    .concat(Array.isArray(lr.above) ? lr.above : [])
+    .concat(Array.isArray(lr.weakerRows) ? lr.weakerRows : [])
+    .concat(Array.isArray(lr.topRivals) ? lr.topRivals : [])
+    .concat(lr.ours && typeof lr.ours === 'object' ? [lr.ours] : []);
+  return [...new Set(rows.map(r => Number(r && r.reviews)).filter(n => Number.isFinite(n) && n > 0))];
 };
 
 // ══ A CLAIM ABOUT WHAT COMPETITOR SITES CONTAIN, WHEN WE READ NONE ═════════
@@ -21770,6 +21901,65 @@ const AUDIT_BACKEND_CLAIM_ROWS = [
 // automatically when that call lands outside business hours" printed in THE
 // BUSINESS on Conner's, live 2026-08-24, while its own fact-check listed it as
 // unsayable. One detector, two consumers — never a second copy of the rule.
+// ══ "X IS THE OWNER" NEEDS EVIDENCE THAT X IS THE OWNER ═════════════════════
+// Live: the story printed "Shane is the named owner" on a lead where the
+// resolver found NOBODY — the brain read the name off their pages and the
+// synthesis promoted it to a role. On that lead the name happened to be
+// corroborated (the published email is shane.irwin@..., the business is
+// Irwin's); on the next lead it will not be. The allow-set is CODE-CHECKED
+// evidence only: a resolver/verified name, a surname carried in the business
+// name, or the site's own published email local part. An ownership sentence
+// about anyone else is cut whole — softening model prose mid-sentence is how
+// a scope word ends up on the wrong clause.
+const OWNERSHIP_CLAIM_RE = /(?:\b(?:Dr|Mr|Ms|Mrs)\.?\s+)?([A-Z][a-z'\u2019-]+(?:\s+[A-Z][a-z'\u2019.-]+){0,2})\s+(?:is|remains)\s+the\s+(?:named\s+|listed\s+)?(?:owner|founder|co-owner)\b|\b[Tt]he\s+owner\s+is\s+(?:Dr\.?|Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Z][a-z'\u2019-]+(?:\s+[A-Z][a-z'\u2019.-]+){0,2})/;
+const stripUnverifiedOwnership = (text, allow) => {
+  if (typeof text !== 'string' || text.length < 20) return { text, cut: [] };
+  const names = ((allow && Array.isArray(allow.names)) ? allow.names : []).map(s => String(s || '').toLowerCase()).filter(Boolean);
+  const emailLocal = String((allow && allow.emailLocal) || '').toLowerCase().replace(/[^a-z.]/g, '');
+  const companyName = String((allow && allow.company) || '');
+  const ok = (claimed) => {
+    const c = String(claimed || '').trim();
+    if (!c) return false;
+    const toks = c.toLowerCase().replace(/[^a-z\s'\u2019-]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
+    if (!toks.length) return false;
+    if (names.some(n => toks.some(t => n.includes(t)))) return true;
+    if (surnameInCompanyName(c, companyName)) return true;
+    if (emailLocal && localMatchesName(emailLocal, toks)) return true;
+    return false;
+  };
+  // The split must not break at an honorific's period — "The owner is Dr.
+  // Chad Robbins" split at "Dr." leaves a fragment whose optional-honorific
+  // regex backtracks into capturing the bare "Dr" as the name, and a correct
+  // eponymous sentence dies in two pieces. Found by the fixture's first boot.
+  const parts = String(text).split(/(?<=[.!?])(?<!\bDr\.)(?<!\bMr\.)(?<!\bMs\.)(?<!\bMrs\.)\s+/);
+  const keep = [], cut = [];
+  for (const s of parts) {
+    const m = OWNERSHIP_CLAIM_RE.exec(s);
+    const claimed = m ? String(m[1] || m[2] || '').trim() : '';
+    // A bare honorific is not a name — a fragment shaped that way is a
+    // splitter artefact, never an ownership claim to judge.
+    if (m && claimed && !/^(Dr|Mr|Ms|Mrs)$/i.test(claimed) && !ok(claimed)) cut.push(s.trim()); else keep.push(s);
+  }
+  return { text: keep.join(' ').replace(/\s{2,}/g, ' ').trim(), cut };
+};
+const stripUnverifiedOwnershipDeep = (node, out, depth, allow) => {
+  const d = depth || 1;
+  if (d > 6) return node;
+  if (typeof node === 'string') {
+    const r = stripUnverifiedOwnership(node, allow);
+    if (r.cut.length && out) out.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripUnverifiedOwnershipDeep(x, out, d + 1, allow));
+  if (node && typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripUnverifiedOwnershipDeep(node[k], out, d + 1, allow);
+    }
+    return node;
+  }
+  return node;
+};
 const stripPostContactClaims = (text) => {
   if (typeof text !== 'string' || text.length < 40) return { text, cut: [] };
   const parts = String(text).split(/(?<=[.!?])\s+/);
@@ -22062,11 +22252,7 @@ const buildAuditFacts = (m = {}, unlinked = null) => {
     // conversions WITHOUT site code, so "nobody can see ROI" would overclaim
     // even on a clean read. Null when they run no Google ads or we could not
     // measure.
-    roiStatus: ads !== 'yes' ? null
-      : (m.adsConversion === true || m.callTracking === true) ? 'counted'
-      : m.tagManager === true ? 'hidden'
-      : (m.adsConversion === false && m.callTracking === false) ? 'blind'
-      : null,
+    roiStatus: ads !== 'yes' ? null : roiStatusOf(m),
     // Which source measured the search read: 'dataforseo' is the real local
     // pack (positions sayable); 'places' is the lookup fallback (absence only,
     // no position possible). §59: the operator could not tell the two apart
@@ -22159,6 +22345,11 @@ const buildFunnelStory = (m = {}, x = {}) => {
   }
 
   // ── 2 · WHO FINDS THEM: the people already typing what they sell ──────────
+  // _strongFound: the trusted top-three case. The chip that summarises the
+  // getting-found stage reads it, because "BROKEN" printed directly above
+  // "That part works." on a live sheet — a stage that measurably works and
+  // carries a leak is a different fact from a stage that is broken.
+  let _strongFound = false;
   {
     let text = '';
     const q = String(m.rankQuery || '').trim();
@@ -22175,6 +22366,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
       text = m.rank <= 3
         ? `When somebody searches "${q}", they are in the top three — the people already looking can find them. That part works.`
         : `When somebody searches "${q}", they show up, but not in the top three.`;
+      if (m.rank <= 3) _strongFound = true;
     }
     // The join Vin walked on Breck's: Facebook-only wiring while the Google
     // search is measured bad or confirmed empty. All five gates or silence.
@@ -22204,8 +22396,14 @@ const buildFunnelStory = (m = {}, x = {}) => {
     if (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) {
       parts.push({
         online_booking: 'A visitor can book a time on the site itself.',
-        form: 'The only thing a visitor can do there is fill in a form and wait.',
-        phone_only: 'The only way in their site offers is a phone call during office hours.',
+        // "The only thing a visitor can do" was false whenever a phone number
+        // sat beside the form; "the only way in is a phone call" was false
+        // whenever a capture path existed anywhere. Neither claims exclusivity
+        // now — the fact is that nothing books a time.
+        form: 'Nothing there books a time. A visitor can fill in a form and wait.',
+        phone_only: m.captureSeen === true
+          ? 'Nothing on their site books a time, and the direct route in is a phone call during office hours.'
+          : 'The only way in their site offers is a phone call during office hours.',
         none_found: 'No route in appears on the pages we read at all.',
       }[m.booking]);
     }
@@ -22276,7 +22474,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
     after: Number(m.reviewsRead) >= 10,
   };
   if (!stages.length && !fixFirst && !measured.found && !measured.door && !measured.after) return null;
-  return { checked: true, stages, measured, fixFirst };
+  return { checked: true, stages, measured, strong: { found: _strongFound === true }, fixFirst };
 };
 
 // ══ AUTHENTIC FEAR, AND THE ONLY HONEST WAY TO PRODUCE IT ═══════════════════
@@ -23978,7 +24176,10 @@ const measureBookingPath = (html, text) => {
   // unambiguous — nobody links calendly.com by accident — and it wins outright.
   // A form is next. A phone route is what is left when no richer route exists,
   // which is what 'the only route offered' was always supposed to mean.
-  const SCHEDULERS = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook\.me|savvycal|cal\.com|hubspot\.com\/meetings|chilipiper|book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
+  // ONE list — SCHEDULER_SIGNATURES is shared with harvestInteriorMarkup and
+  // checkBuiltWith, because two hand-kept copies of "what is a booking tool"
+  // disagreed on a live lead and the disagreement withdrew a composed email.
+  const SCHEDULERS = SCHEDULER_SIGNATURES;
   if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is embedded in the page source' };
 
   // ── A FORM, IN EITHER SHAPE ───────────────────────────────────
@@ -23988,12 +24189,13 @@ const measureBookingPath = (html, text) => {
   // reading is as bad as a false absence.
   const _fieldHits = (h.match(/^\s*(first name|last name|your name|full name|email address|phone number|e-?mail|phone|name|message)\s*\*?\s*$/gim) || []).length
     + (h.match(/\b(first name|last name|email address|phone number)\b/gi) || []).length;
-  const hasForm = /<form\b/i.test(h) && /<input\b[^>]*type=["'](text|email|tel)["']/i.test(h);
-  const hasTextarea = /<textarea\b/i.test(h);
   if (_fieldHits >= 2 && /\b(message|submit|send|comments?)\b/i.test(h)) {
     return { booking: 'form', why: 'an enquiry form is present on the page' };
   }
-  if (hasForm || hasTextarea) return { booking: 'form', why: 'a submitting form is present in the page source' };
+  // htmlHasRealForm is the ONE rule for an HTML-shaped form — shared with the
+  // interior harvest, and tighter than the old <input type="text"> test, which
+  // read a site-search box as a route in.
+  if (htmlHasRealForm(h)) return { booking: 'form', why: 'a submitting form is present in the page source' };
 
   // ══ 'PHONE_ONLY' REQUIRES A PHONE A CUSTOMER CAN ACTUALLY SEE ═════════════
   // This used to accept ANY ten-digit-shaped string anywhere in the blob, and
@@ -24058,6 +24260,33 @@ const measureBookingPath = (html, text) => {
 //          be reported to an owner as "the number on your page".
 // Putting source into `text` would reinstate the invented-phone-number bug
 // recorded inside measureBookingPath.
+// ══ INTERIOR SOURCE EVIDENCE OUTRANKS A FALLTHROUGH ═════════════════════════
+// Live (Irwin's Septic): the contact page's <form> exists only in its rawHtml —
+// Firecrawl markdown deletes forms — so the cascade fell through to the
+// homepage tel: link, the ladder wrote "the only way in their site offers is a
+// phone call", and the fact-checker withdrew the email built on it. The
+// interior markup is already bought and already harvested; a form or scheduler
+// seen THERE is positive source evidence, and positive evidence may upgrade a
+// FALLTHROUGH verdict (phone_only and none_found are what is left when nothing
+// richer was visible). It never downgrades: a measured online_booking stays.
+// Pure so the boot check can execute it both ways.
+const applyInteriorPathEvidence = (out, im, companyName) => {
+  if (!out || !im) return out;
+  if (im.scheduler === true && out.booking !== 'online_booking') {
+    console.log(`SITE AUDIT [${companyName}]: booking ${out.booking} \u2192 online_booking \u2014 a scheduler signature is in the SOURCE of ${im.schedulerPage || 'an interior page'}, which markdown cannot show.`);
+    out.booking = 'online_booking';
+    out.bookingMeasured = true;
+  } else if (im.forms === true && (out.booking === 'phone_only' || out.booking === 'none_found')) {
+    console.log(`SITE AUDIT [${companyName}]: booking ${out.booking} \u2192 form \u2014 a real contact form is in the SOURCE of ${im.formPage || 'an interior page'}. The phone-only verdict was a fallthrough that could not see interior markup.`);
+    out.booking = 'form';
+    out.bookingMeasured = true;
+  }
+  if (im.forms === true || im.scheduler === true) {
+    out.hasCapture = true;
+    out.captureMeasured = true;
+  }
+  return out;
+};
 const bookingSourceFor = (homepageHtml, homepageMd, corpus) => {
   const _md = homepageMd ? String(homepageMd).slice(0, 40000) : '';
   return {
@@ -25045,15 +25274,19 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         // record into one read — and the restatement gate now fails an answer
         // that parrots, so the extra thinking has a check collecting on it.
         ...(THINKING_FOR(SITUATION_MODEL) ? { output_config: { effort: 'high' } } : {}),
-        // 900 -> 1400 -> 1800 -> 4200. The first three were sized against the
-        // ANSWER, which is ~840 tokens. On an adaptive-thinking model max_tokens
-        // caps thinking PLUS the answer, so a ceiling tuned for the answer alone
-        // lets the reasoning eat the budget and returns a part-written JSON that
-        // still parses. That loses the entire briefing, not its tail.
+        // 900 -> 1400 -> 1800 -> 4200 -> 6000 -> scaled. The first three were
+        // sized against the ANSWER, which is ~840 tokens. On an adaptive-
+        // thinking model max_tokens caps thinking PLUS the answer, and the flat
+        // 6000 truncated the FIRST live Sonnet-at-effort-high run (Irwin's:
+        // out:6000 exactly, stop_reason max_tokens, JSON repaired on strategy
+        // 4, the story's tail lost). budget_tokens is not available on this
+        // family (it 400s), so the ceiling is the only bound — it now rises
+        // with the model exactly as the audit's does. A non-thinking model
+        // still gets 4200, plenty for an ~840-token answer.
         //
         // Headroom is cheap and truncation is not: the whole point of this call
         // is the one line anybody has ever praised.
-        max_tokens: 6000,
+        max_tokens: THINKING_FOR(SITUATION_MODEL) ? 12000 : 4200,
         // `sys` is the shape list, both worked examples and the rules \u2014 identical
         // on every lead, ~2,950 Sonnet tokens, billed fresh every time until now.
         // Cached input is $0.30/M against $3.00/M. This call also retries on a
@@ -26274,7 +26507,7 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     reviews.map(r => (r && r.when ? Date.parse(r.when) : NaN))
   );
   if (velocity.checked) {
-    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'} (${velocity.sigmas.toFixed(2)} sigma; under 2.00 the change cannot be told apart from randomness and NO trend is claimed). Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
+    console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: ${velocity.recent} in the last ${velocity.windowDays} days against ${velocity.earlier} in the ${velocity.windowDays} before${velocity.stopped ? ' - STOPPED' : velocity.slowing ? ' - SLOWING' : velocity.growing ? ' - growing' : ' - steady'} (${Math.abs(velocity.sigmas).toFixed(2)} sigma ${velocity.sigmas >= 0 ? 'drop' : 'rise'}; a DROP under 2.00 sigma cannot be told apart from randomness and no slowdown is claimed - the 2-sigma bar applies to drops only). Both windows are fully observed: the oldest review we read is ${velocity.oldestReadDays} days old.`);
   } else {
     console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
   }
@@ -27165,6 +27398,10 @@ ${corpus}` }]
       services: parsed.services || [],
       booking: parsed.booking || 'none_found',
       hasCapture: parsed.hasCapture === true,
+      // false until code (not the model) has seen a form or scheduler in
+      // page source. The pair (hasCapture, captureMeasured) is what lets a
+      // consumer tell "the model believes a form exists" from "we saw one".
+      captureMeasured: false,
     };
     // ── MEASUREMENT OVERRIDES THE MODEL ──────────────────────────────────
     // The model returned phone_only and then none_found for the same practice
@@ -27215,6 +27452,10 @@ ${corpus}` }]
         out.bookingMeasured = true;
       }
     } catch (e) { void e; }
+    // The interior pages' SOURCE, harvested at scrape time. This is the read
+    // that can see the contact page's form; the cascade above cannot, because
+    // its interior input is markdown.
+    try { applyInteriorPathEvidence(out, interiorAdsFor(website), companyName); } catch (e) { void e; }
     console.log(`SITE AUDIT [${companyName}]: booking=${out.booking}${out.bookingMeasured ? ` (measured from ${homepageHtml ? 'the homepage SOURCE plus ' : 'NO homepage source \u2014 '}${usable.length} interior page(s))` : ' (model read \u2014 no signature in source)'} capture=${out.hasCapture}${prices.length ? ` | ${prices.length} published price(s): ${prices.map(p=>p.amount).join(', ')}` : ' | no published pricing'}`);
     // A dead page is a measured fact about their business and belongs with the
     // other measured facts, not only in a log line nobody reads at send time.
@@ -28150,10 +28391,8 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   let _authority = _NO_TITLE(best.title) ? 30 : best.authority;
   let _eponymousOwner = false;
   if (_NO_TITLE(best.title) && best.name) {
-    const _surname = String(best.name).trim().split(/\s+/).pop().toLowerCase();
-    const _co = String(companyName || '').toLowerCase();
     const _onOwnSite = (best.sources || []).some(sc => /own_website|business_name|google_review_replies/.test(String(sc)));
-    if (_surname.length >= 3 && new RegExp(`\\b${_surname.replace(/[^a-z]/g, '')}\\b`).test(_co) && _onOwnSite) {
+    if (surnameInCompanyName(best.name, companyName) && _onOwnSite) {
       _eponymousOwner = true;
       _authority = 80;
       console.log(`DM [${companyName}]: EPONYMOUS AUTHORITY \u2014 no title was scraped for ${best.name}, but their surname is in the business name and they are confirmed on the business's own sources. An unknown title at a business named after the person is owner-level, not junior. Authority ${best.authority} \u2192 80.`);
@@ -33059,7 +33298,11 @@ const checkBuiltWith = async (domain) => {
       // second silently overwrote this one and the detector lost cal.com,
       // savvycal and appointlet entirely, while `acuity` was narrowed to
       // `acuityscheduling` and stopped matching acuity's other domains.
-      hasBooking: /calendly|acuity|cal\.com|savvycal|youcanbook|appointlet|setmore|squareup\.com\/appointments|booksy|simplybook/i.test(html),
+      // ONE list (SCHEDULER_SIGNATURES). This copy's bare `acuity` and
+      // unanchored `cal.com` produced the "Booking tool: YES" that withdrew a
+      // correct-by-its-own-lights email on a lead the cascade read as
+      // phone_only — two hand-kept lists of one fact, disagreeing in one prompt.
+      hasBooking: SCHEDULER_SIGNATURES.test(html),
       copyrightYear: (() => { const ys = [...html.matchAll(/(?:©|&copy;|copyright)[^0-9]{0,20}(20\d\d)/gi)].map(m=>parseInt(m[1])); return ys.length ? Math.max(...ys) : 0; })(),
       // ── CONTACT INTELLIGENCE — extracted from THEIR page (facts, not guesses) ──
       contacts: (() => {
@@ -34879,7 +35122,7 @@ const _runResearchInner = async (req, res) => {
   const _laneKind = buyingWindowKind(discoverySignals);
   const _lane = _laneFromJobs ? (_laneKind === 'funding' ? (_laneRaw || 'retainer') : _laneKind)
     : (_laneRaw === 'software' ? '' : _laneRaw);
-  if (!_lane) console.log(`[LANE] ${company}: no job-posting signal on this lead, so there is NO measured buying window. The pitch must come from the audit alone. (A hard-coded 'software' default was being sent here and framed every local business as one hiring manual ops roles.)`);
+  if (!_lane) console.log(`[LANE] ${company}: no job-posting signal on this lead, so there is NO measured buying window. The pitch must come from the audit alone.`);
   else console.log(`[LANE] ${company}: ${_lane}${_lane === 'retainer' ? '  <- RETAINER (core product)' : _lane === 'both' ? '  <- PERFECT STORM' : ''}`);
 
   const manualRoleCount = req.body.manualRoleCount || 0;
@@ -34893,6 +35136,9 @@ const _runResearchInner = async (req, res) => {
   // the resolver HELD BACK now lands here instead, under a name no render site
   // can mistake for a verified contact.
   let heldBackContact = null;
+  // Code-checked corroboration of a brain-read owner name (business-name
+  // surname, published-email local part). Display information only.
+  let ownerNameEvidence = null;
   // ══ A RE-RUN MUST NOT INHERIT THE LAST RUN'S FINDINGS ════════════════════
   // Seeding from req.body means the client posts back the pain signals from the
   // PREVIOUS research, and if this run's review pull fails or comes back
@@ -37219,6 +37465,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const _bookingRead = {
           booking: sitePages && sitePages.booking,
           bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          // ANY capture evidence — code-measured or the model's own read of
+          // the interior pages. Used only to SUPPRESS "the only way in is a
+          // phone call"-class claims, never to assert a form exists.
+          captureSeen: !!(sitePages && sitePages.hasCapture === true),
         };
         // Read once, above the literal, so the markers and the boolean cannot
         // drift apart the way five inline counters and one opinion did.
@@ -37349,6 +37599,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           tapToCallGenuinelyBroken: !!(htmlSignals && htmlSignals.tapToCallGenuinelyBroken),
           booking: _bookingRead.booking,
           bookingMeasured: _bookingRead.bookingMeasured,
+          captureSeen: _bookingRead.captureSeen,
           // ══ THE COVERAGE TABLE, WHICH HAS NEVER BEEN A FINDING ═══════════
           // Find measures these for free on every run and they have only ever
           // been logged and handed to the writer as background. RUNG INPUT CHECK
@@ -37810,7 +38061,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                           writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 3
                             && contactShapedTheme(String((_harmInputs || {}).reviewPainTop || ''), (_harmInputs || {}).reviewPainTopKind) === true,
                           reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).reviewPainTop || ''), (_harmInputs || {}).reviewPainTopKind) },
-              money: { jobValue: tradeJobValue(String((_harmInputs || {}).tradeWord || '')) } }),
+              money: { jobValue: tradeJobValue(String((_harmInputs || {}).tradeWord || '')), roi: roiStatusOf(_harmInputs || {}) } }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
             subjectOptions: buildSubjects(_harms.lead, _harmInputs || {}),
@@ -38973,9 +39224,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     } else if (_hasAds && !_siteConverts) {
       bottleneck = 'CONVERSION';
       bottleneckWhy = 'Ad code is on their site, so money is going out for visitors — and the page those visitors land on gives them no clear next step to take. The traffic is already bought; the page is where it dies.';
-    } else if (_hasAds && _siteConverts) {
+    } else if (_hasAds && _siteConverts && !(_harmInputs && _harmInputs.datedSite === true)) {
       bottleneck = 'SCALE';
-      bottleneckWhy = 'The site gives a visitor a clear way in, and money is already going out on ads. Nothing needs rebuilding — the opportunity is running the whole path from search to booked job better than it runs today.';
+      // "Nothing needs rebuilding" was printed on a lead whose own site-age
+      // read held two concrete old-build markers and whose product
+      // recommendation was Website Rebuild — three dated-site readers, none
+      // shared. The SCALE branch now consults the same eleven-marker read the
+      // score and the dated_credibility rung use, and its sentence claims only
+      // what was measured.
+      bottleneckWhy = 'The site gives a visitor a clear way in, and money is already going out on ads. Nothing we measured calls for a rebuild — the opportunity is running the whole path from search to booked job better than it runs today.';
+    } else if (_hasAds && _siteConverts && _harmInputs && _harmInputs.datedSite === true) {
+      bottleneck = 'FOUNDATION';
+      bottleneckWhy = `Money is going out on ads and the pages do give a visitor a way in — but the build itself is measurably old (${(Array.isArray(_harmInputs.siteAgeMarkers) ? _harmInputs.siteAgeMarkers.slice(0, 2) : []).filter(Boolean).join('; ') || 'two or more concrete old-build markers'}). An old build undercuts every dollar spent sending people to it, so the rebuild comes before more traffic.`;
     } else if ((_siteBooking === 'form' || _siteBooking === 'phone_only') && !builtWith.hasCRM) {
       // THE MISSING BOTTLENECK. A quote form is not capture if it drops the lead into
       // a human callback queue — the prospect is captured and then made to WAIT. With
@@ -40640,9 +40900,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // ══ COMPETITOR SITES NOBODY OPENED - both live on 2026-08-24 ═══
           const _irc = { cut: [] };
           const _profTotal = (gbpHealth && Number.isFinite(Number(gbpHealth.reviewCount))) ? Number(gbpHealth.reviewCount) : null;
+          // The competitors' own measured counts — so "Caliber's 101 reviews"
+          // is licensed by the pack row that measured it, not eaten for being
+          // neither ours nor our total.
+          const _compCounts = competitorCountsFrom(localRank);
           for (const k of _mf) {
             if (k.charAt(0) === '_') continue;
-            parsed[k] = stripImpossibleReviewCountsDeep(parsed[k], _irc, 1, reviewsRead, _profTotal, reviewsNegativeCount);
+            parsed[k] = stripImpossibleReviewCountsDeep(parsed[k], _irc, 1, reviewsRead, _profTotal, reviewsNegativeCount, _compCounts);
           }
           if (_irc.cut.length) {
             parsed._reviewCountRemoved = _irc.cut.slice(0, 4);
@@ -40662,6 +40926,21 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           for (const k of _mf) {
             if (k.charAt(0) === '_') continue;
             parsed[k] = stripPostContactClaimsDeep(parsed[k], _pcx, 1);
+          }
+          // ══ AND NO OWNERSHIP CLAIM WITHOUT CODE-CHECKED EVIDENCE ═══════
+          const _ownAllow = {
+            names: [verifiedCEO, decisionMaker && decisionMaker.name, heldBackContact && heldBackContact.name].filter(Boolean),
+            emailLocal: String((email && email.email) || '').split('@')[0],
+            company,
+          };
+          const _ownx = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripUnverifiedOwnershipDeep(parsed[k], _ownx, 1, _ownAllow);
+          }
+          if (_ownx.cut.length) {
+            parsed._ownershipClaimRemoved = _ownx.cut.slice(0, 4);
+            console.log(`\u26d4 OWNERSHIP CLAIM [${company}]: removed ${_ownx.cut.length} sentence(s) naming somebody the owner with no code-checked evidence behind the name. First one: "${String(_ownx.cut[0]).slice(0, 110)}". A name that IS corroborated (resolver, business name, their own published email) stands.`);
           }
           if (_pcx.cut.length) {
             parsed._postContactRemoved = _pcx.cut.slice(0, 4);
@@ -40984,9 +41263,18 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _srx = stripUnmeasuredMoneyDeep(_srx, _corpus, _srg.m, 1, 'situationRead');
                   _srx = stripSpelledQuantitiesDeep(_srx, _corpus, _srg.sq, 1);
                   _srx = stripRecencyConclusionsDeep(_srx, _srg.rc, 1);
-                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount);
+                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount, competitorCountsFrom(localRank));
                   _srx = stripCompetitorSiteClaimsDeep(_srx, _srg.cc, 1);
                   _srx = stripPostContactClaimsDeep(_srx, _srg.pc, 1);
+                  _srg.own = { cut: [] };
+                  _srx = stripUnverifiedOwnershipDeep(_srx, _srg.own, 1, {
+                    names: [verifiedCEO, decisionMaker && decisionMaker.name, heldBackContact && heldBackContact.name].filter(Boolean),
+                    emailLocal: String((email && email.email) || '').split('@')[0],
+                    company,
+                  });
+                  if (_srg.own.cut.length) {
+                    console.log(`\u26d4 OWNERSHIP CLAIM [${company}]: the story named somebody the owner with no code-checked evidence \u2014 removed ${_srg.own.cut.length} sentence(s). First one: "${String(_srg.own.cut[0]).slice(0, 110)}".`);
+                  }
                   situationRead = _srx;
                   const _srCut = _srg.q.cut.length + _srg.m.cut.length + _srg.sq.cut.length + _srg.rc.cut.length + _srg.irc.cut.length + _srg.cc.cut.length + _srg.pc.cut.length;
                   if (_srCut) {
@@ -41374,6 +41662,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               const _measured = _c._unobservable
                 ? { score: 1, unmatched: false, why: 'post-contact behaviour \u2014 we have never observed it and no honest email can be built on it' }
                 : measuredScoreFor(_c.finding, _harmInputs || {});
+              // Kept as DATA, not only inside a why-string: the override log
+              // used to print the model's own category ("search_absence" on a
+              // lead ranked #2), because the resolved rung id was discarded
+              // the moment this loop moved on.
+              _c._measuredRung = (!_c._unobservable && _measured && _measured.id) ? _measured.id : null;
               const _v = _c._unobservable
                 ? _measured
                 : _measured
@@ -41723,7 +42016,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               };
 
               if (_wSig && _declaredNow && _wSig !== _declaredNow && _margin >= 3 && !_gaveReason) {
-                console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The AUDIT and the CALL SHEET are rebuilt on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". This line used to end "the email will be built on" that finding, and it was false on every lead: composeFullEmail ran hundreds of lines earlier, off the harm ladder, and never reads leadSignal. A log that overstates its own reach costs exactly what one that understates it does \u2014 it was read as evidence the two rankings had been reconciled, and they never were.`);
+                console.log(`\u2696 LADDER OVERRIDE [${company}]: the audit declared ${_declaredNow} (${_declaredScore}) but ${_wSig}${_ladderWinner._measuredRung && _ladderWinner._measuredRung !== _wSig ? ` (the model's label \u2014 the MEASUREMENT behind it is ${_ladderWinner._measuredRung})` : ''} scored ${_ladderWinner.total} \u2014 ${_margin} points clear, with no reason given for the trade. The AUDIT and the CALL SHEET are rebuilt on ${_wSig}: "${String(_ladderWinner.finding).slice(0, 70)}". This line used to end "the email will be built on" that finding, and it was false on every lead: composeFullEmail ran hundreds of lines earlier, off the harm ladder, and never reads leadSignal. A log that overstates its own reach costs exactly what one that understates it does \u2014 it was read as evidence the two rankings had been reconciled, and they never were.`);
                 parsed.leadSignal = _wSig;
                 parsed.ladderWinner.overrode = _declaredNow;
               } else if (_wSig && _declaredNow && _wSig !== _declaredNow && !_gaveReason && _inBindingTie(_ladderWinner)) {
@@ -42043,6 +42336,25 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 verifiedCEO = dmName;
                 verifiedCEOTitle = verifiedCEOTitle || null;
                 console.log(`Brain read a decision-maker off their own pages: ${verifiedCEO}${verifiedCEOTitle ? ' (' + verifiedCEOTitle + ')' : ' \u2014 no title, and none is being invented'}. This ADDS a name nothing else found. It cannot overrule the resolver and it cannot supply a title: the prompt is handed the title, so echoing it back is not a second source.`);
+                // ── CODE-CHECKED corroboration of the brain-read name ─────
+                // Shane Irwin, live: the business is named Irwin's, the site's
+                // own published address is shane.irwin@..., and the sheet
+                // still printed "Who to talk to \u2014". The evidence was in
+                // hand and string-checkable; only nothing assembled it. This
+                // is INFORMATION for the sheet, never a title and never a
+                // change to the authority gate: the resolver still found
+                // nobody, and the email path's buying floor is untouched.
+                try {
+                  const _ev = [];
+                  if (surnameInCompanyName(dmName, company)) _ev.push(`the business name carries "${dmName.trim().split(/\s+/).pop()}"`);
+                  const _local = String((email && email.email) || '').split('@')[0].toLowerCase().replace(/[^a-z.]/g, '');
+                  const _toks = dmName.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+                  if (_local && _toks.length && localMatchesName(_local, _toks)) _ev.push(`their published address ${_local}@\u2026 is this name`);
+                  if (_ev.length) {
+                    ownerNameEvidence = `Read off their own pages \u2014 no title is published anywhere we read. Corroborated in code: ${_ev.join(', and ')}.`;
+                    console.log(`DM EVIDENCE [${company}]: ${verifiedCEO} \u2014 ${ownerNameEvidence}`);
+                  }
+                } catch (e) { void e; }
               } else if (dm.confidence === 'high' && dmName !== verifiedCEO) {
                 console.log(`\u26a0 DM DISAGREEMENT [${company}]: the resolver settled on ${verifiedCEO} and the audit brain read ${dmName} off the pages. Keeping the resolver's answer, which is corroborated across independent sources; the brain's is one read of one corpus. Worth a human glance if this lead matters.`);
               }
@@ -42141,8 +42453,8 @@ RAW EVIDENCE (what we actually confirmed):
 - Exit signal: ${discoverySignals.preparing_for_exit ? 'YES - BizBuySell listing' : 'none'}
 - Copyright year: ${builtWith.copyrightYear || 'not found'}
 - Title tag: "${builtWith.titleTag || 'not found'}"
-- Email capture on site: ${builtWith.hasEmailCapture ? 'YES' : 'not found'}
-- Booking tool: ${builtWith.hasBooking ? 'YES' : 'not found'}
+- A route in beyond the phone: ${(sitePages && sitePages.captureMeasured === true) ? 'YES \u2014 a contact form or scheduler exists in the source of a page we read (MEASURED \u2014 do not flag a claim that matches it)' : builtWith.hasEmailCapture === true ? 'YES \u2014 an email-capture form on the homepage' : (sitePages && sitePages.hasCapture === true) ? 'the pages we read appear to offer one (model read, unmeasured)' : (builtWith.hasEmailCapture === false && sitePages) ? 'none found on the pages we read' : 'not readable \u2014 make no claim'}
+- Booking route: this is the "Booking path" line in THE MEASURED FACTS above \u2014 the ONE measured truth the copy is built on. There is no second booking measurement; do not infer one from any other line here.
 - PageSpeed mobile: ${pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100${pageSpeed.mobileScoreSource === 'lab' ? ' (Google lab test)' : ''}${pageSpeed.fieldSaysFine ? ' — BUT Google\'s real-visitor field data says the site performs FINE. The record beats the simulation: make NO claim that this site is slow.' : ''}` : 'not checked'}
 
 AUDIT PRODUCED BY FIRST CALL:
@@ -43389,6 +43701,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         booking: sitePages.booking || null,
         bookingMeasured: !!sitePages.bookingMeasured,
         hasCapture: !!sitePages.hasCapture,
+        captureMeasured: sitePages.captureMeasured === true,
         prices: (sitePages.prices || []).slice(0, 8),
         pagesRead: sitePages.pagesRead || [],
         // Pages the site's own navigation does not link to. INTERNAL — the call
@@ -43530,6 +43843,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // most likely outcome is that somebody re-researches a lead we already paid
       // for. Labelled as unverified everywhere it renders.
       heldBackContact,
+      ownerNameEvidence,
       emailResult, decisionMaker,
       publicPainSignals, painSummary,
       // localVisibility, gbpHealth and htmlSignals are returned ABOVE, in the block
@@ -46068,6 +46382,25 @@ app.listen(PORT, () => {
     if (!_topRank || !(_topRank.stages || []).some(st => /they are in the top three/.test(st.text) && /That part works/.test(st.text))) {
       _fails.push('a trusted top-three rank no longer produces the strength sentence \u2014 the crystal-clear "this part works" Vin asked for');
     }
+    // The strength has to travel as DATA too: the stage chip read "BROKEN"
+    // directly above "That part works." on a live sheet, because the chip only
+    // counted rows. A top-three walk sets strong.found; a null-rank walk must not.
+    if (!_topRank || !_topRank.strong || _topRank.strong.found !== true) {
+      _fails.push('the top-three strength never reaches the response as data, so the stage chip is back to calling a working stage BROKEN');
+    }
+    if (_nullRank && _nullRank.strong && _nullRank.strong.found === true) {
+      _fails.push('a lead with NO sayable position claims a strong getting-found stage');
+    }
+    // The door's phone_only sentence drops the word "only" the moment any
+    // capture evidence exists — the withdrawn-email claim, at the walk.
+    const _capPhone = buildFunnelStory({ bookingMeasured: true, booking: 'phone_only', captureSeen: true, rankChecked: true, rankFound: true, rank: null }, {});
+    const _capDoor = _stage(_capPhone, 'the_door');
+    if (_capDoor && /only way in/i.test(_capDoor.text)) {
+      _fails.push('the walk still says "the only way in is a phone call" beside capture evidence \u2014 the exact sentence the fact-checker withdrew a live email over');
+    }
+    if (_capDoor && !/books a time/.test(_capDoor.text)) {
+      _fails.push('the capture-aware door sentence lost its measured half');
+    }
     // The blue links are the second, separate ranking — measured DFS-only by
     // construction. #14 of 19 was measured live on Conner's and rendered
     // nowhere a reader could see it.
@@ -46399,6 +46732,22 @@ app.listen(PORT, () => {
     if (stripImpossibleReviewCounts('Seven of forty reviews say it.', null, 237).cut.length !== 0) {
       _fails.push('a lead with NO measured read had sentences stripped — with nothing to check against, the gate must stay silent');
     }
+    // — a competitor's MEASURED count is licensed by the pack row that holds it —
+    if (stripImpossibleReviewCounts("#1 competitor's 101 reviews - position not earned on reputation.", 90, 262, 6, [101]).cut.length !== 0) {
+      _fails.push("the live Irwin's sentence still dies: Caliber's measured 101 fits neither the 90 read nor the 262 total, and the gate was never handed the counts we hold for the businesses in the ranked search");
+    }
+    if (stripImpossibleReviewCounts("#1 competitor's 101 reviews - position not earned on reputation.", 90, 262, 6, []).cut.length !== 1) {
+      _fails.push('a competitor count we did NOT measure now survives — the licence must come from a real pack row, not from the word "competitor"');
+    }
+    if (stripImpossibleReviewCounts('Fusion Orthodontics shows up above them with 492 reviews against their 540.', 90, 540, null, [492]).cut.length !== 0) {
+      _fails.push('the flagship spine shape — a named competitor with both counts — dies in the audit prose while the email is allowed to say it');
+    }
+    if (competitorCountsFrom({ above: [{ name: 'A', reviews: 101 }], weakerRows: [{ name: 'B', reviews: 55 }], topRivals: [], ours: { name: 'us', reviews: 262 } }).sort((a, b) => a - b).join(',') !== '55,101,262') {
+      _fails.push('competitorCountsFrom no longer collects the measured counts from the rank rows');
+    }
+    if (competitorCountsFrom(null).length !== 0) {
+      _fails.push('competitorCountsFrom invents counts on a lead with no rank read');
+    }
 
     // — competitor sites nobody opened —
     if (stripCompetitorSiteClaims('A buyer comparing three builders is reading the same interchangeable language on all three sites.').cut.length !== 1) {
@@ -46457,7 +46806,7 @@ app.listen(PORT, () => {
     const _dn = (...p) => p.join('');
     const _dsrc = selfSourceNoComments();
     for (const [_what, _needle] of [
-      ['the impossible-count stripper never runs on the audit', _dn('stripImpossibleReviewCountsDeep(parsed[k], _irc,', ' 1, reviewsRead, _profTotal, reviewsNegativeCount)')],
+      ['the impossible-count stripper never runs on the audit', _dn('stripImpossibleReviewCountsDeep(parsed[k], _irc,', ' 1, reviewsRead, _profTotal, reviewsNegativeCount, _compCounts)')],
       ['the competitor-site stripper never runs on the audit', _dn('stripCompetitorSiteClaimsDeep(parsed[k],', ' _cc, 1)')],
       ['the found-but-unsayable pair still prints as a real position', _dn('if (a.rank == null || b.rank', ' == null) {')],
       ['the mine call no longer retries a timeout', _dn("'review-pain-mine', { retryOnTimeout:", ' true })')],
@@ -46569,13 +46918,57 @@ app.listen(PORT, () => {
     if (_pcKeep.cut.length !== 0) _fails.push('a general truth about people or a measured route claim was stripped: "' + String(_pcKeep.cut[0] || '').slice(0, 80) + '"');
     const _pcOwn = stripPostContactClaims('Their form submissions sit unread until Monday morning. The form asks for nine fields on one page.');
     if (_pcOwn.cut.length !== 1 || !/nine fields/.test(_pcOwn.text)) _fails.push('an owned aftermath claim survived the stripper');
+    // 3b. The ownership stripper, both directions on the live shape. "Shane is
+    // the named owner" printed on a lead where the resolver found NOBODY — on
+    // that lead the published email shane.irwin@ corroborates the name in
+    // code, so it must SURVIVE; the identical sentence about a name nothing
+    // corroborates must die; and prose with no ownership claim is untouched.
+    {
+      const _oa = { names: [], emailLocal: 'shane.irwin', company: "Irwin's Septic Tank Cleaning, Plumbing and Repair" };
+      const _ok = stripUnverifiedOwnership('Shane is the named owner. The guarantee is on the contact page.', _oa);
+      if (_ok.cut.length !== 0) _fails.push('a code-corroborated owner name was stripped from the story \u2014 their own published address is the name');
+      const _bad = stripUnverifiedOwnership('Marcus Webb is the named owner. The guarantee is on the contact page.', { names: [], emailLocal: 'info', company: 'Precision Paving LLC' });
+      if (_bad.cut.length !== 1 || !/guarantee is on the contact page/.test(_bad.text)) _fails.push('an UNCORROBORATED ownership claim survived (or a true sentence died with it) \u2014 the model may not hand out the word "owner"');
+      const _epo = stripUnverifiedOwnership('The owner is Dr. Chad Robbins, per their about page.', { names: [], emailLocal: 'frontdesk', company: 'Robbins Facial Plastic Surgery' });
+      if (_epo.cut.length !== 0) _fails.push('an eponymous owner name (surname in the business name) was stripped');
+      const _plain = stripUnverifiedOwnership('The owner is still carrying his own caseload most weeks.', { names: [], emailLocal: '', company: 'x' });
+      if (_plain.cut.length !== 0) _fails.push('ordinary prose about "the owner" with no name attached was stripped');
+      if (surnameInCompanyName('Shane Irwin', "Irwin's Septic") !== true) _fails.push('surnameInCompanyName no longer sees a possessive business name');
+      if (surnameInCompanyName('Marcus Webb', 'Precision Paving') !== false) _fails.push('surnameInCompanyName corroborates a name the business does not carry');
+    }
     // 4. The acronym fix, executed and bounded.
     if (!/hire a CPA\b/.test(fixAcronymCase('Someone ready to hire a cpa cannot book a time.'))) _fails.push('the initialism fix does not fire');
     if (fixAcronymCase('the cpanel login and hvacr parts') !== 'the cpanel login and hvacr parts') _fails.push('the initialism fix fires inside longer words');
     // 4b. The money lines and findings read like sentences a person says.
-    const _mlB = moneyLineFor('paid_traffic_leaks', 'a kitchen or bathroom remodel runs $15k-$80k');
+    const _mlB = moneyLineFor('paid_traffic_leaks', 'a kitchen or bathroom remodel runs $15k-$80k', undefined, 'blind');
     if (!/the money goes out blind/.test(String(_mlB))) _fails.push('the BURNING money line lost its plain form');
     if (/The ad budget is buying clicks/.test(String(_mlB))) _fails.push('the BURNING money line is back to the wording the owner could not parse');
+    // The BURNING sentence must match the MEASURED tracking state — "the money
+    // goes out blind" printed on a live sheet whose conversion tracking was
+    // measured TRUE, three lines under a walk saying the tracking exists.
+    const _mlC = String(moneyLineFor('paid_traffic_leaks', null, undefined, 'counted'));
+    if (/goes out blind/.test(_mlC)) _fails.push('the money line still says "goes out blind" on a lead whose conversion tracking was MEASURED TRUE');
+    if (!/tracking shows clicks arriving/.test(_mlC)) _fails.push('the counted-state money line lost the measured half');
+    if (!/tag container/.test(String(moneyLineFor('paid_traffic_leaks', null, undefined, 'hidden')))) _fails.push('the hidden-state money line no longer names the container we cannot see inside');
+    if (/goes out blind|tracking shows/.test(String(moneyLineFor('paid_traffic_leaks', null, undefined, null)))) _fails.push('an UNMEASURED tracking read produced a tracking claim \u2014 null hardened into an absence (or presence) claim');
+    if (!/goes out blind/.test(String(moneyLineFor('ads_untracked', null)))) _fails.push('ads_untracked lost its blind line \u2014 its own test guarantees the blind state, so the sentence is true by construction');
+    if (/pay for every click/.test(String(moneyLineFor('hiring_marketing_now', null)))) _fails.push('"They pay for every click" still prints under a JOB POSTING finding \u2014 no click exists in that evidence');
+    if (roiStatusOf({ adsConversion: true, callTracking: false, tagManager: true }) !== 'counted') _fails.push('roiStatusOf: counted no longer wins');
+    if (roiStatusOf({ adsConversion: false, callTracking: false, tagManager: true }) !== 'hidden') _fails.push('roiStatusOf: a GTM container no longer reads as hidden');
+    if (roiStatusOf({ adsConversion: null, callTracking: null, tagManager: null }) !== null) _fails.push('roiStatusOf: unmeasured no longer reads as null');
+    if (selfSourceNoComments().indexOf('roi: roiStatusOf(' + '_harmInputs || {})') < 0) _fails.push('the measured ROI state never reaches the money line \u2014 the call site dropped it, so every BURNING row is back to the one template');
+    if (selfSourceNoComments().indexOf('_hasAds && _siteConverts && !(_harmInputs' + ' && _harmInputs.datedSite === true)') < 0) {
+      _fails.push('the SCALE branch stopped consulting the site-age read \u2014 "Nothing needs rebuilding" prints again beside a Website Rebuild recommendation and two measured old-build markers');
+    }
+    if (netServiceOf('https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=x') !== 'pagespeed') {
+      _fails.push('a PageSpeed call still bills its seconds to "google (other)" \u2014 the bucket row matches a host form the code never calls');
+    }
+    if (selfSourceNoComments().indexOf('- Booking route: this is the "Booking path" line in' + ' THE MEASURED FACTS') < 0) {
+      _fails.push('the critique lost its one-booking-truth line \u2014 the prompt can carry two booking verdicts again, which is what withdrew a correct email');
+    }
+    if (selfSourceNoComments().indexOf('- Booking tool: ${builtWith.hasBooking ?' + ' ') >= 0) {
+      _fails.push('the critique is back to a second independent booking read (builtWith.hasBooking, plain truthiness) beside the CONFIRMED measured facts \u2014 two readers of one measurement in one prompt');
+    }
     const _mlR = moneyLineFor('review_pain_pattern', 'a kitchen or bathroom remodel runs $15k-$80k');
     if (!/more hit the same wall, said nothing/.test(String(_mlR))) _fails.push('the review money line is back to the sentence nobody could parse');
     if (sentenceCaseStart('slow or no follow-up after estimates') !== 'Slow or no follow-up after estimates') _fails.push('findings still open lowercase mid-fragment on the sheet');
@@ -46591,6 +46984,10 @@ app.listen(PORT, () => {
       ['the synthesis does not pass through the recency stripper', _dn('stripRecencyConclusionsDeep(_srx, ', '_srg.rc, 1)')],
       ['the gated synthesis is not written back, so the sheet still reads the raw one', _dn('situationRead = ', '_srx;')],
       ['the audit fields do not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(parsed[k], ', '_pcx, 1)')],
+      ['the audit fields do not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(parsed[k], ', '_ownx, 1, _ownAllow)')],
+      ['the synthesis does not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(_srx, ', '_srg.own, 1, {')],
+      ['the resolver and the brain-add no longer share the ONE surname rule', _dn('surnameInCompanyName(best.name, ', 'companyName) && _onOwnSite')],
+      ['the brain-read name never earns its code-checked evidence line', _dn('ownerNameEvidence = `Read off their own pages', ' \\u2014 no title is published')],
       ['the leak promotion floor is not the email anecdote floor', _dn('reviewPainMentions) >= ', '3')],
       // The headline finally has a gate: the first sentence of THE STORY runs
       // the same plain-language rules as the sheet. Removing the faults line
@@ -53501,7 +53898,7 @@ app.listen(PORT, () => {
     //    with the fix reverted for exactly this reason. Needles assembled at
     //    runtime and comment lines stripped, because a literal needle finds
     //    itself and these comments quote the calls verbatim.
-    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoCommentsLF();
     if (_src.indexOf('jobPostings' + 'FromHtml(h)') < 0) {
       _fails.push('nothing harvests JobPosting markup from the pages we already read, so the parser above runs on nothing in production');
     }
@@ -53657,7 +54054,7 @@ app.listen(PORT, () => {
 
     // ── 7. AND THE WIRES. A check that does not assert its call site is half a
     //    check. Needles assembled at runtime, comment lines stripped.
-    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoCommentsLF();
     if (_src.indexOf('...observationHarm' + 'Inputs(_obsCmp)') < 0) {
       _fails.push('the comparison is computed and never spread into _harmInputs — instance twenty-two of measured, correct, and dropped one line before the thing that reads it');
     }
@@ -53828,7 +54225,7 @@ app.listen(PORT, () => {
     }
 
     // ── 7. AND THE WIRES. Needles assembled at runtime, comments stripped.
-    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoCommentsLF();
     if (_src.indexOf('matchNiche' + 'Brief([verifiedIndustry') < 0) {
       _fails.push('the research route no longer looks a brief up, so the library is a data structure nothing reads');
     }
@@ -54556,7 +54953,7 @@ app.listen(PORT, () => {
     }
     // 5. The ask must swap, and only when a URL exists.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('const cta = opts.' + 'pageUrl') < 0) _fails.push('the ask no longer swaps to the page form, so the arm is assigned and never applied');
       if (_src.indexOf('pageUrl: _pageUrl,') < 0) _fails.push('the composed email is not handed the page URL');
       if (_src.indexOf('ctaMode: _ctaMode, pageUrl: _pageUrl ' + '|| null') < 0) {
@@ -54596,7 +54993,7 @@ app.listen(PORT, () => {
   // rather than as a number in a document.
   try {
     const _fails = [];
-    const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const _src = selfSourceNoCommentsLF();
     if (_src.indexOf('SEND_MAX_PER_' + 'REQUEST') < 0) {
       _fails.push('the send cap is gone — fifty leads would go into one synchronous request against a mailbox rated for twenty-five a day, on a domain that already has two hard bounces in twelve sends');
     }
@@ -54665,7 +55062,7 @@ app.listen(PORT, () => {
     }
     // 3. A CRM being down must never lose the outcome, which is already stored.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       const _post = _src.indexOf("sbRest('/call_" + "outcomes'");
       const _hook = _src.indexOf('if (CRM_WEBHOOK_' + 'URL)');
       if (_post < 0) _fails.push('outcomes are no longer written to our own table');
@@ -54722,7 +55119,7 @@ app.listen(PORT, () => {
     // DKIM must say it did not look, not that it found nothing.
     if (typeof checkSendingDomain !== 'function') _fails.push('the sending-domain check is gone');
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf("dkim: { checked: " + "false") < 0) {
         _fails.push('DKIM is being reported as a finding rather than as not-checked — the selector is chosen by whoever set the mailbox up, and guessing one would report a false absence on the most important of the three settings');
       }
@@ -54785,7 +55182,7 @@ app.listen(PORT, () => {
 
     // 3. THE WIRING, because a fixture cannot see a caller.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('researchedAt: new Date().' + 'toISOString()') < 0) {
         _fails.push('the audit no longer records WHEN it was measured — a rank or a review count asserted three weeks late is how a cold call ends');
       }
@@ -54924,7 +55321,7 @@ app.listen(PORT, () => {
         _fails.push('standing down and not standing down produce the same score, so the flag decides nothing');
       }
       // The source must not go back to a truthy-object test.
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('!!URGENCY_ADJUST[m.purchase' + 'Urgency') >= 0) {
         _fails.push('the stand-down flag is testing whether a KEY EXISTS rather than whether the profile moves anything — UNKNOWN is an empty object and an empty object is truthy, which made this whole dimension dead on every lead');
       }
@@ -55019,7 +55416,7 @@ app.listen(PORT, () => {
     }
     // And the wiring: the rank search must actually USE it.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('const _narrowed = narrowTradePhrase(_generic, ' + 'companyName)') < 0) {
         _fails.push('the rank search no longer narrows the phrase, so a specialist is measured on the bucket we discovered him under');
       }
@@ -55128,9 +55525,12 @@ app.listen(PORT, () => {
     //    answer is ~2,600 tokens and the strategic read's is ~840; a ceiling
     //    sized for the answer alone lets reasoning spend it.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('max_tokens: THINKING_FOR(BRAIN_MODEL) ? ' + '9000 : 4200') < 0) {
         _fails.push('the audit budget no longer rises with the model, so pointing BRAIN_MODEL at a thinking model returns a part-written JSON that still parses and loses the whole audit');
+      }
+      if (_src.indexOf('max_tokens: THINKING_FOR(SITUATION_' + 'MODEL) ? 12000 : 4200') < 0) {
+        _fails.push('the strategic read is back on a flat token ceiling \u2014 a thinking model spends that ceiling on reasoning and returns a part-written story, which is exactly what the first live Sonnet run did at 6000');
       }
       if (_src.indexOf('thinking: THINKING_FOR(SITUATION_' + 'MODEL)') < 0) {
         _fails.push('the strategic read no longer states its thinking mode, so it inherits whatever the model does by default');
@@ -55172,7 +55572,7 @@ app.listen(PORT, () => {
     // a business it has never read.
     // The synthesis must run AFTER the audit, or it cannot see the evidence.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       const _deferred = _src.indexOf('measuredFacts = F.' + 'slice();');
       const _called = _src.indexOf('situationRead = await buildSituationRead(measuredFacts.' + 'concat(_extra)');
       if (_called < 0) _fails.push('the strategic read no longer runs with the audit evidence appended, so it is back to reasoning from a summary of a business it has never read');
@@ -55268,7 +55668,7 @@ app.listen(PORT, () => {
     //    than a lesson: a check that does not assert its call site is half a
     //    check. Needles assembled at runtime, comment lines stripped.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('findUnlinkedPages({ sitemap: clean, navKeys: new Set(_navOrder.' + 'keys()), homepage: website })') < 0) {
         _fails.push('the unlinked read is no longer given the site\'s own navigation, so it either reports every page as unlinked or reports nothing at all');
       }
@@ -55347,7 +55747,7 @@ app.listen(PORT, () => {
     }
     // The wiring: computed is not delivered, which is this file's named disease.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('theOneThing: ' + 'buildTheOneThing({') < 0) {
         _fails.push('the one-thing block is built and not returned, which is exactly the computed-but-not-passed failure it was written to end');
       }
@@ -55409,7 +55809,7 @@ app.listen(PORT, () => {
     // restoring that line left every fixture above green. A check that exercises
     // the producer and the consumer can still miss the wire between them.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('offerStrength.checked ? offerStrength.' + 'namedOffer === true') < 0) {
         _fails.push('the rung is no longer handed the measured named offer, so it is back to being inferred from the absence of generic call-to-action wording');
       }
@@ -55508,7 +55908,7 @@ app.listen(PORT, () => {
     //    the merged answer is what the rungs actually read. Needles assembled at
     //    runtime, comment lines stripped — both recorded traps in this file.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('mergeAdSignals(builtWith, ' + 'homepageHtml, interiorAdsFor(website))') < 0) {
         _fails.push('the ad markers are no longer merged from the rendered homepage and the interior pages, so they are back to the plain fetch alone');
       }
@@ -55599,7 +55999,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // and the comment above quotes the broken call verbatim. Both traps are
     // recorded in CLAUDE.md and both have been hit here before.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('city: ' + 'parseCityState(req.body.location).town') < 0) {
         _fails.push('the positioning read is no longer handed a parsed town, so it is being given a street address again and the false city gap is back on every lead');
       }
@@ -55696,7 +56096,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // green, because a fixture that calls the function directly cannot see a
     // caller. Needle assembled at runtime, source stripped of comment lines.
     {
-      const _src = selfSource().split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
+      const _src = selfSourceNoCommentsLF();
       if (_src.indexOf('apiKey, company, content, ' + 'homepageHtml)') < 0) {
         _fails.push('the homepage source is not passed into the page audit, so the booking read is back to interior markdown only and cannot see a scheduler embed');
       }
@@ -55717,6 +56117,72 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       }
     }
 
+    // 8: the Irwin's shape — a contact form that exists ONLY in an interior
+    // page's rawHtml (markdown deletes forms), homepage carrying just a tel:
+    // link. The cascade's fallthrough said phone_only; the interior harvest is
+    // the reader that can see the form, and positive interior evidence must
+    // upgrade a fallthrough verdict — and must never downgrade a measured one.
+    {
+      const _mk = () => ({ booking: 'phone_only', bookingMeasured: true, hasCapture: false, captureMeasured: false });
+      const _im = { forms: true, formPage: 'https://x.com/contact', scheduler: false, schedulerPage: null };
+      const _up = applyInteriorPathEvidence(_mk(), _im, 'selftest');
+      if (_up.booking !== 'form' || _up.captureMeasured !== true || _up.hasCapture !== true) {
+        _fails.push('a real form in an interior page\u2019s SOURCE does not upgrade the phone-only fallthrough \u2014 the Irwin\u2019s withdrawal repeats');
+      }
+      const _sched = applyInteriorPathEvidence(_mk(), { forms: false, formPage: null, scheduler: true, schedulerPage: 'https://x.com/book' }, 'selftest');
+      if (_sched.booking !== 'online_booking') _fails.push('a scheduler in interior source does not upgrade the route');
+      const _keep = applyInteriorPathEvidence({ booking: 'online_booking', bookingMeasured: true, hasCapture: true, captureMeasured: true }, { forms: true, scheduler: false }, 'selftest');
+      if (_keep.booking !== 'online_booking') _fails.push('interior evidence DOWNGRADED a measured online_booking \u2014 it may only ever upgrade a fallthrough');
+      const _none = applyInteriorPathEvidence(_mk(), { forms: false, scheduler: false }, 'selftest');
+      if (_none.booking !== 'phone_only' || _none.captureMeasured === true) _fails.push('interior pages with NO form still changed the verdict \u2014 the upgrade fired on nothing');
+      // The call site, because a fixture supplies its own arguments.
+      if (selfSourceNoCommentsLF().indexOf('applyInteriorPathEvidence(out, ' + 'interiorAdsFor(website), companyName)') < 0) {
+        _fails.push('the interior evidence never reaches the live booking read \u2014 the function exists and nothing calls it');
+      }
+    }
+    // 9: one real-form rule, both directions. A site-search box must NOT read
+    // as a route in; a contact form must.
+    if (htmlHasRealForm('<form role="search"><input type="text" name="s" placeholder="Search"><button>Go</button></form>')) {
+      _fails.push('a site-search box reads as a real form \u2014 a capture path is being manufactured on phone-only sites');
+    }
+    if (!htmlHasRealForm('<form action="/contact"><input type="text" name="your-name"><input type="email" name="your-email"><textarea name="message"></textarea></form>')) {
+      _fails.push('a genuine contact form no longer reads as one');
+    }
+    // 10: ONE scheduler list. Two hand-kept copies disagreed on a live lead and
+    // the disagreement withdrew a composed email. The anchored cal.com must not
+    // fire inside "medical.com"; a real cal.com link must.
+    if (SCHEDULER_SIGNATURES.test('see our partners at https://tropicalmedical.com/about for details')) {
+      _fails.push('"medical.com" trips the scheduler list \u2014 the unanchored cal.com false positive is back');
+    }
+    if (!SCHEDULER_SIGNATURES.test('<a href="https://cal.com/riverside/estimate">Book</a>')) {
+      _fails.push('a real cal.com scheduler link no longer matches the one list');
+    }
+    if (selfSourceNoCommentsLF().indexOf('hasBooking: SCHEDULER_SIGNATURES' + '.test(html),') < 0) {
+      _fails.push('checkBuiltWith keeps its own private booking-tool list \u2014 two copies of one fact is what fed the critique "Booking tool: YES" against the cascade\u2019s phone_only');
+    }
+    // 11: the capture gate on the after-hours claim, both ways — a capture path
+    // anywhere (even one only the model saw) means a first step exists at 2am.
+    {
+      const _rung2 = HARM_LADDER.find(h => h.id === 'no_after_hours');
+      const _pb = { booking: 'phone_only', bookingMeasured: true, unreadBooking: false, open24: false };
+      if (_rung2 && _rung2.test({ ..._pb, captureSeen: true })) {
+        _fails.push('no_after_hours still fires beside a capture path \u2014 "their website offers no way to reach them" beside a working contact form');
+      }
+      if (_rung2 && !_rung2.test({ ..._pb, captureSeen: false })) {
+        _fails.push('the capture gate eats the genuinely phone-only case \u2014 a gate that fires never is a gate somebody deletes');
+      }
+    }
+    // 12: the SPENDING sentence drops the word "only" the moment any capture
+    // evidence exists, and never asserts a form it cannot prove.
+    {
+      const _pl = paidLeakGapFrom({ bookingMeasured: true, booking: 'phone_only', captureSeen: true });
+      if (/only way in/.test(_pl)) _fails.push('"the only way in is a phone call" still ships beside capture evidence \u2014 the exact claim the fact-checker withdrew a live email over');
+      if (/\bform\b/.test(_pl)) _fails.push('the capture-aware phone sentence asserts a form off model evidence');
+      if (!/books a time/.test(_pl)) _fails.push('the capture-aware phone sentence lost its measured half');
+      const _pf = paidLeakGapFrom({ bookingMeasured: true, booking: 'form' });
+      if (/only thing a click can do/.test(_pf)) _fails.push('the form sentence still claims exclusivity beside a phone number');
+      if (!/books a time/.test(_pf)) _fails.push('the form sentence lost the fact that nothing books a time');
+    }
     if (_fails.length) {
       console.log(`⛔ BOOKING PATH CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
     } else {
@@ -57344,9 +57810,13 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // and an absurd one refused rather than trusted.
     const _ra = (v) => ({ headers: { get: (k) => (String(k).toLowerCase() === 'retry-after' ? v : null) } });
     const _probe = makeFcGate({ concurrency: 1, minGapMs: 0 });
-    if (fcNoteRateLimited(_ra('7'), 4000, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 7000) _fails.push('their own Retry-After was ignored in favour of our guess');
-    if (fcNoteRateLimited(null, 4000, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 4000) _fails.push('a response with no Retry-After lost the caller-supplied backoff');
-    if (fcNoteRateLimited(_ra('99999'), 4000, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 4000) _fails.push('an absurd Retry-After was trusted, which would park every Firecrawl call for a day');
+    // Fixture durations are deliberately tiny: the assertions test WHICH
+    // number wins (theirs, ours, or the absurd one refused), not how long a
+    // boot can be made to hold a probe gate. The old 7s/4s/4s left a residual
+    // 7-second timer on every boot for nothing.
+    if (fcNoteRateLimited(_ra('1'), 700, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 1000) _fails.push('their own Retry-After was ignored in favour of our guess');
+    if (fcNoteRateLimited(null, 700, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 700) _fails.push('a response with no Retry-After lost the caller-supplied backoff');
+    if (fcNoteRateLimited(_ra('99999'), 700, 'BOOT SELF-TEST (not a real throttle)', _probe) !== 700) _fails.push('an absurd Retry-After was trusted, which would park every Firecrawl call for a day');
     if (_probe.stats().pausedFor <= 0) _fails.push('the rate-limit handler returned a wait and never actually held the gate — the number is computed and not passed, which is the disease this whole check exists for');
     // AND THE CALL SITES. A fixture supplies its own arguments and therefore
     // cannot see a caller: all three 429 branches must go through the holder,
@@ -57935,6 +58405,15 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
     if (phraseAround('Our practice is your one-stop shop for family dentistry.', 'your one-stop') !== 'Our practice is your one-stop shop for family dentistry.') {
       _fails.push('a clean single sentence comes back altered — the trims are firing where nothing was cut');
+    }
+    // A span that starts at a markdown heading must shed the decoration — a
+    // live sheet quoted their copy as '### Turn to the Pros...'. The hashes
+    // are our notation, not their words; the words themselves must survive.
+    {
+      const _md = 'Septic pumping and cleaning.\n\n### Turn to the Pros for All Your Pumping Needs\n\nCall today for service.';
+      const _h = phraseAround(_md, 'Pros for All');
+      if (/^#/.test(_h)) _fails.push('a quoted span still carries markdown heading hashes: "' + _h.slice(0, 40) + '"');
+      if (_h.indexOf('Turn to the Pros for All Your Pumping Needs') < 0) _fails.push('stripping the decoration ate the quoted words themselves');
     }
     for (const q of [_q, phraseAround(_kc, 'everyone')]) {
       if (/[\u201c\u201d]/.test(q)) _fails.push(`an orphaned curly double-quote survived inside the extracted span ${JSON.stringify(q)} — their quotation mark ends up nested inside ours in the email`);
@@ -59639,9 +60118,19 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // loaded boot that lag reached a quarter of a second. Spacing is asserted on
     // the first; concurrency is asserted on the second, which is correct, because
     // how many are in flight is a property of the bodies.
+    const _PROBE_GAP_MS = 40;
     const _dispatch = [];
     const _gate = makeFcGate({
-      concurrency: FC_CONCURRENCY, minGapMs: FC_MIN_GAP_MS,
+      // A TEST pace, not the production one. What this check proves is the
+      // gate's MECHANICS — spacing enforced at whatever gap is configured, the
+      // concurrency cap, throws returned, no wedge after a throw — and the
+      // mechanics prove identically at 40ms. At the production 350ms the ten
+      // probes alone cost 3.5s of a boot this check IS the settle-sentinel
+      // for, and under drain-phase starvation that stretched to 57 measured
+      // seconds on Render — most of the 93s boot, most of the window in which
+      // this process answers no HTTP at all. The production constant is
+      // config, not a mechanism; nothing here mutates the live pace store.
+      concurrency: FC_CONCURRENCY, minGapMs: _PROBE_GAP_MS,
       onStart: (t) => _dispatch.push(t),
     });
     const _job = (ms, boom) => async () => {
@@ -59724,7 +60213,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // single-digit milliseconds and this goes red, which is the burst it exists
     // to catch.
     const _gaps = _dispatch.slice(1).map((s, i) => s - _dispatch[i]);
-    const _floor = FC_MIN_GAP_MS;
+    const _floor = _PROBE_GAP_MS;
     // Guarded on the stall verdict: with the run already stranded, "5 dispatches
     // for 10 jobs" is a symptom of the same event, and reporting it as its own
     // finding is how one failure printed as three different causes on the
@@ -59747,7 +60236,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_fails.length) {
       console.log(`⛔ FIRECRAWL GATE CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FIRECRAWL GATE CHECK: 10 calls through the real gate with 2 of them throwing — never more than ${FC_CONCURRENCY} in flight, every release at least the full ${_floor}ms after the last as the gate itself timed them, both throws returned to their caller, and the gate still accepts work afterwards. It ran in ${Date.now() - _t0}ms against ~${10 * 30 + 10 * FC_MIN_GAP_MS}ms strictly serial, which is the 350s-per-lead this replaced.`);
+      console.log(`✓ FIRECRAWL GATE CHECK: 10 calls through the real gate with 2 of them throwing — never more than ${FC_CONCURRENCY} in flight, every release at least the full ${_floor}ms after the last as the gate itself timed them, both throws returned to their caller, and the gate still accepts work afterwards. It ran in ${Date.now() - _t0}ms at a ${_PROBE_GAP_MS}ms TEST gap — the mechanics are what is under test; the production floor stays ${FC_MIN_GAP_MS}ms and the live pace store was never touched.`);
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);

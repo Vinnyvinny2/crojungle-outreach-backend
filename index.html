@@ -145,6 +145,7 @@ const persistedFieldsFrom = (l) => ({
       // None of these is expensive to keep. They were simply never added to the
       // one function that decides what survives.
       verifiedCEO: l.verifiedCEO ?? null,
+      ownerNameEvidence: l.ownerNameEvidence ?? null,
       verifiedCEOTitle: l.verifiedCEOTitle ?? null,
       // The job-signal fields, so a re-run does not lose the window. These are
       // NOT duplicated below — rowToLead has produced nine separate
@@ -833,6 +834,7 @@ const rowToLead = (r) => ({
   promptPath: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.promptPath) ?? null,
   brainFailed: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.brainFailed) ?? null,
   verifiedCEO: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.verifiedCEO) ?? null,
+  ownerNameEvidence: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ownerNameEvidence) ?? null,
   verifiedCEOTitle: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.verifiedCEOTitle) ?? null,
   signalAgeDays: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.signalAgeDays) ?? null,
   signalDate: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.signalDate) ?? null,
@@ -1045,10 +1047,42 @@ const sbSaveLead = async (lead) => {
 // sbFetch already tells the two apart: it returns null when the request failed
 // and an empty ARRAY when the table answered with no rows. Only this line
 // collapsed them.
+// ---- PAGES, NOT ONE STATEMENT --------------------------------------------
+// Live 2026-08-25: this was ONE request for 500 rows ordered by updated_at,
+// and Postgres killed it mid-query - 57014 "canceling statement due to
+// statement timeout". Each lead row now carries the full audit, findings and
+// render metadata, so 500 of them in one response is more than the database's
+// time budget, and it only gets heavier as leads accumulate: the exact wall a
+// 50-a-day bulk run drives into. The screen read as "the leads disappeared";
+// the guard below did its job (nothing seeded, saving off), but the read
+// itself has to be shaped so no single statement can time out.
+//
+// Keyset pagination on the primary key: order=id.asc with id=gt.<last>, a
+// bounded page at a time. Deliberately NOT offset pagination - offset re-sorts
+// on every page and a row written mid-walk shifts the pages under us; the id
+// walk is stable whatever writes land. A page that fails is retried with half
+// the rows down to one; if even one row cannot be read the whole load returns
+// null, because a PARTIAL list served as the truth would mark every unread
+// cloud lead as a stale local relic and drop it - worse than no read at all.
+// [] still means the table answered and is genuinely empty (the seed rule).
 const sbLoadLeads = async () => {
-  const rows = await sbFetch('/leads?order=updated_at.desc&limit=500', { headers: { 'Prefer': 'return=representation' } });
-  if (!rows || !Array.isArray(rows)) return null;   // could not read
-  return rows.map(rowToLead);                        // [] means genuinely empty
+  const out = [];
+  let after = null;
+  let size = 40;
+  for (let guard = 0; guard < 400; guard++) {
+    const q = '/leads?order=id.asc&limit=' + size + (after === null ? '' : '&id=gt.' + encodeURIComponent(after));
+    const rows = await sbFetch(q, { headers: { 'Prefer': 'return=representation' } });
+    if (!Array.isArray(rows)) {
+      if (size <= 1) return null;                    // could not read even one row
+      size = Math.max(1, Math.floor(size / 2));
+      console.warn('Supabase: a leads page did not answer - retrying with ' + size + ' row(s) per page');
+      continue;
+    }
+    out.push(...rows);
+    if (rows.length < size) break;                   // short page = last page
+    after = rows[rows.length - 1].id;
+  }
+  return out.map(rowToLead);                         // [] means genuinely empty
 };
 
 // Delete a lead from Supabase
@@ -1092,7 +1126,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260822;
+const CLIENT_CONTRACT = 20260825;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1648,6 +1682,7 @@ const applyResearchResult = (prev, data, ctx) => {
         // lead we already paid for. Always assigned, never conditionally, so a
         // re-run that now clears the block cannot leave the old refusal standing.
         L.heldBackContact = data.heldBackContact || null;
+        L.ownerNameEvidence = data.ownerNameEvidence || null;
         // How much of their site this audit was actually built from. Always
         // assigned: a re-run that read everything must clear a previous run's
         // "we read nothing", or the warning outlives the problem.
@@ -2462,7 +2497,12 @@ const groupByFunnelStage = (pl, fs) => {
     if (lr > 0) for (const r of fill) { if (lr >= 3) break; rankOf.set(r, ++lr); }
   }
   const measured = (fs && fs.measured) || {};
-  const status = (id) => g[id].length ? 'broken' : (measured[id] === true ? 'clean' : 'no_read');
+  // 'mixed': the stage carries leak rows AND the walk measured it working
+  // (a trusted top-three rank). "BROKEN" printed directly above "That part
+  // works." on a live sheet — a working stage with leaks is a different fact
+  // from a broken one, and the chip has to say which.
+  const strong = (fs && fs.strong) || {};
+  const status = (id) => g[id].length ? (strong[id] === true ? 'mixed' : 'broken') : (measured[id] === true ? 'clean' : 'no_read');
   // Inside a stage the numbered leaks lead, in rank order — the sample sheet
   // showed LEAK 3 printed above LEAK 2 because rows kept the money order.
   const ord = (r) => (rankOf.has(r) ? rankOf.get(r) : 99);
@@ -2475,8 +2515,10 @@ const groupByFunnelStage = (pl, fs) => {
 const funnelSvg = (sts, pal) => {
   const P = pal || { broken: '#fef2f2', brokenLine: '#dc2626', clean: '#f5f5f7', cleanLine: '#a1a1a6', noread: '#fafafa', noreadLine: '#c7c7cc', text: '#1d1d1f', brokenText: '#b91c1c', dim: '#1d1d1f' };
   const band = (d, st, label, ly) => {
-    const fill = st === 'broken' ? P.broken : st === 'clean' ? P.clean : P.noread;
-    const line = st === 'broken' ? P.brokenLine : st === 'clean' ? P.cleanLine : P.noreadLine;
+    // 'mixed' (works, with leaks) draws as a working stage whose drips are
+    // red — the leaks are real, the stage is not broken.
+    const fill = st === 'broken' ? P.broken : (st === 'clean' || st === 'mixed') ? P.clean : P.noread;
+    const line = st === 'broken' ? P.brokenLine : (st === 'clean' || st === 'mixed') ? P.cleanLine : P.noreadLine;
     const dash = st === 'no_read' ? ' stroke-dasharray="5 4"' : '';
     const tcol = st === 'broken' ? P.brokenText : P.text;
     return '<path d="' + d + '" fill="' + fill + '" stroke="' + line + '" stroke-width="1.5" stroke-linejoin="round"' + dash + '/>'
@@ -2486,11 +2528,11 @@ const funnelSvg = (sts, pal) => {
     + '<circle cx="' + (x + 17) + '" cy="' + (y + 38) + '" r="2.6" fill="' + P.brokenLine + '"/><circle cx="' + (x + 13) + '" cy="' + (y + 49) + '" r="1.8" fill="' + P.brokenLine + '"/>';
   return '<svg width="236" height="474" viewBox="0 0 200 402" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="funnel">'
     + band('M12 6 L188 6 L166 108 L34 108 Z', sts.found, 'GETTING FOUND', 62)
-    + (sts.found === 'broken' ? drip(174, 40) : '')
+    + ((sts.found === 'broken' || sts.found === 'mixed') ? drip(174, 40) : '')
     + band('M38 120 L162 120 L144 222 L56 222 Z', sts.door, 'THE DOOR', 176)
-    + (sts.door === 'broken' ? drip(151, 154) : '')
+    + ((sts.door === 'broken' || sts.door === 'mixed') ? drip(151, 154) : '')
     + band('M60 234 L140 234 L126 324 L74 324 Z', sts.after, 'AFTER CONTACT', 284)
-    + (sts.after === 'broken' ? drip(130, 262) : '')
+    + ((sts.after === 'broken' || sts.after === 'mixed') ? drip(130, 262) : '')
     + '<path d="M86 336 L114 336 L111 372 L89 372 Z" fill="' + P.clean + '" stroke="' + P.cleanLine + '" stroke-width="1.5" stroke-linejoin="round"/>'
     + '<text x="100" y="392" text-anchor="middle" font-size="11" fill="' + P.dim + '" font-family="-apple-system,Helvetica,sans-serif">booked jobs</text>'
     + '</svg>';
@@ -2530,6 +2572,7 @@ const auditRecordFor = (lead) => {
     company: l.name || l.company || 'Unknown business',
     website: l.website || '',
     owner: l.verifiedCEO || l.founderName || '',
+    ownerEvidence: l.ownerNameEvidence || '',
     ownerTitle: l.verifiedCEOTitle || l.title || '',
     email: l.email || '',
     // How much to trust the address, same rules as the screen — a junior
@@ -2704,7 +2747,7 @@ const auditExportHtml = (records, meta) => {
     // Grouped ONCE, before the header — the score sentence reads the stage
     // statuses and the funnel section reads the same grouping.
     const fg = groupByFunnelStage(r.problemList, r.funnelStory);
-    const anyBroken = fg.stages.some(s3 => s3.status === 'broken');
+    const anyBroken = fg.stages.some(s3 => s3.status === 'broken' || s3.status === 'mixed');
     // Do-not-say: the quote plus one plain line (plainRisk), deduped — rendered
     // LAST, inside the reference tail in oneTail. Stashed here where the pieces
     // are in scope.
@@ -2743,7 +2786,7 @@ const auditExportHtml = (records, meta) => {
       // ═══ 10-SECOND STRIP: WHO TO CALL ═══
       + '<section class="call"><div>'
       + '<div class="cname">' + (r.owner
-          ? e(r.owner) + '<span> &middot; ' + (r.ownerTitle ? e(r.ownerTitle) : 'no title found') + (r.email ? ' &middot; ' + e(r.email) + (r.emailNote ? ' (' + e(r.emailNote) + ')' : '') : '') + '</span>'
+          ? e(r.owner) + '<span> &middot; ' + (r.ownerTitle ? e(r.ownerTitle) : 'no title found') + (r.email ? ' &middot; ' + e(r.email) + (r.emailNote ? ' (' + e(r.emailNote) + ')' : '') : '') + '</span>' + (r.ownerEvidence ? '<div class="dim" style="margin-top:3px">' + e(r.ownerEvidence) + '</div>' : '')
           : (r.email ? e(r.email) + '<span> &middot; no confirmed owner</span>' : 'No confirmed contact'))
       + '</div>'
       + (r.heldBack && r.heldBack.name
@@ -2783,9 +2826,9 @@ const auditExportHtml = (records, meta) => {
           // stage must not read "no fault found" on that run.
           const fbSearch = !!(af && af.searchSource === 'places');
           const stagesHtml = fg.stages.map(s3 => {
-            const cls = s3.status === 'broken' ? 'fb' : s3.status === 'clean' ? 'fc' : 'fn';
+            const cls = s3.status === 'broken' ? 'fb' : (s3.status === 'clean' || s3.status === 'mixed') ? 'fc' : 'fn';
             const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
-            const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
+            const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
             const wt = (walkT[s3.id] || []).join(' ')
               + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '');
             const rowsHtml = s3.rows.map(x => {
@@ -6294,8 +6337,17 @@ function LeadBriefing({ lead }) {
       style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 18,
         paddingBottom: 16, borderBottom: '1px solid var(--b)' }
     },
-      L('Who to talk to', (lead.decisionMaker && lead.decisionMaker.name) || lead.ownerName,
-        (lead.decisionMaker && lead.decisionMaker.title) ? { text: lead.decisionMaker.title } : null),
+      // lead.ownerName was a PHANTOM FIELD — it exists nowhere in either file,
+      // so this line printed an em-dash beside a verifiedCEO the server had
+      // resolved ("Who to talk to —" next to shane.irwin@... on a business
+      // called Irwin's). Same chain every other surface uses.
+      L('Who to talk to', (lead.decisionMaker && lead.decisionMaker.name) || lead.verifiedCEO || lead.founderName,
+        (lead.decisionMaker && lead.decisionMaker.title) ? { text: lead.decisionMaker.title }
+          : lead.verifiedCEOTitle ? { text: lead.verifiedCEOTitle }
+          : lead.ownerNameEvidence ? { text: lead.ownerNameEvidence }
+          : ((lead.decisionMaker && lead.decisionMaker.name) || lead.verifiedCEO || lead.founderName) ? { text: 'no title found' }
+          : (lead.heldBackContact && lead.heldBackContact.name) ? { text: 'held back: ' + lead.heldBackContact.name + ' \u2014 ' + (lead.heldBackContact.why || 'did not clear the buying floor') }
+          : null),
       L('Email', email, emailNote, 'var(--g)'),
       L('Phone', prettyPhone(lead.phone), lead.phoneSource === 'google_business_profile' ? { text: 'The number on their Google listing' } : null),
       // Strip tracking parameters. Dr Rai's website rendered as three wrapped
@@ -6348,7 +6400,7 @@ function LeadBriefing({ lead }) {
       const stageBlocks = fg.stages.map((s3, si) => {
         const broken = s3.status === 'broken';
         const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
-        const stTxt = broken ? 'BROKEN' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
+        const stTxt = broken ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
         const wt = ((walkT[s3.id] || []).join(' ')
           + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '')).trim();
         const rowsEls = s3.rows.map((x, ri) => {
@@ -6457,7 +6509,7 @@ function LeadBriefing({ lead }) {
       // that have no stage: review intelligence, the traffic estimate, and
       // pages only an ad link reaches. Vin left the how to us: "not sure what
       // Kill the 7.9/10 chips block is so that is yoru call."
-      const anyBroken2 = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory).stages.some(s5 => s5.status === 'broken');
+      const anyBroken2 = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory).stages.some(s5 => s5.status === 'broken' || s5.status === 'mixed');
       const notes = [];
       if (af && Number.isFinite(af.campaignPages) && af.campaignPages > 0) notes.push(af.campaignPages + ' page(s) only reachable by ad link \u2014 checkable in one click');
       const te = lead.trafficEstimate;
