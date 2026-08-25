@@ -210,6 +210,27 @@ const runBatch = async (opts) => {
 };
 
 (async () => {
+  // 0. The follow-along detail, through the REAL reducer: set by lead-status,
+  //    gone the moment the lead finishes, cleared by a new roster — a done
+  //    chip claiming "writing the audit" is a stale claim about ended work.
+  {
+    const W0 = makeW({ leads: [] });
+    const api0 = new Function('__W', makeWorld())(W0);
+    const R = api0.batchProgressReduce;
+    let p = R(undefined, { phase: 'roster', total: 2, names: ['A', 'B'] });
+    p = R(p, { phase: 'start', lead: { name: 'A' } });
+    p = R(p, { phase: 'lead-status', lead: { name: 'A' }, leadPhase: 'reading their pages', workedMs: 61000 });
+    if (!p.detail || !p.detail.A || p.detail.A.phase !== 'reading their pages' || p.detail.A.workedMs !== 61000) {
+      fails.push('a lead-status event does not reach the panel detail — the batch bar cannot say what a running lead is doing');
+    }
+    const sum0 = (p.running || []).length + (p.queued || []).length + (p.finished || 0);
+    if (sum0 !== p.total) fails.push('a lead-status event broke the three-state sum');
+    p = R(p, { phase: 'done', lead: { name: 'A' }, finished: 1, total: 2 });
+    if (p.detail && p.detail.A) fails.push('a finished lead still shows a phase — stale follow-along on a done lead');
+    p = R(p, { phase: 'roster', total: 1, names: ['C'] });
+    if (p.detail && Object.keys(p.detail).length) fails.push('a new roster does not clear the previous run detail');
+  }
+
   // 1 + 2 + 5 + 7 — fifty leads, audits only.
   {
     const leads = seed(50);

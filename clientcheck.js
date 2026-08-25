@@ -974,6 +974,62 @@ const mergeStat = runMergeCheck();
   }
 }
 
+// ══ 6d. THE BOARD — the one place that decides which tab a lead is on ═══════
+// Vin, 2026-08-25: "i ran irwin and it didnt pop up in the audited seciton."
+// Irwin WAS in the old sidebar — under Audited, which rendered below the whole
+// not-audited section. The board replaces buried sections with tabs, and
+// boardStatusFor/boardRowsFor are executed here because the old section
+// filters lived inline in the render where nothing could run them.
+{
+  const NEEDB = ['boardStatusFor', 'boardRowsFor', 'phaseLabelFor', 'leadHasAudit'];
+  const foundB = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && NEEDB.includes(n.id.name) && n.init) {
+      foundB[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+  });
+  const missingB = NEEDB.filter(k => !foundB[k]);
+  if (missingB.length) {
+    fails.push('the board cannot be verified: ' + missingB.join(', ') + ' not found at module scope');
+  } else {
+    let modB = null;
+    try {
+      modB = new Function('PHASE_LABEL', foundB.leadHasAudit + '\n' + foundB.phaseLabelFor + '\n' + foundB.boardStatusFor + '\n' + foundB.boardRowsFor
+        + '\nreturn { status: boardStatusFor, rows: boardRowsFor, phase: phaseLabelFor };')({ queued: 'waiting for a worker', running: 'working', dead: 'finishing' });
+    } catch (e) { fails.push('the board functions no longer compile standalone: ' + e.message); }
+    if (modB) {
+      const AUD = { id: 'a', name: "Irwin's Septic", icpScore: 81, problemList: [{ id: 'x', leakRank: 1, problem: 'Every job ends at the invoice' }], researchedAt: '2026-08-25T14:00:00Z' };
+      const RUN = { id: 'b', name: 'A Team Garage Doors', icpScore: 79, problemList: [{ id: 'y' }] };
+      const NEW = { id: 'c', name: 'Honda Of Fife', icpScore: 76 };
+      const QUE = { id: 'd', name: 'CCM Overhead Doors', icpScore: 75 };
+      const ctx = { isRunning: (l) => l.id === 'b', queuedNames: new Set(['CCM Overhead Doors']) };
+      const bd = modB.rows([NEW, AUD, RUN, QUE], ctx);
+      const by = {}; for (const r of bd.rows) by[r.id] = r;
+      if (!by.a || by.a.status !== 'audited') fails.push('an audited lead does not land on the Audited tab — the exact burial Vin reported');
+      if (!by.b || by.b.status !== 'running') fails.push('a running lead with an old audit is not shown as running — running must beat audited or a re-run looks finished');
+      if (!by.d || by.d.status !== 'queued') fails.push('a queued lead is not shown as queued');
+      if (!by.c || by.c.status !== 'not_audited') fails.push('a fresh lead is not on the Not-audited tab');
+      if (!bd.rows.length || bd.rows[0].id !== 'b') fails.push('running leads do not sort first on the board');
+      if (!by.a || by.a.leak1 !== 'Every job ends at the invoice') fails.push('leak 1 does not reach the board row');
+      const cts = bd.counts || {};
+      if (cts.all !== 4 || cts.auditing !== 2 || cts.audited !== 1 || cts.notAudited !== 1) fails.push('the board counts are wrong: ' + JSON.stringify(cts));
+      if (modB.phase('queued') !== 'waiting for a worker') fails.push('the queued phase does not translate for a person');
+      if (modB.phase('reading their reviews') !== 'reading their reviews') fails.push('a real milestone label is rewritten instead of shown');
+    }
+    // Call sites — a fixture supplies its own arguments and cannot see them.
+    const _bn = (...p) => p.join('');
+    for (const [what, needle] of [
+      ['the board never renders — boardRowsFor has no call site', _bn('const bd = boardRowsFor(', '_pool, _ctx);')],
+      ['the way back from the audit to the board is gone', _bn('onSelectLead && onSelectLead(', 'null)')],
+      ["the batch no longer reports each lead's live status to the bar", _bn("onStatus: (stx) => report({ phase: 'lead-status'", ', lead, leadPhase: stx.phase, workedMs: stx.workedMs })')],
+      ['the poll loop no longer hands the phase outward — the milestones are computed and never delivered', _bn('if (typeof o.onStatus === ', "'function') { try { o.onStatus({ phase: st.phase || 'running', workedMs }); }")],
+      ['the search box is destructive again — Export-all while a search is typed exports only the matches', _bn('onChange: e => setSearchQ(', 'e.target.value)')],
+    ]) {
+      if (!src.includes(needle)) fails.push(what);
+    }
+  }
+}
+
 // ══ 6c. THE SEND MUST CARRY BOTH SEQUENCES AND STAMP WHICH ONE FIRED ════════
 // Rotation is a settings entry; these are the three client wires that make it
 // real. Each is a needle for a line that, missing, silently reverts the send

@@ -1126,7 +1126,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260826;
+const CLIENT_CONTRACT = 20260827;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2187,10 +2187,19 @@ const batchProgressReduce = (state, ev) => {
     return a;
   };
   if (ev.phase === 'roster') {
-    return { finished: 0, total, running: [], done: [], queued: (ev.names || []).slice() };
+    return { finished: 0, total, running: [], done: [], queued: (ev.names || []).slice(), detail: {} };
   }
   if (ev.phase === 'start') {
     return { ...s, total, queued: dropOne(s.queued, name), running: (s.running || []).concat([name]) };
+  }
+  // What each running lead is DOING right now — the server's own milestone,
+  // never an elapsed-time guess. Keyed by name because that is what the
+  // running list holds; a duplicate name shows the later report, which is the
+  // honest tie-break for a display.
+  if (ev.phase === 'lead-status') {
+    const d = { ...(s.detail || {}) };
+    d[name] = { phase: String(ev.leadPhase || 'working'), workedMs: Number(ev.workedMs) || 0 };
+    return { ...s, detail: d };
   }
   // What the run has cost so far, summed from each done event's spend - the
   // server's own per-request ledger riding the result. Accumulated HERE, in
@@ -2208,7 +2217,53 @@ const batchProgressReduce = (state, ev) => {
       places: _prev.places + (Number(_sp.places) || 0),
       apify: _prev.apify + (Number(_sp.apify) || 0),
     } : _prev,
+    // The finished lead's phase leaves with it — a done chip showing
+    // "writing the audit" is a stale claim about work that ended.
+    detail: (() => { const d = { ...(s.detail || {}) }; delete d[name]; return d; })(),
     done: (s.done || []).concat([name]) };
+};
+
+// The two non-milestone phases a job can report, said as a person would.
+const PHASE_LABEL = { queued: 'waiting for a worker', running: 'working', dead: 'finishing' };
+const phaseLabelFor = (p) => PHASE_LABEL[String(p || '')] || String(p || 'working');
+
+// ══ THE BOARD: EVERY LEAD IS ONE ROW, ITS STATUS IS A TAB ═══════════════════
+// Vin, 2026-08-25: "it does not show audited leads anymore - i ran irwin and
+// it didnt pop up in the audited seciton." Irwin WAS in the list — under
+// Audited, which rendered BELOW the entire not-audited section: over a hundred
+// rows down, past sticky headers that replace each other as you scroll. A
+// section a person cannot find is a section that does not exist. The board
+// replaces buried sections with tabs, and THIS function is the one place that
+// decides which tab a lead belongs to — executed by clientcheck, because the
+// old section filters lived inline in the render where nothing could run them.
+const boardStatusFor = (l, ctx) => {
+  const c = ctx || {};
+  if (typeof c.isRunning === 'function' && c.isRunning(l)) return 'running';
+  if (c.queuedNames && c.queuedNames.has && c.queuedNames.has(l.name)) return 'queued';
+  return leadHasAudit(l) ? 'audited' : 'not_audited';
+};
+const boardRowsFor = (leads, ctx) => {
+  const rows = (leads || []).filter(Boolean).map(l => {
+    const status = boardStatusFor(l, ctx);
+    const lk = Array.isArray(l.problemList) ? l.problemList.find(r => r && r.leakRank === 1) : null;
+    return {
+      id: l.id, name: l.name || '', score: Number(l.icpScore) || 0, status,
+      approved: !!l.approved, emailWritten: !!l.pitch,
+      researchedAt: l.researchedAt || null,
+      leak1: lk ? String(lk.problem || '') : '',
+      owner: (l.decisionMaker && l.decisionMaker.name) || l.verifiedCEO || '',
+      needsLook: !!(l.rateLimited || (l.brainAudit && l.brainAudit._ladderFailed)),
+    };
+  });
+  const ORDER = { running: 0, queued: 1, audited: 2, not_audited: 3 };
+  rows.sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || (b.score - a.score) || a.name.localeCompare(b.name));
+  const counts = { all: rows.length, auditing: 0, audited: 0, notAudited: 0 };
+  for (const r of rows) {
+    if (r.status === 'running' || r.status === 'queued') counts.auditing++;
+    else if (r.status === 'audited') counts.audited++;
+    else counts.notAudited++;
+  }
+  return { rows, counts };
 };
 
 const runBatchAudit = async (opts) => {
@@ -2249,7 +2304,8 @@ const runBatchAudit = async (opts) => {
     try {
       const r = await researchViaQueue(
         buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null }),
-        { trigger: 'bulk-audit', onJobId: (jid) => setInflightJob(lead.id, jid) }
+        { trigger: 'bulk-audit', onJobId: (jid) => setInflightJob(lead.id, jid),
+          onStatus: (stx) => report({ phase: 'lead-status', lead, leadPhase: stx.phase, workedMs: stx.workedMs }) }
       );
       const data = await r.json();
       // The row as it stands NOW, not as it stood when the batch was assembled.
@@ -3232,6 +3288,7 @@ const pollResearchJob = async (jobId, o) => {
         ? Number(st.workedMs)
         : (st.phase === 'queued' ? 0 : (Date.now() - started));
       if (typeof o.onProgress === 'function') o.onProgress(st.elapsedMs || (Date.now() - started));
+      if (typeof o.onStatus === 'function') { try { o.onStatus({ phase: st.phase || 'running', workedMs }); } catch (e) { void e; } }
       continue;
     }
     if (st.status === 'error' && !st.result) {
@@ -6933,6 +6990,11 @@ function ResearchView({
   // panel below reports finished, in flight, elapsed and every outcome as it
   // lands rather than a tally at the end.
   const [batchAt, setBatchAt] = useState({ finished: 0, total: 0, running: [], queued: [], done: [] });
+  const [boardTab, setBoardTab] = useState('all');
+  // The find-a-lead box, NON-destructive: it used to REPLACE allLeads with the
+  // filtered subset, so "Export all audits" while a search was typed silently
+  // exported only the matches. The store stays whole; render sites filter.
+  const [searchQ, setSearchQ] = useState('');
   const [batchResults, setBatchResults] = useState([]);
   const [batchStartedAt, setBatchStartedAt] = useState(0);
   // A one-second tick, running ONLY while the batch runs, so the elapsed figure
@@ -7573,17 +7635,41 @@ function ResearchView({
         !batchRunning && React.createElement('button', {
           className: 'btn btn-sm', onClick: () => { setBatchResults([]); setBatchStartedAt(0); },
         }, 'Dismiss')),
-      React.createElement('div', { style: { height: 3, borderRadius: 3, background: 'var(--s2)', overflow: 'hidden' } },
-        React.createElement('div', { style: { height: '100%', width: pct + '%', background: 'var(--t)', transition: 'width .3s' } })),
-      batchRunning && React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m2)', display: 'flex', gap: 8, flexWrap: 'wrap' } },
-        React.createElement('span', { style: { color: 'var(--m)' } }, 'Working on:'),
-        (batchAt.running.length
-          ? batchAt.running.map((n, i) => React.createElement('span', { key: 'r' + i }, n))
-          : React.createElement('span', { style: { color: 'var(--m)' } }, 'starting…')),
+      (() => {
+        const runN = (batchAt.running || []).length;
+        const N = Math.max(1, Math.min(total || 1, 60));
+        const doneSegs = total ? Math.floor((done / total) * N) : 0;
+        const runSegs = total ? Math.min(N - doneSegs, Math.max(runN ? 1 : 0, Math.round((runN / total) * N))) : 0;
+        const segs = [];
+        for (let i = 0; i < N; i++) {
+          segs.push(React.createElement('div', {
+            key: 's' + i,
+            style: { flex: 1, height: 7, borderRadius: 99,
+              background: i < doneSegs ? 'var(--a)' : i < doneSegs + runSegs ? 'var(--p)' : 'var(--s2)',
+              transition: 'background .3s' }
+          }));
+        }
+        return React.createElement('div', { style: { display: 'flex', gap: 3 } }, segs);
+      })(),
+      batchRunning && React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' } },
+        ((batchAt.running || []).length
+          ? (batchAt.running || []).map((n, i) => {
+              const d = (batchAt.detail || {})[n];
+              return React.createElement('span', {
+                key: 'rc' + i,
+                style: { display: 'inline-flex', alignItems: 'center', gap: 7, background: 'var(--s2)',
+                  border: '1px solid rgba(124,58,237,.45)', borderRadius: 999, padding: '4px 12px', fontSize: 11.5 }
+              },
+                React.createElement('span', { style: { width: 6, height: 6, borderRadius: 99, background: 'var(--p)', flexShrink: 0 } }),
+                React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, n),
+                React.createElement('span', { style: { color: 'var(--m2)' } },
+                  d ? (phaseLabelFor(d.phase) + ' \u00b7 ' + mmss(d.workedMs)) : 'starting\u2026'));
+            })
+          : React.createElement('span', { style: { fontSize: 11.5, color: 'var(--m2)' } }, 'starting\u2026')),
         (batchAt.queued || []).length
-          ? React.createElement('span', { style: { color: 'var(--m)' } },
-              '· then ' + batchAt.queued.length + ' more: ' + batchAt.queued.slice(0, 3).join(', ')
-              + (batchAt.queued.length > 3 ? ' and ' + (batchAt.queued.length - 3) + ' others' : ''))
+          ? React.createElement('span', { style: { fontSize: 11.5, color: 'var(--m2)' } },
+              'next: ' + batchAt.queued.slice(0, 2).join(', ')
+              + (batchAt.queued.length > 2 ? ' +' + (batchAt.queued.length - 2) + ' more' : ''))
           : null),
       (batchResults.length > 0) && React.createElement('div', { style: { fontSize: 11.5, color: 'var(--m)', display: 'flex', gap: 12, flexWrap: 'wrap' } },
         Object.keys(tally).map(k => React.createElement('span', { key: k }, tally[k] + ' ' + (LABEL[k] || k)))),
@@ -7639,11 +7725,8 @@ function ResearchView({
       React.createElement('input', {
         style: { width: '100%', fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--b)', background: 'var(--s2)', color: 'var(--t)' },
         placeholder: 'Search\u2026',
-        onChange: e => {
-          const q = e.target.value.toLowerCase();
-          const all = getLeads().sort((a,b) => (b.icpScore||0)-(a.icpScore||0));
-          setAllLeads(q ? all.filter(l => l.name.toLowerCase().includes(q)) : all);
-        }
+        value: searchQ,
+        onChange: e => setSearchQ(e.target.value)
       }),
       // ══ AUDIT IN BULK ════════════════════════════════════════════════════
       // Sits above the list because the list is what it changes. It says how
@@ -7770,9 +7853,13 @@ function ResearchView({
     // then what still needs auditing, then what is done. Score-sorted within
     // each. The card itself is one renderer used by all three, because two
     // copies of a row is the two-copies disease with a screen attached.
+    !lead ? React.createElement('div', { style: { flex: 1, padding: '14px 12px', fontSize: 11.5, color: 'var(--m2)', lineHeight: 1.55 } },
+      'Every lead is on the board \u2192 click one to open its audit. This list comes back while a lead is open.') :
     React.createElement('div', { style: { overflowY: 'auto', flex: 1 } },
       (() => {
         const _inf = getInflightJobs();
+        const _q = String(searchQ || '').trim().toLowerCase();
+        const _vis = _q ? allLeads.filter(l => l && String(l.name || '').toLowerCase().includes(_q)) : allLeads;
         const _runningNames = new Set(batchAt.running || []);
         const isRunning = (l) => !!(l && (
           inflightIsLive(_inf[l.id])
@@ -7803,9 +7890,9 @@ function ResearchView({
         // and not about what happens to be running. And Export's scope moved to
         // the export screen, where you can see and choose it, so the heading no
         // longer has to carry it.
-        const inProgress = allLeads.filter(l => isRunning(l) || isQueued(l));
-        const audited = allLeads.filter(l => !isRunning(l) && !isQueued(l) && isAudited(l));
-        const waiting = allLeads.filter(l => !isRunning(l) && !isQueued(l) && !isAudited(l));
+        const inProgress = _vis.filter(l => isRunning(l) || isQueued(l));
+        const audited = _vis.filter(l => !isRunning(l) && !isQueued(l) && isAudited(l));
+        const waiting = _vis.filter(l => !isRunning(l) && !isQueued(l) && !isAudited(l));
         const header = (label, count, color) => React.createElement('div', {
           key: 'h-' + label,
           style: { position: 'sticky', top: 0, zIndex: 2, padding: '7px 12px 6px', background: 'var(--s)',
@@ -7843,9 +7930,12 @@ function ResearchView({
           );
         };
         const out = [];
+        // Audited ABOVE not-audited: it used to render last, below every
+        // not-audited row — over a hundred rows down on a real pipeline —
+        // which read as "audited leads don't show up anymore" (Irwin, live).
         if (inProgress.length) { out.push(header('Auditing now', inProgress.length, 'var(--t)')); inProgress.forEach(l => out.push(leadRow(l))); }
-        if (waiting.length) { out.push(header('Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
         if (audited.length) { out.push(header('Audited', audited.length)); audited.forEach(l => out.push(leadRow(l))); }
+        if (waiting.length) { out.push(header('Not audited yet', waiting.length)); waiting.forEach(l => out.push(leadRow(l))); }
         return out;
       })()
     )
@@ -7983,7 +8073,100 @@ function ResearchView({
   }),
 
   // ══ MAIN PANEL ════════════════════════════════════════════════════════════
-  !lead ? React.createElement('div', { style: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--m)', fontSize: 14 } }, 'Select a lead') :
+  // ══ THE BOARD — every lead, full width, status as a tab ══════════════════
+  // Direction B, approved by mock 2026-08-25. Clicking a row opens the exact
+  // audit screen that already exists; the board is only the front door.
+  !lead ? (() => {
+    const _inf = getInflightJobs();
+    const _runNames = new Set(batchAt.running || []);
+    const _ctx = {
+      isRunning: (l) => !!(l && (inflightIsLive(_inf[l.id]) || _runNames.has(l.name) || researchingId === l.id)),
+      queuedNames: new Set(batchAt.queued || []),
+    };
+    const _q = String(searchQ || '').trim().toLowerCase();
+    const _pool = _q ? allLeads.filter(l => l && String(l.name || '').toLowerCase().includes(_q)) : allLeads;
+    const bd = boardRowsFor(_pool, _ctx);
+    const rows = bd.rows.filter(r =>
+      boardTab === 'all' ? true
+      : boardTab === 'auditing' ? (r.status === 'running' || r.status === 'queued')
+      : boardTab === 'audited' ? r.status === 'audited'
+      : r.status === 'not_audited');
+    const DOT = { running: 'var(--p)', queued: 'var(--am)', audited: 'var(--a)', not_audited: 'var(--m)' };
+    const tabEl = (id, label, n, color) => React.createElement('div', {
+      key: id, onClick: () => setBoardTab(id),
+      style: { padding: '9px 13px', fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+        fontWeight: boardTab === id ? 700 : 600, color: boardTab === id ? 'var(--t)' : 'var(--m2)',
+        borderBottom: boardTab === id ? '2px solid var(--a)' : '2px solid transparent' }
+    }, label + ' ', React.createElement('span', { style: { color: color || 'var(--m)', fontWeight: 700 } }, String(n)));
+    const when = (iso) => {
+      const d = iso ? new Date(iso) : null;
+      if (!d || isNaN(d)) return '';
+      const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+      if (days <= 0) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (days === 1) return 'yesterday';
+      return days + 'd ago';
+    };
+    const GRID = '16px minmax(0, 1.5fr) 44px minmax(0, 2.4fr) 118px 84px 24px';
+    const statusLine = (r) => {
+      if (r.status === 'running') {
+        const d = (batchAt.detail || {})[r.name];
+        return { text: 'auditing \u2014 ' + (d ? phaseLabelFor(d.phase) : 'working\u2026'), color: 'var(--p)' };
+      }
+      if (r.status === 'queued') return { text: 'queued in this run', color: 'var(--am)' };
+      if (r.status === 'audited') {
+        if (r.needsLook) return { text: (r.leak1 ? r.leak1 + ' \u00b7 ' : '') + 'needs a look', color: 'var(--r)' };
+        return { text: r.leak1 ? 'Leak 1: ' + r.leak1 : 'audited \u2014 open for the full read', color: 'var(--t)' };
+      }
+      return { text: '\u2014', color: 'var(--m)' };
+    };
+    return React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '18px 24px 0' } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 } },
+        React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: 'var(--t)' } }, 'Research'),
+        React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)' } },
+          bd.counts.all + ' lead' + (bd.counts.all === 1 ? '' : 's') + (_q ? ' matching \u201c' + searchQ + '\u201d' : '') + ' \u00b7 ' + bd.counts.audited + ' audited')),
+      React.createElement('div', { style: { display: 'flex', gap: 2, borderBottom: '1px solid var(--b)', flexShrink: 0 } },
+        tabEl('all', 'All', bd.counts.all, 'var(--m2)'),
+        tabEl('auditing', 'Auditing', bd.counts.auditing, 'var(--p)'),
+        tabEl('audited', 'Audited', bd.counts.audited, 'var(--a)'),
+        tabEl('not_audited', 'Not audited', bd.counts.notAudited, 'var(--m)')),
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: GRID, gap: '0 14px', padding: '9px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: 'var(--m)', borderBottom: '1px solid var(--b)', flexShrink: 0 } },
+        React.createElement('span', null, ''),
+        React.createElement('span', null, 'LEAD'),
+        React.createElement('span', null, 'SCORE'),
+        React.createElement('span', null, 'STATUS \u00b7 LEAK 1'),
+        React.createElement('span', null, 'AUDITED'),
+        React.createElement('span', null, ''),
+        React.createElement('span', null, '')),
+      React.createElement('div', { style: { flex: 1, overflowY: 'auto', paddingBottom: 16 } },
+        rows.length ? rows.map((r) => {
+          const sl = statusLine(r);
+          return React.createElement('div', {
+            key: r.id,
+            onClick: () => onSelectLead && onSelectLead(r.id),
+            style: { display: 'grid', gridTemplateColumns: GRID, gap: '0 14px', alignItems: 'center',
+              padding: '11px 10px', borderBottom: '1px solid var(--b)', cursor: 'pointer',
+              background: r.status === 'audited' ? 'rgba(255,255,255,.015)' : 'transparent' }
+          },
+            React.createElement('span', { style: { width: 8, height: 8, borderRadius: 99, background: DOT[r.status] || 'var(--m)', justifySelf: 'center' } }),
+            React.createElement('span', { style: { minWidth: 0 } },
+              React.createElement('span', { style: { display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--t)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.name),
+              r.owner ? React.createElement('span', { style: { display: 'block', fontSize: 11.5, color: 'var(--m2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.owner) : null),
+            React.createElement('span', { style: { fontSize: 12.5, color: 'var(--m2)' } }, r.score || ''),
+            React.createElement('span', { style: { fontSize: 12.5, color: sl.color, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: r.status === 'running' ? 600 : 400 } }, sl.text),
+            React.createElement('span', { style: { fontSize: 12, color: r.status === 'audited' ? 'var(--t)' : 'var(--m)' } },
+              r.status === 'audited'
+                ? ('\u2713 ' + when(r.researchedAt) + (r.approved ? ' \u00b7 approved' : r.emailWritten ? ' \u00b7 email written' : '')).trim()
+                : ''),
+            React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: 'var(--m2)' } },
+              r.status === 'audited' ? 'Open audit' : 'Open'),
+            React.createElement('button', {
+              onClick: (e) => { e.stopPropagation(); setDeleteModal({ id: r.id, name: r.name }); },
+              title: 'Remove from pipeline',
+              style: { background: 'transparent', border: 'none', color: 'var(--m2)', fontSize: 15, cursor: 'pointer', lineHeight: 1, padding: '2px 4px' }
+            }, '\u00d7'));
+        }) : React.createElement('div', { style: { padding: '28px 10px', fontSize: 13, color: 'var(--m2)' } },
+          _q ? 'No lead matches that search on this tab.' : 'Nothing on this tab yet.')));
+  })() :
   React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--s2)' } },
 
     // HEADER
@@ -7991,6 +8174,10 @@ function ResearchView({
       // Name + actions
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 } },
         React.createElement('div', null,
+          React.createElement('button', {
+            onClick: () => onSelectLead && onSelectLead(null),
+            style: { background: 'transparent', border: 'none', color: 'var(--m2)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0, marginBottom: 5, fontFamily: 'inherit' }
+          }, '\u2190 All leads'),
           React.createElement('div', { style: { fontSize: 17, fontWeight: 600, color: 'var(--t)', lineHeight: 1.2 } }, lead.name),
           React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', marginTop: 2 } },
             [(lead.auditedWebsite || lead.website), lead.industry, lead.verifiedRevenue ? '💰 ' + lead.verifiedRevenue + ' revenue' : null, lead.verifiedEmployees ? '~'+lead.verifiedEmployees+' emp' : null].filter(Boolean).join(' · ') + (lead.auditedWebsiteResolved ? '  ·  ✓ real domain resolved' : '')
