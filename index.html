@@ -2352,8 +2352,9 @@ const RISK_REASONS = [
 ];
 const plainRisk = (x) => {
   const t = String(x || '');
-  const m = t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"][.\s]*$/) || t.match(/[\u2018']([^\u2018\u2019']{10,220})[\u2019']/) || t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"]/);
-  const quote = m ? m[1] : '';
+  const m = t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"][.\s]*$/) || t.match(/(?:^|[\s(\u2014])[\u2018']([^\u2018\u2019']{10,220})[\u2019'](?=[\s).,;:!?\u2014]|$)/) || t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"]/);
+  let quote = m ? m[1] : '';
+  if (/[.!?]\s+[A-Z]/.test(quote)) quote = '';
   let reason = '';
   for (const [re, r] of RISK_REASONS) { if (re.test(t)) { reason = r; break; } }
   if (!reason) {
@@ -2472,7 +2473,7 @@ const groupByFunnelStage = (pl, fs) => {
 // out. Red marks a stop (the house rule); an unmeasured stage is dashed and
 // never coloured, because "we did not look" must not read as a verdict.
 const funnelSvg = (sts, pal) => {
-  const P = pal || { broken: '#fef2f2', brokenLine: '#dc2626', clean: '#f5f5f7', cleanLine: '#a1a1a6', noread: '#fafafa', noreadLine: '#c7c7cc', text: '#515154', brokenText: '#b91c1c', dim: '#86868b' };
+  const P = pal || { broken: '#fef2f2', brokenLine: '#dc2626', clean: '#f5f5f7', cleanLine: '#a1a1a6', noread: '#fafafa', noreadLine: '#c7c7cc', text: '#1d1d1f', brokenText: '#b91c1c', dim: '#1d1d1f' };
   const band = (d, st, label, ly) => {
     const fill = st === 'broken' ? P.broken : st === 'clean' ? P.clean : P.noread;
     const line = st === 'broken' ? P.brokenLine : st === 'clean' ? P.cleanLine : P.noreadLine;
@@ -2551,6 +2552,7 @@ const auditRecordFor = (lead) => {
     // Review intelligence for the sheet. INTERNAL by the standing rule: reviews
     // are how we read the business, never what gets said to the owner.
     opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
+    traffic: (l.trafficEstimate && l.trafficEstimate.checked && l.trafficEstimate.inIndex) ? l.trafficEstimate : null,
     negUnanswered: (Number.isFinite(Number(l.reviewsNegativeUnanswered)) && Number(l.reviewsNegativeUnanswered) > 0) ? Number(l.reviewsNegativeUnanswered) : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
@@ -2864,12 +2866,16 @@ const auditExportHtml = (records, meta) => {
     // not check, anything with no money pillar, their own words, and Do-not-say
     // LAST — the business first, the guardrails at the end.
     const internal = [
+      (r.traffic && Number.isFinite(r.traffic.organicEtvMonthly)) ? ('~' + r.traffic.organicEtvMonthly.toLocaleString() + ' organic visits/mo — a third-party estimate, never said to him') : '',
+      (r.traffic && Number(r.traffic.paidKeywords) > 0) ? ('~' + (Number.isFinite(r.traffic.paidEtvMonthly) ? r.traffic.paidEtvMonthly.toLocaleString() : '?') + ' Google-paid visits/mo across ' + r.traffic.paidKeywords + ' paid keyword(s) — estimate, never said to him') : '',
+      (r.traffic && Number(r.traffic.paidKeywords) === 0) ? 'The search index has never seen this domain buy a Google ad' : '',
       (r.opsBuckets && r.opsBuckets[0]) ? ('Complaints are mostly “' + p(r.opsBuckets[0].label) + '”' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
       r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply — the cheapest fix a call can open with') : '',
     ].concat((g.internal || []).map(x => p(x.problem)))
      .concat((r.changes || []).filter(c => !c.sayable).map(c => p(c.say))).filter(Boolean);
     const sayableChanges = (r.changes || []).filter(c => c.sayable);
     const couldNot = ''
+      + (r.traffic ? '<p class="dim">Where their visitors actually come from \u2014 the organic/paid/social/direct split \u2014 only their own Analytics can show; worth asking on the call.</p>' : '')
       + (r.websiteScore && r.websiteScore.basedOn
         ? '<p class="dim">Website score graded on: ' + p(r.websiteScore.basedOn)
           + ((r.websiteScore.graded || []).length ? ' — ' + r.websiteScore.graded.map(g2 => e(g2.what + ' ' + g2.got + '/' + g2.of)).join(' · ') : '') + '</p>'
@@ -2915,15 +2921,15 @@ const auditExportHtml = (records, meta) => {
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#86868b;font-size:11.5px}.fst{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:#a1a1a6}.fb .fst{color:#b91c1c}.fev{color:#86868b;font-size:12.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#515154;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#1d1d1f}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#1d1d1f;font-size:13.5px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#1d1d1f;font-size:12.5px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#1d1d1f;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#1d1d1f;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#1d1d1f;font-size:13px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#1d1d1f;font-size:13.5px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#1d1d1f}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#1d1d1f}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#1d1d1f;font-size:12.5px}.fst{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#1d1d1f}.fb .fst{color:#b91c1c}.fev{color:#1d1d1f;font-size:13.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:13px;color:#1d1d1f;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
-    + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#86868b;font-size:13px;margin-bottom:6px}'
-    + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#515154}'
+    + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#1d1d1f;font-size:13.5px;margin-bottom:6px}'
+    + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#1d1d1f}'
     + ''
-    + 'table{border-collapse:collapse;width:100%;font-size:13px}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;border-bottom:1px solid #e5e7eb;padding:6px 8px 6px 0}'
-    + 'td{border-bottom:1px solid #f0f1f3;padding:7px 8px 7px 0;vertical-align:top}.sig td:first-child{width:170px;color:#515154}.good{color:#1d1d1f}.bad{color:#b91c1c}'
-    + 'ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}q{color:#515154;font-style:italic}pre{white-space:pre-wrap;font:13px/1.55 inherit;background:#f5f5f7;padding:12px;border-radius:10px;margin:6px 0 0}'
-    + '.ask{color:#515154;font-size:13px}nav{font-size:13px;margin-bottom:20px;columns:2}nav a{color:#1d1d1f;text-decoration:none}'
+    + 'table{border-collapse:collapse;width:100%;font-size:13px}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#1d1d1f;border-bottom:1px solid #e5e7eb;padding:6px 8px 6px 0}'
+    + 'td{border-bottom:1px solid #f0f1f3;padding:7px 8px 7px 0;vertical-align:top}.sig td:first-child{width:170px;color:#1d1d1f}.good{color:#1d1d1f}.bad{color:#b91c1c}'
+    + 'ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}q{color:#1d1d1f;font-style:italic}pre{white-space:pre-wrap;font:13px/1.55 inherit;background:#f5f5f7;padding:12px;border-radius:10px;margin:6px 0 0}'
+    + '.ask{color:#1d1d1f;font-size:13.5px}nav{font-size:13px;margin-bottom:20px;columns:2}nav a{color:#1d1d1f;text-decoration:none}'
     + '@media print{body{padding:0;max-width:none}article{break-after:page;border-top:none}nav{display:none}}'
     + '</style></head><body>'
     + '<h1>' + e(m.title || 'CROJungle audits') + '</h1>'
@@ -6224,9 +6230,9 @@ function LeadBriefing({ lead }) {
     return t.length === 10 ? '(' + t.slice(0,3) + ') ' + t.slice(3,6) + '-' + t.slice(6) : (p || '');
   };
   const L = (label, value, sub, accent) => React.createElement('div', { style: { minWidth: 0 } },
-    React.createElement('div', { style: { fontSize: 10.5, color: 'var(--m)', letterSpacing: '.02em', marginBottom: 3 } }, label),
+    React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', letterSpacing: '.02em', marginBottom: 3 } }, label),
     React.createElement('div', { style: { fontSize: 14.5, fontWeight: 600, wordBreak: 'break-word', lineHeight: 1.35, color: accent || 'var(--t)' } }, value || '\u2014'),
-    sub ? React.createElement('div', { style: { fontSize: 11, color: sub.warn ? 'var(--am)' : 'var(--m2)', marginTop: 3, lineHeight: 1.45 } }, sub.text) : null
+    sub ? React.createElement('div', { style: { fontSize: 12, color: sub.warn ? 'var(--am)' : 'var(--t)', marginTop: 3, lineHeight: 1.45 } }, sub.text) : null
   );
 
   // The RESOLVER's answer wins over whatever this lead happens to be carrying.
@@ -6262,20 +6268,20 @@ function LeadBriefing({ lead }) {
     (ba._ladderFailed && ba._ladderFailed.why) ? React.createElement('div', {
       style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
     },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
         'Do not call from this audit \u2014 the measurements failed'),
-      React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55 } },
+      React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55 } },
         'All ' + (ba._ladderFailed.rungs || 'the') + ' measured checks were lost on this lead, so everything below was written with nothing under it. Re-run Research before using any of it. Cause: ' + String(ba._ladderFailed.why))
     ) : null,
 
     (ba._criticalFactCheck && ba._criticalFactCheck.length) ? React.createElement('div', {
       style: { padding: '12px 15px', background: 'rgba(239,68,68,.12)', border: '1px solid var(--r)', borderRadius: 7 }
     },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 7 } },
         'Not sendable as written \u2014 ' + ba._criticalFactCheck.length + ' claim' + (ba._criticalFactCheck.length > 1 ? 's' : '') + ' the prospect can disprove'),
       React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
         ba._criticalFactCheck.slice(0, 5).map((x, i) => React.createElement('li', {
-          key: i, style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 4 }
+          key: i, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55, marginBottom: 4 }
         }, String(x)))
       )
     ) : null,
@@ -6308,7 +6314,7 @@ function LeadBriefing({ lead }) {
     // card; the walk prose is gone from here because the funnel section below
     // renders the same facts as staged evidence — nothing said twice.
     (sr || counted.length >= 4) ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The story',
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 7, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The story',
         React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'what is going on here, in one read — every number in it is measured')),
       sr && sr.background ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.65, marginBottom: 8 } }, sr.background) : null,
       sr && sr.headline ? React.createElement('div', { style: { fontSize: 17, fontWeight: 600, color: 'var(--t)', lineHeight: 1.4, marginBottom: 8 } }, sr.headline) : null,
@@ -6318,7 +6324,7 @@ function LeadBriefing({ lead }) {
             ? lead.funnelStory.stages.map(st => st.text).join('\n') : null)
           || (gc && gc.checked !== false && gc.condition ? String(gc.condition).replace(/\s*\u26a0[^]*$/, '') : null)
           || ba.realPain || lead.discoveryReason || 'Not enough measured yet to say what is holding this business back.'),
-      React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 7 } },
+      React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 7 } },
         problems.length === 0
           ? 'We measured ' + counted.length + ' things and found no problems.'
           : (counted.length - problems.length) + ' of ' + counted.length + ' measured signals are clean.'
@@ -6335,8 +6341,8 @@ function LeadBriefing({ lead }) {
       const sts = {}; for (const s3 of fg.stages) sts[s3.id] = s3.status;
       const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
       const lead1 = lead1Row && lead1Row[0].moneyLine;
-      const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#b9c0cc', brokenText: '#f87171', dim: '#8b93a2' };
-      const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
+      const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#f2f4f7', brokenText: '#f87171', dim: '#e8eaee' };
+      const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 12, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
       const walkT = walkTextsByStage(lead.funnelStory);
       const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
       const stageBlocks = fg.stages.map((s3, si) => {
@@ -6351,24 +6357,24 @@ function LeadBriefing({ lead }) {
           return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
             Number.isFinite(lr) ? badge(lr) : null,
             React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-            x.costs ? React.createElement('span', { style: { color: 'var(--m)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
-            ml ? React.createElement('div', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--t)', marginTop: 3 } }, ml) : null,
-            Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
+            x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
+            ml ? React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)', marginTop: 3 } }, ml) : null,
+            Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
         });
         const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
-          ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
+          ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
         const emptyNote = (!s3.rows.length && !legacyFriction && !wt)
-          ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', marginTop: 3 } },
+          ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 3 } },
               s3.status === 'no_read'
                 ? ('Nothing measured here' + (s3.id === 'after' ? ' \u2014 what happens after someone reaches out is a question for the call, not a claim.' : '.'))
                 : 'Measured \u2014 no fault found.')
           : null;
-        const walkEl = wt ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
+        const walkEl = wt ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
         return React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12, marginBottom: 12 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
-            React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--m2)' } }, s3.label),
-            React.createElement('span', { style: { fontSize: 11.5, color: 'var(--m)' } }, s3.sub),
-            React.createElement('span', { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--m)' } }, stTxt)),
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--t)' } }, s3.label),
+            React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, s3.sub),
+            React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
           walkEl, rowsEls, legacyFriction, emptyNote);
       });
       const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
@@ -6378,17 +6384,17 @@ function LeadBriefing({ lead }) {
         : (t && t.firstBrokenLinkWhy ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
             React.createElement('b', null, 'Fix first' + (t.firstBrokenLink ? ' \u2014 ' + layerPlain(t.firstBrokenLink) : '') + ': '), t.firstBrokenLinkWhy) : null);
       const wr = ((lead.funnelStory && lead.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
-      const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginBottom: 8 } },
+      const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 8 } },
         React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
         fg.work.length ? fg.work.map(x => x.problem).join(' \u00b7 ') : String(wr.text)) : null;
-      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6 } },
+      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
         fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
           React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
           (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
-      const sysDiag = t && t.diagnosis ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', lineHeight: 1.6, marginTop: 8 } },
+      const sysDiag = t && t.diagnosis ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 8 } },
         React.createElement('b', null, 'System one-change diagnosis' + (t.layer ? ' \u2014 ' + layerPlain(t.layer) : '') + ': '), t.diagnosis + (t.why ? ' ' + t.why : '')) : null;
       return React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
           React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
         React.createElement('div', { style: { display: 'flex', gap: 20 } },
           React.createElement('div', { style: { flexShrink: 0 }, dangerouslySetInnerHTML: { __html: funnelSvg(sts, DARK) } }),
@@ -6404,7 +6410,7 @@ function LeadBriefing({ lead }) {
     // briefing into a decision — and the "ask before pitching" line is what stops
     // a caller pitching growth to a business that is already at capacity.
     sr && sr.whatHeNeeds ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'The sell'),
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'The sell'),
       sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
       // The catalogue names, derived from the top money leaks' pillars — so the
       // recommendation always lands on something CROJungle sells, without the
@@ -6414,7 +6420,7 @@ function LeadBriefing({ lead }) {
         const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
         const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
           .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];
-        return prods.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginTop: 7 } },
+        return prods.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 7 } },
           'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
       })(),
       // askOnTheCall renders in The conversation above \u2014 one home each.
@@ -6457,7 +6463,12 @@ function LeadBriefing({ lead }) {
       const te = lead.trafficEstimate;
       if (te && te.checked && te.inIndex && Number.isFinite(te.organicEtvMonthly)) {
         notes.push('~' + te.organicEtvMonthly.toLocaleString() + ' organic visits/mo \u2014 third-party estimate, internal only');
-        if (Number(te.paidKeywords) > 0) notes.push('the index has seen paid keywords on this domain');
+        if (Number(te.paidKeywords) > 0) {
+          notes.push('~' + (Number.isFinite(te.paidEtvMonthly) ? te.paidEtvMonthly.toLocaleString() : '?') + ' Google-paid visits/mo across ' + te.paidKeywords + ' paid keyword(s) \u2014 third-party estimate, internal only');
+        } else if (Number(te.paidKeywords) === 0) {
+          notes.push('the index has never seen this domain buy a Google ad \u2014 consistent with what the site wiring shows, internal only');
+        }
+        notes.push('where visitors actually COME from (organic vs paid vs social vs direct) \u2014 only their own Analytics shows the split; worth asking on the call');
       }
       const ob = lead.opsBuckets;
       if (Array.isArray(ob) && ob.length && ob[0] && ob[0].label) {
@@ -6472,9 +6483,9 @@ function LeadBriefing({ lead }) {
       },
         ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
           React.createElement('span', { style: { fontSize: 24, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : 'var(--t)' } }, ws.score + '/10'),
-          React.createElement('span', { style: { fontSize: 12.5, color: 'var(--m2)' } }, 'site build \u2014 ' + (scoreSentence(ws, anyBroken2) || 'graded from the pages we read'))
+          React.createElement('span', { style: { fontSize: 13, color: 'var(--t)' } }, 'site build \u2014 ' + (scoreSentence(ws, anyBroken2) || 'graded from the pages we read'))
         ) : null,
-        notes.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', lineHeight: 1.7 } },
+        notes.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.7 } },
           notes.map((n2, ni) => React.createElement('div', { key: 'nt' + ni }, n2))) : null
       );
     })(),
@@ -6493,23 +6504,23 @@ function LeadBriefing({ lead }) {
       const said = String((sim && (sim.reason || sim.why || sim.reaction)) || '').trim();
       const obj = said.length >= 25 ? said.slice(0, 300) : '';
       const rows = [];
-      const gl = (txt, red) => React.createElement('div', { key: 'l' + rows.length, style: { color: red ? 'var(--r)' : 'var(--m)', fontSize: 12, paddingTop: 1, fontWeight: red ? 600 : 400 } }, txt);
+      const gl = (txt, red) => React.createElement('div', { key: 'l' + rows.length, style: { color: red ? 'var(--r)' : 'var(--t)', fontSize: 13, paddingTop: 1, fontWeight: red ? 600 : 400 } }, txt);
       const gv = (children) => React.createElement('div', { key: 'v' + rows.length, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.55, minWidth: 0 } }, children);
       if (lead.pitch) rows.push(gl('The email led with'), gv([
-        lead.subject ? React.createElement('div', { key: 's', style: { color: 'var(--m2)', fontSize: 12, marginBottom: 3 } }, 'Subject: ' + lead.subject) : null,
-        React.createElement('div', { key: 'p', style: { whiteSpace: 'pre-wrap', color: 'var(--m2)' } }, String(lead.pitch).slice(0, 400) + (String(lead.pitch).length > 400 ? '\u2026' : '')),
-        React.createElement('div', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5, marginTop: 3 } }, 'Already in front of him \u2014 the call does not have to open the same way.'),
+        lead.subject ? React.createElement('div', { key: 's', style: { color: 'var(--t)', fontSize: 13, marginBottom: 3 } }, 'Subject: ' + lead.subject) : null,
+        React.createElement('div', { key: 'p', style: { whiteSpace: 'pre-wrap', color: 'var(--t)' } }, String(lead.pitch).slice(0, 400) + (String(lead.pitch).length > 400 ? '\u2026' : '')),
+        React.createElement('div', { key: 'n', style: { color: 'var(--t)', fontSize: 12.5, marginTop: 3 } }, 'Already in front of him \u2014 the call does not have to open the same way.'),
       ]));
       if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
-        React.createElement('span', { key: 'n', style: { color: 'var(--m)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
+        React.createElement('span', { key: 'n', style: { color: 'var(--t)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
       if (sr && sr.askOnTheCall) rows.push(gl('Worth asking'), gv(sr.askOnTheCall));
       // Do-not-say moved to its own section at the BOTTOM of the audit —
       // the owner's call, 2026-08-24: warnings last, the business first.
       if (!rows.length) return null;
       return React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--b)' } },
           'The conversation',
-          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8, color: 'var(--m)' } }, 'what we know about how it will go \u2014 the opening is your call')),
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8, color: 'var(--t)' } }, 'what we know about how it will go \u2014 the opening is your call')),
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '118px 1fr', gap: '10px 16px' } }, rows)
       );
     })(),
@@ -6562,25 +6573,25 @@ function LeadBriefing({ lead }) {
               style: { marginBottom: 16, padding: '10px 12px', borderRadius: 8,
                 background: 'rgba(96,165,250,.08)', border: '1px solid rgba(96,165,250,.25)' },
             },
-            React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#60a5fa', marginBottom: 5 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#60a5fa', marginBottom: 5 } },
               'How this business gets customers \u2014 ' + String(lead.businessModel.model).replace(/_/g, ' ').toLowerCase()),
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginBottom: 4 } },
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: 4 } },
               String(lead.businessModel.why || '')),
-            lead.businessModel.evidence ? React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', fontStyle: 'italic' } },
+            lead.businessModel.evidence ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', fontStyle: 'italic' } },
               '\u201c' + String(lead.businessModel.evidence).slice(0, 200) + '\u201d \u2014 from their own page') : null,
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginTop: 6 } },
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 6 } },
               'Map-pack, local-rank and after-hours findings are withheld on this lead \u2014 they are measured and true, and they describe a market this business does not sell into.'),
           ) : null,
 
         (() => { const _ofd = dedupeOwnWords(Array.isArray(lead.problemList) ? lead.problemList : [], Array.isArray(lead.originalFindings) ? lead.originalFindings : []); return _ofd.length ? React.createElement('div', { style: { marginBottom: 18 } },
-          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#4ade80', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid rgba(74,222,128,.25)' } },
+          React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#4ade80', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid rgba(74,222,128,.25)' } },
             'What we found in their own words \u2014 ' + _ofd.length),
           _ofd.map((f, i) => React.createElement('div', {
             key: 'of' + i,
             style: { padding: '9px 0', borderBottom: i < _ofd.length - 1 ? '1px solid var(--b)' : 'none' },
           },
             React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: 4 } }, f.finding),
-            f.evidence ? React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', fontStyle: 'italic' } },
+            f.evidence ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', fontStyle: 'italic' } },
               '\u201c' + String(f.evidence).slice(0, 220) + '\u201d \u2014 from their own page') : null,
           )),
         ) : null; })(),
@@ -6593,17 +6604,17 @@ function LeadBriefing({ lead }) {
           const rest = grp.other.map(x => ({ ...x, internalOnly: false })).concat(grp.internal.map(x => ({ ...x, area: 'internal', internalOnly: true })));
           if (!rest.length) return null;
           return React.createElement('div', null,
-          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } },
+          React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } },
             'Also measured \u2014 ' + rest.length + ' more'),
           React.createElement('div', null, rest.map((p, i) => React.createElement('div', {
             key: 'pl' + i,
             style: { display: 'grid', gridTemplateColumns: '150px 1fr', gap: 14, alignItems: 'baseline', padding: '9px 0', borderBottom: i === rest.length - 1 ? 'none' : '1px solid var(--b)' },
           },
-            React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: 'var(--m2)' } }, p.area),
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--t)' } }, p.area),
             React.createElement('div', null,
               React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginBottom: 3 } }, p.problem,
-                p.internalOnly ? React.createElement('span', { style: { fontSize: 10, color: '#fbbf24', marginLeft: 8, border: '1px solid rgba(251,191,36,.35)', borderRadius: 8, padding: '1px 6px', verticalAlign: 'middle' } }, 'internal \u2014 never say reviews to him') : null),
-              p.costs ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)' } }, 'Costs them: ' + p.costs) : null
+                p.internalOnly ? React.createElement('span', { style: { fontSize: 12, color: '#fbbf24', marginLeft: 8, border: '1px solid rgba(251,191,36,.35)', borderRadius: 8, padding: '1px 6px', verticalAlign: 'middle' } }, 'internal \u2014 never say reviews to him') : null),
+              p.costs ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)' } }, 'Costs them: ' + p.costs) : null
             )
           ))));
         })() : sr && Array.isArray(sr.rows) && sr.rows.length ? React.createElement('div', null,
@@ -6623,8 +6634,8 @@ function LeadBriefing({ lead }) {
       // Mike reads this before a call. Walking in and calling a man's strongest
       // habit a problem is worse than saying nothing, and the reader cannot
       // tell which rows are which. Same rows, honest heading.
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What we read about this business — strengths and gaps together'),
-      React.createElement('div', { style: { fontSize: 11, color: 'var(--m)', marginBottom: 10, lineHeight: 1.5 } },
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What we read about this business — strengths and gaps together'),
+      React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginBottom: 10, lineHeight: 1.5 } },
         'No measured finding cleared the bar on this lead, so this is the brain’s read rather than the ladder’s list. Some of these are things they are doing WELL — read it as a picture, not as a fault list.'),
       React.createElement('div', null,
         sr.rows.map((r, i) => React.createElement('div', {
@@ -6632,12 +6643,12 @@ function LeadBriefing({ lead }) {
           style: { display: 'grid', gridTemplateColumns: '170px 1fr', gap: 14, alignItems: 'baseline',
             padding: '8px 0', borderBottom: i === sr.rows.length - 1 ? 'none' : '1px solid var(--b)', fontSize: 13 }
         },
-          React.createElement('div', { style: { color: 'var(--m2)' } }, r.label),
+          React.createElement('div', { style: { color: 'var(--t)' } }, r.label),
           React.createElement('div', { style: { color: 'var(--t)', lineHeight: 1.55 } }, r.says)
         ))
       )
     ) : counted.length > 0 && React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--m)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What we found'),
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'What we found'),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' } },
         rows.map((r, i) => {
           // ── INTERPRETATION WHERE WE HAVE IT ────────────────────────────
@@ -6656,13 +6667,13 @@ function LeadBriefing({ lead }) {
           style: { display: 'grid', gridTemplateColumns: '150px 1fr 74px', gap: 10, alignItems: 'baseline',
             padding: '7px 0', borderBottom: i === rows.length - 1 ? 'none' : '1px solid var(--b)', fontSize: 12.5 }
         },
-          React.createElement('div', { style: { color: 'var(--m2)' } }, r.label),
+          React.createElement('div', { style: { color: 'var(--t)' } }, r.label),
           React.createElement('div', { style: { lineHeight: 1.5 } },
-            React.createElement('div', { style: { color: r.ok === false ? 'var(--t)' : 'var(--m2)' } }, (hit && hit.says) || r.val || '\u2014'),
-            hit && hit.says ? React.createElement('div', { style: { color: 'var(--m)', fontSize: 11, marginTop: 2 } }, r.val) : null
+            React.createElement('div', { style: { color: r.ok === false ? 'var(--t)' : 'var(--t)' } }, (hit && hit.says) || r.val || '\u2014'),
+            hit && hit.says ? React.createElement('div', { style: { color: 'var(--t)', fontSize: 12, marginTop: 2 } }, r.val) : null
           ),
-          React.createElement('div', { style: { fontSize: 9.5, textAlign: 'right', letterSpacing: '.04em',
-            color: NOT_RUN.test(String(r.val || '').trim()) ? 'var(--m)' : r.confidence === 'mechanical' ? 'var(--g)' : r.confidence === 'visual' ? '#22d3ee' : r.confidence === 'limited' ? 'var(--am)' : 'var(--m)' },
+          React.createElement('div', { style: { fontSize: 12, textAlign: 'right', letterSpacing: '.04em',
+            color: NOT_RUN.test(String(r.val || '').trim()) ? 'var(--t)' : r.confidence === 'mechanical' ? 'var(--g)' : r.confidence === 'visual' ? '#22d3ee' : r.confidence === 'limited' ? 'var(--am)' : 'var(--t)' },
           }, NOT_RUN.test(String(r.val || '').trim()) ? 'NOT RUN' : r.confidence === 'mechanical' ? 'MEASURED' : r.confidence === 'visual' ? 'SEEN' : r.confidence === 'limited' ? 'LIMITED' : 'OBSERVED')
         );
         })
@@ -6676,9 +6687,9 @@ function LeadBriefing({ lead }) {
     // bottom at the owner's direction: the caller reads the business first and
     // the guardrails last.
     risks.length ? React.createElement('div', { style: { borderTop: '1px solid var(--b)', paddingTop: 14 } },
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say'),
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say'),
       React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
-        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 5, lineHeight: 1.5, fontSize: 12.5, color: 'var(--t)' } }, plainRisk(x)))
+        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 5, lineHeight: 1.5, fontSize: 13, color: 'var(--t)' } }, plainRisk(x)))
       )
     ) : null,
 
@@ -13683,7 +13694,7 @@ class ErrorBoundary extends React.Component {
 try {
   ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(ErrorBoundary, null, React.createElement(App)));
 } catch (e) {
-  document.getElementById('root').innerHTML = '<div style="padding:40px;color:#ef4444;font-family:monospace;background:#0a0a0f;min-height:100vh"><h2 style="margin-bottom:16px">⚠ Startup Error</h2><p style="color:#f0f0f5">' + e.message + '</p><pre style="color:#6b7280;font-size:11px;margin-top:12px">' + e.stack + '</pre><button onclick="localStorage.clear();location.reload()" style="margin-top:20px;padding:8px 16px;background:#a3e635;color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:600">Clear Storage & Reload</button></div>';
+  document.getElementById('root').innerHTML = '<div style="padding:40px;color:#ef4444;font-family:monospace;background:#0a0a0f;min-height:100vh"><h2 style="margin-bottom:16px">⚠ Startup Error</h2><p style="color:#f0f0f5">' + e.message + '</p><pre style="color:#1d1d1f;font-size:11px;margin-top:12px">' + e.stack + '</pre><button onclick="localStorage.clear();location.reload()" style="margin-top:20px;padding:8px 16px;background:#a3e635;color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:600">Clear Storage & Reload</button></div>';
 }
 
 </script>

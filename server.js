@@ -913,7 +913,10 @@ const NET_LEDGER = new _ALS_NET();
 const NET_SERVICE = [
   [/firecrawl\.dev/i, 'firecrawl'],
   [/anthropic\.com/i, 'anthropic'],
-  [/googleapis\.com/i, 'google places'],
+  [/dataforseo\.com/i, 'dataforseo'],
+  [/pagespeedonline\.googleapis\.com/i, 'pagespeed'],
+  [/places\.googleapis\.com/i, 'google places'],
+  [/googleapis\.com/i, 'google (other)'],
   [/apify\.com/i, 'apify'],
   [/hunter\.io/i, 'hunter'],
   [/myemailverifier\.com/i, 'email verify'],
@@ -996,6 +999,7 @@ const netReport = () => {
   const total = rows.reduce((s, [, e]) => s + e.ms, 0);
   return `${(total / 1000).toFixed(0)}s inside outbound calls (these OVERLAP \u2014 they do not add up to the wall clock): `
     + rows.map(([k, e]) => `${k} ${(e.ms / 1000).toFixed(0)}s/${e.n} call(s)${e.failed ? ` (${e.failed} failed or timed out)` : ''}`).join(', ')
+    + (((led.by.get('anthropic') || {}).failed || 0) > 0 ? ' | NOTE: a failed or timed-out model call is still billed by Anthropic for whatever it generated before we gave up, and the ANTHROPIC TOTAL line cannot see it — the invoice runs slightly above the meter on days with timeouts' : '')
     + (led.gateWaitMs
       ? ` | WAITING for a free Firecrawl browser: ${(netBlockedMs(led, Date.now()) / 1000).toFixed(0)}s of wall clock (${(led.gateWaitMs / 1000).toFixed(0)}s summed across requests, which OVERLAP). The wall figure is the one the kill clock excludes; if it is large, the throttle is ours and FC_CONCURRENCY is the dial`
       : ' | no time was spent waiting for a Firecrawl slot');
@@ -15977,7 +15981,12 @@ const stripQuoteLabel = (t) => String(t || '')
 // is still a warning.
 const _FACT_CONFIRMS = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|is measured and correct|measured and correct|matches the measured|supported by the measured)\b/i;
 const _FACT_OBJECTS = /\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
-const _FACT_STYLE = /^\s*(VOICE FAILURE|TONE|REGISTER|STYLE)\b|\bvoice failure\b/i;
+const _FACT_STYLE = /^\s*(VOICE FAILURE|VOICE|TONE|REGISTER|STYLE)\b|\bvoice failure\b/i;
+// An entry whose own text says no flag is warranted is the checker AGREEING —
+// live 01:21 an "INTERNAL ONLY LEAK" entry ending "no email flag warranted...
+// correctly sequestered" rendered as a Do-not-say warning. Checked after the
+// critical pattern, so "correct but the number is wrong" still warns.
+const _FACT_SELF_CLEARED = /\bno (?:email )?flag (?:is )?(?:warranted|needed|necessary)\b|\bno flag on\b|\bcorrectly sequestered\b|\bcorrectly marked internal\b/i;
 const _FACT_DOUBT = /\b(but|however|though|although|not measured|never measured|wrong|incorrect|overstat\w*|understat\w*|contradict\w*|invent\w*|unverif\w*|inflat\w*|backwards|inverts?)\b/i;
 // 'wording'  a confirmed claim whose only objection is how it is phrased
 // 'style'    a note about register, which is reasoning and not a warning
@@ -15986,6 +15995,7 @@ const _FACT_DOUBT = /\b(but|however|though|although|not measured|never measured|
 const factCheckNoteKind = (flag) => {
   const f = String(flag || '');
   if (CRITICAL_FACT_RE.test(f)) return 'real';
+  if (_FACT_SELF_CLEARED.test(f)) return 'clean';
   if (_FACT_STYLE.test(f)) return 'style';
   if (_FACT_CONFIRMS.test(f) && !_FACT_DOUBT.test(f)) return 'clean';
   if (_FACT_CONFIRMS.test(f) && _FACT_OBJECTS.test(f)) return 'wording';
@@ -20456,7 +20466,11 @@ const buildProblemList = (harms, opts = {}) => {
   // arent big ones then fill" — while a lead with nothing numberable keeps
   // zero badges, because a clean lead is not handed a manufactured crisis.
   const _depth = { after: 0, door: 1, found: 2 };
-  const _evClass = (r) => (r.id === 'review_pain_pattern' && _ev.reviewThemeContact === true) ? 0 : 1;
+  // Written evidence outranks inference INSIDE a stage only at the same floor
+  // the email uses: three mentions (writtenContact), not merely a
+  // contact-shaped theme. A 2-mention anecdote is real evidence and a weak
+  // anchor — "he will do that division before he finishes the sentence".
+  const _evClass = (r) => (r.id === 'review_pain_pattern' && _ev.writtenContact === true) ? 0 : 1;
   // The workmanship review row needs no clause of its own here: its stage is
   // 'work' (decided by the SAME _ev.reviewThemeContact the stage accessor
   // reads), 'work' has no depth, and a row with no depth cannot be numbered.
@@ -20476,8 +20490,28 @@ const buildProblemList = (harms, opts = {}) => {
   // the route merge, which tops the numbering up to three ONLY when a
   // measured anchor already holds leak 1.
   const _numbered = out.filter(_numberable).sort(_leakSort);
+  // ══ THE ANCHOR FLOOR ═══════════════════════════════════════════════════
+  // Leak 1 is the Primary Anchor — the claim the whole sheet hangs off — and a
+  // review pattern below the email's own three-mention floor must not hold it:
+  // the depth rule alone would have made Conner's 2-of-90 "slow follow-up"
+  // the #1 revenue leak, which is §61's exact complaint through the new door.
+  // Below the floor it can still support at 2-3. Last resort mirrors the
+  // email's own rule (BLOCKED RUNG LEADS ANYWAY): when nothing else is
+  // anchorable, the weak pattern anchors rather than the sheet showing no
+  // leaks on a lead with findings.
+  const _anchorable = (r) => !(r.id === 'review_pain_pattern' && _ev.writtenContact !== true);
+  // No explicit last-resort fallback: with no anchorable row the numbering
+  // loop below hands rank 1 to the first sorted row anyway — the falsification
+  // run proved an || _numbered[0] fallback here unreachable, and a mechanism
+  // no fixture can reach is the kind that rots.
+  const _anchor = _numbered.find(_anchorable) || null;
   let _lr = 0;
-  for (const r of _numbered) { if (_lr >= 3) break; r.leakRank = ++_lr; }
+  if (_anchor) _anchor.leakRank = ++_lr;
+  for (const r of _numbered) {
+    if (_lr >= 3) break;
+    if (r === _anchor) continue;
+    r.leakRank = ++_lr;
+  }
   if (amb.length && real.length >= 3 && opts.company) {
     console.log(`▾ AMBIENT [${opts.company || 'lead'}]: ${amb.length} market-wide condition(s) held back from the findings — ${amb.map(a => a.id).join(', ')}. True, and true of nearly every business like theirs, so they explain nothing about why THIS one is behind. They stay on the call sheet, where agreement is the point.`);
   }
@@ -21548,19 +21582,31 @@ const stripRecencyConclusions = (text) => {
 const _RC_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, twenty: 20, thirty: 30, forty: 40, fifty: 50 };
 const _RC_NUM_RE = new RegExp('(?<![\\d,])(\\d{1,3}|' + Object.keys(_RC_WORDS).join('|') + ')\\s+(?:of\\s+(?:the\\s+|your\\s+|their\\s+)?(\\d{1,4}|' + Object.keys(_RC_WORDS).join('|') + ')\\s+)?(?:recent\\s+)?(?:Google\\s+)?reviews?' + '\\b', 'gi');
 const _rcNum = (s) => { const n = String(s || '').toLowerCase(); return /^\d+$/.test(n) ? Number(n) : (_RC_WORDS[n] || null); };
-const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal) => {
+const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal, negativeCount) => {
   const src = String(text || '');
   const read = Number(reviewsRead);
   if (!src || !Number.isFinite(read) || read <= 0) return { text: src, cut: [] };
   const prof = Number.isFinite(Number(profileTotal)) ? Number(profileTotal) : null;
+  const neg = Number.isFinite(Number(negativeCount)) ? Number(negativeCount) : null;
   const okN = (n) => n !== null && (n <= read || (prof !== null && Math.abs(n - prof) <= 2));
   const sentences = src.split(/(?<=[.!?])\s+/);
   const keep = [], cut = [];
   for (const sn of sentences) {
     let bad = false;
+    // "N five-star reviews" where N is their whole count and we MEASURED
+    // low-star reviews in the sample: the number is true and the adjective is
+    // invented. Live 01:20: "You have 141 five-star reviews" on a lead with 8
+    // at three stars or below among the 90 read.
+    if (neg !== null && neg > 0) {
+      const fs = sn.match(/(\d[\d,]*)\s*(?:5|five)[- ]star reviews?/i);
+      if (fs) {
+        const n = _rcNum(fs[1]);
+        if (n !== null && (n >= read || (prof !== null && Math.abs(n - prof) <= 2))) bad = true;
+      }
+    }
     _RC_NUM_RE.lastIndex = 0;
     let m;
-    while ((m = _RC_NUM_RE.exec(sn)) !== null) {
+    while (!bad && (m = _RC_NUM_RE.exec(sn)) !== null) {
       const n = _rcNum(m[1]);
       const of = m[2] !== undefined ? _rcNum(m[2]) : null;
       if (!okN(n)) { bad = true; break; }
@@ -21571,19 +21617,19 @@ const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal) => {
   }
   return { text: keep.join(' ').trim(), cut };
 };
-const stripImpossibleReviewCountsDeep = (node, out, depth, read, prof) => {
+const stripImpossibleReviewCountsDeep = (node, out, depth, read, prof, neg) => {
   const d = Number(depth) || 0;
   if (d > 6 || node == null) return node;
   if (typeof node === 'string') {
-    const r = stripImpossibleReviewCounts(node, read, prof);
+    const r = stripImpossibleReviewCounts(node, read, prof, neg);
     if (r.cut.length) { out.cut.push(...r.cut); return r.text; }
     return node;
   }
-  if (Array.isArray(node)) return node.map(x => stripImpossibleReviewCountsDeep(x, out, d + 1, read, prof));
+  if (Array.isArray(node)) return node.map(x => stripImpossibleReviewCountsDeep(x, out, d + 1, read, prof, neg));
   if (typeof node === 'object') {
     for (const k of Object.keys(node)) {
       if (k.charAt(0) === '_') continue;
-      node[k] = stripImpossibleReviewCountsDeep(node[k], out, d + 1, read, prof);
+      node[k] = stripImpossibleReviewCountsDeep(node[k], out, d + 1, read, prof, neg);
     }
     return node;
   }
@@ -21873,7 +21919,7 @@ const measureFinancing = ({ rawHtml, text } = {}) => {
 // miner's own pain strings and the split goes to the call sheet and the audit
 // screen, never to an email.
 const OPS_BUCKET_DEFS = [
-  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|had to chase|kept waiting|unresponsive|no response/i },
+  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|slow(?:er)? follow[- ]?up|follow[- ]?up (?:took|never|delayed|slow)|had to chase|kept waiting|unresponsive|no response|delay(?:ed)? (?:warranty|repairs?|service)|warranty (?:delays?|took|never)/i },
   { id: 'quote_delay', label: 'quotes take too long', re: /quote (?:delay|took|never)|slow(?:er)? (?:response|to respond|quote)|took (?:weeks|days|forever)|waiting (?:on|for) (?:a |the )?(?:quote|estimate)/i },
   { id: 'scheduling', label: 'scheduling breaks down', re: /schedul|reschedul|missed (?:the )?appointment|no[- ]?show|double[- ]?book|cancel/i },
   { id: 'work_quality', label: 'work has to be redone', re: /redo|re-?work|come back (?:and|to) fix|had to fix|left (?:a mess|unfinished)|unfinished|drainage|uneven|crack(?:s|ed|ing)?\b|poor(?:ly)? (?:done|quality|workmanship)|quality (?:control|issues?|problems?)|workmanship|shoddy|sloppy|damaged?\b/i },
@@ -21911,7 +21957,17 @@ const classifyOpsBuckets = (signals) => {
 // sentence cannot diverge. Reads OPS_BUCKET_DEFS so there is exactly one copy
 // of the vocabulary. Null when there is no theme at all.
 const CONTACT_BUCKET_IDS = new Set(['no_response', 'quote_delay', 'scheduling']);
-const contactShapedTheme = (theme) => {
+// The miner's own tag wins when present: it read the actual reviews, and the
+// regex vocabulary has now been outrun twice in two runs (\u00a757 widened it for
+// Breck's phrasing; the very next lead's "Slow follow-up after initial
+// estimate visit" and "Delayed warranty or defect repairs" missed every
+// bucket again, so the after-contact stage read NO FAULT FOUND while the
+// complaint sat under the funnel as workmanship). The regex remains the
+// fallback for untagged data \u2014 legacy leads, the shallow mine, the route's
+// originals staging \u2014 and was widened for both live misses.
+const contactShapedTheme = (theme, kind) => {
+  if (kind === 'contact') return true;
+  if (kind === 'workmanship') return false;
   const t = String(theme || '');
   if (!t) return null;
   for (const def of OPS_BUCKET_DEFS) {
@@ -22128,6 +22184,11 @@ const buildFunnelStory = (m = {}, x = {}) => {
     // exceeds "set up for" — a pixel proves wiring, not spend — so the
     // conditional is stated out loud, which is also a question only he can
     // answer.
+    if (m.organicChecked === true && m.organicFound === true
+      && typeof m.organicPosition === 'number' && Number.isFinite(m.organicPosition)
+      && typeof m.organicScanned === 'number' && m.organicScanned >= 6) {
+      text += `${text ? ' ' : ''}In the blue links under the map they are #${m.organicPosition} of ${m.organicScanned} — a separate ranking from the map itself.`;
+    }
     if (m.adsReadable === true && m.tagManager === false
       && m.metaPixel === true && m.googleAdsTag === false
       && m.rankChecked === true
@@ -22163,7 +22224,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
   // ── 4 · AFTER THEY REACH OUT: contact complaints, and the capacity read ───
   {
     const parts = [];
-    const themeContact = contactShapedTheme(String(m.reviewPainTop || ''));
+    const themeContact = contactShapedTheme(String(m.reviewPainTop || ''), m.reviewPainTopKind);
     const mentions = Number(m.reviewPainMentions);
     const read = Number(m.reviewsRead);
     const theme = String(m.reviewPainTop || '').trim();
@@ -25000,7 +25061,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         system: [{ type: 'text', text: sys, cache_control: { type: 'ephemeral', ttl: '1h' } }],
         messages: [{ role: 'user', content: `THE MEASURED FACTS:\n${facts}\n\nWhat is going on here?${correction || ''}` }],
       }),
-    }, 45000, 'situation-read');
+    }, 90000, 'situation-read', { retryOnTimeout: true });
     const d = await r.json();
     if (!d || !d.content) return null;
     // Already joined across blocks, which was half right \u2014 but it joined EVERY
@@ -25566,8 +25627,8 @@ const measureGrowthConstraint = ({
             : `${weakerAbove} business(es) ranking above them have FEWER reviews. \u26a0 Their own position was NOT stable enough to measure, so say NOTHING about where they rank \u2014 no digit, no band, no "they rank well". The only claim available is that businesses with fewer reviews are above them.`)
         : `Customers searching for exactly what they sell, in their own city, do not find them in the results.`;
     why = rankNotFound
-      ? `The reputation is already built and it is not being shown to anyone. That is a visibility problem, not a quality problem, and it gates everything below it.`
-      : `The reputation is already built and it is not being shown to enough people. That is a visibility problem, not a quality problem, and it gates everything below it. Do NOT say they are invisible \u2014 ${_rankKnown ? `we measured them at #${rank} and they can check that` : 'they DO appear in the results, we simply could not pin the position down well enough to state it'}.`;
+      ? `The reputation is already built and it is not being shown to anyone. That is a visibility problem, not a quality problem. Whether it is the FIRST thing to fix is the walk's call \u2014 a broken door gets fixed before more people are sent to it.`
+      : `The reputation is already built and it is not being shown to enough people. That is a visibility problem, not a quality problem. Do NOT say they are invisible \u2014 ${_rankKnown ? `we measured them at #${rank} and they can check that` : 'they DO appear in the results, we simply could not pin the position down well enough to state it'}.`;
     product = 'marketing and search ownership';
   }
   // ── CONVERSION — only when the friction is genuinely severe ────────────────
@@ -26321,7 +26382,7 @@ owner can check his own review page.
 \u2022 Never estimate what share of the unread reviews would say the same.
 \u2022 If a pattern appears in only one review, it is not a pattern. Say nothing.
 
-This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words"}],"summary":"one-sentence owner-facing summary"}\n\nREVIEWS PAGE:\n${md}` }]
+This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words","kind":"contact|workmanship|other"}],"summary":"one-sentence owner-facing summary"}\n\nkind: "contact" when the pain is about REACHING them or them coming back \u2014 calls, callbacks, quotes, estimates, follow-up, scheduling, warranty or repair visits that never happen. "workmanship" when it is about the quality of the finished work itself. "other" for anything else (pricing, attitude). One word, exactly one of those three.\n\nREVIEWS PAGE:\n${md}` }]
       }),
       // A larger corpus takes longer to read. 25s suited forty reviews; at 150
       // a timeout returns no pain at all, which is indistinguishable from a
@@ -26393,6 +26454,13 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
       .filter(sg => (sg.count || 0) >= 2)
       .filter(sg => { const ok = quoteExists(sg.evidence); if (!ok) dropped.push(sg.pain); return ok; })
       .map(sg => ({ ...sg, pain: humanizeLabel(sg.pain) }))
+      // The miner's own classification, strict enum or null — a misspelled or
+      // invented value must not become a classification.
+      .map(sg => ({ ...sg, kind: ['contact', 'workmanship', 'other'].includes(String(sg.kind || '').toLowerCase()) ? String(sg.kind).toLowerCase() : null }))
+      // Most-mentioned FIRST. reviewPainTop is signals[0] downstream, and the
+      // live 01:17 run put a 2-mention pattern above a 3-mention one because
+      // the model's emission order was trusted as a ranking.
+      .sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0))
       .map(sg => ({
         // ══ DIVIDE BY WHAT WE READ, NOT BY THE WHOLE PROFILE ══════════════
         // This reported the count against the FULL review total while only ever
@@ -26412,7 +26480,7 @@ This is the scraped Google reviews page for "${companyName}". It contains multip
         pain: readCount
           ? `${sg.pain} — ${sg.count} of the ${readCount} reviews we read say it`
           : (total ? `${sg.pain} — ${sg.count} of ~${total} reviews mention this` : `${sg.pain} — ${sg.count} reviews mention this`),
-        evidence: sg.evidence, count: sg.count, source: 'their Google reviews (pattern across multiple)',
+        evidence: sg.evidence, count: sg.count, kind: sg.kind || null, source: 'their Google reviews (pattern across multiple)',
       }));
     if (dropped.length) console.log(`DEEP PAIN [${companyName}]: dropped ${dropped.length} unverifiable quote(s) — anti-fabrication guard held`);
     if (signals.length) console.log(`DEEP PAIN [${companyName}]: ${signals.length} verified repeating patterns across ~${total} reviews — the "how do they know THIS" hit`);
@@ -30628,7 +30696,7 @@ const probeDfsAuth = async () => {
     }, 15000);
     const parsed = parseDfsUserData(await safeJson(r));
     if (parsed.ok) {
-      console.log(`DFS AUTH PROBE: credentials accepted${parsed.balance !== null ? ` - account balance $${parsed.balance}` : ''}. The rank, organic and duplicate reads can actually run on this instance.`);
+      console.log(`DFS AUTH PROBE: credentials accepted${parsed.balance !== null ? ` - account balance $${parsed.balance}` : ''}. NOTE: this probe is DataForSEO's FREE endpoint, which answers even for an UNVERIFIED account - the paid rank, organic and duplicate reads additionally require account verification (a 40104 on them means: finish verification at app.dataforseo.com). The first paid call on a lead is the real proof.`);
     } else {
       console.log(`⚠ DFS AUTH PROBE FAILED: ${parsed.why} Until this passes, NO lead gets a search position - every rank read falls back to Places, which may not state one.`);
     }
@@ -34000,6 +34068,11 @@ const parseTrafficOverview = (body) => {
     organicEtvMonthly: Number.isFinite(Number(org.etv)) ? Math.round(Number(org.etv)) : null,
     organicKeywords: Number.isFinite(Number(org.count)) ? Number(org.count) : null,
     paidKeywords: Number.isFinite(Number(paid.count)) ? Number(paid.count) : null,
+    // The paid half of the SAME response, previously half-read. Same bounds as
+    // the organic figure: a model of Google-paid traffic only — it cannot see
+    // Facebook, and a zero means the index has never seen this domain buy a
+    // Google ad, never "they run no ads".
+    paidEtvMonthly: Number.isFinite(Number(paid.etv)) ? Math.round(Number(paid.etv)) : null,
     note: 'modeled by a third-party index from ranked keywords — an estimate, not a measurement; internal only' };
 };
 
@@ -34929,6 +35002,10 @@ const _runResearchInner = async (req, res) => {
   let realSpeed = { checked: false };
   let trafficEstimate = { checked: false };
   let reviewsNegativeUnanswered = null;
+  // Low-star reviews in the sample we read — the measurement that proves a
+  // "five-star reviews" qualifier false. Computed in the mine and dropped at
+  // this hop for the stripper's whole life.
+  let reviewsNegativeCount = null;
   let duplicateListing = { checked: false, why: 'not attempted' };
   let adsTransparency = { checked: false, why: 'not attempted' };
   let socialPresence = { checked: false };
@@ -34957,6 +35034,9 @@ const _runResearchInner = async (req, res) => {
   // quoted into an email: it is his writing, not ours, and repeating it back to
   // him is the poker tell this file already records about review data.
   let ownerReplySample = [];
+  // The miner's own kind tag per signal, index-aligned with publicPainSignals.
+  // reviewPainTopKind is read off [0] exactly where reviewPainTop is.
+  let reviewPainKinds = [];
   let reviewsRead = null;
   let channelRoute = 'email';
   let channelReason = '';
@@ -35159,6 +35239,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           console.log(`\u{1F534} NOT ASKING [${kind}] ${target} \u2014 Firecrawl is out of credits, so this request would be refused and would still cost a browser slot and 20 seconds of this lead's clock. NOTHING about this site is known.`);
           return { refused: true, status: 402, body: null, reason: 'out of credits (not asked)', ms: 0 };
         }
+        // A fragment is client-side only: the server for "/contact#!" serves
+        // "/contact", so the hash can only ever waste a credit or confuse the
+        // duplicate detector. Hash-ROUTED SPAs are not harmed — their server
+        // returns the shell either way and the SAME PAGE guard judges the text.
+        target = String(target || '').split('#')[0];
         const t0 = Date.now();
         let r;
         try {
@@ -35902,7 +35987,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (effectivePlaceId && placesKey) {
         gbpHealth = await fetchGBPHealth(effectivePlaceId, placesKey);
         if (gbpHealth) {
-          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}${Number.isFinite(gbpHealth.categoryCount) ? ` (${gbpHealth.categoryCount} in total: ${(gbpHealth.placeCategories || []).slice(0, 6).join(', ')})` : ''}`);
+          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}${Number.isFinite(gbpHealth.categoryCount) ? ` (${gbpHealth.categoryCount} in total: ${(gbpHealth.placeCategories || []).slice(0, 6).join(', ')}${(gbpHealth.placeCategories || []).length > 6 ? ` +${(gbpHealth.placeCategories || []).length - 6} more` : ''})` : ''}`);
         }
       }
       // ══ REVIEW-PATTERN MINE — the highest-reply-rate asset the system produces ══
@@ -35944,6 +36029,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           if (deep && typeof deep.read === 'number' && deep.read > 0) {
             reviewsRead = deep.read;
             if (Number.isFinite(Number(deep.negativeUnanswered))) reviewsNegativeUnanswered = Number(deep.negativeUnanswered);
+            if (Number.isFinite(Number(deep.negativeCount))) reviewsNegativeCount = Number(deep.negativeCount);
             ownerReplyCount = Array.isArray(deep.ownerReplies) ? deep.ownerReplies.length : 0;
             ownerReplySample = (Array.isArray(deep.ownerReplies) ? deep.ownerReplies : [])
               .map(x => String(x || '').replace(/\s+/g, ' ').trim())
@@ -35956,6 +36042,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           if (deep && deep.signals && deep.signals.length > 0) {
             _deepReadCount = deep.read || 0;
             publicPainSignals = deep.signals.map(sg => `${sg.pain} — evidence: "${clipQuote(sg.evidence)}" (${sg.source})`);
+            reviewPainKinds = deep.signals.map(sg => (sg && sg.kind) || null);
             painSummary = deep.summary || painSummary;
             reviewPainFound = true;
             const _top = deep.signals.map(sg => `${sg.pain} (${sg.count || '?'}x)`).join(' | ');
@@ -37577,6 +37664,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // falls back to "more than one", which is what it has always said.
           reviewPainMentions: (Array.isArray(publicPainSignals) && publicPainSignals[0])
             ? reviewPainMentions(String(publicPainSignals[0])) : null,
+          // The miner's own kind tag for that same top signal — index-aligned
+          // by construction, because both [0] reads happen here.
+          reviewPainTopKind: (Array.isArray(reviewPainKinds) && reviewPainKinds[0]) || null,
           // Array.isArray is the "did we look?" test. A null prices array means
           // the page audit never ran, and absence can only be claimed about
           // something we actually looked for.
@@ -37718,8 +37808,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                           // at leak #2; the classifier reads reviewPainTop, the
                           // same string the rung prints.
                           writtenContact: Number((_harmInputs || {}).reviewPainMentions) >= 3
-                            && contactShapedTheme(String((_harmInputs || {}).reviewPainTop || '')) === true,
-                          reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).reviewPainTop || '')) },
+                            && contactShapedTheme(String((_harmInputs || {}).reviewPainTop || ''), (_harmInputs || {}).reviewPainTopKind) === true,
+                          reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).reviewPainTop || ''), (_harmInputs || {}).reviewPainTopKind) },
               money: { jobValue: tradeJobValue(String((_harmInputs || {}).tradeWord || '')) } }),
             // Subjects built from the finding. The last free-text field in the
             // email, and the one that produced "I caught a dead end" five times.
@@ -40054,7 +40144,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // 3. Absence of reviews / social proof (widget-loaded — never confirmable)
           _flag(/\b(no|zero|lack of|missing|don'?t have any?) (google |yelp )?(reviews|testimonials|social proof|star ratings)\b/i, 'claims reviews/social-proof ABSENT (widget-loaded, not confirmable)');
           // 4. What Google indexes / shows, from a scrape
-          _flag(/\bgoogle (shows|displays|indexes)\b/i, 'claims what Google shows, from a scrape');
+          // Exempt when the rank order is TRUSTED (a real pack read): "the
+          // three names Google shows" is then a measurement, and a Do-not-say
+          // full of true sentences is one an operator learns to skip.
+          if (!(localRank && localRank.orderTrusted === true)) {
+            _flag(/\bgoogle (shows|displays|indexes)\b/i, 'claims what Google shows, from a scrape');
+          }
           _flag(/\bjust a moment\b/i, 'contains a bot-challenge string — likely from a blocked scrape');
           // 5. Invented dollar totals about THEM (industry-typical job value is fine)
           _flag(/\byou'?re losing \$[0-9,]+\s*(\/|per |a )?(mo|month|week|year)\b/i, 'states a specific loss total we cannot know');
@@ -40452,6 +40547,16 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           (Array.isArray(publicPainSignals)
             ? publicPainSignals.map(s => ((String(s).match(/evidence: "(.+)" \(/) || [])[1] || '')).filter(Boolean).join('\n\n')
             : ''),
+          // ══ THE OWNER'S OWN REPLIES ARE HIS OWN WORDS ═════════════════════
+          // The prompt hands the model "how he writes back, verbatim" — and the
+          // quote gate then deleted any sentence quoting it, because the
+          // replies never entered this corpus. Live 01:07: "He replies to 19 of
+          // the 90 reviews... 'Thanks so much Terry!'" — a TRUE quote of text
+          // we hold, stripped from the synthesis. Pages, then reviews, now
+          // replies: the third instance of the same category error. Verbatim
+          // snippets only, each its own block, same as the review evidence.
+          (Array.isArray(ownerReplySample) && ownerReplySample.length
+            ? ownerReplySample.map(x => String(x)).join('\n\n') : ''),
         ].filter(Boolean).join('\n\n');
         // ══ THEIR WORDS AND OUR WORDS ANSWER DIFFERENT QUESTIONS ═══════════
         // One rule — "we hold the words you are quoting" — asked of two
@@ -40537,7 +40642,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           const _profTotal = (gbpHealth && Number.isFinite(Number(gbpHealth.reviewCount))) ? Number(gbpHealth.reviewCount) : null;
           for (const k of _mf) {
             if (k.charAt(0) === '_') continue;
-            parsed[k] = stripImpossibleReviewCountsDeep(parsed[k], _irc, 1, reviewsRead, _profTotal);
+            parsed[k] = stripImpossibleReviewCountsDeep(parsed[k], _irc, 1, reviewsRead, _profTotal, reviewsNegativeCount);
           }
           if (_irc.cut.length) {
             parsed._reviewCountRemoved = _irc.cut.slice(0, 4);
@@ -40879,7 +40984,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _srx = stripUnmeasuredMoneyDeep(_srx, _corpus, _srg.m, 1, 'situationRead');
                   _srx = stripSpelledQuantitiesDeep(_srx, _corpus, _srg.sq, 1);
                   _srx = stripRecencyConclusionsDeep(_srx, _srg.rc, 1);
-                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf);
+                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount);
                   _srx = stripCompetitorSiteClaimsDeep(_srx, _srg.cc, 1);
                   _srx = stripPostContactClaimsDeep(_srx, _srg.pc, 1);
                   situationRead = _srx;
@@ -45781,6 +45886,15 @@ app.listen(PORT, () => {
     if (contactShapedTheme('quality control issues - drainage, uneven surfaces') !== false) _fails.push("Breck's workmanship theme classifies as contact-shaped — the exact live failure this gate exists for");
     if (contactShapedTheme('they never called back after the damage') !== true) _fails.push('a mixed contact+quality theme lost its leak status — contact wins on mixed');
     if (contactShapedTheme('') !== null) _fails.push('an absent theme classifies as something');
+    // The miner's own tag wins over the vocabulary in both directions — it
+    // read the reviews, and the regex list has been outrun twice in two runs.
+    if (contactShapedTheme('anything at all', 'contact') !== true) _fails.push("the miner's contact tag does not classify as contact — the root fix for the vocabulary chase is unwired");
+    if (contactShapedTheme('never called back', 'workmanship') !== false) _fails.push("the miner's workmanship tag does not override — a tagged workmanship theme would rank as a leak again");
+    // The two live misses from the 01:17 Conner's run, on UNTAGGED data — the
+    // widened fallback vocabulary must catch what the after-contact stage
+    // read as NO FAULT FOUND while the complaint sat under the funnel.
+    if (contactShapedTheme('Slow follow-up after initial estimate visit') !== true) _fails.push('"slow follow-up after initial estimate visit" classifies as not-contact — the exact live miss that emptied the after stage');
+    if (contactShapedTheme('Delayed warranty or defect repairs after project completion') !== true) _fails.push('"delayed warranty repairs" classifies as not-contact — customers waiting for a service visit is a responsiveness fault, not workmanship');
     // And the widened quality vocabulary reaches the call-sheet buckets too.
     const _rwBuckets = classifyOpsBuckets(['quality control issues - drainage and uneven surfaces - 3 of the 90 reviews we read say it']);
     if (!_rwBuckets.some(b => b.id === 'work_quality')) {
@@ -45792,11 +45906,14 @@ app.listen(PORT, () => {
     if (!selfSourceNoComments().includes(_en('evidence: { adsLive: !!(_measured && _measured.adsLiveInPack)', ','))) {
       _fails.push('the live call site no longer passes the evidence classes, so the agreed rule runs on fixtures and never on a lead');
     }
-    if (!selfSourceNoComments().includes(_en('&& contactShapedTheme(String((_harmInputs || {}).', "reviewPainTop || '')) === true"))) {
-      _fails.push('the live call site no longer classifies the dominant theme, so the workmanship gate runs on fixtures and never on a lead');
+    if (!selfSourceNoComments().includes(_en('&& contactShapedTheme(String((_harmInputs || {}).', "reviewPainTop || ''), (_harmInputs || {}).reviewPainTopKind) === true"))) {
+      _fails.push('the live call site no longer classifies the dominant theme WITH the miner tag, so the root fix runs on fixtures and never on a lead');
     }
-    if (!selfSourceNoComments().includes(_en('reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).', "reviewPainTop || ''))"))) {
-      _fails.push('the live call site no longer passes reviewThemeContact, so the TAXED demotion can never fire on a lead');
+    if (!selfSourceNoComments().includes(_en('reviewThemeContact: contactShapedTheme(String((_harmInputs || {}).', "reviewPainTop || ''), (_harmInputs || {}).reviewPainTopKind)"))) {
+      _fails.push('the live call site no longer passes reviewThemeContact with the miner tag, so the TAXED demotion runs blind on a lead');
+    }
+    if (!selfSourceNoComments().includes(_en('reviewPainTopKind: (Array.isArray(reviewPainKinds) && ', 'reviewPainKinds[0]) || null,'))) {
+      _fails.push("the miner's kind tag never reaches the measurements — computed in the mine and dropped one hop later");
     }
     if (_fails.length) {
       console.log(`⛔ FINDINGS MONEY ORDER CHECK: ${_fails.join(' | ')}.`);
@@ -45951,6 +46068,17 @@ app.listen(PORT, () => {
     if (!_topRank || !(_topRank.stages || []).some(st => /they are in the top three/.test(st.text) && /That part works/.test(st.text))) {
       _fails.push('a trusted top-three rank no longer produces the strength sentence \u2014 the crystal-clear "this part works" Vin asked for');
     }
+    // The blue links are the second, separate ranking — measured DFS-only by
+    // construction. #14 of 19 was measured live on Conner's and rendered
+    // nowhere a reader could see it.
+    const _org = buildFunnelStory({ rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, rankQuery: 'kitchen remodeling contractor in Louisville, KY', organicChecked: true, organicFound: true, organicPosition: 14, organicScanned: 19 }, {});
+    if (!_org || !(_org.stages || []).some(st => /#14 of 19/.test(st.text) && /blue links/.test(st.text))) {
+      _fails.push('a measured blue-links position never reaches the walk — "where does their traffic come from" stays unanswerable on the sheet');
+    }
+    const _orgThin = buildFunnelStory({ rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, rankQuery: 'x in y', organicChecked: true, organicFound: true, organicPosition: 3, organicScanned: 5 }, {});
+    if (_orgThin && (_orgThin.stages || []).some(st => /blue links/.test(st.text))) {
+      _fails.push('a five-result organic field still produces a position — below six results a rank is arithmetic, not a finding');
+    }
     // Unmeasured stages are OMITTED, and a lead with nothing measured is null.
     if (buildFunnelStory({}, {}) !== null) _fails.push('a lead with nothing measured produced a story');
     if (buildFunnelStory({ adsReadable: false, rankChecked: false }, {}) !== null) _fails.push('unreadable ads and an unchecked search still produced stages');
@@ -46059,6 +46187,24 @@ app.listen(PORT, () => {
     ] }, { evidence: { adsLive: false, writtenContact: true, reviewThemeContact: true } });
     const _evRanked = _rkEv.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
     if (!_evRanked[0] || _evRanked[0].id !== 'review_pain_pattern') _fails.push('within one stage a customer-written complaint no longer outranks an inferred finding');
+    // ══ THE ANCHOR FLOOR, both directions ═════════════════════════════════
+    // A 2-mention pattern (writtenContact false, theme still contact-shaped)
+    // sits deepest but may not anchor: the ads finding takes leak 1 and the
+    // pattern supports at 2. On the live Conner's shape the depth rule alone
+    // put the 2-of-90 anecdote at #1 — §61's complaint through the new door.
+    const _rkFloor = buildProblemList({ byHarm: [
+      { id: 'review_pain_pattern', finding: 'slow follow-up after estimates', costs: 'c', harm: 86, opener: 75, novel: 88 },
+      { id: 'paid_traffic_leaks', finding: 'ad code and a phone-only door', costs: 'c', harm: 93, opener: 80, novel: 78 },
+    ] }, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: true } });
+    const _floorRanked = _rkFloor.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
+    if (!_floorRanked[0] || _floorRanked[0].id !== 'paid_traffic_leaks') _fails.push('a review pattern below the three-mention floor still anchors leak 1 over a measured finding');
+    if (!_floorRanked[1] || _floorRanked[1].id !== 'review_pain_pattern') _fails.push('the below-floor pattern lost its supporting number — it should hold leak 2, not vanish');
+    // Last resort: when the weak pattern is ALL there is, it still anchors —
+    // the email's own BLOCKED RUNG LEADS ANYWAY rule, mirrored.
+    const _rkOnly = buildProblemList({ byHarm: [
+      { id: 'review_pain_pattern', finding: 'slow follow-up after estimates', costs: 'c', harm: 86, opener: 75, novel: 88 },
+    ] }, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: true } });
+    if (!_rkOnly.some(r => r.leakRank === 1)) _fails.push('a lead whose only sayable finding is a weak pattern shows no leak 1 at all — the last-resort rule is gone');
     // "if there arent big ones then fill the 2 and 3": one big finding plus
     // two smaller sayable ones still number three leaks, biggest anchoring.
     const _rkFill = buildProblemList({ byHarm: [
@@ -46235,6 +46381,18 @@ app.listen(PORT, () => {
     if (stripImpossibleReviewCounts('The owner replies to 77 of the 79 we read reviews personally.', 79, 405).cut.length !== 0) {
       _fails.push('a TRUE count over the reviews we actually read was eaten — a gate that eats true sentences is the more expensive failure');
     }
+    // — "141 five-star reviews" — the number fits their profile total, so
+    // every count gate passes it, and the QUALIFIER is false: eight of the 90
+    // we read sit at three stars or below. Live 01:20 on Conner's.
+    if (stripImpossibleReviewCounts('You have 141 five-star reviews and a reputation that took years to build.', 90, 141, 8).cut.length !== 1) {
+      _fails.push('"141 five-star reviews" survives on a lead where eight low-star reviews were measured — a number gate cannot see an adjective, so this one now does');
+    }
+    if (stripImpossibleReviewCounts('You have 141 reviews and a reputation that took years to build.', 90, 141, 8).cut.length !== 0) {
+      _fails.push('the TRUE total without the qualifier was eaten — the gate must fire on the adjective, never the number');
+    }
+    if (stripImpossibleReviewCounts('You have 141 five-star reviews.', 90, 141, null).cut.length !== 0) {
+      _fails.push('the qualifier was stripped with NO negative-count measurement — we cannot prove it false without the measurement, and an unproven strip eats true sentences on all-five-star businesses');
+    }
     if (stripImpossibleReviewCounts('They have 305 public reviews at 4.8 stars.', 67, 305).cut.length !== 0) {
       _fails.push('citing the profile TOTAL was eaten — that number is Google\u2019s own record and always sayable');
     }
@@ -46299,10 +46457,11 @@ app.listen(PORT, () => {
     const _dn = (...p) => p.join('');
     const _dsrc = selfSourceNoComments();
     for (const [_what, _needle] of [
-      ['the impossible-count stripper never runs on the audit', _dn('stripImpossibleReviewCountsDeep(parsed[k], _irc,', ' 1, reviewsRead, _profTotal)')],
+      ['the impossible-count stripper never runs on the audit', _dn('stripImpossibleReviewCountsDeep(parsed[k], _irc,', ' 1, reviewsRead, _profTotal, reviewsNegativeCount)')],
       ['the competitor-site stripper never runs on the audit', _dn('stripCompetitorSiteClaimsDeep(parsed[k],', ' _cc, 1)')],
       ['the found-but-unsayable pair still prints as a real position', _dn('if (a.rank == null || b.rank', ' == null) {')],
       ['the mine call no longer retries a timeout', _dn("'review-pain-mine', { retryOnTimeout:", ' true })')],
+      ['the story writer no longer retries a timeout — one slow minute deletes the best writing in the audit and the sheet ships a one-line story', _dn("'situation-read', { retryOnTimeout:", ' true })')],
       ['the DFS local body went back to a location name their database does not hold', _dn('location_code: 2840,', '')],
     ]) {
       if (!_dsrc.includes(_needle)) _fails.push(`${_what} — the computed-but-not-passed class`);
@@ -46348,6 +46507,38 @@ app.listen(PORT, () => {
     if (clipQuote('short enough to keep') !== 'short enough to keep') _fails.push('a quote inside the budget was rewritten');
     const _dnClip = (a, b) => a + b;
     if (!selfSourceNoComments().includes(_dnClip('clipQuote(sg.', 'evidence)'))) _fails.push('the mined-evidence strings no longer go through clipQuote — a fixture supplies its own arguments and cannot see the call site');
+    // The owner's own replies enter the verify corpus — a TRUE quote of his
+    // "Thanks so much Terry!" was stripped from the synthesis because the
+    // replies were handed to the model and never to the gate.
+    if (!selfSourceNoComments().includes(_dnClip('(Array.isArray(ownerReply', 'Sample) && ownerReplySample.length'))) {
+      _fails.push("the owner's review replies no longer enter the verify corpus — true quotes of his own words get stripped again (pages, reviews, replies: third instance)");
+    }
+    // Every scrape sheds its URL fragment at the one door — "/contact#!"
+    // bought a copy of the homepage twice across two live runs.
+    if (!selfSourceNoComments().includes(_dnClip("target = String(target || '').split('", "#')[0];"))) {
+      _fails.push('the scrape door no longer strips URL fragments — hashbang sitemap URLs buy homepage copies again');
+    }
+    // The ordering claim lives in ONE place (the walk's fix-first). The
+    // constraint's "gates everything below it" printed three lines under
+    // "The door first, then the traffic" on the live 01:19 sheet.
+    if (selfSourceNoComments().includes(_dnClip('and it gates every', 'thing below it'))) {
+      _fails.push('the growth constraint is back to claiming fix-order ("gates everything below it") — two ordering authorities on one sheet is the contradiction a reader stops believing');
+    }
+    // The miner asks for the kind and sorts most-mentioned first — the top
+    // pattern is signals[0] downstream, and the live run trusted emission
+    // order (a 2-mention pattern above a 3-mention one).
+    if (!selfSourceNoComments().includes(_dnClip('"kind":"contact|workman', 'ship|other"'))) {
+      _fails.push('the miner schema no longer asks for the kind — the classifier is back to chasing free-form phrasing with regexes');
+    }
+    if (!selfSourceNoComments().includes(_dnClip('.sort((a, b) => (Number(b.count) || 0) - ', '(Number(a.count) || 0))'))) {
+      _fails.push('the mined signals are no longer sorted most-mentioned first — reviewPainTop trusts the model emission order again');
+    }
+    // "claims what Google shows" is exempt only when the rank order was
+    // TRUSTED — on a real-pack lead we DID read what Google shows, and a
+    // Do-not-say full of true sentences is one an operator learns to skip.
+    if (!selfSourceNoComments().includes(_dnClip('if (!(localRank && localRank.', 'orderTrusted === true)) {'))) {
+      _fails.push('the google-shows flag lost its trusted-rank exemption gate — measured pack reads get flagged as scrapes again');
+    }
     // 1c. Copy-quote rows merged at the route are STAGED by their theme: a
     //     review-derived original about callbacks lands after contact, not at
     //     the door. Live: Conner's review quote staged at the door while
@@ -46441,6 +46632,7 @@ app.listen(PORT, () => {
     else {
       if (_hit.organicEtvMonthly !== 1544) _fails.push(`the modeled visits parse to ${_hit.organicEtvMonthly}, not 1544`);
       if (_hit.paidKeywords !== 4) _fails.push('the paid-keyword count is dropped — the one hard nugget in the response, corroboration that ads have run');
+      if (_hit.paidEtvMonthly !== 90) _fails.push('the paid-traffic estimate is dropped — the same response carries paid.etv beside organic.etv and it was half-read for the life of this parser');
       if (!/estimate, not a measurement/.test(String(_hit.note))) _fails.push('the estimate no longer labels itself as one, so a downstream reader can quote it as a fact');
     }
     // Absent from the index is a fact about the INDEX.
@@ -47046,6 +47238,12 @@ app.listen(PORT, () => {
     // harder confirm-but-wording case was correctly cleared.
     _wording.push(`The email states 'Dallas Custom Home Builders shows up above them on Google for "custom home builder in Dallas, TX", with 19 reviews against their 26' \u2014 this is measured and correct.`);
     _wording.push(`VOICE FAILURE: The pitch angle reads as a generic audit finding, not a diagnosis that makes this owner feel seen.`);
+    // Live 01:21: the entry began "VOICE:" (no FAILURE) and rendered into
+    // Do-not-say as a mangled fragment; and an "INTERNAL ONLY LEAK" entry
+    // whose own text says "no email flag warranted... correctly sequestered"
+    // rendered as a warning about a correctly-working safeguard.
+    _wording.push(`VOICE: The pitch reads as a template diagnosis rather than a founder's observation. It should open with the specific measured finding.`);
+    _wording.push(`INTERNAL ONLY LEAK: The product and price appear in the 'Recommended product' field which is correctly marked INTERNAL ONLY. Both are internal scaffolding and are correctly sequestered\u2014no email flag warranted.`);
     for (const f of _wording) {
       if (factCheckNoteKind(f) === 'real') {
         _fails.push(`a flag that is not a claim a prospect could disprove is still going into "Do not say" \u2014 "${f.slice(0, 90)}"`);
