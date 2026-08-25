@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -656,8 +656,38 @@ const mergeStat = runMergeCheck();
           { problem: 'int', funnelStage: 'work', internalOnly: true, moneyRank: 3 },
         ];
         const gl = mod.groupStage(legacyRows, null);
-        if (gl.rankOf.get(legacyRows[0]) !== 1 || gl.rankOf.get(legacyRows[1]) !== 2) fails.push('a legacy lead does not derive the same leak numbers the server assigns');
+        // Depth order, mirroring the server: the door row (deeper) anchors
+        // over the found row even though the found row's pillar ranks higher.
+        if (gl.rankOf.get(legacyRows[1]) !== 1 || gl.rankOf.get(legacyRows[0]) !== 2) fails.push('a legacy lead does not derive the depth-first leak numbers the server assigns');
         if (gl.rankOf.get(legacyRows[2])) fails.push('a legacy internal row took a leak number');
+        // A legacy copy row (fromTheirPages) may fill but never anchor.
+        const glc = mod.groupStage([
+          { problem: 'copy quote', funnelStage: 'door', moneyRank: 6, harm: 90, fromTheirPages: true },
+          { problem: 'real find', funnelStage: 'found', moneyRank: 3, harm: 60, pillar: 'INVISIBLE' },
+        ], null);
+        const glcRows = [...glc.rankOf.entries()];
+        if ((glcRows.find(x => x[0].problem === 'copy quote') || [])[1] === 1) fails.push('a legacy copy observation anchored at leak 1');
+        if ((glcRows.find(x => x[0].problem === 'real find') || [])[1] !== 1) fails.push('the measured row did not anchor when a copy row was present');
+        // The walk mapper: money_out and who_finds_them both land on Getting
+        // found; what_repeats never reaches a stage (the work strip owns it).
+        const wt = mod.walkStage({ stages: [
+          { id: 'money_out', text: 'MO' }, { id: 'who_finds_them', text: 'WF' },
+          { id: 'the_door', text: 'TD' }, { id: 'after_contact', text: 'AC' }, { id: 'what_repeats', text: 'WR' },
+        ] });
+        if (wt.found.join(' ') !== 'MO WF' || wt.door.join(' ') !== 'TD' || wt.after.join(' ') !== 'AC') fails.push('the walk texts do not land at their drawn stages');
+        // Inside one stage the numbered leaks lead, in rank order — LEAK 3
+        // printed above LEAK 2 on the first sample of this layout.
+        const gOrd = mod.groupStage([
+          { problem: 'ranked three', funnelStage: 'found', moneyRank: 1, harm: 70, leakRank: 3 },
+          { problem: 'ranked two', funnelStage: 'found', moneyRank: 3, harm: 96, leakRank: 2 },
+        ], null);
+        const foundRows = (gOrd.stages.find(x => x.id === 'found') || { rows: [] }).rows;
+        if (!foundRows[0] || foundRows[0].problem !== 'ranked two') fails.push('the numbered leaks inside a stage do not render in rank order');
+        if (JSON.stringify(wt).includes('WR')) fails.push('the what_repeats walk text leaked into a funnel stage — it belongs in the work strip');
+        // The score sentence: one plain line, both directions.
+        if (!/well built|build is fine/i.test(mod.scoreLine({ checked: true, score: 8 }, true))) fails.push('a high score does not read as a healthy build');
+        if (!/part of the problem/i.test(mod.scoreLine({ checked: true, score: 3 }, true))) fails.push('a low score does not say the build itself is a problem');
+        if (mod.scoreLine(null, true) !== '' || mod.scoreLine({ checked: false, score: 8 }, true) !== '') fails.push('an unmeasured score produced a sentence');
         // The drawing: red only where broken, dashed only where unread.
         const svgB = mod.fsvg({ found: 'broken', door: 'clean', after: 'no_read' });
         if (!/#dc2626/.test(svgB)) fails.push('a broken stage does not draw red');
@@ -671,6 +701,27 @@ const mergeStat = runMergeCheck();
         for (const mk of ['MARKER_STAGEROW', 'LEAK 1', 'MARKER_STAGEMONEY', 'Getting found']) {
           if (sp.indexOf(mk) < 0) fails.push('the funnel render drops "' + mk + '" — the stage, the number or the money line never reaches the sheet');
         }
+        // The walk's measured sentences render AT their stages (the mock's
+        // grey evidence line), the fallback-search caveat travels with the
+        // found stage instead of a header chip, and the score renders as one
+        // plain sentence. Each was a header chip or nothing before this.
+        const walkLead = { ...LEAD,
+          problemList: [],
+          websiteScore: { checked: true, score: 8, basedOn: 'MARKER_BASEDON', graded: [{ what: 'phone layout', got: 2, of: 2 }] },
+          auditFacts: { checked: true, searchSource: 'places' },
+          funnelStory: { checked: true, stages: [
+            { id: 'money_out', label: 'Money out', text: 'MARKER_WALK_MONEY.' },
+            { id: 'the_door', label: 'What a click lands on', text: 'MARKER_WALK_DOOR.' },
+            { id: 'what_repeats', label: 'What repeats', text: 'MARKER_WALK_REPEATS.' },
+          ], measured: { found: true, door: true, after: false }, fixFirst: null } };
+        const wp = mod.html([mod.rec(walkLead)], { title: 'T', at: 'now' });
+        for (const mk of ['MARKER_WALK_MONEY', 'MARKER_WALK_DOOR', 'MARKER_WALK_REPEATS', 'PARTLY MEASURED', 'fallback source this run', 'MARKER_BASEDON']) {
+          if (wp.indexOf(mk) < 0) fails.push('the funnel render drops "' + mk + '" — a measured walk sentence, the fallback caveat or the score grading never reaches the sheet');
+        }
+        if (!/the leaks are in the path around it|build is fine/.test(wp)) fails.push('the one-sentence score verdict never reaches the sheet — the chips block was removed and nothing replaced it');
+        // A clean measured stage must NOT say "no fault found" when the search
+        // was read on the fallback — that silence is a different fact.
+        if (/NO FAULT FOUND/.test(wp) && wp.indexOf('PARTLY MEASURED') < 0) fails.push('a fallback-search lead still reads NO FAULT FOUND at Getting found');
       } catch (e) { fails.push('the funnel grouping check threw: ' + e.message); }
       if (page) {
         const MARKERS = ['MARKER_OWNER', 'MARKER_TITLE', 'MARKER_PHONE', 'MARKER_BACKGROUND',
@@ -767,7 +818,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -789,13 +840,14 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
         id: 'x1', name: 'Smith & Sons', website: 'https://smith.example',
         ownerName: 'Jason Hicks', email: 'info@x.example', phone: '2103613587',
         websiteScore: { checked: true, score: 8, basedOn: '5 of 6', graded: [] },
+        funnelStory: { checked: true, stages: [{ id: 'money_out', label: 'Money out', text: 'SCREEN_WALK_MARKER.' }], measured: { found: true, door: false, after: false }, fixFirst: null },
         auditFacts: { ads: 'no', booking: 'online_booking', formFields: 4, campaignPages: 10, mobile: 'fine', https: true },
         opsBuckets: [{ label: 'quotes take too long', mentions: 5 }], reviewsNegativeUnanswered: 2,
         situationRead: { background: 'BG', headline: 'HL', read: 'RD', rows: [{ label: 'L', says: 'S' }],
@@ -827,6 +879,15 @@ const mergeStat = runMergeCheck();
         }
         const askCount = texts.filter(t => t === 'ASKQ_MARKER').length;
         if (askCount !== 1) fails.push('askOnTheCall renders ' + askCount + ' time(s) on the audit screen, not once — it belongs in The conversation and nowhere else, or the two copies drift');
+        // The walk's measured sentence renders at its stage ON THE SCREEN —
+        // the export fixture cannot see the screen's separate wiring. HONEST
+        // LIMIT: the recording stub captures text at createElement time, so it
+        // sees an element CREATED and cannot see whether it was mounted — the
+        // falsified regression is the creation being deleted, which is how the
+        // feature would really be lost.
+        if (joined.indexOf('SCREEN_WALK_MARKER') < 0) fails.push("the walk's measured evidence line never reaches the screen's funnel stage — the export shows it and the screen does not");
+        // The one-sentence score verdict replaced the chips block on screen.
+        if (!/build is fine|leaks are in the path around it/.test(joined)) fails.push('the one-sentence score verdict is missing from the screen — the chips block was removed and nothing replaced it');
       }
       try {
         if (briefing({ lead: null }) !== null) fails.push('the audit screen does not return null for a null lead');

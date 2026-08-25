@@ -2448,16 +2448,24 @@ const groupByFunnelStage = (pl, fs) => {
   const ranked = rows.filter(r => Number.isFinite(r.leakRank));
   if (ranked.length) { for (const r of ranked) rankOf.set(r, r.leakRank); }
   else {
+    // Depth-first, mirroring the server: the deepest broken stage anchors
+    // (after > door > found), harm breaks ties inside a stage, and a copy
+    // observation can fill 2-3 but never anchor at 1.
+    const dep = { after: 0, door: 1, found: 2 };
+    const canRank = (r) => !r.internalOnly && !r.ambient && Number.isFinite(dep[stageOf(r)]);
+    const bySort = (a, b) => (dep[stageOf(a)] - dep[stageOf(b)]) || ((b.harm || 0) - (a.harm || 0));
+    const pool = rows.filter(r => canRank(r) && !r.fromTheirPages).sort(bySort);
+    const fill = rows.filter(r => canRank(r) && r.fromTheirPages).sort(bySort);
     let lr = 0;
-    for (const r of rows) {
-      if (lr >= 3) break;
-      if (r.internalOnly || r.ambient || r.fromTheirPages) continue;
-      if (!Number.isFinite(r.moneyRank) || r.moneyRank > 5) continue;
-      rankOf.set(r, ++lr);
-    }
+    for (const r of pool) { if (lr >= 3) break; rankOf.set(r, ++lr); }
+    if (lr > 0) for (const r of fill) { if (lr >= 3) break; rankOf.set(r, ++lr); }
   }
   const measured = (fs && fs.measured) || {};
   const status = (id) => g[id].length ? 'broken' : (measured[id] === true ? 'clean' : 'no_read');
+  // Inside a stage the numbered leaks lead, in rank order — the sample sheet
+  // showed LEAK 3 printed above LEAK 2 because rows kept the money order.
+  const ord = (r) => (rankOf.has(r) ? rankOf.get(r) : 99);
+  for (const k of Object.keys(g)) g[k].sort((a, b) => ord(a) - ord(b));
   return { stages: FUNNEL_STAGE_DEFS.map(d => ({ id: d.id, label: d.label, sub: d.sub, rows: g[d.id], status: status(d.id) })), work, unstaged, rankOf };
 };
 // The funnel drawing. One function, both surfaces — statuses in, inline SVG
@@ -2475,7 +2483,7 @@ const funnelSvg = (sts, pal) => {
   };
   const drip = (x, y) => '<path d="M' + x + ' ' + y + ' C ' + (x + 13) + ' ' + (y + 6) + ', ' + (x + 20) + ' ' + (y + 16) + ', ' + (x + 17) + ' ' + (y + 30) + '" stroke="' + P.brokenLine + '" stroke-width="1.5" stroke-dasharray="3 4" fill="none"/>'
     + '<circle cx="' + (x + 17) + '" cy="' + (y + 38) + '" r="2.6" fill="' + P.brokenLine + '"/><circle cx="' + (x + 13) + '" cy="' + (y + 49) + '" r="1.8" fill="' + P.brokenLine + '"/>';
-  return '<svg width="200" height="402" viewBox="0 0 200 402" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="funnel">'
+  return '<svg width="236" height="474" viewBox="0 0 200 402" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="funnel">'
     + band('M12 6 L188 6 L166 108 L34 108 Z', sts.found, 'GETTING FOUND', 62)
     + (sts.found === 'broken' ? drip(174, 40) : '')
     + band('M38 120 L162 120 L144 222 L56 222 Z', sts.door, 'THE DOOR', 176)
@@ -2485,6 +2493,27 @@ const funnelSvg = (sts, pal) => {
     + '<path d="M86 336 L114 336 L111 372 L89 372 Z" fill="' + P.clean + '" stroke="' + P.cleanLine + '" stroke-width="1.5" stroke-linejoin="round"/>'
     + '<text x="100" y="392" text-anchor="middle" font-size="11" fill="' + P.dim + '" font-family="-apple-system,Helvetica,sans-serif">booked jobs</text>'
     + '</svg>';
+};
+
+// The walk's measured sentences keyed to the three drawn stages, so each
+// stage shows WHAT WAS MEASURED (grey) above WHAT IS BROKEN (rows) — the
+// approved mock's shape. money_out joins Getting found (the ads side of being
+// found); what_repeats renders in the work strip, never here.
+const WALK_TO_STAGE = { money_out: 'found', who_finds_them: 'found', the_door: 'door', after_contact: 'after' };
+const walkTextsByStage = (fs) => {
+  const out = { found: [], door: [], after: [] };
+  for (const st of ((fs && fs.stages) || [])) { const k = WALK_TO_STAGE[st && st.id]; if (k && st && st.text) out[k].push(String(st.text)); }
+  return out;
+};
+// One plain sentence instead of the chips block — Vin: "still waiting for it
+// to get more simplistic", and the call on how was left to us. Code-assembled;
+// says only what the score and the stage statuses already say.
+const scoreSentence = (ws, anyBroken) => {
+  if (!ws || ws.checked !== true || !Number.isFinite(Number(ws.score))) return '';
+  const sc = Number(ws.score);
+  if (sc >= 7) return anyBroken ? 'the build is fine — the leaks are in the path around it' : 'the build is fine';
+  if (sc <= 4) return 'the site build itself is part of the problem';
+  return anyBroken ? 'an average build — the bigger leaks are in the path around it' : 'an average build';
 };
 
 const auditRecordFor = (lead) => {
@@ -2669,18 +2698,11 @@ const auditExportHtml = (records, meta) => {
       ? '<section><h3>' + e(title) + (capTxt ? '<span class="cap">' + e(capTxt) + '</span>' : '') + '</h3>' + body + '</section>' : '';
     const g = r.grouped || { leaks: [], small: [], other: [], internal: [], frictionLoose: [] };
     const af = r.auditFacts;
-    const facts = af ? [
-      adsFactsLabel(af),
-      af.booking ? ('Booking ' + ({ online_booking: 'online', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking)) : '',
-      (typeof af.formFields === 'number') ? ('Form ' + af.formFields + ' fields') : '',
-      (typeof af.campaignPages === 'number' && af.campaignPages > 0) ? (af.campaignPages + ' pages only reachable by ad link') : '',
-      af.mobile ? ('Mobile ' + (af.mobile === 'slow' ? 'slow for real visitors' : 'fine')) : '',
-      af.roiStatus === 'blind' ? 'Nothing ties ad clicks to jobs'
-        : af.roiStatus === 'hidden' ? 'Ad tracking inside a tag container (could not see in)'
-        : af.roiStatus === 'counted' ? 'Ad clicks tracked to outcomes' : '',
-      af.searchSource === 'places' ? 'Search read on the fallback (no position possible this run)' : '',
-    ].filter(Boolean).join(' · ') : '';
     const measured = r.ageDays === null ? '' : (r.ageDays <= 1 ? 'measured today' : 'measured ' + r.ageDays + ' days ago');
+    // Grouped ONCE, before the header — the score sentence reads the stage
+    // statuses and the funnel section reads the same grouping.
+    const fg = groupByFunnelStage(r.problemList, r.funnelStory);
+    const anyBroken = fg.stages.some(s3 => s3.status === 'broken');
     // Do-not-say: the quote plus one plain line (plainRisk), deduped — rendered
     // LAST, inside the reference tail in oneTail. Stashed here where the pieces
     // are in scope.
@@ -2704,10 +2726,9 @@ const auditExportHtml = (records, meta) => {
       + '<header><div class="hrow"><div><h2>' + e(r.company) + '</h2><div class="meta">'
       + [r.trade, r.location, r.website, measured].filter(Boolean).map(e).join(' &middot; ')
       + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></div>'
-      + ((r.websiteScore || facts) ? '<div style="text-align:right;max-width:300px;flex-shrink:0">'
-        + (r.websiteScore ? '<div class="scoren">' + r.websiteScore.score + '<span>/10 website</span></div>' : '')
-        + (facts ? '<div class="meta">' + e(facts) + '</div>' : '')
-        + (r.websiteScore && r.websiteScore.basedOn ? '<div class="meta">Graded on: ' + p(r.websiteScore.basedOn) + '</div>' : '')
+      + (r.websiteScore ? '<div style="text-align:right;max-width:300px;flex-shrink:0">'
+        + '<div class="scoren">' + r.websiteScore.score + '<span>/10 site build</span></div>'
+        + (scoreSentence(r.websiteScore, anyBroken) ? '<div class="meta">' + e(scoreSentence(r.websiteScore, anyBroken)) + '</div>' : '')
         + '</div>' : '')
       + '</div></header>'
       + (r.corpusWarning ? '<div class="stop"><b>Read this first.</b> ' + p(r.corpusWarning) + '</div>' : '')
@@ -2750,14 +2771,21 @@ const auditExportHtml = (records, meta) => {
       // ═══ THE FUNNEL — the skeleton. Every finding at its stage, exactly once,
       // as terse evidence; the top three leaks numbered where they sit. ═══
       + (() => {
-          const fg = groupByFunnelStage(r.problemList, r.funnelStory);
           const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
           if (!anyRows && !r.funnelStory && !(t && (t.friction || []).length)) return '';
           const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
           const lead1 = lead1Row && lead1Row[0].moneyLine;
+          const walkT = walkTextsByStage(r.funnelStory);
+          // The fallback-source caveat travels WITH the stage it scopes: a
+          // Places-read search cannot state a position, so a quiet found
+          // stage must not read "no fault found" on that run.
+          const fbSearch = !!(af && af.searchSource === 'places');
           const stagesHtml = fg.stages.map(s3 => {
             const cls = s3.status === 'broken' ? 'fb' : s3.status === 'clean' ? 'fc' : 'fn';
-            const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'clean' ? 'NO FAULT FOUND' : 'NOT MEASURED';
+            const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
+            const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
+            const wt = (walkT[s3.id] || []).join(' ')
+              + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '');
             const rowsHtml = s3.rows.map(x => {
               const lr = fg.rankOf.get(x);
               const ml = Number.isFinite(lr) ? trimRepeatedJobValue(x.moneyLine, lead1, lr - 1) : null;
@@ -2770,19 +2798,21 @@ const auditExportHtml = (records, meta) => {
             }).join('');
             const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
               ? '<div class="ferow tw">' + t.friction.map(x => p(x)).join(' · ') + '</div>' : '';
-            const emptyNote = (!rowsHtml && !legacyFriction)
+            const emptyNote = (!rowsHtml && !legacyFriction && !wt.trim())
               ? (s3.status === 'no_read'
                 ? '<div class="tw">Nothing measured here' + (s3.id === 'after' ? ' — what happens after someone reaches out is a question for the call, not a claim.' : '.') + '</div>'
                 : '<div class="tw">Measured — no fault found.</div>')
               : '';
-            return '<div class="fstage ' + cls + '"><div class="fsh"><b>' + e(s3.label) + '</b><span class="fss">' + e(s3.sub) + '</span><span class="fst">' + st + '</span></div>' + rowsHtml + legacyFriction + emptyNote + '</div>';
+            return '<div class="fstage ' + cls + '"><div class="fsh"><b>' + e(s3.label) + '</b><span class="fss">' + e(s3.sub) + '</span><span class="fst">' + st + '</span></div>'
+              + (wt.trim() ? '<div class="fev">' + p(wt.trim()) + '</div>' : '') + rowsHtml + legacyFriction + emptyNote + '</div>';
           }).join('');
           const ff = (r.funnelStory && r.funnelStory.fixFirst) || null;
           const ffHtml = ff
             ? '<div class="ffirst"><b>Fix first:</b> ' + e(String(ff.plain || '')) + (ff.why ? ' — ' + p(ff.why) : '') + (ff.join ? ' ' + p(ff.join) : '') + '</div>'
             : (t && t.firstBrokenLinkWhy ? '<div class="ffirst"><b>Fix first' + (t.firstBrokenLink ? ' — ' + e(layerPlain(t.firstBrokenLink)) : '') + ':</b> ' + p(t.firstBrokenLinkWhy) + '</div>' : '');
-          const workHtml = fg.work.length
-            ? '<div class="fwork"><b>Under the funnel — the work itself (context, not a leak):</b> ' + fg.work.map(x => p(x.problem)).join(' · ') + '</div>' : '';
+          const wr = ((r.funnelStory && r.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
+          const workHtml = (fg.work.length || wr)
+            ? '<div class="fwork"><b>Under the funnel — the work itself (context, not a leak):</b> ' + (fg.work.length ? fg.work.map(x => p(x.problem)).join(' · ') : p(wr.text)) + '</div>' : '';
           const unstagedHtml = fg.unstaged.length
             ? '<div style="margin-top:8px">' + fg.unstaged.map(x => '<div class="ferow"><b>' + p(x.problem) + '</b>'
               + (x.costs || x.area ? ' <span class="tw">— ' + [x.area ? e(x.area) : '', x.costs ? p(x.costs) : ''].filter(Boolean).join(' · ') + '</span>' : '') + '</div>').join('') + '</div>' : '';
@@ -2840,6 +2870,10 @@ const auditExportHtml = (records, meta) => {
      .concat((r.changes || []).filter(c => !c.sayable).map(c => p(c.say))).filter(Boolean);
     const sayableChanges = (r.changes || []).filter(c => c.sayable);
     const couldNot = ''
+      + (r.websiteScore && r.websiteScore.basedOn
+        ? '<p class="dim">Website score graded on: ' + p(r.websiteScore.basedOn)
+          + ((r.websiteScore.graded || []).length ? ' — ' + r.websiteScore.graded.map(g2 => e(g2.what + ' ' + g2.got + '/' + g2.of)).join(' · ') : '') + '</p>'
+        : '')
       + ul(r.readLimits, x => '<li>' + p(String(x)) + '</li>')
       + (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to — a page built for an ad is not in the menu by design; their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li class="dim">' + e(x) + '</li>') : '')
       + (r.adsVerified ? '<p class="dim">Listed as a verified advertiser in Google’s Ads Transparency Center.</p>' : '');
@@ -2881,7 +2915,7 @@ const auditExportHtml = (records, meta) => {
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#86868b;font-size:11.5px}.fst{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:#a1a1a6}.fb .fst{color:#b91c1c}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#515154;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#515154}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#86868b;font-size:13px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#86868b;font-size:12px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#86868b;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#86868b;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#86868b;font-size:12.5px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#86868b;font-size:13px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#515154}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#86868b}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#86868b;font-size:11.5px}.fst{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:#a1a1a6}.fb .fst{color:#b91c1c}.fev{color:#86868b;font-size:12.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#515154;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#86868b;font-size:13px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#515154}'
@@ -6303,9 +6337,14 @@ function LeadBriefing({ lead }) {
       const lead1 = lead1Row && lead1Row[0].moneyLine;
       const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#b9c0cc', brokenText: '#f87171', dim: '#8b93a2' };
       const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
+      const walkT = walkTextsByStage(lead.funnelStory);
+      const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
       const stageBlocks = fg.stages.map((s3, si) => {
         const broken = s3.status === 'broken';
-        const stTxt = broken ? 'BROKEN' : s3.status === 'clean' ? 'NO FAULT FOUND' : 'NOT MEASURED';
+        const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
+        const stTxt = broken ? 'BROKEN' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
+        const wt = ((walkT[s3.id] || []).join(' ')
+          + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '')).trim();
         const rowsEls = s3.rows.map((x, ri) => {
           const lr = fg.rankOf.get(x);
           const ml = Number.isFinite(lr) ? trimRepeatedJobValue(x.moneyLine, lead1, lr - 1) : null;
@@ -6318,18 +6357,19 @@ function LeadBriefing({ lead }) {
         });
         const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
           ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
-        const emptyNote = (!s3.rows.length && !legacyFriction)
+        const emptyNote = (!s3.rows.length && !legacyFriction && !wt)
           ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', marginTop: 3 } },
               s3.status === 'no_read'
                 ? ('Nothing measured here' + (s3.id === 'after' ? ' \u2014 what happens after someone reaches out is a question for the call, not a claim.' : '.'))
                 : 'Measured \u2014 no fault found.')
           : null;
+        const walkEl = wt ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
         return React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12, marginBottom: 12 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
             React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--m2)' } }, s3.label),
             React.createElement('span', { style: { fontSize: 11.5, color: 'var(--m)' } }, s3.sub),
             React.createElement('span', { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--m)' } }, stTxt)),
-          rowsEls, legacyFriction, emptyNote);
+          walkEl, rowsEls, legacyFriction, emptyNote);
       });
       const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
       const ffEl = ff
@@ -6337,9 +6377,10 @@ function LeadBriefing({ lead }) {
             React.createElement('b', null, 'Fix first: '), String(ff.plain || '') + (ff.why ? ' \u2014 ' + ff.why : '') + (ff.join ? ' ' + ff.join : ''))
         : (t && t.firstBrokenLinkWhy ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
             React.createElement('b', null, 'Fix first' + (t.firstBrokenLink ? ' \u2014 ' + layerPlain(t.firstBrokenLink) : '') + ': '), t.firstBrokenLinkWhy) : null);
-      const workEl = fg.work.length ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginBottom: 8 } },
+      const wr = ((lead.funnelStory && lead.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
+      const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6, marginBottom: 8 } },
         React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
-        fg.work.map(x => x.problem).join(' \u00b7 ')) : null;
+        fg.work.length ? fg.work.map(x => x.problem).join(' \u00b7 ') : String(wr.text)) : null;
       const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--m2)', lineHeight: 1.6 } },
         fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
           React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
@@ -6404,62 +6445,37 @@ function LeadBriefing({ lead }) {
       // card is the score and the hard facts only. pl stays for the products
       // line below.
       void pl;
-      if (!ws && !af) return null;
-      // PILLAR_LABEL / PILLAR_PRODUCT are module-scope — one copy for the
-      // screen, the selling block and the export.
-      const chip = (txt, tone) => React.createElement('span', {
-        style: { display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11,
-          border: '1px solid ' + (tone === 'bad' ? 'rgba(248,113,113,.4)' : 'var(--b)'),
-          color: tone === 'bad' ? '#f87171' : 'var(--m2)', marginRight: 6, marginBottom: 4 } }, txt);
-      const facts = [];
-      if (af) {
-        facts.push(chip(adsFactsLabel(af), null));
-        // The ROI answer, three states, in words Vin asked for: "are they even
-        // tracking their ads leads". 'blind' is the red one; 'hidden' is a
-        // GTM container we cannot see inside — reported as could-not-see,
-        // never as missing; 'counted' is the good news said plainly.
-        if (af.roiStatus === 'blind') facts.push(chip('nothing ties ad clicks to jobs', 'bad'));
-        else if (af.roiStatus === 'hidden') facts.push(chip('tracking sits inside a tag container \u2014 could not see in', null));
-        else if (af.roiStatus === 'counted') facts.push(chip('ad clicks tracked to outcomes', null));
-        if (af.booking) facts.push(chip('Booking: ' + ({ online_booking: 'online scheduler', form: 'form only', phone_only: 'phone only', none_found: 'no route in' }[af.booking] || af.booking), (af.booking === 'form' || af.booking === 'phone_only' || af.booking === 'none_found') ? 'bad' : null));
-        if (Number.isFinite(af.formFields)) facts.push(chip('Form: ' + af.formFields + ' fields', af.formFields >= 7 ? 'bad' : null));
-        // Positive only, per the read's own rule: finding campaign pages is a
-        // fact; not finding them proves nothing, and the caption says so.
-        if (Number.isFinite(af.campaignPages)) facts.push(chip(af.campaignPages > 0 ? (af.campaignPages + ' page(s) only reachable by ad link') : 'Ad landing pages: none found (they may still exist)'));
-        if (af.mobile) facts.push(chip('Mobile: ' + (af.mobile === 'slow' ? 'slow for their real visitors' : 'fine for real visitors'), af.mobile === 'slow' ? 'bad' : null));
-        if (af.https === false) facts.push(chip('plain http', 'bad'));
-        // Which source measured the search read. 'places' is the fallback —
-        // no position is possible on that run, which is the honest answer to
-        // "is DataForSEO still not working" straight from the sheet.
-        if (af.searchSource === 'places') facts.push(chip('search read on the fallback \u2014 no position possible this run', null));
-      }
+      // The chips are gone — every ads/booking/form/speed fact now renders AT
+      // its funnel stage (the walk's grey evidence line, or a finding row), so
+      // this card is the /10 with one plain sentence, plus the internal notes
+      // that have no stage: review intelligence, the traffic estimate, and
+      // pages only an ad link reaches. Vin left the how to us: "not sure what
+      // Kill the 7.9/10 chips block is so that is yoru call."
+      const anyBroken2 = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory).stages.some(s5 => s5.status === 'broken');
+      const notes = [];
+      if (af && Number.isFinite(af.campaignPages) && af.campaignPages > 0) notes.push(af.campaignPages + ' page(s) only reachable by ad link \u2014 checkable in one click');
       const te = lead.trafficEstimate;
       if (te && te.checked && te.inIndex && Number.isFinite(te.organicEtvMonthly)) {
-        facts.push(chip('~' + te.organicEtvMonthly.toLocaleString() + ' organic visits/mo (third-party estimate \u2014 internal only)'));
-        if (Number(te.paidKeywords) > 0) facts.push(chip('index has seen paid keywords on this domain'));
+        notes.push('~' + te.organicEtvMonthly.toLocaleString() + ' organic visits/mo \u2014 third-party estimate, internal only');
+        if (Number(te.paidKeywords) > 0) notes.push('the index has seen paid keywords on this domain');
       }
-      // Review intelligence — INTERNAL by rule (reviews are how we read the
-      // business, never what we say to the owner). The bucket tells Mike what
-      // KIND of operational fault the complaints describe; the unanswered
-      // negatives are the cheapest fix a call can open with.
       const ob = lead.opsBuckets;
-      if (Array.isArray(ob) && ob.length) {
-        const top = ob[0];
-        if (top && top.label) facts.push(chip('Complaints: mostly ' + top.label + (Number(top.mentions) > 1 ? ' (' + top.mentions + ' mentions)' : '') + ' \u2014 internal only', 'bad'));
+      if (Array.isArray(ob) && ob.length && ob[0] && ob[0].label) {
+        notes.push('Complaints are mostly \u201c' + ob[0].label + '\u201d' + (Number(ob[0].mentions) > 1 ? ' (' + ob[0].mentions + ' mentions)' : '') + ' \u2014 internal only');
       }
       if (Number.isFinite(Number(lead.reviewsNegativeUnanswered)) && Number(lead.reviewsNegativeUnanswered) > 0) {
-        facts.push(chip(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 internal only', 'bad'));
+        notes.push(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 the cheapest fix a call can open with, internal only');
       }
+      if (!(ws && ws.checked) && !notes.length) return null;
       return React.createElement('div', {
-        style: { padding: '14px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }
+        style: { padding: '12px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }
       },
         ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
-          React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : ws.score <= 7 ? '#fbbf24' : 'var(--t)' } }, ws.score + '/10'),
-          React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)' } }, 'how well their website is built \u2014 10 is best (' + ws.basedOn + '). Ads and search are scored separately'),
-          React.createElement('span', { style: { fontSize: 11, color: 'var(--m)' } },
-            (ws.graded || []).map(g => g.what + ' ' + g.got + '/' + g.of).join(' \u00b7 '))
+          React.createElement('span', { style: { fontSize: 24, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : 'var(--t)' } }, ws.score + '/10'),
+          React.createElement('span', { style: { fontSize: 12.5, color: 'var(--m2)' } }, 'site build \u2014 ' + (scoreSentence(ws, anyBroken2) || 'graded from the pages we read'))
         ) : null,
-        facts.length ? React.createElement('div', null, facts) : null
+        notes.length ? React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', lineHeight: 1.7 } },
+          notes.map((n2, ni) => React.createElement('div', { key: 'nt' + ni }, n2))) : null
       );
     })(),
 
