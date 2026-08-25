@@ -1126,7 +1126,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260827;
+const CLIENT_CONTRACT = 20260828;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2242,10 +2242,26 @@ const boardStatusFor = (l, ctx) => {
   if (c.queuedNames && c.queuedNames.has && c.queuedNames.has(l.name)) return 'queued';
   return leadHasAudit(l) ? 'audited' : 'not_audited';
 };
+// Stored leak ranks are NORMALIZED before anything renders them, never copied
+// blindly: Wolf's live sheet carried two LEAK 1 badges because his stored
+// array held rows numbered by two different numbering eras (the pre-depth
+// money order gave rank 1 to the outranked row; the depth order gave rank 1
+// to the door row), and the render trusted both. Rules: internal and ambient
+// rows can never take a number, order is stored-rank-then-position, duplicates
+// become sequential, nothing past three survives. Returns [[row, rank], ...]
+// rank-ascending. ONE copy: the funnel badges, the board's leak-1 line and
+// both Worth-asking lists all read it.
+const normalizedLeakRows = (pl) => {
+  const rows = (Array.isArray(pl) ? pl : []).filter(r => r && Number.isFinite(r.leakRank) && !r.internalOnly && !r.ambient);
+  const stable = rows.map((r, i) => [r, i]).sort((a, b) => (a[0].leakRank - b[0].leakRank) || (a[1] - b[1]));
+  const out = [];
+  for (const [r] of stable) { if (out.length >= 3) break; out.push([r, out.length + 1]); }
+  return out;
+};
 const boardRowsFor = (leads, ctx) => {
   const rows = (leads || []).filter(Boolean).map(l => {
     const status = boardStatusFor(l, ctx);
-    const lk = Array.isArray(l.problemList) ? l.problemList.find(r => r && r.leakRank === 1) : null;
+    const lk = (normalizedLeakRows(l.problemList)[0] || [])[0] || null;
     return {
       id: l.id, name: l.name || '', score: Number(l.icpScore) || 0, status,
       approved: !!l.approved, emailWritten: !!l.pitch,
@@ -2599,11 +2615,13 @@ const groupByFunnelStage = (pl, fs) => {
     else unstaged.push(r);
   }
   // The 1-2-3 the audit exists to name. Server-assigned since the funnel
-  // build; a legacy lead derives the same numbers from the same predicate so
+  // build, and NORMALIZED here rather than copied — stored rows from two
+  // numbering eras rendered two LEAK 1 badges on a live sheet. A legacy lead
+  // with no stored ranks derives the same numbers from the same predicate so
   // the badges can never disagree with the money order.
   const rankOf = new Map();
-  const ranked = rows.filter(r => Number.isFinite(r.leakRank));
-  if (ranked.length) { for (const r of ranked) rankOf.set(r, r.leakRank); }
+  const ranked = normalizedLeakRows(rows);
+  if (ranked.length) { for (const [r, n] of ranked) rankOf.set(r, n); }
   else {
     // Depth-first, mirroring the server: the deepest broken stage anchors
     // (after > door > found), harm breaks ties inside a stage, and a copy
@@ -2970,6 +2988,7 @@ const auditExportHtml = (records, meta) => {
               return '<div class="ferow">' + (Number.isFinite(lr) ? '<span class="lkb">LEAK ' + lr + '</span>' : '')
                 + '<b>' + p(x.problem) + '</b>'
                 + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
+                + (x.rankNote ? '<div class="tw">' + p(x.rankNote) + '</div>' : '')
                 + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
                 + (Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? '<div class="tw">fix we sell: ' + e(PILLAR_PRODUCT[x.pillar]) + '</div>' : '')
                 + '</div>';
@@ -3010,11 +3029,9 @@ const auditExportHtml = (records, meta) => {
       // ═══ THE CALL PREP ═══
       + (() => {
           const rows = [];
-          const opq = (Array.isArray(r.problemList) ? r.problemList : [])
-            .filter(x => x && Number.isFinite(x.leakRank) && x.callOpener)
-            .sort((a, b) => a.leakRank - b.leakRank).slice(0, 3);
+          const opq = normalizedLeakRows(r.problemList).filter(([x]) => x.callOpener);
           if (opq.length || r.askOnTheCall) rows.push(['Worth asking',
-            opq.map(x => '<div><b>Leak ' + x.leakRank + ':</b> ' + p(x.callOpener) + '</div>').join('')
+            opq.map(([x, n]) => '<div><b>Leak ' + n + ':</b> ' + p(x.callOpener) + '</div>').join('')
             + (r.askOnTheCall ? (opq.length ? '<div class="sgr">From the read:</div>' : '') + '<span class="ask">' + p(r.askOnTheCall) + '</span>' : ''), '']);
           if (r.expectObjection) rows.push(['He will likely say',
             '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
@@ -6571,6 +6588,7 @@ function LeadBriefing({ lead }) {
             Number.isFinite(lr) ? badge(lr) : null,
             React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
             x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
+            x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 2 } }, x.rankNote) : null,
             ml ? React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)', marginTop: 3 } }, ml) : null,
             Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
         });
@@ -6732,12 +6750,10 @@ function LeadBriefing({ lead }) {
       ]));
       if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
         React.createElement('span', { key: 'n', style: { color: 'var(--t)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
-      const opq = (Array.isArray(lead.problemList) ? lead.problemList : [])
-        .filter(x => x && Number.isFinite(x.leakRank) && x.callOpener)
-        .sort((a, b) => a.leakRank - b.leakRank).slice(0, 3);
+      const opq = normalizedLeakRows(lead.problemList).filter(([x]) => x.callOpener);
       if (opq.length || (sr && sr.askOnTheCall)) rows.push(gl('Worth asking'), gv([
-        ...opq.map((x, qi) => React.createElement('div', { key: 'q' + qi, style: { marginBottom: 3 } },
-          React.createElement('b', null, 'Leak ' + x.leakRank + ': '), x.callOpener)),
+        ...opq.map(([x, n], qi) => React.createElement('div', { key: 'q' + qi, style: { marginBottom: 3 } },
+          React.createElement('b', null, 'Leak ' + n + ': '), x.callOpener)),
         (sr && sr.askOnTheCall && opq.length) ? React.createElement('div', { key: 'qf', style: { fontSize: 12, marginTop: 2 } }, 'From the read:') : null,
         (sr && sr.askOnTheCall) ? React.createElement('div', { key: 'qa' }, sr.askOnTheCall) : null,
       ]));

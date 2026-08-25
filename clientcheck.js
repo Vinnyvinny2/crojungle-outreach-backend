@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -721,6 +721,23 @@ const mergeStat = runMergeCheck();
         ], null);
         const foundRows = (gOrd.stages.find(x => x.id === 'found') || { rows: [] }).rows;
         if (!foundRows[0] || foundRows[0].problem !== 'ranked two') fails.push('the numbered leaks inside a stage do not render in rank order');
+        // Stored ranks NORMALIZE, never copy: Wolf's live sheet carried two
+        // LEAK 1 badges from rows numbered by two different numbering eras.
+        const dup = [
+          { problem: 'outranked row', funnelStage: 'found', harm: 92, leakRank: 1 },
+          { problem: 'door row', funnelStage: 'door', harm: 62, leakRank: 1 },
+        ];
+        const gDup = mod.groupStage(dup, null);
+        const dupRanks = [gDup.rankOf.get(dup[0]), gDup.rankOf.get(dup[1])].sort().join(',');
+        if (dupRanks !== '1,2') fails.push('two stored LEAK 1 rows still render two LEAK 1 badges (— the exact Wolf symptom); got ranks ' + dupRanks);
+        const nrm = mod.norm([
+          { problem: 'int', internalOnly: true, leakRank: 1 },
+          { problem: 'r2', leakRank: 2 }, { problem: 'r2b', leakRank: 2 },
+          { problem: 'r4', leakRank: 4 }, { problem: 'r5', leakRank: 5 },
+        ]);
+        if (nrm.length !== 3) fails.push('the normalizer kept ' + nrm.length + ' ranked rows, not the top three');
+        if (nrm.some(pair => pair[0].internalOnly)) fails.push('an internal row with a stored rank survived normalization — internal metrics can never take a number');
+        if (!nrm[0] || nrm[0][1] !== 1 || nrm[1][1] !== 2 || nrm[2][1] !== 3) fails.push('normalized ranks are not sequential 1-2-3');
         if (JSON.stringify(wt).includes('WR')) fails.push('the what_repeats walk text leaked into a funnel stage — it belongs in the work strip');
         // The score sentence: one plain line, both directions.
         if (!/well built|build is fine/i.test(mod.scoreLine({ checked: true, score: 8 }, true))) fails.push('a high score does not read as a healthy build');
@@ -734,9 +751,16 @@ const mergeStat = runMergeCheck();
         if (/#dc2626/.test(svgC)) fails.push('a clean funnel still draws red somewhere — colour marks a stop, nothing else');
         // The render: badge, stage row and money line reach the page.
         const stagedLead = { ...LEAD, problemList: [
-          { problem: 'MARKER_STAGEROW', funnelStage: 'found', moneyRank: 3, harm: 90, leakRank: 1, pillar: 'INVISIBLE', moneyLine: 'MARKER_STAGEMONEY' }] };
+          { problem: 'MARKER_STAGEROW', funnelStage: 'found', moneyRank: 3, harm: 90, leakRank: 1, pillar: 'INVISIBLE', moneyLine: 'MARKER_STAGEMONEY', rankNote: 'MARKER_RANKNOTE' }] };
         const sp = mod.html([mod.rec(stagedLead)], { title: 'T', at: 'now' });
-        for (const mk of ['MARKER_STAGEROW', 'LEAK 1', 'MARKER_STAGEMONEY', 'Getting found']) {
+        const dupLead = { ...LEAD, problemList: [
+          { problem: 'dup A', funnelStage: 'door', harm: 80, leakRank: 2, callOpener: 'Is the front desk picking up after five?' },
+          { problem: 'dup B', funnelStage: 'found', harm: 70, leakRank: 2, callOpener: 'Who shows up when you search your own trade?' }] };
+        const dpp = mod.html([mod.rec(dupLead)], { title: 'T', at: 'now' });
+        if ((dpp.match(/Leak 1:/g) || []).length !== 1 || (dpp.match(/Leak 2:/g) || []).length !== 1) {
+          fails.push('two legacy rank-2 openers do not render as Leak 1 and Leak 2 once each — the Worth-asking list is reading raw stored ranks again');
+        }
+        for (const mk of ['MARKER_STAGEROW', 'LEAK 1', 'MARKER_STAGEMONEY', 'MARKER_RANKNOTE', 'Getting found']) {
           if (sp.indexOf(mk) < 0) fails.push('the funnel render drops "' + mk + '" — the stage, the number or the money line never reaches the sheet');
         }
         // The walk's measured sentences render AT their stages (the mock's
@@ -879,7 +903,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -901,7 +925,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
@@ -921,7 +945,7 @@ const mergeStat = runMergeCheck();
         theOneThing: { layer: 'CONVERSION', diagnosis: 'DIAG', why: 'WHY', firstBrokenLink: 'CONVERSION', firstBrokenLinkWhy: 'FBLW', earnedButBlocked: true, frictionCount: 2, friction: ['F1', 'F2'], costliest: null },
         brainAudit: { originalFindings: [{ finding: 'OF', evidence: 'EV' }], _criticalFactCheck: ['CRIT'], _ladderFailed: null },
         problemList: [{ area: 'A', problem: 'PROB', costs: 'COSTS', harm: 80, moneyRank: 1, pillar: 'ROTTING', moneyLine: 'ML',
-          id: 'no_recurring_offer', funnelStage: 'after', leakRank: 1, callOpener: 'OPENQ_MARKER' }],
+          id: 'no_recurring_offer', funnelStage: 'after', leakRank: 1, callOpener: 'OPENQ_MARKER', rankNote: 'RANKNOTE_MARKER' }],
         _claimRisks: ['RISK1'],
         subject: 'SUBJ', pitch: 'PITCHTEXT',
         generatedResult: { prospectSim: { reason: 'My jobs come from referrals and reviews, the website does nothing for me at all.' } },
@@ -935,6 +959,7 @@ const mergeStat = runMergeCheck();
         // The funnel layout (Vin, 2026-08-24): the story is the one narrator,
         // the funnel replaces the money/one-thing/smaller-leaks trio, and the
         // numbered leaks render AT their stages.
+        if (joined.indexOf('RANKNOTE_MARKER') < 0) fails.push('the rank-causation note never reaches the audit screen \u2014 the sheet prints two review counts with nothing stopping the reviews-decide-rank misreading');
         for (const label of ['Not sendable as written', 'Who to talk to', 'The story', 'The funnel', 'The conversation',
           'The email led with', 'He will likely say', 'Worth asking', 'Do not say',
           'The sell']) {
@@ -981,7 +1006,7 @@ const mergeStat = runMergeCheck();
 // boardStatusFor/boardRowsFor are executed here because the old section
 // filters lived inline in the render where nothing could run them.
 {
-  const NEEDB = ['boardStatusFor', 'boardRowsFor', 'phaseLabelFor', 'leadHasAudit'];
+  const NEEDB = ['boardStatusFor', 'boardRowsFor', 'phaseLabelFor', 'leadHasAudit', 'normalizedLeakRows'];
   const foundB = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEEDB.includes(n.id.name) && n.init) {
@@ -994,7 +1019,7 @@ const mergeStat = runMergeCheck();
   } else {
     let modB = null;
     try {
-      modB = new Function('PHASE_LABEL', foundB.leadHasAudit + '\n' + foundB.phaseLabelFor + '\n' + foundB.boardStatusFor + '\n' + foundB.boardRowsFor
+      modB = new Function('PHASE_LABEL', foundB.leadHasAudit + '\n' + foundB.normalizedLeakRows + '\n' + foundB.phaseLabelFor + '\n' + foundB.boardStatusFor + '\n' + foundB.boardRowsFor
         + '\nreturn { status: boardStatusFor, rows: boardRowsFor, phase: phaseLabelFor };')({ queued: 'waiting for a worker', running: 'working', dead: 'finishing' });
     } catch (e) { fails.push('the board functions no longer compile standalone: ' + e.message); }
     if (modB) {

@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260827;
+const CONTRACT_VERSION = 20260828;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -7271,7 +7271,7 @@ Return ONLY valid JSON, no markdown:
   // the tokens.
   "situationRead": "ONE sentence, internal, written BEFORE anything else. Not a finding \u2014 what all the signals ADD UP TO. This is a thinking step: decide what is going on with this business before choosing which findings evidence it. A separate call writes the full briefing, so do not elaborate. BANNED as the answer: no guarantee, no named offer, generic positioning \u2014 those are page observations, not a read of the business.",
 
-  "signalReads": "Array of {signal, says}, one per MEASURED signal you were given. 'signal' is a short label (Local search rank, Reputation, Booking path, Google profile, Positioning, Site technicals). 'says' is ONE sentence of INTERPRETATION for a colleague \u2014 what the fact MEANS for the business, never the fact itself, because the reader already has the fact. WRONG: 'Ranks #15 for plastic surgeon'. RIGHT: '#15 of 20 in Dallas and 10 of the 14 above him have fewer reviews \u2014 the position is not being earned on reputation.' WRONG: '1 profile gap'. RIGHT: 'His Google profile has no description \u2014 the one thing on this list he could fix himself this afternoon.' WRONG: 'Form only, 17 fields'. RIGHT: 'Seventeen fields is the only way in, and the people filling it in have just been in a car accident.' Where a signal is a STRENGTH say so plainly \u2014 a briefing that lists only problems misleads the reader about what kind of business this is.",
+  "signalReads": "Array of {signal, says}, one per MEASURED signal you were given. 'signal' is a short label (Local search rank, Public reviews, Booking path, Google profile, Positioning, Site technicals). 'says' is ONE sentence of INTERPRETATION for a colleague \u2014 what the fact MEANS for the business, never the fact itself, because the reader already has the fact. WRONG: 'Ranks #15 for plastic surgeon'. RIGHT: '#15 of 20 in Dallas and 10 of the 14 above him have fewer reviews \u2014 whatever is deciding that search, it is not review counts.' WRONG: '1 profile gap'. RIGHT: 'His Google profile has no description \u2014 the one thing on this list he could fix himself this afternoon.' WRONG: 'Form only, 17 fields'. RIGHT: 'Seventeen fields is the only way in, and the people filling it in have just been in a car accident.' Where a signal is a STRENGTH say so plainly \u2014 a briefing that lists only problems misleads the reader about what kind of business this is.",
   \u2605 ORDER MATTERS AND IT IS DELIBERATE: you write situationRead and signalReads BEFORE candidateFindings. Reason about the whole business first, then choose the findings that EVIDENCE that read. Doing it the other way round \u2014 findings first, synthesis after \u2014 makes the synthesis a summary of choices already made, and it collapses back into a restatement of one finding. Decide what is going on here, then prove it.
   "originalFindings": "REQUIRED. Array of 0-3 findings YOU discovered by reading their actual pages, which the scanner could not produce. The measured list above is the same handful of checks on every lead — phone-only, no price, nothing to take away — and an owner who reads three of those knows he received a scan. THESE are what make him think somebody actually looked. \u2192 THE ONLY THREE KINDS THAT COUNT, and every one needs work he would never do himself: (1) A CONTRADICTION between two things he controls. He wrote the homepage, he wrote the service pages, he set the Google listing — he cannot hold them all in his head at once, so when they disagree he literally cannot see it. 'Your homepage promises same-day response; your contact page lists office hours' or 'the treatments page names six services and the homepage names three'. Quote both sides. (2) WHAT HIS OWN COPY SAYS, quoted, next to what it does not say. Not 'positioning is generic' — that is a category label and the scanner already produces those. Instead: 'Every service page opens with the same sentence about experience you can trust' with the phrase quoted exactly. The quote IS the finding. (3) WHAT HIS REVIEWERS SAY next to what his site sells. If the review text we read repeats something his pages never mention, that is the sharpest thing available on the lead: his customers have told you what they value and his website is silent on it. \u2192 RULES: every finding must QUOTE or NAME something specific from the pages, exact as written. If you cannot point to the words, it is not one of these — leave it out. NEVER a category label ('generic', 'weak', 'unclear', 'thin', 'lacks'). NEVER an absence claim about a page we did not read — the prompt above lists which pages were opened. Return an EMPTY ARRAY rather than padding: three real ones is exceptional, one is good, zero is honest. Each item: {finding: \"one sentence, containing the quoted words\", evidence: \"the exact text from their page that proves it\"}.",
   "candidateFindings": "DO THIS FIRST, BEFORE YOU WRITE A SINGLE WORD OF THE PITCH. List EVERY finding above that you could plausibly lead with \u2014 usually 3 to 6 \u2014 and score each one. Array of objects: {finding: \"one short line naming the specific finding\", signal: \"review_pattern|search_absence|gbp_gap|conversion_leak|technical_leak|dated_site|positioning_offer\", verifiable: 1-5, severity: 1-5, surprise: 1-5, weFixIt: 1-5, ownerLevel: 1-5, total: sum}. THE FIVE DIMENSIONS, scored honestly \u2014 an inflated score on a weak finding is how a mediocre email gets written: VERIFIABLE (can he confirm it himself in ten seconds? 5 = one tap on his phone; 1 = he has to take our word for it). SEVERITY (how much revenue does this actually touch? 5 = customers never arrive or never convert; 1 = cosmetic). SURPRISE (does he already know? 5 = he has never checked and would be startled; 1 = he knows already \u2014 he KNOWS his site looks dated, so that scores 1 no matter how true it is). WEFIXIT (can CROJungle actually solve this? 5 = squarely what we sell; 1 = pricing, workmanship or staff attitude, which we do not fix and must not lead with). OWNERLEVEL (the delegation test \u2014 5 = only the owner can decide this; 1 = he forwards it to his office manager and the conversation dies). \u26a0 SCORE THE FINDING AT THE ALTITUDE YOU WILL ACTUALLY WRITE IT, NOT THE RAW OBSERVATION \u2014 and this is where live runs have been scoring dishonestly. As a bare fact, almost every technical finding is a TASK: \u2018your phone number isn\u2019t tappable\u2019, \u2018there\u2019s no online booking\u2019, \u2018your Google profile has no photos\u2019 are all things he forwards to his web person or his office manager, and the conversation dies there. Scored honestly as raw observations they are a 1 or a 2, yet they have been scoring 4s and 5s. The same finding becomes a 5 ONLY when it is written at revenue altitude \u2014 naming what it costs in the unit he counts, which is a decision only he can make. Our own best-performing audit did exactly this: the raw fact was \u2018no tap-to-call link\u2019 (a task), and it was written as \u2018pull up your site on a phone and try to tap the number \u2014 it doesn\u2019t dial; every paid visitor who can\u2019t call is a gravel job you paid to acquire that went to whoever was easier to reach\u2019 (a revenue decision). Same finding, different altitude. SO: if you intend to write the finding as a to-do, score it 1-2 and it will rightly lose to something he cannot delegate. If you commit to writing it at revenue altitude, score it 4-5 \u2014 and then you MUST actually write it that way. Never score the altitude you did not deliver. Market, offer and positioning findings are inherently 5s: no owner delegates who his business is for.. \u26a0 SCORE THE ACTUAL INSTANCE, NOT THE CATEGORY. \"They are #12 instead of #8 for one minor service term\" is a weak search finding and should score LOW even though search ranks high as a category. \"Their site has no SSL so browsers warn every visitor away\" is a devastating technical finding and should score HIGH even though technical ranks low as a category. A strong instance of a lower category BEATS a weak instance of a higher one \u2014 that is the whole point of scoring. \u26a0 THREE RULES ABOUT THE LIST ITSELF, ALL BROKEN IN LIVE RUNS. (a) NO DUPLICATES. A sealcoating contractor's list scored \u2018No business description on Google Business Profile\u2019 twice, at 22 and at 20 \u2014 half his Google findings were one finding counted twice, and a quarter of the whole list was wasted. Each candidate must be a DISTINCT finding. If two entries would resolve with the same fix, they are one candidate. (b) POSITIONING/OFFER IS A MANDATORY CANDIDATE, ALWAYS. Score it every single time, even when you are certain it will lose. On that same contractor the audit had already concluded \u2018generic targeting, no clear offer\u2019 and then left it off the list entirely, so the highest-leverage problem in the business never competed. Per Hormozi the market and the offer outrank every tactic beneath them; the ONLY reason it should lose is that a measured finding genuinely outscored it, and it cannot lose a contest it was never entered in. If their homepage copy was captured, positioning_offer appears in candidateFindings. No exceptions.
@@ -12762,41 +12762,52 @@ const BENCHMARK_SECOND_PERSON = /\b(you|your|yours|they|their|theirs|he|his|him)
 // is not taste, it is two facts.
 //
 // PURE, so the boot check runs the real thing against real page shapes.
+// `visible` declares whether a CUSTOMER can perceive the marker's consequence
+// without reading source. Live 2026-08-25, Vin on two sheets carrying the
+// keywords-tag and code-format markers: "no potential customer is looking at
+// the code of their website \u2014 if what we are saying translates to the design
+// as well then this makes sense." A credibility claim needs visible evidence;
+// an invisible marker still dates the build and still counts in the score.
 const SITE_AGE_MARKERS = [
-  { id: 'tables',    re: /<table[^>]*(?:width|border|cellpadding|cellspacing)=/i,
+  { id: 'tables',    visible: true,  re: /<table[^>]*(?:width|border|cellpadding|cellspacing)=/i,
     say: 'the page is still laid out with tables' },
-  { id: 'precss',    re: /<font\b|<center\b|\bbgcolor=|<marquee\b/i,
+  { id: 'precss',    visible: true,  re: /<font\b|<center\b|\bbgcolor=|<marquee\b/i,
     say: 'the code behind the page is the kind used before smartphones existed' },
-  { id: 'flash',     re: /\.swf\b|application\/x-shockwave-flash|<embed[^>]+type=["']application/i,
+  { id: 'flash',     visible: true,  re: /\.swf\b|application\/x-shockwave-flash|<embed[^>]+type=["']application/i,
     say: 'it still has Flash on it, which no browser has run since 2020' },
-  { id: 'oldjquery', re: /jquery[.\-/]?(?:ui[.\-])?(?:1|2)\.\d+(?:\.\d+)?(?:\.min)?\.js/i,
+  { id: 'oldjquery', visible: false, re: /jquery[.\-/]?(?:ui[.\-])?(?:1|2)\.\d+(?:\.\d+)?(?:\.min)?\.js/i,
     say: 'it runs a code library that stopped being current in 2016' },
-  { id: 'xhtml',     re: /<!DOCTYPE[^>]*(?:XHTML|HTML 4)|<html[^>]+xmlns=/i,
+  { id: 'xhtml',     visible: false, re: /<!DOCTYPE[^>]*(?:XHTML|HTML 4)|<html[^>]+xmlns=/i,
     say: 'the page announces itself in a format websites stopped using over a decade ago' },
-  { id: 'keywords',  re: /<meta[^>]+name=["']keywords["']/i,
+  { id: 'keywords',  visible: false, re: /<meta[^>]+name=["']keywords["']/i,
     say: 'it carries a keywords tag that search engines stopped reading in 2009' },
-  { id: 'fixedwidth', re: /<(?:table|div)[^>]+width=["']?(?:7[5-9]\d|8\d\d|9\d\d|1000)["']?[\s>]/i,
+  { id: 'fixedwidth', visible: true, re: /<(?:table|div)[^>]+width=["']?(?:7[5-9]\d|8\d\d|9\d\d|1000)["']?[\s>]/i,
     say: 'the layout is pinned to a fixed width, so it cannot fit a phone' },
-  { id: 'oldbuilder', re: /content=["'][^"']*(?:FrontPage|Dreamweaver|Adobe Muse|iWeb|Microsoft Word)/i,
+  { id: 'oldbuilder', visible: false, re: /content=["'][^"']*(?:FrontPage|Dreamweaver|Adobe Muse|iWeb|Microsoft Word)/i,
     say: 'it was built with a website tool that no longer exists' },
 ];
 // Two markers we already measure elsewhere and must not measure twice.
 const readSiteAge = ({ rawHtml, content, hasViewport, isHttps, copyrightYear } = {}) => {
   const html = String(rawHtml || '');
-  if (!html || html.length < 400) return { checked: false, dated: false, markers: [], score: 0 };
+  if (!html || html.length < 400) return { checked: false, dated: false, markers: [], score: 0, visibleCount: 0 };
   const markers = [];
-  for (const m of SITE_AGE_MARKERS) if (m.re.test(html)) markers.push({ id: m.id, say: m.say });
-  if (hasViewport === false) markers.push({ id: 'noviewport', say: 'a phone gets the desktop page shrunk down instead of a mobile one' });
-  if (isHttps === false) markers.push({ id: 'nohttps', say: 'it is still on plain http, so browsers warn people away from it' });
+  for (const m of SITE_AGE_MARKERS) if (m.re.test(html)) markers.push({ id: m.id, say: m.say, visible: m.visible === true });
+  if (hasViewport === false) markers.push({ id: 'noviewport', visible: true, say: 'a phone gets the desktop page shrunk down instead of a mobile one' });
+  if (isHttps === false) markers.push({ id: 'nohttps', visible: true, say: 'it is still on plain http, so browsers warn people away from it' });
   const yr = Number(copyrightYear);
   if (Number.isFinite(yr) && yr > 1990 && (new Date().getFullYear() - yr) >= 3) {
-    markers.push({ id: 'copyright', say: `the copyright line at the bottom still reads ${yr}` });
+    markers.push({ id: 'copyright', visible: true, say: `the copyright line at the bottom still reads ${yr}` });
   }
   void content;
+  // Visible markers FIRST (stable within each group), because every consumer
+  // that names markers takes the first two \u2014 and a sentence about what a
+  // customer sees should name things a customer can see.
+  markers.sort((a, b) => (b.visible === true ? 1 : 0) - (a.visible === true ? 1 : 0));
   // Two is where an impression becomes evidence. One marker on its own is a
   // quirk; two independent ones in the same page source is a build nobody has
   // touched in years, and every one of them is checkable.
-  return { checked: true, markers, score: markers.length, dated: markers.length >= 2, veryDated: markers.length >= 4 };
+  return { checked: true, markers, score: markers.length, dated: markers.length >= 2, veryDated: markers.length >= 4,
+           visibleCount: markers.filter(m => m.visible === true).length };
 };
 
 const HARM_LADDER = [
@@ -13227,7 +13238,12 @@ const HARM_LADDER = [
   // read the age off the code in ten seconds.
   { harm: 62, specific: 80, novel: 40, delegable: 25, weFix: 95, band: 'BLOCKS', id: 'dated_credibility',
     blind: 'he opens his own site through a bookmark and reads it as familiar rather than as old',
-    test: (m) => m.datedSite === true,
+    // A credibility finding needs evidence a customer can SEE. A build that is
+    // old only in its source \u2014 a keywords tag, an old code library \u2014 still
+    // reaches the facts strip and the website score; it cannot claim a
+    // customer takes the fresher site as the safer company, because nothing
+    // about it is in front of the customer.
+    test: (m) => m.datedSite === true && Number(m.siteAgeVisibleCount) >= 1,
     say: (m) => {
       const ms = Array.isArray(m.siteAgeMarkers) ? m.siteAgeMarkers.slice(0, 2) : [];
       return ms.length >= 2 ? `On their own site, ${ms[0]}, and ${ms[1]}`
@@ -20627,6 +20643,26 @@ const buildProblemList = (harms, opts = {}) => {
       // never be one of the three leaks the call is built on.
       internalOnly: !!INTERNAL_ONLY_RUNGS[h.id],
       moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue, _pillarOf(h.id), (opts.money || {}).roi),
+      // The correction travels WITH the row that prints two review counts
+      // beside a position. Live 2026-08-25: the owner of this system read the
+      // Baggett sentence as "they are above him because of reviews" \u2014 the
+      // exact wrong conclusion the audit brief corrects, and nothing on the
+      // sheet carried the correction. Then his own refinement, same day:
+      // "having more reviews and better rating is def important... it means
+      // theyre doing the other stuff better \u2014 answering all leads, giving
+      // high quality service." So the note carries BOTH halves: reviews are a
+      // real input, and fewer-reviews-above is the tell that the other inputs
+      // are deciding. When this lead's own mined theme is contact-shaped, the
+      // join is stated as world knowledge scoped to Google's own local-ads
+      // guidance \u2014 a candidate for the call, never a crowned cause.
+      // Scoped to this one rung: on any other row the sentence would be an
+      // answer to a question nobody asked.
+      rankNote: h.id === 'outranked_by_weaker'
+        ? ('Reviews do count toward ranking, and this business is ahead on them \u2014 so reviews are not what is deciding this search. The names above them are winning on the other things the map weighs: the listing\u2019s primary category, proximity, the site behind the listing, and how much people interact with each listing.'
+           + (_ev.reviewThemeContact === true
+             ? ' Their own customers already name one of those things: calls that never come back. Google\u2019s own guidance for its local ads ranks businesses partly on how reliably they answer.'
+             : ''))
+        : null,
     };
   });
   // ══ MIKE WAS READING FINDINGS RANKED BY COLD-EMAIL DOOR-OPENING POWER ═══
@@ -20865,7 +20901,27 @@ const buildTheOneThing = ({ growthConstraint, valueEquation, bottleneck, bottlen
 const MONEY_TOKEN_RE = /\$\s?\d[\d,]*(?:\.\d+)?\s*(?:k|m|mm|million|billion)?/gi;
 const flatMoney = (s) => String(s || '').toLowerCase().replace(/[\s,]/g, '');
 // What CROJungle charges. Declared, not inferred, so a reviewer sees the list.
-const OUR_PRICE_FIGURES = ['$10k', '$35k', '$40k', '$50k', '$55k', '$70k', '$100k', '$125k', '$1m'];
+// $20k is the "from $20k" floor BRAIN_STATIC itself states for AI Brain and
+// Custom Software \u2014 a model echoing the prompt's own catalog was getting the
+// whole field deleted for repeating a price WE told it. Live 2026-08-25: both
+// sheets reached the caller with a blank price under a named product.
+const OUR_PRICE_FIGURES = ['$10k', '$20k', '$35k', '$40k', '$50k', '$55k', '$70k', '$100k', '$125k', '$1m'];
+// The catalog's own price line per product family \u2014 the ONE code-owned
+// answer for a recommendedPrice the money gate emptied. Every figure here must
+// be licensed by OUR_PRICE_FIGURES; the boot check runs each line through the
+// real gate to prove a stand-in can never be re-deleted.
+const PRODUCT_PRICE_LINE = [
+  [/ai brain/i, '$40k-$70k'],
+  [/custom (?:ai )?software/i, '$40k-$100k+'],
+  [/rebuild/i, '$50k+'],
+  [/revenue growth|cro retainer|retainer/i, '$10k-$35k/mo'],
+  [/end.?to.?end marketing|ads management|marketing/i, '$10k-$35k/mo'],
+];
+const catalogPriceFor = (product) => {
+  const s = String(product || '');
+  for (const [re, price] of PRODUCT_PRICE_LINE) if (re.test(s)) return price;
+  return null;
+};
 // figures. The claim is "a job in this trade runs about this", never "your job".
 const TRADE_JOB_VALUE = [
   // Home exterior / structural
@@ -21063,7 +21119,7 @@ const NICHE_BRIEFS = [
     id: 'crew_trades',
     label: 'Crew trades — the truck-and-crew half of the target list',
     // Matched on the trade word we already resolve, never on a guess.
-    match: /\b(hvac|heating|cooling|air ?condition\w*|furnace|plumb\w*|electric\w*|roof\w*|restorat\w*|water damage|foundation|waterproof\w*|solar|remodel\w*|kitchen|bath(?:room)?|window\w*|siding|pav\w*|asphalt|concrete|masonry|pool|home ?build\w*|general contract\w*|construct\w*|fire ?protect\w*|sprinkler|excavat\w*|grading|hardscap\w*|landscap\w*|tree (?:service|care|remov\w*)|insulat\w*|spray foam|floor\w*|garage door|deck\w*|patio|sign(?:age|s)?|well drill\w*|septic|gutter\w*|chimney|fenc\w*)\b/i,
+    match: /\b(hvac|heating|cooling|air ?condition\w*|furnace|plumb\w*|electric\w*|roof\w*|restorat\w*|water damage|foundation|waterproof\w*|solar|remodel\w*|kitchen|bath(?:room)?|window\w*|siding|pav\w*|asphalt|concrete|masonry|pool|home ?build\w*|general contract\w*|construct\w*|fire ?protect\w*|sprinkler|excavat\w*|grading|hardscap\w*|landscap\w*|tree (?:service|care|remov\w*)|insulat\w*|spray foam|floor\w*|garage doors?|deck\w*|patio|sign(?:age|s)?|well drill\w*|septic|gutter\w*|chimney|fenc\w*)\b/i,
     // A supplier, a manufacturer or a franchise head office is not a crew.
     notWhen: /\b(supply|supplies|wholesale\w*|manufactur\w*|distribut\w*|franchis\w*|equipment rental)\b/i,
     declared: {
@@ -22236,7 +22292,7 @@ const measureFinancing = ({ rawHtml, text } = {}) => {
 // miner's own pain strings and the split goes to the call sheet and the audit
 // screen, never to an email.
 const OPS_BUCKET_DEFS = [
-  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|slow(?:er)? follow[- ]?up|follow[- ]?up (?:took|never|delayed|slow)|had to chase|kept waiting|unresponsive|no response|delay(?:ed)? (?:warranty|repairs?|service)|warranty (?:delays?|took|never)/i },
+  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|slow(?:er)? follow[- ]?up|follow[- ]?up (?:took|never|delayed|slow)|had to chase|kept waiting|unresponsive|unreachable|no response|never heard back|hard to reach(?!\s+(?:area|spot|place|corner))|(?:not|never) address(?:ed)?\b|(?:no|poor|bad|lack of) communication|delay(?:ed)? (?:warranty|repairs?|service)|warranty (?:delays?|took|never)/i },
   { id: 'quote_delay', label: 'quotes take too long', re: /quote (?:delay|took|never)|slow(?:er)? (?:response|to respond|quote)|took (?:weeks|days|forever)|waiting (?:on|for) (?:a |the )?(?:quote|estimate)/i },
   { id: 'scheduling', label: 'scheduling breaks down', re: /schedul|reschedul|missed (?:the )?appointment|no[- ]?show|double[- ]?book|cancel/i },
   { id: 'work_quality', label: 'work has to be redone', re: /redo|re-?work|come back (?:and|to) fix|had to fix|left (?:a mess|unfinished)|unfinished|drainage|uneven|crack(?:s|ed|ing)?\b|poor(?:ly)? (?:done|quality|workmanship)|quality (?:control|issues?|problems?)|workmanship|shoddy|sloppy|damaged?\b/i },
@@ -22274,22 +22330,25 @@ const classifyOpsBuckets = (signals) => {
 // sentence cannot diverge. Reads OPS_BUCKET_DEFS so there is exactly one copy
 // of the vocabulary. Null when there is no theme at all.
 const CONTACT_BUCKET_IDS = new Set(['no_response', 'quote_delay', 'scheduling']);
-// The miner's own tag wins when present: it read the actual reviews, and the
-// regex vocabulary has now been outrun twice in two runs (\u00a757 widened it for
-// Breck's phrasing; the very next lead's "Slow follow-up after initial
-// estimate visit" and "Delayed warranty or defect repairs" missed every
-// bucket again, so the after-contact stage read NO FAULT FOUND while the
-// complaint sat under the funnel as workmanship). The regex remains the
-// fallback for untagged data \u2014 legacy leads, the shallow mine, the route's
-// originals staging \u2014 and was widened for both live misses.
+// The tag settles only what the string cannot. Contact wins on a mixed theme
+// \u2014 the rule this block has carried since Breck's \u2014 and that has to hold even
+// against a workmanship TAG. Live 2026-08-25: the miner tagged "poor surgical
+// outcomes not addressed or revised adequately" as workmanship (the outcome is
+// the sentence's subject, so the tag is defensible) and the tag short-circuited
+// ABOVE the contact test \u2014 so "not addressed", the follow-up failure the owner
+// can sell against, was filed as workmanship context and the after-contact
+// stage read NO FAULT FOUND while the email led on the same complaint. The
+// contact vocabulary is tested FIRST now; the tag decides only the strings the
+// vocabulary cannot see. The regex remains the fallback for untagged data
+// \u2014 legacy leads, the shallow mine, the route's originals staging.
 const contactShapedTheme = (theme, kind) => {
   if (kind === 'contact') return true;
-  if (kind === 'workmanship') return false;
   const t = String(theme || '');
-  if (!t) return null;
   for (const def of OPS_BUCKET_DEFS) {
-    if (CONTACT_BUCKET_IDS.has(def.id) && def.re.test(t)) return true;
+    if (CONTACT_BUCKET_IDS.has(def.id) && t && def.re.test(t)) return true;
   }
+  if (kind === 'workmanship') return false;
+  if (!t) return null;
   return false;
 };
 
@@ -22530,7 +22589,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
       // with no sayable position is a claim about a list we do not trust.
       text = m.rank <= 3
         ? `When somebody searches "${q}", they are in the top three — the people already looking can find them. That part works.`
-        : `When somebody searches "${q}", they show up, but not in the top three.`;
+        : `When somebody searches "${q}", they show up at #${m.rank}${Number.isFinite(Number(m.scanned)) ? ` of the ${m.scanned} listed` : ''} — under the top three.`;
       if (m.rank <= 3) _strongFound = true;
     }
     // The join Vin walked on Breck's: Facebook-only wiring while the Google
@@ -22545,6 +22604,18 @@ const buildFunnelStory = (m = {}, x = {}) => {
       && typeof m.organicPosition === 'number' && Number.isFinite(m.organicPosition)
       && typeof m.organicScanned === 'number' && m.organicScanned >= 6) {
       text += `${text ? ' ' : ''}In the blue links under the map they are #${m.organicPosition} of ${m.organicScanned} — a separate ranking from the map itself.`;
+    }
+    // WHICH ranking a position is. Vin, on a #2: "is that organic or are they
+    // running ads to rank that high — info we need." Sayable only when we
+    // could actually look: markup readable, no ad code of either kind, no tag
+    // container that could hide one, and no sponsored row of theirs on the
+    // search we ran. Gated on a position sentence already standing — with no
+    // position in front of it this is a claim about a list nobody measured.
+    if (text && m.rankChecked === true && m.rankFound === true
+      && m.adsReadable === true && m.tagManager === false
+      && m.googleAdsTag === false && m.metaPixel === false
+      && m.adsLiveInPack !== true) {
+      text += ` That position is the unpaid ranking: no ad code on any page we read, and no sponsored listing of theirs appeared on the search we ran.`;
     }
     if (m.adsReadable === true && m.tagManager === false
       && m.metaPixel === true && m.googleAdsTag === false
@@ -22636,7 +22707,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
     // The order sentence Vin endorsed, said only when both halves are measured:
     // the search is bad or empty AND the landing path is broken.
     join: (stages.some(s => s.id === 'the_door')
-      && stages.some(s => s.id === 'who_finds_them' && /not in the (?:results|top three)|show up, but not/.test(s.text)))
+      && stages.some(s => s.id === 'who_finds_them' && /not in the (?:results|top three)|show up, but not|under the top three/.test(s.text)))
       ? 'Showing up higher will not pay off while it lands on the same dead end. The door first, then the traffic.'
       : null,
   } : null;
@@ -23336,7 +23407,7 @@ const OWNER_KNOWS = {
   // a composite over copyright age, a missing viewport, missing https, table
   // layout and <font>/<center> tags — none of which is a badge, and table-layout
   // markup is exactly what an owner cannot see.
-  dated_credibility:            ['has_not_looked', 'a composite of markup age — table layout, missing viewport, old tags — none of which is visible to anyone who is not reading the source'],
+  dated_credibility:            ['has_not_looked', 'a composite of markup age read from source he has never opened; the rung fires only when at least one marker shows to a visitor, and the reading itself is one he has not done'],
   dead_blog:                    ['decided', 'he knows he stopped posting'],
   no_google_listing:            ['decided', 'he knows whether he ever created one'],
   low_rating:                   ['decided', 'his own star rating, on the first screen of his own listing'],
@@ -24674,7 +24745,7 @@ const readLeadMagnet = (text, pagesRead) => {
 // plus a derived shape that is labelled derived. No composite score is ever shown
 // to the owner, because a number he cannot check is a number he can dispute.
 const measureValueEquation = ({ booking, bookingMeasured = true, hasTelLink, formFieldCount, hasForm,
-                                guarantee, reviewCount, reviewRating, publishedPrices } = {}) => {
+                                guarantee, reviewCount, reviewRating, publishedPrices, unreadPricing } = {}) => {
   // ══ AN UNVERIFIED BOOKING READ IS NOT A MEASUREMENT ══════════════════════
   // measureBookingPath is authoritative wherever the page carries a signature and
   // the model's read is the fallback where it does not. In one live batch the
@@ -24733,9 +24804,15 @@ const measureValueEquation = ({ booking, bookingMeasured = true, hasTelLink, for
     else if (formFieldCount >= 4) { effort += 1; friction.push(`the form asks for ${formFieldCount} fields`); }
   }
   // Hormozi treats "you must ask us what it costs" as sacrifice, not pricing strategy.
-  if (publishedPrices === 0) {
+  // Scoped and guarded like every other absence in this file: "anywhere" was a
+  // claim about pages nobody opened \u2014 live 2026-08-25, the constraint said
+  // "no price appears anywhere" on a lead whose sitemap listed a pricing page
+  // we never read. An unread pricing page suppresses the entry entirely, the
+  // same rule no_published_pricing has carried since it shipped, because an
+  // obstacle we could not prove must not count toward "N measured obstacles".
+  if (publishedPrices === 0 && unreadPricing !== true) {
     effort += 1;
-    friction.push('no price appears anywhere, so the only way to find out what it costs is to hand over contact details and wait');
+    friction.push('no price appears on any page we read, so the only way to find out what it costs is to hand over contact details and wait');
   } else if (publishedPrices > 0) {
     belief.push(`${publishedPrices} published price point(s) \u2014 a stranger can find out what it costs without asking anyone`);
   }
@@ -25167,7 +25244,7 @@ const measureBusinessHistory = ({ foundedYear, reviewCount, reviewRating, review
     findings.push({
       kind: 'reputation_not_converting',
       layer: 'LEADS',
-      finding: `${weakerAbove} of the ${above} businesses ranking above them have FEWER reviews. The reputation is better than the position.`,
+      finding: `${weakerAbove} of the ${above} businesses ranking above them have FEWER reviews. The public review record is stronger than the position.`,
       why: 'Whatever decides who gets found here, it is not the quality of the work — so more work will not fix it.',
       evidence: `Rank #${rank} measured; review counts compared across the businesses above.`,
     });
@@ -25399,6 +25476,8 @@ YOU MAY AND SHOULD USE WHAT YOU KNOW ABOUT THE WORLD:
 \u2022 The obvious inference. A builder trading sixteen years has completed far more than nineteen jobs. Say so. Hedging that is not caution, it is refusing to think.
 
 AND ONE RULE OF REGISTER, everywhere: never compress a person or an idea into a coined phrase. A live read said \u201cfree searcher\u201d and the owner of this system wrote \u201cno clue wtf a free searcher is lol\u201d. Say the person: \u201cthe people already searching Google for this work\u201d, \u201ca visitor the ads paid for\u201d, \u201csomeone who already asked for a quote\u201d. If a phrase you are about to write is not one a business owner says out loud, unpack it into the plain words it stands for.
+
+AND THREE RULES ABOUT RANK AND REPUTATION: reviews and ratings are a real ranking input \u2014 never dismiss them \u2014 and never present them as the whole story either. When a business with FEWER reviews sits above this one, the honest read is that the OTHER inputs are deciding that search: the listing's primary category (the heaviest single setting), proximity, the site behind the listing, and how people engage with the listing. Keep the two surfaces apart: phone responsiveness ranks Google's PAID local ads, not the organic map \u2014 name it only beside the ads, never as an organic-map factor. You may list candidates; never crown one as the cause. Never treat fewer reviews as a worse reputation or more as a better one \u2014 a review count measures who ASKS for reviews, not who does better work. And never pass a verdict on a business's whole reputation from its rating and reviews \u2014 that record is the public part of it, the only part we can measure, so write \u201chis public reviews\u201d or \u201cthe part of his reputation a stranger can see\u201d, never a verdict on the whole.
 
 \u2550\u2550\u2550 WHAT YOU MAY NOT DO \u2550\u2550\u2550
 Every NUMBER and every FACT about this specific business must come from the list you are given. Do not invent a figure, a competitor, a customer behaviour, or anything about what happens after someone contacts them. Reasoning is permitted; inventing is not. Attach your reasoning to the fact in the same sentence so the reader can see where measurement ends and judgement begins.
@@ -26076,12 +26155,12 @@ const measureGrowthConstraint = ({
         // unsayable. With no rank there is no ratio and no standing, only the
         // durable fact.
         ? (_rankKnown
-            ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not reputation. \u26a0 Use that exact ratio; do not inflate it.`
+            ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not review counts. \u26a0 Use that exact ratio; do not inflate it.`
             : `${weakerAbove} business(es) ranking above them have FEWER reviews. \u26a0 Their own position was NOT stable enough to measure, so say NOTHING about where they rank \u2014 no digit, no band, no "they rank well". The only claim available is that businesses with fewer reviews are above them.`)
         : `Customers searching for exactly what they sell, in their own city, do not find them in the results.`;
     why = rankNotFound
-      ? `The reputation is already built and it is not being shown to anyone. That is a visibility problem, not a quality problem. Whether it is the FIRST thing to fix is the walk's call \u2014 a broken door gets fixed before more people are sent to it.`
-      : `The reputation is already built and it is not being shown to enough people. That is a visibility problem, not a quality problem. Do NOT say they are invisible \u2014 ${_rankKnown ? `we measured them at #${rank} and they can check that` : 'they DO appear in the results, we simply could not pin the position down well enough to state it'}.`;
+      ? `The public review record is already earned and it is not being shown to anyone. That is a visibility problem, not a quality problem. Whether it is the FIRST thing to fix is the walk's call \u2014 a broken door gets fixed before more people are sent to it.`
+      : `The public review record is already earned and it is not being shown to enough people. That is a visibility problem, not a quality problem. Do NOT say they are invisible \u2014 ${_rankKnown ? `we measured them at #${rank} and they can check that` : 'they DO appear in the results, we simply could not pin the position down well enough to state it'}.`;
     product = 'marketing and search ownership';
   }
   // ── CONVERSION — only when the friction is genuinely severe ────────────────
@@ -26835,7 +26914,7 @@ owner can check his own review page.
 \u2022 Never estimate what share of the unread reviews would say the same.
 \u2022 If a pattern appears in only one review, it is not a pattern. Say nothing.
 
-This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words","kind":"contact|workmanship|other"}],"summary":"one-sentence owner-facing summary"}\n\nkind: "contact" when the pain is about REACHING them or them coming back \u2014 calls, callbacks, quotes, estimates, follow-up, scheduling, warranty or repair visits that never happen. "workmanship" when it is about the quality of the finished work itself. "other" for anything else (pricing, attitude). One word, exactly one of those three.\n\nREVIEWS PAGE:\n${md}` }]
+This is the scraped Google reviews page for "${companyName}". It contains multiple customer reviews.\n\nTASK: Find the OPERATIONAL pains that REPEAT across MULTIPLE reviews — the recurring fires an owner would recognize and could fix (slow callbacks, scheduling chaos, missed appointments, no follow-up, quote delays, communication gaps, understaffing). A pattern in many reviews is a theme the owner KNOWS about and hasn't fixed — that is what we want.\n\nRULES:\n- Only report a pain that appears in 2+ reviews. Count how many reviews mention it.\n- Estimate the total number of reviews you can see.\n- Never invent. Keep one short exact quote per pattern.\n- Ignore isolated price gripes and one-off complaints.\n\nReturn ONLY valid JSON:\n{"totalReviews": number, "signals":[{"pain":"short operational pain","count": number,"evidence":"exact quote under 20 words","kind":"contact|workmanship|other"}],"summary":"one-sentence owner-facing summary"}\n\nkind: "contact" when the pain is about REACHING them or them coming back \u2014 calls, callbacks, quotes, estimates, follow-up, scheduling, warranty or repair visits that never happen, or a problem raised AFTER the work that nobody responds to or addresses. "workmanship" when it is about the quality of the finished work itself. "other" for anything else (pricing, attitude). One word, exactly one of those three.\n\nREVIEWS PAGE:\n${md}` }]
       }),
       // A larger corpus takes longer to read. 25s suited forty reviews; at 150
       // a timeout returns no pain at all, which is indistinguishable from a
@@ -36697,8 +36776,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               const _above = _pos !== null ? _pos - 1 : null;
               const weak = r.weakerAbove
                 ? (_above !== null
-                    ? ` ${r.weakerAbove} of the ${_above} above them have FEWER reviews — reputation is not the problem, visibility is.`
-                    : ` ${r.weakerAbove} business(es) ranking above them have FEWER reviews — reputation is not the problem, visibility is. The position itself is not sayable on this lead, but this is true at every position we measured.`)
+                    ? ` ${r.weakerAbove} of the ${_above} above them have FEWER reviews — their public reviews are not the problem, visibility is.`
+                    : ` ${r.weakerAbove} business(es) ranking above them have FEWER reviews — their public reviews are not the problem, visibility is. The position itself is not sayable on this lead, but this is true at every position we measured.`)
                 : '';
               const _where = _pos !== null
                 ? `#${_pos}${_scanned !== null ? ' of ' + _scanned : ''}`
@@ -37390,6 +37469,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
       reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
       publishedPrices: sitePages && Array.isArray(sitePages.prices) ? sitePages.prices.length : undefined,
+      unreadPricing: !!(sitePages && sitePages.existsButUnread && sitePages.existsButUnread.pricing),
     });
     if (valueEquation.checked) {
       console.log(`VALUE EQUATION [${company}]: ${valueEquation.shape} \u2014 delay=${valueEquation.delay} effort=${valueEquation.effort} likelihood=${valueEquation.likelihood} | ${valueEquation.frictionCount} friction point(s)${valueEquation.earnedButBlocked ? ' \u2014 REPUTATION EARNED BUT BLOCKED: the strongest single story available on this lead' : ''}`);
@@ -37621,12 +37701,22 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // name. "Coral Springs Plumbing" and "Moral Fiber Landscaping" are why:
         // a name is a marketing decision and a category is a measurement.
         {
-          const _b = matchNicheBrief([verifiedIndustry, customerTrade, req.body.industry].filter(Boolean).join(' '));
+          let _b = matchNicheBrief([verifiedIndustry, customerTrade, req.body.industry].filter(Boolean).join(' '));
+          // A site-down lead resolves no trade from its pages, and older rows
+          // arrive with an empty industry \u2014 but the server already holds
+          // Google's own listing category from Place Details. Tried SEPARATELY
+          // and LAST, never joined in: a category like "Garage door supplier"
+          // would trip the model disqualifier and delete a brief the primary
+          // string had already earned. Fed RAW on purpose \u2014 an ambiguous
+          // category (supplier, store) still resolves to NO brief, and no
+          // brief beats the wrong bucket every time.
+          const _gbpCat = (gbpHealth && gbpHealth.checked && gbpHealth.primaryCategory) ? String(gbpHealth.primaryCategory) : null;
+          if (!_b && _gbpCat) _b = matchNicheBrief(_gbpCat);
           _niche = nicheBriefPayload(_b, Date.now());
           if (_niche) {
             console.log(`\u{1F4D8} NICHE BRIEF [${company}]: ${_niche.label}. The unit is ${_niche.unit}. ${_niche.hasFigures ? `${_niche.sourced.length} sourced figure(s), verified ${_niche.verifiedAt}` : 'no sourced figures yet — the vocabulary and the questions are live, the numbers wait on the research'}. Framing and vocabulary only: nothing here is a claim about THIS business, and none of it can reach an email.`);
           } else {
-            console.log(`\u{1F4D8} NO NICHE BRIEF [${company}]: nothing in the library matches "${[verifiedIndustry, customerTrade, req.body.industry].filter(Boolean).join(' / ') || 'no trade resolved'}". A business we cannot place gets no brief, which costs a paragraph on the call sheet; placing one in the WRONG bucket would hand the caller a page of confident vocabulary about somebody else's trade.`);
+            console.log(`\u{1F4D8} NO NICHE BRIEF [${company}]: nothing in the library matches "${[verifiedIndustry, customerTrade, req.body.industry, _gbpCat].filter(Boolean).join(' / ') || 'no trade resolved'}". A business we cannot place gets no brief, which costs a paragraph on the call sheet; placing one in the WRONG bucket would hand the caller a page of confident vocabulary about somebody else's trade.`);
           }
         }
         // ══ THE THIRD TIME ONE NAME KILLED THE WHOLE LADDER ════════════════
@@ -38092,6 +38182,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           siteVeryDated: !!_siteAge.veryDated,
           siteAgeMarkers: _siteAge.markers.map(m => m.say),
           siteAgeScore: _siteAge.score,
+          siteAgeVisibleCount: Number(_siteAge.visibleCount) || 0,
           // ══ THE ONE FIGURE THE SPINE READS AND NOTHING SUPPLIED ═══════════
           // buildFactualSpine reads fourteen names to build `figures` — the ONLY
           // numbers the email is permitted to contain. Thirteen were already
@@ -39492,7 +39583,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         bottleneckWhy = `The deepest measured leak comes first: ${String(_leak1.problem || '').replace(/\.\s*$/, '')}. That is where money already earned is dying, and no rebuild recovers it. The build itself is also measurably old (${_markers}) — real, worth fixing, and second, not first.`;
       } else {
         bottleneck = 'FOUNDATION';
-        bottleneckWhy = `Money is going out on ads and the pages do give a visitor a way in — but the build itself is measurably old (${_markers}). An old build undercuts every dollar spent sending people to it, so the rebuild comes before more traffic.`;
+        bottleneckWhy = Number(_harmInputs.siteAgeVisibleCount) >= 1
+          ? `Money is going out on ads and the pages do give a visitor a way in — but the build itself is measurably old (${_markers}). An old build undercuts every dollar spent sending people to it, so the rebuild comes before more traffic.`
+          : `Money is going out on ads and the pages do give a visitor a way in — but the code under the page is measurably old (${_markers}). None of that shows to a visitor; what it dates is the build itself, and a build that old fights every change on this list, so the rebuild still comes before more traffic.`;
       }
     } else if ((_siteBooking === 'form' || _siteBooking === 'phone_only') && !builtWith.hasCRM) {
       // THE MISSING BOTTLENECK. A quote form is not capture if it drops the lead into
@@ -39790,7 +39883,7 @@ ${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : '
 → A pitch that names the operational fire ("your reviews say quotes take three weeks and you're hiring four schedulers to keep up") is in a completely different league from one that names a website flaw ("your homepage has no lead capture form"). The first makes the owner feel SEEN. The second sounds like every other agency email.
 → CONNECT the operational pain to the website/ad finding wherever they genuinely link — that combination is the sharpest possible pitch. Example: "You are running 840 ads into a page with no form, while your reviews say quotes take three weeks. You are paying to generate leads you cannot answer."
 → NEVER quote the review verbatim in the email (it embarrasses them publicly). Reference the PATTERN, not the quote. "Your reviews mention slow quote turnaround" — not "one customer said you're incompetent."${_hasReviewPattern ? `\n\n\u2605\u2605 MANDATORY OPENING \u2605\u2605\nWe mined THEIR OWN Google reviews and found a pain that REPEATS across multiple reviews, with a count. This is the strongest opening line available to us and it MUST be where the pitch starts.\n\u2192 Your pitchAngle MUST open by naming this recurring pattern AND its count. The count is what makes it undeniable: one complaint is an anecdote, seven is a problem the owner already knows about and has not fixed.\n\u2192 Say the NUMBER out loud. "Seven of your last forty reviews mention the same thing" lands far harder than "some customers mention".\n\u2192 Never reproduce the review text and never name a reviewer \u2014 describe the PATTERN only. The count plus the theme is the punch; the raw quote is a liability.\n\u2192 THEN connect it to the money/product finding in the same breath. That pairing (their operational fire + what it costs) is the sharpest email this system can write.\n\u2192 RELEVANCE TEST \u2014 this mandate applies ONLY when the pattern is something CROJungle actually fixes (slow callbacks, missed calls, no follow-up, quote/estimate delays, scheduling chaos, leads going unanswered). If the recurring pattern is about PRICING, WORKMANSHIP, STAFF ATTITUDE or DAMAGE, do NOT open with it \u2014 we cannot fix that, and naming it makes us sound like a complaint tracker before an irrelevant pivot. Use the next-strongest confirmed fact instead and ignore the pattern.\n\u2192 The test: can the owner draw a straight line from the pain you named to what we sell? If yes, lead with it. If no, it is not our hook regardless of the count.\n\u2192 GOOD: "Nine of your recent reviews mention waiting days for a callback \u2014 and you are paying for 27 ads driving straight to a page with no way to capture those people. Want me to send it over?"\n\u2192 BAD: "Your website has no lead capture form." (True, generic, ignorable \u2014 and it buries the one thing that would make him stop scrolling.)` : ''}` : 'No verified operational pain found in public sources — pitch from the site/ad audit only. Do NOT invent operational pain: fabricating a complaint would destroy credibility instantly.'}
-${localRank && localRank.ours ? `\n═══ THE REVIEW COUNT — USE OURS, NEVER THEIRS ═══\nThis business has ${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}★. That number, and only that number, may appear in anything you write.\n⚠ THEIR WEBSITE MAY DISPLAY A DIFFERENT, LARGER NUMBER. Review-widget badges aggregate every platform — Google, Facebook, Yelp, a review vendor — and often count history the Google profile no longer shows. Live, twice, on the same lead: a badge on the homepage read "380 reviews" while the Google profile had 156, and the generated email said 380. That is a 2.4x overstatement of the most checkable fact in the message. Ours is the number that actually matters because it is the one we measured. \u26a0 AND DO NOT TREAT IT AS THE REASON FOR THEIR SEARCH POSITION. This clause used to read \u2018Google reviews are what local rank is computed from\u2019 and that is false. The local pack is ranked on relevance, distance and prominence together \u2014 category and service wording, the completeness and activity of the profile, proximity to the searcher, links and mentions across the web, site quality and speed, and yes, reviews as ONE input among those. A single wrong sentence in this brief made every audit downstream read reviews as the lever that moves rank, and that is why four consecutive runs produced emails an owner reads as being about his reviews. If a business with fewer reviews is ranking above them, the correct conclusion is the opposite of the one that sentence invited: reviews are demonstrably NOT what is deciding that search, and something else is \u2014 paid placement, a better-matched profile, a faster site, closer proximity, or work someone is doing that this business is not. Name the gap. Never name reviews as its cause.\n→ If a review count appears anywhere in the page content or the screenshot and it is not ${localRank.ours.reviews}, it is a different measurement. Ignore it.\n→ Same rule for star ratings, years in business, employee counts and every other figure: if it is not in this evidence block, it does not go in the email.` : ''}${localRank && localRank.checked && localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" — the exact phrase a customer in their city types — they come up #${localRank.rank} of ${localRank.scanned}, with ${localRank.ours.reviews} reviews at ${localRank.ours.rating}\u2605.\nAhead of them: ${localRank.above.map(a => `${a.name} (${a.reviews} reviews, ${a.rating || '?'}\u2605)`).join(', ')}${localRank.weakerAbove ? `\n\u2605 ${localRank.weakerAbove} of the ${localRank.rank - 1} businesses ABOVE them have FEWER reviews than they do.` : ''}\n\u2192 This is a FACT the owner can check in ten seconds, and most have never checked it.\n\u2192 \u26a0 BUT THE EXACT POSITION MOVES. Two runs of the same lead, minutes apart, same query, returned #19 and then #18 \u2014 local results shift with the searcher, the moment and the index. Below the top few, the NUMBER is not stable enough to put in an email he will read tomorrow. Above position 10, write the BAND, not the digit: \u2018near the bottom of the first twenty\u2019, \u2018not on the first screen anyone looks at\u2019. AND THIS IS WHY THE BAND MATTERS FOR THE INVITATION. Our number comes from ONE Places text search. His own search is personalised by his location, his history and his device, so he will NOT see the same digit \u2014 our own fact-checker raised this against a live email that told him to run the search and expect #19. Invite him to check the BAND, which survives personalisation: \u2018run that search and see how far down your name is\u2019 is true for him however Google personalises it; \u2018run that search and you are #19\u2019 is a promise we cannot keep. The invitation is the strongest move in the email \u2014 it is the moment he stops reading and starts verifying \u2014 so it must be a thing he will actually find. Inside the top 3 the position is stable and specific and you may state it exactly. Between 4 and 10, say \u2018on the first page but not near the top\u2019. This costs nothing in force \u2014 \u2018you are near the bottom of that list\u2019 lands the same as \u2018#18\u2019 \u2014 and it removes the one way this fact can be wrong when he checks it.\n\u2192 ${localRank.weakerAbove ? 'The weaker-reputation-ranking-higher comparison is the whole point: the reputation is already built and the position is not. Say the numbers out loud. \u26a0 BUT THEY ARE IN THE RESULTS \u2014 we FOUND them at this position, so NEVER write that they are invisible, that nobody sees them, or that customers never see this business. Our own fact-checker caught exactly that on a #19 lead: \"rank #19 is not invisibility; he IS showing up.\" He can run the search and see his own name, and one checkable falsehood discredits every true number beside it. The accurate and still-devastating version is about WHERE he sits and how people read a list: he is on it, near the bottom, and people choose from the top. That is a general truth about behaviour, which is allowed. Invisibility is a claim about his business, which here is false.' : 'State the position plainly. Do not speculate about WHY they rank there — we measured position, not cause.'}\n\u2192 Do NOT claim to know their traffic, their spend, or their conversion rate. We measured one thing: where they appear. Overstating it destroys the credibility the number earns.\n\u2192 \u26a0 AND DO NOT NAME A CAUSE FOR THE POSITION. This rank comes from ONE PLACES TEXT SEARCH \u2014 the local/map surface, which ranks on proximity, prominence and profile completeness. A title tag, a meta description or a page heading drives ORGANIC results, which we never measured. So \"you rank #19 because your title tag says New Jersey\" links a cause we did not measure to an effect on a different surface. A live audit wrote \"the page telling Google where he belongs says New Jersey \u2014 that is why the reputation is not showing up\" and the fact-checker correctly called it speculative attribution. A wrong title tag is a REAL, separate, checkable finding. State it as its own fact. Never as the reason for the rank.` : ''}${localRank && localRank.checked && !localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" they do NOT appear in the top ${localRank.scanned} at all. A customer looking for exactly what they sell, in their own city, does not see them.\nWho does appear: ${localRank.topRivals.map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}\n\u2192 Absence is a stronger fact than a low rank, and it is verifiable in one search. Say it plainly and without exaggeration: they are not in the results, and name who is.\n\u2192 Do NOT infer why. We measured absence, not cause.` : ''}
+${localRank && localRank.ours ? `\n═══ THE REVIEW COUNT — USE OURS, NEVER THEIRS ═══\nThis business has ${localRank.ours.reviews} Google reviews at ${localRank.ours.rating}★. That number, and only that number, may appear in anything you write.\n⚠ THEIR WEBSITE MAY DISPLAY A DIFFERENT, LARGER NUMBER. Review-widget badges aggregate every platform — Google, Facebook, Yelp, a review vendor — and often count history the Google profile no longer shows. Live, twice, on the same lead: a badge on the homepage read "380 reviews" while the Google profile had 156, and the generated email said 380. That is a 2.4x overstatement of the most checkable fact in the message. Ours is the number that actually matters because it is the one we measured. \u26a0 AND DO NOT TREAT IT AS THE REASON FOR THEIR SEARCH POSITION. This clause used to read \u2018Google reviews are what local rank is computed from\u2019 and that is false. The local pack is ranked on relevance, distance and prominence together \u2014 category and service wording, the completeness and activity of the profile, proximity to the searcher, links and mentions across the web, site quality and speed, and yes, reviews as ONE input among those. A single wrong sentence in this brief made every audit downstream read reviews as the lever that moves rank, and that is why four consecutive runs produced emails an owner reads as being about his reviews. If a business with fewer reviews is ranking above them, the correct conclusion is the opposite of the one that sentence invited: reviews are demonstrably NOT what is deciding that search, and something else is \u2014 paid placement, a better-matched profile, a faster site, closer proximity, or work someone is doing that this business is not \u2014 the listing's PRIMARY CATEGORY is the heaviest single setting on the organic map, and engagement with the listing counts too. Keep the surfaces apart: how reliably a business answers ranks Google's PAID local ads, not the organic map \u2014 real, worth saying, and only ever beside the ads. Name the gap. Never name reviews as its cause \u2014 and never dismiss reviews either: they are a real input, just not the one deciding a search where the fewer-reviewed name is on top.\n→ If a review count appears anywhere in the page content or the screenshot and it is not ${localRank.ours.reviews}, it is a different measurement. Ignore it.\n→ Same rule for star ratings, years in business, employee counts and every other figure: if it is not in this evidence block, it does not go in the email.` : ''}${localRank && localRank.checked && localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" — the exact phrase a customer in their city types — they come up #${localRank.rank} of ${localRank.scanned}, with ${localRank.ours.reviews} reviews at ${localRank.ours.rating}\u2605.\nAhead of them: ${localRank.above.map(a => `${a.name} (${a.reviews} reviews, ${a.rating || '?'}\u2605)`).join(', ')}${localRank.weakerAbove ? `\n\u2605 ${localRank.weakerAbove} of the ${localRank.rank - 1} businesses ABOVE them have FEWER reviews than they do.` : ''}\n\u2192 This is a FACT the owner can check in ten seconds, and most have never checked it.\n\u2192 \u26a0 BUT THE EXACT POSITION MOVES. Two runs of the same lead, minutes apart, same query, returned #19 and then #18 \u2014 local results shift with the searcher, the moment and the index. Below the top few, the NUMBER is not stable enough to put in an email he will read tomorrow. Above position 10, write the BAND, not the digit: \u2018near the bottom of the first twenty\u2019, \u2018not on the first screen anyone looks at\u2019. AND THIS IS WHY THE BAND MATTERS FOR THE INVITATION. Our number comes from ONE Places text search. His own search is personalised by his location, his history and his device, so he will NOT see the same digit \u2014 our own fact-checker raised this against a live email that told him to run the search and expect #19. Invite him to check the BAND, which survives personalisation: \u2018run that search and see how far down your name is\u2019 is true for him however Google personalises it; \u2018run that search and you are #19\u2019 is a promise we cannot keep. The invitation is the strongest move in the email \u2014 it is the moment he stops reading and starts verifying \u2014 so it must be a thing he will actually find. Inside the top 3 the position is stable and specific and you may state it exactly. Between 4 and 10, say \u2018on the first page but not near the top\u2019. This costs nothing in force \u2014 \u2018you are near the bottom of that list\u2019 lands the same as \u2018#18\u2019 \u2014 and it removes the one way this fact can be wrong when he checks it.\n\u2192 ${localRank.weakerAbove ? 'The weaker-reputation-ranking-higher comparison is the whole point: the reputation is already built and the position is not. Say the numbers out loud. \u26a0 BUT THEY ARE IN THE RESULTS \u2014 we FOUND them at this position, so NEVER write that they are invisible, that nobody sees them, or that customers never see this business. Our own fact-checker caught exactly that on a #19 lead: \"rank #19 is not invisibility; he IS showing up.\" He can run the search and see his own name, and one checkable falsehood discredits every true number beside it. The accurate and still-devastating version is about WHERE he sits and how people read a list: he is on it, near the bottom, and people choose from the top. That is a general truth about behaviour, which is allowed. Invisibility is a claim about his business, which here is false.' : 'State the position plainly. Do not speculate about WHY they rank there — we measured position, not cause.'}\n\u2192 Do NOT claim to know their traffic, their spend, or their conversion rate. We measured one thing: where they appear. Overstating it destroys the credibility the number earns.\n\u2192 \u26a0 AND DO NOT NAME A CAUSE FOR THE POSITION. This rank comes from ONE PLACES TEXT SEARCH \u2014 the local/map surface, which ranks on proximity, prominence and profile completeness. A title tag, a meta description or a page heading drives ORGANIC results, which we never measured. So \"you rank #19 because your title tag says New Jersey\" links a cause we did not measure to an effect on a different surface. A live audit wrote \"the page telling Google where he belongs says New Jersey \u2014 that is why the reputation is not showing up\" and the fact-checker correctly called it speculative attribution. A wrong title tag is a REAL, separate, checkable finding. State it as its own fact. Never as the reason for the rank.` : ''}${localRank && localRank.checked && !localRank.found ? `\n═══ WHERE THEY ACTUALLY RANK WHEN A CUSTOMER LOOKS ═══\nSearching "${localRank.query}" they do NOT appear in the top ${localRank.scanned} at all. A customer looking for exactly what they sell, in their own city, does not see them.\nWho does appear: ${localRank.topRivals.map(t => `${t.name} (${t.reviews} reviews)`).join(', ')}\n\u2192 Absence is a stronger fact than a low rank, and it is verifiable in one search. Say it plainly and without exaggeration: they are not in the results, and name who is.\n\u2192 Do NOT infer why. We measured absence, not cause.` : ''}
 ${localVisibility && localVisibility.checked && localVisibility.invisible.some(r => r.kind === 'their own service page') ? `\n═══ SERVICES THEY SELL BUT CANNOT BE FOUND FOR ═══\nTheir OWN sitemap publishes a dedicated page for each of these. We searched each one the way a customer in ${localVisibility.results[0].city} would, and they do not appear in the results at all:\n${localVisibility.invisible.filter(r => r.kind === 'their own service page').map(r => `- "${r.query}" — not in the top ${r.scanned}. Who is: ${r.topRivals.slice(0,2).map(t => t.name).join(', ')}`).join('\n')}\n\u2192 THIS IS THE SHARPEST SEO FACT WE CAN GIVE AN OWNER. He paid to have that service page built. He assumes it works. It does not, and he has never checked.\n\u2192 Name the SERVICE, not the abstraction. "You have a page for crawl space encapsulation and you are not in the results when someone in Concord searches it" beats "your SEO needs work" by a mile.\n\u2192 Tie it to money the way an owner counts it: that is a service he staffs for and wants to sell, and the calls are going to whoever does appear.\n\u2192 Do NOT claim to know his traffic, keyword volume, spend, or why he ranks where he does. We measured presence and absence on one search each. Nothing more.` : ''}
 ${!(localVisibility && localVisibility.checked) ? `\n\u26d4 THE SEARCH SURFACE WAS NOT MEASURED FOR THIS LEAD.\nThe local-rank check did not run, so we have NO information about where this business appears in search, who outranks them, or what a searcher sees.\nYou may NOT write \u2014 in any wording \u2014 that nobody finds them, that they are invisible, that searchers see a competitor first, that they do not come up, or anything else about search results, rankings, or what Google displays.\nA scrape of their website tells you about their WEBSITE. It tells you nothing about search.\nThis exact error has already shipped twice: one email asserted what Google shows as a business's title based on a bot-check page our own scraper was served, and another told an insurance agency that nobody searching a specific phrase was seeing them when no search had been run at all. Both were confident, both were checkable, and being wrong about a checkable claim destroys every true statement standing next to it.\nWrite about what IS on their site instead \u2014 that we did measure.` : ''}
 GOOGLE BUSINESS PROFILE (measured from their live listing — these are FACTS the owner can confirm by opening their own Google listing): ${gbpHealth && gbpHealth.checked ? (gbpHealth.gapCount ? gbpHealth.gaps.map(g => '- ' + g).join('\n') + `\n→ These are the first thing a local customer sees: the Google profile is what decides whether they show up in the map pack when someone searches their service nearby. An incomplete profile quietly loses them customers they never hear about. Each gap here is MEASURED from their live profile — you may state it as fact. This is often the sharpest, most defensible finding available because it is both revenue-critical and 100% checkable.` : 'Their Google Business Profile looks complete (hours, photos, description, website link all present) — do NOT invent a profile problem.') : 'Google Business Profile not checked for this lead — make NO claims about their Google listing, map-pack presence, or profile completeness.'}
@@ -41211,6 +41304,18 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             console.log(`\u26d4 RECENCY CONCLUSION [${company}]: removed ${_rc.cut.length} sentence(s) asserting what a reader concludes from the age of their reviews. First one: "${String(_rc.cut[0]).slice(0, 140)}". Nobody checks the date on the newest review and concludes a business has closed \u2014 the owner's own instinct, recorded in this file \u2014 and what the measurement really says (they stopped ASKING for reviews) is already in the audit as intelligence. The prompt has forbidden this framing since 2026-08-23 and the model produced it anyway, which is what every stripper in this battery exists for.`);
           }
           const _emptied = Object.keys(_was).filter(k => String(_was[k]).trim() && !String(parsed[k] || '').trim());
+          // recommendedPrice is the one emptied field with a code-owned
+          // answer: the catalog's own declared line for the recommended
+          // product stands in \u2014 code-assembled, every figure licensed, and
+          // attached after the gates so nothing re-walks it.
+          if (_emptied.includes('recommendedPrice')) {
+            const _cp = catalogPriceFor(parsed.recommendedProduct);
+            if (_cp) {
+              parsed.recommendedPrice = _cp;
+              _emptied.splice(_emptied.indexOf('recommendedPrice'), 1);
+              console.log(`\u26a0 PRICE STOOD IN [${company}]: the money gate emptied recommendedPrice; the catalog's own line for "${parsed.recommendedProduct}" (${_cp}) stands in.`);
+            }
+          }
           if (_emptied.length) {
             parsed._fieldsEmptiedByGates = _emptied;
             console.log(`⚠ GATE EMPTIED A FIELD [${company}]: ${_emptied.join(', ')} had prose in it and has none now. Every sentence in it either quoted words we do not hold or carried a figure we cannot trace. That is either a whole fabricated field or a corpus that is missing something we DO hold — the second is what deleted the factual spine on 2026-08-21. The lead is NOT blocked for this: the measured ladder is untouched and is the half a call is made from.`);
@@ -41727,12 +41832,23 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 {
                   const _dep = { after: 0, door: 1, found: 2 };
                   const _have = parsed.problemList.filter(r => Number.isFinite(r && r.leakRank));
-                  let _n = _have.length;
+                  // COUNT-as-max minted duplicate ranks: stored {2,3} plus one
+                  // copy row produced a second 3, because two ranked rows made
+                  // _n=2 and the next mint was ++_n=3. The max of the ranks
+                  // already present is the only number a new rank may extend.
+                  let _n = _have.reduce((m2, r) => Math.max(m2, Number(r.leakRank) || 0), 0);
                   if (_n > 0 && _n < 3) {
                     const _pool = parsed.problemList
                       .filter(r => r && !r.leakRank && !r.internalOnly && !r.ambient && Number.isFinite(_dep[r.funnelStage]))
                       .sort((a, b) => (_dep[a.funnelStage] - _dep[b.funnelStage]) || ((b.harm || 0) - (a.harm || 0)));
                     for (const r of _pool) { if (_n >= 3) break; r.leakRank = ++_n; r.callOpener = callOpenerFor(r); }
+                  }
+                  // Two numbering eras joined in storage is how Wolf's sheet
+                  // carried two LEAK 1 badges. The server cannot un-write old
+                  // rows; it can refuse to add to them in silence.
+                  {
+                    const _rks = parsed.problemList.filter(r => Number.isFinite(r && r.leakRank)).map(r => r.leakRank);
+                    if (new Set(_rks).size !== _rks.length) console.log(`\u26a0 LEAK NUMBERING [${company}]: duplicate leak ranks {${_rks.join(',')}} in the merged list \u2014 stored rows from two numbering passes. The client renumbers for display; a re-run rewrites them for good.`);
                   }
                 }
                 // ══ ONE COUNT, OR THE CALL STARTS WRONG ══════════════════════
@@ -41875,7 +41991,9 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                 });
                 console.log(`\u2713 CANDIDATE HYGIENE [${company}]: positioning_offer was missing \u2014 injected from measured offerStrength data (total: ${_ptotal}). It now competes as Hormozi requires.`);
               } else {
-                console.log(`\u26a0 CANDIDATE HYGIENE [${company}]: positioning/offer was never scored, so Hormozi\u2019s highest-leverage layer (market and offer) could not compete for the lead. It should be a candidate on every lead whose homepage copy was captured.`);
+                console.log(trustedContent && trustedContent.length > 200
+                  ? `\u26a0 CANDIDATE HYGIENE [${company}]: the offer read never ran on a lead whose homepage copy WAS captured, so Hormozi\u2019s highest-leverage layer (market and offer) could not compete for the lead.`
+                  : `\u{1F4C4} CANDIDATE HYGIENE [${company}]: positioning/offer was not scored because no trusted homepage copy was captured on this lead (site down, blocked, or too thin) \u2014 not a scoring defect: the offer layer cannot be judged on pages nobody read.`);
               }
             }
           }
@@ -42689,7 +42807,7 @@ RAW EVIDENCE (what we actually confirmed):
 - VERIFIED HEADCOUNT: ${verifiedEmployees ? verifiedEmployees.toLocaleString() + ' employees (confirmed via Google search)' : 'Not verified'}
 - ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
-- LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED \u2014 we ran real Google local searches for this business via the Places API. Results: ' + localVisibility.results.map(r => (r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`) + ((() => { const _riv = (Array.isArray(r.above) && r.above.length) ? r.above : (Array.isArray(r.topRivals) ? r.topRivals : []); if (!_riv.length) return ''; return ` \u2014 businesses actually returned above them for that query, WITH their real Google review counts: ${_riv.map(t => `${t.name} (${t.reviews} reviews${t.rating ? ', ' + t.rating + '\u2605' : ''})`).join(', ')}` + (r.ours && r.ours.reviews != null ? `; this business itself has ${r.ours.reviews} reviews${r.ours.rating ? ' at ' + r.ours.rating + '\u2605' : ''}` : '') + (r.weakerAbove ? `; \u2605 ${r.weakerAbove} of the businesses ranked ABOVE them have FEWER reviews than this business does \u2014 that comparison is MEASURED and must NOT be flagged` : ''); })())).join('; ') + '. \u26a0 THE COMPETITOR NAMES AND REVIEW COUNTS ABOVE ARE MEASURED FACTS returned by the Places API for that exact search \u2014 they are the businesses a customer sees instead of this one. If the audit names those companies or quotes those review counts, that is CORRECT and must NOT be flagged as unverified or as "competitor data stated as fact". \u26a0 BUT ONLY THE NAMES AND THE COUNTS ARE MEASURED. We do NOT measure how old a competitor review is, how recent or active that competitor is, their rating trend, their ad spend, or why they rank higher. Any claim that competitor reviews are recent, newer or fresher, or that a competitor is more active, MUST STILL BE FLAGGED \u2014 that is an embellishment resting on top of a real number, which is harder to spot and just as false.' + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
+- LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED \u2014 we ran real Google local searches for this business via the Places API. Results: ' + localVisibility.results.map(r => (r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`) + ((() => { const _riv = (Array.isArray(r.above) && r.above.length) ? r.above : (Array.isArray(r.topRivals) ? r.topRivals : []); if (!_riv.length) return ''; return ` \u2014 businesses actually returned above them for that query, WITH their real Google review counts: ${_riv.map(t => `${t.name} (${t.reviews} reviews${t.rating ? ', ' + t.rating + '\u2605' : ''})`).join(', ')}` + (r.ours && r.ours.reviews != null ? `; this business itself has ${r.ours.reviews} reviews${r.ours.rating ? ' at ' + r.ours.rating + '\u2605' : ''}` : '') + (r.weakerAbove ? `; \u2605 ${r.weakerAbove} of the businesses ranked ABOVE them have FEWER reviews than this business does \u2014 that comparison is MEASURED and must NOT be flagged. \u26a0 AND ITS ARITHMETIC: the copy may state it as ONE NAMED competitor plus ${r.weakerAbove - 1} other(s) \u2014 the named one plus the others equals the same measured ${r.weakerAbove}, so that split is NOT an understatement and must not be flagged either` : ''); })())).join('; ') + '. \u26a0 THE COMPETITOR NAMES AND REVIEW COUNTS ABOVE ARE MEASURED FACTS returned by the Places API for that exact search \u2014 they are the businesses a customer sees instead of this one. If the audit names those companies or quotes those review counts, that is CORRECT and must NOT be flagged as unverified or as "competitor data stated as fact". \u26a0 BUT ONLY THE NAMES AND THE COUNTS ARE MEASURED. We do NOT measure how old a competitor review is, how recent or active that competitor is, their rating trend, their ad spend, or why they rank higher. Any claim that competitor reviews are recent, newer or fresher, or that a competitor is more active, MUST STILL BE FLAGGED \u2014 that is an embellishment resting on top of a real number, which is harder to spot and just as false.' + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
 - THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date - but review AGE is internal intelligence, so DO flag any claim that a prospect notices it, reads it as the business being inactive, or that it is costing them trust. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + (gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - the real count is unknown, so FLAG any specific photo count as unverifiable), hours ' : gbpHealth.photosSeen + ' photos, hours ') + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
@@ -46294,7 +46412,23 @@ app.listen(PORT, () => {
     const _ve5 = { checked: true, denominator: 5, frictionCount: 3, numerator: 0,
       friction: ['the only way to start is a contact form \u2014 nothing on the site can book a time',
                  'the form asks for 8 fields',
-                 'no price appears anywhere, so the only way to find out what it costs is to hand over contact details and wait'] };
+                 'no price appears on any page we read, so the only way to find out what it costs is to hand over contact details and wait'] };
+    // The value equation carries the same absence discipline as the rungs:
+    // the no-price entry is scoped to pages we read, and an unread pricing
+    // page suppresses it entirely. Executed both ways, plus the call site,
+    // because a fixture supplies its own arguments and cannot see a caller.
+    const _veRead = measureValueEquation({ booking: 'form', hasForm: true, formFieldCount: 5, publishedPrices: 0 });
+    if (!_veRead.friction.some(f => /no price appears on any page we read/.test(f))) _fails.push('a full-read no-price lead lost its scoped friction entry');
+    if (_veRead.friction.some(f => /appears anywhere/.test(f))) _fails.push('the no-price friction claims "anywhere" again \u2014 a claim about pages nobody opened');
+    const _veUnread = measureValueEquation({ booking: 'form', hasForm: true, formFieldCount: 5, publishedPrices: 0, unreadPricing: true });
+    if (_veUnread.friction.some(f => /no price appears/.test(f))) _fails.push('the no-price friction still fires with a pricing page sitting unread \u2014 the live false absence, back in the constraint');
+    if (_veUnread.effort >= _veRead.effort) _fails.push('the unread-pricing case still counts the unproven price obstacle in the arithmetic');
+    {
+      const _vn = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_vn('unreadPricing: !!(sitePages && sitePages.existsBut', 'Unread && sitePages.existsButUnread.pricing),'))) {
+        _fails.push('the VE call site no longer passes the unread-pricing provenance, so the rule runs on fixtures and never on a lead');
+      }
+    }
     const _opsContact = { themes: 1, mentions: 2, reviewsRead: 90, share: 2 / 90, binding: false };
     const _os0 = { checked: true, gapCount: 2 };
     const _mc = { checked: true, band: 'partial', signals: [], gaps: [], isConstraint: false };
@@ -46495,6 +46629,34 @@ app.listen(PORT, () => {
     if (_live[0].id !== 'ads_untracked') {
       _fails.push('BURNING proven LIVE by a sponsored row lost its #1 — the rule demotes the inference, never the proof');
     }
+    // The rank-causation correction travels WITH the outranked row, executed.
+    // Wolf's sheet printed two review counts beside a position and the owner
+    // of this system read it as "they are above him because of reviews".
+    const _orList = buildProblemList({ byHarm: [
+      { id: 'outranked_by_weaker', finding: 'a competitor shows up above them with fewer reviews', costs: 'x', harm: 92, opener: 90, novel: 72 },
+    ] }, {});
+    const _orRow = _orList.find(r => r.id === 'outranked_by_weaker');
+    if (!_orRow || !/reviews are not what is deciding/.test(String(_orRow.rankNote || ''))) {
+      _fails.push('the outranked row no longer carries the rank-causation correction, so the sheet prints two review counts and lets the reader conclude reviews decide the ranking');
+    }
+    if (_orRow && !/Reviews do count/.test(String(_orRow.rankNote || ''))) {
+      _fails.push('the note negates reviews \u2014 the owner corrected this himself: reviews are a real input, and fewer-reviews-above means the OTHER inputs are deciding');
+    }
+    if (_orRow && /local ads/.test(String(_orRow.rankNote || ''))) {
+      _fails.push('the responsiveness join prints on a lead with NO contact-shaped review evidence \u2014 a candidate cause fabricated out of nothing');
+    }
+    // With measured contact pain the join appears, scoped to Google's own
+    // local-ads guidance \u2014 a candidate for the call, never a crowned cause.
+    const _orJoin = buildProblemList({ byHarm: [
+      { id: 'outranked_by_weaker', finding: 'a competitor shows up above them with fewer reviews', costs: 'x', harm: 92, opener: 90, novel: 72 },
+    ] }, { evidence: { reviewThemeContact: true } });
+    const _orJoinRow = _orJoin.find(r => r.id === 'outranked_by_weaker');
+    if (!_orJoinRow || !/calls that never come back/.test(String(_orJoinRow.rankNote || '')) || !/local ads/.test(String(_orJoinRow.rankNote || ''))) {
+      _fails.push('a lead holding BOTH the outranked measurement and contact-shaped review pain no longer connects them \u2014 the join the owner asked for, lost');
+    }
+    if (_list.some(r => r.rankNote)) {
+      _fails.push('a non-rank finding carries the rank note — the correction belongs only on the row that prints review counts beside a position');
+    }
     const _noWritten = buildProblemList(_evHarms, { evidence: { adsLive: false, writtenContact: false } });
     if (_noWritten[0].id !== 'ads_untracked') {
       _fails.push('with no written evidence on the lead the tag-BURNING rung was demoted anyway — the inference loses only to written evidence, not to nothing');
@@ -46528,10 +46690,17 @@ app.listen(PORT, () => {
     if (contactShapedTheme('quality control issues - drainage, uneven surfaces') !== false) _fails.push("Breck's workmanship theme classifies as contact-shaped — the exact live failure this gate exists for");
     if (contactShapedTheme('they never called back after the damage') !== true) _fails.push('a mixed contact+quality theme lost its leak status — contact wins on mixed');
     if (contactShapedTheme('') !== null) _fails.push('an absent theme classifies as something');
-    // The miner's own tag wins over the vocabulary in both directions — it
-    // read the reviews, and the regex list has been outrun twice in two runs.
+    // The tag settles only what the string cannot: a contact tag always wins,
+    // a workmanship tag holds only when the string carries no contact shape.
     if (contactShapedTheme('anything at all', 'contact') !== true) _fails.push("the miner's contact tag does not classify as contact — the root fix for the vocabulary chase is unwired");
-    if (contactShapedTheme('never called back', 'workmanship') !== false) _fails.push("the miner's workmanship tag does not override — a tagged workmanship theme would rank as a leak again");
+    if (contactShapedTheme('never called back', 'workmanship') !== true) _fails.push('a contact-shaped string no longer overrides a workmanship tag — the mixed-theme follow-up complaint would be buried as context again');
+    if (contactShapedTheme('tile grout cracked within a month', 'workmanship') !== false) _fails.push("a genuinely workmanship-tagged theme classifies as contact — the Breck ranking failure comes back through the tag");
+    // The live 2026-08-25 pair: the top pattern's mixed theme must classify
+    // contact THROUGH its workmanship tag, and the second pattern's wording
+    // must be inside the vocabulary at all.
+    if (contactShapedTheme('poor surgical outcomes not addressed or revised adequately', 'workmanship') !== true) _fails.push('the FCPS follow-up complaint — outcomes not addressed — stays buried under its workmanship tag, the exact live failure this rule exists for');
+    if (contactShapedTheme('doctor hard to reach after complications') !== true) _fails.push('"hard to reach after complications" classifies as not-contact — the second FCPS pattern was outside the vocabulary');
+    if (contactShapedTheme('paint peeling in hard to reach areas') !== false) _fails.push('"hard to reach areas" — a place, not a person — classifies as contact, which would promote a workmanship theme to a numbered leak');
     // The two live misses from the 01:17 Conner's run, on UNTAGGED data — the
     // widened fallback vocabulary must catch what the after-contact stage
     // read as NO FAULT FOUND while the complaint sat under the funnel.
@@ -46749,6 +46918,25 @@ app.listen(PORT, () => {
     if (_orgThin && (_orgThin.stages || []).some(st => /blue links/.test(st.text))) {
       _fails.push('a five-result organic field still produces a position — below six results a rank is arithmetic, not a finding');
     }
+    // The under-top-three sentence carries the DIGIT, and the walk states
+    // WHICH ranking a position is when we could actually look. Vin, live on a
+    // #2: "is that organic or are they running ads to rank that high — info
+    // we need"; and "not in the top three" read the same on a #4 and a #17.
+    const _midRank = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 7, scanned: 20, rankQuery: 'personal injury lawyer in Jacksonville, FL', adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false }, {});
+    const _midTxt = ((_midRank && _midRank.stages) || []).map(st => st.text).join(' ');
+    if (!/#7 of the 20 listed/.test(_midTxt)) _fails.push('the under-top-three sentence lost its digit — a #4 and a #17 read identically, which is a measurement flattened back into an impression');
+    if (!/unpaid ranking/.test(_midTxt)) _fails.push('an ads-absent lead below the top three no longer says its position is the unpaid one');
+    const _topQ = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 2, rankQuery: 'plastic surgeon in Jacksonville, FL', adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false }, {});
+    const _topTxt = ((_topQ && _topQ.stages) || []).map(st => st.text).join(' ');
+    if (!/That part works/.test(_topTxt) || !_topQ.strong || _topQ.strong.found !== true) _fails.push('the unpaid-status append broke the top-three strength sentence or its data flag');
+    if (!/unpaid ranking/.test(_topTxt)) _fails.push('a top-three lead with ads measured absent no longer states the position is unpaid — the exact question the owner asked of a live #2');
+    const _livePack = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 2, rankQuery: 'x in y', adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false, adsLiveInPack: true }, {});
+    if (((_livePack && _livePack.stages) || []).some(st => /unpaid ranking/.test(st.text))) _fails.push('a lead whose sponsored row appeared on the search still claims the unpaid ranking — the one direct proof of live ads, contradicted in the next sentence');
+    const _noPos = buildFunnelStory({ adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false }, {});
+    if (((_noPos && _noPos.stages) || []).some(st => /unpaid ranking/.test(st.text))) _fails.push('the unpaid-ranking sentence prints with no position sentence in front of it — a claim about a list nobody measured');
+    // And the fix-order join still fires on the NEW under-top-three wording.
+    const _midDoor = buildFunnelStory({ ...BRECKS, rankFound: true, rankAbsenceConfirmed: false, rank: 7, scanned: 20 }, { bottleneck: 'FOUNDATION', bottleneckWhy: 'x', adsLive: false, opsPain: null, opsRoles: [] });
+    if (!_midDoor || !_midDoor.fixFirst || !_midDoor.fixFirst.join) _fails.push('a measured #7 above a broken door no longer produces the fix-order sentence — the join regex was not taught the new wording');
     // Unmeasured stages are OMITTED, and a lead with nothing measured is null.
     if (buildFunnelStory({}, {}) !== null) _fails.push('a lead with nothing measured produced a story');
     if (buildFunnelStory({ adsReadable: false, rankChecked: false }, {}) !== null) _fails.push('unreadable ads and an unchecked search still produced stages');
@@ -46757,7 +46945,7 @@ app.listen(PORT, () => {
     // the field contract, is what this asserts.
     if (buildFunnelStory({ adsReadable: false, googleAdsTag: true, metaPixel: false, tagManager: false }, {}) !== null) _fails.push('a money stage rendered off tag fields we did not read — the did-we-look gate is gone');
     // Every sentence every fixture emitted, scored by the ladder's own gate.
-    for (const _r of [_fs, _gtm, _gb, _gu, _cap]) {
+    for (const _r of [_fs, _gtm, _gb, _gu, _cap, _midRank, _topQ, _midDoor]) {
       for (const _s of ((_r && _r.stages) || [])) {
         const _pf = plainEnglishFaults(_s.text, { trade: 'paving', mined: String(BRECKS.reviewPainTop) });
         if (_pf.length) _fails.push(`the ${_s.id} stage fails the plain-English gate: ${_pf[0]}`);
@@ -47009,6 +47197,21 @@ app.listen(PORT, () => {
     const _ranked = _rk.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
     if (_ranked.length !== 3) _fails.push(`${_ranked.length} leak rank(s) assigned, not 3 — the audit's stated goal is the top three`);
     if (_ranked.length === 3 && (_ranked[0].leakRank !== 1 || _ranked[2].leakRank !== 3)) _fails.push('the leak ranks are not 1-2-3');
+    {
+      const _cn = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_cn('AND ITS ARITHMETIC: the copy may state it as ONE NAMED competitor plus ', '${r.weakerAbove - 1} other(s)'))) {
+        _fails.push('the critique lost the named-plus-others arithmetic note \u2014 "and 4 others have fewer too" beside a measured 5-of-10 gets false-flagged as an understatement again');
+      }
+      if (!selfSourceNoComments().includes(_cn('positioning/offer was not scored because no trusted homepage copy ', 'was captured on this lead'))) {
+        _fails.push('the hygiene warning is back to implying a scoring defect on a lead whose site was simply down');
+      }
+    }
+    {
+      const _tn = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_tn('let _n = _have.reduce((m2, r) => Math.max(m2, ', 'Number(r.leakRank) || 0), 0);'))) {
+        _fails.push('the route top-up is back to counting ranked rows instead of taking the highest rank — stored {2,3} plus a copy row mints a duplicate 3 again');
+      }
+    }
     if (_ranked[0] && _ranked[0].id !== 'review_pain_pattern') _fails.push(`leak 1 is ${_ranked[0] && _ranked[0].id}, not the after-contact complaint — the deepest broken stage anchors, because money already in hand dying there nullifies every dollar spent above it`);
     if (_ranked[1] && _ranked[1].id !== 'no_after_hours') _fails.push('leak 2 is not the worse of the two door findings — harm breaks ties inside a stage');
     if (_ranked[2] && _ranked[2].id !== 'no_published_pricing') _fails.push('leak 3 is not the remaining door finding');
@@ -53960,7 +54163,7 @@ app.listen(PORT, () => {
     // what NOT_SELLABLE_OPENER is about — and it is a perfectly ordinary thing
     // to say to a stranger, which is what INTERNAL_ONLY_RUNGS is about. When it
     // is all we have, it must still open the email.
-    const _onlyUnsellable = rankHarms({ datedSite: true, tradeWord: 'plumber', rankChecked: false });
+    const _onlyUnsellable = rankHarms({ datedSite: true, siteAgeVisibleCount: 1, tradeWord: 'plumber', rankChecked: false });
     if ((_onlyUnsellable.all || []).length && !_onlyUnsellable.lead) {
       _fails.push('a lead whose only findings are unsellable now produces NO opener at all — the block must be ignored when everything is blocked, or the lead is lost entirely');
     }
@@ -54829,6 +55032,23 @@ app.listen(PORT, () => {
       }
       const _probe = matchNicheBrief('wholesale supply warehouse');
       if (_probe) _fails.push(`a wholesale warehouse still matched ${_probe.id}`);
+      // The Places-label plural: every lead from the 'garage door company'
+      // query carries the label 'Garage Doors', and the singular alternative
+      // matched only its own query string \u2014 the recorded \u00a715 stem trap,
+      // green on the coverage check while the label every lead carries failed.
+      const _gdLabel = matchNicheBrief('Garage Doors');
+      if (!_gdLabel || _gdLabel.id !== 'crew_trades') _fails.push(`the lead-side label "Garage Doors" resolves to ${(_gdLabel && _gdLabel.id) || 'NOTHING'} \u2014 the plural the singular alternative cannot match`);
+      // Google's own category for this trade is often ambiguous between an
+      // installer and a supply house. Fed raw it must resolve to NO brief:
+      // no brief costs a paragraph; the wrong bucket costs a page of
+      // confident vocabulary about somebody else's trade.
+      if (matchNicheBrief('Garage door supplier')) _fails.push('an ambiguous supplier category earns a brief \u2014 the wrong-bucket failure the disqualifier exists for');
+      {
+        const _gn = (...p) => p.join('');
+        if (!selfSourceNoComments().includes(_gn('if (!_b && _gbpCat) _b = matchNicheBrief(', '_gbpCat);'))) {
+          _fails.push('the Places-category fallback is unwired at the call site \u2014 a site-down lead is back to "no trade resolved" while the server holds their listing category');
+        }
+      }
       // The disqualifier must stay MODEL words only. Section 14 records a size
       // gate that refused a dermatology practice for containing "cancer
       // center", and a filter widened until it catches the ICP is the more
@@ -55130,7 +55350,7 @@ app.listen(PORT, () => {
       adsReadable: true, googleAdsTag: true, metaPixel: true, tagManager: false,
       bookingMeasured: true, booking: 'form', pricingMeasured: true, pricesPublished: 0,
       servicePagesChecked: 3, servicePagesInvisible: 2, serviceInvisibleNames: ['probate', 'trust administration'],
-      recurringChecked: true, hasRecurringOffer: false, datedSite: true,
+      recurringChecked: true, hasRecurringOffer: false, datedSite: true, siteAgeVisibleCount: 2,
       siteAgeMarkers: ['the page is still laid out with tables', 'the code behind the page is the kind used before smartphones existed'],
       adsTagConfirmed: true, paidLeakGap: 'the only thing a click can do there is fill in a form and wait',
       duplicateChecked: true, duplicateFound: true, duplicateOtherReviews: 41,
@@ -57101,6 +57321,29 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (!/\$40k-\$70k/.test(String(_cat.topThreeProducts[0].price))) _fails.push('our own price was deleted out of topThreeProducts[].price');
     if (!/\$10k-\$35k/.test(String(_cat.topThreeProducts[1].price))) _fails.push('the retainer range was deleted out of topThreeProducts[].price');
     if (/\$40k roof/.test(_cat.pitchAngle)) _fails.push('the catalogue exemption leaked into prose — "$40k" is ours in a price field and invented in a sentence about HIS roof');
+    // The stand-in machinery, executed. Live 2026-08-25: both sheets reached
+    // the caller with a blank recommendedPrice, because the model echoed the
+    // prompt's own "from $20k" floor and the licence list had never been told.
+    if (catalogPriceFor('AI Brain (Dev Jungle)') !== '$40k-$70k') _fails.push('the AI Brain catalog line is gone, so an emptied recommendedPrice stays blank on the sheet');
+    if (catalogPriceFor('Basket Weaving Advisory') !== null) _fails.push('an unknown product invents a price line \u2014 a stand-in may only ever say a declared price');
+    for (const [, _plP] of PRODUCT_PRICE_LINE) {
+      const _plIn = { recommendedPrice: `Recommended: ${_plP}` };
+      _plIn.recommendedPrice = stripUnmeasuredMoneyDeep(_plIn.recommendedPrice, _corpus, { cut: [], figures: [] }, 1, 'recommendedPrice');
+      if (!_plIn.recommendedPrice.includes(_plP)) _fails.push(`the catalog line "${_plP}" does not survive the money gate it exists to satisfy \u2014 a stand-in the gate would re-delete`);
+    }
+    const _floorIn = stripUnmeasuredMoneyDeep('AI Brain builds start from $20k.', _corpus, { cut: [], figures: [] }, 1, 'recommendedPrice');
+    if (!/\$20k/.test(String(_floorIn))) _fails.push('our own published $20k floor dies in a catalogue field \u2014 the exact hole that blanked both live sheets');
+    const _floorProse = stripUnmeasuredMoneyDeep('A $20k roof replacement is common here.', _corpus, { cut: [], figures: [] }, 1, 'pitchAngle');
+    if (/\$20k/.test(String(_floorProse))) _fails.push('a bare $20k survives in prose about THEIR money \u2014 the licence is scoped to our own work and our own fields only');
+    // And the stand-in's CALL SITE, because a fixture supplies its own
+    // arguments and cannot see a caller.
+    {
+      const _sn = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_sn("if (_emptied.includes('recommendedPrice'))", ' {'))
+        || !selfSourceNoComments().includes(_sn('const _cp = catalogPriceFor(parsed.', 'recommendedProduct);'))) {
+        _fails.push('the recommendedPrice stand-in is unwired at the route \u2014 an emptied price field reaches the caller blank again');
+      }
+    }
     // Driven exactly as the loop above drives it. The first version handed the
     // OBJECT in with the path already set to 'recommendedPrice', so the key made
     // it 'recommendedPrice.recommendedPrice', the field exemption could never
@@ -57492,6 +57735,23 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // Nothing read means nothing claimed - the EXISTS BUT UNREAD rule.
     if (readSiteAge({ rawHtml: '' }).checked !== false) _fails.push('a page we never read still produces a verdict about how old it is');
 
+    // An invisible-only build: old in its source, nothing a customer can see.
+    // Still measured (dated, scored, on the facts strip); the CREDIBILITY rung
+    // must not fire on it, because "a customer takes the fresher site as the
+    // safer company" is a claim about what a customer sees.
+    const _code = readSiteAge({ rawHtml: `<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="keywords" content="roofing"><script src="/js/jquery-1.11.2.min.js"></script></head><body>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    if (!_code.dated) _fails.push('three source-only markers no longer read as a dated build, so the facts strip and the score lose the measurement');
+    if (_code.visibleCount !== 0) _fails.push(`an invisible-only build reports ${_code.visibleCount} visible marker(s) \u2014 the split is misclassifying`);
+    // And visible markers sort FIRST, because every consumer names the first two.
+    const _mix = readSiteAge({ rawHtml: `<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="keywords" content="x"></head><body><table width="960" border="1"><tr><td>hi</td></tr></table>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    // tables happens to be declared first AND visible, so [0] alone would
+    // pass without the sort \u2014 the fixture-that-measures-nothing trap. The
+    // second slot and the last slot are where the sort actually shows:
+    // unsorted, xhtml (invisible) sits second and fixedwidth (visible) last.
+    if (!_mix.markers.length || _mix.markers[0].visible !== true || (_mix.markers[1] || {}).visible !== true) _fails.push('a mixed build no longer puts the customer-visible markers first, so the sentence names source trivia while the fixed-width layout sits unnamed');
+    if (_mix.markers[_mix.markers.length - 1].visible !== false) _fails.push('the invisible markers no longer sort last on a mixed build');
+    if (_mix.visibleCount < 1) _fails.push('the mixed build lost its visible count');
+
     // ── the rung has to SAY the markers, not describe an impression ────────
     const _rung = HARM_LADDER.find(r => r && r.id === 'dated_credibility');
     if (!_rung) {
@@ -57504,6 +57764,9 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       // And it must still produce something when the markers did not travel -
       // the computed-but-not-passed case, which this file records twenty times.
       if (!_rung.say({ tradeWord: 'roofer' })) _fails.push('the rung produces an empty sentence when the markers are missing rather than falling back');
+      // The credibility gate: no customer-visible marker, no credibility claim.
+      if (_rung.test({ datedSite: true, siteAgeVisibleCount: 0 }) !== false) _fails.push('the rung fires on a build that is old only in its source \u2014 a credibility claim with nothing a customer can see behind it, the exact overclaim the owner flagged');
+      if (_rung.test({ datedSite: true, siteAgeVisibleCount: 1 }) !== true) _fails.push('one visible marker no longer clears the credibility gate, so the rung never fires at all');
     }
 
     // ── the call site, because a fixture supplies its own arguments ────────
@@ -57518,7 +57781,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_fails.length) {
       console.log(`⛔ SITE AGE CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ SITE AGE CHECK: ${SITE_AGE_MARKERS.length + 3} markers of an old build, each a specific thing in their own page source with a phrase the owner can check. Two together is evidence; one is a quirk and stays silent; a current responsive page comes back clean; and a page we never read produces no verdict at all. The rung NAMES the markers instead of saying the site "reads as several years old", which named nothing and could not be verified.`);
+      console.log(`✓ SITE AGE CHECK: ${SITE_AGE_MARKERS.length + 3} markers of an old build, each a specific thing in their own page source with a phrase the owner can check. Two together is evidence; one is a quirk and stays silent; a current responsive page comes back clean; and a page we never read produces no verdict at all. The rung NAMES the markers instead of saying the site "reads as several years old" \u2014 and it now needs at least one marker a CUSTOMER can see, because a build that is old only in its source cannot cost credibility with people who never read source. Visible markers sort first, so the sentence names what a visitor actually meets.`);
     }
   } catch (e) {
     console.log(`⛔ SITE AGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
