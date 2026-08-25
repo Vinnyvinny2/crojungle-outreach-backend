@@ -5964,6 +5964,19 @@ Pros" stops reaching sheets; and LADDER OVERRIDE names the MEASURED rung beside
 the model's label, so "search_absence" on a lead ranked #2 reads as the
 mislabel it is.
 
+### And the sidebar that said "0 LEADS" over a 202-lead pipeline — FIXED same day
+
+First reload on the merged build: the paginated read loaded all 202 leads and
+the sidebar showed none of them. It synced from memory only on MOUNT and on
+the browser 'storage' event — which fires in OTHER tabs only, and never at
+all once the pipeline outgrows localStorage and the cache switches off (which
+this pipeline now does). The cloud load lands after the sidebar first draws,
+so memory updated and no view heard. The masking had been the cache: mount
+used to read yesterday's copy and look alive. `setLeadsMem` — already the one
+writer — now announces `cj-leads-changed` in its own tab and the sidebar
+listens; falsified both ways (dispatch removed, listener removed), each red
+alone in `clientcheck`.
+
 **229 boot checks green, settled in 19s locally.** Twenty-three falsifications
 — eighteen server, five client — each red alone on its named assertion; the
 ownership stripper's own first boot caught its honorific-splitter defect, and
