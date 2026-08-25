@@ -3333,6 +3333,13 @@ const getLeads = () => {
 const setLeadsMem = (arr) => {
   _leadsMem = Array.isArray(arr) ? arr : [];
   cacheLeadsBestEffort(_leadsMem);
+  // Announce the change to THIS tab's views. The 'storage' event the sidebar
+  // listened for only fires in OTHER tabs — and never at all once the cache
+  // is off — so on a pipeline too big for localStorage, the boot's cloud
+  // load (which lands AFTER the sidebar first draws) updated memory and no
+  // view ever heard about it: "0 LEADS" over a 202-lead pipeline, live
+  // 2026-08-25. One writer, one announcement.
+  try { window.dispatchEvent(new Event('cj-leads-changed')); } catch (e) { void e; }
   return _leadsMem;
 };
 
@@ -6889,8 +6896,11 @@ function ResearchView({
   useEffect(() => {
     const sync = () => setAllLeads(getLeads().sort((a,b) => (b.icpScore||0) - (a.icpScore||0)));
     window.addEventListener('storage', sync);
+    // Same-tab writes (the boot's cloud load included) announce through the
+    // one writer; 'storage' alone made this sidebar blind to its own tab.
+    window.addEventListener('cj-leads-changed', sync);
     sync(); // fire immediately on mount
-    return () => window.removeEventListener('storage', sync);
+    return () => { window.removeEventListener('storage', sync); window.removeEventListener('cj-leads-changed', sync); };
   }, []);
 
   // Always save lead to DB immediately when added

@@ -1187,6 +1187,25 @@ const PENDING = [];
   }
 }
 
+// ══ A SAME-TAB WRITE MUST REACH THE SIDEBAR ══════════════════════════════
+// Live 2026-08-25: the sidebar read "0 LEADS" over a 202-lead pipeline. It
+// synced from the in-memory store only on mount and on the browser 'storage'
+// event — which fires in OTHER tabs only, and never at all once the pipeline
+// outgrows localStorage and the cache switches off. The boot's cloud load
+// lands AFTER the sidebar first draws, so memory updated and no view heard.
+// The one writer (setLeadsMem) now announces 'cj-leads-changed' in this tab
+// and the sidebar listens. Needles assembled at runtime, both halves real.
+{
+  const N2 = (...p) => p.join('');
+  const bare2 = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  if (bare2.indexOf(N2("window.dispatchEvent(new Event('cj-le", "ads-changed'))")) < 0) {
+    fails.push("setLeadsMem no longer announces same-tab lead changes — with the cache off, a reload draws an empty sidebar over a full pipeline until the user pokes the search box");
+  }
+  if (bare2.indexOf(N2("window.addEventListener('cj-leads-cha", "nged', sync)")) < 0) {
+    fails.push("the sidebar no longer listens for same-tab lead changes — the boot's cloud load updates memory and the list never redraws");
+  }
+}
+
 // ══ A DEDUPED JOB MUST BE ABOUT THIS BUSINESS ════════════════════════════
 // The server hands back an in-flight job rather than paying for a second run of
 // the same business. The client polls by ID either way, so if that dedupe ever
