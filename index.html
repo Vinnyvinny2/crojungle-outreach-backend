@@ -2272,7 +2272,13 @@ const boardRowsFor = (leads, ctx) => {
     };
   });
   const ORDER = { running: 0, queued: 1, audited: 2, not_audited: 3 };
-  rows.sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || (b.score - a.score) || a.name.localeCompare(b.name));
+  // Within Audited the FRESHEST audit leads the list — a just-finished run
+  // must surface, not sit under a week of stale high-score rows. Score still
+  // breaks ties, and every other status keeps score order.
+  const ts = (r) => { const t = Date.parse(r.researchedAt || ''); return Number.isFinite(t) ? t : 0; };
+  rows.sort((a, b) => (ORDER[a.status] - ORDER[b.status])
+    || (a.status === 'audited' && b.status === 'audited' ? (ts(b) - ts(a)) : 0)
+    || (b.score - a.score) || a.name.localeCompare(b.name));
   const counts = { all: rows.length, auditing: 0, audited: 0, notAudited: 0 };
   for (const r of rows) {
     if (r.status === 'running' || r.status === 'queued') counts.auditing++;
@@ -7078,6 +7084,13 @@ function ResearchView({
         const sv = JSON.parse(localStorage.getItem('cj_saved_v1') || '[]');
         setSavedFlag(sv.some(s => (s.name||'').toLowerCase() === (l.name||'').toLowerCase()));
       } catch { setSavedFlag(false); }
+    } else if (!leadId) {
+      // The board renders on !lead. This branch did not exist, so the
+      // "All leads" button set the selection to null and NOTHING cleared the
+      // open lead — the operator was trapped on the audit screen with a back
+      // button that looked dead. Live 2026-08-25: "theres an all leads arrow
+      // but it doesnt worek i need a way to get back."
+      setLead(null);
     }
   }, [leadId]);
 
