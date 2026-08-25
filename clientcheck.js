@@ -722,6 +722,29 @@ const mergeStat = runMergeCheck();
         // A clean measured stage must NOT say "no fault found" when the search
         // was read on the fallback — that silence is a different fact.
         if (/NO FAULT FOUND/.test(wp) && wp.indexOf('PARTLY MEASURED') < 0) fails.push('a fallback-search lead still reads NO FAULT FOUND at Getting found');
+        // ══ NO GREY TEXT ON THE SHEET — the owner's order, enforced ══════
+        // "eliminate the grey text... it gets read right over cuz its smaller
+        // font size and grey." Hierarchy lives in size and weight now; a grey
+        // TEXT token reappearing in the export is the regression.
+        for (const grey of ['color:#86868b', 'color:#515154', 'color:#6b7280', 'color:#a1a1a6']) {
+          if (wp.indexOf(grey) >= 0 || sp.indexOf(grey) >= 0) fails.push('grey text is back on the sheet (' + grey + ') — the owner asked for full-contrast text with hierarchy from size and weight only');
+        }
+        // The paid half of the traffic estimate reaches the sheet's internal
+        // list — "why doesnt it say anything about paid traffic".
+        const paidLead = { ...LEAD, problemList: [], trafficEstimate: { checked: true, inIndex: true, organicEtvMonthly: 341, organicKeywords: 120, paidKeywords: 6, paidEtvMonthly: 220 } };
+        const pp = mod.html([mod.rec(paidLead)], { title: 'T', at: 'now' });
+        if (pp.indexOf('341') < 0 || pp.indexOf('Google-paid') < 0 || pp.indexOf('220') < 0) fails.push('the paid-traffic estimate never reaches the sheet — the organic half rendered alone for the life of the estimate');
+        if (pp.indexOf('their own Analytics') < 0) fails.push('the sheet no longer says where the traffic-source question gets answered (their Analytics, on the call)');
+        const zeroPaidLead = { ...LEAD, problemList: [], trafficEstimate: { checked: true, inIndex: true, organicEtvMonthly: 341, organicKeywords: 120, paidKeywords: 0 } };
+        const zp = mod.html([mod.rec(zeroPaidLead)], { title: 'T', at: 'now' });
+        if (!/never seen this domain buy a Google ad/.test(zp)) fails.push('a zero paid-keyword read no longer renders as the honest negative — the second independent answer to "are they running ads"');
+        // plainRisk: a possessive apostrophe is not a quote delimiter — the
+        // live Do-not-say bullet began "s observation. It should open with".
+        // The LIVE shape needs the SECOND apostrophe downstream — without it
+        // the old regex found no closing quote and the fixture measured
+        // nothing (caught by its own falsification run).
+        const pr = mod.plain("The pitch reads as a template diagnosis rather than a founder's observation. It should open with the specific measured finding (search rank) without preamble, and skip the 'someone in Louisville searching' construction.");
+        if (/^.s observation/.test(String(pr)) || /\u201cs observation/.test(String(pr))) fails.push('plainRisk still mistakes a possessive apostrophe for a quote — the mangled Do-not-say bullet is back');
       } catch (e) { fails.push('the funnel grouping check threw: ' + e.message); }
       if (page) {
         const MARKERS = ['MARKER_OWNER', 'MARKER_TITLE', 'MARKER_PHONE', 'MARKER_BACKGROUND',
@@ -888,6 +911,14 @@ const mergeStat = runMergeCheck();
         if (joined.indexOf('SCREEN_WALK_MARKER') < 0) fails.push("the walk's measured evidence line never reaches the screen's funnel stage — the export shows it and the screen does not");
         // The one-sentence score verdict replaced the chips block on screen.
         if (!/build is fine|leaks are in the path around it/.test(joined)) fails.push('the one-sentence score verdict is missing from the screen — the chips block was removed and nothing replaced it');
+        // No grey text on the audit SCREEN either — enforced on the lifted
+        // source because the recording stub cannot see styles. var(--m) and
+        // var(--m2) are the app's grey text tokens; the briefing may not use
+        // them for text. (Non-color uses would trip this too, which is
+        // accepted: the briefing has none and a new one deserves a look.)
+        if (/var\(--m2?\)/.test(found.LeadBriefing || '')) {
+          fails.push('grey text is back on the audit screen (var(--m) inside LeadBriefing) — the owner asked for white text with hierarchy from size and weight only');
+        }
       }
       try {
         if (briefing({ lead: null }) !== null) fails.push('the audit screen does not return null for a null lead');
