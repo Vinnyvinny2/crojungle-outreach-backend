@@ -348,6 +348,20 @@ const runBatch = async (opts) => {
     const capped = api.batchCandidates(mixed, { limit: 1 }).map(x => x.id).join(',');
     if (capped !== 'e') fails.push(`the size limit produced [${capped}] instead of the single highest-scoring candidate`);
 
+    // ══ THE OPERATOR'S OWN TICKS REPLACE THE TOP-N ════════════════════════
+    // Live 2026-08-25: "it forces me to audit the leads like i cant select
+    // which leads to run the 50 audits on it pre chooses." A ticked set IS
+    // the batch; eligibility still applies, so a tick cannot buy a
+    // no-website or already-audited lead into a run.
+    const picked = api.batchCandidates(mixed, { limit: 50, pickedIds: new Set(['a']) }).map(x => x.id).join(',');
+    if (picked !== 'a') fails.push(`a hand-picked lead produced [${picked}] — the tick must replace the top-N pick entirely`);
+    const pickedBad = api.batchCandidates(mixed, { limit: 50, pickedIds: new Set(['b', 'c', 'a']) }).map(x => x.id).join(',');
+    if (pickedBad !== 'a') fails.push(`ticking ineligible leads produced [${pickedBad}] — a no-website or already-audited tick must still be refused while the re-audit box is off`);
+    const pickedDone = api.batchCandidates(mixed, { limit: 50, includeResearched: true, pickedIds: new Set(['c']) }).map(x => x.id).join(',');
+    if (pickedDone !== 'c') fails.push(`a ticked already-audited lead with re-audit ON produced [${pickedDone}] — the tick plus the box is exactly how a chosen re-run is supposed to happen`);
+    const noPick = api.batchCandidates(mixed, { limit: 50, pickedIds: new Set() }).map(x => x.id).join(',');
+    if (noPick !== 'e,a') fails.push(`an empty tick set changed the default pick to [${noPick}] — no ticks must mean the old top-scores behaviour exactly`);
+
     // ══ AND A JOB RECORD FROM A DEAD TAB MUST NOT STRAND A LEAD ═══════════
     // This filter had no age check at all. A tab closed mid-run leaves up to
     // three in-flight records behind, and the resume path deliberately collects

@@ -1359,6 +1359,12 @@ const PENDING = [];
   if (bare.indexOf(N('saveLeads([...existing, ...add', 'ed], added);')) < 0) {
     fails.push('moving companies from Find to the pipeline no longer pushes every lead to Supabase - it used to hand saveLeads the LAST one, so fifty moved and one was saved, and the other forty-nine existed only in that browser tab');
   }
+  if (bare.indexOf(N('inflight: getInflightJobs(), pick', 'edIds: batchPick });')) < 0) {
+    fails.push("startBatch no longer passes the operator's ticked leads - the board ticks decorate and the batch still pre-chooses");
+  }
+  if (bare.indexOf(N('checked: batchPick.has(', 'r.id),')) < 0) {
+    fails.push('the board rows lost their tick box - there is no way to hand-pick a batch again');
+  }
   if (bare.indexOf(N('const _batchPool = getLe', 'ads();')) < 0
       || bare.indexOf(N('batchCandidates(_batchP', 'ool, { limit: batchSize')) < 0) {
     fails.push('the bulk panel counts a different pool from the one startBatch spends on - it read allLeads, which the Search box above it REPLACES with a filtered subset, so typing three letters made the button say "3 ready" and then audit fifty');
