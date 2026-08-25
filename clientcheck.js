@@ -1028,6 +1028,29 @@ const mergeStat = runMergeCheck();
       const NEW = { id: 'c', name: 'Honda Of Fife', icpScore: 76 };
       const QUE = { id: 'd', name: 'CCM Overhead Doors', icpScore: 75 };
       const ctx = { isRunning: (l) => l.id === 'b', queuedNames: new Set(['CCM Overhead Doors']) };
+      // Within Audited the FRESHEST audit leads. Live 2026-08-25: a 3-lead run
+      // finished and the new audits sat buried under a week of stale
+      // higher-score rows — "it needs to filter the just completed audit to
+      // the top of the list." An older audit with a HIGHER score must lose.
+      {
+        const OLD_HI = { id: 'o1', name: 'Stale High Scorer', icpScore: 97, problemList: [{ id: 'z1' }], researchedAt: '2026-08-18T10:00:00Z' };
+        const FRESH_LO = { id: 'f1', name: 'Fresh Low Scorer', icpScore: 88, problemList: [{ id: 'z2' }], researchedAt: '2026-08-25T21:00:00Z' };
+        const fb = modB.rows([OLD_HI, FRESH_LO], { isRunning: () => false, queuedNames: new Set() });
+        const audOrder = fb.rows.filter(r => r.status === 'audited').map(r => r.id);
+        if (audOrder[0] !== 'f1') fails.push('a just-finished audit still sits below a stale higher-score row in the Audited tab — the operator scrolls past a week of old audits to find the run that just ended');
+      }
+      // The way BACK to the board. The "All leads" button sets the selection
+      // to null, and the lead-loading effect only handled the FOUND case, so
+      // nothing ever cleared the open lead — the operator was trapped on the
+      // audit screen with a back button that looked dead. The effect lives
+      // inside a React component this harness cannot execute, so the branch
+      // is pinned at its call site, needle assembled at runtime.
+      {
+        const _rn = (...p) => p.join('');
+        if (src.indexOf(_rn('} else if (!lead', 'Id) {')) < 0 || src.indexOf(_rn('      setLead(', 'null);')) < 0) {
+          fails.push('the null-selection branch is gone from the lead-loading effect — the "All leads" button strands the operator on the audit screen again');
+        }
+      }
       const bd = modB.rows([NEW, AUD, RUN, QUE], ctx);
       const by = {}; for (const r of bd.rows) by[r.id] = r;
       if (!by.a || by.a.status !== 'audited') fails.push('an audited lead does not land on the Audited tab — the exact burial Vin reported');
