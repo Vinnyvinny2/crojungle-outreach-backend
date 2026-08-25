@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260825;
+const CONTRACT_VERSION = 20260826;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -22309,7 +22309,12 @@ const leakEvidenceFrom = (m = {}) => {
 // byMoney/byHarm chain when nothing is stage-placed at all.
 const worstAnchorFrom = (sayable, m = {}) => {
   const ev = leakEvidenceFrom(m);
-  const rows = (sayable || []).filter(h => h && !INTERNAL_ONLY_RUNGS[h.id]
+  // No explicit internal-only clause: every internal review metric's declared
+  // stage is 'work', 'work' has no depth, and the stage test below excludes
+  // it — the falsification run proved a second guard on the same fact
+  // unreachable, which is the recorded dead-limb class. The _iwInt fixture
+  // guards the stage-placement path that actually does the work.
+  const rows = (sayable || []).filter(h => h
     && !isAmbientRung(h, m.bindingLayer)
     && Number.isFinite(LEAK_DEPTH[stageForRung(h.id, ev.reviewThemeContact)]));
   rows.sort((a, b) => (LEAK_DEPTH[stageForRung(a.id, ev.reviewThemeContact)] - LEAK_DEPTH[stageForRung(b.id, ev.reviewThemeContact)])
@@ -46401,6 +46406,18 @@ app.listen(PORT, () => {
     if (_authCount < 2) {
       _fails.push(`only ${_authCount} of the 2 growth-constraint call sites read the review base from the Place record — the other is back on the rank row, which does not exist on a rank-dark lead, and the diagnosis goes blind exactly when the search half is dark`);
     }
+    // The new layer's supporting maps: a layer key with no product family and
+    // no opening altitude is a diagnosis nothing downstream can act on, and
+    // the binding bonus must land on the rung the layer is ABOUT.
+    if (!PRODUCT_FAMILY.RETENTION || PRODUCT_FAMILY.RETENTION.family !== 'retention') {
+      _fails.push('PRODUCT_FAMILY has no RETENTION row — the diagnosis exists and no product family can be derived from it');
+    }
+    if (!openingConditionFor('recurring_gap', { city: 'Tulsa', trade: 'septic work' })) {
+      _fails.push('openingConditionFor has no recurring_gap altitude — a RETENTION lead gets no opening height');
+    }
+    if (HARM_LADDER_LAYER.no_recurring_offer !== 'RETENTION') {
+      _fails.push('no_recurring_offer is not filed under RETENTION — the binding-layer bonus cannot land on the rung the diagnosis is about');
+    }
     const _recNeedle = _gn('offerStrength, valueEquation, marketClarity,', ' recurringOffer,');
     const _recCount = _gsrc.split(_recNeedle).length - 1;
     if (_recCount < 2) {
@@ -46818,6 +46835,21 @@ app.listen(PORT, () => {
     }
     if (adLandingKindFor('', 'x.example') !== null || adLandingKindFor('https://x.example/a', '') !== null) {
       _fails.push('a missing URL or host does not return null — unmeasured must stay unmeasured');
+    }
+    // The sitemap denominator: sitemapPages must count the WHOLE sitemap, not
+    // the leftover pool — "every one of the 1 page(s)" printed on a 12-URL
+    // sitemap live, and the one page it counted was by construction NOT
+    // reachable from navigation.
+    const _up = findUnlinkedPages({
+      sitemap: ['https://d.example/', 'https://d.example/services', 'https://d.example/about', 'https://d.example/blog/some-old-post-about-things'],
+      navKeys: new Set(['d.example/services', 'd.example/about', 'd.example/contact']),
+      homepage: 'https://d.example/',
+    });
+    if (!_up.checked || _up.sitemapPages !== 3) {
+      _fails.push(`sitemapPages is ${_up.sitemapPages} on a 3-distinct-page sitemap — the denominator is back on the leftover pool and the log lies about the sitemap again`);
+    }
+    if (_up.offNavPages !== 1) {
+      _fails.push(`offNavPages is ${_up.offNavPages} — the unlinked pool and the sitemap total are one counter again`);
     }
     const _an = (...p) => p.join('');
     const _asrc = selfSourceNoComments();

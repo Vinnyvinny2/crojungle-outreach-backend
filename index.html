@@ -1126,7 +1126,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260825;
+const CLIENT_CONTRACT = 20260826;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2405,7 +2405,8 @@ const plainRisk = (x) => {
 const LAYER_PLAIN = { MARKET: 'how they position themselves', OFFER: 'what they promise a customer',
   LEADS: 'getting found', CONVERSION: 'turning interest into booked jobs', 'FOLLOW-UP': 'following up on interest',
   OPERATIONS: 'delivering the work', CAPTURE: 'catching the visitors they pay for', SCALE: 'compounding what already works',
-  FOUNDATION: 'the website itself', DEMAND: 'getting more people in the door', THROUGHPUT: 'keeping up with the work' };
+  FOUNDATION: 'the website itself', DEMAND: 'getting more people in the door', THROUGHPUT: 'keeping up with the work',
+  RETENTION: 'keeping the customers they already win' };
 const layerPlain = (x) => { const k = String(x || '').toUpperCase().trim(); return LAYER_PLAIN[k] ? LAYER_PLAIN[k] + ' (' + k + ')' : String(x || ''); };
 
 const adsFactsLabel = (af) => {
@@ -2462,6 +2463,70 @@ const FUNNEL_STAGE_DEFS = [
   { id: 'after', label: 'After they reach out', sub: 'a request becoming a job' },
 ];
 const PILLAR_TO_STAGE = { BURNING: 'found', INVISIBLE: 'found', UNCAUGHT: 'door', LEAKING: 'door', ROTTING: 'after', TAXED: 'work' };
+// ══ THE SIGNALS, LINED UP AGAINST THE FUNNEL ═══════════════════════════════
+// Vin, 2026-08-25: "formatting the whole audit around the signals we get and
+// matching it up with the funnel is ideal — top of the funnel would show their
+// traffic sources... middle would be landing pages or their main website or
+// booking page." One builder, both surfaces. Three-state by construction: a
+// measured value, red when a problem row at this stage speaks about the same
+// signal, and UNMEASURED rows collapse into one plain line — §36 removed a
+// grid of "Not checked" rows from this sheet once already, and a wall of
+// not-measured is how that comes back.
+const SIGNAL_RUNGS = {
+  search: ['outranked_by_weaker','absent_from_search','service_invisibility','rank_slipped','duplicate_listing','wrong_gbp_category','no_google_listing','listing_closed','thin_profile','no_hours_on_profile','no_website_on_profile','coverage_gap'],
+  organic: ['organic_invisible'],
+  adsCode: ['paying_for_a_search_they_lose'],
+  roi: ['ads_untracked'],
+  meta: ['social_spend_no_search','no_retargeting'],
+  adLanding: ['paid_traffic_leaks'],
+  booking: ['no_after_hours','form_only_no_booking','tap_to_call_broken','phone_mismatch'],
+  form: ['long_form'],
+  price: ['no_published_pricing','no_offer','undifferentiated','no_financing'],
+  build: ['dated_credibility','stale_copyright','placeholder_text','dead_blog','site_empty','broken_page','no_https','expired_certificate','no_mobile_viewport'],
+  speed: ['slow_mobile'],
+  followup: ['review_pain_pattern'],
+  recurring: ['no_recurring_offer'],
+};
+const signalRowsFor = (stageId, ctx) => {
+  const af = (ctx && ctx.af) || {};
+  const ids = new Set(((ctx && ctx.rows) || []).filter(x => x && !x.internalOnly && x.id).map(x => x.id));
+  const hot = (key) => (SIGNAL_RUNGS[key] || []).some(id => ids.has(id));
+  const rows = [], unmeasured = [];
+  const R = (label, value, key, internal) => {
+    if (value == null || value === '') { unmeasured.push(label); return; }
+    rows.push({ label, value, red: !!(key && hot(key)), internal: !!internal });
+  };
+  if (stageId === 'found') {
+    const lr = (ctx && ctx.rank) || null;
+    R('Search, map', lr ? (lr.found === false
+        ? (lr.absenceConfirmed ? 'not in the results (checked twice)' : 'not seen on one look (unconfirmed)')
+        : (Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1 ? '#' + lr.rank + ' of ' + (lr.scanned || '?') : "they appear; no position on this run's source"))
+      : null, 'search');
+    R('Search, blue links', Number.isFinite(af.organicPosition) ? '#' + af.organicPosition + ' of ' + af.organicScanned : null, 'organic');
+    R('Google ads code', af.ads === 'yes' ? ('on their site' + (af.adsLive === true ? ' · their own sponsored result appeared' : '')) : af.ads === 'no' ? 'none found' : null, 'adsCode');
+    R('Facebook ad code', af.metaPixel === true ? 'on their site' : af.metaPixel === false ? 'none found' : null, 'meta');
+    const tr = (ctx && ctx.traffic) || null;
+    if (tr) R('Traffic, estimated', '~' + (Number(tr.organicEtvMonthly) || 0) + ' unpaid' + (Number(tr.paidKeywords) > 0 ? ' + ~' + (Number(tr.paidEtvMonthly) || 0) + ' paid' : '') + ' visits/month, third-party estimate', null, true);
+  } else if (stageId === 'door') {
+    R('Ad clicks land on', af.adLanding
+      ? ({ homepage: 'their homepage, not a page built for the ad', interior: 'an ordinary page of the site', unlinked: 'a page the site never links — landing-page shaped', offsite: 'a page on a different domain' })[af.adLanding]
+      : (af.ads === 'yes' ? 'only their ads account shows it — worth asking' : null), 'adLanding');
+    R('What a click becomes', af.roiStatus === 'counted' ? 'tracking on the pages can tie a click to a job'
+      : af.roiStatus === 'hidden' ? 'hidden inside their tag container — could not see'
+      : af.roiStatus === 'blind' ? 'nothing on the pages counts it' : null, 'roi');
+    R('Booking route', ({ online_booking: 'a visitor can book a time on the site', form: 'a form, then waiting', phone_only: 'a phone call', none_found: 'no route found on the pages read' })[af.booking] || null, 'booking');
+    R('Form length', Number.isFinite(af.formFields) ? af.formFields + ' fields' : null, 'form');
+    R('Price on the site', Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null), 'price');
+    R('Site build', Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null, 'build');
+    R('Real-visitor speed', af.mobile === 'slow' ? 'slow for their real visitors' : af.mobile === 'fine' ? 'fine for their real visitors' : null, 'speed');
+  } else if (stageId === 'after') {
+    R('Service plan', af.recurring === 'none' ? 'none on the pages read' : af.recurring === 'offered' ? 'they sell one' : null, 'recurring');
+    const ob = Array.isArray(ctx && ctx.opsBuckets) && ctx.opsBuckets.length ? ctx.opsBuckets[0] : null;
+    if (ob) R('Top review complaint', String(ob.label || '') + ' (' + (Number(ob.mentions) || 0) + ' mention' + (Number(ob.mentions) === 1 ? '' : 's') + ')', 'followup', true);
+    if (Number(ctx && ctx.negUnanswered) > 0) R('Unanswered negative reviews', String(ctx.negUnanswered) + ' with no reply', null, true);
+  }
+  return { rows, unmeasured };
+};
 const groupByFunnelStage = (pl, fs) => {
   const rows = (Array.isArray(pl) ? pl : []).filter(Boolean);
   const seen = new Set();
@@ -2597,6 +2662,15 @@ const auditRecordFor = (lead) => {
     opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
     traffic: (l.trafficEstimate && l.trafficEstimate.checked && l.trafficEstimate.inIndex) ? l.trafficEstimate : null,
     negUnanswered: (Number.isFinite(Number(l.reviewsNegativeUnanswered)) && Number(l.reviewsNegativeUnanswered) > 0) ? Number(l.reviewsNegativeUnanswered) : null,
+    // The map-rank read and the published-price count, for the signal rows —
+    // compact copies of measurements the record did not carry before.
+    rank: (ba.localRank && ba.localRank.checked) ? {
+      found: ba.localRank.found === true,
+      rank: Number.isFinite(Number(ba.localRank.rank)) ? Number(ba.localRank.rank) : null,
+      scanned: Number(ba.localRank.scanned) || null,
+      absenceConfirmed: ba.localRank.absenceConfirmed === true,
+    } : null,
+    pricesShown: (l.sitePages && Array.isArray(l.sitePages.prices)) ? l.sitePages.prices.length : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
     oneThing: t ? {
@@ -2825,6 +2899,9 @@ const auditExportHtml = (records, meta) => {
           // Places-read search cannot state a position, so a quiet found
           // stage must not read "no fault found" on that run.
           const fbSearch = !!(af && af.searchSource === 'places');
+          const sigCtx = { af: af || {}, rows: Array.isArray(r.problemList) ? r.problemList : [],
+            rank: r.rank || null, traffic: r.traffic || null, pricesShown: r.pricesShown,
+            negUnanswered: r.negUnanswered, opsBuckets: r.opsBuckets || null };
           const stagesHtml = fg.stages.map(s3 => {
             const cls = s3.status === 'broken' ? 'fb' : (s3.status === 'clean' || s3.status === 'mixed') ? 'fc' : 'fn';
             const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
@@ -2848,7 +2925,16 @@ const auditExportHtml = (records, meta) => {
                 ? '<div class="tw">Nothing measured here' + (s3.id === 'after' ? ' — what happens after someone reaches out is a question for the call, not a claim.' : '.') + '</div>'
                 : '<div class="tw">Measured — no fault found.</div>')
               : '';
+            const sg = signalRowsFor(s3.id, sigCtx);
+            const sigHtml = sg.rows.length
+              ? '<div class="sgrid">' + sg.rows.map(g =>
+                  '<div class="sgr' + (g.red ? ' sgred' : '') + '">' + e(g.label) + ': ' + p(g.value)
+                  + (g.internal ? ' <span class="lkchip">INTERNAL</span>' : '') + '</div>').join('')
+                + (sg.unmeasured.length ? '<div class="sgr">Not measured: ' + e(sg.unmeasured.join(', ')) + '</div>' : '')
+                + '</div>'
+              : '';
             return '<div class="fstage ' + cls + '"><div class="fsh"><b>' + e(s3.label) + '</b><span class="fss">' + e(s3.sub) + '</span><span class="fst">' + st + '</span></div>'
+              + sigHtml
               + (wt.trim() ? '<div class="fev">' + p(wt.trim()) + '</div>' : '') + rowsHtml + legacyFriction + emptyNote + '</div>';
           }).join('');
           const ff = (r.funnelStory && r.funnelStory.fixFirst) || null;
@@ -2868,7 +2954,12 @@ const auditExportHtml = (records, meta) => {
       // ═══ THE CALL PREP ═══
       + (() => {
           const rows = [];
-          if (r.askOnTheCall) rows.push(['Worth asking', '<span class="ask">' + p(r.askOnTheCall) + '</span>', '']);
+          const opq = (Array.isArray(r.problemList) ? r.problemList : [])
+            .filter(x => x && Number.isFinite(x.leakRank) && x.callOpener)
+            .sort((a, b) => a.leakRank - b.leakRank).slice(0, 3);
+          if (opq.length || r.askOnTheCall) rows.push(['Worth asking',
+            opq.map(x => '<div><b>Leak ' + x.leakRank + ':</b> ' + p(x.callOpener) + '</div>').join('')
+            + (r.askOnTheCall ? (opq.length ? '<div class="sgr">From the read:</div>' : '') + '<span class="ask">' + p(r.askOnTheCall) + '</span>' : ''), '']);
           if (r.expectObjection) rows.push(['He will likely say',
             '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
           if (r.pitch) rows.push(['The email led with',
@@ -2964,7 +3055,7 @@ const auditExportHtml = (records, meta) => {
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#1d1d1f}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#1d1d1f;font-size:13.5px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#1d1d1f;font-size:12.5px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#1d1d1f;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#1d1d1f;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#1d1d1f;font-size:13px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#1d1d1f;font-size:13.5px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#1d1d1f}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#1d1d1f}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#1d1d1f;font-size:12.5px}.fst{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#1d1d1f}.fb .fst{color:#b91c1c}.fev{color:#1d1d1f;font-size:13.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:13px;color:#1d1d1f;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#1d1d1f}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#1d1d1f;font-size:13.5px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#1d1d1f;font-size:12.5px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#1d1d1f;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#1d1d1f;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#1d1d1f;font-size:13px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#1d1d1f;font-size:13.5px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#1d1d1f}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#1d1d1f}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#1d1d1f;font-size:12.5px}.fst{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#1d1d1f}.fb .fst{color:#b91c1c}.fev{color:#1d1d1f;font-size:13.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.sgrid{margin:4px 0 2px}.sgr{font-size:12.5px;line-height:1.55;color:#1d1d1f}.sgred{color:#b91c1c;font-weight:600}.lkchip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 5px;vertical-align:1px}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:13px;color:#1d1d1f;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#1d1d1f;font-size:13.5px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#1d1d1f}'
@@ -6404,6 +6495,12 @@ function LeadBriefing({ lead }) {
       const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 12, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
       const walkT = walkTextsByStage(lead.funnelStory);
       const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
+      const sigCtx = { af: lead.auditFacts || {}, rows: Array.isArray(lead.problemList) ? lead.problemList : [],
+        rank: (lead.brainAudit && lead.brainAudit.localRank && lead.brainAudit.localRank.checked) ? lead.brainAudit.localRank : null,
+        traffic: (lead.trafficEstimate && lead.trafficEstimate.checked && lead.trafficEstimate.inIndex) ? lead.trafficEstimate : null,
+        pricesShown: (lead.sitePages && Array.isArray(lead.sitePages.prices)) ? lead.sitePages.prices.length : null,
+        negUnanswered: Number(lead.reviewsNegativeUnanswered) > 0 ? Number(lead.reviewsNegativeUnanswered) : null,
+        opsBuckets: Array.isArray(lead.opsBuckets) ? lead.opsBuckets : null };
       const stageBlocks = fg.stages.map((s3, si) => {
         const broken = s3.status === 'broken';
         const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
@@ -6429,12 +6526,18 @@ function LeadBriefing({ lead }) {
                 : 'Measured \u2014 no fault found.')
           : null;
         const walkEl = wt ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
+        const sg = signalRowsFor(s3.id, sigCtx);
+        const sigEls = (sg.rows.length || sg.unmeasured.length) ? React.createElement('div', { style: { margin: '4px 0 2px' } },
+          sg.rows.map((g, gi) => React.createElement('div', { key: 'sg' + gi, style: { fontSize: 12.5, lineHeight: 1.55, color: g.red ? '#f87171' : 'var(--t)', fontWeight: g.red ? 600 : 400 } },
+            g.label + ': ' + g.value,
+            g.internal ? React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '0 5px', marginLeft: 6, verticalAlign: '1px' } }, 'INTERNAL') : null)),
+          sg.unmeasured.length ? React.createElement('div', { key: 'sgu', style: { fontSize: 12, color: 'var(--t)' } }, 'Not measured: ' + sg.unmeasured.join(', ')) : null) : null;
         return React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12, marginBottom: 12 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
             React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--t)' } }, s3.label),
             React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, s3.sub),
             React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
-          walkEl, rowsEls, legacyFriction, emptyNote);
+          sigEls, walkEl, rowsEls, legacyFriction, emptyNote);
       });
       const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
       const ffEl = ff
@@ -6572,7 +6675,15 @@ function LeadBriefing({ lead }) {
       ]));
       if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
         React.createElement('span', { key: 'n', style: { color: 'var(--t)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
-      if (sr && sr.askOnTheCall) rows.push(gl('Worth asking'), gv(sr.askOnTheCall));
+      const opq = (Array.isArray(lead.problemList) ? lead.problemList : [])
+        .filter(x => x && Number.isFinite(x.leakRank) && x.callOpener)
+        .sort((a, b) => a.leakRank - b.leakRank).slice(0, 3);
+      if (opq.length || (sr && sr.askOnTheCall)) rows.push(gl('Worth asking'), gv([
+        ...opq.map((x, qi) => React.createElement('div', { key: 'q' + qi, style: { marginBottom: 3 } },
+          React.createElement('b', null, 'Leak ' + x.leakRank + ': '), x.callOpener)),
+        (sr && sr.askOnTheCall && opq.length) ? React.createElement('div', { key: 'qf', style: { fontSize: 12, marginTop: 2 } }, 'From the read:') : null,
+        (sr && sr.askOnTheCall) ? React.createElement('div', { key: 'qa' }, sr.askOnTheCall) : null,
+      ]));
       // Do-not-say moved to its own section at the BOTTOM of the audit —
       // the owner's call, 2026-08-24: warnings last, the business first.
       if (!rows.length) return null;

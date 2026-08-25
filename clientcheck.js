@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,7 +511,7 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
         + '\nreturn { rec: auditRecordFor, html: auditExportHtml, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence };')();
     } catch (e) {
@@ -554,8 +554,15 @@ const mergeStat = runMergeCheck();
           firstBrokenLink: 'CONVERSION', firstBrokenLinkWhy: 'MARKER_FIRSTBROKEN',
           earnedButBlocked: true, frictionCount: 2, friction: ['MARKER_FRICTION1', 'MARKER_FRICTION2'],
           costliest: { id: 'r', problem: 'MARKER_COSTLIEST', costs: 'MARKER_COSTS', harm: 74 } },
-        brainAudit: { originalFindings: [{ finding: 'MARKER_ORIGINAL', quote: 'MARKER_QUOTE' }] },
-        problemList: [{ area: 'MARKER_AREA', problem: 'MARKER_PROBLEM', costs: 'MARKER_PCOSTS', harm: 80 }],
+        brainAudit: { originalFindings: [{ finding: 'MARKER_ORIGINAL', quote: 'MARKER_QUOTE' }],
+          localRank: { checked: true, found: true, rank: 4, scanned: 20 } },
+        auditFacts: { ads: 'yes', adLanding: 'unlinked', booking: 'form', formFields: 8, roiStatus: 'blind' },
+        problemList: [{ area: 'MARKER_AREA2', problem: 'MARKER_PROBLEM', costs: 'MARKER_PCOSTS', harm: 80,
+          id: 'no_recurring_offer', pillar: 'ROTTING', funnelStage: 'after', moneyRank: 5, leakRank: 1, callOpener: 'MARKER_OPENQ' },
+          // A second, UNSTAGED row: the staged row above renders at its funnel
+          // stage (problem + costs), so the area label has to survive through
+          // the unstaged list, where it has always rendered.
+          { area: 'MARKER_AREA', problem: 'An unstaged finding', costs: 'its cost', harm: 40 }],
         _claimRisks: ['MARKER_RISK'], _criticalFactCheck: ['MARKER_CRITICAL'],
         subject: 'MARKER_SUBJECT', pitch: 'MARKER_PITCH',
         pageShots: [{ label: 'MARKER_SHOTLABEL', shot: 'https://shot.example/1.png' }],
@@ -563,6 +570,21 @@ const mergeStat = runMergeCheck();
       let page = '';
       try { page = mod.html([mod.rec(LEAD)], { title: 'T', at: 'now' }); }
       catch (e) { fails.push('the audit export threw on a normal lead: ' + e.message); }
+      // The three-openers section and the signals-at-their-stage grid (Vin,
+      // 2026-08-25: "3 options for this section at all times based on the top
+      // revenue leaks" and "matching [the signals] up with the funnel is ideal").
+      if (page.indexOf('MARKER_OPENQ') < 0 || page.indexOf('Leak 1:') < 0) {
+        fails.push('a numbered leak\'s conversation opener never reaches the sheet\'s Worth-asking section');
+      }
+      if (page.indexOf('Ad clicks land on') < 0 || page.indexOf('never links') < 0) {
+        fails.push('the ad-landing signal row never reaches the sheet\'s funnel stage — the measurement Vin called very important information');
+      }
+      if (page.indexOf('Booking route') < 0 || page.indexOf('#4 of 20') < 0) {
+        fails.push('the signal rows are not lined up at their funnel stages on the sheet (booking at the door, the map read at getting-found)');
+      }
+      if (page.indexOf('nothing on the pages counts it') < 0) {
+        fails.push('a blind conversion read does not reach the door stage as a signal row');
+      }
 
       // ══ THE SEGMENT BRIEF RENDERS ONCE PER TRADE, NOT ONCE PER LEAD ══════
       // A 50-lead export printed the identical crew-trades brief fifty times —
@@ -857,7 +879,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -879,7 +901,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
@@ -898,7 +920,8 @@ const mergeStat = runMergeCheck();
         growthConstraint: { layer: 'MARKET', condition: 'c' },
         theOneThing: { layer: 'CONVERSION', diagnosis: 'DIAG', why: 'WHY', firstBrokenLink: 'CONVERSION', firstBrokenLinkWhy: 'FBLW', earnedButBlocked: true, frictionCount: 2, friction: ['F1', 'F2'], costliest: null },
         brainAudit: { originalFindings: [{ finding: 'OF', evidence: 'EV' }], _criticalFactCheck: ['CRIT'], _ladderFailed: null },
-        problemList: [{ area: 'A', problem: 'PROB', costs: 'COSTS', harm: 80, moneyRank: 1, pillar: 'ROTTING', moneyLine: 'ML' }],
+        problemList: [{ area: 'A', problem: 'PROB', costs: 'COSTS', harm: 80, moneyRank: 1, pillar: 'ROTTING', moneyLine: 'ML',
+          id: 'no_recurring_offer', funnelStage: 'after', leakRank: 1, callOpener: 'OPENQ_MARKER' }],
         _claimRisks: ['RISK1'],
         subject: 'SUBJ', pitch: 'PITCHTEXT',
         generatedResult: { prospectSim: { reason: 'My jobs come from referrals and reviews, the website does nothing for me at all.' } },
@@ -924,6 +947,8 @@ const mergeStat = runMergeCheck();
         if (joined.indexOf('OWNER_EV_MARKER') < 0) fails.push('the code-checked owner-name evidence never reaches the screen');
         const askCount = texts.filter(t => t === 'ASKQ_MARKER').length;
         if (askCount !== 1) fails.push('askOnTheCall renders ' + askCount + ' time(s) on the audit screen, not once — it belongs in The conversation and nowhere else, or the two copies drift');
+        if (joined.indexOf('OPENQ_MARKER') < 0) fails.push("a numbered leak's conversation opener never reaches the screen's Worth-asking section — the three starts Vin asked for are dark");
+        if (joined.indexOf('a visitor can book a time on the site') < 0) fails.push('the signal rows are not lined up at their funnel stages on the screen (the booking read never renders at the door)');
         // The walk's measured sentence renders at its stage ON THE SCREEN —
         // the export fixture cannot see the screen's separate wiring. HONEST
         // LIMIT: the recording stub captures text at createElement time, so it
