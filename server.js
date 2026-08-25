@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260826;
+const CONTRACT_VERSION = 20260827;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -35881,6 +35881,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         'screenshot@fullPage': _full || null } };
     };
 
+    req._setPhase && req._setPhase('reading their pages');
     const [firecrawlRes, fbAdsRes, builtWithRes, enrichRes] = await Promise.allSettled([
       scrapeHomepage(),
       // ── AD LIBRARY: OFF BY DEFAULT ──────────────────────────────────────
@@ -36464,6 +36465,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // This is the top of the local revenue funnel and every gap is checkable by
       // the owner in ten seconds — measured, not inferred.
       if (effectivePlaceId && placesKey) {
+        req._setPhase && req._setPhase('reading their Google listing');
         gbpHealth = await fetchGBPHealth(effectivePlaceId, placesKey);
         if (gbpHealth) {
           console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}${Number.isFinite(gbpHealth.categoryCount) ? ` (${gbpHealth.categoryCount} in total: ${(gbpHealth.placeCategories || []).slice(0, 6).join(', ')}${(gbpHealth.placeCategories || []).length > 6 ? ` +${(gbpHealth.placeCategories || []).length - 6} more` : ''})` : ''}`);
@@ -36501,6 +36503,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Google's own review count for this place, from the profile read —
           // the independent number the truncation guard needs, so a throttled
           // Apify response cannot vouch for its own completeness.
+          req._setPhase && req._setPhase('reading their reviews');
           const deep = await deepReviewMine(company, effectivePlaceId, apifyToken, apiKey,
             Number((gbpHealth && gbpHealth.reviewCount) || req.body.reviewCount || 0));
           // Capture engagement BEFORE the branch chain: whether the owner answers
@@ -36603,6 +36606,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (!String(req.body.location || '').trim() && _rankLocation) {
           console.log(`\u{1F4CD} LOCATION RECOVERED [${company}]: the lead carried no location, so the rank searches use the address on their own Google listing \u2014 "${_rankLocation}". Without this the whole search-visibility half of the ladder goes dark on this lead.`);
         }
+        req._setPhase && req._setPhase('running their search');
         const lv = await auditLocalVisibility({
           companyName: company, placeId: effectivePlaceId, website,
           // ── USE THE TRADE WE ALREADY READ ────────────────────────────
@@ -40137,6 +40141,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // reads exactly like a run that did not reach the brain at all.
           console.log(`\u26d4 BRAIN INPUT BREAKDOWN COULD NOT RUN [${company}] — ${(e && e.message) || e}. The cost split is unmeasured for this lead.`);
         }
+        req._setPhase && req._setPhase('writing the audit');
         const _auditKeyInfo = auditKeyFromContent(msgContent);
         const _auditKey = _auditKeyInfo.key;
         // Under 2,000 characters of text means the evidence assembly upstream is
@@ -44269,7 +44274,14 @@ const runResearch = (req, res, sink) => runWithLead(
   (req.body && (req.body.company || req.body.name)) || 'lead',
   () => {
     const _net = { by: new Map(), gateWaitMs: 0 };
-    if (sink && typeof sink === 'object') sink.net = _net;
+    if (sink && typeof sink === 'object') {
+      sink.net = _net;
+      // The status route has shipped job.phase since the queue clock landed and
+      // nothing ever wrote a milestone into it - so the batch bar could only
+      // say "working". These are REAL milestones (set when that stage's code is
+      // reached), never an elapsed-time simulation.
+      req._setPhase = (p) => { sink.phase = String(p); };
+    }
     return FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
       () => NET_LEDGER.run(_net, () => _runResearchInner(req, res)));
   });
@@ -46918,6 +46930,39 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ CALL OPENER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE BATCH BAR'S FOLLOW-ALONG IS MILESTONES, NOT A SIMULATION ═══════════
+  // The status route has shipped job.phase since the queue clock landed and
+  // nothing ever wrote a milestone into it — so "what is this lead doing right
+  // now" could only be answered with an elapsed-time guess. Five real
+  // milestones now, each set when that stage's code is actually reached, and
+  // the job wrapper is the one place the setter is attached (the sync route
+  // gets none, so the milestones cost it nothing).
+  try {
+    const _fails = [];
+    const _pn = (...p) => p.join('');
+    const _psrc = selfSourceNoComments();
+    if (!_psrc.includes(_pn('req._setPhase = (p) => { sink.', 'phase = String(p); };'))) {
+      _fails.push('the job wrapper no longer attaches the phase setter — every milestone below is a silent no-op and the bar is back to "working"');
+    }
+    const _mCount = _psrc.split(_pn('req._setPhase && req._setPhase(', "'")).length - 1;
+    if (_mCount < 5) {
+      _fails.push(`only ${_mCount} of the 5 research milestones set a phase — a stage with no milestone reads as whatever the previous stage said`);
+    }
+    for (const _ph of ['reading their pages', 'reading their Google listing', 'reading their reviews', 'running their search', 'writing the audit']) {
+      if (!_psrc.includes(_pn("req._setPhase('", _ph))) _fails.push(`the "${_ph}" milestone is gone`);
+    }
+    if (!_psrc.includes(_pn('phase: job.phase || ', "'running'"))) {
+      _fails.push('the status route no longer returns the phase, so the milestones are computed and never delivered — the recorded class');
+    }
+    if (_fails.length) {
+      console.log(`⛔ PHASE MILESTONE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ PHASE MILESTONE CHECK: the five research milestones are real stage boundaries wired through the job wrapper's setter and delivered by the status route — the batch bar's follow-along reports what a lead is actually doing, never an elapsed-time simulation.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PHASE MILESTONE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ EVERY FINDING HAS ITS PLACE ON THE FUNNEL, AND THE TOP 3 ARE NUMBERED ═
