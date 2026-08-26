@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -715,8 +715,24 @@ const mergeStat = runMergeCheck();
         ], { measured: { found: true, door: true, after: false } });
         const mxFound2 = gmx2.stages.find(x => x.id === 'found');
         if (!mxFound2 || mxFound2.status !== 'broken') fails.push('a stage with leaks and NO measured strength stopped reading BROKEN — the mixed state fired on nothing');
-        const mxSvg = mod.fsvg({ found: 'mixed', door: 'clean', after: 'no_read' }, null);
-        if (mxSvg.indexOf('circle') < 0) fails.push('a mixed stage draws no leak drips — the leaks are real even where the stage works');
+        // ══ THE FUNNEL IS THE ROWS (round 98) ═══════════════════════════
+        // Vin approved Direction A with one rule: the funnel must always fit
+        // the text beside it. So the segments and the cards are the same grid
+        // rows, and what this can verify is the SHAPE CONTRACT: the rows join
+        // into one continuous funnel (his complaint about the first draft was
+        // "its boxes its suppose to be a funnel"), it genuinely narrows, and
+        // red fill marks only a broken stage.
+        for (let ti = 0; ti < mod.taper.length - 1; ti++) {
+          if (mod.taper[ti].bot !== mod.taper[ti + 1].top) fails.push('funnel row ' + ti + ' does not join row ' + (ti + 1) + ' — the segments are boxes again, not one funnel');
+          if (mod.taper[ti + 1].top <= mod.taper[ti].top) fails.push('the funnel stops narrowing at row ' + (ti + 1));
+        }
+        for (const tr of mod.taper) { if (tr.bot <= tr.top) fails.push('a funnel row widens downward — that is not a funnel'); if (tr.bot >= 50) fails.push('a funnel row narrows past its own midline and the shape inverts'); }
+        if (mod.segClip(0).indexOf('polygon(0% 0%, 100% 0%') !== 0) fails.push('the funnel mouth is not full width');
+        if (mod.segClip(99) !== mod.segClip(mod.taper.length - 1)) fails.push('an out-of-range row does not clamp to the last taper');
+        for (const dk of [false, true]) {
+          if (mod.segFill('broken', dk) === mod.segFill('clean', dk)) fails.push('a broken segment fills like a clean one — colour no longer marks the stop');
+          if (mod.segFill('mixed', dk) === mod.segFill('broken', dk)) fails.push('a working-with-leaks stage fills red — mixed is a working stage whose drips are red, not a broken one');
+        }
         if (!st.door.rows.some(r => r.problem === 'legacy pillar row')) fails.push('a legacy row with only a pillar did not fall back to a stage — old audits dump everything in the reference tail');
         if (gfs.work.some(r => r.internalOnly)) fails.push('an internal review metric reached the funnel context strip — the reference owns the internal list');
         if (!gfs.work.some(r => r.problem === 'workmanship repeats')) fails.push('the workmanship context row is missing from under the funnel');
@@ -777,12 +793,29 @@ const mergeStat = runMergeCheck();
         if (!/well built|build is fine/i.test(mod.scoreLine({ checked: true, score: 8 }, true))) fails.push('a high score does not read as a healthy build');
         if (!/part of the problem/i.test(mod.scoreLine({ checked: true, score: 3 }, true))) fails.push('a low score does not say the build itself is a problem');
         if (mod.scoreLine(null, true) !== '' || mod.scoreLine({ checked: false, score: 8 }, true) !== '') fails.push('an unmeasured score produced a sentence');
-        // The drawing: red only where broken, dashed only where unread.
-        const svgB = mod.fsvg({ found: 'broken', door: 'clean', after: 'no_read' });
-        if (!/#dc2626/.test(svgB)) fails.push('a broken stage does not draw red');
-        if (!/stroke-dasharray="5 4"/.test(svgB)) fails.push('an unmeasured stage does not draw dashed');
-        const svgC = mod.fsvg({ found: 'clean', door: 'clean', after: 'clean' });
-        if (/#dc2626/.test(svgC)) fails.push('a clean funnel still draws red somewhere — colour marks a stop, nothing else');
+        // The rendered sheet: the segments, the spout and the drip actually
+        // reach the page, and the funnel sizes off the rows — there is no
+        // fixed-height drawing left to fall out of sync.
+        {
+          const fpage = mod.html([mod.rec(LEAD)], { title: 'T', at: 'now' });
+          if ((fpage.match(/clip-path:polygon\(/g) || []).length < 3) fails.push('the export funnel lost its tapered segments — the drawing is gone or back to a fixed picture');
+          // NOT the words 'booked jobs': LAYER_PLAIN translates CONVERSION as
+          // "turning interest into booked jobs", so that text is on nearly
+          // every sheet and the first version of this assertion passed with
+          // the spout deleted — found by the falsification run, which is the
+          // fixture-that-measures-nothing trap this file records. The spout's
+          // own class can only come from the spout row.
+          if (fpage.indexOf('class="fspoutlbl"') < 0) fails.push('the funnel spout row never reaches the sheet — the funnel ends without its narrow booked-jobs outlet');
+          if (fpage.indexOf('&#128167;') < 0) fails.push('a broken stage renders no drip on the sheet');
+          if (/<svg[^>]*aria-label="funnel"/.test(fpage)) fails.push('the retired fixed-size funnel SVG is back on the sheet beside the row funnel');
+        }
+        // Call sites, assembled at runtime: both surfaces must draw through
+        // the ONE clip builder, or the export and the screen taper drift.
+        {
+          const _fn2 = (...p) => p.join('');
+          if (!src.includes(_fn2("';clip-path:' + funnel", 'SegClip(si)'))) fails.push('the export no longer clips its segments through funnelSegClip — two tapers can drift');
+          if (!src.includes(_fn2('clipPath: funnel', 'SegClip(si)'))) fails.push('the screen no longer clips its segments through funnelSegClip');
+        }
         // The render: badge, stage row and money line reach the page.
         const stagedLead = { ...LEAD, problemList: [
           { problem: 'MARKER_STAGEROW', funnelStage: 'found', moneyRank: 3, harm: 90, leakRank: 1, pillar: 'INVISIBLE', moneyLine: 'MARKER_STAGEMONEY', rankNote: 'MARKER_RANKNOTE' }] };
@@ -937,7 +970,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'funnelSvg', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -959,7 +992,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
