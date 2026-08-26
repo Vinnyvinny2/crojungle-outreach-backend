@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260901;
+const CONTRACT_VERSION = 20260902;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -7799,6 +7799,16 @@ const rankUrlsByIntent = (urls, re, limit = 4, opts = {}) => {
       // "pain-management" and "case-history" never do.
       const m = seg.match(re);
       if (!m) return false;
+      // ══ MONEY WORDS MATCH ANYWHERE IN THE SEGMENT - round 101 ═══════════
+      // The position rule exists to keep "myths-facts-about-latisse" from
+      // reading as a leadership page. A PRICING hint is different: the
+      // real-world slugs are "/concrete-pricing", "/driveway-cost",
+      // "/price-list" - the money word trails the trade word by convention.
+      // TriStar's sitemap held a pricing page, the picker demanded the hint
+      // LEAD the slug, the page went unread, and the sheet said "Not
+      // measured: Price on the site" about the audit's own vocabulary. The
+      // caller opts in per intent, so the leadership rule is untouched.
+      if (opts.hintAnywhere) return true;
       if (m.index === 0) return true;                       // about-us, our-story, who-we-are
       const pfx = seg.match(/^(?:our|the|my)[-_]/i);
       return !!pfx && m.index === pfx[0].length;              // our-team, the-team
@@ -8816,6 +8826,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
         // way the ad markers, the navigation harvest and the booking read can see
         // anything but the homepage. Consumed and dropped in harvestInteriorMarkup.
         formats: ['markdown', 'screenshot@fullPage', 'rawHtml'],
+        location: { country: 'US', languages: ['en'] },
         // MUST MATCH firecrawlScrape EXACTLY. Both write into the same URL-keyed
         // cache, so if batch stripped nav/header/footer and the single scrape did
         // not, a cached page would mean something different depending on which
@@ -8947,7 +8958,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         // populate 2-4s after load, and a shot taken at 1.5s shows an empty slot
         // where the proof is. That mistake already told an electrician he had no
         // social proof on a page carrying 221 Google reviews.
-        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true }),
+        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
       }, timeout);
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
@@ -8994,7 +9005,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         const r2 = await fcCall('https://api.firecrawl.dev/v1/scrape', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge }),
+          body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge, location: { country: 'US', languages: ['en'] } }),
         }, Math.min(timeout, 30000));
         const d2 = await r2.json();
         const _md2 = d2.data?.markdown || d2.markdown || '';
@@ -10836,15 +10847,15 @@ const visionAuditPage = async (screenshotBase64, companyName, apiKey) => {
         max_tokens: 700,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } },
-          { type: 'text', text: `This is the above-the-fold screenshot of ${companyName}'s homepage — exactly what a visitor sees on arrival before scrolling.
+          { type: 'text', text: `This is a screenshot of ${companyName}'s homepage. It is usually the FULL PAGE, top to bottom; when it is, the TOP of the image (roughly the first screen's worth, before any scrolling) is what a visitor sees on arrival. Questions marked ABOVE THE FOLD are about THAT TOP REGION ONLY — a button or headline further down the page does not count for them.
 
 Answer each question about what is ACTUALLY VISIBLE in this image. You are the eyes of the audit — a human looking at this same screenshot must agree with every answer. Describe what you SEE, do not infer from what you'd expect.
 
 Return ONLY JSON:
 {
-  "hasVisibleCTA": true/false,        // Is there a clear, clickable call-to-action button visible (Get a quote, Contact us, Book now, Shop, Sign up)? A nav menu link does NOT count — it must be a prominent action.
+  "hasVisibleCTA": true/false,        // ABOVE THE FOLD: is there a clear, clickable call-to-action button visible in the top region (Get a quote, Contact us, Book now, Shop, Sign up)? A nav menu link does NOT count — it must be a prominent action.
   "ctaObserved": "what the CTA button says, or 'none visible'",
-  "hasHeadline": true/false,          // Is there a real value-proposition headline (not just a logo or nav)?
+  "hasHeadline": true/false,          // ABOVE THE FOLD: is there a real value-proposition headline in the top region (not just a logo or nav)?
   "headlineObserved": "the headline text you see, or 'none visible'",
   "heroIsBlank": true/false,          // Is the main hero area empty, a blank carousel, still loading, or broken-looking?
   "hasVisibleSocialProof": true/false,// Are testimonials, review stars, client logos, or trust badges visible ANYWHERE in the screenshot (not only above the fold)?
@@ -10855,7 +10866,8 @@ Return ONLY JSON:
   "overallConversionReadiness": "strong|moderate|weak",  // Based only on what's visible: can this page convert a paid-ad visitor?
   "visibleEmail": "the FULL email address visible anywhere in this image, or null",
   "visibleEmailRaw": "exactly how it was written on the page (e.g. 'jill [at] vklntrans dot com'), or null",
-  "visiblePhone": "the phone number visible in this image, or null"
+  "visiblePhone": "the phone number visible in this image, or null",
+  "looksBlockedOrError": true/false    // TRUE if this image is NOT a business homepage at all: an error page (403, 404, "Access Forbidden", "has been disallowed"), a bot-check or CAPTCHA interstitial, a hosting/parking page, or a blank document. When true every other answer is about the BLOCK PAGE and none of it may be treated as a fact about their site.
 }
 
 ABOUT THE EMAIL — this matters a lot:
@@ -11150,8 +11162,32 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
 // A function rather than a variable because two call sites need it and they sit
 // in different blocks — scopecheck refused the first version for exactly that,
 // which is the "line order is not scope" class CLAUDE.md PART 6 records.
-const rankLocationFrom = (leadLocation, gbp) =>
-  String(leadLocation || '').trim() || String((gbp && gbp.formattedAddress) || '').trim();
+// ══ A CHAIN THAT VALIDATES EACH CANDIDATE, NOT A CHAIN OF FIRST-TRUTHY ═══════
+// TriStar Concrete, live 2026-08-26: the whole search surface - map, blue
+// links, sponsored block, AI answer - was skipped with "no city could be
+// parsed from the location" while the SAME RUN held Nashville three separate
+// ways: the domain-match read, the sitemap service areas, and their own Google
+// record. The old one-liner took the first TRUTHY candidate, so a lead
+// location that existed but could not parse (or a Places record with no
+// formatted address) poisoned the read even when a better candidate sat one
+// field over. Each candidate is now tried IN ORDER and kept only if it
+// actually parses to a city that is not a bare state; the log says which
+// source supplied it.
+const rankLocationFrom = (leadLocation, gbp) => {
+  const _cands = [
+    { v: String(leadLocation || '').trim(), src: 'the lead' },
+    { v: (gbp && gbp.gbpCity && gbp.gbpState) ? `${gbp.gbpCity}, ${gbp.gbpState}` : '', src: 'their own Google record' },
+    { v: String((gbp && gbp.formattedAddress) || '').trim(), src: 'their listed address' },
+  ];
+  for (const c of _cands) {
+    if (!c.v) continue;
+    const p = parseCityState(c.v).cityState;
+    if (p && !isBareStateName(p)) return c.v;
+  }
+  // Nothing parsed - return the lead's own string (possibly empty) so the
+  // refusal downstream names the true cause instead of a silent ''.
+  return String(leadLocation || '').trim() || String((gbp && gbp.formattedAddress) || '').trim();
+};
 
 // ══ A STREET ADDRESS IS NOT A CITY, AND ONE CALLER NEVER KNEW ════════════════
 // This parser lived inline inside the local-rank check, where it was correct and
@@ -11427,6 +11463,14 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       // The authoritative city off their own record.
       gbpCity: Array.isArray(d.addressComponents)
         ? String(((d.addressComponents.find(c => c && Array.isArray(c.types) && c.types.includes('locality')) || {}).longText) || '').slice(0, 80) || null
+        : null,
+      // And the state beside it, short form ("TN"), so the two can be joined
+      // into the exact "City, ST" shape every parser downstream expects. gbpCity
+      // shipped in round 100 with no state and NO CONSUMER - the recorded
+      // computed-but-not-passed class - while TriStar's whole search surface
+      // was skipped for want of a city the same object was holding.
+      gbpState: Array.isArray(d.addressComponents)
+        ? String(((d.addressComponents.find(c => c && Array.isArray(c.types) && c.types.includes('administrative_area_level_1')) || {}).shortText) || '').slice(0, 4) || null
         : null,
       // A service-area business hides its address on the listing, so any
       // address-based match (the duplicate-listing proof standard) is
@@ -12227,6 +12271,22 @@ const serviceVisibilityGap = (lv) => {
     // something else, and every true sentence beside it dies with that one.
     names: missing.map(r => String(r.query || '').replace(/\s+in\s+[^,]+(,\s*[A-Z]{2})?\s*$/i, '').trim())
       .filter(Boolean),
+    // ══ ONE CONFIRMED ABSENCE IS A FINDING TOO - round 101 ═════════════════
+    // The >=2 floor above exists because single service rows are single-draw
+    // noise. The ONE row that buys a second look (see auditLocalVisibility)
+    // comes back absenceConfirmed, and that confirmed single used to reach the
+    // sheet only by hijacking the lead's whole rank identity (the Windows Plus
+    // bathroom row). It travels by name now: the query we ran, the field size,
+    // and the service word - service_invisibility's single-confirmed branch.
+    confirmed: missing.filter(r => r.absenceConfirmed === true).length,
+    confirmedQuery: (missing.find(r => r.absenceConfirmed === true) || {}).query || null,
+    confirmedScanned: Number((missing.find(r => r.absenceConfirmed === true) || {}).scanned) || null,
+    confirmedName: (() => {
+      const r = missing.find(x => x.absenceConfirmed === true);
+      if (!r) return null;
+      const n = String(r.query || '').replace(/\s+in\s+[^,]+(,\s*[A-Z]{2})?\s*$/i, '').trim();
+      return n || null;
+    })(),
   };
 };
 
@@ -12371,7 +12431,7 @@ const paidLeakGapFrom = (m = {}) => {
     return 'nothing on their site books a time, and the direct route in is a phone call during office hours';
   }
   if (m.bookingMeasured === true && m.booking === 'form') {
-    return 'nothing on their site books a time, so a paid click ends in a form and a wait';
+    return 'nothing on their site books a time, so a click from those ads would end in a form and a wait';
   }
   if (m.formFieldCountIsSingleForm === true && Number(m.formFieldCount) >= 7) {
     return `the form it lands on asks for ${Number(m.formFieldCount)} pieces of information first`;
@@ -13501,7 +13561,7 @@ const HARM_LADDER = [
       && m.tagManager === false
       && m.adsConversion === false && m.callTracking === false,
     say: () => "Google's ad code is on their site, and nothing on any page we read counts whether a click ever became a call or a booked job",
-    costs: 'whether any of that spend gets counted is visible only inside their ads account. If nothing is counting, every click is bought blind.' },
+    costs: 'whether any spend behind it gets counted is visible only inside their ads account. If those ads are live and nothing is counting, every click is bought blind.' },
 
   { harm: 84, specific: 88, novel: 70, delegable: 20, weFix: 92, band: 'INVISIBLE', id: 'organic_invisible',
     blind: 'he searches his own name, sees himself at the top, and never looks at the search his customers actually type',
@@ -13839,7 +13899,7 @@ const HARM_LADDER = [
         // deliberately — a real prospect said that exact contrast is what would
         // have made him open the email in thirty seconds — but it belongs at the
         // end of the sentence, not the front of the email.
-        return `${top.name} shows up above them on Google for "${m.rankQuery}", with ${top.reviews} reviews against their ${ours}`
+        return `${top.name} shows up above them on Google for "${m.outrankedQuery || m.rankQuery}", with ${top.reviews} reviews against their ${ours}`
           // "1 other above them HAVE fewer" shipped on McCormick Law's sheet.
           // One wrong verb on the most checkable sentence in the system reads
           // as carelessness about the very numbers we are asking him to trust.
@@ -13864,7 +13924,7 @@ const HARM_LADDER = [
       // rank sometimes suppressed we do not always hold the number above them,
       // and weakerAbove counts only the ones with fewer reviews, which is not
       // the same thing and would be a wrong number stated confidently.
-      return `They are not the first name Google shows when somebody searches "${m.rankQuery}"`;
+      return `They are not the first name Google shows when somebody searches "${m.outrankedQuery || m.rankQuery}"`;
     },
     // "the reputation is real and it is not reaching the people searching right
     // now" opens on an abstract noun, and the skeleton that wraps a cost line in
@@ -13989,8 +14049,13 @@ const HARM_LADDER = [
   { harm: 91, specific: 95, novel: 88, delegable: 20, weFix: 95, band: 'INVISIBLE', id: 'service_invisibility',
     blind: 'an owner searches his own trade name and finds himself. Nobody searches their own service list one line at a time, so the gap never shows up from inside',
     reframe: 'the work they most want to be found for is the work nobody can find them for',
-    test: (m) => Number(m.servicePagesChecked) >= 2 && Number(m.servicePagesInvisible) >= 2
-      && Array.isArray(m.serviceInvisibleNames) && m.serviceInvisibleNames.length >= 2,
+    test: (m) => (Number(m.servicePagesChecked) >= 2 && Number(m.servicePagesInvisible) >= 2
+      && Array.isArray(m.serviceInvisibleNames) && m.serviceInvisibleNames.length >= 2)
+      // A SINGLE absent service page counts when the absence was CONFIRMED by
+      // a second independent search (round 101, the Windows Plus bathroom
+      // page). One draw stays noise; two misses on a page he published is the
+      // finding the promotion used to smuggle in as "their rank".
+      || (m.serviceAbsentConfirmed === true && !!m.serviceAbsentName),
     // ══ "2 OF THEM" BECAME "2 OF YOU" ═════════════════════════════════════
     // toSecondPerson rewrites they/them into you/your because the subject of a
     // rung sentence is the business. Here "them" was the SERVICES, and the live
@@ -14003,6 +14068,15 @@ const HARM_LADDER = [
     say: (m) => {
       const n = Number(m.servicePagesInvisible), of = Number(m.servicePagesChecked);
       const names = (m.serviceInvisibleNames || []).slice(0, 2).map(x => keepSpan(String(x)));
+      // ══ THE CONFIRMED SINGLE, BY NAME AND BY QUERY - round 101 ═════════
+      // One published service page, absent on two independent searches. The
+      // query is stated verbatim so the owner can run the exact search we ran
+      // - the same discipline as every other rank sentence - and the field
+      // size scopes the claim to the list we actually read.
+      if (!(of >= 2 && n >= 2 && names.length >= 2) && m.serviceAbsentConfirmed === true && m.serviceAbsentName) {
+        const scanned = Number.isFinite(Number(m.serviceAbsentScanned)) ? `${m.serviceAbsentScanned} ` : '';
+        return `They publish a page for ${keepSpan(String(m.serviceAbsentName))}, and somebody searching Google for ${m.serviceAbsentQuery ? `"${keepSpan(String(m.serviceAbsentQuery))}"` : 'it'} does not find them among the ${scanned}listings that search returns. We ran that search twice`;
+      }
       // ══ THE SAME FACT, TO A MAN WHO KNOWS HE RANKS WELL ═══════════════
       // Vaughn Mills, live: this opened his email while his own fact check
       // recorded #3 for "gynecologist" in the same city. Read by an owner who
@@ -14098,7 +14172,7 @@ const HARM_LADDER = [
   // must be true and blocked false, so a refused fetch cannot become a claim.
   { harm: 93, specific: 94, novel: 78, delegable: 35, weFix: 95, band: 'SPENDING', id: 'paid_traffic_leaks',
     blind: 'the ads account and the contact page are opened by different people months apart, and nobody has ever had them side by side',
-    reframe: 'the click is paid for whether or not anything can happen when it arrives',
+    reframe: 'a live ad pays for the click whether or not anything can happen when it arrives',
     test: (m) => m.adsTagConfirmed === true && !!m.paidLeakGap,
     // ══ THIS SENTENCE SAID "GOOGLE ADS CONVERSION TAG" ═══════════════════
     // Vin, on the whole system: "even if they run a $15M business they may not
@@ -14139,7 +14213,7 @@ const HARM_LADDER = [
     // owned by a named company. Same bound as ever: the code exists; no claim
     // that a campaign is live today.
     say: (m) => `${(m.googleAdsTag === true && m.metaPixel === true) ? "Google's and Facebook's" : m.googleAdsTag === true ? "Google's" : "Facebook's"} ad code is on their site, and ${keepSpan(String(m.paidLeakGap))}`,
-    costs: 'every click they pay for arrives somewhere it cannot be acted on' },
+    costs: 'every click they pay for arrives somewhere it cannot be acted on, if those ads are live' },
 
   // ── PAYING FOR THE SEARCH THEY ARE NOT WINNING ───────────────────────
   // Vin, 2026-08-18, naming the finding he wants this system to produce: "can
@@ -14289,7 +14363,7 @@ const HARM_LADDER = [
     test: (m) => m.adsReadable === true && m.tagManager === false
       && m.googleAdsTag === true && m.metaPixel === false,
     say: () => "Google's ad code is on their site and Facebook's is not, so a visitor who leaves cannot be shown this business again on Facebook or Instagram",
-    costs: 'every visitor they paid for gets one chance to buy, and then has to be bought again at full price' },
+    costs: 'if those ads are live, every visitor they pay for gets one chance to buy, and then has to be bought again at full price' },
 
   // ══ A FIVE-FIGURE TRADE WITH NO WAY TO PAY OVER TIME ════════════════════
   // Quote-to-close is where the big money dies in these trades, and reviews
@@ -15006,7 +15080,7 @@ const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand, leadId2) => {
 };
 
 const resolveMeasurements = ({
-  localRank = null, gbpHealth = null, history = null, htmlSignals = null,
+  localRank = null, outrankRow = null, gbpHealth = null, history = null, htmlSignals = null,
   reviewsRead = null, ownerReplyCount = null, deepReviews = null,
   // Pages listed in their sitemap that we never opened. Needed here because the
   // absence rungs must not fire about a page we chose not to read.
@@ -15040,15 +15114,29 @@ const resolveMeasurements = ({
   // refusing a correct match over a lag would delete the finding on every lead.
   // A placeId or domain match is never questioned, and a lead where we hold only
   // one of the two numbers is left exactly as it was.
-  const _rowRaw = (localRank && localRank.ours) ? localRank.ours : null;
-  const _rowMismatch = (() => {
-    if (!_rowRaw || !localRank) return false;
-    if (localRank.matchedBy === 'placeId' || localRank.matchedBy === 'domain') return false;
+  const _mismatchOf = (row) => {
+    const raw = (row && row.ours) ? row.ours : null;
+    if (!raw || !row) return false;
+    if (row.matchedBy === 'placeId' || row.matchedBy === 'domain') return false;
     const a = num(gbpHealth && gbpHealth.reviewCount);
-    const b = num(_rowRaw.reviews);
+    const b = num(raw.reviews);
     if (a === null || b === null || a <= 0) return false;
     return Math.abs(b - a) > Math.max(5, a * 0.25);
-  })();
+  };
+  const _rowRaw = (localRank && localRank.ours) ? localRank.ours : null;
+  const _rowMismatch = _mismatchOf(localRank);
+  // ══ THE OUTRANKED EVIDENCE HAS ITS OWN ROW - round 101 ═══════════════════
+  // The lead's rank identity is the primary-trade row (localRank). The
+  // outranked evidence may legitimately come from a DIFFERENT query on the
+  // same lead - John P. Goodman measured his best finding on a service query
+  // while his head term said he was fine. The two used to share one variable,
+  // which is how the Windows Plus sheet read a service query's absence as the
+  // lead's own rank. Every weaker*/ourReviews field below reads THIS row, and
+  // outrankedQuery names the search those numbers came from so the sentence
+  // and its evidence can never describe two different searches.
+  const _oRow = outrankRow || localRank;
+  const _oMismatch = _oRow === localRank ? _rowMismatch : _mismatchOf(_oRow);
+  const _oOurs = (_oMismatch || !_oRow || !_oRow.ours) ? null : _oRow.ours;
   const _ours = _rowMismatch ? null : _rowRaw;
   const _recency = (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked)
     ? gbpHealth.reviewRecency : null;
@@ -15140,7 +15228,10 @@ const resolveMeasurements = ({
     // of only two rungs with a real human reply behind it and losing it hurts -
     // but a named competitor "above them" read off a relevance lookup is a
     // sentence the owner can disprove in one search, which costs more.
-    weakerAbove: (localRank && !_rowMismatch && localRank.orderTrusted) ? num(localRank.weakerAbove) : null,
+    weakerAbove: (_oRow && !_oMismatch && _oRow.orderTrusted) ? num(_oRow.weakerAbove) : null,
+    // The query the outranked evidence was measured on. Falls back to the head
+    // query on stored leads from before the split.
+    outrankedQuery: (_oRow && !_oMismatch && _oRow.orderTrusted && _oRow.query) ? String(_oRow.query) : null,
     rankRowNotUs: _rowMismatch,
     // Derived from the trade read off their own homepage — a measurement, not a
     // judgement, so no verification pass is needed.
@@ -15192,27 +15283,27 @@ const resolveMeasurements = ({
     // Only businesses ABOVE him with FEWER reviews qualify — that is the whole
     // sting, and it is the comparison already measured as weakerAbove.
     weakerNames: (() => {
-      const ours = _ours ? Number(_ours.reviews) : null;
-      if (!localRank || _rowMismatch || !Number.isFinite(ours)) return null;
+      const ours = _oOurs ? Number(_oOurs.reviews) : null;
+      if (!_oRow || _oMismatch || !Number.isFinite(ours)) return null;
       // "X shows up above them" is a statement about ORDER. On a source whose
       // order we do not believe, naming a competitor is the same false claim
       // with a name attached to it, which is worse rather than better.
-      if (!localRank.orderTrusted) return null;
+      if (!_oRow.orderTrusted) return null;
       // weakerRows is the businesses above them holding FEWER reviews, taken
       // from the whole field. `above` is a three-row slice of the TOP of that
       // search and is a different question — see the note in checkLocalRank.
       // It stays as the fallback so a result cached before this existed still
       // produces a name rather than nothing.
-      const src = Array.isArray(localRank.weakerRows) && localRank.weakerRows.length
-        ? localRank.weakerRows
-        : (Array.isArray(localRank.above) ? localRank.above : []);
+      const src = Array.isArray(_oRow.weakerRows) && _oRow.weakerRows.length
+        ? _oRow.weakerRows
+        : (Array.isArray(_oRow.above) ? _oRow.above : []);
       const names = src
         .filter(a => a && a.name && Number.isFinite(Number(a.reviews)) && Number(a.reviews) < ours)
         .map(a => ({ name: String(a.name).trim(), reviews: Number(a.reviews) }));
       return names.length ? names : null;
     })(),
-    ourReviews: (_ours && Number.isFinite(Number(_ours.reviews)))
-      ? Number(_ours.reviews) : null,
+    ourReviews: (_oOurs && Number.isFinite(Number(_oOurs.reviews)))
+      ? Number(_oOurs.reviews) : null,
 
     // Google profile.
     // The Places photos array caps at 10, so a saturated count travels as null
@@ -20890,7 +20981,7 @@ const RUNG_MONEY_LINE = {
     ? `${jv}. A client already won has no reason to come back on a schedule, so one of those jobs has to be sold again from zero every time.`
     : 'A client already won has no reason to come back on a schedule, so the same work has to be sold again from zero every time.',
 };
-const moneyLineFor = (id, jobValue, pillarOverride, roi) => {
+const moneyLineFor = (id, jobValue, pillarOverride, roi, adsLive) => {
   const home = pillarForRung(id);
   const pillar = pillarOverride || home;
   // The rung's own line speaks only from its home pillar. review_pain_pattern's
@@ -20900,7 +20991,20 @@ const moneyLineFor = (id, jobValue, pillarOverride, roi) => {
   const build = (pillar === home ? RUNG_MONEY_LINE[id] : null) || (pillar && MONEY_LINE_BY_PILLAR[pillar]);
   if (!build) return null;
   const jv = String(jobValue || '').trim();
-  const line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null, roi);
+  let line = build(jv ? jv.charAt(0).toUpperCase() + jv.slice(1) : null, roi);
+  // ══ "THEY PAY FOR EVERY CLICK" EARNS ITS TENSE - round 101 ═══════════════
+  // The BURNING lines asserted spend as fact off a tag that only proves
+  // wiring - the exact class stripUnprovenAdSpend cuts from MODEL prose, and
+  // these are code-assembled so the gate never saw them ("They pay for every
+  // click" literally matches the stripper's own regex). A sponsored row or
+  // their LSA ad seen on OUR pull licenses the flat form; a tag alone gets
+  // the conditional, which is also the honest call opener - it asks him
+  // something only he knows.
+  if (line && adsLive !== true) {
+    line = line
+      .replace(/(^|\. )They pay for every click, and /, '$1If those ads are live, they pay for every click \u2014 and ')
+      .replace(/(^|\. )Money is leaving on every click /, '$1If those ads are live, money is leaving on every click ');
+  }
   return line ? fixAcronymCase(line) : null;
 };
 
@@ -20992,7 +21096,7 @@ const buildProblemList = (harms, opts = {}) => {
       // to the owner. Internal rows stay in this list for the audit; they can
       // never be one of the three leaks the call is built on.
       internalOnly: !!INTERNAL_ONLY_RUNGS[h.id],
-      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue, _pillarOf(h.id), (opts.money || {}).roi),
+      moneyLine: moneyLineFor(h.id, (opts.money || {}).jobValue, _pillarOf(h.id), (opts.money || {}).roi, _ev.adsLive === true),
       // The correction travels WITH the row that prints two review counts
       // beside a position. Live 2026-08-25: the owner of this system read the
       // Baggett sentence as "they are above him because of reviews" \u2014 the
@@ -21187,10 +21291,25 @@ const buildTheOneThing = ({ growthConstraint, valueEquation, bottleneck, bottlen
   if (_why && w && /^Nothing here is broken enough to lead an email with/.test(_why)) {
     _why = `Nothing we measured stands out as the single biggest blocker - but the measurements still found something real, and the email leads on it: "${String(w.finding || '').slice(0, 110)}". Sell that finding on its own terms rather than a bigger story.`;
   }
+  // ══ NONE DEFERS TO LEAK 1 - round 101 ═════════════════════════════════════
+  // When no layer measures as binding, the diagnosis names the leaks instead
+  // of an essay about positioning, and the two render sites concatenate
+  // diagnosis + why - so the pair is written here as ONE thought, never the
+  // same opening sentence twice (the live TriStar sheet printed it twice
+  // back-to-back).
+  let _diag = gc ? _clean(gc.condition) : null;
+  let _layerOut = gc ? gc.layer : null;
+  if (gc && gc.layer === 'NONE') {
+    _layerOut = null;
+    if (w) {
+      _diag = `No single layer of the business stands out as the biggest blocker \u2014 the numbered leaks ARE the diagnosis, and leak 1 is: "${String(w.finding || '').slice(0, 110)}".`;
+      _why = `Sell that finding on its own terms rather than a bigger story.`;
+    }
+  }
   return {
     // WHAT IS BINDING, and why it is not the cheaper thing underneath.
-    layer: gc ? gc.layer : null,
-    diagnosis: gc ? _clean(gc.condition) : null,
+    layer: _layerOut,
+    diagnosis: _diag,
     why: _why,
     role: gc ? _clean(gc.role) : null,
     product: gc ? gc.product : null,
@@ -22752,7 +22871,7 @@ const measureFinancing = ({ rawHtml, text } = {}) => {
 // miner's own pain strings and the split goes to the call sheet and the audit
 // screen, never to an email.
 const OPS_BUCKET_DEFS = [
-  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|slow(?:er)? follow[- ]?up|follow[- ]?up (?:took|never|delayed|slow)|had to chase|kept waiting|unresponsive|unreachable|no response|never heard back|hard to reach(?!\s+(?:area|spot|place|corner))|(?:not|never) address(?:ed)?\b|(?:no|poor|bad|lack of) communication|delay(?:ed)? (?:warranty|repairs?|service)|warranty (?:delays?|took|never)|ghost(?:ed|ing)\b|left (?:us|me|them) hanging|blew (?:us|me) off|never returns? (?:calls?|phone calls?|a call)|no(?:body| one) (?:ever )?picks? up/i },
+  { id: 'no_response', label: 'nobody responds', re: /callback|call(?:ed|s)? ?back|never called|no one (?:called|answered|got back)|no follow[- ]?up|slow(?:er)? follow[- ]?up|follow[- ]?up (?:took|never|delayed|slow)|had to chase|kept waiting|unresponsive|unreachable|no response|no(?:body| ?one) (?:ever )?responds?|never responded|(?:did|does|would)n'?t respond|not responding|never heard back|hard to reach(?!\s+(?:area|spot|place|corner))|(?:not|never) address(?:ed)?\b|(?:no|poor|bad|lack of) communication|delay(?:ed)? (?:warranty|repairs?|service)|warranty (?:delays?|took|never)|ghost(?:ed|ing)\b|left (?:us|me|them) hanging|blew (?:us|me) off|never returns? (?:calls?|phone calls?|a call)|no(?:body| one) (?:ever )?picks? up/i },
   { id: 'quote_delay', label: 'quotes take too long', re: /quote (?:delay|took|never)|slow(?:er)? (?:response|to respond|quote)|took (?:weeks|days|forever)|waiting (?:on|for) (?:a |the )?(?:quote|estimate)/i },
   { id: 'scheduling', label: 'scheduling breaks down', re: /schedul|reschedul|missed (?:the )?appointment|no[- ]?show|double[- ]?book|cancel/i },
   { id: 'work_quality', label: 'work has to be redone', re: /redo|re-?work|come back (?:and|to) fix|had to fix|left (?:a mess|unfinished)|unfinished|drainage|uneven|crack(?:s|ed|ing)?\b|poor(?:ly)? (?:done|quality|workmanship)|quality (?:control|issues?|problems?)|workmanship|shoddy|sloppy|damaged?\b/i },
@@ -22818,8 +22937,29 @@ const contactShapedTheme = (theme, kind) => {
 // read this, so the numbering and `worst` cannot use two different floors.
 const leakEvidenceFrom = (m = {}) => {
   const theme = contactShapedTheme(String(m.reviewPainTop || ''), m.reviewPainTopKind);
+  // ══ WHICH KIND OF CONTACT COMPLAINT, because the owner ruled on it ═══════
+  // Round 101, Vin on three hand-checked sheets in one morning: TriStar's
+  // callback complaints (2 mentions, weeks-long silence on signed work) "the
+  // biggest leak ever"; Burbank's quote delays (2 mentions) "the number 1 leak
+  // without a question", above the ads finding; Windows Plus's no-shows
+  // (2 mentions) he was unsure about. The split his three calls draw: a
+  // complaint that money IN HAND got no response (no_response, quote_delay)
+  // is the deepest possible leak at TWO distinct written mentions - there is
+  // no division for the owner to do, each one is a named lost job. A
+  // scheduling/no-show complaint keeps the three-mention floor, and
+  // workmanship never numbers. This deliberately supersedes the blanket
+  // three-mention floor §61 set - the floor stays for everything the owner
+  // did not rule on.
+  const t = String(m.reviewPainTop || '');
+  const bucket = (() => {
+    for (const def of OPS_BUCKET_DEFS) { if (t && def.re.test(t)) return def.id; }
+    return null;
+  })();
+  const mentions = Number(m.reviewPainMentions);
+  const responseToMoney = bucket === 'no_response' || bucket === 'quote_delay';
   return { reviewThemeContact: theme,
-           writtenContact: Number(m.reviewPainMentions) >= 3 && theme === true,
+           contactBucket: bucket,
+           writtenContact: theme === true && (mentions >= 3 || (mentions >= 2 && responseToMoney)),
            // Their ad seen in Google's Sponsored services block on OUR pull:
            // the one direct Google-side proof of live local-ads spend. Rides
            // the same accessor so no call site can carry one class and drop
@@ -22847,28 +22987,36 @@ const worstAnchorFrom = (sayable, m = {}) => {
   return rows.find(h => leakAnchorable(h.id, ev.writtenContact)) || rows[0] || null;
 };
 
-const scoreWebsite = (m = {}) => {
+const scoreWebsite = (m = {}, extras = {}) => {
+  // ══ V2 - round 101, off Vin's hand-check of three live sheets ═════════════
+  // Windows Plus scored 9/10 and Burbank 8.6/10 on sites the owner of this
+  // system calls conversion disasters: the old weights let the WHOLE door
+  // problem (a form-and-wait route plus a long form) cost at most 1.5 of 10,
+  // the viewport tag weighed the same as the booking route, and an unmeasured
+  // speed component SHRANK the denominator and inflated everything else.
+  // V2: the booking route is the heaviest component (it is the money stage
+  // the depth ordering ranks first), the first screen is graded by the eyes
+  // that actually looked at it, price and proof placement join (measured
+  // only), and NO build can score above 7.5 while its door cannot book a
+  // time - a clean build around a form-and-wait door is still a form-and-wait
+  // door. Every component still leaves the denominator when unmeasured.
   const graded = [];   // { what, got, of, why }
   const skipped = [];
   const add = (what, got, of, why) => graded.push({ what, got, of, why });
+  const _hs = (extras.htmlSignals && extras.htmlSignals.checked) ? extras.htmlSignals : null;
+  // The eyes count only when the render was real and fully loaded - a block
+  // page or a mid-load shot grades nothing (the Burbank 403 scored the
+  // block page itself under the old shape).
+  const _vis = (extras.visualAnalysis
+    && extras.visualAnalysis.pageFullyLoaded !== false
+    && extras.visualAnalysis.looksBlockedOrError !== true) ? extras.visualAnalysis : null;
 
-  // Built for a phone (2). The single loudest age signal there is.
-  if (m.viewportChecked === true) {
-    add('built for a phone', m.hasViewport === false ? 0 : 2, 2,
-      m.hasViewport === false ? 'loads at desktop width and has to be pinched to read' : 'resizes for a phone');
-  } else skipped.push('phone layout');
-
-  // Modern build (2), from the eleven concrete age markers.
-  if (Number.isFinite(Number(m.siteAgeScore))) {
-    const n = Number(m.siteAgeScore);
-    add('modern build', n >= 4 ? 0 : n >= 2 ? 1 : 2, 2,
-      n >= 2 ? `${n} concrete marker(s) of an old build in their own source` : 'no meaningful age markers in the source');
-  } else skipped.push('build age');
-
-  // A way to book (2). The route a ready customer actually gets.
+  // A way to book (3). The route a ready customer actually gets - the
+  // heaviest component, because the audit's own depth rule says the door is
+  // where the money dies.
   if (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) {
-    const got = m.booking === 'online_booking' ? 2 : m.booking === 'form' ? 1 : m.booking === 'phone_only' ? 0.5 : 0;
-    add('a way to book', got, 2, {
+    const got = m.booking === 'online_booking' ? 3 : m.booking === 'form' ? 1 : m.booking === 'phone_only' ? 0.5 : 0;
+    add('a way to book', got, 3, {
       online_booking: 'a real self-serve scheduler',
       form: 'a form that submits and waits for a human',
       phone_only: 'a phone line during business hours, nothing else',
@@ -22876,29 +23024,73 @@ const scoreWebsite = (m = {}) => {
     }[m.booking]);
   } else skipped.push('booking route');
 
+  // The first screen (1.5), graded by the vision read of the real render.
+  if (_vis && typeof _vis.hasVisibleCTA === 'boolean') {
+    const got = _vis.hasVisibleCTA === true ? (_vis.heroIsBlank === true ? 0.75 : 1.5) : 0;
+    add('the first screen', got, 1.5,
+      _vis.hasVisibleCTA !== true ? 'no clear next step on the first screen'
+        : _vis.heroIsBlank === true ? 'a next step is there but the hero area is blank or broken'
+        : 'a visitor lands on a clear next step');
+  } else skipped.push('first screen');
+
   // The form asks little (1). Only when a single real form was measured.
   if (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount))) {
     const n = Number(m.formFieldCount);
     add('a form a stranger finishes', n >= 9 ? 0 : n >= 6 ? 0.5 : 1, 1, `${n} fields before anything happens`);
   } else skipped.push('form size');
 
-  // Fast for the real visitors Google measured (2).
+  // Built for a phone (1).
+  if (m.viewportChecked === true) {
+    add('built for a phone', m.hasViewport === false ? 0 : 1, 1,
+      m.hasViewport === false ? 'loads at desktop width and has to be pinched to read' : 'resizes for a phone');
+  } else skipped.push('phone layout');
+
+  // Modern build (1.5), from the concrete age markers.
+  if (Number.isFinite(Number(m.siteAgeScore))) {
+    const n = Number(m.siteAgeScore);
+    add('modern build', n >= 4 ? 0 : n >= 2 ? 0.75 : 1.5, 1.5,
+      n >= 2 ? `${n} concrete marker(s) of an old build in their own source` : 'no meaningful age markers in the source');
+  } else skipped.push('build age');
+
+  // Fast for the real visitors Google measured (1.5).
   if (m.mobileFieldMeasured === true) {
-    add('fast on a real phone', m.mobileFieldSlow === true ? 0 : 2, 2,
+    add('fast on a real phone', m.mobileFieldSlow === true ? 0 : 1.5, 1.5,
       m.mobileFieldSlow === true ? "failed Google's own failing thresholds for their real visitors over 28 days" : 'no failing marks from their real visitors');
   } else skipped.push('real-visitor speed');
 
-  // Secure (1).
+  // A price a stranger can see (0.5). Measured presence or measured absence
+  // only - a pricing page we chose not to open leaves the denominator.
+  if (Number(m.pricesPublished) > 0 || m.homepagePriceSeen === true) {
+    add('a price a stranger can see', 0.5, 0.5, 'a real figure is published on the pages we read');
+  } else if (m.pricingMeasured === true && Number(m.pricesPublished) === 0 && m.unreadPricing !== true && m.homepagePriceSeen !== true) {
+    add('a price a stranger can see', 0, 0.5, 'no figure anywhere on the pages we read');
+  } else skipped.push('price visibility');
+
+  // Proof where a visitor meets it (0.5). Only when proof was FOUND somewhere
+  // - "no proof in the footer" about a site with no proof at all would award
+  // the point for the worse state.
+  if (_hs && Number.isFinite(Number(_hs.proofPosition))) {
+    add('proof where a visitor meets it', _hs.proofOnlyInFooter === true ? 0 : 0.5, 0.5,
+      _hs.proofOnlyInFooter === true ? 'the first proof on the page lives in the footer' : 'proof appears before the footer');
+  } else skipped.push('proof placement');
+
+  // Secure (0.5).
   if (typeof m.isHttps === 'boolean') {
-    add('secure connection', m.isHttps ? 1 : 0, 1, m.isHttps ? 'serves over https' : 'plain http, and browsers say so out loud');
+    add('secure connection', m.isHttps ? 0.5 : 0, 0.5, m.isHttps ? 'serves over https' : 'plain http, and browsers say so out loud');
   } else skipped.push('https');
 
   const of = graded.reduce((n, g) => n + g.of, 0);
   const got = graded.reduce((n, g) => n + g.got, 0);
   if (!of) return { checked: false, skipped };
   // One decimal, scaled to ten whatever was measurable.
-  const score = Math.round((got / of) * 100) / 10;
-  return { checked: true, score, outOf: 10, graded, skipped,
+  let score = Math.round((got / of) * 100) / 10;
+  // ══ THE DOOR CAPS THE SCORE ═══════════════════════════════════════════════
+  let capped = null;
+  if (m.bookingMeasured === true && m.booking !== 'online_booking' && score > 7.5) {
+    capped = 'capped at 7.5: nothing on the site books a time, and a clean build around a form-and-wait door is still a form-and-wait door';
+    score = 7.5;
+  }
+  return { checked: true, score, outOf: 10, graded, skipped, capped,
            basedOn: `${graded.length} of ${graded.length + skipped.length} components measured` };
 };
 
@@ -22942,7 +23134,21 @@ const buildAuditFacts = (m = {}, unlinked = null, extras = null) => {
     // even on a clean read. Null when they run no Google ads or we could not
     // measure.
     roiStatus: ads !== 'yes' ? null : roiStatusOf(m),
-    adsLive: m.adsLiveInPack === true ? true : null,
+    // ══ EMERGENCY COPY OVER A SCHEDULED DOOR - round 101, internal ═════════
+    // Burbank's pages sell 24/7 emergency work and the site's route in is a
+    // form (their CTA: "schedule a walkthrough"). Nobody with an emergency
+    // schedules a walkthrough. Measured on THEIR OWN copy plus the measured
+    // booking route; phone_only is NOT a mismatch (an emergency customer
+    // calls), and a lead whose copy never claims emergency work reads false.
+    emergencyMismatch: (m.emergencyCopySeen === true && m.bookingMeasured === true
+      && (m.booking === 'form' || m.booking === 'none_found')) ? true
+      : (m.emergencyCopySeen === false ? false : null),
+    // ONE predicate now (round 101): a sponsored pack row OR their LSA ad
+    // seen on our own pull both prove live spend. The strippers already took
+    // the union; the facts strip, the walk and the leak evidence read three
+    // hand-spelled variants, so an LSA-proven advertiser kept its BURNING
+    // rows demoted as "inferred from a tag".
+    adsLive: (m.adsLiveInPack === true || m.lsaUs === true) ? true : null,
     adLanding: m.adLandingKind || null,
     adLandingUrl: m.adLandingUrl || null,
     organicPosition: (m.organicChecked === true && m.organicFound === true
@@ -22956,6 +23162,26 @@ const buildAuditFacts = (m = {}, unlinked = null, extras = null) => {
     // anywhere but the Render log, which is why "is DataForSEO working" was
     // unanswerable from a sheet.
     searchSource: m.rankSource || null,
+    // ══ THE QUERY, ON THE FACTS - round 101 ═══════════════════════════════
+    // The Windows Plus sheet printed a service query's absence two rows above
+    // the head query's #2 with neither named - "the Getting found section
+    // constantly goes against itself" (Vin). Every search surface on the
+    // facts (map, blue links, sponsored block, AI answer, pack) is measured
+    // on the PRIMARY TRADE query; this names it once so the client can label
+    // every one of those rows, and Check-it-yourself can hand the caller the
+    // exact search on the export too.
+    searchQuery: m.rankQuery || null,
+    // ══ THE PRICE STATE, SERVER-AUTHORITATIVE - round 101 ═════════════════
+    // The client used to infer the price row from a rung id, so a pricing
+    // page sitting unread and a homepage hero price both rendered as "Not
+    // measured: Price on the site" - one of Vin's named complaints ("why is
+    // Price on the site not measured, that's very easy to measure"). Four
+    // honest states now: shown / none (measured absence) / unread (a pricing
+    // page exists that we did not open) / null (never measured).
+    price: (Number(m.pricesPublished) > 0 || m.homepagePriceSeen === true) ? 'shown'
+      : m.unreadPricing === true ? 'unread'
+      : (m.pricingMeasured === true && Number(m.pricesPublished) === 0) ? 'none'
+      : null,
     // ══ THE §28 CHECKLIST SIX, FINALLY CONSUMED ═════════════════════════════
     // Measured since §28 off CROJungle's own published Landing Page Autopsy and
     // Funnel Leak Ledger, boot-checked, and consumed by NOTHING - no rung, no
@@ -26827,10 +27053,19 @@ const measureGrowthConstraint = ({
     // Nothing measured is binding. Say that plainly rather than inventing a
     // crisis \u2014 a business with no measurable constraint is a weak lead, and
     // pretending otherwise is how a system talks itself into a bad email.
-    layer = 'MARKET';
-    condition = marketClarity.checked
-      ? `Nothing we measured stands out as the single biggest blocker. The way they present themselves reads as ${marketClarity.band}${marketClarity.signals.length ? ' \u2014 ' + marketClarity.signals[0] : ''}.`
-      : `Nothing we measured stands out as the single biggest blocker on this lead, and their copy was not readable enough to judge how they present themselves.`;
+    //
+    // ══ NO MORE MARKET ESSAY - round 101 ═══════════════════════════════════
+    // This branch used to stamp layer='MARKET' and append a positioning read
+    // ("The way they present themselves reads as partial - ..."), and it
+    // printed on two of Vin's three hand-checked sheets in one morning:
+    // "generic market positioning stuff that couldn't be farther from the
+    // truth" (TriStar), "this is bad" (Burbank). A layer named while the
+    // diagnosis disclaims one is a contradiction wearing a heading, and the
+    // essay was an opinion where the sheet wanted the leaks. NONE is a real
+    // state: buildTheOneThing points it at leak 1, and the sheet renders no
+    // layer label for it.
+    layer = 'NONE';
+    condition = `Nothing we measured stands out as the single biggest blocker.`;
     why = `Nothing here is broken enough to lead an email with. Write a shorter email built on the strongest single measured finding, or leave this lead for the call pile \u2014 manufacturing a crisis for a business that does not have one is the fastest way to lose credibility with an owner who knows his own numbers.`;
     product = 'positioning';
   }
@@ -27975,7 +28210,12 @@ const ARTICLE_SLUG = new RegExp(
   'i');
 
 const PAGE_INTENT = [
-  { key: 'pricing',  re: /(pricing|prices|rates|plans|packages|cost|fees|tuition|membership)/i },
+  // Round 101: singular 'price' and the financing family join, and the picker
+  // matches these ANYWHERE in the last segment (hintAnywhere) - the unread
+  // detector and this list must agree or a page can be flagged exists-but-
+  // unread while being unpickable, which is exactly how TriStar's pricing
+  // page stayed unread while warranty got a slot.
+  { key: 'pricing',  re: /(pricing|price|prices|rates?|plans|packages|cost|fees?|financing|tuition|membership)/i },
   // THE OWNER'S OWN STORY. On an owner-operated business the About page is where the
   // founder writes, in the first person, why he started, who taught him the trade,
   // how long he has been at it, what he is proud of. Nothing else on the internet
@@ -28057,7 +28297,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
     for (const intent of PAGE_INTENT) {
       // The proof category is the one that WANTS reviews and testimonials pages;
       // every other category still treats them as content noise.
-      const ranked = rankUrlsByIntent(clean, intent.re, 6, { wantProof: intent.key === 'proof' })
+      const ranked = rankUrlsByIntent(clean, intent.re, 6, { wantProof: intent.key === 'proof', hintAnywhere: intent.key === 'pricing' })
         .filter(u => !picked.some(p => p.url === u));
       ranked.slice(0, 2).forEach(u => picked.push({ key: intent.key, url: u }));
     }
@@ -35189,15 +35429,34 @@ const dfsLocalization = ({ bizLat, bizLng, city, mode }) => {
   // null becomes exactly 0, and no business in this ICP sits on the equator
   // or the prime meridian. auditfuzz found the single-zero case after the
   // fixture found the pair.
-  if (typeof bizLat === 'number' && typeof bizLng === 'number' && Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0) {
-    const coord = mode === 'organic'
-      ? `${lat.toFixed(7)},${lng.toFixed(7)},30000`
-      : `${lat.toFixed(7)},${lng.toFixed(7)}`;
-    return { arg: { location_coordinate: coord }, note: 'their own coordinates' };
-  }
+  const _coordsOk = typeof bizLat === 'number' && typeof bizLng === 'number' && Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0;
+  const coord = _coordsOk
+    ? (mode === 'organic' ? `${lat.toFixed(7)},${lng.toFixed(7)},30000` : `${lat.toFixed(7)},${lng.toFixed(7)}`)
+    : null;
+  // ══ THE CITY FIRST, THE BUSINESS'S OWN ADDRESS ONLY AS A FALLBACK ═══════
+  // Round 99 stood the search at the business's own coordinates, on the
+  // argument that the customer stands where the business is. Burbank Electric
+  // proved the argument wrong at its edge, live 2026-08-26: their registered
+  // address is in Fernandina Beach, 30+ miles from the Jacksonville they sell
+  // into, so "electrician in Jacksonville, FL" measured from THEIR OFFICE put
+  // them at #1 of 100 while a person searching from Jacksonville finds them
+  // around #15 - and both stability samples shared the standpoint, so the
+  // second look confirmed the bias instead of catching it. Google weighs
+  // proximity heavily; standing at the business inflates the business. The
+  // industry's own rank-tracking guidance says the same: a city-level
+  // location_name is the neutral "typical searcher in this market" read, and
+  // a single point at the business's address flatters it. So: the city named
+  // in the query is where the searcher stands. Coordinates remain as the
+  // DECLARED fallback for cities DataForSEO's database has never heard of
+  // (a 40501 on location_name), where the office is usually inside the same
+  // small market and the bias is bounded.
   const name = dfsLocationName(city);
-  if (name) return { arg: { location_name: name }, note: `city-level ("${name}")` };
-  return { arg: { location_code: 2840 }, note: 'COUNTRY-LEVEL (code 2840) - the localized surfaces (sponsored block, AI answer, the real pack order) cannot be trusted on a country-level read' };
+  if (name) {
+    return { arg: { location_name: name }, note: `city-level ("${name}") - the standpoint of a searcher in that market`,
+      fallback: coord ? { arg: { location_coordinate: coord }, note: 'their own coordinates (their city is not in DataForSEO\'s location database) - a standpoint that can flatter their own position' } : null };
+  }
+  if (coord) return { arg: { location_coordinate: coord }, note: 'their own coordinates (no city parsed) - a standpoint that can flatter their own position', fallback: null };
+  return { arg: { location_code: 2840 }, note: 'COUNTRY-LEVEL (code 2840) - the localized surfaces (sponsored block, AI answer, the real pack order) cannot be trusted on a country-level read', fallback: null };
 };
 const DFS_LOGIN = process.env.DATAFORSEO_LOGIN || '';
 const DFS_PASSWORD = process.env.DATAFORSEO_PASSWORD || '';
@@ -35337,18 +35596,19 @@ const packTradeOverlap = (cats, tradeWords, phraseWords) => {
 // Both sources come back in the same shape and every caller reads orderTrusted.
 // A second copy of this decision is how a rank claim would quietly come back on
 // the untrusted path, which is the disease this file is mostly a record of.
-const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
+const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng, noPlacesFallback }) => {
   if (DFS_READY) {
     // ══ LOCALIZE TO THEIR MARKET, NOT TO A COUNTRY ══════════════════════════
     // The first localized attempt (§59) sent location_name with an abbreviated
-    // state and was refused; the fix then over-corrected to location_code 2840
-    // — the whole United States — and a country-level page carries none of the
-    // surfaces a real searcher sees. The coordinate on their own Google
-    // listing localizes exactly, with no dependence on DataForSEO's location
-    // database; the full-state location_name is the fallback their database
-    // does hold; and country-level is the last resort, SAID OUT LOUD, because
-    // a silent country-level read is three sheets of "none appeared".
+    // state and was refused; §76 over-corrected to the business's own
+    // coordinates, and Burbank Electric (office 30+ miles outside its market)
+    // measured #1 of 100 from its own doorstep against a hand-checked ~#15.
+    // The order is city-level location_name FIRST (the searcher's standpoint),
+    // their own coordinates only when the database refuses the city, and
+    // country-level last, SAID OUT LOUD, because a silent country-level read
+    // is three sheets of "none appeared". See dfsLocalization.
     const _loc = dfsLocalization({ bizLat, bizLng, city, mode: 'finder' });
+    let _locArg = _loc.arg, _locNote = _loc.note, _fellBack = false;
     try {
       const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
       let parsed = null;
@@ -35358,8 +35618,8 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
       // DataForSEO's own guidance is that live SERP calls can run long under
       // load, and the old 20-second ceiling here killed every depth-100 read
       // on the first credentialed run.
-      for (let _try = 0; _try < 2 && !(parsed && parsed.ok); _try++) {
-        if (_try > 0) console.log(`↺ LOCAL PACK [${query}]: no usable answer on the first ask (${parsed && parsed.why}) — asking once more before falling back.`);
+      for (let _try = 0; _try < 3 && !(parsed && parsed.ok); _try++) {
+        if (_try > 0 && !_fellBack) console.log(`↺ LOCAL PACK [${query}]: no usable answer on the first ask (${parsed && parsed.why}) — asking once more before falling back.`);
         let body = null;
         try {
           const r = await fetchT(DFS_URL, {
@@ -35367,7 +35627,7 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
             headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
             body: JSON.stringify([{
               keyword: String(query || ''),
-              ..._loc.arg,
+              ..._locArg,
               language_code: 'en',
               device: 'desktop',
               // 100, up from 20. Live 2026-08-25: a business a human then found
@@ -35387,12 +35647,20 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
           continue;
         }
         parsed = parseLocalFinder(body);
+        // A location_name their database refuses is not an account fact - the
+        // DECLARED fallback (their own coordinates) gets one attempt before
+        // anything falls to Places. Any other 40xxx fails identically twice.
+        if (!parsed.ok && _loc.fallback && !_fellBack && /40501|invalid field[^a-z]*'?location_name/i.test(String(parsed.why || ''))) {
+          _fellBack = true; _locArg = _loc.fallback.arg; _locNote = _loc.fallback.note;
+          console.log(`↺ LOCAL PACK [${query}]: DataForSEO's location database does not know this city — standing at ${_locNote} instead.`);
+          continue;
+        }
         if (!parsed.ok && /40\d\d\d|CREDENTIALS|task error/i.test(String(parsed.why || ''))) break;
       }
       if (parsed && parsed.ok) {
         const organic = parsed.results.filter(x => !x.isPaid);
         const paid = parsed.results.filter(x => x.isPaid);
-        console.log(`\u{1F4CD} LOCAL PACK [${query}]: DataForSEO returned ${organic.length} organic result(s)${paid.length ? ` and ${paid.length} SPONSORED above them` : ''}, localized to ${_loc.note}. This is the list a customer actually sees, so the position is sayable.`);
+        console.log(`\u{1F4CD} LOCAL PACK [${query}]: DataForSEO returned ${organic.length} organic result(s)${paid.length ? ` and ${paid.length} SPONSORED above them` : ''}, localized to ${_locNote}. This is the list a customer actually sees, so the position is sayable.`);
         return { ok: true, source: 'dataforseo', orderTrusted: packOrderTrusted('dataforseo'), results: organic, paid };
       }
       console.log(`⚠ LOCAL PACK [${query}]: DataForSEO did not answer usefully - ${parsed && parsed.why}. Falling back to Places, which means NO position may be stated for this lead.`);
@@ -35400,6 +35668,7 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
       console.log(`⚠ LOCAL PACK [${query}]: DataForSEO call failed - ${(e && e.message) || e}. Falling back to Places, position not sayable.`);
     }
   }
+  if (noPlacesFallback) return { ok: false, why: 'DataForSEO could not localize this market, and the Places fallback is disabled for this read - its relevance order would be noise about a market this small' };
   if (!placesKey) return { ok: false, why: 'no rank source configured' };
   notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received
   const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
@@ -35700,18 +35969,24 @@ const checkOrganicRank = async ({ query, city, website, companyName, bizLat, biz
     // Localized exactly like the finder read — one decision, see
     // dfsLocalization; the organic coordinate takes a RADIUS, not a zoom.
     const _loc = dfsLocalization({ bizLat, bizLng, city, mode: 'organic' });
+    let _locArg = _loc.arg, _fellBack = false;
     let parsed = null;
-    for (let _try = 0; _try < 2 && !(parsed && parsed.ok); _try++) {
+    for (let _try = 0; _try < 3 && !(parsed && parsed.ok); _try++) {
       if (_try > 0) console.log(`↺ ORGANIC RANK [${query}]: no usable answer on the first ask (${parsed && parsed.why}) — asking once more.`);
       try {
         const r = await fetchT(DFS_ORGANIC_URL, {
           method: 'POST',
           headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify([{ keyword: String(query), ..._loc.arg, language_code: 'en', device: 'desktop', depth: 20, load_async_ai_overview: true }]),
+          body: JSON.stringify([{ keyword: String(query), ..._locArg, language_code: 'en', device: 'desktop', depth: 20, load_async_ai_overview: true }]),
         }, DFS_LIVE_TIMEOUT_MS);
         parsed = parseOrganicSerp(await safeJson(r), dom, companyName);
       } catch (e) {
         parsed = { ok: false, why: `the call itself failed: ${(e && e.message) || e}` };
+        continue;
+      }
+      if (!parsed.ok && _loc.fallback && !_fellBack && /40501|invalid field[^a-z]*'?location_name/i.test(String(parsed.why || ''))) {
+        _fellBack = true; _locArg = _loc.fallback.arg;
+        console.log(`↺ ORGANIC RANK [${query}]: DataForSEO's location database does not know this city — standing at their own coordinates instead.`);
         continue;
       }
       if (!parsed.ok && /40\d\d\d|task error/i.test(String(parsed.why || ''))) break;
@@ -35732,7 +36007,7 @@ const checkOrganicRank = async ({ query, city, website, companyName, bizLat, biz
   }
 };
 
-const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng, guardTrade }) => {
+const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng, guardTrade, noPlacesFallback }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
   // ══ REFUSE TO SEARCH A SECTOR LABEL ═══════════════════════════════════════
@@ -35802,7 +36077,7 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
     // twelfth. Worse, narrowTradePhrase deliberately builds the query out of
     // words taken from their own name, so the sharpening added for specialists
     // was feeding the very bias that broke them.
-    const _pack = await fetchLocalPack({ query, city, placesKey, bizLat, bizLng });
+    const _pack = await fetchLocalPack({ query, city, placesKey, bizLat, bizLng, noPlacesFallback });
     if (!_pack || !_pack.ok) return { checked: false, why: (_pack && _pack.why) || 'no answer from the rank source' };
     const packSource = _pack.source;
     const orderTrusted = _pack.orderTrusted === true;
@@ -36164,9 +36439,23 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
         'remodel', 'renovation', 'renovations', 'construction', 'builder', 'builders', 'flooring',
         'floors', 'gutter', 'gutters', 'insulation', 'masonry', 'paving', 'pest', 'control',
         'pool', 'pools', 'septic', 'solar', 'garage', 'dental', 'dentist', 'dentists', 'medical',
+        'bathroom', 'bathrooms', 'bath', 'kitchen', 'kitchens', 'basement', 'basements', 'shower',
         'law', 'legal', 'attorney', 'attorneys', 'lawyer', 'lawyers', 'surgery', 'surgeon']);
       while (parts.length && _SLUG_SERVICE.has(parts[0].toLowerCase())) parts.shift();
       while (parts.length && _SLUG_SERVICE.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+      // ══ THE STATE HIDING MID-SLUG - round 101 ══════════════════════════
+      // /scottsburg-in-bathroom-remodeling is Scottsburg, INDIANA - the first
+      // state pop ran on the RAW last token ("remodeling") and could never see
+      // it, and the connector strip below would then eat "in" as a preposition,
+      // losing the state (the documented Sheridan ambiguity). Live: "Scottsburg
+      // In Bathroom" went out as a city. After the trade strip, a trailing
+      // two-letter token that is a REAL state abbreviation is the state -
+      // checked against the state table, and only when something remains in
+      // front of it to be the city.
+      if (!_st && parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])
+        && US_STATE_NAMES[String(parts[parts.length - 1]).toUpperCase()]) {
+        _st = String(parts.pop()).toUpperCase();
+      }
       // A connecting "in" survives at either end of "…-services-in-raymore".
       while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[0])) parts.shift();
       while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[parts.length - 1])) parts.pop();
@@ -36209,6 +36498,13 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
     const _altRank = await checkLocalRankStable({
       companyName, placeId, website, industry,
       location: _alt, placesKey,
+      // DFS-only on purpose (round 101): Windows Plus's first service-area pick
+      // was Bagdad, KY - a village DataForSEO's database refused - and the
+      // Places fallback then printed "NOT IN TOP 20 (published service area)"
+      // off a relevance lookup: an absence row about a market of two hundred
+      // people, presented beside real measurements. A market the rank source
+      // cannot localize produces NO row, not a noisy one.
+      noPlacesFallback: true,
     });
     if (_altRank.checked) {
       results.push({ ..._altRank, kind: 'published service area' });
@@ -36401,6 +36697,19 @@ const summariseAboveReviews = (above, ourReviews) => {
   const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
   return { n: counts.length, avg, why: '' };
 };
+// ══ THE LEAD'S RANK IS ITS PRIMARY TRADE, PERIOD ═════════════════════════════
+// Round 101, off the Windows Plus sheet Vin hand-checked: the promoted service
+// row (an absent "bathroom remodeling" query) BECAME the lead's rank, so the
+// sheet said "not among the 100 listings returned" about a business sitting #2
+// and #1 for the trade it is NAMED after — while the map-pack row beside it,
+// measured on the head query, said #2. Two queries, one variable, a sheet at
+// war with itself. The head row is the lead's rank identity everywhere the
+// sheet, the walk, the facts strip and the observation ledger read; pickRankRow
+// keeps ONLY its email job — choosing the sharpest OUTRANKED evidence among
+// FOUND rows (John P. Goodman's gum-surgery row) — and a service page's absence
+// travels as service_invisibility with its query named, never as "their rank".
+const headRankRowFrom = (results) =>
+  (Array.isArray(results) ? results : []).filter(Boolean).find(r => r.kind === 'primary trade') || null;
 const pickRankRow = (results) => {
   const rows = (Array.isArray(results) ? results : []).filter(Boolean);
   if (!rows.length) return { row: null, note: 'no rank rows at all' };
@@ -36409,35 +36718,11 @@ const pickRankRow = (results) => {
     return { row: rows.find(r => r.kind === 'primary trade') || rows[0],
              note: 'they were not found for any query — absence is the finding and it travels by its own route' };
   }
-  // ══ ABSENT FOR A SERVICE HE PUBLISHES A PAGE ABOUT ════════════════════
-  // absent_from_search carries harm 96 — higher than every review rung on the
-  // ladder — and its test is `rankChecked && rankFound === false`. It reads the
-  // row this function hands back, and this function preferred a FOUND row, so
-  // the rung could only ever fire when a business was missing for its HEAD
-  // term. A business found for "orthodontist in Kansas City" but absent for a
-  // service it publishes a whole page about had that finding measured, logged
-  // as a VISIBILITY GAP, and then made unreachable by this line.
-  //
-  // The earlier note here — "absence travels by its own route" — was right
-  // about the PROMPT and wrong about the LADDER. The prompt block exists; the
-  // ladder route does not, and the ladder is what decides what the email opens
-  // on. The file's own comment calls this "the sharpest SEO fact we can give an
-  // owner", and it has never once been the email.
-  //
-  // It also matters for a reason beyond harm: it is SELLABLE. He cannot fix a
-  // search position by deciding to, and it is the exact thing a retainer does.
-  // A review complaint is neither.
-  //
-  // Only a page HE published counts. Being absent for a service he never claimed
-  // to offer is not a finding about him.
-  const _absentOwn = rows.filter(r => !r.found && r.kind === 'their own service page'
-    && Number.isFinite(Number(r.scanned)) && Number(r.scanned) > 0);
-  if (_absentOwn.length) {
-    const _pick = _absentOwn[0];
-    const _others = rows.filter(r => r !== _pick).map(r => `"${r.query}" (${r.found ? '#' + r.rank : 'absent'})`);
-    return { row: _pick,
-      note: `"${_pick.query}" — they publish a page for this service and do NOT appear in the top ${_pick.scanned} for it. That is harm 96, above every review finding on the ladder, and it is work a retainer does rather than something he fixes by deciding to${_others.length ? `. Passed over: ${_others.join(', ')}` : ''}` };
-  }
+  // The absent-service promotion that lived here (§47) is gone - round 101.
+  // It handed an absent service row back as THE lead's rank, which is how the
+  // Windows Plus sheet read a #2/#1 business as invisible. A confirmed absent
+  // service page now travels through service_invisibility with its query
+  // named, and this function's remaining job is the OUTRANKED evidence only.
   const above = (r) => {
     const n = Number(r.rank) - 1;
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -36611,6 +36896,7 @@ const _runResearchInner = async (req, res) => {
   // outside that block — a lower declaration is invisible by the time the prompt is
   // built and the whole signal would silently never reach the audit.
   let localRank = null;
+  let outrankRow = null;   // the email's sharpest OUTRANKED evidence row - may differ from localRank (round 101)
   let localVisibility = null;
   let gbpHealth = null;  // hoisted to function scope so the prompt (outside the Places-lead block) can read it
   let htmlSignals = { checked: false };  // hoisted to function scope so the prompt can read it
@@ -36942,6 +37228,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: target, formats, onlyMainContent: false, waitFor,
               maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true,
+              // Round 101: Burbank's homepage render was a 403 geo-block -
+              // "Your location (NO) has been disallowed" - served to a non-US
+              // egress. Every business this system audits is in the US, so the
+              // render stands where their customer stands. Firecrawl's
+              // documented location option; the blocked-page detection stays as
+              // the belt, because their docs say a missing US proxy falls to
+              // the nearest region.
+              location: { country: 'US', languages: ['en'] },
               ...(opts && opts.mobile === true ? { mobile: true } : {}) }),
           }, timeout);
         } catch (e) {
@@ -37201,6 +37495,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     }
 
     let screenshotUrl = firecrawlData.data?.screenshot || firecrawlData.screenshot || null;
+    // Round 101: when a render is discarded as a block/error page, the sheet
+    // must say WHY there is no picture - "no screenshot" and "their server
+    // refused our camera" are different facts and only one is about them.
+    let renderRefused = null;
     // ══ ONE IMAGE NOW, AND IT IS THE WHOLE PAGE ═══════════════════════════════
     // screenshotUrl  — what the vision call is given. It used to be a viewport
     //                  crop of the top ~1000px, because a tall page renders past
@@ -37240,10 +37538,23 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // about it destroys every true thing alongside it.
     //
     // Detect it, refuse to audit it, and say so.
-    const _botCheck = /just a moment\.\.\.|checking your browser|cf-browser-verification|enable javascript and cookies to continue|attention required.*cloudflare|verifying you are human|ddos protection by cloudflare/i;
-    const _looksChallenged = content && content.length < 3000 && _botCheck.test(content);
+    // Round 101 widened this past Cloudflare's vocabulary: Burbank Electric's
+    // homepage RENDER was a literal "403: Access Forbidden - Your location (NO)
+    // has been disallowed" page - a geo-block served to a non-US egress - and
+    // none of the three detectors knew the words, so the block page shipped on
+    // the sheet as "their homepage, top to bottom", was scored by the vision
+    // model, and fed the site score. The scrape response's own HTTP status is
+    // consumed too - Firecrawl reports it in metadata.statusCode and nothing
+    // ever read it.
+    const _botCheck = /just a moment\.\.\.|checking your browser|cf-browser-verification|enable javascript and cookies to continue|attention required.*cloudflare|verifying you are human|ddos protection by cloudflare|access forbidden|access denied|has been disallowed|not available in your (?:country|region)|error 403|403 forbidden|geo.?block/i;
+    const _httpStatus = Number(firecrawlData.data?.metadata?.statusCode ?? firecrawlData.metadata?.statusCode);
+    const _blockedStatus = Number.isFinite(_httpStatus) && _httpStatus >= 400;
+    const _looksChallenged = (content && content.length < 3000 && _botCheck.test(content)) || _blockedStatus;
     if (_looksChallenged) {
-      console.log(`\u26d4 BOT CHECK [${company}]: the scrape returned a challenge/interstitial page, not their site. This is about OUR request being challenged \u2014 it is NOT evidence about what Google sees, what their title tag is, or how their site behaves for a human. Discarding the page; no findings will be produced from it.`);
+      console.log(`\u26d4 BOT CHECK [${company}]: the scrape returned ${_blockedStatus ? `HTTP ${_httpStatus} - a block or error page` : 'a challenge/interstitial page'}, not their site. This is about OUR request being refused \u2014 it is NOT evidence about what Google sees, what their title tag is, or how their site behaves for a human. Discarding the page AND its render; no findings will be produced from it.`);
+      renderRefused = _blockedStatus
+        ? `their server answered HTTP ${_httpStatus} to our renderer - the picture was a block page, not their homepage, and was discarded`
+        : 'their site served our renderer a bot-check page - the picture was not their homepage and was discarded';
       content = '';
       screenshotUrl = null;
       fullPageUrl = null;
@@ -37915,7 +38226,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (lv.checked) {
           localVisibility = lv;
           const _pick = pickRankRow(lv.results);
-          localRank = _pick.row;
+          // The lead's rank identity is the PRIMARY TRADE row; the pick is the
+          // outranked evidence only (round 101 - the Windows Plus split-brain).
+          localRank = headRankRowFrom(lv.results) || _pick.row;
+          outrankRow = _pick.row;
           console.log(`RANK ROW [${company}]: ${_pick.note}`);
           // ══ THE BLUE LINKS ARE A SECOND, SEPARATE RANKING ═══════════════
           // Measured on the SAME phrase and the SAME city as the pack, because
@@ -38128,7 +38442,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (lv2.checked) {
           localVisibility = lv2;
           const _pick2 = pickRankRow(lv2.results);
-          localRank = _pick2.row;
+          localRank = headRankRowFrom(lv2.results) || _pick2.row;
+          outrankRow = _pick2.row;
           console.log(`RANK ROW [${company}]: ${_pick2.note}`);
           for (const r of lv2.results) {
             console.log(r.found
@@ -38602,7 +38917,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     marketClarity = readMarketClarity(
       [trustedContent, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
-      { trade: customerTrade || verifiedIndustry || '', city: parseCityState(req.body.location).town });
+      { trade: customerTrade || verifiedIndustry || '', city: parseCityState(rankLocationFrom(req.body.location, gbpHealth)).town });
     if (marketClarity.checked) {
       console.log(`MARKET CLARITY [${company}]: ${marketClarity.band.toUpperCase()} \u2014 ${marketClarity.verdict}${marketClarity.gaps.length ? ' | ' + marketClarity.gaps.join(' | ') : ''}`);
     }
@@ -38822,7 +39137,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             : (localRank && localRank.ours ? localRank.ours.reviews : undefined),
           reviewRating: (gbpHealth && Number.isFinite(Number(gbpHealth.rating))) ? Number(gbpHealth.rating)
             : (localRank && localRank.ours ? localRank.ours.rating : undefined),
-          weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
+          weakerAbove: (outrankRow || localRank) ? ((outrankRow || localRank).weakerAbove || 0) : 0,
           offerStrength, valueEquation, marketClarity, recurringOffer,
           opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
           opsPain: readOperationalPain(publicPainSignals, reviewsRead),
@@ -38835,7 +39150,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // Every number below comes from here, so the ladder and the client can
         // no longer disagree about what was measured.
         const _measured = resolveMeasurements({
-          localRank, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
+          localRank, outrankRow, gbpHealth, history, htmlSignals, reviewsRead, ownerReplyCount,
           sitePagesArg: sitePages,
           tradeWordArg: customerTrade || verifiedIndustry || '',
           // ══ THE MINE RESULT LIVES IN A BLOCK, NOT HERE ═══════════════════
@@ -38878,6 +39193,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // for zero services". Unmeasured is not the same as measured-and-fine, and
     // this file has shipped that confusion before.
     const _svcGap = serviceVisibilityGap(localVisibility);
+    if (_svcGap.invisible < 2 && _svcGap.confirmed >= 1) {
+      console.log(`\u2605 CONFIRMED SERVICE ABSENCE [${company}]: "${_svcGap.confirmedQuery}" missed twice \u2014 a page they publish, invisible for its own search. Travels as service_invisibility with the query named; it is never the lead's own rank (round 101).`);
+    }
     if (_svcGap.invisible >= 2) {
       console.log(`\u2605 VISIBILITY GAP IS NOW A FINDING [${company}]: invisible for ${_svcGap.invisible} of ${_svcGap.checked} service page(s) \u2014 ${_svcGap.names.slice(0, 3).join(', ')}. This number has been printed on every lead for weeks and could not be said in an email until now.`);
     }
@@ -38951,7 +39269,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // PART 6 class, and it would have licensed the strongest new claim in
           // the file off a single noisy draw.
           rankStable: localRank && localRank.rankStable,
-          weakerAbove: localRank && localRank.weakerAbove,
+          weakerAbove: (outrankRow || localRank) && (outrankRow || localRank).weakerAbove,
           adsReadable: !!(builtWith && builtWith.adsRead === true),
           // Same merged-read gate as _harmInputs, for the same reason: a null
           // recorded here on a lead whose rendered copy proved the tag wastes
@@ -39117,6 +39435,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           servicePagesChecked: _svcGap.checked,
           servicePagesInvisible: _svcGap.invisible,
           serviceInvisibleNames: _svcGap.names,
+          // The single service absence a second search confirmed (round 101) -
+          // the finding the old rank-row promotion used to smuggle in as the
+          // lead's own rank.
+          serviceAbsentConfirmed: _svcGap.confirmed >= 1,
+          serviceAbsentName: _svcGap.confirmedName,
+          serviceAbsentQuery: _svcGap.confirmedQuery,
+          serviceAbsentScanned: _svcGap.confirmedScanned,
           // Abraham's frequency lever. recurringChecked is a GATE, not a value:
           // without it, `hasRecurringOffer === false` on a lead we never
           // measured would read as "they have no plan" rather than "we did not
@@ -39324,6 +39649,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // Two lines. This is the "computed but not passed" seam again, on the
           // single highest-value sentence in the system.
           weakerNames: _measured.weakerNames,
+          outrankedQuery: _measured.outrankedQuery,
           ourReviews: _measured.ourReviews,
           // ══ THE SUBJECT RESOLVER'S OWN INPUTS ════════════════════════════
           // buildSubjects fills {pain}, {city}, {year} from these four, and
@@ -39490,6 +39816,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // the owner can disprove in one glance. This only ever SUPPRESSES the
           // no-price family; it never makes a claim.
           homepagePriceSeen: /\$\s?\d/.test(String(content || '')),
+          // Their own copy claims emergency / 24-7 work (round 101, Burbank:
+          // "they're targeting emergency jobs... no one's doing a walkthrough
+          // if they have an emergency"). Positive read of THEIR words; the
+          // mismatch row it feeds is internal.
+          emergencyCopySeen: /\b24[\s\/-]?7\b|emergency/i.test(String(content || '')),
           // ══ THE ONLY MEASUREMENT WE TAKE OF HIS ACTUAL CUSTOMERS ═══════
           // Google's CrUX field data: what really happened to real phones
           // visiting his site over the last twenty-eight days. Everything else
@@ -39615,7 +39946,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               // PROVEN live (a sponsored row in the pack — the only direct
               // proof), and does this lead carry customer-WRITTEN contact
               // evidence (a repeating complaint, at least two people).
-              evidence: { adsLive: !!(_measured && _measured.adsLiveInPack),
+              evidence: { adsLive: !!((_measured && _measured.adsLiveInPack) || (organicRank && organicRank.serp && organicRank.serp.lsaUs === true)),
                           // >= 3, matching the email's anecdote floor: a
                           // 2-of-90 complaint took leak #1 from a measured
                           // BURNING finding on Conner's (2026-08-24), and the
@@ -39996,7 +40327,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           : (localRank && localRank.ours ? localRank.ours.reviews : undefined),
         reviewRating: (gbpHealth && Number.isFinite(Number(gbpHealth.rating))) ? Number(gbpHealth.rating)
           : (localRank && localRank.ours ? localRank.ours.rating : undefined),
-        weakerAbove: localRank ? (localRank.weakerAbove || 0) : 0,
+        weakerAbove: (outrankRow || localRank) ? ((outrankRow || localRank).weakerAbove || 0) : 0,
         offerStrength, valueEquation, marketClarity, recurringOffer,
         opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
         opsPain: readOperationalPain(publicPainSignals, reviewsRead),
@@ -40494,6 +40825,26 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // per-item uncertainty, and absence of reviews/CTA is never confirmed.
         if (screenshotBase64) {
           visualAnalysis = await visionAuditPage(screenshotBase64, company, apiKey);
+          // ══ THE EYES ARE THE LAST QUARANTINE - round 101 ═══════════════════
+          // The cheap checks (HTTP status, block-page vocabulary) run at the
+          // scrape; a block page that slips past them still reaches the ONE
+          // model that actually LOOKS at every render. Burbank's homepage
+          // render was a literal 403 page, shipped as "their homepage, top to
+          // bottom", scored by this very call. When the eyes say the image is
+          // not a business homepage, the render leaves the sheet, the brain's
+          // image list and every visual conclusion at once - and the sheet
+          // says why there is no picture instead of pretending none was taken.
+          if (visualAnalysis && visualAnalysis.looksBlockedOrError === true) {
+            console.log(`\u26d4 RENDER QUARANTINE [${company}]: the vision model read the homepage render as a block or error page, not their site. Discarding the render from the sheet, the brain and every visual conclusion.`);
+            renderRefused = renderRefused || 'the homepage render was a block or error page, not their site - it was discarded rather than shown';
+            screenshotUrl = null; fullPageUrl = null; mobileShotUrl = null;
+            screenshotBase64 = null;
+            for (let _qi = msgContent.length - 1; _qi >= 0; _qi--) {
+              const _qc = msgContent[_qi];
+              if (_qc && (_qc.type === 'image' || (_qc.type === 'text' && /^IMAGE \d/.test(String(_qc.text || ''))))) msgContent.splice(_qi, 1);
+            }
+            visualAnalysis = null;
+          }
           // visualAnalysis now carries the authoritative visual findings;
           // hasCTA (declared below) reads from it directly.
 
@@ -40786,10 +41137,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       bottleneckWhy = `$${Math.round(_revPerEmp/1000)}k revenue per employee across ${verifiedEmployees} people is labor-heavy, and they are not buying traffic — so the constraint is what it costs them to deliver, not what it costs to get found. Automation moves margin before marketing moves revenue.`;
     } else if (_hasAds && !_hasCapture) {
       bottleneck = 'CAPTURE';
-      bottleneckWhy = 'Ad code is on their site, so money is going out for visitors \u2014 and the pages we read give those visitors no way to book a time and nothing to leave their details in. Every ad dollar buys a visit that ends with nothing written down. Fix that before anyone sends them more traffic.';
+      bottleneckWhy = 'Ad code is on their site \u2014 so if those ads are live, money is going out for visitors, and the pages we read give those visitors no way to book a time and nothing to leave their details in. Every ad dollar would buy a visit that ends with nothing written down. Fix that before anyone sends them more traffic.';
     } else if (_hasAds && !_siteConverts) {
       bottleneck = 'CONVERSION';
-      bottleneckWhy = 'Ad code is on their site, so money is going out for visitors — and the page those visitors land on gives them no clear next step to take. The traffic is already bought; the page is where it dies.';
+      bottleneckWhy = 'Ad code is on their site \u2014 so if those ads are live, money is going out for visitors, and the page those visitors land on gives them no clear next step to take. Fix the page before buying another click.';
     } else if (_hasAds && _siteConverts && !(_harmInputs && _harmInputs.datedSite === true)) {
       bottleneck = 'SCALE';
       // "Nothing needs rebuilding" was printed on a lead whose own site-age
@@ -40798,7 +41149,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // shared. The SCALE branch now consults the same eleven-marker read the
       // score and the dated_credibility rung use, and its sentence claims only
       // what was measured.
-      bottleneckWhy = 'The site gives a visitor a clear way in, and money is already going out on ads. Nothing we measured calls for a rebuild — the opportunity is running the whole path from search to booked job better than it runs today.';
+      bottleneckWhy = 'The site gives a visitor a clear way in, and their ad wiring says money may be going out on ads. Nothing we measured calls for a rebuild — the opportunity is running the whole path from search to booked job better than it runs today.';
     } else if (_hasAds && _siteConverts && _harmInputs && _harmInputs.datedSite === true) {
       // ══ THE REBUILD IS NOT AUTOMATICALLY FIRST ══
       // Irwin's, live 2026-08-25: leak 1 was the missing service plan - after
@@ -42496,7 +42847,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // The competitors' own measured counts — so "Caliber's 101 reviews"
           // is licensed by the pack row that measured it, not eaten for being
           // neither ours nor our total.
-          const _compCounts = competitorCountsFrom(localRank);
+          const _compCounts = competitorCountsFrom(localRank).concat(outrankRow && outrankRow !== localRank ? competitorCountsFrom(outrankRow) : []);
           for (const k of _mf) {
             if (k.charAt(0) === '_') continue;
             parsed[k] = stripImpossibleReviewCountsDeep(parsed[k], _irc, 1, reviewsRead, _profTotal, reviewsNegativeCount, _compCounts);
@@ -42838,7 +43189,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             // the same object — computed here so nothing can drift.
             funnelStory = buildFunnelStory(_harmInputs, {
               bottleneck, bottleneckWhy,
-              adsLive: !!(localRank && localRank.paidIsUs),
+              adsLive: !!((localRank && localRank.paidIsUs) || (organicRank && organicRank.serp && organicRank.serp.lsaUs === true)),
               opsPain: readOperationalPain(publicPainSignals, reviewsRead),
               opsRoles: (careers && Array.isArray(careers.opsRoles)) ? careers.opsRoles.slice(0, 3) : [],
             });
@@ -42889,7 +43240,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _srx = stripUnmeasuredMoneyDeep(_srx, _corpus, _srg.m, 1, 'situationRead');
                   _srx = stripSpelledQuantitiesDeep(_srx, _corpus, _srg.sq, 1);
                   _srx = stripRecencyConclusionsDeep(_srx, _srg.rc, 1);
-                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount, competitorCountsFrom(localRank));
+                  _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount, competitorCountsFrom(localRank).concat(outrankRow && outrankRow !== localRank ? competitorCountsFrom(outrankRow) : []));
                   _srx = stripCompetitorSiteClaimsDeep(_srx, _srg.cc, 1);
                   _srx = stripPostContactClaimsDeep(_srx, _srg.pc, 1);
                   _srg.conf = { cut: [] };
@@ -44076,9 +44427,9 @@ RAW EVIDENCE (what we actually confirmed):
 - THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 AND THEIR ARITHMETIC: these are DISTINCT patterns. A sentence that adds their counts together and attributes the SUM to one single complaint ("the same thing four times", "four different customers describe the same experience" when no single pattern has four) is a FABRICATION and MUST be flagged. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date - but review AGE is internal intelligence, so DO flag any claim that a prospect notices it, reads it as the business being inactive, or that it is costing them trust. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + (gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - the real count is unknown, so FLAG any specific photo count as unverifiable), hours ' : gbpHealth.photosSeen + ' photos, hours ') + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
-- WHAT THE SCREENSHOT ACTUALLY SHOWED (a vision model READ their rendered homepage image \u2014 this is a MEASUREMENT, not a guess): ${visualAnalysis ? `MEASURED. Above the fold we saw: headline present = ${visualAnalysis.hasHeadline}, visible call-to-action present = ${visualAnalysis.hasVisibleCTA}, hero area blank = ${visualAnalysis.heroIsBlank}, overall conversion readiness = ${visualAnalysis.overallConversionReadiness}.${brainVisual && brainVisual.heroHeadline ? ` The headline read: "${brainVisual.heroHeadline}".` : ''}${brainVisual && brainVisual.ctaText ? ` The CTA read: "${brainVisual.ctaText}".` : ''}
+- WHAT THE SCREENSHOT ACTUALLY SHOWED (a vision model READ their rendered homepage image \u2014 this is a MEASUREMENT, not a guess): ${visualAnalysis ? `MEASURED on the rendered page (the above-the-fold answers are about the TOP region of the full-page render). In that top region: headline present = ${visualAnalysis.hasHeadline}, visible call-to-action present = ${visualAnalysis.hasVisibleCTA}, hero area blank = ${visualAnalysis.heroIsBlank}, overall conversion readiness = ${visualAnalysis.overallConversionReadiness}.${brainVisual && brainVisual.heroHeadline ? ` The headline read: "${brainVisual.heroHeadline}".` : ''}${brainVisual && brainVisual.ctaText ? ` The CTA read: "${brainVisual.ctaText}".` : ''}
   \u26a0 A live critique flagged "the pitch implies specific knowledge of homepage visual layout \u2014 this comes from a screenshot read, which we cannot independently verify" and told the audit to strip it. That was WRONG and it cost a real finding. We rendered the page, captured it, and a vision model read the image \u2014 describing what is visibly on that page is reporting a measurement. Statements about what appears above the fold, whether there is a headline, and whether there is a visible call-to-action are ALLOWED and must NOT be flagged as unverifiable.
-  \u26a0 THE LIMIT, WHICH STILL HOLDS: the screenshot shows the page ABOVE THE FOLD at one viewport at one moment. It cannot support claims about what loads further down, what a widget renders a few seconds later, what a mobile visitor sees, or what Google indexed. Flag those.` : 'NOT MEASURED \u2014 no screenshot was read on this lead. Any claim about what the page looks like, what is above the fold, or what a visitor sees is unsupported here and SHOULD be flagged.'}
+  \u26a0 THE LIMIT, WHICH STILL HOLDS: the screenshot shows the rendered page at one viewport at one moment, and the fold answers are about its top region only. It cannot support claims about what loads further down, what a widget renders a few seconds later, what a mobile visitor sees, or what Google indexed. Flag those.` : 'NOT MEASURED \u2014 no screenshot was read on this lead. Any claim about what the page looks like, what is above the fold, or what a visitor sees is unsupported here and SHOULD be flagged.'}
 - REAL-WORLD SPEED (Google CrUX field data, mobile): ${realSpeed.checked ? (realSpeed.hasFieldData ? (realSpeed.isProblem ? 'MEASURED and IS a problem: ' + realSpeed.findings.join('; ') + '. Claims about slow loading or layout shift on mobile are CORRECT here and must not be flagged.' : 'MEASURED and is FINE (' + realSpeed.overall + '). Any claim that their site is slow would be FALSE \u2014 flag it.') : 'NO FIELD DATA \u2014 too few visitors for Google to report. Any speed claim is unsupported; flag it.') : 'NOT MEASURED \u2014 flag any claim about speed, load time or mobile performance.'}
 - SOCIAL PRESENCE (links on their own site only): ${socialPresence.checked ? (socialPresence.count ? 'MEASURED \u2014 they link ' + socialPresence.platforms.join(', ') + '. A claim they link these is CORRECT. Any claim about POSTING FREQUENCY, followers, engagement or a profile being dead/abandoned is UNMEASURED \u2014 flag it, we never opened the profiles.' : 'MEASURED \u2014 no social profile linked on the pages read. A claim they link none is CORRECT.') : 'NOT MEASURED \u2014 flag any claim about social presence.'}
 - MARKET CLARITY (measured from their own homepage and site copy): ${marketClarity.checked ? (marketClarity.isConstraint ? 'MEASURED \u2014 their copy does NOT name who it is for. Specific gaps found: ' + marketClarity.gaps.join('; ') + '. A claim that their positioning is generic or that they speak to everyone is CORRECT and must NOT be flagged.' : 'MEASURED \u2014 their copy DOES name who it is for (' + (marketClarity.signals.join('; ') || marketClarity.band) + '). A claim that their targeting is generic would be FALSE \u2014 flag it.') : 'NOT MEASURED \u2014 make no claim about who they target or whether their positioning is generic.'}
@@ -44711,10 +45062,14 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // hasCTAAboveFold is not a field the eyes return, so `!undefined` was always
     // true and this condition reduced to `!hasCTA && visualAnalysis` — the guard
     // read as a second opinion and was not one.
-    if (!hasCTA && visualAnalysis && visualAnalysis.hasVisibleCTA === false) flaws.push('no_cta');
+    // pageFullyLoaded was an instruction in a prompt for its whole life -
+    // PART 3: instructional guards do not hold. Mechanical now (round 101): a
+    // mid-load screenshot may not manufacture a visual absence.
+    const _visTrust = !!(visualAnalysis && visualAnalysis.pageFullyLoaded !== false);
+    if (!hasCTA && _visTrust && visualAnalysis.hasVisibleCTA === false) flaws.push('no_cta');
     else if (!hasCTA && !visualAnalysis && content.length > 500) flaws.push('no_cta'); // fallback if no screenshot
 
-    if (hasWeakHeadline && visualAnalysis?.hasHeadline === false) flaws.push('weak_hero');
+    if (hasWeakHeadline && _visTrust && visualAnalysis.hasHeadline === false) flaws.push('weak_hero');
     else if (hasWeakHeadline && !visualAnalysis) flaws.push('weak_hero');
 
     // The comment forty lines above says it plainly: "we never manufacture a
@@ -44722,7 +45077,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // hasSocialProof does not exist, so `!undefined` was true on every lead and
     // the claim was manufactured exactly as forbidden. An uncertain read — a
     // review widget still loading — must never produce this flaw either.
-    if (!hasTestimonials && visualAnalysis && visualAnalysis.hasVisibleSocialProof === false && visualAnalysis.socialProofUncertain !== true) flaws.push('no_social_proof');
+    if (!hasTestimonials && _visTrust && visualAnalysis.hasVisibleSocialProof === false && visualAnalysis.socialProofUncertain !== true) flaws.push('no_social_proof');
     else if (!hasTestimonials && !visualAnalysis && content.length > 500) flaws.push('no_social_proof');
 
     // MEDIUM CONFIDENCE — BuiltWith confirmed absence (only flag if content is rich enough to be reliable)
@@ -45410,7 +45765,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // a fact the ladder scored on. websiteScore is the /10 with every point
       // traceable; auditFacts is ads yes/no/unreadable, the booking route, the
       // campaign pages the site does not link to, and real-visitor speed.
-      websiteScore: scoreWebsite(_harmInputs),
+      websiteScore: scoreWebsite(_harmInputs, { htmlSignals, visualAnalysis }),
       auditFacts: buildAuditFacts(_harmInputs, sitePages && sitePages.unlinkedPages, {
         htmlSignals,
         analytics: (builtWith && builtWith.adsRead === true) ? (builtWith.hasAnalytics ?? null) : null,
@@ -45499,6 +45854,9 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       screenshotUrl,
       // The scrollable render, so the audit view can show what is below the fold.
       fullPageUrl,
+      // Round 101: WHY there is no picture, when a render was taken and thrown
+      // away as a block/error page. The client shows this instead of silence.
+      renderRefused: renderRefused || null,
       // Full-page renders of every INNER page we read, so a human can scroll the
       // booking page and the services page \u2014 not just the homepage. These are the
       // pages where a crash or an empty form actually lives.
@@ -48003,7 +48361,7 @@ app.listen(PORT, () => {
     // The wire: the call site must hand both evidence classes over, or the rule
     // passes its fixtures while every live lead runs without it.
     const _en = (...p) => p.join('');
-    if (!selfSourceNoComments().includes(_en('evidence: { adsLive: !!(_measured && _measured.adsLiveInPack)', ','))) {
+    if (!selfSourceNoComments().includes(_en('evidence: { adsLive: !!((_measured && _measured.adsLiveInPack)', ' || (organicRank && organicRank.serp && organicRank.serp.lsaUs === true)),'))) {
       _fails.push('the live call site no longer passes the evidence classes, so the agreed rule runs on fixtures and never on a lead');
     }
     // The derivation moved into ONE shared copy (leakEvidenceFrom) so the
@@ -48045,7 +48403,7 @@ app.listen(PORT, () => {
     else {
       if (!(_tri.score >= 3 && _tri.score <= 6.5)) _fails.push(`the TriStar shape scores ${_tri.score}/10 — an outdated form-walled site should sit in the bottom half, visibly`);
       if (!_tri.skipped.includes('real-visitor speed')) _fails.push('an unmeasured component is not reported as skipped, so the operator cannot tell a bad site from a half-read one');
-      if (!/5 of 6/.test(String(_tri.basedOn))) _fails.push(`basedOn reads "${_tri.basedOn}" rather than naming 5 of 6 components`);
+      if (!/5 of 9/.test(String(_tri.basedOn))) _fails.push(`basedOn reads "${_tri.basedOn}" rather than naming 5 of 9 components (v2 grades nine)`);
     }
     const _good = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 0,
       bookingMeasured: true, booking: 'online_booking', formFieldCountIsSingleForm: true, formFieldCount: 4,
@@ -48056,6 +48414,30 @@ app.listen(PORT, () => {
     if (!_half.checked) _fails.push('a half-read site produced no score at all — the honest answer is a score over what was read');
     else if (_half.score < 9) _fails.push(`a site measured only on viewport and https — both fine — scores ${_half.score}/10: the unmeasured components are being scored as ZERO, which is the exact class PART 6 names, pointed at a number an operator will repeat`);
     if (scoreWebsite({}).checked !== false) _fails.push('a lead with nothing measured produced a score from nothing');
+    // ══ V2 (round 101): THE DOOR CAPS THE SCORE ═══════════════════════════
+    // Windows Plus shipped 9/10 over a form-and-wait door and the owner's
+    // verdict was "this site IS NOT A 9/10 not even close". A clean build
+    // around a door that cannot book a time caps at 7.5, out loud.
+    const _win = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 0,
+      bookingMeasured: true, booking: 'form', formFieldCountIsSingleForm: true, formFieldCount: 5,
+      mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true },
+      { visualAnalysis: { pageFullyLoaded: true, hasVisibleCTA: true, heroIsBlank: false } });
+    if (!_win.checked || _win.score > 7.5) _fails.push(`the Windows Plus shape scores ${_win && _win.score}/10 \u2014 a form-and-wait door must cap the build at 7.5 however clean the build`);
+    if (_win.checked && _win.score === 7.5 && !_win.capped) _fails.push('the cap fired without naming itself \u2014 a silently capped number reads as an earned one');
+    // A scheduler door is NOT capped - the cap is about the door, not a tax.
+    const _sched = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 0,
+      bookingMeasured: true, booking: 'online_booking', formFieldCountIsSingleForm: true, formFieldCount: 4,
+      mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true },
+      { visualAnalysis: { pageFullyLoaded: true, hasVisibleCTA: true, heroIsBlank: false } });
+    if (!_sched.checked || _sched.score < 9 || _sched.capped) _fails.push(`a real scheduler with a clean build scores ${_sched && _sched.score} (capped=${_sched && _sched.capped}) \u2014 the cap taxed the door it exists to reward`);
+    // A blocked or mid-load render grades NO first screen - the Burbank 403
+    // scored the block page itself under the old shape.
+    const _blk = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true },
+      { visualAnalysis: { looksBlockedOrError: true, hasVisibleCTA: false } });
+    if (!_blk.skipped.includes('first screen')) _fails.push('a block-page render still grades the first screen');
+    const _mid = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true },
+      { visualAnalysis: { pageFullyLoaded: false, hasVisibleCTA: false } });
+    if (!_mid.skipped.includes('first screen')) _fails.push('a mid-load render still grades the first screen \u2014 a spinner reads as "no clear next step"');
 
     // The facts strip: three states, and could-not-read is never "no".
     const _fy = buildAuditFacts({ googleAdsTag: true, adsReadable: true, adsConversion: false, callTracking: false });
@@ -48086,7 +48468,7 @@ app.listen(PORT, () => {
     // ── the call site, because a fixture supplies its own arguments ────────
     const _wn = (...p) => p.join('');
     const _wsrc = selfSourceNoComments();
-    if (!_wsrc.includes(_wn('websiteScore: scoreWebsite(', '_harmInputs),'))) {
+    if (!_wsrc.includes(_wn('websiteScore: scoreWebsite(', '_harmInputs, { htmlSignals, visualAnalysis }),'))) {
       _fails.push('the response no longer carries the score, so the card computes on the client from fields it does not have — or not at all');
     }
     if (!_wsrc.includes(_wn('auditFacts: buildAuditFacts(', '_harmInputs, sitePages && sitePages.unlinkedPages, {'))) {
@@ -48533,22 +48915,38 @@ app.listen(PORT, () => {
     ] }, { evidence: { adsLive: false, writtenContact: true, reviewThemeContact: true } });
     const _evRanked = _rkEv.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
     if (!_evRanked[0] || _evRanked[0].id !== 'review_pain_pattern') _fails.push('within one stage a customer-written complaint no longer outranks an inferred finding');
-    // ══ THE ANCHOR FLOOR, both directions ═════════════════════════════════
-    // A 2-mention pattern (writtenContact false, theme still contact-shaped)
-    // sits deepest but may not anchor: the ads finding takes leak 1 and the
-    // pattern supports at 2. On the live Conner's shape the depth rule alone
-    // put the 2-of-90 anecdote at #1 — §61's complaint through the new door.
+    // ══ THE ANCHOR FLOOR, both directions - re-scoped by the owner, r101 ═══
+    // The below-floor case is now the SCHEDULING shape (and anything the
+    // buckets cannot place): the owner lifted the floor to two mentions ONLY
+    // for no_response/quote_delay complaints - money in hand that got no
+    // answer - and was explicitly unsure about no-shows, so scheduling keeps
+    // the three-mention floor. The fixture's finding text matches what its
+    // supplied evidence says, because the old text ('slow follow-up') would
+    // bucket to no_response in production and carry writtenContact TRUE now.
     const _rkFloor = buildProblemList({ byHarm: [
-      { id: 'review_pain_pattern', finding: 'slow follow-up after estimates', costs: 'c', harm: 86, opener: 75, novel: 88 },
+      { id: 'review_pain_pattern', finding: 'missed appointment windows twice', costs: 'c', harm: 86, opener: 75, novel: 88 },
       { id: 'paid_traffic_leaks', finding: 'ad code and a phone-only door', costs: 'c', harm: 93, opener: 80, novel: 78 },
     ] }, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: true } });
     const _floorRanked = _rkFloor.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
-    if (!_floorRanked[0] || _floorRanked[0].id !== 'paid_traffic_leaks') _fails.push('a review pattern below the three-mention floor still anchors leak 1 over a measured finding');
+    if (!_floorRanked[0] || _floorRanked[0].id !== 'paid_traffic_leaks') _fails.push('a review pattern below the anchor floor still anchors leak 1 over a measured finding');
     if (!_floorRanked[1] || _floorRanked[1].id !== 'review_pain_pattern') _fails.push('the below-floor pattern lost its supporting number — it should hold leak 2, not vanish');
+    // ══ THE BURBANK SHAPE, through the REAL derivation - a check that does
+    // not assert its call site is half a check, so the evidence here comes
+    // from leakEvidenceFrom itself, not a hand-built object. Quote delays at
+    // TWO mentions must take leak 1 over the ads finding - "money literally
+    // going out the door... without a question" (Vin, 2026-08-26).
+    const _bkEv = leakEvidenceFrom({ reviewPainTop: 'Quote delays and non-response to follow-up', reviewPainTopKind: 'contact', reviewPainMentions: 2 });
+    if (_bkEv.writtenContact !== true) _fails.push('a 2-mention quote-delay complaint no longer clears the anchor floor through the real derivation');
+    const _rkBurbank = buildProblemList({ byHarm: [
+      { id: 'review_pain_pattern', finding: 'Quote delays and non-response to follow-up', costs: 'c', harm: 86, opener: 75, novel: 88 },
+      { id: 'paid_traffic_leaks', finding: 'ad code and a form-and-wait door', costs: 'c', harm: 93, opener: 80, novel: 78 },
+    ] }, { evidence: { adsLive: false, ..._bkEv } });
+    const _bkRanked = _rkBurbank.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
+    if (!_bkRanked[0] || _bkRanked[0].id !== 'review_pain_pattern') _fails.push('the Burbank shape: a 2-mention written quote-delay complaint no longer takes leak 1 over the ads finding');
     // Last resort: when the weak pattern is ALL there is, it still anchors —
     // the email's own BLOCKED RUNG LEADS ANYWAY rule, mirrored.
     const _rkOnly = buildProblemList({ byHarm: [
-      { id: 'review_pain_pattern', finding: 'slow follow-up after estimates', costs: 'c', harm: 86, opener: 75, novel: 88 },
+      { id: 'review_pain_pattern', finding: 'missed appointment windows twice', costs: 'c', harm: 86, opener: 75, novel: 88 },
     ] }, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: true } });
     if (!_rkOnly.some(r => r.leakRank === 1)) _fails.push('a lead whose only sayable finding is a weak pattern shows no leak 1 at all — the last-resort rule is gone');
     // "if there arent big ones then fill the 2 and 3": one big finding plus
@@ -48762,10 +49160,20 @@ app.listen(PORT, () => {
     const _fails = [];
     const _n = (...p) => p.join('');
     // 1. The localization decision, all three branches.
+    // Round 101: the CITY leads and the coordinates are the DECLARED fallback.
+    // Burbank Electric measured #1 of 100 from its own Fernandina Beach
+    // doorstep against a hand-checked ~#15 in the Jacksonville it sells into -
+    // standing at the business flatters the business, and both stability
+    // samples shared the standpoint so the second look confirmed the bias.
     const _lc = dfsLocalization({ bizLat: 35.2271, bizLng: -80.8431, city: 'Charlotte, NC', mode: 'finder' });
-    if (!_lc.arg.location_coordinate || _lc.arg.location_coordinate !== '35.2271000,-80.8431000') _fails.push(`the finder coordinate came out "${_lc.arg.location_coordinate}" — it must be lat,lng with no third component so DataForSEO's documented 9z default applies`);
+    if (!_lc.arg.location_name || _lc.arg.location_name !== 'Charlotte,North Carolina,United States') _fails.push(`with a parseable city the finder must stand IN THE CITY, not at the business — got ${JSON.stringify(_lc.arg)}`);
+    if (!_lc.fallback || !_lc.fallback.arg || _lc.fallback.arg.location_coordinate !== '35.2271000,-80.8431000') _fails.push(`the finder's declared coordinate fallback came out "${_lc.fallback && _lc.fallback.arg && _lc.fallback.arg.location_coordinate}" — it must be lat,lng with no third component so DataForSEO's documented 9z default applies`);
     const _lo = dfsLocalization({ bizLat: 35.2271, bizLng: -80.8431, city: 'Charlotte, NC', mode: 'organic' });
-    if (!/,30000$/.test(String(_lo.arg.location_coordinate))) _fails.push('the organic coordinate lost its radius — the two endpoints take DIFFERENT third components and mixing them is undocumented behaviour');
+    if (!_lo.arg.location_name) _fails.push('the organic read no longer stands in the city');
+    if (!/,30000$/.test(String(_lo.fallback && _lo.fallback.arg && _lo.fallback.arg.location_coordinate))) _fails.push('the organic coordinate fallback lost its radius — the two endpoints take DIFFERENT third components and mixing them is undocumented behaviour');
+    // Coordinates still serve when no city parses at all.
+    const _lcOnly = dfsLocalization({ bizLat: 35.2271, bizLng: -80.8431, city: '', mode: 'finder' });
+    if (!_lcOnly.arg.location_coordinate) _fails.push('with no city at all the coordinates no longer serve — a suburb lead loses its read entirely');
     const _ln = dfsLocalization({ bizLat: null, bizLng: null, city: 'San Antonio, TX', mode: 'finder' });
     if (!_ln.arg.location_name || _ln.arg.location_name !== 'San Antonio,Texas,United States') _fails.push(`the location_name fallback came out "${_ln.arg.location_name}" — their database holds "San Antonio,Texas,United States" and nothing else`);
     const _l0 = dfsLocalization({ bizLat: null, bizLng: null, city: 'Springfield', mode: 'finder' });
@@ -48829,8 +49237,8 @@ app.listen(PORT, () => {
     // first falsification cut the spread and left the decision line standing,
     // and both needles above stayed green — computed-but-not-passed, inside
     // this very check. The spread is pinned on its own now.
-    if (!_src.includes(_n('              ..._loc', '.arg,'))) _fails.push('the finder request body lost the localization spread — the decision is computed and the request still goes out country-level');
-    if (!_src.includes(_n('String(query), ..._loc', '.arg, language_code'))) _fails.push('the organic request body lost the localization spread');
+    if (!_src.includes(_n('              ..._loc', 'Arg,'))) _fails.push('the finder request body lost the localization spread — the decision is computed and the request still goes out country-level');
+    if (!_src.includes(_n('String(query), ..._loc', 'Arg, language_code'))) _fails.push('the organic request body lost the localization spread');
     if ((_src.match(new RegExp(_n('}, DFS_LIVE_', 'TIMEOUT_MS\\);'), 'g')) || []).length < 2) _fails.push('a DFS live call is back on a hand-written timeout — 20 seconds is what killed every depth-100 read on the first credentialed run');
     if ((_src.match(new RegExp(_n('&& m\\.packUs !== ', 'true'), 'g')) || []).length < 3) _fails.push('the pack stand-down reaches fewer than three consumers (two rungs and the walk absence) — a gate applied per consumer is a gate somebody forgets to apply');
     if (!_src.includes(_n('packUs: !!(organicRank && organicRank.serp && ', 'organicRank.serp.packUs),'))) _fails.push('the pack read never reaches the harm inputs — measured, paid for, dropped one line before use');
@@ -48841,10 +49249,18 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('the top of that list ', 'is not stated'))) _fails.push('the NOT IN TOP log prints an empty "top of that list:" tail again on the fallback source');
     if (!_src.includes(_n('mobileShotUrl = (await firecrawlData.', '_mobilePromise) || null'))) _fails.push('the phone render is started and never collected — paid for and invisible');
     if (!_src.includes(_n('output_config: { effort: ', 'SITUATION_EFFORT }'))) _fails.push('the situation-read effort dial is disconnected — the priciest call on the lead is back on a hardcoded constant');
+    // Round 101: the declared fallback must actually be TAKEN when DataForSEO
+    // refuses the city name (40501), in BOTH fetch loops — a fallback nobody
+    // swaps to is a comment — and the service-area read is DFS-only, because
+    // a Places answer about a village is relevance noise sold as a market.
+    if ((_src.match(new RegExp(_n('40501\\|invalid field', "\\[\\^a-z\\]\\*'\\?location_name"), 'g')) || []).length < 2) _fails.push('a 40501 on the city name no longer swaps to the coordinate fallback in both fetch loops — Bagdad, KY burns two calls and falls to Places noise again');
+    if (!_src.includes(_n('_fellBack = true; _locArg = _loc.fallback.arg; _locNote', ' = _loc.fallback.note;'))) _fails.push('the finder loop no longer takes the declared fallback on a refused city');
+    if (!_src.includes(_n('if (noPlacesFallback) return { ok: false, why: ', "'DataForSEO could not localize this market"))) _fails.push('the service-area read can fall to Places again — a village query answered by a relevance lookup prints an absence row about noise');
+    if (!_src.includes(_n('noPlaces', 'Fallback: true,'))) _fails.push('the service-area call site no longer opts out of the Places fallback');
     if (_fails.length) {
       console.log(`⛔ RANK LOCALIZATION CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
     } else {
-      console.log(`✓ RANK LOCALIZATION CHECK: every DFS search now stands where the searcher stands — their own coordinates first, the full-state location name second, and country-level 2840 only as a LOUD last resort — with 75-second timeouts (their own guidance is 120), one retry on the retriable half, both stability samples in flight at once, and a whole-state "market" refused at both doors. The organic page's own map pack is parsed as a second free read: their listing in it stands down INVISIBLE and the paying band, and the top ranked keywords land on the lead as the named top of their funnel. Executed here: the localization decision, the pack parse, the keywords parse, the walk branch, both stand-downs both ways, and thirteen call-site wires.`);
+      console.log(`✓ RANK LOCALIZATION CHECK: every DFS search now stands where the searcher stands — the city-level location name FIRST (a searcher in Jacksonville stands in Jacksonville, not at the business's own office, which is how Burbank read #1), the business's coordinates as the declared fallback taken on a 40501 in both fetch loops, and country-level 2840 only as a LOUD last resort — with 75-second timeouts (their own guidance is 120), one retry on the retriable half, both stability samples in flight at once, and a whole-state "market" refused at both doors. The organic page's own map pack is parsed as a second free read: their listing in it stands down INVISIBLE and the paying band, and the top ranked keywords land on the lead as the named top of their funnel. Executed here: the localization decision, the pack parse, the keywords parse, the walk branch, both stand-downs both ways, and thirteen call-site wires.`);
     }
   } catch (e) {
     console.log(`⛔ RANK LOCALIZATION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -49273,6 +49689,225 @@ app.listen(PORT, () => {
     console.log(`⛔ NEW SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══════════ PRIMARY TRADE RANK CHECK — the lead's rank is its own trade ══
+  // Round 101, off the Windows Plus sheet Vin hand-checked against live Google.
+  // pickRankRow's absent-service promotion fed the LEAD's rank, so the sheet
+  // said "not among the 100 listings returned (checked twice)" about a business
+  // sitting #2 and #1 for the trade it is NAMED after — while the map-pack row
+  // beside it said #2. This check EXECUTES the split: the head row is the
+  // lead's rank identity, the outranked evidence keeps its own row with its
+  // query named, and a confirmed single service absence travels by name
+  // through service_invisibility instead of hijacking the rank.
+  try {
+    const _fails = [];
+    const _n2 = (...p) => p.join('');
+    // The Windows shape: the absent service row arrives FIRST in the results
+    // array (the service loop appends in its own order), the head row second.
+    const _svcRow = { kind: 'their own service page', svc: 'bathroom remodeling', checked: true,
+      found: false, scanned: 100, query: 'bathroom remodeling in Louisville, KY', absenceConfirmed: true };
+    const _headRow = { kind: 'primary trade', checked: true, found: true, rank: 2, scanned: 99,
+      weakerAbove: 0, orderTrusted: true, matchedBy: 'placeId', query: 'window replacement contractor in Louisville, KY',
+      ours: { reviews: 210, rating: 4.8 } };
+    const _outRow = { kind: 'their own service page', svc: 'gum surgery', checked: true, found: true,
+      rank: 8, scanned: 100, weakerAbove: 4, weakerNames: ['A Cheaper Rival'], orderTrusted: true,
+      matchedBy: 'placeId', query: 'gum surgery in Louisville, KY', ours: { reviews: 210, rating: 4.8 } };
+    const _head = headRankRowFrom([_svcRow, _headRow]);
+    if (!_head || _head.query !== _headRow.query) _fails.push('headRankRowFrom does not return the primary-trade row — the lead\'s rank identity is whatever row happens to sit first again');
+    if (headRankRowFrom([_svcRow]) !== null) _fails.push('with no primary-trade row headRankRowFrom invents one — a service row is back as the lead\'s rank');
+    // The lead's rank comes from the HEAD row; the weaker evidence and its
+    // query come from the OUTRANK row. One lead, two queries, no split-brain.
+    const _rm = resolveMeasurements({ localRank: _head, outrankRow: _outRow,
+      gbpHealth: { reviewCount: 212, rating: 4.8 } });
+    if (_rm.rank !== 2 || _rm.rankFound !== true) _fails.push(`the lead\'s rank is not the primary-trade row\'s (#2) — got rank=${_rm.rank} found=${_rm.rankFound}`);
+    if (_rm.weakerAbove !== 4) _fails.push(`weakerAbove does not read the outranked-evidence row — got ${_rm.weakerAbove}, the John P. Goodman finding is dead`);
+    if (_rm.outrankedQuery !== _outRow.query) _fails.push('outrankedQuery does not name the search the weaker numbers came from — the sentence and its evidence can describe two different searches');
+    // Without an outrank row the weaker fields fall back to the head row.
+    const _rmSolo = resolveMeasurements({ localRank: { ..._headRow, weakerAbove: 1, weakerNames: ['X'] }, gbpHealth: { reviewCount: 212 } });
+    if (_rmSolo.weakerAbove !== 1) _fails.push('with no outrank row the weaker evidence dies — the fallback to the head row is gone');
+    // The confirmed single service absence travels by NAME, never as the rank.
+    const _gap = serviceVisibilityGap({ results: [_svcRow, _headRow] });
+    if (_gap.confirmed !== 1 || _gap.confirmedName !== 'bathroom remodeling') _fails.push(`serviceVisibilityGap does not surface the confirmed single — confirmed=${_gap.confirmed} name=${_gap.confirmedName}`);
+    if (_gap.confirmedQuery !== _svcRow.query || _gap.confirmedScanned !== 100) _fails.push('the confirmed absence lost its query or field size — the owner cannot run the search we quoted');
+    const _si = HARM_LADDER.find(h => h.id === 'service_invisibility');
+    if (!_si || _si.test({ serviceAbsentConfirmed: true, serviceAbsentName: 'bathroom remodeling' }) !== true) _fails.push('a twice-confirmed single service absence fires nothing — the finding the promotion used to smuggle in is simply gone');
+    if (_si && _si.test({ serviceAbsentConfirmed: false, serviceAbsentName: 'bathroom remodeling' }) !== false) _fails.push('an UNCONFIRMED single absence fires the rung — one draw is noise and harm 91 is riding it');
+    const _siSay = _si ? String(_si.say({ serviceAbsentConfirmed: true, serviceAbsentName: 'bathroom remodeling', serviceAbsentQuery: _svcRow.query, serviceAbsentScanned: 100 })) : '';
+    if (!/We ran that search twice/.test(_siSay) || !_siSay.includes(_svcRow.query)) _fails.push('the single-confirmed sentence lost its query or its two-look claim');
+    // The sheet names the search beside the rank.
+    if (buildAuditFacts({ rankQuery: _headRow.query }, null, null).searchQuery !== _headRow.query) _fails.push('the facts strip does not carry the query — "the audit didn\'t tell us exactly what to search" stands');
+    // Call sites, pinned at runtime: BOTH rank paths take the head row, the
+    // outrank row travels beside it into resolveMeasurements, and the service
+    // wires are fed from the gap. A check that does not assert its call site
+    // is half a check — the promotion was "fixed" in a fixture once before.
+    const _s = selfSourceNoComments();
+    for (const [what, needle] of [
+      ['the primary rank path does not take the head row', _n2('localRank = headRankRowFrom(lv', '.results) || _pick.row;')],
+      ['the re-run rank path does not take the head row', _n2('localRank = headRankRowFrom(lv2', '.results) || _pick2.row;')],
+      ['the outrank row never reaches resolveMeasurements', _n2('localRank, outrankRow,', ' gbpHealth, history')],
+      ['the confirmed service absence never reaches the ladder', _n2('serviceAbsentConfirmed: _svcGap', '.confirmed >= 1,')],
+      ['the absence query never reaches the ladder', _n2('serviceAbsentQuery: _svcGap', '.confirmedQuery,')],
+    ]) {
+      if (!_s.includes(needle)) _fails.push(what);
+    }
+    if (_fails.length) {
+      console.log(`⛔ PRIMARY TRADE RANK CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ PRIMARY TRADE RANK CHECK: the Windows Plus split-brain cannot come back — the lead\'s rank is always its primary-trade row (#2 stays #2 whatever the service loop found), the outranked evidence keeps its own row and names its own query, a confirmed single service absence travels through service_invisibility by name with the exact search quoted, the facts strip names the head query, and every wire is pinned at its call site.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PRIMARY TRADE RANK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══════════ RENDER QUARANTINE CHECK — a block page is never their homepage ═
+  // Round 101, off the Burbank sheet: the homepage render was a literal
+  // "403: Access Forbidden — Your location (NO) has been disallowed" page —
+  // served to a non-US egress — and it shipped as "their homepage, top to
+  // bottom": vision read it, the score graded it, the sheet displayed it.
+  // Three layers now, each pinned here: the scrape-time quarantine (HTTP
+  // status + block-page vocabulary), the vision belt (looksBlockedOrError
+  // discards the render from the sheet, the brain and every visual
+  // conclusion), and the US egress on every render request so the page we
+  // photograph is the page a US customer sees.
+  try {
+    const _fails = [];
+    const _n2 = (...p) => p.join('');
+    const _s = selfSourceNoComments();
+    for (const [what, needle] of [
+      ['the HTTP status of the scrape is consumed by nothing again — a 403 body reads as their homepage', _n2('const _httpStatus = Number(firecrawlData.data?.metadata?.', 'statusCode')],
+      ['the status gate is gone', _n2('_blockedStatus = Number.isFinite(_httpStatus) && _httpStatus', ' >= 400;')],
+      ['the block-page vocabulary lost the geo-block family — the literal Burbank page walks through', _n2('has been disallowed|not available in your ', '(?:country|region)')],
+      ['the vision belt no longer splices the render out of the brain\'s evidence', _n2('msgContent.splice(_qi', ', 1);')],
+      ['a quarantined render still reaches the sheet — the display URLs are not nulled', _n2('screenshotUrl = null; fullPageUrl = null; ', 'mobileShotUrl = null;')],
+      ['the vision prompt no longer asks whether the image is a block page at all', _n2('"looksBlockedOrError": true', '/false')],
+      ['the quarantine reason never reaches the client', _n2('renderRefused: renderRefused', ' || null,')],
+      ['the vision-trust gate is gone — no_cta/weak_hero/no_social_proof fire off a render the eyes refused', _n2('const _visTrust = !!(visualAnalysis && visualAnalysis', '.pageFullyLoaded !== false);')],
+    ]) {
+      if (!_s.includes(needle)) _fails.push(what);
+    }
+    // Every render request stands in the US. Firecrawl documents the location
+    // param; without it the egress is whatever region is nearest, which is how
+    // a Norwegian exit node bought a geo-block as "their homepage". Counted,
+    // not single-needled: the homepage scrape, the batch scrape, the markdown
+    // retry and the phone render must all carry it.
+    const _usNeedle = _n2("location: { country: '", "US', languages: ['en'] }");
+    const _usCount = _s.split(_usNeedle).length - 1;
+    if (_usCount < 4) _fails.push(`only ${_usCount} of the 4 render/scrape bodies carry the US egress — a non-US exit node can still buy a geo-block as their homepage`);
+    // The one executable half: the score must refuse the vision components of
+    // a render the eyes called a block page — the denominator shrinks, no
+    // component is graded off a 403 body.
+    const _wsBlk = scoreWebsite({ bookingMeasured: true, booking: 'online_booking', viewportChecked: true, hasViewport: true },
+      { visualAnalysis: { looksBlockedOrError: true, hasVisibleCTA: true, pageFullyLoaded: true } });
+    if (!_wsBlk.checked || (_wsBlk.graded || []).some(g => g.what === 'the first screen') || !(_wsBlk.skipped || []).includes('first screen')) _fails.push('the website score grades the first screen off a render the eyes refused — Burbank\'s 403 page is back in the denominator');
+    if (_fails.length) {
+      console.log(`⛔ RENDER QUARANTINE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ RENDER QUARANTINE CHECK: a refused render can never again ship as their homepage — the scrape quarantines on HTTP status and the block-page vocabulary (the literal Burbank 403 wording included), the vision belt discards a block page from the sheet, the brain\'s evidence and every visual conclusion with the reason delivered to the client, all four render bodies stand in the US, and the score will not grade a first screen the eyes refused.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RENDER QUARANTINE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══════════ DIAGNOSIS AND MONEY LINE CHECK — round 101 residuals ═════════
+  // The rest of what three hand-checked sheets carried, each executed both
+  // ways: the MARKET essay that printed on two of three sheets when nothing
+  // bound ("generic market positioning stuff that couldn't be farther from
+  // the truth"), the code-assembled money lines asserting ad spend off a tag,
+  // the pricing page the picker left unread on the lead whose sheet then said
+  // price was not measured, the emergency copy sitting over a
+  // schedule-a-walkthrough door, and the price row's four honest states.
+  try {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    // 1 · Nothing binds -> layer NONE, no positioning essay, and the one-thing
+    // defers to leak 1 instead of printing an opinion where the leaks belong.
+    const _gcNone = measureGrowthConstraint({ reviewCount: 40, reviewRating: 4.8, rank: 2, rankScanned: 20 });
+    if (!_gcNone.checked || _gcNone.layer !== 'NONE') _fails.push(`nothing-binds resolves to layer ${_gcNone.layer}, not NONE — the MARKET essay is back`);
+    if (/present themselves|positioning/i.test(String(_gcNone.condition))) _fails.push('the nothing-binds condition carries positioning prose again — an opinion printed where the sheet wants the leaks');
+    const _oneNone = buildTheOneThing({ growthConstraint: _gcNone, worst: { id: 'review_pain_pattern', finding: 'customers say nobody calls back' } });
+    if (!_oneNone || _oneNone.layer !== null) _fails.push('a NONE constraint still renders a layer label');
+    if (!_oneNone || !/numbered leaks ARE the diagnosis/.test(String(_oneNone.diagnosis))) _fails.push('the NONE diagnosis does not defer to leak 1 — two verdicts about one lead on one sheet again');
+    // 2 · "They pay for every click" earns its tense. Code-assembled BURNING
+    // lines are outside stripUnprovenAdSpend's walk, so the conditional lives
+    // in moneyLineFor itself: a tag alone gets "If those ads are live", a
+    // sponsored row or their LSA ad seen on OUR pull licenses the flat form.
+    const _mlCond = String(moneyLineFor('paid_traffic_leaks', null, undefined, 'blind', false) || '');
+    if (!/If those ads are live, they pay for every click/.test(_mlCond)) _fails.push('the BURNING money line asserts spend as fact off a tag again — the exact class the stripper cuts from model prose, code-assembled past it');
+    const _mlLive = String(moneyLineFor('paid_traffic_leaks', null, undefined, 'blind', true) || '');
+    if (/If those ads are live, they pay/.test(_mlLive) || !/They pay for every click/.test(_mlLive)) _fails.push('a PROVEN live advertiser gets the hedged line — their ad was on our own pull and the sentence must say the flat fact');
+    // 3 · A pricing page is never left unread: the money words match anywhere
+    // in the slug (real slugs are /concrete-pricing, /driveway-cost — the
+    // money word trails the trade word by convention), the leadership rule is
+    // untouched, and the vocabulary knows financing and cost.
+    const _prUrls = ['https://x.com/services', 'https://x.com/concrete-pricing-guide'];
+    const _prRe = /(pricing|price|prices|rates?|plans|packages|cost|fees?|financing|tuition|membership)/i;
+    if (!rankUrlsByIntent(_prUrls, _prRe, 6, { hintAnywhere: true }).some(u => /pricing/.test(u))) _fails.push('a mid-slug pricing page is invisible to the picker — TriStar\'s pricing page goes unread while the sheet says price was not measured');
+    if (rankUrlsByIntent(['https://x.com/myths-facts-about-latisse'], /(about|team)/i, 6).length) _fails.push('the leadership position rule loosened — a Latisse FAQ reads as a leadership page again');
+    if (!_prRe.test('financing') || !_prRe.test('cost')) _fails.push('the pricing vocabulary lost financing or cost');
+    const _s = selfSourceNoComments();
+    if (!_s.includes(_n('hintAnywhere: intent.key === ', "'pricing'"))) _fails.push('the pricing intent no longer opts into anywhere-matching at the call site — the fixture above supplies its own flag and cannot see the caller');
+    // 4 · Emergency copy over a scheduled door is a measured mismatch;
+    // phone_only is NOT one (an emergency customer calls), and a site whose
+    // copy never claims emergency work reads false, not mismatch.
+    if (buildAuditFacts({ emergencyCopySeen: true, bookingMeasured: true, booking: 'form' }, null, null).emergencyMismatch !== true) _fails.push('emergency copy over a form-and-wait door no longer reads as a mismatch — the Burbank contradiction goes unmeasured');
+    if (buildAuditFacts({ emergencyCopySeen: true, bookingMeasured: true, booking: 'phone_only' }, null, null).emergencyMismatch === true) _fails.push('a phone-only door reads as an emergency mismatch — an emergency customer CALLS');
+    if (buildAuditFacts({ emergencyCopySeen: false }, null, null).emergencyMismatch !== false) _fails.push('a site that never claims emergency work carries the mismatch state');
+    if (!_s.includes(_n('emergencyCopySeen: /\\b24[\\s\\/-]?7\\b|emergency/i.test(String(content', " || ''))"))) _fails.push('the emergency-copy read never runs at the call site — the facts strip reads a field nothing writes');
+    // 5 · The price row's four honest states, server-authoritative.
+    if (buildAuditFacts({ pricesPublished: 2 }, null, null).price !== 'shown') _fails.push('a published price does not read shown');
+    if (buildAuditFacts({ homepagePriceSeen: true }, null, null).price !== 'shown') _fails.push('a homepage hero price does not read shown');
+    if (buildAuditFacts({ unreadPricing: true }, null, null).price !== 'unread') _fails.push('a pricing page we chose not to open no longer reads unread — the sheet says "none" about a page one click away');
+    if (buildAuditFacts({ pricingMeasured: true, pricesPublished: 0 }, null, null).price !== 'none') _fails.push('a measured absence does not read none');
+    if (buildAuditFacts({}, null, null).price !== null) _fails.push('an unmeasured price hardened into a state');
+    // 6 · The mid-slug state pop: /scottsburg-in-bathroom-remodeling is
+    // Scottsburg, INDIANA — inline in a network function, so the two halves
+    // of the fix are pinned where they run.
+    if (!_s.includes(_n('if (!_st && parts.length > 1 && /^[a-z]{2}$/i', '.test(parts[parts.length - 1])'))
+      || !_s.includes(_n('&& US_STATE_NAMES[String(parts[parts.length - 1])', '.toUpperCase()]'))) _fails.push('the after-trade-strip state pop is gone — "Scottsburg In Bathroom" ships as a city again');
+    // 7 · The pricing intent's own vocabulary lives in PAGE_INTENTS, and the
+    // fixture above supplies its own regex — half a check without this pin.
+    if (!_s.includes(_n("{ key: 'pricing',  re: /(pricing|price|prices|rates?|plans|packages|cost|fees?", '|financing|tuition|membership)/i }'))) _fails.push('the pricing intent vocabulary narrowed — a /financing or /cost page goes back to unread');
+    // 8 · The city chain: TriStar had Nashville three ways and the rank read
+    // took the first truthy string, which was unparseable — so the whole
+    // search surface was skipped. Executed on the real chain: a lead location
+    // that cannot parse must fall through to their own Google record, a
+    // parseable lead wins, and a bare state is never a market.
+    // The live TriStar shape: the lead arrived with NO location while the run
+    // held Nashville in their own Google record. (A comma-less prose string
+    // like "serving the metro area" still parses as a candidate city — a
+    // documented looseness in parseCityState, not this round's defect.)
+    if (rankLocationFrom('', { gbpCity: 'Nashville', gbpState: 'TN' }) !== 'Nashville, TN') _fails.push('an empty lead location no longer falls through to their Google record — the TriStar skip is back');
+    if (rankLocationFrom('Louisville, KY', { gbpCity: 'Nashville', gbpState: 'TN' }) !== 'Louisville, KY') _fails.push('the lead\'s own parseable city lost to a later candidate');
+    if (rankLocationFrom('Colorado', { gbpCity: 'Denver', gbpState: 'CO' }) !== 'Denver, CO') _fails.push('a bare state name survives as the market instead of falling through');
+    if (!_s.includes(_n('gbpState: Array.isArray(', 'd.addressComponents)'))) _fails.push('fetchGBPHealth no longer delivers the state beside the city — the chain\'s second candidate is structurally dead and the fixtures above supply their own');
+    // 9 · The facts strip's live-ads flag takes the same union the evidence
+    // does — an LSA-proven advertiser must never read as tag-inferred.
+    if (buildAuditFacts({ lsaUs: true }, null, null).adsLive !== true) _fails.push('an LSA-proven advertiser does not read adsLive on the facts strip — the union narrowed back to the pack row');
+    if (buildAuditFacts({ adsLiveInPack: false, lsaUs: false }, null, null).adsLive !== null) _fails.push('not seeing their ad hardened into a state — absence of a rotating surface is never a fact');
+    // 10 · The ads rung family speaks conditionally off a tag: the reframe
+    // carries "whether or not", the costs carry "if those ads are live".
+    const _ptlR = HARM_LADDER.find(h => h.id === 'paid_traffic_leaks');
+    if (!_ptlR || !/whether or not/.test(String(_ptlR.reframe))) _fails.push('the paid_traffic_leaks reframe asserts spend as fact again — the tag proves wiring, never a live campaign');
+    if (!_ptlR || !/if those ads are live/i.test(String(_ptlR.costs))) _fails.push('the paid_traffic_leaks costs line lost its conditional');
+    // 11 · The round-101 respond stems, through the REAL leak derivation —
+    // "nobody responds" matched NO bucket on the live TriStar sheet, so the
+    // complaint Vin called the biggest leak ever ranked third.
+    const _nr101 = leakEvidenceFrom({ reviewPainTop: 'nobody responds after the deposit is paid', reviewPainTopKind: 'contact', reviewPainMentions: 2 });
+    if (_nr101.writtenContact !== true) _fails.push('"nobody responds" still matches no bucket — the TriStar complaint ranks under two form findings again');
+    // 12 · The booking route is the heaviest score component, asserted on the
+    // component itself — the 7.5 cap masks a gutted weight in every
+    // whole-score fixture, so the weight is read where it is assigned.
+    const _bw101 = scoreWebsite({ bookingMeasured: true, booking: 'form', viewportChecked: true, hasViewport: true }, {});
+    const _bwg101 = (_bw101.graded || []).find(g => g.what === 'a way to book');
+    if (!_bwg101 || _bwg101.of !== 3 || _bwg101.got !== 1) _fails.push('the booking route is no longer the heaviest component (a form must score 1 of 3) — the whole door problem is back to costing 1.5 of 10');
+    if (_fails.length) {
+      console.log(`⛔ DIAGNOSIS AND MONEY LINE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ DIAGNOSIS AND MONEY LINE CHECK: the round-101 residuals hold both ways — nothing-binds is a NONE that defers to leak 1 (no positioning essay), the BURNING money line hedges on a tag and speaks flat only on a live-seen ad, a mid-slug pricing page is picked while the leadership rule stands, emergency copy over a scheduled door is measured (and a phone door is not a mismatch), the price row has its four honest states, and the mid-slug state pop is pinned where it runs.`);
+    }
+  } catch (e) {
+    console.log(`⛔ DIAGNOSIS AND MONEY LINE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ WHAT THE FIRST DATAFORSEO-CREDENTIALED RUN EXPOSED, EXECUTED ═════════
   // Three leads, 2026-08-24: every DFS call failed with a swallowed reason, an
   // invented "Seven of forty reviews" shipped after the mine timed out, the
@@ -49572,7 +50207,9 @@ app.listen(PORT, () => {
       ['the synthesis does not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(_srx, ', '_srg.own, 1, {')],
       ['the resolver and the brain-add no longer share the ONE surname rule', _dn('surnameInCompanyName(best.name, ', 'companyName) && _onOwnSite')],
       ['the brain-read name never earns its code-checked evidence line', _dn('ownerNameEvidence = `Read off their own pages', ' \\u2014 no title is published')],
-      ['the leak promotion floor is not the email anecdote floor', _dn('reviewPainMentions) >= ', '3')],
+      // Re-scoped by the owner, round 101: the floor is three mentions OR two
+      // for the response-to-money buckets (no_response/quote_delay).
+      ['the leak promotion floor lost the owner\'s two-tier rule', _dn('(mentions >= 3 || (mentions >= 2 && ', 'responseToMoney))')],
       // The headline finally has a gate: the first sentence of THE STORY runs
       // the same plain-language rules as the sheet. Removing the faults line
       // reverts it to the six-word spec whose drift the owner read as broken
@@ -58625,7 +59262,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // recorded in CLAUDE.md and both have been hit here before.
     {
       const _src = selfSourceNoCommentsLF();
-      if (_src.indexOf('city: ' + 'parseCityState(req.body.location).town') < 0) {
+      if (_src.indexOf('city: ' + 'parseCityState(rankLocationFrom(req.body.location, gbpHealth)).town') < 0) {
         _fails.push('the positioning read is no longer handed a parsed town, so it is being given a street address again and the false city gap is back on every lead');
       }
       if (_src.indexOf('city: ' + "req.body.location || ''") >= 0) {
@@ -59419,19 +60056,32 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (!selfSourceNoComments().includes(_mn('worst: worstAnchorFrom(_sayable,', ' m) || byMoney[0] || byHarm[0]'))) {
       _fails.push('worst is no longer the shared leak-1 pick with the sayable money fallbacks behind it \u2014 either an internal metric can be THE ONE THING again, or the one-thing and the numbered leaks can disagree on one sheet again');
     }
-    // The Irwin shape, executed: pillar-absolute byMoney put the dated build
-    // (harm 62, LEAKING) above the recurring gap and the callback complaint
-    // (harm 86, ROTTING) — so "costing them most" disagreed with LEAK 1 on a
-    // live sheet. Depth-first with the anchor floor picks the recurring gap
-    // when the complaint sits under three mentions, and the complaint itself
-    // once it clears the floor.
+    // The Irwin shape, executed - RE-RULED BY THE OWNER, round 101. This
+    // fixture used to demand no_recurring_offer here, because §61's blanket
+    // three-mention floor held a 2-mention callback complaint down. Vin then
+    // hand-checked three sheets in one morning (2026-08-26) and ruled the
+    // other way for exactly this class: customers writing that calls and
+    // quotes got NO RESPONSE is the deepest leak at two distinct mentions -
+    // "money literally going out the door... without a question." A
+    // no_response/quote_delay complaint at 2 mentions now anchors; the floor
+    // stays for scheduling shapes and everything else.
     const _iw = worstAnchorFrom([
       { id: 'review_pain_pattern', harm: 86 },
       { id: 'no_recurring_offer', harm: 76 },
       { id: 'dated_credibility', harm: 62 },
     ], { reviewPainMentions: 2, reviewPainTop: 'slow or no callbacks after estimate visits', reviewPainTopKind: 'contact' });
-    if (!_iw || _iw.id !== 'no_recurring_offer') {
-      _fails.push(`worst is ${_iw && _iw.id} rather than no_recurring_offer on the Irwin shape \u2014 the costliest line and leak 1 disagree again`);
+    if (!_iw || _iw.id !== 'review_pain_pattern') {
+      _fails.push(`worst is ${_iw && _iw.id} rather than the 2-mention callback complaint \u2014 the owner's 2026-08-26 ruling (a written no-response complaint anchors at two) is not being honoured`);
+    }
+    // And the SCHEDULING shape at two mentions still holds the floor - the
+    // owner was unsure on exactly this case (Windows Plus's no-shows), so the
+    // conservative rule stands for it.
+    const _iwSched = worstAnchorFrom([
+      { id: 'review_pain_pattern', harm: 86 },
+      { id: 'no_recurring_offer', harm: 76 },
+    ], { reviewPainMentions: 2, reviewPainTop: 'No-show or missed service appointment', reviewPainTopKind: 'contact' });
+    if (!_iwSched || _iwSched.id !== 'no_recurring_offer') {
+      _fails.push('a 2-mention SCHEDULING complaint now anchors worst - the floor the owner did not lift was lifted anyway');
     }
     const _iw3 = worstAnchorFrom([
       { id: 'review_pain_pattern', harm: 86 },
@@ -59560,13 +60210,13 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (!_src.includes(_n('rank: (!_rowMismatch && localRank && localRank.found', ' && localRank.orderTrusted)'))) {
       _fails.push('the measurement assembly no longer gates the position on order trust — the second wall is gone and every rung reads through it');
     }
-    if (!_src.includes(_n('weakerAbove: (localRank && !_rowMismatch', ' && localRank.orderTrusted)'))) {
+    if (!_src.includes(_n('weakerAbove: (_oRow && !_oMismatch', ' && _oRow.orderTrusted)'))) {
       _fails.push('weakerAbove survives an untrusted order, so the count behind the named sentence comes back');
     }
-    if (!_src.includes(_n('if (!localRank.orderTrusted)', ' return null;'))) {
+    if (!_src.includes(_n('if (!_oRow.orderTrusted)', ' return null;'))) {
       _fails.push('weakerNames no longer refuses an untrusted order — naming a competitor off a lookup is the same false claim with a name attached');
     }
-    if (!_src.includes(_n('await fetchLocalPack({ query, city', ', placesKey, bizLat, bizLng })'))) {
+    if (!_src.includes(_n('await fetchLocalPack({ query, city', ', placesKey, bizLat, bizLng, noPlacesFallback })'))) {
       _fails.push('checkLocalRank is not going through the one pack door, so the trust flag is decided somewhere else or not at all');
     }
     // EXECUTED, not read. See packOrderTrusted: the first version of this
@@ -60219,7 +60869,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     const _src = selfSource();
     // The prompt's own JSON keys are the contract. Read them out of the prompt
     // rather than retyping them here, or this becomes the second copy that rots.
-    const _pStart = _src.indexOf(_needle('This is the above-the-fold screenshot of'));
+    const _pStart = _src.indexOf(_needle('This is a screenshot of ${componentName}'.replace('componentName', 'companyName')));
     const _pEnd = _pStart > -1 ? _src.indexOf('}`', _pStart) : -1;
     const _promptBlock = _pStart > -1 && _pEnd > _pStart ? _src.slice(_pStart, _pEnd) : '';
     const _visionFields = new Set((_promptBlock.match(/"([a-zA-Z]+)"\s*:/g) || []).map(x => x.replace(/[":\s]/g, '')));
