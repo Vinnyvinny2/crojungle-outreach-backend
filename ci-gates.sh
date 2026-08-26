@@ -56,6 +56,14 @@ if want fuzz; then
   run node fuzzcore.js 20000
 fi
 
+# Round 99: thousands of fake audits through the real ladder, numbering, walk
+# and facts strip — the pipeline the caller's sheet is assembled from. Its
+# first-ever run found two live bugs (a Number([]) coordinate and a zero-lat
+# phantom) before it went green.
+if want auditfuzz; then
+  run node auditfuzz.js 5000
+fi
+
 if want e2e; then
   # The research route driven end to end over a fake network — two real boots,
   # six scenarios, the seams between the functions. See servercheck.js.

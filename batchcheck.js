@@ -351,12 +351,16 @@ const runBatch = async (opts) => {
     // ══ THE OPERATOR'S OWN TICKS REPLACE THE TOP-N ════════════════════════
     // Live 2026-08-25: "it forces me to audit the leads like i cant select
     // which leads to run the 50 audits on it pre chooses." A ticked set IS
-    // the batch; eligibility still applies, so a tick cannot buy a
-    // no-website or already-audited lead into a run.
+    // the batch. Round 96 made a ticked AUDITED lead also need the re-audit
+    // box, and the owner's next live session hit exactly that wall: "when i
+    // rerun a lead it only lets me do one not multiple leads to rerun." A
+    // tick is the operator's own hand on a specific lead, so ticking an
+    // audited lead now IS the re-run intent — while a no-website tick is
+    // still refused, because there is nothing to audit at any intent.
     const picked = api.batchCandidates(mixed, { limit: 50, pickedIds: new Set(['a']) }).map(x => x.id).join(',');
     if (picked !== 'a') fails.push(`a hand-picked lead produced [${picked}] — the tick must replace the top-N pick entirely`);
     const pickedBad = api.batchCandidates(mixed, { limit: 50, pickedIds: new Set(['b', 'c', 'a']) }).map(x => x.id).join(',');
-    if (pickedBad !== 'a') fails.push(`ticking ineligible leads produced [${pickedBad}] — a no-website or already-audited tick must still be refused while the re-audit box is off`);
+    if (pickedBad !== 'c,a') fails.push(`ticking a no-website lead plus an audited lead produced [${pickedBad}] — the audited tick must RE-RUN (the operator's hand is the intent) and the no-website tick must still be refused`);
     const pickedDone = api.batchCandidates(mixed, { limit: 50, includeResearched: true, pickedIds: new Set(['c']) }).map(x => x.id).join(',');
     if (pickedDone !== 'c') fails.push(`a ticked already-audited lead with re-audit ON produced [${pickedDone}] — the tick plus the box is exactly how a chosen re-run is supposed to happen`);
     const noPick = api.batchCandidates(mixed, { limit: 50, pickedIds: new Set() }).map(x => x.id).join(',');

@@ -605,6 +605,16 @@ const mergeStat = runMergeCheck();
         const _rot97 = mod.sig('found', { af: { lsa: { blockPresent: true, us: false, shown: 3 } }, rows: [] });
         const _rv97 = _rot97.rows.map(r => String(r.value)).join(' | ');
         if (!/proves nothing/.test(_rv97)) fails.push('the rotating-block caption lost its "not seeing their ad proves nothing" bound — one pull of a rotating surface must never read as their absence');
+        // ══ ROUND 99: the pack second-source, the LSA slot number and the
+        // named traffic — Vin's "where they ranked for sponsored for places
+        // and for businesses", on the sheet. Positive-only both ways.
+        const _r99 = mod.sig('found', { af: { ads: 'yes', lsa: { blockPresent: true, us: true, usIndex: 2, shown: 2 }, pack: { us: true, usIndex: 2 } }, rows: [], traffic: { organicEtvMonthly: 210, paidKeywords: 0, topKeywords: [{ keyword: 'pest control charlotte', position: 9, volume: 320 }] } });
+        const _r99v = _r99.rows.map(r => r.label + ': ' + r.value).join(' | ');
+        if (!/The map beside the results/.test(_r99v)) fails.push("their listing in the page's own map pack never reaches the found rows — the second free read of the map question is invisible on the sheet");
+        if (!/shown #2/.test(_r99v)) fails.push('the LSA slot number is measured and never shown — the sponsored position was the direct ask');
+        if (!/What already brings traffic/.test(_r99v) || !/pest control charlotte/.test(_r99v)) fails.push('the ranked keywords never reach the sheet — the named top of their funnel, bought and invisible');
+        const _r99n = mod.sig('found', { af: { lsa: { blockPresent: false, us: false } }, rows: [] });
+        if (_r99n.rows.some(r => /map beside the results/i.test(String(r.label)))) fails.push('a pack row renders with no pack sighting — absence consumed as a fact, the direction the positive-only rule forbids');
       } else {
         fails.push('signalRowsFor is not exposed for execution, so none of the surface rows can be verified');
       }
@@ -1623,6 +1633,25 @@ const PENDING = [];
   } else {
     const envN = [...every].filter(k => (decl[k] || '').startsWith('env:')).length;
     notes.push(`\u2713 config: all ${every.size} API key(s) this server consumes have a declared source \u2014 ${every.size - envN} with a Settings field the app actually sends, ${envN} resolved from the server's own environment and EXECUTED at boot. pageSpeedKey was read for the life of this project with no field anywhere, and no way to tell an empty key from an API with no data.`);
+  }
+}
+
+{
+  // ══ ROUND 99: the caption describes the ADDRESS ══════════════════════════
+  // Axiom's sheet rendered an em-dash for the email with "Pattern-built, not
+  // confirmed" beneath it — a confidence note about an address that does not
+  // exist. Needles assembled at runtime, both halves real.
+  const _n99 = (...p) => p.join('');
+  if (html.indexOf(_n99('const emailNote = (lead.emailResult && ', 'email)')) < 0) {
+    fails.push('the email caption no longer requires an address — a confidence note about a missing address reads as a measurement');
+  }
+  if (html.indexOf(_n99('No usable address', ' found')) < 0) {
+    fails.push('the no-address state lost its honest caption');
+  }
+  // and a ticked audited lead IS the re-run intent (batchcheck executes the
+  // behaviour; this pins the one-line decision at its site).
+  if (html.indexOf(_n99('const includeDone = !!opts.includeResearched || ', '!!picked;')) < 0) {
+    fails.push('a ticked audited lead needs the re-audit checkbox again — the multi-re-run flow dies back to one-at-a-time');
   }
 }
 
