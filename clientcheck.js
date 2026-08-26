@@ -513,7 +513,7 @@ const mergeStat = runMergeCheck();
     try {
       mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.funnelSvg + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, fsvg: funnelSvg, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -584,6 +584,40 @@ const mergeStat = runMergeCheck();
       }
       if (page.indexOf('nothing on the pages counts it') < 0) {
         fails.push('a blind conversion read does not reach the door stage as a signal row');
+      }
+
+      // ══ THE SURFACES AND THE WALK BRIEF, EXECUTED (round 97) ══════════════
+      // The Axiom failure on the client side: the pest company held the #2
+      // Sponsored slot and nothing on the sheet could show it. And the walk's
+      // brief must dedupe the funnel without erasing old leads' walk text.
+      if (mod.sig) {
+        const _af97 = { ads: 'yes', lsa: { blockPresent: true, us: true, shown: 2 }, aiOverview: { present: true, citesUs: true }, liveChat: true };
+        const _found97 = mod.sig('found', { af: _af97, rows: [], rank: { checked: true, found: true, rank: 26, scanned: 100, query: 'pest control company in Charlotte, NC' } });
+        const _fv97 = _found97.rows.map(r => r.label + ': ' + r.value).join(' | ');
+        if (!/pay-per-lead block on our pull/.test(_fv97)) fails.push('their own LSA ad never reaches the found-stage signal rows — the Axiom blindness, on the client');
+        if (!/AI answer/.test(_fv97) || !/cites their site/.test(_fv97)) fails.push("Google's AI answer citing them never reaches the signal rows");
+        if (!/Check it yourself/.test(_fv97) || !/pest control company in Charlotte, NC/.test(_fv97)) fails.push('the hand-check search line is missing — the caller cannot rerun the exact search we measured');
+        const _abs97 = mod.sig('found', { af: {}, rows: [], rank: { checked: true, found: false, absenceConfirmed: true, scanned: 100 } });
+        const _av97 = _abs97.rows.map(r => String(r.value)).join(' | ');
+        if (!/among the 100 listings returned/.test(_av97)) fails.push('the absence row still says "not in the results" without the window it scanned — the depth-20 overclaim, on the sheet');
+        const _door97 = mod.sig('door', { af: { liveChat: true }, rows: [] });
+        if (!_door97.rows.some(r => /Live chat/.test(r.label))) fails.push('a live-chat widget never reaches the door signal rows — the George Sink popup, invisible on the client');
+        const _rot97 = mod.sig('found', { af: { lsa: { blockPresent: true, us: false, shown: 3 } }, rows: [] });
+        const _rv97 = _rot97.rows.map(r => String(r.value)).join(' | ');
+        if (!/proves nothing/.test(_rv97)) fails.push('the rotating-block caption lost its "not seeing their ad proves nothing" bound — one pull of a rotating surface must never read as their absence');
+      } else {
+        fails.push('signalRowsFor is not exposed for execution, so none of the surface rows can be verified');
+      }
+      if (mod.walkStage) {
+        const _wt97 = mod.walkStage({ stages: [
+          { id: 'money_out', text: 'FULLTEXT-A', brief: '' },
+          { id: 'who_finds_them', text: 'FULLTEXT-B covered. BRIEF-B verdict.', brief: 'BRIEF-B verdict.' },
+          { id: 'the_door', text: 'OLD-LEAD-TEXT' },
+        ] });
+        const _joined97 = [..._wt97.found, ..._wt97.door, ..._wt97.after].join(' ');
+        if (/FULLTEXT-A/.test(_joined97)) fails.push('an empty brief still renders the full walk text — the funnel repeats every signal row a second time');
+        if (!/BRIEF-B verdict/.test(_joined97) || /FULLTEXT-B/.test(_joined97)) fails.push('the walk brief is not preferred over the full text — the dedupe Vin asked for never reaches the screen');
+        if (!/OLD-LEAD-TEXT/.test(_joined97)) fails.push('a lead audited before the brief existed loses its walk text entirely — old sheets go blank at their stages');
       }
 
       // ══ THE SEGMENT BRIEF RENDERS ONCE PER TRADE, NOT ONCE PER LEAD ══════
